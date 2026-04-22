@@ -1,0 +1,62 @@
+[graph]
+targets = [
+  #{ triple = "x86_64-unknown-linux-musl" },
+]
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+ignore = [
+  #"RUSTSEC-0000-0000",
+]
+
+[licenses]
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Unicode-DFS-2016",
+  "Unicode-3.0",
+  "MPL-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "CC0-1.0",
+]
+confidence-threshold = 0.8
+exceptions = [
+  #{ allow = ["Zlib"], name = "adler32", version = "*" },
+]
+
+[licenses.private]
+ignore = false
+registries = [
+  #"https://sekretz.com/registry
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+highlight = "all"
+allow = [
+  #{ name = "ansi_term", version = "=0.11.0" },
+]
+deny = [
+  #{ name = "ansi_term", version = "=0.11.0" },
+]
+skip = [
+  #{ name = "ansi_term", version = "=0.11.0" },
+]
+skip-tree = [
+  #{ name = "ansi_term", version = "=0.11.0", depth = 20 },
+]
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []
