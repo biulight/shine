@@ -13,6 +13,7 @@ A fast Rust CLI tool for managing shell environment presets.
 - **Safe uninstall** — removes only shine-managed files; user-created files are never touched
 - **Dry-run support** — preview any destructive operation before it runs
 - **TOML config** — `~/.shine/config.toml` with comment preservation on updates
+- **Release update check** — checks GitHub Releases at runtime with a 24h cache
 - **Multi-shell support** — bash, zsh, fish, powershell, elvish
 
 ## Installation
@@ -25,7 +26,7 @@ Or build from source:
 
 ```bash
 cargo build --release
-# Binary at: target/release/cli (rename/alias to `shine`)
+# Binary at: target/release/shine
 ```
 
 ## Usage
@@ -68,6 +69,14 @@ Shell config (~/.zshrc): PATH updated
 ```
 
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped.
+
+### Runtime update policy
+
+`shine` checks the latest GitHub Release for `biulight/shine` before executing commands and caches the result for 24 hours under `~/.shine/`.
+
+- Newer `major` or `minor` release: prints an upgrade reminder and continues
+- Newer `patch` release: requires you to upgrade before continuing
+- Network/API/cache failures: silently skipped, command execution continues
 
 ### Uninstall shell presets
 

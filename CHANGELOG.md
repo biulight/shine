@@ -5,6 +5,27 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.3.0] — 2026-04-24
+
+### Features
+
+**Runtime release update check**
+- `shine` now checks the latest GitHub Release for `biulight/shine` before executing commands
+- Latest release lookup is cached locally for 24 hours under the shine config directory
+- Version comparison follows SemVer semantics
+- Newer `major` or `minor` versions show an upgrade reminder and continue execution
+- Newer `patch` versions require the user to upgrade before the command continues
+- Network errors, API failures, and invalid cache state are ignored so normal commands still run
+
+**Unified CLI versioning**
+- The CLI version now reads from `[workspace.package].version`
+- `shine --version` and the compiled package version stay aligned with the workspace release version
+
+### Docs
+
+- README now documents runtime update behavior
+- README build output path corrected to `target/release/shine`
+
 ## [0.2.0] — 2026-04-23
 
 ### Features
