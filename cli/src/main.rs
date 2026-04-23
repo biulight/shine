@@ -6,9 +6,11 @@ mod commands;
 mod config;
 mod presets;
 mod shells;
+mod update_check;
 
 use crate::config::Config;
 use commands::{AppCommands, ShellCommands};
+use update_check::UpdateStatus;
 
 /// `Shine` - Quick config for sys
 #[derive(Parser, Debug)]
@@ -66,6 +68,25 @@ async fn main() -> Result<()> {
     }
 
     let config = Box::pin(Config::load_or_init()).await?;
+
+    match update_check::check_for_update(&config).await {
+        Ok(UpdateStatus::UpToDate) => {}
+        Ok(UpdateStatus::UpdateAvailable { latest }) => {
+            eprintln!(
+                "A newer version of shine is available: {} -> {}. Please update when convenient.",
+                env!("CARGO_PKG_VERSION"),
+                latest
+            );
+        }
+        Ok(UpdateStatus::UpdateRequired { latest }) => {
+            bail!(
+                "A newer patch release of shine is required: {} -> {}. Please update before continuing.",
+                env!("CARGO_PKG_VERSION"),
+                latest
+            );
+        }
+        Err(_) => {}
+    }
 
     if let Commands::App { command: _ } = &cli.command {}
 

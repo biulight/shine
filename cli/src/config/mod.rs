@@ -101,6 +101,12 @@ impl Config {
         &self.bin_dir
     }
 
+    pub(crate) fn shine_dir(&self) -> &Path {
+        self.config_path
+            .parent()
+            .expect("config_path is always under the shine config directory")
+    }
+
     #[cfg(test)]
     pub(crate) fn new_for_test(dir: &Path) -> Self {
         Self {
