@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Build
 cargo build
-cargo build --release          # binary at target/release/cli
+cargo build --release          # binary at target/release/shine
 
 # Run (dev)
 cargo run -- shell list
