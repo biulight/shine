@@ -8,6 +8,8 @@ A fast Rust CLI tool for managing shell environment presets.
 
 - **Embedded presets** — shell scripts are compiled into the binary; no internet required after installation
 - **Symlink-based bin directory** — `~/.shine/bin/` holds flat symlinks to installed scripts; add it to `PATH` once
+- **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
+- **Category install** — install all presets or a specific subset (e.g. `proxy`)
 - **Safe uninstall** — removes only shine-managed files; user-created files are never touched
 - **Dry-run support** — preview any destructive operation before it runs
 - **TOML config** — `~/.shine/config.toml` with comment preservation on updates
@@ -26,34 +28,46 @@ cargo build --release
 # Binary at: target/release/cli (rename/alias to `shine`)
 ```
 
-Then add `~/.shine/bin` to your shell's `PATH`:
+## Usage
+
+### List available presets
 
 ```bash
-# bash / zsh
-echo 'export PATH="$HOME/.shine/bin:$PATH"' >> ~/.zshrc
-
-# fish
-fish_add_path ~/.shine/bin
+shine shell list
 ```
 
-## Usage
+Shows all bundled preset categories and a description of each script:
+
+```
+Available shell preset categories:
+
+  proxy (2 scripts)
+    set_proxy     Set HTTP/HTTPS proxy environment variables.
+                  ...
+    uset_proxy    Unset all proxy environment variables.
+                  ...
+
+  tools (1 script)
+    test_tools    Verify shine-installed shell tools are callable.
+                  ...
+```
 
 ### Install shell presets
 
 ```bash
-shine shell install
+shine shell install            # install all categories
+shine shell install proxy      # install only the proxy category
 ```
 
-Extracts embedded shell scripts to `~/.shine/presets/shell/` and creates symlinks in `~/.shine/bin/`.
-
-Output example:
+Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, etc.):
 
 ```
-Presets (shell): 2 created, 0 skipped
-Bin links: 2 created, 0 skipped, 0 conflicts
+Presets (shell): 3 created, 0 skipped
+Bin links: 3 created, 0 skipped, 0 conflicts
+Shell config (~/.zshrc): PATH updated
 ```
 
-Running `install` a second time is safe — existing files and correct symlinks are skipped.
+Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped.
 
 ### Uninstall shell presets
 
@@ -61,30 +75,27 @@ Running `install` a second time is safe — existing files and correct symlinks 
 shine shell uninstall
 ```
 
-Removes shine-managed symlinks from `~/.shine/bin/` and embedded-asset preset files from `~/.shine/presets/shell/`. User-created files are never removed.
+Removes shine-managed symlinks from `~/.shine/bin/`, preset files from `~/.shine/presets/shell/`, and the PATH entry from your shell config. User-created files are never removed.
 
 ```bash
-# Preview what would be removed without touching anything
-shine shell uninstall --dry-run
-
-# Also remove empty managed directories after uninstall
-shine shell uninstall --purge
+shine shell uninstall --dry-run   # preview without changes
+shine shell uninstall --purge     # also remove empty managed directories
 ```
 
-`--purge` removes `~/.shine/bin/` and `~/.shine/presets/shell/` if they are empty after uninstall. It never removes `~/.shine/config.toml` or the root `~/.shine/` directory.
+`--purge` removes `~/.shine/bin/` and `~/.shine/presets/shell/` if empty after uninstall. It never removes `~/.shine/config.toml` or the root `~/.shine/` directory.
 
 ## Bundled Presets
 
-### shell/proxy — `set_proxy.sh` / `uset_proxy.sh`
+### shell/proxy — `set_proxy` / `uset_proxy`
 
 One-command proxy management for the entire development environment.
 
 **Set proxy:**
 
 ```bash
-source ~/.shine/bin/set_proxy.sh          # auto-detect SOCKS5 or fall back to HTTP
-source ~/.shine/bin/set_proxy.sh sock5    # force SOCKS5
-source ~/.shine/bin/set_proxy.sh http     # force HTTP
+source set_proxy           # auto-detect SOCKS5 or fall back to HTTP
+source set_proxy sock5     # force SOCKS5
+source set_proxy http      # force HTTP
 ```
 
 Configures simultaneously:
@@ -97,47 +108,61 @@ Default ports: HTTP `6152`, SOCKS5 `6153` (edit `~/.shine/presets/shell/proxy/se
 **Unset proxy:**
 
 ```bash
-source ~/.shine/bin/uset_proxy.sh
+source uset_proxy
 ```
 
 Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy config.
 
+### shell/tools — `test_tools`
+
+Verifies that shine-installed shell tools are callable from the current environment.
+
 ## Configuration
 
-`~/.shine/config.toml` is created automatically on first run. Currently it stores the schema version; future releases will expose user-configurable options here.
+`~/.shine/config.toml` is created automatically on first run.
 
-Override the config directory at runtime:
+Override directories at runtime:
 
 ```bash
-SHINE_CONFIG_DIR=/custom/path shine shell install
+SHINE_CONFIG_DIR=/custom/path shine shell install   # override shine dir + presets dir
+SHINE_PRESETS=/custom/presets shine shell install   # override presets dir only
 ```
+
+Or persist a custom presets directory in `~/.shine/config.toml`:
+
+```toml
+presets_dir = "/custom/presets"
+```
+
+Priority: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `config.toml[presets_dir]` > default.
 
 ## Directory Layout
 
 ```
 ~/.shine/
-├── config.toml          # user configuration
+├── config.toml
 ├── bin/
-│   ├── set_proxy.sh     # symlink → presets/shell/proxy/set_proxy.sh
-│   └── uset_proxy.sh    # symlink → presets/shell/proxy/uset_proxy.sh
+│   ├── set_proxy        # symlink → presets/shell/proxy/set_proxy.sh
+│   ├── uset_proxy       # symlink → presets/shell/proxy/uset_proxy.sh
+│   └── test_tools       # symlink → presets/shell/tools/test_tools.sh
 └── presets/
     └── shell/
-        └── proxy/
-            ├── set_proxy.sh
-            └── uset_proxy.sh
+        ├── proxy/
+        │   ├── set_proxy.sh
+        │   └── uset_proxy.sh
+        └── tools/
+            └── test_tools.sh
 ```
 
 ## Development
 
 ```bash
-# Run tests
-cargo test --all
-
-# Lint
-cargo clippy --all-targets -- -D warnings
-
-# Format
-cargo fmt --all
+cargo nextest run --all-features   # tests (used by pre-commit)
+cargo test                         # fallback
+cargo clippy --all-targets --all-features --tests --benches -- -D warnings
+cargo fmt
+cargo deny check bans licenses sources
+typos
 ```
 
 ### Workspace layout
@@ -145,14 +170,19 @@ cargo fmt --all
 ```
 shine/
 ├── cli/        # binary crate — CLI parsing, commands, config
+│   ├── build.rs               # triggers rust-embed recompile on presets/ changes
 │   └── src/
 │       ├── main.rs
-│       ├── bin_links.rs   # symlink management
-│       ├── presets.rs     # embedded-asset extraction / removal
-│       ├── config/        # Config struct, load/save, TOML migration
-│       ├── commands/      # clap subcommand definitions
-│       └── shells/        # shell-specific handlers
-└── utils/      # library crate — TOML comment-preserving migration
+│       ├── bin_links.rs       # symlink management
+│       ├── presets.rs         # embedded-asset extraction, list_categories
+│       ├── config/            # Config struct, load/save, env-var priority chain
+│       ├── commands/          # clap subcommand definitions
+│       └── shells/            # ShellType, install/uninstall/list, PATH injection
+├── utils/      # library crate — TOML comment-preserving migration
+└── presets/    # shell scripts embedded into the binary at compile time
+    └── shell/
+        ├── proxy/
+        └── tools/
 ```
 
 ## License
