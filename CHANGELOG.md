@@ -5,7 +5,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
-## [Unreleased] — 2026-04-23
+## [0.2.0] — 2026-04-23
 
 ### Features
 
