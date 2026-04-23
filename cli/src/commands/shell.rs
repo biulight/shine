@@ -2,10 +2,16 @@ use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 pub enum ShellCommands {
-    /// List all shells
+    /// List available shell preset categories and their scripts
     List,
-    /// Install all shell presets and create bin symlinks
-    Install,
+    /// Install shell presets and create bin symlinks.
+    /// Run 'shine shell list' to see available categories.
+    Install {
+        /// Preset category to install (e.g. "proxy"). Installs all if omitted.
+        /// Run 'shine shell list' to see available categories.
+        #[arg(value_name = "CATEGORY")]
+        category: Option<String>,
+    },
     /// Uninstall shell presets and remove bin symlinks
     Uninstall {
         /// Also remove empty managed directories after uninstall
@@ -15,6 +21,4 @@ pub enum ShellCommands {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Proxy
-    Proxy,
 }

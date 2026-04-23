@@ -8,7 +8,7 @@ use tokio::io::AsyncWriteExt;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct Config {
-    /// Presets directory - computed from home
+    /// Presets directory - computed at runtime, not serialized
     #[serde(skip)]
     presets_dir: PathBuf,
     /// Bin directory for symlinks - computed from home
@@ -27,6 +27,14 @@ pub(crate) struct Config {
     pub schema_version: u32,
     #[serde(skip)]
     pub shell_type: ShellType,
+    /// Optional persistent presets_dir override stored in config.toml.
+    /// Takes effect when neither SHINE_CONFIG_DIR nor SHINE_PRESETS is set.
+    #[serde(
+        rename = "presets_dir",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub presets_dir_override: Option<PathBuf>,
 }
 
 impl Config {
@@ -35,8 +43,17 @@ impl Config {
             UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf());
         let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
 
-        let (shine_dir, presets_dir) =
-            resolve_runtime_config_dirs(&default_shine_dir, &default_presets_dir).await?;
+        // Pre-read config.toml (from the expected shine_dir) to extract an optional
+        // presets_dir override before the full resolution pass.
+        let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
+        let toml_presets =
+            read_presets_override_from_toml(&preliminary_shine_dir.join("config.toml")).await;
+
+        let (shine_dir, presets_dir) = resolve_runtime_config_dirs(
+            &default_shine_dir,
+            &default_presets_dir,
+            toml_presets.as_deref(),
+        );
 
         let bin_dir = shine_dir.join("bin");
         let config_path = shine_dir.join("config.toml");
@@ -94,6 +111,7 @@ impl Config {
             file_name: "config.toml".to_string(),
             schema_version: 0,
             shell_type: ShellType::default(),
+            presets_dir_override: None,
         }
     }
 
@@ -188,6 +206,7 @@ impl Default for Config {
             file_name: "config.toml".to_string(),
             schema_version: 0,
             shell_type: ShellType::default(),
+            presets_dir_override: None,
         }
     }
 }
@@ -210,27 +229,68 @@ fn default_config_and_presets_dir() -> Result<(PathBuf, PathBuf)> {
     Ok((config_dir.clone(), config_dir.join("presets")))
 }
 
-async fn resolve_runtime_config_dirs(
-    default_shine_dir: &Path,
-    default_presets_dir: &Path,
-) -> Result<(PathBuf, PathBuf)> {
-    if let Ok(custom_config_dir) = std::env::var("SHINE_CONFIG_DIR") {
-        let custom_config_dir = custom_config_dir.trim();
-        if !custom_config_dir.is_empty() {
-            let config_dir = PathBuf::from(shellexpand::tilde(custom_config_dir).to_string());
-
-            return Ok((config_dir.clone(), config_dir.join("presets")));
+/// Return the shine root dir implied by `SHINE_CONFIG_DIR`, or `default` if unset.
+/// Used for a preliminary read of config.toml before full resolution.
+fn preliminary_shine_dir_from_env(default: &Path) -> PathBuf {
+    if let Ok(val) = std::env::var("SHINE_CONFIG_DIR") {
+        let val = val.trim().to_string();
+        if !val.is_empty() {
+            return PathBuf::from(shellexpand::tilde(&val).to_string());
         }
     }
-    Ok((default_shine_dir.to_owned(), default_presets_dir.to_owned()))
+    default.to_owned()
+}
 
-    // if let Ok(custom_workspace) = std::env::var("SHINE_WORKSPACE") && !custom_workspace.is_empty() {
-    //     let expanded = PathBuf::from(shellexpand::tilde(&custom_workspace).to_string());
-    //     return Ok((
-    //
-    //         ))
-    //
-    // }
+/// Attempt to read the `presets_dir` key from an existing config.toml without
+/// doing a full parse. Returns `None` if the file is absent, unreadable, or the
+/// key is not set.
+async fn read_presets_override_from_toml(config_path: &Path) -> Option<PathBuf> {
+    let content = tokio::fs::read_to_string(config_path).await.ok()?;
+    #[derive(Deserialize)]
+    struct MinimalConfig {
+        #[serde(default)]
+        presets_dir: Option<PathBuf>,
+    }
+    let partial: MinimalConfig = toml::from_str(&content).ok()?;
+    partial.presets_dir
+}
+
+/// Resolve the runtime (shine_dir, presets_dir) pair.
+///
+/// Priority (highest first):
+///   1. `SHINE_CONFIG_DIR` — overrides both shine_dir and presets_dir
+///   2. `SHINE_PRESETS`    — overrides presets_dir only
+///   3. `config_toml_presets` — presets_dir from config.toml `presets_dir` key
+///   4. defaults
+fn resolve_runtime_config_dirs(
+    default_shine_dir: &Path,
+    default_presets_dir: &Path,
+    config_toml_presets: Option<&Path>,
+) -> (PathBuf, PathBuf) {
+    if let Ok(val) = std::env::var("SHINE_CONFIG_DIR") {
+        let val = val.trim().to_string();
+        if !val.is_empty() {
+            let dir = PathBuf::from(shellexpand::tilde(&val).to_string());
+            return (dir.clone(), dir.join("presets"));
+        }
+    }
+
+    if let Ok(val) = std::env::var("SHINE_PRESETS") {
+        let val = val.trim().to_string();
+        if !val.is_empty() {
+            let presets = PathBuf::from(shellexpand::tilde(&val).to_string());
+            return (default_shine_dir.to_owned(), presets);
+        }
+    }
+
+    if let Some(p) = config_toml_presets
+        && let Some(s) = p.to_str()
+    {
+        let presets = PathBuf::from(shellexpand::tilde(s).to_string());
+        return (default_shine_dir.to_owned(), presets);
+    }
+
+    (default_shine_dir.to_owned(), default_presets_dir.to_owned())
 }
 
 #[cfg(test)]
@@ -246,6 +306,7 @@ mod tests {
             file_name: "config.toml".to_string(),
             schema_version: 0,
             shell_type: ShellType::default(),
+            presets_dir_override: None,
         }
     }
 
@@ -357,12 +418,10 @@ mod tests {
             file_name: "config.toml".to_string(),
             schema_version: 0,
             shell_type: ShellType::default(),
+            presets_dir_override: None,
         };
         assert!(config.save().await.is_err());
     }
-
-    #[test]
-    fn test_resolve_runtime_config_dir() {}
 
     #[test]
     fn new_for_test_bin_dir_is_under_root() {
@@ -381,6 +440,165 @@ mod tests {
         assert_eq!(config.bin_dir(), dir.join("bin"));
 
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    // --- resolve_runtime_config_dirs unit tests ---
+
+    #[test]
+    fn shine_config_dir_overrides_everything() {
+        let default_shine = PathBuf::from("/home/user/.shine");
+        let default_presets = PathBuf::from("/home/user/.shine/presets");
+        let custom = std::env::temp_dir().join("shine-override-test");
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom.to_str().unwrap()) };
+        let (shine, presets) = resolve_runtime_config_dirs(&default_shine, &default_presets, None);
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+
+        assert_eq!(shine, custom);
+        assert_eq!(presets, custom.join("presets"));
+    }
+
+    #[test]
+    fn shine_presets_overrides_presets_only() {
+        let default_shine = PathBuf::from("/home/user/.shine");
+        let default_presets = PathBuf::from("/home/user/.shine/presets");
+        let custom_presets = std::env::temp_dir().join("my-presets");
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        unsafe { std::env::set_var("SHINE_PRESETS", custom_presets.to_str().unwrap()) };
+        let (shine, presets) = resolve_runtime_config_dirs(&default_shine, &default_presets, None);
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+
+        assert_eq!(shine, default_shine);
+        assert_eq!(presets, custom_presets);
+    }
+
+    #[test]
+    fn shine_config_dir_takes_precedence_over_shine_presets() {
+        let default_shine = PathBuf::from("/home/user/.shine");
+        let default_presets = PathBuf::from("/home/user/.shine/presets");
+        let custom_dir = std::env::temp_dir().join("shine-cfg-dir");
+        let custom_presets = std::env::temp_dir().join("shine-presets-ignored");
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom_dir.to_str().unwrap()) };
+        unsafe { std::env::set_var("SHINE_PRESETS", custom_presets.to_str().unwrap()) };
+        let (shine, presets) = resolve_runtime_config_dirs(&default_shine, &default_presets, None);
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+
+        assert_eq!(shine, custom_dir);
+        assert_eq!(presets, custom_dir.join("presets"));
+    }
+
+    #[test]
+    fn config_toml_presets_dir_is_used_when_no_env() {
+        let default_shine = PathBuf::from("/home/user/.shine");
+        let default_presets = PathBuf::from("/home/user/.shine/presets");
+        let toml_presets = PathBuf::from("/custom/presets");
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        let (shine, presets) = resolve_runtime_config_dirs(
+            &default_shine,
+            &default_presets,
+            Some(toml_presets.as_path()),
+        );
+
+        assert_eq!(shine, default_shine);
+        assert_eq!(presets, toml_presets);
+    }
+
+    #[test]
+    fn shine_presets_takes_precedence_over_config_toml() {
+        let default_shine = PathBuf::from("/home/user/.shine");
+        let default_presets = PathBuf::from("/home/user/.shine/presets");
+        let env_presets = std::env::temp_dir().join("env-presets");
+        let toml_presets = PathBuf::from("/toml/presets");
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        unsafe { std::env::set_var("SHINE_PRESETS", env_presets.to_str().unwrap()) };
+        let (_, presets) = resolve_runtime_config_dirs(
+            &default_shine,
+            &default_presets,
+            Some(toml_presets.as_path()),
+        );
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+
+        assert_eq!(presets, env_presets);
+    }
+
+    #[tokio::test]
+    async fn read_presets_override_returns_none_when_file_missing() {
+        let missing =
+            std::env::temp_dir().join(format!("shine-no-config-{}.toml", uuid::Uuid::new_v4()));
+        let result = read_presets_override_from_toml(&missing).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn read_presets_override_returns_none_when_key_absent() {
+        let dir = make_temp_dir().await;
+        let path = dir.join("config.toml");
+        fs::write(&path, "schema_version = 0\n").await.unwrap();
+
+        let result = read_presets_override_from_toml(&path).await;
+        assert!(result.is_none());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_presets_override_returns_path_when_key_present() {
+        let dir = make_temp_dir().await;
+        let path = dir.join("config.toml");
+        fs::write(&path, "schema_version = 0\npresets_dir = \"/my/presets\"\n")
+            .await
+            .unwrap();
+
+        let result = read_presets_override_from_toml(&path).await;
+        assert_eq!(result, Some(PathBuf::from("/my/presets")));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn presets_dir_override_round_trips_through_save() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.presets_dir_override = Some(PathBuf::from("/external/presets"));
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        assert!(
+            content.contains("/external/presets"),
+            "presets_dir should be written to config.toml"
+        );
+
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert_eq!(
+            loaded.presets_dir_override,
+            Some(PathBuf::from("/external/presets"))
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn presets_dir_absent_from_toml_when_override_is_none() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir); // presets_dir_override: None
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let parsed: toml::Table = toml::from_str(&content).unwrap();
+        assert!(
+            !parsed.contains_key("presets_dir"),
+            "presets_dir key must be absent when override is None"
+        );
+
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }

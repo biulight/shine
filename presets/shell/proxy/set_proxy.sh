@@ -1,8 +1,9 @@
 #!/bin/bash
-
-# 代理设置脚本
-# HTTP代理端口: 6152
-# SOCKS5代理端口: 6153
+# 设置代理环境变量（http_proxy、https_proxy、all_proxy）。
+# 同时为 Git、NPM、Yarn、pnpm 配置工具代理。
+# HTTP 代理端口: 6152，SOCKS5 代理端口: 6153。
+# 用法: source set_proxy.sh [auto|sock5|http]
+# 默认 auto 模式优先使用 SOCKS5，不可用时自动回退至 HTTP。
 
 HTTP_PROXY_PORT=6152
 SOCKS5_PROXY_PORT=6153

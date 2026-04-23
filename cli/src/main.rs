@@ -78,11 +78,13 @@ async fn main() -> Result<()> {
         Commands::App { .. } => unreachable!(),
         Commands::Completions { .. } => unreachable!(),
         Commands::Shell { command } => match command {
-            ShellCommands::Install => Box::pin(shells::handle_install(&config)).await,
+            ShellCommands::List => Box::pin(shells::handle_list()).await,
+            ShellCommands::Install { category } => {
+                Box::pin(shells::handle_install(&config, category.as_deref())).await
+            }
             ShellCommands::Uninstall { purge, dry_run } => {
                 Box::pin(shells::handle_uninstall(&config, purge, dry_run)).await
             }
-            other => Box::pin(shells::handle_command(other, &config)).await,
         },
     }
 }

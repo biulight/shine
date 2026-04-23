@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -15,6 +16,91 @@ pub(crate) struct ExtractReport {
 pub(crate) struct RemoveReport {
     pub removed: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
+}
+
+pub(crate) struct ScriptInfo {
+    pub name: String,
+    pub description: Vec<String>,
+}
+
+pub(crate) struct CategoryInfo {
+    pub name: String,
+    pub scripts: Vec<ScriptInfo>,
+}
+
+/// Parse the leading comment block from a shell script, skipping the shebang line.
+///
+/// Collects consecutive lines starting with `# ` or bare `#` until the first
+/// non-comment, non-shebang line. Trailing empty description lines are trimmed.
+pub(crate) fn parse_script_description(content: &[u8]) -> Vec<String> {
+    let text = std::str::from_utf8(content).unwrap_or("");
+    let mut desc = Vec::new();
+
+    for line in text.lines() {
+        if line.starts_with("#!") {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("# ") {
+            desc.push(rest.to_string());
+        } else if line == "#" {
+            desc.push(String::new());
+        } else {
+            break;
+        }
+    }
+
+    while desc.last().is_some_and(|l: &String| l.is_empty()) {
+        desc.pop();
+    }
+
+    desc
+}
+
+/// List all preset categories under `prefix/` and their scripts with descriptions.
+///
+/// Categories are the immediate subdirectories of `prefix/`. Scripts within each
+/// category are sorted by name. Returns categories in alphabetical order.
+pub(crate) fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
+    let normalized = prefix.trim_end_matches('/');
+    let filter = format!("{normalized}/");
+
+    let mut map: BTreeMap<String, Vec<ScriptInfo>> = BTreeMap::new();
+
+    for asset_path in PresetAssets::iter() {
+        let relative: &str = asset_path.as_ref();
+        if !relative.starts_with(filter.as_str()) {
+            continue;
+        }
+        let rest = &relative[filter.len()..];
+        let slash = match rest.find('/') {
+            Some(p) => p,
+            None => continue,
+        };
+        let category = &rest[..slash];
+        let file_name = &rest[slash + 1..];
+
+        if file_name.is_empty() {
+            continue;
+        }
+
+        let description = PresetAssets::get(relative)
+            .map(|f| parse_script_description(f.data.as_ref()))
+            .unwrap_or_default();
+
+        map.entry(category.to_string())
+            .or_default()
+            .push(ScriptInfo {
+                name: file_name.to_string(),
+                description,
+            });
+    }
+
+    map.into_iter()
+        .map(|(name, mut scripts)| {
+            scripts.sort_by(|a, b| a.name.cmp(&b.name));
+            CategoryInfo { name, scripts }
+        })
+        .collect()
 }
 
 /// Remove embedded-asset files under `prefix/` from `target_dir`.
@@ -172,6 +258,73 @@ mod tests {
     #[test]
     fn embedded_assets_not_empty() {
         assert!(PresetAssets::iter().count() > 0, "no assets embedded");
+    }
+
+    #[test]
+    fn parse_description_extracts_comment_block() {
+        let script = b"#!/bin/bash\n# First line.\n# Second line.\n\nsome_command\n";
+        let desc = parse_script_description(script);
+        assert_eq!(desc, vec!["First line.", "Second line."]);
+    }
+
+    #[test]
+    fn parse_description_skips_shebang_only() {
+        let script = b"#!/bin/bash\nsome_command\n";
+        let desc = parse_script_description(script);
+        assert!(desc.is_empty());
+    }
+
+    #[test]
+    fn parse_description_handles_bare_hash_as_empty_line() {
+        let script = b"#!/bin/bash\n# First.\n#\n# Third.\n";
+        let desc = parse_script_description(script);
+        assert_eq!(desc, vec!["First.", "", "Third."]);
+    }
+
+    #[test]
+    fn parse_description_trims_trailing_empty_lines() {
+        let script = b"#!/bin/bash\n# First.\n#\n#\n";
+        let desc = parse_script_description(script);
+        assert_eq!(desc, vec!["First."]);
+    }
+
+    #[test]
+    fn parse_description_empty_content() {
+        let desc = parse_script_description(b"");
+        assert!(desc.is_empty());
+    }
+
+    #[test]
+    fn list_categories_returns_proxy_and_tools() {
+        let cats = list_categories("shell");
+        let names: Vec<&str> = cats.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names.contains(&"proxy"),
+            "proxy category missing: {names:?}"
+        );
+        assert!(
+            names.contains(&"tools"),
+            "tools category missing: {names:?}"
+        );
+    }
+
+    #[test]
+    fn list_categories_proxy_scripts_have_descriptions() {
+        let cats = list_categories("shell");
+        let proxy = cats.iter().find(|c| c.name == "proxy").unwrap();
+        for script in &proxy.scripts {
+            assert!(
+                !script.description.is_empty(),
+                "{} should have a description",
+                script.name
+            );
+        }
+    }
+
+    #[test]
+    fn list_categories_empty_prefix_returns_empty() {
+        let cats = list_categories("nonexistent");
+        assert!(cats.is_empty());
     }
 
     #[tokio::test]

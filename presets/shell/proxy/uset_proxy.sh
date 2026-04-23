@@ -1,6 +1,8 @@
 #!/bin/bash
-
-# 取消代理设置脚本
+# 取消所有代理环境变量及工具代理配置。
+# 清除 http_proxy、https_proxy、all_proxy 等系统环境变量。
+# 同时清除 Git、NPM、Yarn、pnpm 的全局代理设置。
+# 用法: source uset_proxy.sh
 
 echo "🔄 取消代理配置..."
 
@@ -28,8 +30,6 @@ unset all_proxy
 unset ALL_PROXY
 unset no_proxy
 unset NO_PROXY
-
-
 
 # 取消Git代理
 echo "🔧 取消Git代理..."
