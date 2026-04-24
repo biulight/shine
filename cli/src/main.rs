@@ -40,6 +40,8 @@ enum Commands {
         #[arg(value_enum)]
         shell: CompletionShell,
     },
+    /// Check for a newer version of shine
+    Update,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -69,23 +71,27 @@ async fn main() -> Result<()> {
 
     let config = Box::pin(Config::load_or_init()).await?;
 
-    match update_check::check_for_update(&config).await {
-        Ok(UpdateStatus::UpToDate) => {}
-        Ok(UpdateStatus::UpdateAvailable { latest }) => {
-            eprintln!(
-                "A newer version of shine is available: {} -> {}. Please update when convenient.",
-                env!("CARGO_PKG_VERSION"),
-                latest
-            );
+    // Skip the background version check when the user explicitly runs `shine update`,
+    // which does its own forced fetch below.
+    if !matches!(cli.command, Commands::Update) {
+        match update_check::check_for_update(&config).await {
+            Ok(UpdateStatus::UpToDate) => {}
+            Ok(UpdateStatus::UpdateAvailable { latest }) => {
+                eprintln!(
+                    "A newer version of shine is available: {} -> {}. Please update when convenient.",
+                    env!("CARGO_PKG_VERSION"),
+                    latest
+                );
+            }
+            Ok(UpdateStatus::UpdateRequired { latest }) => {
+                bail!(
+                    "A newer patch release of shine is required: {} -> {}. Please update before continuing.",
+                    env!("CARGO_PKG_VERSION"),
+                    latest
+                );
+            }
+            Err(_) => {}
         }
-        Ok(UpdateStatus::UpdateRequired { latest }) => {
-            bail!(
-                "A newer patch release of shine is required: {} -> {}. Please update before continuing.",
-                env!("CARGO_PKG_VERSION"),
-                latest
-            );
-        }
-        Err(_) => {}
     }
 
     if let Commands::App { command: _ } = &cli.command {}
@@ -98,6 +104,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::App { .. } => unreachable!(),
         Commands::Completions { .. } => unreachable!(),
+        Commands::Update => handle_update(&config).await,
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list()).await,
             ShellCommands::Install { category } => {
@@ -108,4 +115,29 @@ async fn main() -> Result<()> {
             }
         },
     }
+}
+
+async fn handle_update(config: &Config) -> Result<()> {
+    let current = env!("CARGO_PKG_VERSION");
+    println!("Checking for updates (current: {current})...");
+
+    match update_check::check_for_update_forced(config).await {
+        Ok(UpdateStatus::UpToDate) => {
+            println!("shine {current} is up to date.");
+        }
+        Ok(UpdateStatus::UpdateAvailable { latest }) => {
+            println!("A newer version of shine is available: {current} -> {latest}.");
+            println!("Please update when convenient.");
+        }
+        Ok(UpdateStatus::UpdateRequired { latest }) => {
+            bail!(
+                "A newer patch release of shine is required: {current} -> {latest}. Please update before continuing."
+            );
+        }
+        Err(e) => {
+            bail!("Update check failed: {e}");
+        }
+    }
+
+    Ok(())
 }

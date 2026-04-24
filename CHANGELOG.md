@@ -5,6 +5,22 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.3.2] — 2026-04-24
+
+### Features
+
+**Manual update check command**
+- Added `shine update` command to manually trigger a version check against the latest GitHub Release
+- Bypasses the 24-hour local cache, always fetches the current release from GitHub
+- Prints the installed version alongside the latest; exits with an error if a required patch update is pending
+- Other commands continue to use the cached check (no extra network round-trip)
+
+### Fixes
+
+- Added a 5-second timeout to the GitHub release HTTP request to prevent indefinite hangs on slow or unreachable networks
+
+---
+
 ## [0.3.1] — 2026-04-24
 
 ### Features

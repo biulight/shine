@@ -30,6 +30,19 @@ struct GithubLatestRelease {
     tag_name: String,
 }
 
+/// Always fetches from GitHub, ignoring the 24-hour cache.
+pub(crate) async fn check_for_update_forced(config: &Config) -> Result<UpdateStatus> {
+    let current = Version::parse(env!("CARGO_PKG_VERSION"))
+        .context("current package version must be valid semver")?;
+    let now_secs = unix_timestamp_now()?;
+    let cache_path = config.shine_dir().join(UPDATE_CACHE_FILE);
+
+    let latest = fetch_latest_version().await?;
+    store_cache(&cache_path, &latest, now_secs).await?;
+
+    Ok(compare_versions(&current, &latest))
+}
+
 pub(crate) async fn check_for_update(config: &Config) -> Result<UpdateStatus> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .context("current package version must be valid semver")?;
@@ -101,6 +114,7 @@ async fn store_cache(cache_path: &Path, latest: &Version, checked_at_unix_secs: 
 async fn fetch_latest_version() -> Result<Version> {
     let client = reqwest::Client::builder()
         .default_headers(default_headers()?)
+        .timeout(Duration::from_secs(5))
         .build()
         .context("failed to build update-check client")?;
 
