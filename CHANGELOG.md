@@ -5,6 +5,22 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.3.1] — 2026-04-24
+
+### Features
+
+**Suffix-free installed commands**
+- Installed shell commands are now accessible without the `.sh` extension (e.g. `set_proxy` instead of `set_proxy.sh`)
+- `~/.shine/bin/` symlinks now use the file stem; known extensions stripped: `.sh`, `.bash`, `.zsh`, `.fish`, `.ps1`
+- Collision detection uses the stem, so `foo.sh` and `foo.zsh` in the same category correctly report a conflict
+
+### Docs
+
+- `shine shell list` footer now states that commands are available directly by name after installation
+- Usage hints in all bundled preset scripts updated to omit `.sh` suffix
+
+---
+
 ## [0.3.0] — 2026-04-24
 
 ### Features
