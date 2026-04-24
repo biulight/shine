@@ -5,6 +5,28 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.5.0] — 2026-04-25
+
+### Features
+
+**App preset management**
+- Added `shine app list`, `shine app install`, and `shine app uninstall` for managing non-shell configuration presets
+- App presets can declare a `shine-dest:` annotation for explicit install targets such as `~/.gitconfig`, `~/.ideavimrc`, or `~/.config/starship/starship.toml`
+- Presets without an annotation now install under `app_default_dest_root/<CATEGORY>/<FILE>`, with `~/.config` used by default
+- Existing unmanaged destination files are backed up to `*.shine.bak` before install, and matching backups are restored during uninstall
+- Installed app files are tracked in `~/.shine/app-manifest.toml` so managed updates and removals stay deterministic
+
+### Docs
+
+- README now documents the new `shine app` workflow, destination resolution rules, backup behavior, and current bundled app presets
+- README pinned-version install example updated to `0.5.0`
+
+### Internal
+
+- Added app preset fixtures for JetBrains IdeaVim, git, and starship
+
+---
+
 ## [0.4.1] — 2026-04-25
 
 ### Fixes

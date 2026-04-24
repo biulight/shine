@@ -13,6 +13,7 @@ A fast Rust CLI tool for managing shell environment presets.
 - **Safe uninstall** — removes only shine-managed files; user-created files are never touched
 - **Dry-run support** — preview any destructive operation before it runs
 - **TOML config** — `~/.shine/config.toml` with comment preservation on updates
+- **App preset installer** — install annotated config files like `~/.gitconfig` or `~/.config/starship/starship.toml`
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
 - **Multi-shell support** — bash, zsh, fish, powershell, elvish
 
@@ -76,6 +77,56 @@ Shell config (~/.zshrc): PATH updated
 
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped.
 
+### List available app presets
+
+```bash
+shine app list
+```
+
+Shows bundled application config categories, file descriptions, and annotated destination hints:
+
+```
+Available app preset categories:
+
+  git (1 file)
+    gitconfig      Personal git configuration with common aliases and sensible defaults.
+                   → ~/.gitconfig
+
+  starship (1 file)
+    starship.toml  Starship prompt: minimal left-prompt with git branch and status.
+                   → ~/.config/starship/starship.toml
+```
+
+### Install app presets
+
+```bash
+shine app install             # install all app categories
+shine app install starship    # install only one category
+shine app install --dry-run   # preview destination writes
+```
+
+`shine app install` first extracts bundled files to `~/.shine/presets/app/`, then copies them to their final destinations. If a preset file starts with a `shine-dest:` annotation, that absolute path is used after `~` expansion. If no annotation is present, `shine` falls back to:
+
+```text
+<app_default_dest_root>/<CATEGORY>/<FILE>
+```
+
+The default `app_default_dest_root` is `~/.config`.
+
+If the destination already exists and is not managed by `shine`, it is moved aside to `*.shine.bak` before the preset is installed. Managed app installs are tracked in `~/.shine/app-manifest.toml`, so repeat installs can safely skip unchanged files and overwrite only files previously installed by `shine`.
+
+### Uninstall app presets
+
+```bash
+shine app uninstall
+shine app uninstall --dry-run
+shine app uninstall --purge
+```
+
+Uninstall removes only app files whose content still matches the version recorded in `~/.shine/app-manifest.toml`. If a file was modified after installation, `shine` leaves it in place and reports it as user-modified. When an unmanaged file was backed up during install, uninstall restores that backup automatically.
+
+`--purge` additionally removes `~/.shine/presets/app/` and `~/.shine/app-manifest.toml`.
+
 ### Runtime update policy
 
 `shine` checks the latest GitHub Release for `biulight/shine` before executing commands and caches the result for 24 hours under `~/.shine/`.
@@ -97,7 +148,7 @@ shine upgrade  # download and install the latest release for this platform
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.4.1 sh install.sh
+SHINE_VERSION=0.5.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -168,22 +219,44 @@ presets_dir = "/custom/presets"
 
 Priority: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `config.toml[presets_dir]` > default.
 
+You can also change the fallback install root for app presets that do not carry a `shine-dest:` annotation:
+
+```toml
+app_default_dest_root = "~/.config"
+```
+
 ## Directory Layout
 
 ```
 ~/.shine/
+├── app-manifest.toml
 ├── config.toml
 ├── bin/
 │   ├── set_proxy        # symlink → presets/shell/proxy/set_proxy.sh
 │   ├── uset_proxy       # symlink → presets/shell/proxy/uset_proxy.sh
 │   └── test_tools       # symlink → presets/shell/tools/test_tools.sh
 └── presets/
+    ├── app/
+    │   ├── JetBrains/
+    │   │   └── .ideavimrc
+    │   ├── git/
+    │   │   └── gitconfig
+    │   └── starship/
+    │       └── starship.toml
     └── shell/
         ├── proxy/
         │   ├── set_proxy.sh
         │   └── uset_proxy.sh
         └── tools/
             └── test_tools.sh
+
+Installed app files live at their annotated destinations, for example:
+
+```text
+~/.gitconfig
+~/.ideavimrc
+~/.config/starship/starship.toml
+```
 ```
 
 ## Development
@@ -207,14 +280,14 @@ shine/
 │       ├── main.rs
 │       ├── bin_links.rs       # symlink management
 │       ├── presets.rs         # embedded-asset extraction, list_categories
+│       ├── apps/              # app preset install/uninstall, manifest, destination resolution
 │       ├── config/            # Config struct, load/save, env-var priority chain
 │       ├── commands/          # clap subcommand definitions
 │       └── shells/            # ShellType, install/uninstall/list, PATH injection
 ├── utils/      # library crate — TOML comment-preserving migration
-└── presets/    # shell scripts embedded into the binary at compile time
+└── presets/    # bundled shell/app files embedded into the binary at compile time
+    ├── app/
     └── shell/
-        ├── proxy/
-        └── tools/
 ```
 
 ## License
