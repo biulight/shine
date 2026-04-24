@@ -137,6 +137,8 @@ pub(crate) async fn handle_list() -> Result<()> {
 
     println!("Use 'shine shell install <CATEGORY>' to install a specific category.");
     println!("Use 'shine shell install' to install all.");
+    println!();
+    println!("After installation, commands are available directly by name (e.g. `set_proxy`).");
 
     Ok(())
 }
@@ -342,6 +344,11 @@ mod tests {
         assert!(
             first_bin_entry.is_some(),
             "bin dir should have symlinks after install"
+        );
+        // symlinks use stem names (no .sh suffix)
+        assert!(
+            config.bin_dir().join("set_proxy").exists(),
+            "bin link should be named without extension"
         );
 
         handle_uninstall(&config, false, false).await.unwrap();

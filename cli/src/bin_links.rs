@@ -111,19 +111,17 @@ pub(crate) async fn link_executables(
             continue;
         }
 
-        let file_name = match source.file_name() {
-            Some(n) => n.to_owned(),
-            None => continue,
-        };
+        if source.file_name().is_none() {
+            continue;
+        }
+        let stem = link_stem(source);
 
-        if !seen.insert(file_name.clone()) {
-            report
-                .conflicts
-                .push((bin_dir.join(&file_name), source.clone()));
+        if !seen.insert(stem.clone()) {
+            report.conflicts.push((bin_dir.join(&stem), source.clone()));
             continue;
         }
 
-        let link_path = bin_dir.join(&file_name);
+        let link_path = bin_dir.join(&stem);
 
         match tokio::fs::symlink_metadata(&link_path).await {
             Ok(meta) if meta.file_type().is_symlink() => {
@@ -166,6 +164,15 @@ pub(crate) async fn link_executables(
     }
 
     Ok(report)
+}
+
+fn link_stem(path: &Path) -> std::ffi::OsString {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("sh" | "bash" | "zsh" | "fish" | "ps1") => {
+            path.file_stem().map(|s| s.to_owned()).unwrap_or_default()
+        }
+        _ => path.file_name().map(|n| n.to_owned()).unwrap_or_default(),
+    }
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -249,6 +256,8 @@ mod tests {
         let link = &report.created[0];
         assert!(link.is_symlink());
         assert_eq!(fs::read_link(link).await.unwrap(), exe);
+        // symlink name is the stem, not the full filename
+        assert_eq!(link.file_name().unwrap(), "run");
 
         fs::remove_dir_all(&src).await.unwrap();
         fs::remove_dir_all(&bin).await.unwrap();
@@ -274,7 +283,7 @@ mod tests {
     async fn skips_when_correct_symlink_already_exists() {
         let (src, bin) = make_dirs().await;
         let exe = make_executable(&src, "run.sh").await;
-        tokio::fs::symlink(&exe, bin.join("run.sh")).await.unwrap();
+        tokio::fs::symlink(&exe, bin.join("run")).await.unwrap();
 
         let report = link_executables(&bin, &[exe], false).await.unwrap();
 
@@ -290,7 +299,7 @@ mod tests {
     async fn reports_conflict_when_regular_file_exists() {
         let (src, bin) = make_dirs().await;
         let exe = make_executable(&src, "run.sh").await;
-        make_plain(&bin, "run.sh").await;
+        make_plain(&bin, "run").await;
 
         let report = link_executables(&bin, &[exe], false).await.unwrap();
 
@@ -307,16 +316,14 @@ mod tests {
         let (src, bin) = make_dirs().await;
         let exe = make_executable(&src, "run.sh").await;
         let other = make_executable(&src, "other.sh").await;
-        tokio::fs::symlink(&other, bin.join("run.sh"))
-            .await
-            .unwrap();
+        tokio::fs::symlink(&other, bin.join("run")).await.unwrap();
 
         let report = link_executables(&bin, std::slice::from_ref(&exe), true)
             .await
             .unwrap();
 
         assert_eq!(report.overwritten.len(), 1);
-        assert_eq!(fs::read_link(bin.join("run.sh")).await.unwrap(), exe);
+        assert_eq!(fs::read_link(bin.join("run")).await.unwrap(), exe);
 
         fs::remove_dir_all(&src).await.unwrap();
         fs::remove_dir_all(&bin).await.unwrap();
@@ -341,7 +348,7 @@ mod tests {
         let report = link_executables(&bin, &[exe], false).await.unwrap();
 
         assert_eq!(report.created.len(), 1);
-        assert!(bin.join("set_proxy.sh").exists());
+        assert!(bin.join("set_proxy").exists());
 
         fs::remove_dir_all(&src).await.unwrap();
         fs::remove_dir_all(&bin).await.unwrap();
