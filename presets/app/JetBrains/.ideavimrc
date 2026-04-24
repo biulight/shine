@@ -1,0 +1,405 @@
+" shine-dest: ~/.ideavimrc
+" ~/.ideavimrc - JetBrains IDEs 的 Vim 模式配置文件
+
+" ================================================================================================
+" = 插件 =====================================
+" ================================================================================================
+" https://github.com/JetBrains/ideavim/wiki/IdeaVim-Plugins
+set NERDTree
+set easymotion
+set multiple-cursors
+set commentary
+set argtextobj
+set textobj-entire
+set ReplaceWithRegister
+set exchange
+set vim-paragraph-motion
+set textobj-indent
+set sneak
+set surround
+
+
+" ================================================================================================
+" = 基础设置 =====================================
+" ================================================================================================
+" 共享系统粘贴板
+set clipboard+=unnamed
+" 忽略大小写
+set igcase
+" 上下方保留5行预览代码
+set scrolloff=5
+" 设置命令历史记录条数
+set history=200
+" 显示当前行号
+set number
+" 显示相对行号
+set relativenumber
+" 打开增量搜索模式,随着键入即时搜索
+set incsearch
+" 搜索高亮
+set hlsearch
+" 保证normal模式是英文键盘
+" set keep-english-in-normal
+
+
+" ===============================================================================================
+" = 无引导键映射 =====================================
+" ================================================================================================
+inoremap jk <ESC>
+
+nnoremap H ^
+nnoremap L g_
+nnoremap J 5j
+nnoremap K 5k
+
+vnoremap H ^
+vnoremap L g_
+vnoremap J 5j
+vnoremap K 5k
+
+" g: go to somewhere
+map ge <action>(GotoNextError)
+map gj <action>(MethodDown)
+map gk <action>(MethodUp)
+map gp <action>(WebOpenInAction)
+map gi <action>(GotoImplementation)
+map ga '.
+
+" input in somewhere
+" 在标签内输入
+nmap ti f>a
+" 在函数参数末输入
+nmap mi gmf)i
+
+" Tab切换
+nnoremap <tab> gt
+vnoremap <tab> gt
+nnoremap <s-tab> gT
+vnoremap <s-tab> gT
+
+
+" 标记和书签
+map ma <action>(ToggleBookmark)
+
+map ms mS
+map md mD
+map mf mF
+
+map 's 'S
+map 'd 'D
+map 'f 'F
+
+" open terminal
+nnoremap <c-'> :action ActivateTerminalToolWindow<CR> " it isn't work in terminal
+nnoremap <c-t> :action ActivateTerminalToolWindow<CR>
+vnoremap <c-'> :action ActivateTerminalToolWindow<CR>
+" close terminal
+" nnoremap <leader>ct <action>(CloseActiveTerminalSession)
+
+" 窗口拆分
+nnoremap <c-\> :action SplitVertically<CR>
+nnoremap <c--> :action SplitHorizontally<CR>
+nnoremap <c-m> :action MoveEditorToOppositeTabGroup<CR>
+nnoremap ;q :action Unsplit<CR>
+nnoremap ;a :action UnsplitAll<CR>
+
+" 窗口之间光标移动
+nnoremap <A-h> <c-w>h
+nnoremap <A-l> <c-w>l
+nnoremap <A-j> <c-w>j
+nnoremap <A-k> <c-w>k
+
+" multiple-cursors  多光标
+map mc <A-n>
+map mx <A-x>
+map mp <A-p>
+
+" ================================================================================================
+" = 引导键映射 =====================================
+" ================================================================================================
+" 引导键
+let mapleader=" "
+
+
+" ================================================================================================
+"  Which-Key
+" ================================================================================================
+set which-key
+set notimeout
+
+" a ⭐️
+let g:WhichKeyDesc_a = "<leader>a 作者"
+nmap <leader>a <action>(Annotate)
+
+
+" b ⭐️
+let g:WhichKeyDesc_b = "<leader>b 断点"
+nmap <leader>b <action>(ToggleLineBreakpoint)
+
+
+" c ⭐️
+let g:WhichKeyDesc_c = "<leader>c 关闭/拷贝"
+
+let g:WhichKeyDesc_c_CloseCurrentFile = "<leader>cc 关闭当前标签"
+nmap <leader>cc <action>(CloseContent)
+
+let g:WhichKeyDesc_c_CloseAllEditors = "<leader>ca 关闭所有标签"
+nmap <leader>ca <action>(CloseAllEditors)
+
+let g:WhichKeyDesc_c_CloseAllEditorsButActive = "<leader>co 关闭其他标签"
+nmap <leader>co <action>(CloseAllEditorsButActive)
+
+let g:WhichKeyDesc_c_CopyFunction = "<leader>cf 拷贝当前函数"
+nmap <leader>cf Vg_%y
+
+
+" d ⭐️
+let g:WhichKeyDesc_d = "<leader>d 删除/勿扰"
+
+let g:WhichKeyDesc_d_DeleteObject = "<leader>do 删除{}"
+nmap <leader>do S<space>{Vg_%D
+
+let g:WhichKeyDesc_d_DeleteFunction = "<leader>df 删除函数"
+nmap <leader>df gmVg_%d
+
+let g:WhichKeyDesc_d_NotDisturbMode = "<leader>dd 勿扰模式"
+nmap <leader>dd <action>(ToggleDistractionFreeMode)
+
+" e ⭐
+let g:WhichKeyDesc_e ="<leader>e nvimtree"
+nmap <leader>e <action>(ActivateProjectToolWindow)
+vmap <leader>e <action>(ActivateProjectToolWindow)
+
+" f ⭐
+let g:WhichKeyDesc_f = "<leader>f 查找/格式化"
+
+let g:WhichKeyDesc_f_FindInCurrentFile = "<leader>ff 当前文件查找"
+nmap <leader>ff <action>(Find)
+vmap <leader>ff <action>(Find)
+
+let g:WhichKeyDesc_f_FindInAllFile = "<leader>fa 全文件查找"
+nmap <leader>fa <action>(FindInPath)
+vmap <leader>fa <action>(FindInPath)
+
+let g:WhichKeyDesc_f_FindFileLocation = "<leader>fl 文件定位"
+nmap <leader>fl <action>(SelectInProjectView)
+vmap <leader>fl <action>(SelectInProjectView)
+
+let g:WhichKeyDesc_f_FindUsages = "<leader>fu 查找用法"
+nmap <leader>fu <action>(FindUsages)
+vmap <leader>fu <action>(FindUsages)
+
+if &ide =~? 'webstorm'
+  let g:WhichKeyDesc_f_FormatCode = "<leader>fc 格式化代码"
+  nmap <leader>fc :action ReformatWithPrettierAction<CR>:action Javascript.Linters.EsLint.Fix<CR>
+  vmap <leader>fc :action ReformatWithPrettierAction<CR>:action Javascript.Linters.EsLint.Fix<CR>
+elseif &ide =~? 'pycharm'
+else
+  let g:WhichKeyDesc_f_FormatCode = "<leader>fc 格式化代码"
+  nmap <leader>fc :action ReformatCode<CR>
+  vmap <leader>fc :action ReformatCode<CR>
+endif
+
+let g:WhichKeyDesc_f_FormatFile = "<leader>lf 格式化文件"
+nmap <leader>lf <action>(ShowReformatFileDialog)
+vmap <leader>lf <action>(ShowReformatFileDialog)
+
+
+let g:WhichKeyDesc_f_FullScreen = "<leader>fs 全屏"
+nmap <leader>fs <action>(ToggleZenMode)
+vmap <leader>fs <action>(ToggleZenMode)
+
+" g ⭐️
+"let g:WhichKeyDesc_Git = "<leader>g Git"
+"
+"let g:WhichKeyDesc_Git_GitPull = "<leader>gu 拉取"
+"nmap <leader>gu <action>(Vcs.UpdateProject)
+"vmap <leader>gu <action>(Vcs.UpdateProject)
+"
+"let g:WhichKeyDesc_Git_GitCommit = "<leader>gc 提交"
+"nmap <leader>gc <action>(CheckinProject)
+"vmap <leader>gc <action>(CheckinProject)
+"
+"let g:WhichKeyDesc_Git_GitPush = "<leader>gp 推送"
+"nmap <leader>gp <action>(Vcs.Push)
+"vmap <leader>gp <action>(Vcs.Push)
+"
+"let g:WhichKeyDesc_Git_GitReset = "<leader>gr 回滚"
+"nmap <leader>gr <action>(ChangesView.Revert)
+"vmap <leader>gr <action>(ChangesView.Revert)
+
+
+" h ⭐️
+let g:WhichKeyDesc_TagLeft = "<leader>h 左切标签"
+nnoremap <leader>h gT
+vnoremap <leader>h gT
+
+
+
+" j ⭐️
+let g:WhichKeyDesc_Jump = "<leader>j 跳转"
+
+let g:WhichKeyDesc_s_JavaDoc = "<leader>jd 快速JavaDoc"
+nmap <leader>jd <action>(QuickJavaDoc)
+
+let g:WhichKeyDesc_Jump_EveryWhere = "<leader>je 任意跳转"
+nmap <leader>je :action AceAction<CR>
+vmap <leader>je :action AceAction<CR>
+
+let g:WhichKeyDesc_Jump_JumpAndSelect = "<leader>js 跳转并选择"
+map <leader>js :action AceTargetAction<CR>
+
+
+let g:WhichKeyDesc_Jump_OpenedProject = "<leader>jp 跳转到已打开项目"
+nmap <leader>jp <action>(OpenProjectWindows)
+
+
+" l ⭐️
+" let g:WhichKeyDesc_TagRight = "<leader>l 右切标签"
+" nnoremap <leader>l gt
+" vnoremap <leader>l gt
+
+
+" m ⭐️
+let g:WhichKeyDesc_m = "<leader>m 移动"
+
+let g:WhichKeyDesc_m_MoveStatementUp = "<leader>mu 向上移动行"
+nmap <leader>mu <action>(MoveStatementUp)
+
+let g:WhichKeyDesc_m_MoveStatementDown = "<leader>md 向下移动行"
+nmap <leader>md <action>(MoveStatementDown)
+
+let g:WhichKeyDesc_m_MoveCaretToCodeBlockStart = "<leader>mf 移动到代码块开始"
+nmap <leader>mf <action>(MoveCaretToCodeBlockStart)
+
+
+" n ⭐️
+let g:WhichKeyDesc_n = "<leader>n Navigate/取消"
+
+let g:WhichKeyDesc_n_SearchEverywhere = "<leader>na SearchEverywhere"
+nmap <leader>na <action>(SearchEverywhere)
+vmap <leader>na <action>(SearchEverywhere)
+
+let g:WhichKeyDesc_n_GotoFile = "<leader>nf GotoFile"
+nmap <leader>nf <action>(GotoFile)
+vmap <leader>nf <action>(GotoFile)
+
+let g:WhichKeyDesc_n_TextSearchAction = "<leader>nt TextSearchAction"
+nmap <leader>nt <action>(TextSearchAction)
+vmap <leader>nt <action>(TextSearchAction)
+
+let g:WhichKeyDesc_n_GotoSymbol = "<leader>ns GotoSymbol"
+nmap <leader>ns <action>(GotoSymbol)
+vmap <leader>ns <action>(GotoSymbol)
+
+let g:WhichKeyDesc_No_NoAllNotice = "<leader>nn 清除所有通知"
+nmap <leader>nn <action>(ClearAllNotifications)
+vmap <leader>nn <action>(ClearAllNotifications)
+
+let g:WhichKeyDesc_No_Highlight = "<leader>nh 取消高亮"
+nmap <leader>nh :nohlsearch<CR>
+vmap <leader>nh :nohlsearch<CR>
+
+" r ⭐️
+let g:WhichKeyDesc_r = "<leader>r 运行/替换/重构"
+
+let g:WhichKeyDesc_r_Run = "<leader>ru 运行"
+nmap <leader>ru <action>(Run)
+
+let g:WhichKeyDesc_r_RunDebug = "<leader>rd 调试"
+nmap <leader>rd <action>(DebugClass)
+
+let g:WhichKeyDesc_r_RunConfiguration = "<leader>rg 运行配置"
+nmap <leader>rg <action>(RunConfiguration)
+
+let g:WhichKeyDesc_r_ReopenClosedTab = "<leader>rc 重开最近关闭标签"
+nmap <leader>rc <action>(ReopenClosedTab)
+
+let g:WhichKeyDesc_r_ExtractMethod = "<leader>rm 提取方法"
+nmap <leader>rm <action>(ExtractMethod)
+vmap <leader>rm <action>(ExtractMethod)
+
+let g:WhichKeyDesc_r_RenameElement = "<leader>rn 重构变量名"
+nmap <leader>rn <action>(RenameElement)
+vmap <leader>rn <action>(RenameElement)
+
+let g:WhichKeyDesc_r_ReplaceInCurrentFile = "<leader>rr 当前文件替换"
+nmap <leader>rr <action>(Replace)
+vmap <leader>rr <action>(Replace)
+
+let g:WhichKeyDesc_r_ReplaceInAllFile = "<leader>ra 全文件替换"
+nmap <leader>ra <action>(ReplaceInPath)
+vmap <leader>ra <action>(ReplaceInPath)
+
+let g:WhichKeyDesc_r_RollbackChangedLines = "<leader>rl 回滚行"
+nmap <leader>rl <action>(Vcs.RollbackChangedLines)
+vmap <leader>rl <action>(Vcs.RollbackChangedLines)
+
+
+" s ⭐️
+let g:WhichKeyDesc_Show = "<leader>s 显示/停止"
+
+let g:WhichKeyDesc_s_ShowCurrentChange = "<leader>sc 显示光标下的变更"
+nmap <leader>sc <action>(VcsShowCurrentChangeMarker)
+
+let g:WhichKeyDesc_s_ShowIntentionActions = "<leader>si 显示意图操作"
+nnoremap <leader>si :action ShowIntentionActions<CR>
+
+let g:WhichKeyDesc_s_ShowErrorDescription = "<leader>se 显示错误描述"
+nmap <leader>se <action>(ShowErrorDescription)
+
+let g:WhichKeyDesc_Show_Bookmarks = "<leader>sb 书签列表"
+nmap <leader>sb <action>(ShowBookmarks)
+
+let g:WhichKeyDesc_Show_ShowFileStructure = "<leader>ss 文件结构"
+nmap <leader>ss <action>(FileStructurePopup)
+
+let g:WhichKeyDesc_s_StopRun = "<leader>st 停止运行"
+nmap <leader>st <action>(Stop)
+
+" t ⭐️
+let g:WhichKeyDesc_Trans = "<leader>t 翻译"
+
+let g:WhichKeyDesc_Trans_Translate = "<leader>tt 翻译"
+nmap <leader>tt <action>($EditorTranslateAction)
+vmap <leader>tt <action>($EditorTranslateAction)
+
+let g:WhichKeyDesc_Trans_TranslateAndReplace = "<leader>tr 翻译并替换"
+nmap <leader>tr <action>($TranslateAndReplaceAction)
+vmap <leader>tr <action>($TranslateAndReplaceAction)
+
+" v 选中
+let g:WhichKeyDesc_Selected = "<leader>v 选中"
+nmap <leader>v <action>(EditorSelectWord)
+vmap <leader>v <action>(EditorSelectWord)
+
+" z 折叠 ⭐️
+let g:WhichKeyDesc_Zip = "<leader>z 折叠"
+
+let g:WhichKeyDesc_Zip_unZipAll = "<leader>zo 展开所有"
+nmap <leader>zo <action>(ExpandAllRegions)
+vmap <leader>zo <action>(ExpandAllRegions)
+
+let g:WhichKeyDesc_Zip_ZipAll = "<leader>zc 折叠所有"
+nmap <leader>zc <action>(CollapseAllRegions)
+vmap <leader>zc <action>(CollapseAllRegions)
+
+
+" ================================================================================================
+" = 额外的 =====================================
+" ================================================================================================
+
+" 增加空行
+let g:WhichKeyDesc_TopAddBlankLine = "<leader>[ 上增一行"
+nmap <leader>[ O<esc>j
+
+let g:WhichKeyDesc_DownAddBlankLine = "<leader>] 下增一行"
+nmap <leader>] o<esc>k
+
+" 重新加载 .ideavimrc
+let g:WhichKeyDesc_ReloadVimRc = "<leader>~ ReloadVimRc"
+nmap <leader>~ <action>(IdeaVim.ReloadVimRc.reload)
+
+" 单词跳转: <leader><leader>w 或者 b
+" 字母跳转: <leader><leader>s
+" 上下行跳转: <leader><leader>j 或者 k

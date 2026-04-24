@@ -35,6 +35,15 @@ pub(crate) struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub presets_dir_override: Option<PathBuf>,
+    /// Optional override for the default destination root used by `shine app install`
+    /// when a preset file carries no `shine-dest:` annotation.
+    /// Defaults to `~/.config` when not set.
+    #[serde(
+        rename = "app_default_dest_root",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub app_default_dest_root_override: Option<PathBuf>,
 }
 
 impl Config {
@@ -107,6 +116,16 @@ impl Config {
             .expect("config_path is always under the shine config directory")
     }
 
+    pub(crate) fn app_default_dest_root(&self) -> PathBuf {
+        match &self.app_default_dest_root_override {
+            Some(p) => {
+                let s = p.to_str().unwrap_or("~/.config");
+                PathBuf::from(shellexpand::tilde(s).to_string())
+            }
+            None => self.home_dir.join(".config"),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn new_for_test(dir: &Path) -> Self {
         Self {
@@ -118,6 +137,7 @@ impl Config {
             schema_version: 0,
             shell_type: ShellType::default(),
             presets_dir_override: None,
+            app_default_dest_root_override: None,
         }
     }
 
@@ -213,6 +233,7 @@ impl Default for Config {
             schema_version: 0,
             shell_type: ShellType::default(),
             presets_dir_override: None,
+            app_default_dest_root_override: None,
         }
     }
 }
@@ -322,6 +343,7 @@ mod tests {
             schema_version: 0,
             shell_type: ShellType::default(),
             presets_dir_override: None,
+            app_default_dest_root_override: None,
         }
     }
 
@@ -434,6 +456,7 @@ mod tests {
             schema_version: 0,
             shell_type: ShellType::default(),
             presets_dir_override: None,
+            app_default_dest_root_override: None,
         };
         assert!(config.save().await.is_err());
     }

@@ -1,0 +1,25 @@
+# shine-dest: ~/.gitconfig
+# Personal git configuration with common aliases and sensible defaults.
+
+[pull]
+    rebase = true
+
+[push]
+    default = current
+
+[init]
+    defaultBranch = main
+
+[core]
+    editor = vim
+    autocrlf = input
+
+[color]
+    ui = auto
+
+[alias]
+    st = status
+    co = checkout
+    br = branch
+    lg = log --oneline --graph --decorate --all
+    undo = reset HEAD~1 --mixed

@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use clap::{Parser, ValueEnum};
 
+mod apps;
 mod bin_links;
 mod commands;
 mod config;
@@ -31,6 +32,7 @@ enum Commands {
         #[command(subcommand)]
         command: ShellCommands,
     },
+    /// Install app config files (e.g. starship.toml, .ideavimrc) to their annotated destinations
     App {
         #[command(subcommand)]
         command: AppCommands,
@@ -96,16 +98,22 @@ async fn main() -> Result<()> {
         }
     }
 
-    if let Commands::App { command: _ } = &cli.command {}
-
     if let Commands::Completions { shell: _ } = &cli.command {
         let _stdout = std::io::stdout().lock();
         return Ok(());
     }
 
     match cli.command {
-        Commands::App { .. } => unreachable!(),
         Commands::Completions { .. } => unreachable!(),
+        Commands::App { command } => match command {
+            AppCommands::List => Box::pin(apps::handle_list()).await,
+            AppCommands::Install { category, dry_run } => {
+                Box::pin(apps::handle_install(&config, category, dry_run)).await
+            }
+            AppCommands::Uninstall { purge, dry_run } => {
+                Box::pin(apps::handle_uninstall(&config, purge, dry_run)).await
+            }
+        },
         Commands::Update => handle_update(&config).await,
         Commands::Upgrade => handle_upgrade(&config).await,
         Commands::Shell { command } => match command {

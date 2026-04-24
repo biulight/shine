@@ -21,6 +21,7 @@ pub(crate) struct RemoveReport {
 pub(crate) struct ScriptInfo {
     pub name: String,
     pub description: Vec<String>,
+    pub dest_annotation: Option<String>,
 }
 
 pub(crate) struct CategoryInfo {
@@ -28,7 +29,37 @@ pub(crate) struct CategoryInfo {
     pub scripts: Vec<ScriptInfo>,
 }
 
-/// Parse the leading comment block from a shell script, skipping the shebang line.
+/// Extract a `shine-dest:` annotation from a single comment line.
+///
+/// Recognises `# shine-dest:` (shell/TOML/INI) and `" shine-dest:` (VimScript).
+pub(crate) fn extract_annotation_from_line(line: &str) -> Option<String> {
+    const PREFIXES: &[&str] = &["# shine-dest:", "\" shine-dest:"];
+    for &prefix in PREFIXES {
+        if let Some(rest) = line.trim_start().strip_prefix(prefix) {
+            let dest = rest.trim().to_string();
+            if !dest.is_empty() {
+                return Some(dest);
+            }
+        }
+    }
+    None
+}
+
+/// Parse the `shine-dest:` annotation from the first (or second, if shebang) line.
+pub(crate) fn parse_dest_annotation(content: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(content).ok()?;
+    let mut lines = text.lines();
+    let first = lines.next()?;
+    let candidate = if first.starts_with("#!") {
+        lines.next()?
+    } else {
+        first
+    };
+    extract_annotation_from_line(candidate)
+}
+
+/// Parse the leading comment block from a shell script, skipping the shebang line
+/// and any `shine-dest:` annotation line.
 ///
 /// Collects consecutive lines starting with `# ` or bare `#` until the first
 /// non-comment, non-shebang line. Trailing empty description lines are trimmed.
@@ -38,6 +69,9 @@ pub(crate) fn parse_script_description(content: &[u8]) -> Vec<String> {
 
     for line in text.lines() {
         if line.starts_with("#!") {
+            continue;
+        }
+        if extract_annotation_from_line(line).is_some() {
             continue;
         }
         if let Some(rest) = line.strip_prefix("# ") {
@@ -83,15 +117,21 @@ pub(crate) fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
             continue;
         }
 
-        let description = PresetAssets::get(relative)
+        let asset_data = PresetAssets::get(relative);
+        let description = asset_data
+            .as_ref()
             .map(|f| parse_script_description(f.data.as_ref()))
             .unwrap_or_default();
+        let dest_annotation = asset_data
+            .as_ref()
+            .and_then(|f| parse_dest_annotation(f.data.as_ref()));
 
         map.entry(category.to_string())
             .or_default()
             .push(ScriptInfo {
                 name: file_name.to_string(),
                 description,
+                dest_annotation,
             });
     }
 
