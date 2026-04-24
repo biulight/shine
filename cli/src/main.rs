@@ -133,12 +133,12 @@ async fn handle_update(config: &Config) -> Result<()> {
             println!("Run `shine upgrade` to install it.");
         }
         Ok(UpdateStatus::UpdateRequired { latest }) => {
-            bail!(
-                "A newer patch release of shine is required: {current} -> {latest}. Run `shine upgrade` before continuing."
-            );
+            println!("A newer patch release of shine is available: {current} -> {latest}.");
+            println!("Run `shine upgrade` to install it.");
         }
         Err(e) => {
-            bail!("Update check failed: {e}");
+            eprintln!("Update check failed: {e}");
+            std::process::exit(1);
         }
     }
 
