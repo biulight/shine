@@ -42,12 +42,7 @@ build_download_url() {
   version="$1"
   target="$2"
   asset="shine-v${version}-${target}.tar.gz"
-
-  if [ "$version" = "latest" ]; then
-    printf 'https://github.com/%s/releases/latest/download/%s' "$SHINE_REPO" "$asset"
-  else
-    printf 'https://github.com/%s/releases/download/v%s/%s' "$SHINE_REPO" "$version" "$asset"
-  fi
+  printf 'https://github.com/%s/releases/download/v%s/%s' "$SHINE_REPO" "$version" "$asset"
 }
 
 download_file() {
@@ -67,11 +62,28 @@ download_file() {
   fail "either curl or wget is required"
 }
 
+resolve_version() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "https://api.github.com/repos/${SHINE_REPO}/releases/latest" \
+      | grep '"tag_name"' \
+      | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/'
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- "https://api.github.com/repos/${SHINE_REPO}/releases/latest" \
+      | grep '"tag_name"' \
+      | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/'
+  else
+    fail "either curl or wget is required"
+  fi
+}
+
 main() {
   need_cmd tar
   target="$(detect_target)"
   if [ "$SHINE_VERSION" = "latest" ]; then
-    asset_version="latest"
+    log "Resolving latest version..."
+    asset_version="$(resolve_version)"
+    [ -n "$asset_version" ] || fail "could not resolve latest version from GitHub API"
+    log "Latest version: v${asset_version}"
   else
     asset_version="$SHINE_VERSION"
   fi
