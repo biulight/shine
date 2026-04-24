@@ -5,17 +5,45 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.4.0] — 2026-04-24
+
+### Features
+
+**GitHub Release self-upgrade**
+- Added `shine upgrade` to download and install the latest GitHub Release asset for the current macOS/Linux platform
+- Upgrade installs the matching `darwin`/`linux` and `x86_64`/`aarch64` asset, extracts the packaged binary, and replaces the current executable in place
+- Successful upgrades refresh the local update-check cache so subsequent commands do not keep warning about the old version
+
+**Update command coexistence**
+- Kept `shine update` as the manual version-check command while adding `shine upgrade` as the install action
+- Runtime update warnings now direct users to run `shine upgrade` when a newer release is available
+
+**Release installer script**
+- Added top-level `install.sh` for one-step installation from GitHub Releases into `~/.local/bin`
+- Supports `SHINE_INSTALL_DIR`, `SHINE_VERSION`, and `SHINE_REPO` overrides for custom install locations, pinned versions, or alternate repositories
+- Detects the current platform, downloads the matching `tar.gz` asset, installs `shine`, and warns when the install directory is not on `PATH`
+
+**Release asset publishing**
+- GitHub Actions now builds versioned Release assets for `darwin-x86_64`, `darwin-aarch64`, `linux-x86_64`, and `linux-aarch64`
+- Tag builds upload packaged `shine-v{version}-{target}.tar.gz` archives together with `install.sh` to the GitHub Release
+
+### Docs
+
+- README now documents `shine update` vs `shine upgrade`, GitHub Release installation, and `install.sh` environment variables
+
+### Internal
+
+- Added release-asset selection and archive extraction tests for the new upgrade flow
+- Stabilized config tests that mutate `SHINE_CONFIG_DIR` and `SHINE_PRESETS` under parallel test execution
+
+---
+
 ## [0.3.2] — 2026-04-24
 
 ### Features
 
-**Release install and self-upgrade**
-- Added `shine upgrade` to download and install the latest GitHub Release asset for the current macOS/Linux platform
-- Added top-level `install.sh` for one-step installation into `~/.local/bin`
-- GitHub Release builds now publish `install.sh` plus versioned `tar.gz` assets for supported targets
-
 **Manual update check command**
-- Kept `shine update` as the manual version-check command against the latest GitHub Release
+- Added `shine update` command to manually trigger a version check against the latest GitHub Release
 - Bypasses the 24-hour local cache, always fetches the current release from GitHub
 - Prints the installed version alongside the latest; exits with an error if a required patch update is pending
 - Other commands continue to use the cached check (no extra network round-trip)

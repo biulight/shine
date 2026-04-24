@@ -97,7 +97,7 @@ shine upgrade  # download and install the latest release for this platform
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.3.2 sh install.sh
+SHINE_VERSION=0.4.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
