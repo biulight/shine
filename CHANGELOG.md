@@ -5,6 +5,24 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.4.1] — 2026-04-25
+
+### Fixes
+
+- `install.sh` now resolves the actual latest GitHub release tag before building the asset download URL, so `SHINE_VERSION=latest` installs correctly
+- `shine update` and version-gate failures now print clearer user-facing messages with proper exit handling
+
+### Docs
+
+- README pinned-version install example updated to `0.4.1`
+
+### Internal
+
+- Added `renovate.json` to automate dependency update management
+- Added `CDLA-Permissive-2.0` to the cargo-deny license allowlist
+
+---
+
 ## [0.4.0] — 2026-04-24
 
 ### Features
