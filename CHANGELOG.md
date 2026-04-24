@@ -9,8 +9,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
+**Release install and self-upgrade**
+- Added `shine upgrade` to download and install the latest GitHub Release asset for the current macOS/Linux platform
+- Added top-level `install.sh` for one-step installation into `~/.local/bin`
+- GitHub Release builds now publish `install.sh` plus versioned `tar.gz` assets for supported targets
+
 **Manual update check command**
-- Added `shine update` command to manually trigger a version check against the latest GitHub Release
+- Kept `shine update` as the manual version-check command against the latest GitHub Release
 - Bypasses the 24-hour local cache, always fetches the current release from GitHub
 - Prints the installed version alongside the latest; exits with an error if a required patch update is pending
 - Other commands continue to use the cached check (no extra network round-trip)

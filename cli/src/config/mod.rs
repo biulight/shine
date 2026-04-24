@@ -302,6 +302,15 @@ fn resolve_runtime_config_dirs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("environment lock must not be poisoned")
+    }
 
     fn config_in(dir: &Path) -> Config {
         Config {
@@ -436,8 +445,10 @@ mod tests {
         assert_eq!(config.bin_dir(), dir.join("bin"));
     }
 
-    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
     async fn load_or_init_creates_bin_dir() {
+        let _guard = env_lock();
         let dir = make_temp_dir().await;
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
 
@@ -453,6 +464,7 @@ mod tests {
 
     #[test]
     fn shine_config_dir_overrides_everything() {
+        let _guard = env_lock();
         let default_shine = PathBuf::from("/home/user/.shine");
         let default_presets = PathBuf::from("/home/user/.shine/presets");
         let custom = std::env::temp_dir().join("shine-override-test");
@@ -467,6 +479,7 @@ mod tests {
 
     #[test]
     fn shine_presets_overrides_presets_only() {
+        let _guard = env_lock();
         let default_shine = PathBuf::from("/home/user/.shine");
         let default_presets = PathBuf::from("/home/user/.shine/presets");
         let custom_presets = std::env::temp_dir().join("my-presets");
@@ -482,6 +495,7 @@ mod tests {
 
     #[test]
     fn shine_config_dir_takes_precedence_over_shine_presets() {
+        let _guard = env_lock();
         let default_shine = PathBuf::from("/home/user/.shine");
         let default_presets = PathBuf::from("/home/user/.shine/presets");
         let custom_dir = std::env::temp_dir().join("shine-cfg-dir");
@@ -499,6 +513,7 @@ mod tests {
 
     #[test]
     fn config_toml_presets_dir_is_used_when_no_env() {
+        let _guard = env_lock();
         let default_shine = PathBuf::from("/home/user/.shine");
         let default_presets = PathBuf::from("/home/user/.shine/presets");
         let toml_presets = PathBuf::from("/custom/presets");
@@ -517,6 +532,7 @@ mod tests {
 
     #[test]
     fn shine_presets_takes_precedence_over_config_toml() {
+        let _guard = env_lock();
         let default_shine = PathBuf::from("/home/user/.shine");
         let default_presets = PathBuf::from("/home/user/.shine/presets");
         let env_presets = std::env::temp_dir().join("env-presets");

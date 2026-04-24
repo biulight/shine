@@ -19,6 +19,12 @@ A fast Rust CLI tool for managing shell environment presets.
 ## Installation
 
 ```bash
+curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
+```
+
+Or install from source:
+
+```bash
 cargo install --path cli
 ```
 
@@ -77,6 +83,23 @@ Running `install` again is safe — existing files, correct symlinks, and an alr
 - Newer `major` or `minor` release: prints an upgrade reminder and continues
 - Newer `patch` release: requires you to upgrade before continuing
 - Network/API/cache failures: silently skipped, command execution continues
+
+Manual commands:
+
+```bash
+shine update   # force-check the latest release, do not install
+shine upgrade  # download and install the latest release for this platform
+```
+
+### install.sh options
+
+`install.sh` defaults to installing `shine` into `~/.local/bin/shine` without editing your shell config.
+
+```bash
+SHINE_INSTALL_DIR=/custom/bin sh install.sh
+SHINE_VERSION=0.3.2 sh install.sh
+SHINE_REPO=biulight/shine sh install.sh
+```
 
 ### Uninstall shell presets
 
