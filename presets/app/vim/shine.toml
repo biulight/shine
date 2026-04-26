@@ -1,0 +1,2 @@
+description = "Vim configuration directory with base config and machine-local overrides."
+dest = "~/.vim"

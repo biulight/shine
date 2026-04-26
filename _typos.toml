@@ -1,4 +1,5 @@
 [default.extend-words]
+tabe = "tabe"
 
 [files]
 extend-exclude = ["CHANGELOG.md", "notebooks/*"]

@@ -83,7 +83,7 @@ Running `install` again is safe — existing files, correct symlinks, and an alr
 shine app list
 ```
 
-Shows bundled application config categories, file descriptions, and annotated destination hints:
+Shows bundled application config categories, file descriptions, and destination hints:
 
 ```
 Available app preset categories:
@@ -95,6 +95,13 @@ Available app preset categories:
   starship (1 file)
     starship.toml  Starship prompt: minimal left-prompt with git branch and status.
                    → ~/.config/starship/starship.toml
+
+  vim (2 files)
+    Vim configuration directory with base config and machine-local overrides.
+    → ~/.vim
+    _machine_specific.vim
+
+    vimrc
 ```
 
 ### Install app presets
@@ -105,7 +112,18 @@ shine app install starship    # install only one category
 shine app install --dry-run   # preview destination writes
 ```
 
-`shine app install` first extracts bundled files to `~/.shine/presets/app/`, then copies them to their final destinations. If a preset file starts with a `shine-dest:` annotation, that absolute path is used after `~` expansion. If no annotation is present, `shine` falls back to:
+`shine app install` first extracts bundled files to `~/.shine/presets/app/`, then copies them to their final destinations.
+
+If `presets/app/<CATEGORY>/shine.toml` exists, that category uses directory-level metadata:
+
+```toml
+description = "Vim configuration directory"
+dest = "~/.vim"
+```
+
+When `shine.toml` defines `files`, only those entries are installed. When it omits `files`, `shine` treats the whole category directory as managed and maps every file except `shine.toml` into `dest` with the same relative path.
+
+If no `shine.toml` exists, `shine` falls back to the legacy file-level rules: a preset file may start with a `shine-dest:` annotation for an explicit absolute target after `~` expansion. Without that annotation, `shine` installs to:
 
 ```text
 <app_default_dest_root>/<CATEGORY>/<FILE>

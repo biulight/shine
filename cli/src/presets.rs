@@ -21,12 +21,30 @@ pub(crate) struct RemoveReport {
 pub(crate) struct ScriptInfo {
     pub name: String,
     pub description: Vec<String>,
-    pub dest_annotation: Option<String>,
 }
 
 pub(crate) struct CategoryInfo {
     pub name: String,
     pub scripts: Vec<ScriptInfo>,
+}
+
+pub(crate) fn asset_paths(prefix: &str) -> Vec<String> {
+    let normalized = prefix.trim_end_matches('/');
+    let filter = format!("{normalized}/");
+    PresetAssets::iter()
+        .filter_map(|asset_path| {
+            let relative: &str = asset_path.as_ref();
+            if relative.starts_with(filter.as_str()) {
+                Some(relative.to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn read_asset_bytes(path: &str) -> Option<Vec<u8>> {
+    PresetAssets::get(path).map(|file| file.data.as_ref().to_vec())
 }
 
 /// Extract a `shine-dest:` annotation from a single comment line.
@@ -122,16 +140,11 @@ pub(crate) fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
             .as_ref()
             .map(|f| parse_script_description(f.data.as_ref()))
             .unwrap_or_default();
-        let dest_annotation = asset_data
-            .as_ref()
-            .and_then(|f| parse_dest_annotation(f.data.as_ref()));
-
         map.entry(category.to_string())
             .or_default()
             .push(ScriptInfo {
                 name: file_name.to_string(),
                 description,
-                dest_annotation,
             });
     }
 

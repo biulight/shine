@@ -11,6 +11,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 **App preset management**
 - Added `shine app list`, `shine app install`, and `shine app uninstall` for managing non-shell configuration presets
+- App categories can now declare `presets/app/<category>/shine.toml` for directory-level install targets such as `vim -> ~/.vim`
+- `shine.toml` supports both explicit file lists and whole-directory mapping when `files` is omitted
 - App presets can declare a `shine-dest:` annotation for explicit install targets such as `~/.gitconfig`, `~/.ideavimrc`, or `~/.config/starship/starship.toml`
 - Presets without an annotation now install under `app_default_dest_root/<CATEGORY>/<FILE>`, with `~/.config` used by default
 - Existing unmanaged destination files are backed up to `*.shine.bak` before install, and matching backups are restored during uninstall

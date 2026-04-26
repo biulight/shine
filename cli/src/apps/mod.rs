@@ -1,14 +1,16 @@
 mod annotation;
 mod file_ops;
 mod manifest;
+mod metadata;
 
 use crate::config::Config;
 use anyhow::{Context, Result};
 use file_ops::{InstallOutcome, UninstallOutcome};
 use manifest::{AppEntry, AppManifest};
+use std::path::PathBuf;
 
 pub(crate) async fn handle_list() -> Result<()> {
-    let categories = crate::presets::list_categories("app");
+    let categories = metadata::load_embedded_categories(None)?;
 
     if categories.is_empty() {
         println!("No app preset categories found.");
@@ -18,48 +20,45 @@ pub(crate) async fn handle_list() -> Result<()> {
     println!("Available app preset categories:\n");
 
     for cat in &categories {
-        let word = if cat.scripts.len() == 1 {
+        let word = if cat.files.len() == 1 {
             "file"
         } else {
             "files"
         };
-        println!("  {} ({} {})", cat.name, cat.scripts.len(), word);
+        println!("  {} ({} {})", cat.name, cat.files.len(), word);
+        if let Some(description) = &cat.description {
+            println!("    {description}");
+        }
 
-        let max_name = cat.scripts.iter().map(|s| s.name.len()).max().unwrap_or(0);
+        if let Some(dest) = &cat.destination_root {
+            println!("    → {dest}");
+        }
+
+        let max_name = cat
+            .files
+            .iter()
+            .map(|s| s.source_rel.display().to_string().len())
+            .max()
+            .unwrap_or(0);
         let desc_col = max_name + 4;
         let continuation_indent = " ".repeat(4 + desc_col);
 
-        for script in &cat.scripts {
-            let name = &script.name;
-            let padding = " ".repeat(desc_col - name.len());
-            let dest_hint = script
-                .dest_annotation
-                .as_deref()
-                .map(|d| format!("→ {d}"))
-                .unwrap_or_default();
+        for file in &cat.files {
+            let name = file.source_rel.display().to_string();
+            let padding = " ".repeat(desc_col.saturating_sub(name.len()));
+            let detail = file.description.as_deref().map(str::to_string);
 
-            match script.description.as_slice() {
-                [] => {
-                    let hint = if dest_hint.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{padding}{dest_hint}")
-                    };
-                    println!("    {name}{hint}");
-                }
-                [first, rest @ ..] => {
-                    println!("    {name}{padding}{first}");
-                    for line in rest {
-                        if line.is_empty() {
-                            println!();
-                        } else {
-                            println!("{continuation_indent}{line}");
-                        }
-                    }
-                    if !dest_hint.is_empty() {
-                        println!("{continuation_indent}{dest_hint}");
-                    }
-                }
+            match detail {
+                Some(line) => println!("    {name}{padding}{line}"),
+                None => println!("    {name}"),
+            }
+
+            if cat.uses_metadata && file.target_rel != file.source_rel {
+                println!("{continuation_indent}→ {}", file.target_rel.display());
+            } else if !cat.uses_metadata
+                && let Some(dest) = &file.legacy_dest_annotation
+            {
+                println!("{continuation_indent}→ {dest}");
             }
             println!();
         }
@@ -87,112 +86,82 @@ pub(crate) async fn handle_install(
 
     let extract_report =
         crate::presets::extract_prefix(&prefix, config.presets_dir(), false).await?;
-    let total_extracted = extract_report.created.len()
-        + extract_report.overwritten.len()
-        + extract_report.skipped.len();
-    println!("Presets ({}): {} available", prefix, total_extracted,);
+    let categories = metadata::load_installed_categories(config, category.as_deref()).await?;
+    let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
+    println!("Presets ({}): {} available", prefix, total_available,);
 
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
-    let app_prefix = config.presets_dir().join("app");
-
-    let all_sources: Vec<_> = extract_report
-        .created
-        .iter()
-        .chain(extract_report.overwritten.iter())
-        .chain(extract_report.skipped.iter())
-        .cloned()
-        .collect();
 
     let mut installed = 0usize;
     let mut skipped = 0usize;
     let mut backed_up = 0usize;
 
-    for source_path in &all_sources {
-        let rel = source_path.strip_prefix(&app_prefix).with_context(|| {
-            format!(
-                "source path not under app presets dir: {}",
-                source_path.display()
-            )
-        })?;
+    for cat in &categories {
+        let category_root = config.presets_dir().join("app").join(&cat.name);
+        for file in &cat.files {
+            let source_path = category_root.join(&file.source_rel);
+            let display_name = format!("{}/{}", cat.name, file.source_rel.display());
+            let destination = match resolve_install_destination(cat, file, config) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("  ✗ {display_name}: bad destination: {e}");
+                    continue;
+                }
+            };
 
-        let mut components = rel.components();
-        let cat_name = components
-            .next()
-            .and_then(|c| c.as_os_str().to_str())
-            .unwrap_or("");
-        let file_name = components
-            .next()
-            .and_then(|c| c.as_os_str().to_str())
-            .unwrap_or("");
+            let is_managed = manifest.find_by_dest(&destination).is_some();
 
-        if file_name.is_empty() {
-            continue;
-        }
-
-        let source_content = match tokio::fs::read(source_path).await {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("  ✗ {cat_name}/{file_name}: failed to read: {e}");
-                continue;
-            }
-        };
-
-        let annotation = crate::presets::parse_dest_annotation(&source_content);
-        let destination = match annotation::resolve_destination(
-            annotation.as_deref(),
-            cat_name,
-            file_name,
-            config,
-        ) {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("  ✗ {cat_name}/{file_name}: bad destination: {e}");
-                continue;
-            }
-        };
-
-        let is_managed = manifest.find_by_dest(&destination).is_some();
-
-        match file_ops::install_file(source_path, &destination, is_managed, dry_run).await {
-            Ok(InstallOutcome::Installed { hash }) => {
-                println!("  ✓ {file_name} → {}", destination.display());
-                manifest.upsert(AppEntry {
-                    source: format!("app/{cat_name}/{file_name}"),
-                    destination,
-                    backup: None,
-                    content_hash: hash,
-                });
-                installed += 1;
-            }
-            Ok(InstallOutcome::AlreadyManaged) => {
-                println!("  - {file_name} already up to date");
-                skipped += 1;
-            }
-            Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
-                println!(
-                    "  ✓ {file_name} → {} (backup: {})",
-                    destination.display(),
-                    backup.display()
-                );
-                manifest.upsert(AppEntry {
-                    source: format!("app/{cat_name}/{file_name}"),
-                    destination,
-                    backup: Some(backup),
-                    content_hash: hash,
-                });
-                installed += 1;
-                backed_up += 1;
-            }
-            Ok(InstallOutcome::DryRun) => {
-                println!("  [dry-run] {file_name} → {}", destination.display());
-                skipped += 1;
-            }
-            Err(e) => {
-                eprintln!("  ✗ {cat_name}/{file_name}: {e}");
+            match file_ops::install_file(&source_path, &destination, is_managed, dry_run).await {
+                Ok(InstallOutcome::Installed { hash }) => {
+                    println!(
+                        "  ✓ {} → {}",
+                        file.source_rel.display(),
+                        destination.display()
+                    );
+                    manifest.upsert(AppEntry {
+                        source: format!("app/{}/{}", cat.name, file.source_rel.display()),
+                        destination,
+                        backup: None,
+                        content_hash: hash,
+                    });
+                    installed += 1;
+                }
+                Ok(InstallOutcome::AlreadyManaged) => {
+                    println!("  - {} already up to date", file.source_rel.display());
+                    skipped += 1;
+                }
+                Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
+                    println!(
+                        "  ✓ {} → {} (backup: {})",
+                        file.source_rel.display(),
+                        destination.display(),
+                        backup.display()
+                    );
+                    manifest.upsert(AppEntry {
+                        source: format!("app/{}/{}", cat.name, file.source_rel.display()),
+                        destination,
+                        backup: Some(backup),
+                        content_hash: hash,
+                    });
+                    installed += 1;
+                    backed_up += 1;
+                }
+                Ok(InstallOutcome::DryRun) => {
+                    println!(
+                        "  [dry-run] {} → {}",
+                        file.source_rel.display(),
+                        destination.display()
+                    );
+                    skipped += 1;
+                }
+                Err(e) => {
+                    eprintln!("  ✗ {display_name}: {e}");
+                }
             }
         }
     }
 
+    let _ = extract_report;
     if !dry_run {
         manifest.save(config.shine_dir()).await?;
     }
@@ -292,10 +261,41 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
     Ok(())
 }
 
+fn resolve_install_destination(
+    category: &metadata::AppCategory,
+    file: &metadata::AppFile,
+    config: &Config,
+) -> Result<PathBuf> {
+    if let Some(dest_root) = &category.destination_root {
+        let expanded = shellexpand::full(dest_root)
+            .with_context(|| format!("failed to expand destination root: {dest_root}"))?
+            .to_string();
+        let root = PathBuf::from(expanded);
+        if !root.is_absolute() {
+            anyhow::bail!("destination root must be absolute after expansion");
+        }
+        if root
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            anyhow::bail!("destination root must not contain '..'");
+        }
+        return Ok(root.join(&file.target_rel));
+    }
+
+    annotation::resolve_destination(
+        file.legacy_dest_annotation.as_deref(),
+        &category.name,
+        &file.target_rel.display().to_string(),
+        config,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::presets;
     use std::sync::{Mutex, OnceLock};
     use tokio::fs;
 
@@ -416,6 +416,45 @@ mod tests {
             count_first,
             "re-install must not duplicate manifest entries"
         );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn list_uses_embedded_metadata_for_vim() {
+        let categories = metadata::load_embedded_categories(Some("vim")).unwrap();
+        let vim = categories.iter().find(|c| c.name == "vim").unwrap();
+        assert!(vim.uses_metadata);
+        assert_eq!(vim.destination_root.as_deref(), Some("~/.vim"));
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn install_places_vim_under_directory_root() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        presets::extract_prefix("app/vim", config.presets_dir(), false)
+            .await
+            .unwrap();
+
+        let categories = metadata::load_installed_categories(&config, Some("vim"))
+            .await
+            .unwrap();
+        let vim = categories.iter().find(|c| c.name == "vim").unwrap();
+        let vimrc = vim
+            .files
+            .iter()
+            .find(|f| f.source_rel == PathBuf::from("vimrc"))
+            .unwrap();
+        let destination = resolve_install_destination(vim, vimrc, &config).unwrap();
+        assert_eq!(destination, dir.join(".vim").join("vimrc"));
 
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();

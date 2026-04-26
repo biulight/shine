@@ -5,14 +5,14 @@ use std::path::PathBuf;
 pub(crate) fn resolve_destination(
     annotation: Option<&str>,
     category: &str,
-    filename: &str,
+    relative_path: &str,
     config: &Config,
 ) -> Result<PathBuf> {
     let raw = match annotation {
         Some(ann) => ann.to_string(),
         None => {
             let root = config.app_default_dest_root();
-            format!("{}/{}/{}", root.display(), category, filename)
+            format!("{}/{}/{}", root.display(), category, relative_path)
         }
     };
 
@@ -73,6 +73,14 @@ mod tests {
         let result = resolve_destination(None, "starship", "starship.toml", &config).unwrap();
         // fallback is home/.config/starship/starship.toml
         assert!(result.ends_with("starship/starship.toml"));
+    }
+
+    #[test]
+    fn fallback_keeps_nested_relative_path() {
+        let home = std::env::temp_dir().join("shine-ann-nested");
+        let config = test_config(&home);
+        let result = resolve_destination(None, "vim", "colors/theme.vim", &config).unwrap();
+        assert!(result.ends_with("vim/colors/theme.vim"));
     }
 
     #[test]
