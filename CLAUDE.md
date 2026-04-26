@@ -96,6 +96,10 @@ fi
 
 Reads embedded assets, groups them by immediate subdirectory under `shell/`, and displays per-script descriptions parsed from the leading comment block of each `.sh` file (lines starting with `# ` after the shebang, until the first non-comment line).
 
+## Git Push Policy
+
+**Never `git push` to the remote without explicit user approval.** Commit locally, then stop and let the user review before pushing. This applies to branch pushes, tag pushes, and force-pushes.
+
 ## CHANGELOG
 
 Do **not** use `git cliff` to generate CHANGELOG entries. Write entries manually based on the actual changes in the release. Follow the existing format:

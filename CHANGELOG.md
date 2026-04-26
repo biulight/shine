@@ -7,10 +7,6 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [0.5.1] — 2026-04-27
 
-### Bug Fixes
-
-- Fix clippy `cmp_owned` warnings: replace `PathBuf::from(...)` with `Path::new(...)` in equality comparisons (`apps/metadata.rs`, `apps/mod.rs`)
-
 ### Features
 
 - App preset categories now support a `shine.toml` manifest declaring `dest`, optional per-file `target` overrides, and `description` fields
