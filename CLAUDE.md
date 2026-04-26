@@ -114,6 +114,22 @@ Do **not** use `git cliff` to generate CHANGELOG entries. Write entries manually
 
 Keep entries concise and user-facing. Internal refactors can be grouped under **Internal**.
 
+### Commit scope convention for internal fixes
+
+Fix commits that exist only because new feature code in the same release introduced them (clippy noise, lint, formatting, typos) must use one of these scopes so `git cliff` automatically skips them:
+
+| Scope | Example |
+|-------|---------|
+| `fix(lint): ...` | clippy allow/deny rule adjustment |
+| `fix(clippy): ...` | clippy suggestion |
+| `fix(fmt): ...` | rustfmt formatting |
+| `fix(typo): ...` | spell-check fix in new code |
+| `fix(build): ...` | build/compile error in new code |
+| `fix(ci): ...` | CI pipeline fix |
+| `fix(internal): ...` | any other non-user-facing cleanup |
+
+Real user-facing bug fixes must **not** use these scopes — use the affected feature area instead (e.g. `fix(install): ...`, `fix(shell): ...`).
+
 ## Adding a new preset category
 
 1. Create `presets/shell/<category>/your_script.sh` with a `#!/bin/bash` shebang and a multi-line `# description` comment block immediately after it.
