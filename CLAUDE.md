@@ -41,17 +41,32 @@ shine/
 ├── cli/          # Main binary crate
 │   ├── build.rs  # cargo:rerun-if-changed=../presets (rust-embed trigger)
 │   └── src/
-│       ├── main.rs        # CLI entry, command routing
-│       ├── commands/      # Clap subcommand enums (ShellCommands, AppCommands)
-│       ├── config/        # Config struct, load/save, env-var priority chain
-│       ├── presets.rs     # rust-embed asset extraction, list_categories, parse_script_description
-│       ├── bin_links.rs   # Symlink management in ~/.shine/bin/
-│       └── shells/        # ShellType, handle_install/uninstall/list, PATH injection
+│       ├── main.rs           # CLI entry, command routing
+│       ├── commands/
+│       │   ├── mod.rs        # Clap subcommand enums (ShellCommands, AppCommands)
+│       │   ├── shell.rs      # shine shell subcommand handlers
+│       │   └── app.rs        # shine app subcommand handlers
+│       ├── apps/
+│       │   ├── mod.rs        # App install/uninstall/list orchestration
+│       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile)
+│       │   ├── annotation.rs # shine-dest: comment annotation parser
+│       │   ├── file_ops.rs   # File copy, backup (*.shine.bak), restore
+│       │   └── manifest.rs   # ~/.shine/app-manifest.toml tracking
+│       ├── config/           # Config struct, load/save, env-var priority chain
+│       ├── presets.rs        # rust-embed asset extraction, list_categories, parse_script_description
+│       ├── bin_links.rs      # Symlink management in ~/.shine/bin/
+│       ├── shells/           # ShellType, handle_install/uninstall/list, PATH injection
+│       └── update_check.rs   # GitHub release version check, 24h cache
 ├── utils/        # Library crate: TOML comment-preserving sync (utils::sync_table)
-└── presets/      # Embedded shell scripts (compiled into binary via rust-embed)
-    └── shell/
-        ├── proxy/   set_proxy.sh, uset_proxy.sh
-        └── tools/   test_tools.sh
+└── presets/      # Embedded assets (compiled into binary via rust-embed)
+    ├── shell/
+    │   ├── proxy/   set_proxy.sh, uset_proxy.sh
+    │   └── tools/   test_tools.sh
+    └── app/
+        ├── git/        gitconfig  (shine-dest: ~/.gitconfig)
+        ├── JetBrains/  .ideavimrc (shine-dest: ~/.ideavimrc)
+        ├── starship/   starship.toml (shine-dest: ~/.config/starship/starship.toml)
+        └── vim/        shine.toml, vimrc, _machine_specific.vim
 ```
 
 ### Key data flow
