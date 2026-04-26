@@ -1,10 +1,21 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-See [Conventional Commits](https://www.conventionalcommits.org/) for commit guidelines.
+All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 ---
+## [0.5.1] — 2026-04-27
 
+### Bug Fixes
+
+- Fix clippy `cmp_owned` warnings: replace `PathBuf::from(...)` with `Path::new(...)` in equality comparisons (`apps/metadata.rs`, `apps/mod.rs`)
+
+### Features
+
+- App preset categories now support a `shine.toml` manifest declaring `dest`, optional per-file `target` overrides, and `description` fields
+- When `shine.toml` is absent the legacy `shine-dest:` annotation and default-root fallback are still used (backwards compatible)
+- Added bundled vim preset with `shine.toml` (`presets/app/vim/`)
+
+---
 ## [0.5.0] — 2026-04-25
 
 ### Features
@@ -28,190 +39,90 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Added app preset fixtures for JetBrains IdeaVim, git, and starship
 
 ---
+## [0.4.1](https://github.com/biulight/shine/compare/v0.4.0..v0.4.1) - 2026-04-24
 
-## [0.4.1] — 2026-04-25
+### Bug Fixes
 
-### Fixes
+- **(cli)** improve update messaging and add license exception - ([94efa45](https://github.com/biulight/shine/commit/94efa45eee494cd908f46d744ff8b739a7f9b0d1)) - biulight
+- **(install)** resolve 'latest' version tag from GitHub API before building asset URL - ([ded26b4](https://github.com/biulight/shine/commit/ded26b43c4362b790b69f22751786d33ccb58690)) - biulight
 
-- `install.sh` now resolves the actual latest GitHub release tag before building the asset download URL, so `SHINE_VERSION=latest` installs correctly
-- `shine update` and version-gate failures now print clearer user-facing messages with proper exit handling
+### Miscellaneous Chores
 
-### Docs
-
-- README pinned-version install example updated to `0.4.1`
-
-### Internal
-
-- Added `renovate.json` to automate dependency update management
-- Added `CDLA-Permissive-2.0` to the cargo-deny license allowlist
+- add Renovate configuration for dependency management - ([a5531c0](https://github.com/biulight/shine/commit/a5531c03894113231265394fb8fdc3443cc501b4)) - biulight
+- release 0.4.1 - ([2348a0e](https://github.com/biulight/shine/commit/2348a0e0d4db851be6a2d5a5403a6d71da4dfea9)) - biulight
 
 ---
+## [0.4.0](https://github.com/biulight/shine/compare/v0.3.2..v0.4.0) - 2026-04-24
 
-## [0.4.0] — 2026-04-24
+### Bug Fixes
+
+- switch reqwest TLS backend from default-tls to rustls-tls for ARM64 cross-compilation - ([c70c2b9](https://github.com/biulight/shine/commit/c70c2b905b251e7873af96282bae0893c7e5f92d)) - copilot-swe-agent[bot]
+- drop macos-13 release runner - ([1bc2733](https://github.com/biulight/shine/commit/1bc2733130840ed44a28d3c7ae0a9e9767bc9f5f)) - biulight
 
 ### Features
 
-**GitHub Release self-upgrade**
-- Added `shine upgrade` to download and install the latest GitHub Release asset for the current macOS/Linux platform
-- Upgrade installs the matching `darwin`/`linux` and `x86_64`/`aarch64` asset, extracts the packaged binary, and replaces the current executable in place
-- Successful upgrades refresh the local update-check cache so subsequent commands do not keep warning about the old version
+- add release install and upgrade flow - ([d981f2c](https://github.com/biulight/shine/commit/d981f2ce6c793cc1aa15999cb420e9303cf10645)) - biulight
 
-**Update command coexistence**
-- Kept `shine update` as the manual version-check command while adding `shine upgrade` as the install action
-- Runtime update warnings now direct users to run `shine upgrade` when a newer release is available
+### Miscellaneous Chores
 
-**Release installer script**
-- Added top-level `install.sh` for one-step installation from GitHub Releases into `~/.local/bin`
-- Supports `SHINE_INSTALL_DIR`, `SHINE_VERSION`, and `SHINE_REPO` overrides for custom install locations, pinned versions, or alternate repositories
-- Detects the current platform, downloads the matching `tar.gz` asset, installs `shine`, and warns when the install directory is not on `PATH`
+- release 0.4.0 - ([fa9d2b0](https://github.com/biulight/shine/commit/fa9d2b0049153b7de06a0d50aec364c50eb98046)) - biulight
 
-**Release asset publishing**
-- GitHub Actions now builds versioned Release assets for `darwin-x86_64`, `darwin-aarch64`, `linux-x86_64`, and `linux-aarch64`
-- Tag builds upload packaged `shine-v{version}-{target}.tar.gz` archives together with `install.sh` to the GitHub Release
+### Other
 
-### Docs
+- Initial plan - ([5bcd1c6](https://github.com/biulight/shine/commit/5bcd1c60e223648f6fe17fa209803705c7e88502)) - copilot-swe-agent[bot]
+- Merge pull request #2 from biulight/copilot/fix-github-actions-build-release-assets
 
-- README now documents `shine update` vs `shine upgrade`, GitHub Release installation, and `install.sh` environment variables
-
-### Internal
-
-- Added release-asset selection and archive extraction tests for the new upgrade flow
-- Stabilized config tests that mutate `SHINE_CONFIG_DIR` and `SHINE_PRESETS` under parallel test execution
+Fix ARM64 cross-compilation: switch reqwest TLS backend from OpenSSL to Rustls - ([ad2c2d6](https://github.com/biulight/shine/commit/ad2c2d65eac97ba737b61dc18df3a297589e3d4f)) - Felix Jiang
 
 ---
+## [0.3.2](https://github.com/biulight/shine/compare/v0.3.1..v0.3.2) - 2026-04-24
 
-## [0.3.2] — 2026-04-24
+### Miscellaneous Chores
 
-### Features
-
-**Manual update check command**
-- Added `shine update` command to manually trigger a version check against the latest GitHub Release
-- Bypasses the 24-hour local cache, always fetches the current release from GitHub
-- Prints the installed version alongside the latest; exits with an error if a required patch update is pending
-- Other commands continue to use the cached check (no extra network round-trip)
-
-### Fixes
-
-- Added a 5-second timeout to the GitHub release HTTP request to prevent indefinite hangs on slow or unreachable networks
+- release 0.3.2 - ([d225db2](https://github.com/biulight/shine/commit/d225db2836d9d2b407067bb6b9b212a30a2a878d)) - biulight
 
 ---
-
-## [0.3.1] — 2026-04-24
+## [0.3.1](https://github.com/biulight/shine/compare/v0.3.0..v0.3.1) - 2026-04-24
 
 ### Features
 
-**Suffix-free installed commands**
-- Installed shell commands are now accessible without the `.sh` extension (e.g. `set_proxy` instead of `set_proxy.sh`)
-- `~/.shine/bin/` symlinks now use the file stem; known extensions stripped: `.sh`, `.bash`, `.zsh`, `.fish`, `.ps1`
-- Collision detection uses the stem, so `foo.sh` and `foo.zsh` in the same category correctly report a conflict
+- install shell commands without .sh suffix - ([03b6b32](https://github.com/biulight/shine/commit/03b6b32ef012b2525af75a9374c4f70199f2ac01)) - biulight
 
-### Docs
+### Miscellaneous Chores
 
-- `shine shell list` footer now states that commands are available directly by name after installation
-- Usage hints in all bundled preset scripts updated to omit `.sh` suffix
+- release 0.3.1 - ([1ab77c7](https://github.com/biulight/shine/commit/1ab77c72a0ccabe22b2be7a55f9de6ae9ea962fa)) - biulight
 
 ---
-
-## [0.3.0] — 2026-04-24
-
-### Features
-
-**Runtime release update check**
-- `shine` now checks the latest GitHub Release for `biulight/shine` before executing commands
-- Latest release lookup is cached locally for 24 hours under the shine config directory
-- Version comparison follows SemVer semantics
-- Newer `major` or `minor` versions show an upgrade reminder and continue execution
-- Newer `patch` versions require the user to upgrade before the command continues
-- Network errors, API failures, and invalid cache state are ignored so normal commands still run
-
-**Unified CLI versioning**
-- The CLI version now reads from `[workspace.package].version`
-- `shine --version` and the compiled package version stay aligned with the workspace release version
-
-### Docs
-
-- README now documents runtime update behavior
-- README build output path corrected to `target/release/shine`
-
-## [0.2.0] — 2026-04-23
+## [0.3.0](https://github.com/biulight/shine/compare/v0.2.0..v0.3.0) - 2026-04-23
 
 ### Features
 
-**`shine shell list`** _(new command)_
-- Lists all bundled preset categories grouped by subdirectory under `shell/`
-- Displays per-script descriptions parsed from the leading comment block of each `.sh` file (lines starting with `# ` immediately after the shebang)
-- Aligned two-column output: script name on the left, multi-line description on the right
+- **(cli)** add shine binary definition to Cargo.toml - ([e3736dc](https://github.com/biulight/shine/commit/e3736dc18ac47276821f5644b1da24ce0259dd92)) - biulight
+- add runtime update check - ([4100aca](https://github.com/biulight/shine/commit/4100aca78e594a513cd73d5f0c71989a744750a7)) - biulight
 
-**`shine shell install [CATEGORY]`** _(extended)_
-- New optional `CATEGORY` positional argument; omitting it installs all shell presets (previous behavior)
-- `shine shell install proxy` installs only `shell/proxy/` presets
-- `--help` hints to run `shine shell list` to see available categories
+### Miscellaneous Chores
 
-**Auto PATH injection**
-- `install` appends a sentinel-guarded PATH block to the detected shell config file (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, etc.)
-- Uses `$HOME`-relative path when `bin_dir` is under the home directory
-- Bash/Zsh guard: `if [[ ":$PATH:" != *":$HOME/.shine/bin:"* ]]` prevents duplicate entries on re-source
-- Fish: uses `fish_add_path` (idempotent by default)
-- `uninstall` removes the sentinel block precisely; `--dry-run` leaves the config untouched
-- Idempotent: a second `install` prints "already configured, skipped"
-
-**New preset: `shell/tools/test_tools.sh`**
-- Verifies that shine-installed shell tools are callable from the current environment
-
-**Preset script comment headers**
-- All bundled `.sh` scripts now carry a structured multi-line `# description` block immediately after the shebang, consumed by `shine shell list`
-
-### Removed
-
-- `shine shell proxy` standalone subcommand — superseded by `shine shell install proxy`
-
-### Internal
-
-- `cli/build.rs` added: registers `cargo:rerun-if-changed=../presets` so `rust-embed` recompiles when preset files are added or modified
-- `presets::list_categories` and `presets::parse_script_description` public helpers
-- `shells::path_export_snippet`, `append_path_to_shell_config`, `remove_path_from_shell_config` helpers
-- Test count: 57 → 66
+- release 0.3.0 - ([3c7926f](https://github.com/biulight/shine/commit/3c7926f2c905bf9052d388b0466bb3fd0640d03a)) - biulight
 
 ---
+## [0.2.0] - 2026-04-23
 
-## [0.1.0] — 2026-04-23
+### Documentation
 
-Initial release of `shine`.
+- update README, CHANGELOG, and add CLAUDE.md - ([7bbb752](https://github.com/biulight/shine/commit/7bbb7522fe586658e6a65a293c11bcb074cccae0)) - biulight
 
 ### Features
 
-**`shine shell install`**
-- Extract embedded shell preset scripts to `~/.shine/presets/shell/`
-- Create `~/.shine/bin/` directory and populate it with flat symlinks to installed executable scripts
-- Idempotent: existing correct symlinks and files are skipped on re-run
-- Conflict detection: reports collisions without overwriting user files
+- initial release of shine v0.1.0 - ([8afbd3f](https://github.com/biulight/shine/commit/8afbd3f23dafc473d48410b79d1c42c9b3467517)) - biulight
+- shell install improvements - ([e2723a0](https://github.com/biulight/shine/commit/e2723a0f160458ca87b41ccc77d2871f94d5034e)) - biulight
 
-**`shine shell uninstall`**
-- Remove shine-managed symlinks from `~/.shine/bin/` (user-created symlinks with external targets are untouched)
-- Remove embedded-asset preset files from `~/.shine/presets/shell/` (user-added files are untouched)
-- `--dry-run` flag: print what would be removed without making any changes
-- `--purge` flag: additionally remove empty managed directories (`bin/`, `presets/shell/`, `presets/`) after uninstall; never removes `config.toml`
-- Fully idempotent: second run is a no-op
+### Miscellaneous Chores
 
-**Bundled presets: `shell/proxy`**
-- `set_proxy.sh`: one-command proxy setup for system env, git, npm, yarn, pnpm
-  - Auto mode: detects SOCKS5 availability, falls back to HTTP
-  - Explicit modes: `auto`, `sock5`, `http`
-  - Default ports: HTTP 6152, SOCKS5 6153
-- `uset_proxy.sh`: one-command proxy teardown for all of the above
+- Add MIT license - ([13177aa](https://github.com/biulight/shine/commit/13177aa28ba7bff11a9b4ccecea230f5f5306758)) - biulight
+- bump version to 0.2.0 - ([cc5a4a0](https://github.com/biulight/shine/commit/cc5a4a0a9e60e391f8e3a7a3e22552b18d2058a0)) - biulight
 
-**Configuration**
-- `~/.shine/config.toml` created automatically on first run
-- TOML comment preservation on in-place updates (via `toml_edit`)
-- `SHINE_CONFIG_DIR` environment variable overrides the default `~/.shine/` location
-- `SHINE_PRESETS` environment variable overrides the presets directory only
-- `presets_dir` key in `config.toml` as a persistent override
+### Other
 
-**Supported shells**
-- bash, zsh, fish, powershell, elvish
+- fix workflow — use main branch and upgrade git-cliff-action to v4 - ([090c1f1](https://github.com/biulight/shine/commit/090c1f1e9cdc1a40b6a2402c73fff75fb1ebbcd5)) - biulight
 
-### Internal
-
-- Workspace: `cli` (binary) + `utils` (TOML migration library)
-- 57 unit and integration tests
-- Pre-commit hooks: `cargo fmt`, `cargo clippy -D warnings`, `cargo deny check`, `typos`, `cargo nextest`
+<!-- generated by git-cliff -->

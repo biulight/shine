@@ -28,9 +28,6 @@ cargo fmt
 cargo clippy --all-targets --all-features --tests --benches -- -D warnings
 cargo deny check bans licenses sources
 typos                          # spell-check
-
-# CHANGELOG (git-cliff)
-git cliff --output CHANGELOG.md
 ```
 
 Pre-commit runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo deny check`, `typos`, and `cargo nextest run` on every commit. All must pass before committing.
@@ -98,6 +95,20 @@ fi
 ### `shine shell list`
 
 Reads embedded assets, groups them by immediate subdirectory under `shell/`, and displays per-script descriptions parsed from the leading comment block of each `.sh` file (lines starting with `# ` after the shebang, until the first non-comment line).
+
+## CHANGELOG
+
+Do **not** use `git cliff` to generate CHANGELOG entries. Write entries manually based on the actual changes in the release. Follow the existing format:
+
+```
+## [x.y.z] — YYYY-MM-DD
+
+### Features / Bug Fixes / Internal / Docs
+
+- Plain-English description of what changed and why
+```
+
+Keep entries concise and user-facing. Internal refactors can be grouped under **Internal**.
 
 ## Adding a new preset category
 
