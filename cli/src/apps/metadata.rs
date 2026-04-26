@@ -288,7 +288,7 @@ async fn collect_fs_files(category_root: &Path) -> Result<Vec<PathBuf>> {
                     .strip_prefix(category_root)
                     .with_context(|| format!("file outside category root: {}", path.display()))?;
                 let rel = normalize_relative(&rel.to_string_lossy())?;
-                if rel == PathBuf::from("shine.toml") {
+                if rel == std::path::Path::new("shine.toml") {
                     continue;
                 }
                 files.push(rel);

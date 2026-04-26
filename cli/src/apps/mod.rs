@@ -451,7 +451,7 @@ mod tests {
         let vimrc = vim
             .files
             .iter()
-            .find(|f| f.source_rel == PathBuf::from("vimrc"))
+            .find(|f| f.source_rel == std::path::Path::new("vimrc"))
             .unwrap();
         let destination = resolve_install_destination(vim, vimrc, &config).unwrap();
         assert_eq!(destination, dir.join(".vim").join("vimrc"));
