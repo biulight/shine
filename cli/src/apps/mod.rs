@@ -6,6 +6,7 @@ mod metadata;
 pub(crate) use manifest::{AppManifest, hash_content};
 pub(crate) use metadata::load_embedded_categories;
 
+use crate::colors;
 use crate::config::Config;
 use anyhow::{Context, Result};
 use file_ops::{InstallOutcome, UninstallOutcome};
@@ -107,7 +108,10 @@ pub(crate) async fn handle_install(
             let destination = match resolve_install_destination(cat, file, config) {
                 Ok(d) => d,
                 Err(e) => {
-                    eprintln!("  ✗ {display_name}: bad destination: {e}");
+                    eprintln!(
+                        "  {} {display_name}: bad destination: {e}",
+                        colors::symbol("✗")
+                    );
                     continue;
                 }
             };
@@ -117,7 +121,8 @@ pub(crate) async fn handle_install(
             match file_ops::install_file(&source_path, &destination, is_managed, dry_run).await {
                 Ok(InstallOutcome::Installed { hash }) => {
                     println!(
-                        "  ✓ {} → {}",
+                        "  {} {} → {}",
+                        colors::symbol("✓"),
                         file.source_rel.display(),
                         destination.display()
                     );
@@ -135,7 +140,8 @@ pub(crate) async fn handle_install(
                 }
                 Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
                     println!(
-                        "  ✓ {} → {} (backup: {})",
+                        "  {} {} → {} (backup: {})",
+                        colors::symbol("✓"),
                         file.source_rel.display(),
                         destination.display(),
                         backup.display()
@@ -158,7 +164,7 @@ pub(crate) async fn handle_install(
                     skipped += 1;
                 }
                 Err(e) => {
-                    eprintln!("  ✗ {display_name}: {e}");
+                    eprintln!("  {} {display_name}: {e}", colors::symbol("✗"));
                 }
             }
         }
@@ -193,13 +199,18 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
     for entry in &entries {
         match file_ops::uninstall_entry(entry, dry_run).await {
             Ok(UninstallOutcome::Removed) => {
-                println!("  ✓ removed {}", entry.destination.display());
+                println!(
+                    "  {} removed {}",
+                    colors::symbol("✓"),
+                    entry.destination.display()
+                );
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
             }
             Ok(UninstallOutcome::RestoredBackup { backup }) => {
                 println!(
-                    "  ✓ removed {} (restored {})",
+                    "  {} removed {} (restored {})",
+                    colors::symbol("✓"),
                     entry.destination.display(),
                     backup.display()
                 );
@@ -214,7 +225,8 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
             }
             Ok(UninstallOutcome::UserModified) => {
                 println!(
-                    "  ! {} was modified after installation, left in place",
+                    "  {} {} was modified after installation, left in place",
+                    colors::symbol("!"),
                     entry.destination.display()
                 );
                 user_modified += 1;
@@ -224,7 +236,11 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
                 skipped += 1;
             }
             Err(e) => {
-                eprintln!("  ✗ {}: {e}", entry.destination.display());
+                eprintln!(
+                    "  {} {}: {e}",
+                    colors::symbol("✗"),
+                    entry.destination.display()
+                );
             }
         }
     }

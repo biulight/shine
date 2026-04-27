@@ -1,35 +1,12 @@
 use crate::apps::{
     AppManifest, hash_content, load_embedded_categories, resolve_install_destination,
 };
+use crate::colors;
 use crate::commands::CheckCommands;
 use crate::config::Config;
 use crate::presets;
 use crate::shells::{SENTINEL_START, get_shell_config_path};
 use anyhow::Result;
-use owo_colors::{OwoColorize, Stream};
-
-/// Wrap a status symbol in the appropriate ANSI color.
-/// Falls back to plain text when stdout is not a TTY or `NO_COLOR` is set.
-fn colorize_symbol(symbol: &str) -> String {
-    match symbol {
-        "✓" => symbol
-            .if_supports_color(Stream::Stdout, |s| s.green())
-            .to_string(),
-        "↑" => symbol
-            .if_supports_color(Stream::Stdout, |s| s.cyan())
-            .to_string(),
-        "~" => symbol
-            .if_supports_color(Stream::Stdout, |s| s.yellow())
-            .to_string(),
-        "!" => symbol
-            .if_supports_color(Stream::Stdout, |s| s.magenta())
-            .to_string(),
-        "✗" => symbol
-            .if_supports_color(Stream::Stdout, |s| s.red())
-            .to_string(),
-        other => other.to_string(),
-    }
-}
 
 pub(crate) async fn handle_check(config: &Config, command: Option<CheckCommands>) -> Result<()> {
     match command {
@@ -80,7 +57,7 @@ async fn check_shell(config: &Config) -> Result<()> {
 
             println!(
                 "  {}  {}/{}  {}",
-                colorize_symbol(symbol),
+                colors::symbol(symbol),
                 cat.name,
                 script.name,
                 status
@@ -106,7 +83,7 @@ async fn check_shell(config: &Config) -> Result<()> {
             ),
         ),
     };
-    println!("  {}  {}", colorize_symbol(path_symbol), path_status);
+    println!("  {}  {}", colors::symbol(path_symbol), path_status);
 
     Ok(())
 }
@@ -242,7 +219,7 @@ async fn check_app(config: &Config) -> Result<()> {
             .unwrap_or_default();
         println!(
             "  {}  {}{}  ({})",
-            colorize_symbol(symbol),
+            colors::symbol(symbol),
             cat.name,
             dest_part,
             status_label

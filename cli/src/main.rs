@@ -4,6 +4,7 @@ use clap::{Parser, ValueEnum};
 mod apps;
 mod bin_links;
 mod check;
+mod colors;
 mod commands;
 mod config;
 mod presets;
@@ -141,14 +142,27 @@ async fn handle_update(config: &Config) -> Result<()> {
 
     match update_check::check_for_update_forced(config).await {
         Ok(UpdateStatus::UpToDate) => {
-            println!("shine {current} is up to date.");
+            println!(
+                "{}",
+                colors::green(&format!("shine {current} is up to date."))
+            );
         }
         Ok(UpdateStatus::UpdateAvailable { latest }) => {
-            println!("A newer version of shine is available: {current} -> {latest}.");
+            println!(
+                "{}",
+                colors::yellow(&format!(
+                    "A newer version of shine is available: {current} -> {latest}."
+                ))
+            );
             println!("Run `shine upgrade` to install it.");
         }
         Ok(UpdateStatus::UpdateRequired { latest }) => {
-            println!("A newer patch release of shine is available: {current} -> {latest}.");
+            println!(
+                "{}",
+                colors::yellow(&format!(
+                    "A newer patch release of shine is available: {current} -> {latest}."
+                ))
+            );
             println!("Run `shine upgrade` to install it.");
         }
         Err(e) => {
@@ -166,10 +180,16 @@ async fn handle_upgrade(config: &Config) -> Result<()> {
 
     match update_check::upgrade_to_latest_release(config).await {
         Ok(update_check::UpgradeResult::AlreadyUpToDate) => {
-            println!("shine {current} is up to date.");
+            println!(
+                "{}",
+                colors::green(&format!("shine {current} is up to date."))
+            );
         }
         Ok(update_check::UpgradeResult::Upgraded { previous, latest }) => {
-            println!("Upgraded shine from {previous} to {latest}.");
+            println!(
+                "{}",
+                colors::green(&format!("Upgraded shine from {previous} to {latest}."))
+            );
         }
         Err(e) => {
             bail!("Upgrade failed: {e}");
