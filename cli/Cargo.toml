@@ -19,6 +19,7 @@ tokio = { version = "1.52.1", features = ["rt", "rt-multi-thread", "macros", "ne
 toml = { workspace = true }
 toml_edit = { workspace = true }
 rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }
+owo-colors = { version = "4", features = ["supports-colors"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 semver = "1.0.28"
 serde_json = "1.0.145"
