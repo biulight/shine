@@ -3,7 +3,6 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use tokio::io::AsyncWriteExt;
 
 pub(crate) const SENTINEL_START: &str = "# >>> shine >>>";
 const SENTINEL_END: &str = "# <<< shine <<<";
@@ -213,14 +212,10 @@ async fn append_path_to_shell_config(config: &Config) -> Result<()> {
 
     let snippet = path_export_snippet(&config.shell_type, config.bin_dir(), &config.home_dir);
 
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&config_path)
-        .await
-        .with_context(|| format!("opening shell config: {config_path:?}"))?;
-
-    file.write_all(format!("\n{snippet}").as_bytes())
+    // Write the complete new content atomically so the file is closed (and thus
+    // fully visible to subsequent reads) before this function returns.
+    let new_content = format!("{existing}\n{snippet}");
+    tokio::fs::write(&config_path, new_content.as_bytes())
         .await
         .with_context(|| format!("writing to shell config: {config_path:?}"))?;
 
