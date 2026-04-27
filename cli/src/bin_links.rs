@@ -166,7 +166,7 @@ pub(crate) async fn link_executables(
     Ok(report)
 }
 
-fn link_stem(path: &Path) -> std::ffi::OsString {
+pub(crate) fn link_stem(path: &Path) -> std::ffi::OsString {
     match path.extension().and_then(|e| e.to_str()) {
         Some("sh" | "bash" | "zsh" | "fish" | "ps1") => {
             path.file_stem().map(|s| s.to_owned()).unwrap_or_default()
