@@ -5,6 +5,27 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.6.0] — 2026-04-27
+
+### Features
+
+**`shine check` — local config audit**
+- Added `shine check` to display which app configs and shell presets are applied locally
+- `shine check app` — one status line per app category with aggregated status across all files in that category
+- `shine check shell` — per-script install status (preset file + bin symlink) plus PATH sentinel detection
+- `shine check` with no subcommand shows both shell and app status
+
+App status symbols:
+- `✓` all files up-to-date
+- `↑` shine has a newer version — run `shine app install`
+- `~` user-modified or partial install
+- `!` destination file missing (was installed, now deleted)
+- `✗` not installed
+
+Multi-file categories (e.g. `vim` with `dest = "~/.vim"`) are reported as a single unit
+
+---
+
 ## [0.5.1] — 2026-04-27
 
 ### Features
