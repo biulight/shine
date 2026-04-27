@@ -5,6 +5,18 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.6.1] — 2026-04-28
+
+### UX
+
+- ANSI colors are now applied consistently across all status-bearing output
+- Added shared `colors` module (`✓` green, `↑` cyan, `~` yellow, `!` magenta, `✗` red)
+- `shine app install` / `uninstall` — file-level status lines are now colored
+- `shine update` / `upgrade` — result messages colored (success → green, warning → yellow)
+- Colors degrade automatically to plain text when stdout is not a TTY or `NO_COLOR` is set
+
+---
+
 ## [0.6.0] — 2026-04-27
 
 ### Features
