@@ -3,10 +3,13 @@ mod file_ops;
 mod manifest;
 mod metadata;
 
+pub(crate) use manifest::{AppManifest, hash_content};
+pub(crate) use metadata::load_embedded_categories;
+
 use crate::config::Config;
 use anyhow::{Context, Result};
 use file_ops::{InstallOutcome, UninstallOutcome};
-use manifest::{AppEntry, AppManifest};
+use manifest::AppEntry;
 use std::path::PathBuf;
 
 pub(crate) async fn handle_list() -> Result<()> {
@@ -261,7 +264,7 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
     Ok(())
 }
 
-fn resolve_install_destination(
+pub(crate) fn resolve_install_destination(
     category: &metadata::AppCategory,
     file: &metadata::AppFile,
     config: &Config,

@@ -3,6 +3,7 @@ use clap::{Parser, ValueEnum};
 
 mod apps;
 mod bin_links;
+mod check;
 mod commands;
 mod config;
 mod presets;
@@ -10,7 +11,7 @@ mod shells;
 mod update_check;
 
 use crate::config::Config;
-use commands::{AppCommands, ShellCommands};
+use commands::{AppCommands, CheckCommands, ShellCommands};
 use update_check::UpdateStatus;
 
 /// `Shine` - Quick config for sys
@@ -36,6 +37,11 @@ enum Commands {
     App {
         #[command(subcommand)]
         command: AppCommands,
+    },
+    /// Check which shine configurations are applied locally
+    Check {
+        #[command(subcommand)]
+        command: Option<CheckCommands>,
     },
     Completions {
         /// Target shell
@@ -116,6 +122,7 @@ async fn main() -> Result<()> {
         },
         Commands::Update => handle_update(&config).await,
         Commands::Upgrade => handle_upgrade(&config).await,
+        Commands::Check { command } => Box::pin(check::handle_check(&config, command)).await,
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list()).await,
             ShellCommands::Install { category } => {

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tokio::io::AsyncWriteExt;
 
-const SENTINEL_START: &str = "# >>> shine >>>";
+pub(crate) const SENTINEL_START: &str = "# >>> shine >>>";
 const SENTINEL_END: &str = "# <<< shine <<<";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
