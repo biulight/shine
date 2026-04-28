@@ -1,0 +1,2 @@
+description = "Fastfetch system information tool configuration."
+dest = "~/.config/fastfetch"

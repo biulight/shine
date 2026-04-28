@@ -1,0 +1,2 @@
+description = "Archey4 system information tool configuration."
+dest = "~/.config/archey4"
