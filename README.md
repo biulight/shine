@@ -6,7 +6,7 @@ A fast Rust CLI tool for managing shell environment presets.
 
 ## Features
 
-- **Embedded presets** — shell scripts are compiled into the binary; no internet required after installation
+- **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
 - **Symlink-based bin directory** — `~/.shine/bin/` holds flat symlinks to installed scripts; add it to `PATH` once
 - **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
 - **Category install** — install all presets or a specific subset (e.g. `proxy`)
@@ -38,24 +38,22 @@ cargo build --release
 
 ## Usage
 
-### List available presets
+### List available shell presets
 
 ```bash
 shine shell list
 ```
 
-Shows all bundled preset categories and a description of each script:
-
 ```
-Available shell preset categories:
+Shell Preset Categories
 
-  proxy (2 scripts)
+  proxy  2 scripts
     set_proxy     Set HTTP/HTTPS proxy environment variables.
                   ...
     uset_proxy    Unset all proxy environment variables.
                   ...
 
-  tools (1 script)
+  tools  1 script
     test_tools    Verify shine-installed shell tools are callable.
                   ...
 ```
@@ -70,12 +68,23 @@ shine shell install proxy      # install only the proxy category
 Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, etc.):
 
 ```
-Presets (shell): 3 created, 0 skipped
-Bin links: 3 created, 0 skipped, 0 conflicts
-Shell config (~/.zshrc): PATH updated
+Shell Presets  3 created
+Bin Links      3 created
 ```
 
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped.
+
+### Uninstall shell presets
+
+```bash
+shine shell uninstall
+shine shell uninstall --dry-run   # preview without changes
+shine shell uninstall --purge     # also remove empty managed directories
+```
+
+Removes shine-managed symlinks from `~/.shine/bin/`, preset files from `~/.shine/presets/shell/`, and the PATH entry from your shell config. User-created files are never removed.
+
+`--purge` removes `~/.shine/bin/` and `~/.shine/presets/shell/` if empty after uninstall. It never removes `~/.shine/config.toml` or the root `~/.shine/` directory.
 
 ### List available app presets
 
@@ -83,26 +92,26 @@ Running `install` again is safe — existing files, correct symlinks, and an alr
 shine app list
 ```
 
-Shows bundled application config categories, file descriptions, and destination hints:
-
 ```
-Available app preset categories:
+App Preset Categories
 
-  git (1 file)
-    gitconfig      Personal git configuration with common aliases and sensible defaults.
-                   → ~/.gitconfig
+  JetBrains  JetBrains IDEs configuration.
+  git        Personal git configuration with common aliases and sensible defaults.
+  starship   Starship prompt: minimal left-prompt with git branch and status.
+  vim        Vim configuration directory with base config and machine-local overrides.  2 files
 
-  starship (1 file)
-    starship.toml  Starship prompt: minimal left-prompt with git branch and status.
-                   → ~/.config/starship/starship.toml
-
-  vim (2 files)
-    Vim configuration directory with base config and machine-local overrides.
-    → ~/.vim
-    _machine_specific.vim
-
-    vimrc
+Run `shine app install <CATEGORY>` to install a specific category.
+Run `shine app install` to install all.
 ```
+
+### Show app preset details
+
+```bash
+shine app info starship
+shine app info vim
+```
+
+Prints the description, destination, and file list for a single category, with per-file install status when the category has already been installed.
 
 ### Install app presets
 
@@ -113,6 +122,15 @@ shine app install --dry-run   # preview destination writes
 ```
 
 `shine app install` first extracts bundled files to `~/.shine/presets/app/`, then copies them to their final destinations.
+
+```
+Installing  3 files available
+  ✓  gitconfig   →  ~/.gitconfig
+  ✓  starship.toml  →  ~/.config/starship/starship.toml
+  -  vimrc  already up to date
+
+Done  2 installed · 1 skipped
+```
 
 If `presets/app/<CATEGORY>/shine.toml` exists, that category uses directory-level metadata:
 
@@ -145,6 +163,42 @@ Uninstall removes only app files whose content still matches the version recorde
 
 `--purge` additionally removes `~/.shine/presets/app/` and `~/.shine/app-manifest.toml`.
 
+### Check configuration status
+
+```bash
+shine check           # check both shell presets and app configs
+shine check shell     # shell presets only
+shine check app       # app configs only
+```
+
+Shows the status of every managed preset and config file in one view:
+
+```
+Shell Presets
+  ✓  proxy/set_proxy.sh   installed
+  ✓  proxy/uset_proxy.sh  installed
+  ✗  tools/test_tools.sh  not installed
+  ✓  PATH configured      ~/.zshrc
+
+App Configs
+  ✓  JetBrains/IdeaVim  →  ~/.ideavimrc              up-to-date
+  ✓  git                →  ~/.gitconfig               up-to-date
+  ↑  starship           →  ~/.config/starship/...     update available  run `shine app install`
+  ✗  vim                →  ~/.vim                     not installed
+
+Summary  2 up-to-date · 1 update available · 1 not installed
+```
+
+Status symbols:
+
+| Symbol | Meaning |
+|--------|---------|
+| `✓` | Installed and up-to-date |
+| `↑` | Update available — run `shine app install` |
+| `~` | User-modified or partial install |
+| `!` | Destination missing (was installed) |
+| `✗` | Not installed |
+
 ### Runtime update policy
 
 `shine` checks the latest GitHub Release for `biulight/shine` before executing commands and caches the result for 24 hours under `~/.shine/`.
@@ -169,21 +223,6 @@ SHINE_INSTALL_DIR=/custom/bin sh install.sh
 SHINE_VERSION=0.5.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
-
-### Uninstall shell presets
-
-```bash
-shine shell uninstall
-```
-
-Removes shine-managed symlinks from `~/.shine/bin/`, preset files from `~/.shine/presets/shell/`, and the PATH entry from your shell config. User-created files are never removed.
-
-```bash
-shine shell uninstall --dry-run   # preview without changes
-shine shell uninstall --purge     # also remove empty managed directories
-```
-
-`--purge` removes `~/.shine/bin/` and `~/.shine/presets/shell/` if empty after uninstall. It never removes `~/.shine/config.toml` or the root `~/.shine/` directory.
 
 ## Bundled Presets
 
@@ -267,6 +306,7 @@ app_default_dest_root = "~/.config"
         │   └── uset_proxy.sh
         └── tools/
             └── test_tools.sh
+```
 
 Installed app files live at their annotated destinations, for example:
 
@@ -274,7 +314,6 @@ Installed app files live at their annotated destinations, for example:
 ~/.gitconfig
 ~/.ideavimrc
 ~/.config/starship/starship.toml
-```
 ```
 
 ## Development
@@ -297,6 +336,7 @@ shine/
 │   └── src/
 │       ├── main.rs
 │       ├── bin_links.rs       # symlink management
+│       ├── colors.rs          # TTY-aware color helpers (degrades gracefully with NO_COLOR)
 │       ├── presets.rs         # embedded-asset extraction, list_categories
 │       ├── apps/              # app preset install/uninstall, manifest, destination resolution
 │       ├── config/            # Config struct, load/save, env-var priority chain
