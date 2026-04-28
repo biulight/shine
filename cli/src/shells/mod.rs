@@ -1,3 +1,4 @@
+use crate::colors;
 use crate::config::Config;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -22,11 +23,19 @@ pub(crate) async fn handle_install(config: &Config, category: Option<&str>) -> R
         None => "shell".to_string(),
     };
     let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), false).await?;
+
+    let mut shell_parts: Vec<String> = Vec::new();
+    if !report.created.is_empty() {
+        shell_parts.push(colors::green(&format!("{} created", report.created.len())));
+    }
+    if !report.skipped.is_empty() {
+        shell_parts.push(colors::dim(&format!("{} skipped", report.skipped.len())));
+    }
+    let sep = colors::dim(" · ");
     println!(
-        "Presets ({}): {} created, {} skipped",
-        prefix,
-        report.created.len(),
-        report.skipped.len()
+        "{}  {}",
+        colors::bold("Shell Presets"),
+        shell_parts.join(&sep)
     );
 
     let sources: Vec<_> = report
@@ -37,11 +46,30 @@ pub(crate) async fn handle_install(config: &Config, category: Option<&str>) -> R
         .cloned()
         .collect();
     let link_report = crate::bin_links::link_executables(config.bin_dir(), &sources, false).await?;
+
+    let mut link_parts: Vec<String> = Vec::new();
+    if !link_report.created.is_empty() {
+        link_parts.push(colors::green(&format!(
+            "{} created",
+            link_report.created.len()
+        )));
+    }
+    if !link_report.skipped.is_empty() {
+        link_parts.push(colors::dim(&format!(
+            "{} skipped",
+            link_report.skipped.len()
+        )));
+    }
+    if !link_report.conflicts.is_empty() {
+        link_parts.push(colors::yellow(&format!(
+            "{} conflicts",
+            link_report.conflicts.len()
+        )));
+    }
     println!(
-        "Bin links: {} created, {} skipped, {} conflicts",
-        link_report.created.len(),
-        link_report.skipped.len(),
-        link_report.conflicts.len(),
+        "{}     {}",
+        colors::bold("Bin Links    "),
+        link_parts.join(&sep)
     );
 
     append_path_to_shell_config(config).await?;
@@ -50,23 +78,51 @@ pub(crate) async fn handle_install(config: &Config, category: Option<&str>) -> R
 
 pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool) -> Result<()> {
     if dry_run {
-        println!("[dry-run] No files will be modified.");
+        println!("{}", colors::dim("[dry-run] No files will be modified."));
     }
+
+    let sep = colors::dim(" · ");
 
     let unlink_report =
         crate::bin_links::unlink_managed(config.bin_dir(), config.presets_dir(), dry_run).await?;
+    let mut link_parts: Vec<String> = Vec::new();
+    if !unlink_report.removed.is_empty() {
+        link_parts.push(colors::green(&format!(
+            "{} removed",
+            unlink_report.removed.len()
+        )));
+    }
+    if !unlink_report.skipped.is_empty() {
+        link_parts.push(colors::dim(&format!(
+            "{} skipped",
+            unlink_report.skipped.len()
+        )));
+    }
     println!(
-        "Bin links: {} removed, {} skipped",
-        unlink_report.removed.len(),
-        unlink_report.skipped.len(),
+        "{}     {}",
+        colors::bold("Bin Links    "),
+        link_parts.join(&sep)
     );
 
     let remove_report =
         crate::presets::remove_prefix("shell", config.presets_dir(), dry_run).await?;
+    let mut shell_parts: Vec<String> = Vec::new();
+    if !remove_report.removed.is_empty() {
+        shell_parts.push(colors::green(&format!(
+            "{} removed",
+            remove_report.removed.len()
+        )));
+    }
+    if !remove_report.skipped.is_empty() {
+        shell_parts.push(colors::dim(&format!(
+            "{} skipped",
+            remove_report.skipped.len()
+        )));
+    }
     println!(
-        "Presets (shell): {} removed, {} skipped",
-        remove_report.removed.len(),
-        remove_report.skipped.len(),
+        "{}  {}",
+        colors::bold("Shell Presets"),
+        shell_parts.join(&sep)
     );
 
     if purge && !dry_run {
@@ -79,7 +135,11 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
         // remove_dir only succeeds if empty — treat non-empty as benign
         let _ = tokio::fs::remove_dir(config.presets_dir()).await;
         let _ = tokio::fs::remove_dir(config.bin_dir()).await;
-        println!("Purge: managed directories removed (if empty).");
+        println!(
+            "  {}  {}",
+            colors::symbol("✓"),
+            colors::dim("managed directories purged (if empty)"),
+        );
     }
 
     if !dry_run {
@@ -93,11 +153,11 @@ pub(crate) async fn handle_list() -> Result<()> {
     let categories = crate::presets::list_categories("shell");
 
     if categories.is_empty() {
-        println!("No shell preset categories found.");
+        println!("{}", colors::dim("No shell preset categories found."));
         return Ok(());
     }
 
-    println!("Available shell preset categories:\n");
+    println!("{}\n", colors::bold("Shell Preset Categories"));
 
     for cat in &categories {
         let word = if cat.scripts.len() == 1 {
@@ -105,7 +165,11 @@ pub(crate) async fn handle_list() -> Result<()> {
         } else {
             "scripts"
         };
-        println!("  {} ({} {})", cat.name, cat.scripts.len(), word);
+        println!(
+            "  {}  {}",
+            cat.name,
+            colors::dim(&format!("{} {}", cat.scripts.len(), word))
+        );
 
         // Strip extensions for display and compute alignment column.
         let stems: Vec<&str> = cat.scripts.iter().map(|s| script_stem(&s.name)).collect();
@@ -134,10 +198,21 @@ pub(crate) async fn handle_list() -> Result<()> {
         }
     }
 
-    println!("Use 'shine shell install <CATEGORY>' to install a specific category.");
-    println!("Use 'shine shell install' to install all.");
+    println!(
+        "{}",
+        colors::dim("Run `shine shell install <CATEGORY>` to install a specific category.")
+    );
+    println!(
+        "{}",
+        colors::dim("Run `shine shell install` to install all.")
+    );
     println!();
-    println!("After installation, commands are available directly by name (e.g. `set_proxy`).");
+    println!(
+        "{}",
+        colors::dim(
+            "After installation, commands are available directly by name (e.g. `set_proxy`)."
+        )
+    );
 
     Ok(())
 }

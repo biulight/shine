@@ -24,20 +24,18 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
 
     // Header
     if let Some(desc) = &cat.description {
-        println!("{} — {}", cat.name, desc);
+        println!("{}  {}", colors::bold(&cat.name), colors::dim(desc));
     } else {
-        println!("{}", cat.name);
+        println!("{}", colors::bold(&cat.name));
     }
     println!();
 
-    // Destination
     if let Some(dest_root) = &cat.destination_root {
-        println!("  Destination  {dest_root}");
+        println!("  {}  {}", colors::dim("Destination"), dest_root);
     }
-    println!("  Files        {}", cat.files.len());
+    println!("  {}  {}", colors::dim("Files      "), cat.files.len());
     println!();
 
-    // Per-file rows
     let col_width = cat
         .files
         .iter()
@@ -60,26 +58,31 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
                         match tokio::fs::read(&dest).await {
                             Ok(bytes) => {
                                 if hash_content(&bytes) == entry.content_hash {
-                                    format!("  {}", colors::green("[installed, up to date]"))
+                                    format!("  {}", colors::green("installed, up to date"))
                                 } else {
-                                    format!("  {}", colors::yellow("[installed, user-modified]"))
+                                    format!("  {}", colors::yellow("installed, user-modified"))
                                 }
                             }
                             Err(_) => {
-                                format!("  {}", colors::yellow("[installed, missing on disk]"))
+                                format!("  {}", colors::yellow("installed, missing on disk"))
                             }
                         }
                     }
                 };
-                format!("→ {}{}", dest.display(), status)
+                format!(
+                    "{}  {}{}",
+                    colors::dim("→"),
+                    colors::dim(&dest.display().to_string()),
+                    status
+                )
             }
-            Err(_) => "(destination unresolvable)".to_string(),
+            Err(_) => colors::dim("(destination unresolvable)"),
         };
 
         let file_desc = file
             .description
             .as_deref()
-            .map(|d| format!("  {d}"))
+            .map(|d| format!("  {}", colors::dim(d)))
             .unwrap_or_default();
 
         println!("  {source_name}{padding}  {dest_str}{file_desc}");
@@ -87,9 +90,19 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
 
     println!();
     if any_installed {
-        println!("Installed. Use 'shine app install {category}' to reinstall.");
+        println!(
+            "{}",
+            colors::dim(&format!(
+                "Installed. Run `shine app install {category}` to reinstall."
+            ))
+        );
     } else {
-        println!("Not installed. Use 'shine app install {category}' to install.");
+        println!(
+            "{}",
+            colors::dim(&format!(
+                "Not installed. Run `shine app install {category}` to install."
+            ))
+        );
     }
 
     Ok(())
@@ -99,14 +112,15 @@ pub(crate) async fn handle_list() -> Result<()> {
     let categories = metadata::load_embedded_categories(None)?;
 
     if categories.is_empty() {
-        println!("No app preset categories found.");
+        println!("{}", colors::dim("No app preset categories found."));
         return Ok(());
     }
 
-    println!("Available app preset categories:\n");
+    println!("{}\n", colors::bold("App Preset Categories"));
+
+    let name_width = categories.iter().map(|c| c.name.len()).max().unwrap_or(0);
 
     for cat in &categories {
-        // Effective description: category-level first, then single-file fallback.
         let effective_desc = cat.description.as_deref().or_else(|| {
             if cat.files.len() == 1 {
                 cat.files[0].description.as_deref()
@@ -115,34 +129,36 @@ pub(crate) async fn handle_list() -> Result<()> {
             }
         });
 
-        if cat.files.len() > 1 {
-            println!("  {} ({} files)", cat.name, cat.files.len());
+        let name_pad = " ".repeat(name_width.saturating_sub(cat.name.len()));
+        let file_count = if cat.files.len() > 1 {
+            format!("  {}", colors::dim(&format!("{} files", cat.files.len())))
         } else {
-            println!("  {}", cat.name);
-        }
+            String::new()
+        };
 
-        if let Some(desc) = effective_desc {
-            println!("    {desc}");
-        }
+        let desc_part = effective_desc.map(|d| format!("  {d}")).unwrap_or_default();
 
-        // Show per-file details only when shine.toml has an explicit files section
-        // and there are multiple files to distinguish.
+        println!("  {}{}{}{}", cat.name, name_pad, desc_part, file_count);
+
+        // Per-file rows for explicit multi-file categories
         if cat.has_explicit_files && cat.files.len() > 1 {
             for file in &cat.files {
                 let name = file.source_rel.display().to_string();
                 if let Some(desc) = &file.description {
-                    println!("    {name}  {desc}");
+                    println!("    {}  {}", colors::dim(&name), colors::dim(desc));
                 } else {
-                    println!("    {name}");
+                    println!("    {}", colors::dim(&name));
                 }
             }
         }
-
-        println!();
     }
 
-    println!("Use 'shine app install <CATEGORY>' to install a specific category.");
-    println!("Use 'shine app install' to install all.");
+    println!();
+    println!(
+        "{}",
+        colors::dim("Run `shine app install <CATEGORY>` to install a specific category.")
+    );
+    println!("{}", colors::dim("Run `shine app install` to install all."));
 
     Ok(())
 }
@@ -153,7 +169,7 @@ pub(crate) async fn handle_install(
     dry_run: bool,
 ) -> Result<()> {
     if dry_run {
-        println!("[dry-run] No files will be modified.");
+        println!("{}", colors::dim("[dry-run] No files will be modified."));
     }
 
     let prefix = match &category {
@@ -165,7 +181,11 @@ pub(crate) async fn handle_install(
         crate::presets::extract_prefix(&prefix, config.presets_dir(), false).await?;
     let categories = metadata::load_installed_categories(config, category.as_deref()).await?;
     let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
-    println!("Presets ({}): {} available", prefix, total_available,);
+    println!(
+        "{}  {}",
+        colors::bold("Installing"),
+        colors::dim(&format!("{total_available} files available"))
+    );
 
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
 
@@ -194,10 +214,11 @@ pub(crate) async fn handle_install(
             match file_ops::install_file(&source_path, &destination, is_managed, dry_run).await {
                 Ok(InstallOutcome::Installed { hash }) => {
                     println!(
-                        "  {} {} → {}",
+                        "  {}  {}  {}  {}",
                         colors::symbol("✓"),
                         file.source_rel.display(),
-                        destination.display()
+                        colors::dim("→"),
+                        colors::dim(&destination.display().to_string()),
                     );
                     manifest.upsert(AppEntry {
                         source: format!("app/{}/{}", cat.name, file.source_rel.display()),
@@ -208,16 +229,22 @@ pub(crate) async fn handle_install(
                     installed += 1;
                 }
                 Ok(InstallOutcome::AlreadyManaged) => {
-                    println!("  - {} already up to date", file.source_rel.display());
+                    println!(
+                        "  {}  {}  {}",
+                        colors::dim("-"),
+                        file.source_rel.display(),
+                        colors::dim("already up to date"),
+                    );
                     skipped += 1;
                 }
                 Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
                     println!(
-                        "  {} {} → {} (backup: {})",
+                        "  {}  {}  {}  {}  {}",
                         colors::symbol("✓"),
                         file.source_rel.display(),
-                        destination.display(),
-                        backup.display()
+                        colors::dim("→"),
+                        colors::dim(&destination.display().to_string()),
+                        colors::dim(&format!("(backup: {})", backup.display())),
                     );
                     manifest.upsert(AppEntry {
                         source: format!("app/{}/{}", cat.name, file.source_rel.display()),
@@ -230,9 +257,11 @@ pub(crate) async fn handle_install(
                 }
                 Ok(InstallOutcome::DryRun) => {
                     println!(
-                        "  [dry-run] {} → {}",
+                        "  {}  {}  {}  {}",
+                        colors::dim("[dry-run]"),
                         file.source_rel.display(),
-                        destination.display()
+                        colors::dim("→"),
+                        colors::dim(&destination.display().to_string()),
                     );
                     skipped += 1;
                 }
@@ -248,17 +277,29 @@ pub(crate) async fn handle_install(
         manifest.save(config.shine_dir()).await?;
     }
 
-    println!(
-        "\nApps ({}): {} installed ({} backed up), {} skipped",
-        prefix, installed, backed_up, skipped
-    );
+    let mut summary_parts: Vec<String> = Vec::new();
+    if installed > 0 {
+        let backup_note = if backed_up > 0 {
+            format!(", {backed_up} backed up")
+        } else {
+            String::new()
+        };
+        summary_parts.push(colors::green(&format!(
+            "{installed} installed{backup_note}"
+        )));
+    }
+    if skipped > 0 {
+        summary_parts.push(colors::dim(&format!("{skipped} skipped")));
+    }
+    let sep = colors::dim(" · ");
+    println!("\n{}  {}", colors::bold("Done"), summary_parts.join(&sep));
 
     Ok(())
 }
 
 pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool) -> Result<()> {
     if dry_run {
-        println!("[dry-run] No files will be modified.");
+        println!("{}", colors::dim("[dry-run] No files will be modified."));
     }
 
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
@@ -273,39 +314,49 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
         match file_ops::uninstall_entry(entry, dry_run).await {
             Ok(UninstallOutcome::Removed) => {
                 println!(
-                    "  {} removed {}",
+                    "  {}  {}",
                     colors::symbol("✓"),
-                    entry.destination.display()
+                    colors::dim(&entry.destination.display().to_string()),
                 );
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
             }
             Ok(UninstallOutcome::RestoredBackup { backup }) => {
                 println!(
-                    "  {} removed {} (restored {})",
+                    "  {}  {}  {}",
                     colors::symbol("✓"),
-                    entry.destination.display(),
-                    backup.display()
+                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim(&format!("(restored {})", backup.display())),
                 );
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 restored += 1;
             }
             Ok(UninstallOutcome::NotFound) => {
-                println!("  - {} not found, skipped", entry.destination.display());
+                println!(
+                    "  {}  {}  {}",
+                    colors::dim("-"),
+                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim("not found, skipped"),
+                );
                 manifest.remove_by_dest(&entry.destination);
                 skipped += 1;
             }
             Ok(UninstallOutcome::UserModified) => {
                 println!(
-                    "  {} {} was modified after installation, left in place",
+                    "  {}  {}  {}",
                     colors::symbol("!"),
-                    entry.destination.display()
+                    entry.destination.display(),
+                    colors::yellow("modified after install, left in place"),
                 );
                 user_modified += 1;
             }
             Ok(UninstallOutcome::DryRun) => {
-                println!("  [dry-run] would remove {}", entry.destination.display());
+                println!(
+                    "  {}  {}",
+                    colors::dim("[dry-run]"),
+                    colors::dim(&entry.destination.display().to_string()),
+                );
                 skipped += 1;
             }
             Err(e) => {
@@ -323,11 +374,6 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
     }
 
     let remove_report = crate::presets::remove_prefix("app", config.presets_dir(), dry_run).await?;
-    println!(
-        "Presets (app): {} removed, {} skipped",
-        remove_report.removed.len(),
-        remove_report.skipped.len(),
-    );
 
     if purge && !dry_run {
         let app_dir = config.presets_dir().join("app");
@@ -342,13 +388,33 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
                 .await
                 .context("removing app manifest")?;
         }
-        println!("Purge: app presets directory and manifest removed.");
+        println!(
+            "  {}  {}",
+            colors::symbol("✓"),
+            colors::dim("app presets directory and manifest purged"),
+        );
     }
 
-    println!(
-        "\nApps: {} removed ({} backups restored), {} user-modified (kept), {} skipped",
-        removed, restored, user_modified, skipped
-    );
+    let mut summary_parts: Vec<String> = Vec::new();
+    if removed > 0 {
+        let restore_note = if restored > 0 {
+            format!(", {restored} backups restored")
+        } else {
+            String::new()
+        };
+        summary_parts.push(colors::green(&format!("{removed} removed{restore_note}")));
+    }
+    if user_modified > 0 {
+        summary_parts.push(colors::yellow(&format!(
+            "{user_modified} user-modified (kept)"
+        )));
+    }
+    if skipped > 0 {
+        summary_parts.push(colors::dim(&format!("{skipped} skipped")));
+    }
+    let _ = remove_report;
+    let sep = colors::dim(" · ");
+    println!("\n{}  {}", colors::bold("Done"), summary_parts.join(&sep));
 
     Ok(())
 }

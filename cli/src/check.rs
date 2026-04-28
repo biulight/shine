@@ -24,15 +24,25 @@ pub(crate) async fn handle_check(config: &Config, command: Option<CheckCommands>
 async fn check_shell(config: &Config) -> Result<()> {
     let categories = presets::list_categories("shell");
 
-    println!("Shell presets:");
+    println!("{}", colors::bold("Shell Presets"));
 
     if categories.is_empty() {
-        println!("  (no embedded shell presets found)");
+        println!("  {}", colors::dim("(no embedded shell presets found)"));
         return Ok(());
     }
 
     let presets_shell = config.presets_dir().join("shell");
     let bin_dir = config.bin_dir();
+
+    // Collect rows first so we can align columns.
+    struct Row {
+        symbol: String,
+        label: String,
+        status_sym: &'static str,
+        status_text: &'static str,
+    }
+
+    let mut rows: Vec<Row> = Vec::new();
 
     for cat in &categories {
         for script in &cat.scripts {
@@ -42,49 +52,67 @@ async fn check_shell(config: &Config) -> Result<()> {
 
             let file_exists = script_path.exists();
             let link_exists = link_path.exists() || {
-                // also check as a symlink that may be broken
                 tokio::fs::symlink_metadata(&link_path)
                     .await
                     .map(|m| m.file_type().is_symlink())
                     .unwrap_or(false)
             };
 
-            let (symbol, status) = match (file_exists, link_exists) {
+            let (sym, status_text) = match (file_exists, link_exists) {
                 (true, true) => ("✓", "installed"),
-                (true, false) => ("~", "preset file present but bin symlink missing"),
-                (false, true) => ("~", "bin symlink present but preset file missing"),
+                (true, false) => ("~", "preset present, bin symlink missing"),
+                (false, true) => ("~", "bin symlink present, preset missing"),
                 (false, false) => ("✗", "not installed"),
             };
 
-            println!(
-                "  {}  {}/{}  {}",
-                colors::symbol(symbol),
-                cat.name,
-                script.name,
-                status
-            );
+            rows.push(Row {
+                symbol: colors::symbol(sym),
+                label: format!("{}/{}", cat.name, script.name),
+                status_sym: sym,
+                status_text,
+            });
         }
     }
 
-    // Check PATH sentinel in shell config
+    let label_width = rows.iter().map(|r| r.label.len()).max().unwrap_or(0);
+
+    for row in &rows {
+        let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
+        println!(
+            "  {}  {}{}  {}",
+            row.symbol,
+            row.label,
+            pad,
+            colors::status_label(row.status_text, row.status_sym),
+        );
+    }
+
+    // PATH sentinel check
     let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
-    let (path_symbol, path_status) = match tokio::fs::read_to_string(&config_path).await {
+    let (path_sym, path_label, path_detail) = match tokio::fs::read_to_string(&config_path).await {
         Ok(content) if content.contains(SENTINEL_START) => {
-            ("✓", format!("PATH configured  ({})", config_path.display()))
+            ("✓", "PATH configured", config_path.display().to_string())
         }
         Ok(_) => (
             "✗",
-            format!("PATH not configured  ({})", config_path.display()),
+            "PATH not configured",
+            config_path.display().to_string(),
         ),
         Err(_) => (
             "✗",
-            format!(
-                "PATH not configured  (shell config not found: {})",
-                config_path.display()
-            ),
+            "PATH not configured",
+            format!("shell config not found: {}", config_path.display()),
         ),
     };
-    println!("  {}  {}", colors::symbol(path_symbol), path_status);
+
+    let path_label_pad = " ".repeat(label_width.saturating_sub(path_label.len()));
+    println!(
+        "  {}  {}{}  {}",
+        colors::symbol(path_sym),
+        path_label,
+        path_label_pad,
+        colors::dim(&path_detail),
+    );
 
     Ok(())
 }
@@ -93,27 +121,30 @@ async fn check_shell(config: &Config) -> Result<()> {
 /// Higher discriminant = higher priority (wins in fold).
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 enum FileStatus {
-    NotInstalled, // ✗  none installed
-    UpToDate,     // ✓  all good
-    UpdateAvail,  // ↑  newer version available
-    Partial,      // ~  mix of states (legacy aggregation only)
-    UserModified, // ~  user touched the file
-    Missing,      // !  in manifest but dest deleted
+    NotInstalled,
+    UpToDate,
+    UpdateAvail,
+    Partial,
+    UserModified,
+    Missing,
 }
 
 async fn check_app(config: &Config) -> Result<()> {
-    println!("App configs:");
+    println!("{}", colors::bold("App Configs"));
 
     let categories = match load_embedded_categories(None) {
         Ok(cats) => cats,
         Err(e) => {
-            println!("  (failed to load embedded app presets: {e})");
+            println!(
+                "  {}",
+                colors::dim(&format!("(failed to load embedded app presets: {e})"))
+            );
             return Ok(());
         }
     };
 
     if categories.is_empty() {
-        println!("  (no embedded app presets found)");
+        println!("  {}", colors::dim("(no embedded app presets found)"));
         return Ok(());
     }
 
@@ -125,9 +156,18 @@ async fn check_app(config: &Config) -> Result<()> {
     let mut missing = 0usize;
     let mut not_installed = 0usize;
 
+    struct Row {
+        sym: &'static str,
+        label: String,
+        dest: Option<String>,
+        status_text: &'static str,
+        file_status: FileStatus,
+    }
+
+    let mut rows: Vec<Row> = Vec::new();
+
     for cat in &categories {
         if cat.has_explicit_files {
-            // Per-file output for categories with an explicit [[files]] section.
             for file in &cat.files {
                 let (dest_opt, status) = match resolve_install_destination(cat, file, config) {
                     Err(_) => (None, FileStatus::Missing),
@@ -176,42 +216,29 @@ async fn check_app(config: &Config) -> Result<()> {
                     .clone()
                     .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
 
-                let dest_part = dest_opt
-                    .map(|d| {
-                        let s = d.to_string_lossy().into_owned();
-                        format!(
-                            "  →  {}",
-                            s.replace(config.home_dir.to_string_lossy().as_ref(), "~")
-                        )
-                    })
-                    .unwrap_or_default();
+                let dest_str = dest_opt.map(|d| {
+                    d.to_string_lossy()
+                        .into_owned()
+                        .replace(config.home_dir.to_string_lossy().as_ref(), "~")
+                });
 
-                let (symbol, status_label) = match status {
-                    FileStatus::Missing => ("!", "destination missing (was installed)"),
+                let (sym, status_text) = match status {
+                    FileStatus::Missing => ("!", "destination missing"),
                     FileStatus::UserModified => ("~", "user modified"),
-                    FileStatus::UpdateAvail => ("↑", "update available — run `shine app install`"),
+                    FileStatus::UpdateAvail => ("↑", "update available"),
                     FileStatus::UpToDate => ("✓", "up-to-date"),
                     FileStatus::NotInstalled | FileStatus::Partial => ("✗", "not installed"),
                 };
 
-                println!(
-                    "  {}  {}{}  ({})",
-                    colors::symbol(symbol),
+                rows.push(Row {
+                    sym,
                     label,
-                    dest_part,
-                    status_label
-                );
-
-                match status {
-                    FileStatus::Missing => missing += 1,
-                    FileStatus::UserModified => user_modified += 1,
-                    FileStatus::UpdateAvail => update_available += 1,
-                    FileStatus::UpToDate => up_to_date += 1,
-                    FileStatus::NotInstalled | FileStatus::Partial => not_installed += 1,
-                }
+                    dest: dest_str,
+                    status_text,
+                    file_status: status,
+                });
             }
         } else {
-            // Legacy/auto-collected: one aggregated row per category.
             let mut file_statuses: Vec<FileStatus> = Vec::new();
 
             for file in &cat.files {
@@ -291,59 +318,87 @@ async fn check_app(config: &Config) -> Result<()> {
                 None
             };
 
-            let (symbol, status_label) = match cat_status {
-                FileStatus::Missing => ("!", "destination missing (was installed)"),
+            let (sym, status_text) = match cat_status {
+                FileStatus::Missing => ("!", "destination missing"),
                 FileStatus::UserModified => ("~", "user modified"),
                 FileStatus::Partial => ("~", "partial install"),
-                FileStatus::UpdateAvail => ("↑", "update available — run `shine app install`"),
+                FileStatus::UpdateAvail => ("↑", "update available"),
                 FileStatus::UpToDate => ("✓", "up-to-date"),
                 FileStatus::NotInstalled => ("✗", "not installed"),
             };
 
-            let dest_part = dest_display
-                .map(|d| format!("  →  {}", d))
-                .unwrap_or_default();
-            println!(
-                "  {}  {}{}  ({})",
-                colors::symbol(symbol),
-                cat.name,
-                dest_part,
-                status_label
-            );
+            rows.push(Row {
+                sym,
+                label: cat.name.clone(),
+                dest: dest_display,
+                status_text,
+                file_status: cat_status,
+            });
+        }
+    }
 
-            match cat_status {
-                FileStatus::Missing => missing += 1,
-                FileStatus::UserModified | FileStatus::Partial => user_modified += 1,
-                FileStatus::UpdateAvail => update_available += 1,
-                FileStatus::UpToDate => up_to_date += 1,
-                FileStatus::NotInstalled => not_installed += 1,
-            }
+    let label_width = rows.iter().map(|r| r.label.len()).max().unwrap_or(0);
+
+    for row in &rows {
+        let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
+        let dest_part = row
+            .dest
+            .as_deref()
+            .map(|d| format!("  {}  {}", colors::dim("→"), colors::dim(d)))
+            .unwrap_or_default();
+
+        let run_hint = if row.sym == "↑" {
+            format!("  {}", colors::dim("run `shine app install`"))
+        } else {
+            String::new()
+        };
+
+        println!(
+            "  {}  {}{}{}  {}{}",
+            colors::symbol(row.sym),
+            row.label,
+            pad,
+            dest_part,
+            colors::status_label(row.status_text, row.sym),
+            run_hint,
+        );
+
+        match row.file_status {
+            FileStatus::Missing => missing += 1,
+            FileStatus::UserModified | FileStatus::Partial => user_modified += 1,
+            FileStatus::UpdateAvail => update_available += 1,
+            FileStatus::UpToDate => up_to_date += 1,
+            FileStatus::NotInstalled => not_installed += 1,
         }
     }
 
     let total = up_to_date + update_available + user_modified + missing + not_installed;
     if total == 0 {
-        println!("  (no app presets found)");
+        println!("  {}", colors::dim("(no app presets found)"));
         return Ok(());
     }
 
     let mut parts: Vec<String> = Vec::new();
     if up_to_date > 0 {
-        parts.push(format!("{} up-to-date", up_to_date));
+        parts.push(colors::green(&format!("{up_to_date} up-to-date")));
     }
     if update_available > 0 {
-        parts.push(format!("{} update available", update_available));
+        parts.push(colors::cyan(&format!(
+            "{update_available} update available"
+        )));
     }
     if user_modified > 0 {
-        parts.push(format!("{} user-modified", user_modified));
+        parts.push(colors::yellow(&format!("{user_modified} user-modified")));
     }
     if missing > 0 {
-        parts.push(format!("{} destination missing", missing));
+        parts.push(colors::yellow(&format!("{missing} destination missing")));
     }
     if not_installed > 0 {
-        parts.push(format!("{} not installed", not_installed));
+        parts.push(colors::dim(&format!("{not_installed} not installed")));
     }
-    println!("\nSummary: {}", parts.join(", "));
+
+    let sep = colors::dim(" · ");
+    println!("\n{}  {}", colors::bold("Summary"), parts.join(&sep));
 
     Ok(())
 }
