@@ -24,6 +24,7 @@ pub(crate) struct AppFile {
     pub source_rel: PathBuf,
     pub target_rel: PathBuf,
     pub description: Option<String>,
+    pub display_name: Option<String>,
     pub legacy_dest_annotation: Option<String>,
 }
 
@@ -39,6 +40,7 @@ struct FileToml {
     source: String,
     target: Option<String>,
     description: Option<String>,
+    display_name: Option<String>,
 }
 
 pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<AppCategory>> {
@@ -86,6 +88,7 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
                         source_rel,
                         target_rel,
                         description: file.description,
+                        display_name: file.display_name,
                         legacy_dest_annotation: None,
                     })
                 })
@@ -96,6 +99,7 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
                     source_rel: rel.clone(),
                     target_rel: rel,
                     description: None,
+                    display_name: None,
                     legacy_dest_annotation: None,
                 })
                 .collect(),
@@ -124,6 +128,7 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
                     source_rel: rel.clone(),
                     target_rel: rel,
                     description: parse_legacy_description(&bytes),
+                    display_name: None,
                     legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
                 }
             })
@@ -159,6 +164,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
                         source_rel,
                         target_rel,
                         description: file.description,
+                        display_name: file.display_name,
                         legacy_dest_annotation: None,
                     })
                 })
@@ -170,6 +176,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
                     source_rel: rel.clone(),
                     target_rel: rel,
                     description: None,
+                    display_name: None,
                     legacy_dest_annotation: None,
                 })
                 .collect(),
@@ -205,6 +212,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
             source_rel: rel.clone(),
             target_rel: rel,
             description: parse_legacy_description(&bytes),
+            display_name: None,
             legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
         });
     }

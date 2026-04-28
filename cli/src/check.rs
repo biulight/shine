@@ -96,7 +96,7 @@ enum FileStatus {
     NotInstalled, // ✗  none installed
     UpToDate,     // ✓  all good
     UpdateAvail,  // ↑  newer version available
-    Partial,      // ~  mix of states
+    Partial,      // ~  mix of states (legacy aggregation only)
     UserModified, // ~  user touched the file
     Missing,      // !  in manifest but dest deleted
 }
@@ -126,112 +126,198 @@ async fn check_app(config: &Config) -> Result<()> {
     let mut not_installed = 0usize;
 
     for cat in &categories {
-        // Collect a FileStatus for every file in this category.
-        let mut file_statuses: Vec<FileStatus> = Vec::new();
-
-        for file in &cat.files {
-            let dest = match resolve_install_destination(cat, file, config) {
-                Ok(d) => d,
-                Err(_) => {
-                    file_statuses.push(FileStatus::Missing);
-                    continue;
-                }
-            };
-
-            let manifest_entry = manifest.find_by_dest(&dest);
-
-            let status = match manifest_entry {
-                None => FileStatus::NotInstalled,
-                Some(entry) => {
-                    if !dest.exists() {
-                        FileStatus::Missing
-                    } else {
-                        match tokio::fs::read(&dest).await {
-                            Err(_) => FileStatus::Missing,
-                            Ok(dest_bytes) => {
-                                let dest_hash = hash_content(&dest_bytes);
-                                let manifest_hash = entry.content_hash;
-
-                                if dest_hash != manifest_hash {
-                                    FileStatus::UserModified
+        if cat.has_explicit_files {
+            // Per-file output for categories with an explicit [[files]] section.
+            for file in &cat.files {
+                let (dest_opt, status) = match resolve_install_destination(cat, file, config) {
+                    Err(_) => (None, FileStatus::Missing),
+                    Ok(dest) => {
+                        let manifest_entry = manifest.find_by_dest(&dest);
+                        let status = match manifest_entry {
+                            None => FileStatus::NotInstalled,
+                            Some(entry) => {
+                                if !dest.exists() {
+                                    FileStatus::Missing
                                 } else {
-                                    let asset_key =
-                                        format!("app/{}/{}", cat.name, file.source_rel.display());
-                                    let embedded_hash = presets::read_asset_bytes(&asset_key)
-                                        .map(|b| hash_content(&b));
-                                    match embedded_hash {
-                                        Some(emb) if emb != manifest_hash => {
-                                            FileStatus::UpdateAvail
+                                    match tokio::fs::read(&dest).await {
+                                        Err(_) => FileStatus::Missing,
+                                        Ok(dest_bytes) => {
+                                            let dest_hash = hash_content(&dest_bytes);
+                                            let manifest_hash = entry.content_hash;
+                                            if dest_hash != manifest_hash {
+                                                FileStatus::UserModified
+                                            } else {
+                                                let asset_key = format!(
+                                                    "app/{}/{}",
+                                                    cat.name,
+                                                    file.source_rel.display()
+                                                );
+                                                let embedded_hash =
+                                                    presets::read_asset_bytes(&asset_key)
+                                                        .map(|b| hash_content(&b));
+                                                match embedded_hash {
+                                                    Some(emb) if emb != manifest_hash => {
+                                                        FileStatus::UpdateAvail
+                                                    }
+                                                    _ => FileStatus::UpToDate,
+                                                }
+                                            }
                                         }
-                                        _ => FileStatus::UpToDate,
+                                    }
+                                }
+                            }
+                        };
+                        (Some(dest), status)
+                    }
+                };
+
+                let label = file
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
+
+                let dest_part = dest_opt
+                    .map(|d| {
+                        let s = d.to_string_lossy().into_owned();
+                        format!(
+                            "  →  {}",
+                            s.replace(config.home_dir.to_string_lossy().as_ref(), "~")
+                        )
+                    })
+                    .unwrap_or_default();
+
+                let (symbol, status_label) = match status {
+                    FileStatus::Missing => ("!", "destination missing (was installed)"),
+                    FileStatus::UserModified => ("~", "user modified"),
+                    FileStatus::UpdateAvail => ("↑", "update available — run `shine app install`"),
+                    FileStatus::UpToDate => ("✓", "up-to-date"),
+                    FileStatus::NotInstalled | FileStatus::Partial => ("✗", "not installed"),
+                };
+
+                println!(
+                    "  {}  {}{}  ({})",
+                    colors::symbol(symbol),
+                    label,
+                    dest_part,
+                    status_label
+                );
+
+                match status {
+                    FileStatus::Missing => missing += 1,
+                    FileStatus::UserModified => user_modified += 1,
+                    FileStatus::UpdateAvail => update_available += 1,
+                    FileStatus::UpToDate => up_to_date += 1,
+                    FileStatus::NotInstalled | FileStatus::Partial => not_installed += 1,
+                }
+            }
+        } else {
+            // Legacy/auto-collected: one aggregated row per category.
+            let mut file_statuses: Vec<FileStatus> = Vec::new();
+
+            for file in &cat.files {
+                let dest = match resolve_install_destination(cat, file, config) {
+                    Ok(d) => d,
+                    Err(_) => {
+                        file_statuses.push(FileStatus::Missing);
+                        continue;
+                    }
+                };
+
+                let manifest_entry = manifest.find_by_dest(&dest);
+
+                let status = match manifest_entry {
+                    None => FileStatus::NotInstalled,
+                    Some(entry) => {
+                        if !dest.exists() {
+                            FileStatus::Missing
+                        } else {
+                            match tokio::fs::read(&dest).await {
+                                Err(_) => FileStatus::Missing,
+                                Ok(dest_bytes) => {
+                                    let dest_hash = hash_content(&dest_bytes);
+                                    let manifest_hash = entry.content_hash;
+                                    if dest_hash != manifest_hash {
+                                        FileStatus::UserModified
+                                    } else {
+                                        let asset_key = format!(
+                                            "app/{}/{}",
+                                            cat.name,
+                                            file.source_rel.display()
+                                        );
+                                        let embedded_hash = presets::read_asset_bytes(&asset_key)
+                                            .map(|b| hash_content(&b));
+                                        match embedded_hash {
+                                            Some(emb) if emb != manifest_hash => {
+                                                FileStatus::UpdateAvail
+                                            }
+                                            _ => FileStatus::UpToDate,
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
+                };
+
+                file_statuses.push(status);
+            }
+
+            let has_installed = file_statuses.iter().any(|s| *s != FileStatus::NotInstalled);
+            let has_not_installed = file_statuses.contains(&FileStatus::NotInstalled);
+            let cat_status = if has_installed && has_not_installed {
+                FileStatus::Partial
+            } else {
+                file_statuses
+                    .iter()
+                    .copied()
+                    .max()
+                    .unwrap_or(FileStatus::NotInstalled)
             };
 
-            file_statuses.push(status);
-        }
+            let dest_display: Option<String> = if let Some(root) = &cat.destination_root {
+                Some(
+                    shellexpand::tilde(root)
+                        .into_owned()
+                        .replace(config.home_dir.to_string_lossy().as_ref(), "~"),
+                )
+            } else if cat.files.len() == 1 {
+                resolve_install_destination(cat, &cat.files[0], config)
+                    .ok()
+                    .map(|p| {
+                        let s = p.to_string_lossy().into_owned();
+                        s.replace(config.home_dir.to_string_lossy().as_ref(), "~")
+                    })
+            } else {
+                None
+            };
 
-        // Aggregate: detect a partial install (mix of NotInstalled and something else).
-        let has_installed = file_statuses.iter().any(|s| *s != FileStatus::NotInstalled);
-        let has_not_installed = file_statuses.contains(&FileStatus::NotInstalled);
-        let cat_status = if has_installed && has_not_installed {
-            FileStatus::Partial
-        } else {
-            file_statuses
-                .iter()
-                .copied()
-                .max()
-                .unwrap_or(FileStatus::NotInstalled)
-        };
+            let (symbol, status_label) = match cat_status {
+                FileStatus::Missing => ("!", "destination missing (was installed)"),
+                FileStatus::UserModified => ("~", "user modified"),
+                FileStatus::Partial => ("~", "partial install"),
+                FileStatus::UpdateAvail => ("↑", "update available — run `shine app install`"),
+                FileStatus::UpToDate => ("✓", "up-to-date"),
+                FileStatus::NotInstalled => ("✗", "not installed"),
+            };
 
-        // Determine destination to display.
-        let dest_display: Option<String> = if let Some(root) = &cat.destination_root {
-            Some(
-                shellexpand::tilde(root)
-                    .into_owned()
-                    .replace(config.home_dir.to_string_lossy().as_ref(), "~"),
-            )
-        } else if cat.files.len() == 1 {
-            resolve_install_destination(cat, &cat.files[0], config)
-                .ok()
-                .map(|p| {
-                    let s = p.to_string_lossy().into_owned();
-                    s.replace(config.home_dir.to_string_lossy().as_ref(), "~")
-                })
-        } else {
-            None
-        };
+            let dest_part = dest_display
+                .map(|d| format!("  →  {}", d))
+                .unwrap_or_default();
+            println!(
+                "  {}  {}{}  ({})",
+                colors::symbol(symbol),
+                cat.name,
+                dest_part,
+                status_label
+            );
 
-        let (symbol, status_label) = match cat_status {
-            FileStatus::Missing => ("!", "destination missing (was installed)"),
-            FileStatus::UserModified => ("~", "user modified"),
-            FileStatus::Partial => ("~", "partial install"),
-            FileStatus::UpdateAvail => ("↑", "update available — run `shine app install`"),
-            FileStatus::UpToDate => ("✓", "up-to-date"),
-            FileStatus::NotInstalled => ("✗", "not installed"),
-        };
-
-        let dest_part = dest_display
-            .map(|d| format!("  →  {}", d))
-            .unwrap_or_default();
-        println!(
-            "  {}  {}{}  ({})",
-            colors::symbol(symbol),
-            cat.name,
-            dest_part,
-            status_label
-        );
-
-        match cat_status {
-            FileStatus::Missing => missing += 1,
-            FileStatus::UserModified | FileStatus::Partial => user_modified += 1,
-            FileStatus::UpdateAvail => update_available += 1,
-            FileStatus::UpToDate => up_to_date += 1,
-            FileStatus::NotInstalled => not_installed += 1,
+            match cat_status {
+                FileStatus::Missing => missing += 1,
+                FileStatus::UserModified | FileStatus::Partial => user_modified += 1,
+                FileStatus::UpdateAvail => update_available += 1,
+                FileStatus::UpToDate => up_to_date += 1,
+                FileStatus::NotInstalled => not_installed += 1,
+            }
         }
     }
 
