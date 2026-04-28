@@ -1,2 +1,7 @@
-description = "JetBrains IDEs IdeaVim configuration."
+description = "JetBrains IDEs configuration."
 dest = "~"
+
+[[files]]
+source = ".ideavimrc"
+target = ".ideavimrc"
+description = "IdeaVim plugin configuration."
