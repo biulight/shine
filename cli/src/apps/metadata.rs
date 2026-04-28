@@ -12,6 +12,7 @@ pub(crate) struct AppCategory {
     pub description: Option<String>,
     pub destination_root: Option<String>,
     pub files: Vec<AppFile>,
+    #[allow(dead_code)]
     pub uses_metadata: bool,
 }
 

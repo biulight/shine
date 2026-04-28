@@ -30,18 +30,15 @@ pub(crate) async fn handle_list() -> Result<()> {
             "files"
         };
         println!("  {} ({} {})", cat.name, cat.files.len(), word);
+
         if let Some(description) = &cat.description {
             println!("    {description}");
-        }
-
-        if let Some(dest) = &cat.destination_root {
-            println!("    → {dest}");
         }
 
         let max_name = cat
             .files
             .iter()
-            .map(|s| s.source_rel.display().to_string().len())
+            .map(|f| f.source_rel.display().to_string().len())
             .max()
             .unwrap_or(0);
         let desc_col = max_name + 4;
@@ -50,28 +47,40 @@ pub(crate) async fn handle_list() -> Result<()> {
         for file in &cat.files {
             let name = file.source_rel.display().to_string();
             let padding = " ".repeat(desc_col.saturating_sub(name.len()));
-            let detail = file.description.as_deref().map(str::to_string);
+            let dest = display_destination(cat, file);
 
-            match detail {
-                Some(line) => println!("    {name}{padding}{line}"),
-                None => println!("    {name}"),
+            match (&file.description, dest) {
+                (Some(desc), Some(d)) => {
+                    println!("    {name}{padding}{desc}");
+                    println!("{continuation_indent}→ {d}");
+                }
+                (Some(desc), None) => {
+                    println!("    {name}{padding}{desc}");
+                }
+                (None, Some(d)) => {
+                    println!("    {name}{padding}→ {d}");
+                }
+                (None, None) => {
+                    println!("    {name}");
+                }
             }
-
-            if cat.uses_metadata && file.target_rel != file.source_rel {
-                println!("{continuation_indent}→ {}", file.target_rel.display());
-            } else if !cat.uses_metadata
-                && let Some(dest) = &file.legacy_dest_annotation
-            {
-                println!("{continuation_indent}→ {dest}");
-            }
-            println!();
         }
+
+        println!();
     }
 
     println!("Use 'shine app install <CATEGORY>' to install a specific category.");
     println!("Use 'shine app install' to install all.");
 
     Ok(())
+}
+
+fn display_destination(cat: &metadata::AppCategory, file: &metadata::AppFile) -> Option<String> {
+    if let Some(dest_root) = &cat.destination_root {
+        let target = file.target_rel.to_string_lossy();
+        return Some(format!("{dest_root}/{target}"));
+    }
+    file.legacy_dest_annotation.clone()
 }
 
 pub(crate) async fn handle_install(
