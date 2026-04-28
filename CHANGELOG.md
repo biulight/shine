@@ -5,6 +5,19 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.8.0] — 2026-04-29
+
+### UX
+
+**Terminal output beautification across all commands**
+- `shine check`: bold section headers, aligned label columns, colored status text, dim paths with `→` arrow, Summary line uses `·` separator with per-status colors
+- `shine app list`: name-aligned layout, dim file counts and hint text
+- `shine app install/uninstall`: dim paths and arrows, unified **Done** summary with colored `·` separated counts
+- `shine shell install/uninstall/list`: bold section headers, colored created/skipped/removed counts
+- Added `bold()`, `dim()`, `cyan()`, `status_label()` helpers to `colors.rs`; all output degrades gracefully to plain text when stdout is not a TTY or `NO_COLOR` is set
+
+---
+
 ## [0.7.0] — 2026-04-29
 
 ### Features
