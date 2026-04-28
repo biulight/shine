@@ -5,6 +5,34 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.7.0] — 2026-04-29
+
+### Features
+
+**`shine app info <CATEGORY>`**
+- New subcommand that prints the description, destination, and file list for a single app category
+- Shows `display_name`, source, target, and per-file description when available
+
+**`shine app list` — improved output**
+- Beautified layout with aligned columns
+- Simplified to show only essential information
+
+**`shine check` — per-file rows for explicit `[[files]]` categories**
+- Categories that declare an explicit `[[files]]` section in `shine.toml` now emit one status row per file instead of a single aggregated category row
+- Row label uses the new `display_name` field when set (e.g. `JetBrains/IdeaVim`), falling back to `{category}/{source}`
+- Legacy and auto-collected categories keep the existing single-row aggregated behavior
+
+### Presets
+
+- Added `shine.toml` with `dest` for **archey4** and **fastfetch** categories
+- **JetBrains**: migrated to explicit `[[files]]` declaration; removed `shine-dest` annotation from `.ideavimrc`; added `display_name = "JetBrains/IdeaVim"`
+
+### Schema
+
+- `shine.toml` `[[files]]` entries now support an optional `display_name` field to control the label shown in `shine check` output
+
+---
+
 ## [0.6.1] — 2026-04-28
 
 ### UX
