@@ -24,43 +24,33 @@ pub(crate) async fn handle_list() -> Result<()> {
     println!("Available app preset categories:\n");
 
     for cat in &categories {
-        let word = if cat.files.len() == 1 {
-            "file"
-        } else {
-            "files"
-        };
-        println!("  {} ({} {})", cat.name, cat.files.len(), word);
+        // Effective description: category-level first, then single-file fallback.
+        let effective_desc = cat.description.as_deref().or_else(|| {
+            if cat.files.len() == 1 {
+                cat.files[0].description.as_deref()
+            } else {
+                None
+            }
+        });
 
-        if let Some(description) = &cat.description {
-            println!("    {description}");
+        if cat.files.len() > 1 {
+            println!("  {} ({} files)", cat.name, cat.files.len());
+        } else {
+            println!("  {}", cat.name);
         }
 
-        let max_name = cat
-            .files
-            .iter()
-            .map(|f| f.source_rel.display().to_string().len())
-            .max()
-            .unwrap_or(0);
-        let desc_col = max_name + 4;
-        let continuation_indent = " ".repeat(4 + desc_col);
+        if let Some(desc) = effective_desc {
+            println!("    {desc}");
+        }
 
-        for file in &cat.files {
-            let name = file.source_rel.display().to_string();
-            let padding = " ".repeat(desc_col.saturating_sub(name.len()));
-            let dest = display_destination(cat, file);
-
-            match (&file.description, dest) {
-                (Some(desc), Some(d)) => {
-                    println!("    {name}{padding}{desc}");
-                    println!("{continuation_indent}→ {d}");
-                }
-                (Some(desc), None) => {
-                    println!("    {name}{padding}{desc}");
-                }
-                (None, Some(d)) => {
-                    println!("    {name}{padding}→ {d}");
-                }
-                (None, None) => {
+        // Show per-file details only when shine.toml has an explicit files section
+        // and there are multiple files to distinguish.
+        if cat.has_explicit_files && cat.files.len() > 1 {
+            for file in &cat.files {
+                let name = file.source_rel.display().to_string();
+                if let Some(desc) = &file.description {
+                    println!("    {name}  {desc}");
+                } else {
                     println!("    {name}");
                 }
             }
@@ -73,14 +63,6 @@ pub(crate) async fn handle_list() -> Result<()> {
     println!("Use 'shine app install' to install all.");
 
     Ok(())
-}
-
-fn display_destination(cat: &metadata::AppCategory, file: &metadata::AppFile) -> Option<String> {
-    if let Some(dest_root) = &cat.destination_root {
-        let target = file.target_rel.to_string_lossy();
-        return Some(format!("{dest_root}/{target}"));
-    }
-    file.legacy_dest_annotation.clone()
 }
 
 pub(crate) async fn handle_install(

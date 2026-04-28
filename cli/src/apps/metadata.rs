@@ -14,6 +14,9 @@ pub(crate) struct AppCategory {
     pub files: Vec<AppFile>,
     #[allow(dead_code)]
     pub uses_metadata: bool,
+    /// `true` when shine.toml has an explicit `[[files]]` section;
+    /// `false` for auto-collected files and legacy categories.
+    pub has_explicit_files: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +72,7 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
     let metadata_path = format!("app/{name}/shine.toml");
     if let Some(bytes) = presets::read_asset_bytes(&metadata_path) {
         let parsed = parse_category_toml(name, &bytes)?;
+        let has_explicit_files = parsed.files.is_some();
         let files = match parsed.files {
             Some(files) => files
                 .into_iter()
@@ -103,6 +107,7 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
             destination_root: Some(parsed.dest),
             files,
             uses_metadata: true,
+            has_explicit_files,
         });
     }
 
@@ -124,6 +129,7 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
             })
             .collect(),
         uses_metadata: false,
+        has_explicit_files: false,
     })
 }
 
@@ -136,6 +142,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
             .await
             .with_context(|| format!("reading metadata: {}", metadata_path.display()))?;
         let parsed = parse_category_toml(name, &bytes)?;
+        let has_explicit_files = parsed.files.is_some();
         let files = match parsed.files {
             Some(files) => files
                 .into_iter()
@@ -184,6 +191,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
             destination_root: Some(parsed.dest),
             files,
             uses_metadata: true,
+            has_explicit_files,
         });
     }
 
@@ -207,6 +215,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
         destination_root: None,
         files,
         uses_metadata: false,
+        has_explicit_files: false,
     })
 }
 
