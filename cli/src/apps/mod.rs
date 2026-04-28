@@ -13,6 +13,88 @@ use file_ops::{InstallOutcome, UninstallOutcome};
 use manifest::AppEntry;
 use std::path::PathBuf;
 
+pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
+    let categories = metadata::load_embedded_categories(Some(category))?;
+    let cat = categories
+        .iter()
+        .find(|c| c.name == category)
+        .ok_or_else(|| anyhow::anyhow!("app preset category not found: {category}"))?;
+
+    let manifest = AppManifest::load(config.shine_dir()).await?;
+
+    // Header
+    if let Some(desc) = &cat.description {
+        println!("{} — {}", cat.name, desc);
+    } else {
+        println!("{}", cat.name);
+    }
+    println!();
+
+    // Destination
+    if let Some(dest_root) = &cat.destination_root {
+        println!("  Destination  {dest_root}");
+    }
+    println!("  Files        {}", cat.files.len());
+    println!();
+
+    // Per-file rows
+    let col_width = cat
+        .files
+        .iter()
+        .map(|f| f.source_rel.display().to_string().len())
+        .max()
+        .unwrap_or(0);
+
+    let mut any_installed = false;
+
+    for file in &cat.files {
+        let source_name = file.source_rel.display().to_string();
+        let padding = " ".repeat(col_width.saturating_sub(source_name.len()));
+
+        let dest_str = match resolve_install_destination(cat, file, config) {
+            Ok(dest) => {
+                let status = match manifest.find_by_dest(&dest) {
+                    None => String::new(),
+                    Some(entry) => {
+                        any_installed = true;
+                        match tokio::fs::read(&dest).await {
+                            Ok(bytes) => {
+                                if hash_content(&bytes) == entry.content_hash {
+                                    format!("  {}", colors::green("[installed, up to date]"))
+                                } else {
+                                    format!("  {}", colors::yellow("[installed, user-modified]"))
+                                }
+                            }
+                            Err(_) => {
+                                format!("  {}", colors::yellow("[installed, missing on disk]"))
+                            }
+                        }
+                    }
+                };
+                format!("→ {}{}", dest.display(), status)
+            }
+            Err(_) => "(destination unresolvable)".to_string(),
+        };
+
+        let file_desc = file
+            .description
+            .as_deref()
+            .map(|d| format!("  {d}"))
+            .unwrap_or_default();
+
+        println!("  {source_name}{padding}  {dest_str}{file_desc}");
+    }
+
+    println!();
+    if any_installed {
+        println!("Installed. Use 'shine app install {category}' to reinstall.");
+    } else {
+        println!("Not installed. Use 'shine app install {category}' to install.");
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn handle_list() -> Result<()> {
     let categories = metadata::load_embedded_categories(None)?;
 

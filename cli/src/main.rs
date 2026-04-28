@@ -114,6 +114,7 @@ async fn main() -> Result<()> {
         Commands::Completions { .. } => unreachable!(),
         Commands::App { command } => match command {
             AppCommands::List => Box::pin(apps::handle_list()).await,
+            AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
             AppCommands::Install { category, dry_run } => {
                 Box::pin(apps::handle_install(&config, category, dry_run)).await
             }

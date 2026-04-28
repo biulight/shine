@@ -4,6 +4,12 @@ use clap::Subcommand;
 pub enum AppCommands {
     /// List available app preset categories and their destination paths
     List,
+    /// Show detailed information about a specific app preset category
+    Info {
+        /// Category to inspect (e.g. vim, starship)
+        #[arg(value_name = "CATEGORY")]
+        category: String,
+    },
     /// Install app preset files for all or a specific category
     Install {
         /// Category to install (e.g. JetBrains, starship). Installs all if omitted.
