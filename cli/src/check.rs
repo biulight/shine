@@ -37,7 +37,8 @@ async fn check_shell(config: &Config) -> Result<()> {
     for cat in &categories {
         for script in &cat.scripts {
             let script_path = presets_shell.join(&cat.name).join(&script.name);
-            let link_path = bin_dir.join(&script.name);
+            let link_name = crate::bin_links::link_stem(std::path::Path::new(&script.name));
+            let link_path = bin_dir.join(&link_name);
 
             let file_exists = script_path.exists();
             let link_exists = link_path.exists() || {
