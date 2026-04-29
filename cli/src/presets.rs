@@ -321,7 +321,6 @@ pub(crate) async fn extract_prefix(
 }
 
 /// Extract all embedded assets.
-#[allow(dead_code)]
 pub(crate) async fn extract_all(target_dir: &Path, overwrite: bool) -> Result<ExtractReport> {
     extract_matching(|_| true, target_dir, overwrite).await
 }
@@ -781,6 +780,85 @@ mod tests {
         assert!(names.contains(&"a.sh"), "a.sh missing: {names:?}");
         assert!(names.contains(&"b.sh"), "b.sh missing: {names:?}");
         assert!(!names.contains(&"readme.txt"), "non-.sh should be excluded");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    // --- extract_all (presets export) tests ---
+
+    #[tokio::test]
+    async fn extract_all_creates_files_in_target_dir() {
+        let dir = make_temp_dir().await;
+        let report = extract_all(&dir, false).await.unwrap();
+
+        assert!(
+            !report.created.is_empty(),
+            "should create at least one file"
+        );
+        assert!(report.skipped.is_empty());
+        assert!(report.overwritten.is_empty());
+
+        for path in &report.created {
+            assert!(path.exists(), "{path:?} should exist after export");
+        }
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn extract_all_skips_existing_by_default() {
+        let dir = make_temp_dir().await;
+
+        // First export — populates the dir
+        let first = extract_all(&dir, false).await.unwrap();
+        assert!(!first.created.is_empty());
+
+        // Overwrite one file with marker content
+        let marker = b"do-not-overwrite";
+        let target_path = &first.created[0];
+        fs::write(target_path, marker).await.unwrap();
+
+        // Second export without --force — should skip the modified file
+        let second = extract_all(&dir, false).await.unwrap();
+        assert!(
+            second.skipped.contains(target_path),
+            "modified file should be skipped on re-export without --force"
+        );
+
+        let content = fs::read(target_path).await.unwrap();
+        assert_eq!(
+            content, marker,
+            "file content must not change without --force"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn extract_all_force_overwrites_existing() {
+        let dir = make_temp_dir().await;
+
+        // First export
+        let first = extract_all(&dir, false).await.unwrap();
+        assert!(!first.created.is_empty());
+
+        // Overwrite one file with marker content
+        let marker = b"old-content";
+        let target_path = &first.created[0];
+        fs::write(target_path, marker).await.unwrap();
+
+        // Re-export with force
+        let second = extract_all(&dir, true).await.unwrap();
+        assert!(
+            second.overwritten.contains(target_path),
+            "modified file should appear in overwritten list with --force"
+        );
+
+        let content = fs::read(target_path).await.unwrap();
+        assert_ne!(
+            content, marker,
+            "file content should be overwritten with --force"
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

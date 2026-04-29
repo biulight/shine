@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use clap::{Parser, ValueEnum};
+use std::path::PathBuf;
 
 mod apps;
 mod bin_links;
@@ -13,7 +14,7 @@ mod shells;
 mod update_check;
 
 use crate::config::Config;
-use commands::{AppCommands, CheckCommands, ShellCommands};
+use commands::{AppCommands, CheckCommands, PresetsCommands, ShellCommands};
 use update_check::UpdateStatus;
 
 /// `Shine` - Quick config for sys
@@ -52,6 +53,11 @@ enum Commands {
     },
     /// List installed shell presets and app configs
     List,
+    /// Export built-in embedded presets to the presets directory for local customization
+    Presets {
+        #[command(subcommand)]
+        command: PresetsCommands,
+    },
     /// Check for a newer version of shine
     Update,
     /// Download and install the latest shine release for this platform
@@ -87,7 +93,10 @@ async fn main() -> Result<()> {
 
     // Skip the background version check when the user explicitly runs `shine update`
     // or `shine upgrade`, which do their own forced fetch below.
-    if !matches!(cli.command, Commands::Update | Commands::Upgrade) {
+    if !matches!(
+        cli.command,
+        Commands::Update | Commands::Upgrade | Commands::Presets { .. }
+    ) {
         match update_check::check_for_update(&config).await {
             Ok(UpdateStatus::UpToDate) => {}
             Ok(UpdateStatus::UpdateAvailable { latest }) => {
@@ -139,6 +148,11 @@ async fn main() -> Result<()> {
         },
         Commands::Update => handle_update(&config).await,
         Commands::Upgrade => handle_upgrade(&config).await,
+        Commands::Presets { command } => match command {
+            PresetsCommands::Export { dir, force } => {
+                Box::pin(handle_presets_export(&config, dir, force)).await
+            }
+        },
         Commands::List => Box::pin(list::handle_list(&config)).await,
         Commands::Check { command } => Box::pin(check::handle_check(&config, command)).await,
         Commands::Shell { command } => match command {
@@ -222,6 +236,47 @@ async fn handle_upgrade(config: &Config) -> Result<()> {
             bail!("Upgrade failed: {e}");
         }
     }
+
+    Ok(())
+}
+
+async fn handle_presets_export(config: &Config, dir: Option<PathBuf>, force: bool) -> Result<()> {
+    use anyhow::Context as _;
+
+    let target = dir.unwrap_or_else(|| config.presets_dir().to_owned());
+    tokio::fs::create_dir_all(&target)
+        .await
+        .with_context(|| format!("creating export directory: {}", target.display()))?;
+
+    println!("Exporting built-in presets to {} ...", target.display());
+
+    let report = presets::extract_all(&target, force).await?;
+
+    let created = report.created.len();
+    let overwritten = report.overwritten.len();
+    let skipped = report.skipped.len();
+
+    if created > 0 {
+        println!("{}", colors::green(&format!("  {created} file(s) created")));
+    }
+    if overwritten > 0 {
+        println!(
+            "{}",
+            colors::yellow(&format!("  {overwritten} file(s) updated (overwritten)"))
+        );
+    }
+    if skipped > 0 {
+        println!("  {skipped} file(s) skipped (already exist; use --force to overwrite)");
+    }
+    if created == 0 && overwritten == 0 && skipped == 0 {
+        println!("  No files exported (empty embedded asset set).");
+    }
+
+    println!();
+    println!(
+        "Tip: set `presets_dir = {:?}` in ~/.shine/config.toml to use this folder.",
+        target
+    );
 
     Ok(())
 }
