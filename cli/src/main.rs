@@ -116,7 +116,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Completions { .. } => unreachable!(),
         Commands::App { command } => match command {
-            AppCommands::List => Box::pin(apps::handle_list()).await,
+            AppCommands::List => Box::pin(apps::handle_list(&config)).await,
             AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
             AppCommands::Install {
                 category,
@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
         Commands::List => Box::pin(list::handle_list(&config)).await,
         Commands::Check { command } => Box::pin(check::handle_check(&config, command)).await,
         Commands::Shell { command } => match command {
-            ShellCommands::List => Box::pin(shells::handle_list()).await,
+            ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
             ShellCommands::Install { category, force } => {
                 Box::pin(shells::handle_install(&config, category.as_deref(), force)).await
             }

@@ -44,6 +44,12 @@ pub(crate) struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub app_default_dest_root_override: Option<PathBuf>,
+    /// `true` when the presets directory is provided by the user (via env var or config.toml
+    /// `presets_dir` key) rather than the default `~/.shine/presets/`.
+    /// When `true`, install commands read presets from disk directly without extracting
+    /// embedded assets, and list commands enumerate the on-disk folder.
+    #[serde(skip)]
+    pub is_external_presets: bool,
 }
 
 impl Config {
@@ -58,7 +64,7 @@ impl Config {
         let toml_presets =
             read_presets_override_from_toml(&preliminary_shine_dir.join("config.toml")).await;
 
-        let (shine_dir, presets_dir) = resolve_runtime_config_dirs(
+        let (shine_dir, presets_dir, is_external_presets) = resolve_runtime_config_dirs(
             &default_shine_dir,
             &default_presets_dir,
             toml_presets.as_deref(),
@@ -88,6 +94,7 @@ impl Config {
             config.presets_dir = presets_dir;
             config.bin_dir = bin_dir;
             config.home_dir = home_dir;
+            config.is_external_presets = is_external_presets;
             Ok(config)
         } else {
             let config = Config {
@@ -95,6 +102,7 @@ impl Config {
                 presets_dir,
                 bin_dir,
                 home_dir,
+                is_external_presets,
                 ..Config::default()
             };
             config.save().await?;
@@ -138,6 +146,7 @@ impl Config {
             shell_type: ShellType::default(),
             presets_dir_override: None,
             app_default_dest_root_override: None,
+            is_external_presets: false,
         }
     }
 
@@ -234,6 +243,7 @@ impl Default for Config {
             shell_type: ShellType::default(),
             presets_dir_override: None,
             app_default_dest_root_override: None,
+            is_external_presets: false,
         }
     }
 }
@@ -289,16 +299,18 @@ async fn read_presets_override_from_toml(config_path: &Path) -> Option<PathBuf> 
 ///   2. `SHINE_PRESETS`    — overrides presets_dir only
 ///   3. `config_toml_presets` — presets_dir from config.toml `presets_dir` key
 ///   4. defaults
+///
+/// Returns `(shine_dir, presets_dir, is_external_presets)`.
 fn resolve_runtime_config_dirs(
     default_shine_dir: &Path,
     default_presets_dir: &Path,
     config_toml_presets: Option<&Path>,
-) -> (PathBuf, PathBuf) {
+) -> (PathBuf, PathBuf, bool) {
     if let Ok(val) = std::env::var("SHINE_CONFIG_DIR") {
         let val = val.trim().to_string();
         if !val.is_empty() {
             let dir = PathBuf::from(shellexpand::tilde(&val).to_string());
-            return (dir.clone(), dir.join("presets"));
+            return (dir.clone(), dir.join("presets"), true);
         }
     }
 
@@ -306,7 +318,7 @@ fn resolve_runtime_config_dirs(
         let val = val.trim().to_string();
         if !val.is_empty() {
             let presets = PathBuf::from(shellexpand::tilde(&val).to_string());
-            return (default_shine_dir.to_owned(), presets);
+            return (default_shine_dir.to_owned(), presets, true);
         }
     }
 
@@ -314,10 +326,14 @@ fn resolve_runtime_config_dirs(
         && let Some(s) = p.to_str()
     {
         let presets = PathBuf::from(shellexpand::tilde(s).to_string());
-        return (default_shine_dir.to_owned(), presets);
+        return (default_shine_dir.to_owned(), presets, true);
     }
 
-    (default_shine_dir.to_owned(), default_presets_dir.to_owned())
+    (
+        default_shine_dir.to_owned(),
+        default_presets_dir.to_owned(),
+        false,
+    )
 }
 
 #[cfg(test)]
@@ -344,6 +360,7 @@ mod tests {
             shell_type: ShellType::default(),
             presets_dir_override: None,
             app_default_dest_root_override: None,
+            is_external_presets: false,
         }
     }
 
@@ -457,6 +474,7 @@ mod tests {
             shell_type: ShellType::default(),
             presets_dir_override: None,
             app_default_dest_root_override: None,
+            is_external_presets: false,
         };
         assert!(config.save().await.is_err());
     }
@@ -493,7 +511,8 @@ mod tests {
         let custom = std::env::temp_dir().join("shine-override-test");
 
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom.to_str().unwrap()) };
-        let (shine, presets) = resolve_runtime_config_dirs(&default_shine, &default_presets, None);
+        let (shine, presets, _) =
+            resolve_runtime_config_dirs(&default_shine, &default_presets, None);
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
 
         assert_eq!(shine, custom);
@@ -509,7 +528,8 @@ mod tests {
 
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         unsafe { std::env::set_var("SHINE_PRESETS", custom_presets.to_str().unwrap()) };
-        let (shine, presets) = resolve_runtime_config_dirs(&default_shine, &default_presets, None);
+        let (shine, presets, _) =
+            resolve_runtime_config_dirs(&default_shine, &default_presets, None);
         unsafe { std::env::remove_var("SHINE_PRESETS") };
 
         assert_eq!(shine, default_shine);
@@ -526,7 +546,8 @@ mod tests {
 
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom_dir.to_str().unwrap()) };
         unsafe { std::env::set_var("SHINE_PRESETS", custom_presets.to_str().unwrap()) };
-        let (shine, presets) = resolve_runtime_config_dirs(&default_shine, &default_presets, None);
+        let (shine, presets, _) =
+            resolve_runtime_config_dirs(&default_shine, &default_presets, None);
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         unsafe { std::env::remove_var("SHINE_PRESETS") };
 
@@ -543,7 +564,7 @@ mod tests {
 
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         unsafe { std::env::remove_var("SHINE_PRESETS") };
-        let (shine, presets) = resolve_runtime_config_dirs(
+        let (shine, presets, _) = resolve_runtime_config_dirs(
             &default_shine,
             &default_presets,
             Some(toml_presets.as_path()),
@@ -563,7 +584,7 @@ mod tests {
 
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         unsafe { std::env::set_var("SHINE_PRESETS", env_presets.to_str().unwrap()) };
-        let (_, presets) = resolve_runtime_config_dirs(
+        let (_, presets, _) = resolve_runtime_config_dirs(
             &default_shine,
             &default_presets,
             Some(toml_presets.as_path()),

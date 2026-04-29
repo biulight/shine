@@ -26,37 +26,47 @@ pub(crate) async fn handle_install(
         Some(cat) => format!("shell/{cat}"),
         None => "shell".to_string(),
     };
-    let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
 
-    let mut shell_parts: Vec<String> = Vec::new();
-    if !report.created.is_empty() {
-        shell_parts.push(colors::green(&format!("{} created", report.created.len())));
-    }
-    if !report.overwritten.is_empty() {
-        shell_parts.push(colors::green(&format!(
-            "{} updated",
-            report.overwritten.len()
-        )));
-    }
-    if !report.skipped.is_empty() {
-        shell_parts.push(colors::dim(&format!("{} skipped", report.skipped.len())));
-    }
-    let sep = colors::dim(" · ");
-    println!(
-        "{}  {}",
-        colors::bold("Shell Presets"),
-        shell_parts.join(&sep)
-    );
+    // When the user has configured a custom presets directory, use the scripts
+    // already present on disk. When using the default directory, extract the
+    // embedded assets into it first.
+    let sources: Vec<_> = if config.is_external_presets {
+        crate::presets::collect_fs_shell_scripts(config.presets_dir(), &prefix).await?
+    } else {
+        let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
 
-    let sources: Vec<_> = report
-        .created
-        .iter()
-        .chain(report.overwritten.iter())
-        .chain(report.skipped.iter())
-        .cloned()
-        .collect();
+        let mut shell_parts: Vec<String> = Vec::new();
+        if !report.created.is_empty() {
+            shell_parts.push(colors::green(&format!("{} created", report.created.len())));
+        }
+        if !report.overwritten.is_empty() {
+            shell_parts.push(colors::green(&format!(
+                "{} updated",
+                report.overwritten.len()
+            )));
+        }
+        if !report.skipped.is_empty() {
+            shell_parts.push(colors::dim(&format!("{} skipped", report.skipped.len())));
+        }
+        let sep = colors::dim(" · ");
+        println!(
+            "{}  {}",
+            colors::bold("Shell Presets"),
+            shell_parts.join(&sep)
+        );
+
+        report
+            .created
+            .iter()
+            .chain(report.overwritten.iter())
+            .chain(report.skipped.iter())
+            .cloned()
+            .collect()
+    };
+
     let link_report = crate::bin_links::link_executables(config.bin_dir(), &sources, force).await?;
 
+    let sep = colors::dim(" · ");
     let mut link_parts: Vec<String> = Vec::new();
     if !link_report.created.is_empty() {
         link_parts.push(colors::green(&format!(
@@ -135,28 +145,34 @@ pub(crate) async fn handle_uninstall(
         link_parts.join(&sep)
     );
 
-    let remove_report =
-        crate::presets::remove_prefix(&prefix, config.presets_dir(), dry_run).await?;
-    let mut shell_parts: Vec<String> = Vec::new();
-    if !remove_report.removed.is_empty() {
-        shell_parts.push(colors::green(&format!(
-            "{} removed",
-            remove_report.removed.len()
-        )));
+    // When the user has a custom presets directory, the source files are theirs —
+    // only remove the embedded-managed files when using the default directory.
+    if !config.is_external_presets {
+        let remove_report =
+            crate::presets::remove_prefix(&prefix, config.presets_dir(), dry_run).await?;
+        let mut shell_parts: Vec<String> = Vec::new();
+        if !remove_report.removed.is_empty() {
+            shell_parts.push(colors::green(&format!(
+                "{} removed",
+                remove_report.removed.len()
+            )));
+        }
+        if !remove_report.skipped.is_empty() {
+            shell_parts.push(colors::dim(&format!(
+                "{} skipped",
+                remove_report.skipped.len()
+            )));
+        }
+        println!(
+            "{}  {}",
+            colors::bold("Shell Presets"),
+            shell_parts.join(&sep)
+        );
     }
-    if !remove_report.skipped.is_empty() {
-        shell_parts.push(colors::dim(&format!(
-            "{} skipped",
-            remove_report.skipped.len()
-        )));
-    }
-    println!(
-        "{}  {}",
-        colors::bold("Shell Presets"),
-        shell_parts.join(&sep)
-    );
 
-    if purge && !dry_run {
+    // Only purge managed directories when using the default presets directory.
+    // Never delete a user-configured external folder.
+    if purge && !dry_run && !config.is_external_presets {
         let purge_dir = match category {
             Some(cat) => config.presets_dir().join("shell").join(cat),
             None => config.presets_dir().join("shell"),
@@ -186,8 +202,12 @@ pub(crate) async fn handle_uninstall(
     Ok(())
 }
 
-pub(crate) async fn handle_list() -> Result<()> {
-    let categories = crate::presets::list_categories("shell");
+pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+    let categories = if config.is_external_presets {
+        crate::presets::list_fs_shell_categories(config.presets_dir()).await
+    } else {
+        crate::presets::list_categories("shell")
+    };
 
     if categories.is_empty() {
         println!("{}", colors::dim("No shell preset categories found."));

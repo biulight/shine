@@ -14,7 +14,11 @@ use manifest::AppEntry;
 use std::path::PathBuf;
 
 pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
-    let categories = metadata::load_embedded_categories(Some(category))?;
+    let categories = if config.is_external_presets {
+        metadata::load_installed_categories(config, Some(category)).await?
+    } else {
+        metadata::load_embedded_categories(Some(category))?
+    };
     let cat = categories
         .iter()
         .find(|c| c.name == category)
@@ -108,8 +112,12 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_list() -> Result<()> {
-    let categories = metadata::load_embedded_categories(None)?;
+pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+    let categories = if config.is_external_presets {
+        metadata::load_installed_categories(config, None).await?
+    } else {
+        metadata::load_embedded_categories(None)?
+    };
 
     if categories.is_empty() {
         println!("{}", colors::dim("No app preset categories found."));
@@ -178,8 +186,12 @@ pub(crate) async fn handle_install(
         None => "app".to_string(),
     };
 
-    let extract_report =
-        crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
+    // When the user has configured a custom presets directory, the app preset
+    // files are already there — skip the embedded-asset extraction step.
+    if !config.is_external_presets {
+        let _extract_report =
+            crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
+    }
     let categories = metadata::load_installed_categories(config, category.as_deref()).await?;
     let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
     println!(
@@ -275,7 +287,6 @@ pub(crate) async fn handle_install(
         }
     }
 
-    let _ = extract_report;
     if !dry_run {
         manifest.save(config.shine_dir()).await?;
     }

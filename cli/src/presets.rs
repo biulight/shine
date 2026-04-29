@@ -156,6 +156,102 @@ pub(crate) fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
         .collect()
 }
 
+/// List shell preset categories by scanning the filesystem under `presets_dir/shell/`.
+///
+/// Each immediate subdirectory of `presets_dir/shell/` is a category; `.sh` files within
+/// it are the scripts. Descriptions are parsed from each script's leading comment block.
+/// Returns categories in alphabetical order.
+pub(crate) async fn list_fs_shell_categories(presets_dir: &Path) -> Vec<CategoryInfo> {
+    let shell_root = presets_dir.join("shell");
+    if !shell_root.is_dir() {
+        return Vec::new();
+    }
+
+    let mut categories: std::collections::BTreeMap<String, Vec<ScriptInfo>> =
+        std::collections::BTreeMap::new();
+
+    let Ok(mut cat_entries) = fs::read_dir(&shell_root).await else {
+        return Vec::new();
+    };
+
+    while let Ok(Some(cat_entry)) = cat_entries.next_entry().await {
+        let Ok(ft) = cat_entry.file_type().await else {
+            continue;
+        };
+        if !ft.is_dir() {
+            continue;
+        }
+        let category = cat_entry.file_name().to_string_lossy().to_string();
+        let cat_dir = shell_root.join(&category);
+
+        let Ok(mut script_entries) = fs::read_dir(&cat_dir).await else {
+            continue;
+        };
+        let mut scripts: Vec<ScriptInfo> = Vec::new();
+        while let Ok(Some(script_entry)) = script_entries.next_entry().await {
+            let Ok(sft) = script_entry.file_type().await else {
+                continue;
+            };
+            if !sft.is_file() {
+                continue;
+            }
+            let name = script_entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".sh") {
+                continue;
+            }
+            let description = fs::read(script_entry.path())
+                .await
+                .map(|b| parse_script_description(&b))
+                .unwrap_or_default();
+            scripts.push(ScriptInfo { name, description });
+        }
+        scripts.sort_by(|a, b| a.name.cmp(&b.name));
+        if !scripts.is_empty() {
+            categories.insert(category, scripts);
+        }
+    }
+
+    categories
+        .into_iter()
+        .map(|(name, scripts)| CategoryInfo { name, scripts })
+        .collect()
+}
+
+/// Collect full paths to `.sh` files under `presets_dir/<prefix>/`.
+///
+/// Used by `shell install` when `is_external_presets` is true, to link scripts
+/// that already exist on disk without extracting embedded assets.
+pub(crate) async fn collect_fs_shell_scripts(
+    presets_dir: &Path,
+    prefix: &str,
+) -> Result<Vec<PathBuf>> {
+    let root = presets_dir.join(prefix);
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut scripts = Vec::new();
+    let mut stack = vec![root.clone()];
+
+    while let Some(dir) = stack.pop() {
+        let mut entries = fs::read_dir(&dir)
+            .await
+            .with_context(|| format!("reading directory: {}", dir.display()))?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let ft = entry.file_type().await?;
+            if ft.is_dir() {
+                stack.push(path);
+            } else if ft.is_file() && path.extension().is_some_and(|e| e == "sh") {
+                scripts.push(path);
+            }
+        }
+    }
+
+    scripts.sort();
+    Ok(scripts)
+}
+
 /// Remove embedded-asset files under `prefix/` from `target_dir`.
 ///
 /// Only files known to `PresetAssets` are candidates — user-added files are
