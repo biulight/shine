@@ -300,13 +300,37 @@ pub(crate) async fn handle_install(
     Ok(())
 }
 
-pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool) -> Result<()> {
+pub(crate) async fn handle_uninstall(
+    config: &Config,
+    category: Option<&str>,
+    purge: bool,
+    dry_run: bool,
+) -> Result<()> {
     if dry_run {
         println!("{}", colors::dim("[dry-run] No files will be modified."));
     }
 
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
-    let entries: Vec<_> = manifest.entries.clone();
+
+    let entries: Vec<_> = if let Some(cat) = category {
+        let prefix = format!("app/{cat}/");
+        let filtered: Vec<_> = manifest
+            .entries
+            .iter()
+            .filter(|e| e.source.starts_with(&prefix))
+            .cloned()
+            .collect();
+        if filtered.is_empty() {
+            println!(
+                "{}",
+                colors::dim(&format!("No installed files found for category '{cat}'."))
+            );
+            return Ok(());
+        }
+        filtered
+    } else {
+        manifest.entries.clone()
+    };
 
     let mut removed = 0usize;
     let mut restored = 0usize;
@@ -376,26 +400,50 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
         manifest.save(config.shine_dir()).await?;
     }
 
-    let remove_report = crate::presets::remove_prefix("app", config.presets_dir(), dry_run).await?;
+    let remove_prefix_key = match category {
+        Some(cat) => format!("app/{cat}"),
+        None => "app".to_string(),
+    };
+    let remove_report =
+        crate::presets::remove_prefix(&remove_prefix_key, config.presets_dir(), dry_run).await?;
 
     if purge && !dry_run {
-        let app_dir = config.presets_dir().join("app");
-        if app_dir.exists() {
-            tokio::fs::remove_dir_all(&app_dir).await.with_context(|| {
-                format!("removing app presets directory: {}", app_dir.display())
-            })?;
+        if let Some(cat) = category {
+            // Category-scoped purge: only remove that category's presets dir
+            let cat_dir = config.presets_dir().join("app").join(cat);
+            if cat_dir.exists() {
+                tokio::fs::remove_dir_all(&cat_dir).await.with_context(|| {
+                    format!(
+                        "removing app category presets directory: {}",
+                        cat_dir.display()
+                    )
+                })?;
+            }
+            println!(
+                "  {}  {}",
+                colors::symbol("✓"),
+                colors::dim(&format!("app/{cat} presets directory purged")),
+            );
+        } else {
+            // Global purge: remove entire app presets dir + manifest file
+            let app_dir = config.presets_dir().join("app");
+            if app_dir.exists() {
+                tokio::fs::remove_dir_all(&app_dir).await.with_context(|| {
+                    format!("removing app presets directory: {}", app_dir.display())
+                })?;
+            }
+            let manifest_path = config.shine_dir().join("app-manifest.toml");
+            if manifest_path.exists() {
+                tokio::fs::remove_file(&manifest_path)
+                    .await
+                    .context("removing app manifest")?;
+            }
+            println!(
+                "  {}  {}",
+                colors::symbol("✓"),
+                colors::dim("app presets directory and manifest purged"),
+            );
         }
-        let manifest_path = config.shine_dir().join("app-manifest.toml");
-        if manifest_path.exists() {
-            tokio::fs::remove_file(&manifest_path)
-                .await
-                .context("removing app manifest")?;
-        }
-        println!(
-            "  {}  {}",
-            colors::symbol("✓"),
-            colors::dim("app presets directory and manifest purged"),
-        );
     }
 
     let mut summary_parts: Vec<String> = Vec::new();
@@ -505,7 +553,7 @@ mod tests {
             );
         }
 
-        handle_uninstall(&config, false, false).await.unwrap();
+        handle_uninstall(&config, None, false, false).await.unwrap();
 
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert!(
@@ -534,7 +582,7 @@ mod tests {
         let manifest_before = AppManifest::load(config.shine_dir()).await.unwrap();
         let count_before = manifest_before.entries.len();
 
-        handle_uninstall(&config, false, true).await.unwrap();
+        handle_uninstall(&config, None, false, true).await.unwrap();
 
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_eq!(
@@ -616,6 +664,88 @@ mod tests {
             .unwrap();
         let destination = resolve_install_destination(vim, vimrc, &config).unwrap();
         assert_eq!(destination, dir.join(".vim").join("vimrc"));
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn uninstall_specific_category_only_removes_that_category() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        // Install all categories
+        handle_install(&config, None, false, false).await.unwrap();
+        let manifest_all = AppManifest::load(config.shine_dir()).await.unwrap();
+        let total = manifest_all.entries.len();
+        assert!(total > 0, "need at least one installed entry");
+
+        // Find a category that was installed
+        let first_category = manifest_all
+            .entries
+            .iter()
+            .find_map(|e| {
+                e.source
+                    .strip_prefix("app/")
+                    .and_then(|s| s.split('/').next())
+                    .map(|s| s.to_string())
+            })
+            .expect("no category found in manifest");
+
+        let category_count = manifest_all
+            .entries
+            .iter()
+            .filter(|e| e.source.starts_with(&format!("app/{first_category}/")))
+            .count();
+
+        // Uninstall only that category
+        handle_uninstall(&config, Some(&first_category), false, false)
+            .await
+            .unwrap();
+
+        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert_eq!(
+            manifest_after.entries.len(),
+            total - category_count,
+            "only entries for '{first_category}' should be removed"
+        );
+        // No remaining entry belongs to the uninstalled category
+        let prefix = format!("app/{first_category}/");
+        assert!(
+            manifest_after
+                .entries
+                .iter()
+                .all(|e| !e.source.starts_with(&prefix)),
+            "uninstalled category must not appear in manifest"
+        );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn uninstall_unknown_category_returns_early() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        // Nothing installed — uninstalling a specific category should succeed silently
+        handle_uninstall(&config, Some("nonexistent"), false, false)
+            .await
+            .unwrap();
 
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();

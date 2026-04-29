@@ -24,6 +24,9 @@ pub enum AppCommands {
     },
     /// Uninstall installed app preset files and optionally restore backups
     Uninstall {
+        /// Category to uninstall (e.g. vim, starship). Uninstalls all if omitted.
+        #[arg(value_name = "CATEGORY")]
+        category: Option<String>,
         /// Also remove the app presets directory and manifest after uninstalling
         #[arg(long)]
         purge: bool,

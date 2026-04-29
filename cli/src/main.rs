@@ -120,8 +120,18 @@ async fn main() -> Result<()> {
                 force,
                 dry_run,
             } => Box::pin(apps::handle_install(&config, category, dry_run, force)).await,
-            AppCommands::Uninstall { purge, dry_run } => {
-                Box::pin(apps::handle_uninstall(&config, purge, dry_run)).await
+            AppCommands::Uninstall {
+                category,
+                purge,
+                dry_run,
+            } => {
+                Box::pin(apps::handle_uninstall(
+                    &config,
+                    category.as_deref(),
+                    purge,
+                    dry_run,
+                ))
+                .await
             }
         },
         Commands::Update => handle_update(&config).await,
