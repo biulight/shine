@@ -15,6 +15,9 @@ pub enum AppCommands {
         /// Category to install (e.g. JetBrains, starship). Installs all if omitted.
         #[arg(value_name = "CATEGORY")]
         category: Option<String>,
+        /// Overwrite existing files even when content matches
+        #[arg(long, short = 'f')]
+        force: bool,
         /// Print what would be installed without making any changes
         #[arg(long)]
         dry_run: bool,

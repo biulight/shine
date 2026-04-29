@@ -25,6 +25,7 @@ pub(crate) async fn install_file(
     destination: &Path,
     is_managed: bool,
     dry_run: bool,
+    force: bool,
 ) -> Result<InstallOutcome> {
     if dry_run {
         return Ok(InstallOutcome::DryRun);
@@ -44,7 +45,7 @@ pub(crate) async fn install_file(
     if destination.exists() {
         if is_managed {
             let existing = fs::read(destination).await.unwrap_or_default();
-            if hash_content(&existing) == hash {
+            if !force && hash_content(&existing) == hash {
                 return Ok(InstallOutcome::AlreadyManaged);
             }
             fs::copy(source, destination)
@@ -135,7 +136,9 @@ mod tests {
         let dest = dir.join("dest.toml");
         fs::write(&source, b"content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, false, false).await.unwrap();
+        let outcome = install_file(&source, &dest, false, false, false)
+            .await
+            .unwrap();
         assert!(matches!(outcome, InstallOutcome::Installed { .. }));
         assert!(dest.exists());
         assert_eq!(fs::read(&dest).await.unwrap(), b"content");
@@ -149,7 +152,9 @@ mod tests {
         let dest = dir.join("deep/nested/dest.toml");
         fs::write(&source, b"content").await.unwrap();
 
-        install_file(&source, &dest, false, false).await.unwrap();
+        install_file(&source, &dest, false, false, false)
+            .await
+            .unwrap();
         assert!(dest.exists());
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -162,7 +167,9 @@ mod tests {
         fs::write(&source, b"new content").await.unwrap();
         fs::write(&dest, b"user content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, false, false).await.unwrap();
+        let outcome = install_file(&source, &dest, false, false, false)
+            .await
+            .unwrap();
         let backup = match outcome {
             InstallOutcome::BackedUpAndInstalled { backup, .. } => backup,
             other => panic!("expected BackedUpAndInstalled, got {other:?}"),
@@ -181,7 +188,9 @@ mod tests {
         fs::write(&source, b"content").await.unwrap();
         fs::write(&dest, b"content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, true, false).await.unwrap();
+        let outcome = install_file(&source, &dest, true, false, false)
+            .await
+            .unwrap();
         assert!(matches!(outcome, InstallOutcome::AlreadyManaged));
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -194,7 +203,9 @@ mod tests {
         fs::write(&source, b"updated").await.unwrap();
         fs::write(&dest, b"old").await.unwrap();
 
-        let outcome = install_file(&source, &dest, true, false).await.unwrap();
+        let outcome = install_file(&source, &dest, true, false, false)
+            .await
+            .unwrap();
         assert!(matches!(outcome, InstallOutcome::Installed { .. }));
         assert_eq!(fs::read(&dest).await.unwrap(), b"updated");
         fs::remove_dir_all(&dir).await.unwrap();
@@ -207,7 +218,9 @@ mod tests {
         let dest = dir.join("dest.toml");
         fs::write(&source, b"content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, false, true).await.unwrap();
+        let outcome = install_file(&source, &dest, false, true, false)
+            .await
+            .unwrap();
         assert!(matches!(outcome, InstallOutcome::DryRun));
         assert!(!dest.exists());
         fs::remove_dir_all(&dir).await.unwrap();

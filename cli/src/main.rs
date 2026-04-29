@@ -115,9 +115,11 @@ async fn main() -> Result<()> {
         Commands::App { command } => match command {
             AppCommands::List => Box::pin(apps::handle_list()).await,
             AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
-            AppCommands::Install { category, dry_run } => {
-                Box::pin(apps::handle_install(&config, category, dry_run)).await
-            }
+            AppCommands::Install {
+                category,
+                force,
+                dry_run,
+            } => Box::pin(apps::handle_install(&config, category, dry_run, force)).await,
             AppCommands::Uninstall { purge, dry_run } => {
                 Box::pin(apps::handle_uninstall(&config, purge, dry_run)).await
             }
@@ -127,8 +129,8 @@ async fn main() -> Result<()> {
         Commands::Check { command } => Box::pin(check::handle_check(&config, command)).await,
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list()).await,
-            ShellCommands::Install { category } => {
-                Box::pin(shells::handle_install(&config, category.as_deref())).await
+            ShellCommands::Install { category, force } => {
+                Box::pin(shells::handle_install(&config, category.as_deref(), force)).await
             }
             ShellCommands::Uninstall { purge, dry_run } => {
                 Box::pin(shells::handle_uninstall(&config, purge, dry_run)).await

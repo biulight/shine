@@ -17,16 +17,26 @@ pub(crate) enum ShellType {
     Elvish,
 }
 
-pub(crate) async fn handle_install(config: &Config, category: Option<&str>) -> Result<()> {
+pub(crate) async fn handle_install(
+    config: &Config,
+    category: Option<&str>,
+    force: bool,
+) -> Result<()> {
     let prefix = match category {
         Some(cat) => format!("shell/{cat}"),
         None => "shell".to_string(),
     };
-    let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), false).await?;
+    let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
 
     let mut shell_parts: Vec<String> = Vec::new();
     if !report.created.is_empty() {
         shell_parts.push(colors::green(&format!("{} created", report.created.len())));
+    }
+    if !report.overwritten.is_empty() {
+        shell_parts.push(colors::green(&format!(
+            "{} updated",
+            report.overwritten.len()
+        )));
     }
     if !report.skipped.is_empty() {
         shell_parts.push(colors::dim(&format!("{} skipped", report.skipped.len())));
@@ -45,7 +55,7 @@ pub(crate) async fn handle_install(config: &Config, category: Option<&str>) -> R
         .chain(report.skipped.iter())
         .cloned()
         .collect();
-    let link_report = crate::bin_links::link_executables(config.bin_dir(), &sources, false).await?;
+    let link_report = crate::bin_links::link_executables(config.bin_dir(), &sources, force).await?;
 
     let mut link_parts: Vec<String> = Vec::new();
     if !link_report.created.is_empty() {
@@ -54,9 +64,15 @@ pub(crate) async fn handle_install(config: &Config, category: Option<&str>) -> R
             link_report.created.len()
         )));
     }
+    if !link_report.overwritten.is_empty() {
+        link_parts.push(colors::green(&format!(
+            "{} updated",
+            link_report.overwritten.len()
+        )));
+    }
     if !link_report.skipped.is_empty() {
         link_parts.push(colors::dim(&format!(
-            "{} skipped",
+            "{} up to date",
             link_report.skipped.len()
         )));
     }
@@ -72,7 +88,7 @@ pub(crate) async fn handle_install(config: &Config, category: Option<&str>) -> R
         link_parts.join(&sep)
     );
 
-    append_path_to_shell_config(config).await?;
+    append_path_to_shell_config(config, force).await?;
     Ok(())
 }
 
@@ -264,7 +280,7 @@ fn remove_sentinel_block(content: &str) -> String {
     format!("{}{}", &content[..block_start], &content[end..])
 }
 
-async fn append_path_to_shell_config(config: &Config) -> Result<()> {
+async fn append_path_to_shell_config(config: &Config, force: bool) -> Result<()> {
     let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
 
     if let Some(parent) = config_path.parent() {
@@ -278,13 +294,23 @@ async fn append_path_to_shell_config(config: &Config) -> Result<()> {
         .unwrap_or_default();
 
     if existing.contains(SENTINEL_START) {
-        println!(
-            "Shell config ({}): already configured, skipped",
-            config_path.display()
-        );
-        return Ok(());
+        if !force {
+            println!(
+                "Shell config ({}): already configured, skipped",
+                config_path.display()
+            );
+            return Ok(());
+        }
+        // Force: remove old sentinel block and re-add with current snippet.
+        let cleaned = remove_sentinel_block(&existing);
+        tokio::fs::write(&config_path, cleaned.as_bytes())
+            .await
+            .with_context(|| format!("rewriting shell config: {config_path:?}"))?;
     }
 
+    let existing = tokio::fs::read_to_string(&config_path)
+        .await
+        .unwrap_or_default();
     let snippet = path_export_snippet(&config.shell_type, config.bin_dir(), &config.home_dir);
 
     // Write the complete new content atomically so the file is closed (and thus
@@ -397,7 +423,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, None).await.unwrap();
+        handle_install(&config, None, false).await.unwrap();
         assert!(
             config
                 .presets_dir()
@@ -449,7 +475,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, None).await.unwrap();
+        handle_install(&config, None, false).await.unwrap();
         handle_uninstall(&config, true, false).await.unwrap();
 
         assert!(!config.bin_dir().exists(), "bin_dir should be purged");
@@ -474,7 +500,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, None).await.unwrap();
+        handle_install(&config, None, false).await.unwrap();
         let preset_path = config.presets_dir().join("shell/proxy/set_proxy.sh");
         assert!(preset_path.exists());
 
@@ -556,7 +582,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config).await.unwrap();
+        append_path_to_shell_config(&config, false).await.unwrap();
 
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let content = fs::read_to_string(&config_path).await.unwrap();
@@ -571,8 +597,8 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config).await.unwrap();
-        append_path_to_shell_config(&config).await.unwrap();
+        append_path_to_shell_config(&config, false).await.unwrap();
+        append_path_to_shell_config(&config, false).await.unwrap();
 
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let content = fs::read_to_string(&config_path).await.unwrap();
@@ -585,7 +611,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config).await.unwrap();
+        append_path_to_shell_config(&config, false).await.unwrap();
         remove_path_from_shell_config(&config).await.unwrap();
 
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
@@ -612,7 +638,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, None).await.unwrap();
+        handle_install(&config, None, false).await.unwrap();
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let before = fs::read_to_string(&config_path).await.unwrap();
 

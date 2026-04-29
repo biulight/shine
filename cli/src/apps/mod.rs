@@ -167,6 +167,7 @@ pub(crate) async fn handle_install(
     config: &Config,
     category: Option<String>,
     dry_run: bool,
+    force: bool,
 ) -> Result<()> {
     if dry_run {
         println!("{}", colors::dim("[dry-run] No files will be modified."));
@@ -178,7 +179,7 @@ pub(crate) async fn handle_install(
     };
 
     let extract_report =
-        crate::presets::extract_prefix(&prefix, config.presets_dir(), false).await?;
+        crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
     let categories = metadata::load_installed_categories(config, category.as_deref()).await?;
     let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
     println!(
@@ -211,7 +212,9 @@ pub(crate) async fn handle_install(
 
             let is_managed = manifest.find_by_dest(&destination).is_some();
 
-            match file_ops::install_file(&source_path, &destination, is_managed, dry_run).await {
+            match file_ops::install_file(&source_path, &destination, is_managed, dry_run, force)
+                .await
+            {
                 Ok(InstallOutcome::Installed { hash }) => {
                     println!(
                         "  {}  {}  {}  {}",
@@ -484,7 +487,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, None, false).await.unwrap();
+        handle_install(&config, None, false, false).await.unwrap();
 
         // At least the manifest should have entries
         let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
@@ -526,7 +529,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, None, false).await.unwrap();
+        handle_install(&config, None, false, false).await.unwrap();
 
         let manifest_before = AppManifest::load(config.shine_dir()).await.unwrap();
         let count_before = manifest_before.entries.len();
@@ -562,11 +565,11 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, None, false).await.unwrap();
+        handle_install(&config, None, false, false).await.unwrap();
         let manifest_first = AppManifest::load(config.shine_dir()).await.unwrap();
         let count_first = manifest_first.entries.len();
 
-        handle_install(&config, None, false).await.unwrap();
+        handle_install(&config, None, false, false).await.unwrap();
         let manifest_second = AppManifest::load(config.shine_dir()).await.unwrap();
 
         assert_eq!(
