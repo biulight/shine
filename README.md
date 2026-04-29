@@ -9,7 +9,8 @@ A fast Rust CLI tool for managing shell environment presets.
 - **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
 - **Symlink-based bin directory** — `~/.shine/bin/` holds flat symlinks to installed scripts; add it to `PATH` once
 - **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
-- **Category install** — install all presets or a specific subset (e.g. `proxy`)
+- **Category install/uninstall** — install or uninstall all presets or a specific subset (e.g. `proxy`)
+- **Installed-only view** — `shine list` shows only what is currently set up on this machine
 - **Safe uninstall** — removes only shine-managed files; user-created files are never touched
 - **Dry-run support** — preview any destructive operation before it runs
 - **TOML config** — `~/.shine/config.toml` with comment preservation on updates
@@ -77,14 +78,18 @@ Running `install` again is safe — existing files, correct symlinks, and an alr
 ### Uninstall shell presets
 
 ```bash
-shine shell uninstall
-shine shell uninstall --dry-run   # preview without changes
-shine shell uninstall --purge     # also remove empty managed directories
+shine shell uninstall                # uninstall all categories
+shine shell uninstall proxy          # uninstall only the proxy category
+shine shell uninstall --dry-run      # preview without changes
+shine shell uninstall --purge        # also remove empty managed directories
+shine shell uninstall proxy --purge  # uninstall proxy and remove its preset dir
 ```
 
 Removes shine-managed symlinks from `~/.shine/bin/`, preset files from `~/.shine/presets/shell/`, and the PATH entry from your shell config. User-created files are never removed.
 
-`--purge` removes `~/.shine/bin/` and `~/.shine/presets/shell/` if empty after uninstall. It never removes `~/.shine/config.toml` or the root `~/.shine/` directory.
+When a category is specified only that category's files and symlinks are removed; the PATH entry is kept so other installed categories remain usable.
+
+`--purge` removes the target directory (the whole `~/.shine/presets/shell/` tree when no category is given, or only `~/.shine/presets/shell/<category>/` when one is specified). It never removes `~/.shine/config.toml` or the root `~/.shine/` directory.
 
 ### List available app presets
 
@@ -154,14 +159,40 @@ If the destination already exists and is not managed by `shine`, it is moved asi
 ### Uninstall app presets
 
 ```bash
-shine app uninstall
-shine app uninstall --dry-run
-shine app uninstall --purge
+shine app uninstall                # uninstall all app categories
+shine app uninstall starship       # uninstall only the starship category
+shine app uninstall --dry-run      # preview without changes
+shine app uninstall --purge        # also remove presets and manifest
+shine app uninstall git --purge    # uninstall git category and remove its preset dir
 ```
 
 Uninstall removes only app files whose content still matches the version recorded in `~/.shine/app-manifest.toml`. If a file was modified after installation, `shine` leaves it in place and reports it as user-modified. When an unmanaged file was backed up during install, uninstall restores that backup automatically.
 
-`--purge` additionally removes `~/.shine/presets/app/` and `~/.shine/app-manifest.toml`.
+When a category is specified only that category's managed files are removed; other installed categories are unaffected.
+
+`--purge` additionally removes `~/.shine/presets/app/<category>/` when a category is given, or the full `~/.shine/presets/app/` and `~/.shine/app-manifest.toml` when no category is given.
+
+### List installed presets and configs
+
+```bash
+shine list
+```
+
+Shows only items that are currently installed or configured — a quick "what's set up on this machine" view. Unlike `shine check`, entries that are not installed are omitted.
+
+```
+Shell Presets
+  ✓  proxy/set_proxy.sh   installed
+  ✓  proxy/uset_proxy.sh  installed
+
+App Configs
+  ✓  git      →  ~/.gitconfig                    up-to-date
+  ↑  starship →  ~/.config/starship/starship.toml  update available
+
+Summary  2 shell · 2 app
+```
+
+If nothing is installed yet, `shine list` prints a hint to run `shine shell install` or `shine app install`.
 
 ### Check configuration status
 

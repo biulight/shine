@@ -5,6 +5,28 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.9.0] — 2026-04-29
+
+### Features
+
+**`shine list` — show installed items at a glance**
+- New top-level command that prints only installed shell presets and app configs, filtered from `shine check` output
+- Displays two aligned sections (Shell Presets, App Configs) with the same status symbols as `shine check`
+- Shows a compact summary footer; prints a helpful hint when nothing is installed yet
+
+**`shine shell uninstall [CATEGORY]` — per-category shell uninstall**
+- Optional positional `CATEGORY` argument scopes removal to a single preset category (e.g. `shine shell uninstall proxy`)
+- Only that category's preset files and bin symlinks are removed; the PATH sentinel is preserved so other installed categories remain usable
+- `--purge` with a category removes only that category's subdirectory; without a category the existing full-cleanup behaviour is unchanged
+- Omitting the argument keeps the existing all-categories behaviour
+
+**`shine app uninstall [CATEGORY]` — per-category app uninstall**
+- Same optional `CATEGORY` argument for app configs (e.g. `shine app uninstall starship`)
+- Uninstalls only that category's managed files and restores any `.shine.bak` backups; `--purge` removes only the category's presets subdirectory
+- Omitting the argument keeps the existing all-categories behaviour
+
+---
+
 ## [0.8.0] — 2026-04-29
 
 ### UX
