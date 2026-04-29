@@ -92,15 +92,30 @@ pub(crate) async fn handle_install(
     Ok(())
 }
 
-pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool) -> Result<()> {
+pub(crate) async fn handle_uninstall(
+    config: &Config,
+    category: Option<&str>,
+    purge: bool,
+    dry_run: bool,
+) -> Result<()> {
     if dry_run {
         println!("{}", colors::dim("[dry-run] No files will be modified."));
     }
 
     let sep = colors::dim(" · ");
 
+    // When a category is given, scope removal to that category's subdirectory.
+    let managed_root = match category {
+        Some(cat) => config.presets_dir().join("shell").join(cat),
+        None => config.presets_dir().to_path_buf(),
+    };
+    let prefix = match category {
+        Some(cat) => format!("shell/{cat}"),
+        None => "shell".to_owned(),
+    };
+
     let unlink_report =
-        crate::bin_links::unlink_managed(config.bin_dir(), config.presets_dir(), dry_run).await?;
+        crate::bin_links::unlink_managed(config.bin_dir(), &managed_root, dry_run).await?;
     let mut link_parts: Vec<String> = Vec::new();
     if !unlink_report.removed.is_empty() {
         link_parts.push(colors::green(&format!(
@@ -121,7 +136,7 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
     );
 
     let remove_report =
-        crate::presets::remove_prefix("shell", config.presets_dir(), dry_run).await?;
+        crate::presets::remove_prefix(&prefix, config.presets_dir(), dry_run).await?;
     let mut shell_parts: Vec<String> = Vec::new();
     if !remove_report.removed.is_empty() {
         shell_parts.push(colors::green(&format!(
@@ -142,15 +157,20 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
     );
 
     if purge && !dry_run {
-        let shell_dir = config.presets_dir().join("shell");
-        if shell_dir.exists() {
-            tokio::fs::remove_dir_all(&shell_dir)
+        let purge_dir = match category {
+            Some(cat) => config.presets_dir().join("shell").join(cat),
+            None => config.presets_dir().join("shell"),
+        };
+        if purge_dir.exists() {
+            tokio::fs::remove_dir_all(&purge_dir)
                 .await
-                .with_context(|| format!("removing shell presets directory: {shell_dir:?}"))?;
+                .with_context(|| format!("removing presets directory: {purge_dir:?}"))?;
         }
-        // remove_dir only succeeds if empty — treat non-empty as benign
-        let _ = tokio::fs::remove_dir(config.presets_dir()).await;
-        let _ = tokio::fs::remove_dir(config.bin_dir()).await;
+        if category.is_none() {
+            // remove_dir only succeeds if empty — treat non-empty as benign
+            let _ = tokio::fs::remove_dir(config.presets_dir()).await;
+            let _ = tokio::fs::remove_dir(config.bin_dir()).await;
+        }
         println!(
             "  {}  {}",
             colors::symbol("✓"),
@@ -158,7 +178,8 @@ pub(crate) async fn handle_uninstall(config: &Config, purge: bool, dry_run: bool
         );
     }
 
-    if !dry_run {
+    // Only remove the PATH sentinel when uninstalling all shell presets.
+    if category.is_none() && !dry_run {
         remove_path_from_shell_config(config).await?;
     }
 
@@ -447,7 +468,7 @@ mod tests {
             "bin link should be named without extension"
         );
 
-        handle_uninstall(&config, false, false).await.unwrap();
+        handle_uninstall(&config, None, false, false).await.unwrap();
         assert!(
             !config
                 .presets_dir()
@@ -462,7 +483,7 @@ mod tests {
         );
 
         // Idempotency: second uninstall must not error
-        handle_uninstall(&config, false, false).await.unwrap();
+        handle_uninstall(&config, None, false, false).await.unwrap();
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -476,7 +497,7 @@ mod tests {
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
         handle_install(&config, None, false).await.unwrap();
-        handle_uninstall(&config, true, false).await.unwrap();
+        handle_uninstall(&config, None, true, false).await.unwrap();
 
         assert!(!config.bin_dir().exists(), "bin_dir should be purged");
         assert!(
@@ -504,7 +525,7 @@ mod tests {
         let preset_path = config.presets_dir().join("shell/proxy/set_proxy.sh");
         assert!(preset_path.exists());
 
-        handle_uninstall(&config, false, true).await.unwrap();
+        handle_uninstall(&config, None, false, true).await.unwrap();
 
         assert!(preset_path.exists(), "dry-run must not remove preset files");
 
@@ -642,7 +663,7 @@ mod tests {
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let before = fs::read_to_string(&config_path).await.unwrap();
 
-        handle_uninstall(&config, false, true).await.unwrap();
+        handle_uninstall(&config, None, false, true).await.unwrap();
 
         let after = fs::read_to_string(&config_path).await.unwrap();
         assert_eq!(before, after, "dry-run must not touch shell config");

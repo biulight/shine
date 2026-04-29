@@ -146,8 +146,18 @@ async fn main() -> Result<()> {
             ShellCommands::Install { category, force } => {
                 Box::pin(shells::handle_install(&config, category.as_deref(), force)).await
             }
-            ShellCommands::Uninstall { purge, dry_run } => {
-                Box::pin(shells::handle_uninstall(&config, purge, dry_run)).await
+            ShellCommands::Uninstall {
+                category,
+                purge,
+                dry_run,
+            } => {
+                Box::pin(shells::handle_uninstall(
+                    &config,
+                    category.as_deref(),
+                    purge,
+                    dry_run,
+                ))
+                .await
             }
         },
     }

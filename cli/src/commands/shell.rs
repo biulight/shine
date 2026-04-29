@@ -15,8 +15,13 @@ pub enum ShellCommands {
         #[arg(long, short = 'f')]
         force: bool,
     },
-    /// Uninstall shell presets and remove bin symlinks
+    /// Uninstall shell presets and remove bin symlinks.
+    /// Run 'shine shell list' to see installed categories.
     Uninstall {
+        /// Preset category to uninstall (e.g. "proxy"). Uninstalls all if omitted.
+        /// Run 'shine shell list' to see installed categories.
+        #[arg(value_name = "CATEGORY")]
+        category: Option<String>,
         /// Also remove empty managed directories after uninstall
         #[arg(long)]
         purge: bool,
