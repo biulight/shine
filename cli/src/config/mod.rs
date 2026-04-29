@@ -667,4 +667,72 @@ mod tests {
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
+
+    // --- is_external_presets flag tests ---
+
+    #[test]
+    fn is_external_presets_true_when_shine_config_dir_set() {
+        let _guard = env_lock();
+        let default = PathBuf::from("/home/user/.shine");
+        let presets = PathBuf::from("/home/user/.shine/presets");
+        let custom = std::env::temp_dir().join("shine-ext-test");
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom.to_str().unwrap()) };
+        let (_, _, is_external) = resolve_runtime_config_dirs(&default, &presets, None);
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+
+        assert!(
+            is_external,
+            "SHINE_CONFIG_DIR should set is_external_presets"
+        );
+    }
+
+    #[test]
+    fn is_external_presets_true_when_shine_presets_set() {
+        let _guard = env_lock();
+        let default = PathBuf::from("/home/user/.shine");
+        let presets = PathBuf::from("/home/user/.shine/presets");
+        let custom = std::env::temp_dir().join("shine-ext-presets");
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        unsafe { std::env::set_var("SHINE_PRESETS", custom.to_str().unwrap()) };
+        let (_, _, is_external) = resolve_runtime_config_dirs(&default, &presets, None);
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+
+        assert!(is_external, "SHINE_PRESETS should set is_external_presets");
+    }
+
+    #[test]
+    fn is_external_presets_true_when_toml_presets_dir_set() {
+        let _guard = env_lock();
+        let default = PathBuf::from("/home/user/.shine");
+        let presets = PathBuf::from("/home/user/.shine/presets");
+        let toml_override = PathBuf::from("/toml/presets");
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        let (_, _, is_external) =
+            resolve_runtime_config_dirs(&default, &presets, Some(toml_override.as_path()));
+
+        assert!(
+            is_external,
+            "config.toml presets_dir should set is_external_presets"
+        );
+    }
+
+    #[test]
+    fn is_external_presets_false_when_no_override() {
+        let _guard = env_lock();
+        let default = PathBuf::from("/home/user/.shine");
+        let presets = PathBuf::from("/home/user/.shine/presets");
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        let (_, _, is_external) = resolve_runtime_config_dirs(&default, &presets, None);
+
+        assert!(
+            !is_external,
+            "no override should leave is_external_presets false"
+        );
+    }
 }

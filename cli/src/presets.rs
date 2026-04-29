@@ -673,4 +673,115 @@ mod tests {
         assert!(report.removed.is_empty());
         assert!(!missing.exists());
     }
+
+    // --- list_fs_shell_categories tests ---
+
+    #[tokio::test]
+    async fn list_fs_shell_categories_returns_empty_for_missing_dir() {
+        let missing =
+            std::env::temp_dir().join(format!("shine-presets-no-{}", uuid::Uuid::new_v4()));
+        let cats = list_fs_shell_categories(&missing).await;
+        assert!(cats.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_fs_shell_categories_finds_categories_from_disk() {
+        let dir = make_temp_dir().await;
+        // Create presets/shell/myplugin/hello.sh
+        let cat_dir = dir.join("shell/myplugin");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("hello.sh"),
+            b"#!/bin/bash\n# Says hello.\necho hello\n",
+        )
+        .await
+        .unwrap();
+
+        let cats = list_fs_shell_categories(&dir).await;
+
+        assert_eq!(cats.len(), 1, "should find exactly one category");
+        assert_eq!(cats[0].name, "myplugin");
+        assert_eq!(cats[0].scripts.len(), 1);
+        assert_eq!(cats[0].scripts[0].name, "hello.sh");
+        assert_eq!(cats[0].scripts[0].description, vec!["Says hello."]);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_fs_shell_categories_ignores_non_sh_files() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("shell/extras");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(cat_dir.join("readme.md"), b"# readme\n")
+            .await
+            .unwrap();
+        fs::write(cat_dir.join("script.sh"), b"#!/bin/bash\n# A script.\n")
+            .await
+            .unwrap();
+
+        let cats = list_fs_shell_categories(&dir).await;
+
+        assert_eq!(cats.len(), 1);
+        assert_eq!(cats[0].scripts.len(), 1, "only .sh files should be listed");
+        assert_eq!(cats[0].scripts[0].name, "script.sh");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_fs_shell_categories_returns_alphabetical_order() {
+        let dir = make_temp_dir().await;
+        for cat in ["zzz", "aaa", "mmm"] {
+            let cat_dir = dir.join("shell").join(cat);
+            fs::create_dir_all(&cat_dir).await.unwrap();
+            fs::write(cat_dir.join("s.sh"), b"#!/bin/bash\n")
+                .await
+                .unwrap();
+        }
+
+        let cats = list_fs_shell_categories(&dir).await;
+        let names: Vec<&str> = cats.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["aaa", "mmm", "zzz"]);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    // --- collect_fs_shell_scripts tests ---
+
+    #[tokio::test]
+    async fn collect_fs_shell_scripts_returns_empty_for_missing_dir() {
+        let missing =
+            std::env::temp_dir().join(format!("shine-presets-noscr-{}", uuid::Uuid::new_v4()));
+        let scripts = collect_fs_shell_scripts(&missing, "shell").await.unwrap();
+        assert!(scripts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn collect_fs_shell_scripts_finds_sh_files_recursively() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("shell/myplugin");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(cat_dir.join("a.sh"), b"#!/bin/bash\n")
+            .await
+            .unwrap();
+        fs::write(cat_dir.join("b.sh"), b"#!/bin/bash\n")
+            .await
+            .unwrap();
+        fs::write(cat_dir.join("readme.txt"), b"ignore me\n")
+            .await
+            .unwrap();
+
+        let scripts = collect_fs_shell_scripts(&dir, "shell").await.unwrap();
+
+        let names: Vec<_> = scripts
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert!(names.contains(&"a.sh"), "a.sh missing: {names:?}");
+        assert!(names.contains(&"b.sh"), "b.sh missing: {names:?}");
+        assert!(!names.contains(&"readme.txt"), "non-.sh should be excluded");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
 }

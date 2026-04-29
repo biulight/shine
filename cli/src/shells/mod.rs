@@ -690,4 +690,89 @@ mod tests {
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
+
+    // --- external presets tests ---
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_presets_install_links_disk_scripts_without_extraction() {
+        let dir = make_temp_dir().await;
+        // new_for_test sets presets_dir = dir/presets, bin_dir = dir/bin
+        // Create a script in presets_dir/shell/custom/ to simulate user-managed presets.
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        let script = cat_dir.join("my_tool.sh");
+        fs::write(&script, b"#!/bin/bash\n# My tool.\necho hi\n")
+            .await
+            .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script).await.unwrap().permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        fs::set_permissions(&script, perms).await.unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        // The script must NOT have been extracted from embedded assets into
+        // presets_dir — the only file there is the one we created above.
+        let count = {
+            let mut rd = fs::read_dir(&cat_dir).await.unwrap();
+            let mut n = 0u32;
+            while rd.next_entry().await.unwrap().is_some() {
+                n += 1;
+            }
+            n
+        };
+        assert_eq!(count, 1, "no embedded assets should have been extracted");
+
+        // A bin symlink for the script should have been created.
+        let link = config.bin_dir().join("my_tool");
+        assert!(link.exists(), "bin symlink should point at disk script");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_presets_uninstall_preserves_disk_scripts() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        let script = cat_dir.join("my_tool.sh");
+        fs::write(&script, b"#!/bin/bash\n# My tool.\necho hi\n")
+            .await
+            .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script).await.unwrap().permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        fs::set_permissions(&script, perms).await.unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+        assert!(config.bin_dir().join("my_tool").exists());
+
+        handle_uninstall(&config, Some("custom"), false, false)
+            .await
+            .unwrap();
+
+        // User-owned script must survive uninstall.
+        assert!(script.exists(), "user script must not be deleted");
+        // Bin symlink should be gone.
+        assert!(
+            !config.bin_dir().join("my_tool").exists(),
+            "bin link should be removed"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
 }
