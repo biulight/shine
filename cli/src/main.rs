@@ -7,6 +7,7 @@ mod check;
 mod colors;
 mod commands;
 mod config;
+mod list;
 mod presets;
 mod shells;
 mod update_check;
@@ -49,6 +50,8 @@ enum Commands {
         #[arg(value_enum)]
         shell: CompletionShell,
     },
+    /// List installed shell presets and app configs
+    List,
     /// Check for a newer version of shine
     Update,
     /// Download and install the latest shine release for this platform
@@ -136,6 +139,7 @@ async fn main() -> Result<()> {
         },
         Commands::Update => handle_update(&config).await,
         Commands::Upgrade => handle_upgrade(&config).await,
+        Commands::List => Box::pin(list::handle_list(&config)).await,
         Commands::Check { command } => Box::pin(check::handle_check(&config, command)).await,
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list()).await,

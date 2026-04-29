@@ -1,5 +1,5 @@
 use crate::apps::{
-    AppManifest, hash_content, load_embedded_categories, resolve_install_destination,
+    AppCategory, AppManifest, hash_content, load_embedded_categories, resolve_install_destination,
 };
 use crate::colors;
 use crate::commands::CheckCommands;
@@ -21,28 +21,53 @@ pub(crate) async fn handle_check(config: &Config, command: Option<CheckCommands>
     Ok(())
 }
 
-async fn check_shell(config: &Config) -> Result<()> {
+// ---------------------------------------------------------------------------
+// Shared row types
+// ---------------------------------------------------------------------------
+
+/// Per-file status used for aggregation within a category.
+/// Higher discriminant = higher priority (wins in fold).
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub(crate) enum FileStatus {
+    NotInstalled,
+    UpToDate,
+    UpdateAvail,
+    Partial,
+    UserModified,
+    Missing,
+}
+
+pub(crate) struct ShellRow {
+    pub(crate) symbol: String,
+    pub(crate) label: String,
+    pub(crate) status_sym: &'static str,
+    pub(crate) status_text: &'static str,
+    /// `true` when at least one of preset-file or bin-symlink exists.
+    pub(crate) is_installed: bool,
+}
+
+pub(crate) struct AppRow {
+    pub(crate) sym: &'static str,
+    pub(crate) label: String,
+    pub(crate) dest: Option<String>,
+    pub(crate) status_text: &'static str,
+    pub(crate) file_status: FileStatus,
+}
+
+// ---------------------------------------------------------------------------
+// Shared row builders (data-only, no printing)
+// ---------------------------------------------------------------------------
+
+/// Build shell preset rows.  Does not include the PATH sentinel line.
+pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     let categories = presets::list_categories("shell");
-
-    println!("{}", colors::bold("Shell Presets"));
-
     if categories.is_empty() {
-        println!("  {}", colors::dim("(no embedded shell presets found)"));
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let presets_shell = config.presets_dir().join("shell");
     let bin_dir = config.bin_dir();
-
-    // Collect rows first so we can align columns.
-    struct Row {
-        symbol: String,
-        label: String,
-        status_sym: &'static str,
-        status_text: &'static str,
-    }
-
-    let mut rows: Vec<Row> = Vec::new();
+    let mut rows: Vec<ShellRow> = Vec::new();
 
     for cat in &categories {
         for script in &cat.scripts {
@@ -65,108 +90,28 @@ async fn check_shell(config: &Config) -> Result<()> {
                 (false, false) => ("✗", "not installed"),
             };
 
-            rows.push(Row {
+            rows.push(ShellRow {
                 symbol: colors::symbol(sym),
                 label: format!("{}/{}", cat.name, script.name),
                 status_sym: sym,
                 status_text,
+                is_installed: file_exists || link_exists,
             });
         }
     }
 
-    let label_width = rows.iter().map(|r| r.label.len()).max().unwrap_or(0);
-
-    for row in &rows {
-        let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
-        println!(
-            "  {}  {}{}  {}",
-            row.symbol,
-            row.label,
-            pad,
-            colors::status_label(row.status_text, row.status_sym),
-        );
-    }
-
-    // PATH sentinel check
-    let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
-    let (path_sym, path_label, path_detail) = match tokio::fs::read_to_string(&config_path).await {
-        Ok(content) if content.contains(SENTINEL_START) => {
-            ("✓", "PATH configured", config_path.display().to_string())
-        }
-        Ok(_) => (
-            "✗",
-            "PATH not configured",
-            config_path.display().to_string(),
-        ),
-        Err(_) => (
-            "✗",
-            "PATH not configured",
-            format!("shell config not found: {}", config_path.display()),
-        ),
-    };
-
-    let path_label_pad = " ".repeat(label_width.saturating_sub(path_label.len()));
-    println!(
-        "  {}  {}{}  {}",
-        colors::symbol(path_sym),
-        path_label,
-        path_label_pad,
-        colors::dim(&path_detail),
-    );
-
-    Ok(())
+    Ok(rows)
 }
 
-/// Per-file status used for aggregation within a category.
-/// Higher discriminant = higher priority (wins in fold).
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-enum FileStatus {
-    NotInstalled,
-    UpToDate,
-    UpdateAvail,
-    Partial,
-    UserModified,
-    Missing,
-}
-
-async fn check_app(config: &Config) -> Result<()> {
-    println!("{}", colors::bold("App Configs"));
-
-    let categories = match load_embedded_categories(None) {
-        Ok(cats) => cats,
-        Err(e) => {
-            println!(
-                "  {}",
-                colors::dim(&format!("(failed to load embedded app presets: {e})"))
-            );
-            return Ok(());
-        }
-    };
-
-    if categories.is_empty() {
-        println!("  {}", colors::dim("(no embedded app presets found)"));
-        return Ok(());
-    }
-
+/// Build app config rows for the given pre-loaded categories.
+pub(crate) async fn build_app_rows(
+    config: &Config,
+    categories: &[AppCategory],
+) -> Result<Vec<AppRow>> {
     let manifest = AppManifest::load(config.shine_dir()).await?;
+    let mut rows: Vec<AppRow> = Vec::new();
 
-    let mut up_to_date = 0usize;
-    let mut update_available = 0usize;
-    let mut user_modified = 0usize;
-    let mut missing = 0usize;
-    let mut not_installed = 0usize;
-
-    struct Row {
-        sym: &'static str,
-        label: String,
-        dest: Option<String>,
-        status_text: &'static str,
-        file_status: FileStatus,
-    }
-
-    let mut rows: Vec<Row> = Vec::new();
-
-    for cat in &categories {
+    for cat in categories {
         if cat.has_explicit_files {
             for file in &cat.files {
                 let (dest_opt, status) = match resolve_install_destination(cat, file, config) {
@@ -230,7 +175,7 @@ async fn check_app(config: &Config) -> Result<()> {
                     FileStatus::NotInstalled | FileStatus::Partial => ("✗", "not installed"),
                 };
 
-                rows.push(Row {
+                rows.push(AppRow {
                     sym,
                     label,
                     dest: dest_str,
@@ -327,7 +272,7 @@ async fn check_app(config: &Config) -> Result<()> {
                 FileStatus::NotInstalled => ("✗", "not installed"),
             };
 
-            rows.push(Row {
+            rows.push(AppRow {
                 sym,
                 label: cat.name.clone(),
                 dest: dest_display,
@@ -336,6 +281,95 @@ async fn check_app(config: &Config) -> Result<()> {
             });
         }
     }
+
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// check_shell / check_app — thin wrappers that print everything
+// ---------------------------------------------------------------------------
+
+async fn check_shell(config: &Config) -> Result<()> {
+    let categories = presets::list_categories("shell");
+
+    println!("{}", colors::bold("Shell Presets"));
+
+    if categories.is_empty() {
+        println!("  {}", colors::dim("(no embedded shell presets found)"));
+        return Ok(());
+    }
+
+    let rows = build_shell_rows(config).await?;
+
+    let label_width = rows.iter().map(|r| r.label.len()).max().unwrap_or(0);
+
+    for row in &rows {
+        let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
+        println!(
+            "  {}  {}{}  {}",
+            row.symbol,
+            row.label,
+            pad,
+            colors::status_label(row.status_text, row.status_sym),
+        );
+    }
+
+    // PATH sentinel check
+    let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
+    let (path_sym, path_label, path_detail) = match tokio::fs::read_to_string(&config_path).await {
+        Ok(content) if content.contains(SENTINEL_START) => {
+            ("✓", "PATH configured", config_path.display().to_string())
+        }
+        Ok(_) => (
+            "✗",
+            "PATH not configured",
+            config_path.display().to_string(),
+        ),
+        Err(_) => (
+            "✗",
+            "PATH not configured",
+            format!("shell config not found: {}", config_path.display()),
+        ),
+    };
+
+    let path_label_pad = " ".repeat(label_width.saturating_sub(path_label.len()));
+    println!(
+        "  {}  {}{}  {}",
+        colors::symbol(path_sym),
+        path_label,
+        path_label_pad,
+        colors::dim(&path_detail),
+    );
+
+    Ok(())
+}
+
+async fn check_app(config: &Config) -> Result<()> {
+    println!("{}", colors::bold("App Configs"));
+
+    let categories = match load_embedded_categories(None) {
+        Ok(cats) => cats,
+        Err(e) => {
+            println!(
+                "  {}",
+                colors::dim(&format!("(failed to load embedded app presets: {e})"))
+            );
+            return Ok(());
+        }
+    };
+
+    if categories.is_empty() {
+        println!("  {}", colors::dim("(no embedded app presets found)"));
+        return Ok(());
+    }
+
+    let rows = build_app_rows(config, &categories).await?;
+
+    let mut up_to_date = 0usize;
+    let mut update_available = 0usize;
+    let mut user_modified = 0usize;
+    let mut missing = 0usize;
+    let mut not_installed = 0usize;
 
     let label_width = rows.iter().map(|r| r.label.len()).max().unwrap_or(0);
 
