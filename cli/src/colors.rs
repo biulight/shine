@@ -62,7 +62,11 @@ pub(crate) fn status_label(s: &str, sym: &str) -> String {
 
 /// Returns a formatted note indicating the active external presets directory.
 pub(crate) fn external_presets_note(dir: &std::path::Path) -> String {
-    format!("{}  {}", dim("presets"), dir.display())
+    use owo_colors::Style;
+    let label = "◈ External Presets"
+        .if_supports_color(Stream::Stdout, |t| t.style(Style::new().bold().cyan()))
+        .to_string();
+    format!("{}  {}", label, dir.display())
 }
 
 #[cfg(test)]
@@ -85,8 +89,8 @@ mod tests {
         let path = Path::new("/some/dir");
         let note = external_presets_note(path);
         assert!(
-            note.contains("presets"),
-            "note should include the 'presets' label: {note:?}"
+            note.contains("External Presets"),
+            "note should include the 'External Presets' label: {note:?}"
         );
     }
 }
