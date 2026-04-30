@@ -248,7 +248,7 @@ pub(crate) async fn handle_install(
                 Ok(d) => d,
                 Err(e) => {
                     eprintln!(
-                        "  {} {display_name}: bad destination: {e}",
+                        "  {} {display_name}: bad destination: {e:#}",
                         colors::symbol("✗")
                     );
                     continue;
@@ -261,13 +261,13 @@ pub(crate) async fn handle_install(
             let outcome = if !file.transforms.is_empty() {
                 match tokio::fs::read(&source_path).await {
                     Err(e) => {
-                        eprintln!("  {} {display_name}: {e}", colors::symbol("✗"));
+                        eprintln!("  {} {display_name}: {e:#}", colors::symbol("✗"));
                         continue;
                     }
                     Ok(raw) => match transforms::apply(&file.transforms, &raw) {
                         Err(e) => {
                             eprintln!(
-                                "  {} {display_name}: transform failed: {e}",
+                                "  {} {display_name}: transform failed: {e:#}",
                                 colors::symbol("✗")
                             );
                             continue;
@@ -355,7 +355,7 @@ pub(crate) async fn handle_install(
                     skipped += 1;
                 }
                 Err(e) => {
-                    eprintln!("  {} {display_name}: {e}", colors::symbol("✗"));
+                    eprintln!("  {} {display_name}: {e:#}", colors::symbol("✗"));
                 }
             }
         }

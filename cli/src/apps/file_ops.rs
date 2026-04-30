@@ -58,7 +58,7 @@ async fn install_bytes_impl(
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)
             .await
-            .with_context(|| format!("creating directory: {}", parent.display()))?;
+            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
     }
 
     let hash = hash_content(content);
@@ -71,23 +71,27 @@ async fn install_bytes_impl(
             }
             fs::write(destination, content)
                 .await
-                .with_context(|| format!("overwriting managed file: {}", destination.display()))?;
+                .with_context(|| format!("failed to overwrite: {}", destination.display()))?;
             return Ok(InstallOutcome::Installed { hash });
         }
 
         let backup = backup_path(destination);
-        fs::rename(destination, &backup)
-            .await
-            .with_context(|| format!("backing up to: {}", backup.display()))?;
+        fs::rename(destination, &backup).await.with_context(|| {
+            format!(
+                "failed to back up {} to {}",
+                destination.display(),
+                backup.display()
+            )
+        })?;
         fs::write(destination, content)
             .await
-            .with_context(|| format!("installing to: {}", destination.display()))?;
+            .with_context(|| format!("failed to install to: {}", destination.display()))?;
         return Ok(InstallOutcome::BackedUpAndInstalled { backup, hash });
     }
 
     fs::write(destination, content)
         .await
-        .with_context(|| format!("installing to: {}", destination.display()))?;
+        .with_context(|| format!("failed to install to: {}", destination.display()))?;
     Ok(InstallOutcome::Installed { hash })
 }
 
