@@ -485,49 +485,52 @@ pub(crate) async fn handle_uninstall(
         manifest.save(config.shine_dir()).await?;
     }
 
-    let remove_prefix_key = match category {
-        Some(cat) => format!("app/{cat}"),
-        None => "app".to_string(),
-    };
-    let remove_report =
-        crate::presets::remove_prefix(&remove_prefix_key, config.presets_dir(), dry_run).await?;
+    // Only clean up extracted preset files when using embedded presets.
+    // For external presets the presets_dir is user-managed and must not be touched.
+    if !config.is_external_presets {
+        let remove_prefix_key = match category {
+            Some(cat) => format!("app/{cat}"),
+            None => "app".to_string(),
+        };
+        let _remove_report =
+            crate::presets::remove_prefix(&remove_prefix_key, config.presets_dir(), dry_run)
+                .await?;
 
-    if purge && !dry_run {
-        if let Some(cat) = category {
-            // Category-scoped purge: only remove that category's presets dir
-            let cat_dir = config.presets_dir().join("app").join(cat);
-            if cat_dir.exists() {
-                tokio::fs::remove_dir_all(&cat_dir).await.with_context(|| {
-                    format!(
-                        "removing app category presets directory: {}",
-                        cat_dir.display()
-                    )
-                })?;
+        if purge && !dry_run {
+            if let Some(cat) = category {
+                let cat_dir = config.presets_dir().join("app").join(cat);
+                if cat_dir.exists() {
+                    tokio::fs::remove_dir_all(&cat_dir).await.with_context(|| {
+                        format!(
+                            "removing app category presets directory: {}",
+                            cat_dir.display()
+                        )
+                    })?;
+                }
+                println!(
+                    "  {}  {}",
+                    colors::symbol("✓"),
+                    colors::dim(&format!("app/{cat} presets directory purged")),
+                );
+            } else {
+                let app_dir = config.presets_dir().join("app");
+                if app_dir.exists() {
+                    tokio::fs::remove_dir_all(&app_dir).await.with_context(|| {
+                        format!("removing app presets directory: {}", app_dir.display())
+                    })?;
+                }
+                let manifest_path = config.shine_dir().join("app-manifest.toml");
+                if manifest_path.exists() {
+                    tokio::fs::remove_file(&manifest_path)
+                        .await
+                        .context("removing app manifest")?;
+                }
+                println!(
+                    "  {}  {}",
+                    colors::symbol("✓"),
+                    colors::dim("app presets directory and manifest purged"),
+                );
             }
-            println!(
-                "  {}  {}",
-                colors::symbol("✓"),
-                colors::dim(&format!("app/{cat} presets directory purged")),
-            );
-        } else {
-            // Global purge: remove entire app presets dir + manifest file
-            let app_dir = config.presets_dir().join("app");
-            if app_dir.exists() {
-                tokio::fs::remove_dir_all(&app_dir).await.with_context(|| {
-                    format!("removing app presets directory: {}", app_dir.display())
-                })?;
-            }
-            let manifest_path = config.shine_dir().join("app-manifest.toml");
-            if manifest_path.exists() {
-                tokio::fs::remove_file(&manifest_path)
-                    .await
-                    .context("removing app manifest")?;
-            }
-            println!(
-                "  {}  {}",
-                colors::symbol("✓"),
-                colors::dim("app presets directory and manifest purged"),
-            );
         }
     }
 
@@ -548,7 +551,6 @@ pub(crate) async fn handle_uninstall(
     if skipped > 0 {
         summary_parts.push(colors::dim(&format!("{skipped} skipped")));
     }
-    let _ = remove_report;
     let sep = colors::dim(" · ");
     println!("\n{}  {}", colors::bold("Done"), summary_parts.join(&sep));
 
