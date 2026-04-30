@@ -1,9 +1,10 @@
 {
-//  "proxies": {
-//    "http-proxy": "http://127.0.0.1:7897",
-//    "https-proxy": "http://127.0.0.1:7897",
-//    "no-proxy": "*.test.example.com,.example.org,127.0.0.0/8"
-//  },
+  // proxy settings
+  "proxies": {
+    "http-proxy": "http://127.0.0.1:6152",
+    "https-proxy": "http://127.0.0.1:6152",
+    "no-proxy": "*.test.example.com,.example.org,127.0.0.0/8"
+  }
 //  "registry-mirrors": [
 //    // tencent mirror, only for underside tencent network, if you are outside tencent network, please use another mirror
 //    "https://mirror.ccs.tencentyun.com"
