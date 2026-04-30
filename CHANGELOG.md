@@ -5,6 +5,15 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.11.1] — 2026-05-01
+
+### Fixes
+
+- **`shine app uninstall`** no longer deletes files from a user-managed external `presets_dir`; preset cleanup is now skipped when `is_external_presets` is set
+- **`shine presets export`** no longer prints the `shine presets link` tip when `presets_dir` is already configured in `config.toml` or via `SHINE_PRESETS`
+
+---
+
 ## [0.11.0] — 2026-04-30
 
 ### Features
