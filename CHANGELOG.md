@@ -5,6 +5,21 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.11.0] — 2026-04-30
+
+### Features
+
+**File transforms in `shine.toml` — convert files during install**
+- Declare a `transform` (or `transforms` pipeline) on any `[[files]]` entry to process a source file before it is written to its destination
+- First supported transform: `jsonc-to-json` — strips `//` line comments, `/* */` block comments, and trailing commas from a JSONC file and writes valid JSON to the target path
+- Combine with `target` to rename the file at the destination (e.g. `daemon.jsonc` → `daemon.json`)
+- `shine check` compares the transformed output against the installed file, so editing a comment-only line in the source JSONC that produces identical JSON is correctly reported as **up-to-date** rather than an available update
+- Install output annotates transform steps: `✓  daemon.jsonc  [jsonc-to-json]  →  /etc/docker/daemon.json`
+- Invalid transform names fail at preset load time with a clear error, not mid-install
+- Built-in docker preset updated to use the new mechanism (`daemon.jsonc → daemon.json`)
+
+---
+
 ## [0.10.0] — 2026-04-30
 
 ### Features

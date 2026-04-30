@@ -147,6 +147,41 @@ dest = "~/.vim"
 
 When `shine.toml` defines `files`, only those entries are installed. When it omits `files`, `shine` treats the whole category directory as managed and maps every file except `shine.toml` into `dest` with the same relative path.
 
+#### File transforms
+
+A `[[files]]` entry may declare a `transform` to process the source file before it is written to the destination. Use `target` to rename the file at the destination if the transform changes the format:
+
+```toml
+description = "Docker daemon configuration"
+dest = "/etc/docker"
+
+[[files]]
+source      = "daemon.jsonc"
+target      = "daemon.json"
+description = "Docker daemon options"
+transform   = "jsonc-to-json"
+```
+
+`shine install` output shows the transform step:
+
+```
+  ✓  daemon.jsonc  [jsonc-to-json]  →  /etc/docker/daemon.json
+```
+
+`shine check` compares the **transformed** output against the installed file — a source change that produces identical JSON output is reported as **up-to-date**.
+
+**Supported transforms**
+
+| Name | From | To | Description |
+|---|---|---|---|
+| `jsonc-to-json` | `.jsonc` | `.json` | Strip `//` and `/* */` comments, trailing commas; emit canonical JSON |
+
+For a pipeline of transforms, use the `transforms` array instead:
+
+```toml
+transforms = ["jsonc-to-json"]
+```
+
 If no `shine.toml` exists, `shine` falls back to the legacy file-level rules: a preset file may start with a `shine-dest:` annotation for an explicit absolute target after `~` expansion. Without that annotation, `shine` installs to:
 
 ```text
