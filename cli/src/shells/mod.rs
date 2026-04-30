@@ -22,6 +22,7 @@ pub(crate) async fn handle_install(
     category: Option<&str>,
     force: bool,
 ) -> Result<()> {
+    crate::config::print_presets_note(config);
     let prefix = match category {
         Some(cat) => format!("shell/{cat}"),
         None => "shell".to_string(),
@@ -108,6 +109,7 @@ pub(crate) async fn handle_uninstall(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
+    crate::config::print_presets_note(config);
     if dry_run {
         println!("{}", colors::dim("[dry-run] No files will be modified."));
     }
@@ -203,6 +205,7 @@ pub(crate) async fn handle_uninstall(
 }
 
 pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+    crate::config::print_presets_note(config);
     let categories = if config.is_external_presets {
         crate::presets::list_fs_shell_categories(config.presets_dir()).await
     } else {

@@ -227,6 +227,18 @@ impl Config {
     }
 }
 
+/// Print a note showing the active external presets directory.
+/// No-op when the embedded presets are in use.
+pub(crate) fn print_presets_note(config: &Config) {
+    if config.is_external_presets {
+        println!(
+            "{}",
+            crate::colors::external_presets_note(config.presets_dir())
+        );
+        println!();
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         let home_dir =

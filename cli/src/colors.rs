@@ -59,3 +59,34 @@ pub(crate) fn status_label(s: &str, sym: &str) -> String {
         _ => s.to_string(),
     }
 }
+
+/// Returns a formatted note indicating the active external presets directory.
+pub(crate) fn external_presets_note(dir: &std::path::Path) -> String {
+    format!("{}  {}", dim("presets"), dir.display())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn external_presets_note_contains_path() {
+        let path = Path::new("/home/user/.custom/presets");
+        let note = external_presets_note(path);
+        assert!(
+            note.contains("/home/user/.custom/presets"),
+            "note should include the path: {note:?}"
+        );
+    }
+
+    #[test]
+    fn external_presets_note_contains_presets_label() {
+        let path = Path::new("/some/dir");
+        let note = external_presets_note(path);
+        assert!(
+            note.contains("presets"),
+            "note should include the 'presets' label: {note:?}"
+        );
+    }
+}

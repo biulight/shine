@@ -14,6 +14,7 @@ use manifest::AppEntry;
 use std::path::PathBuf;
 
 pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
+    crate::config::print_presets_note(config);
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, Some(category)).await?
     } else {
@@ -113,6 +114,7 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
 }
 
 pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+    crate::config::print_presets_note(config);
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
     } else {
@@ -177,6 +179,7 @@ pub(crate) async fn handle_install(
     dry_run: bool,
     force: bool,
 ) -> Result<()> {
+    crate::config::print_presets_note(config);
     if dry_run {
         println!("{}", colors::dim("[dry-run] No files will be modified."));
     }

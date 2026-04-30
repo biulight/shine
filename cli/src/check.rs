@@ -9,6 +9,7 @@ use crate::shells::{SENTINEL_START, get_shell_config_path};
 use anyhow::Result;
 
 pub(crate) async fn handle_check(config: &Config, command: Option<CheckCommands>) -> Result<()> {
+    crate::config::print_presets_note(config);
     match command {
         None => {
             check_shell(config).await?;
@@ -234,7 +235,12 @@ pub(crate) async fn build_app_rows(
                 file_statuses.push(status);
             }
 
-            let has_installed = file_statuses.iter().any(|s| *s != FileStatus::NotInstalled);
+            let has_installed = file_statuses.iter().any(|s| {
+                matches!(
+                    s,
+                    FileStatus::UpToDate | FileStatus::UpdateAvail | FileStatus::UserModified
+                )
+            });
             let has_not_installed = file_statuses.contains(&FileStatus::NotInstalled);
             let cat_status = if has_installed && has_not_installed {
                 FileStatus::Partial

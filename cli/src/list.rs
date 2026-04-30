@@ -5,6 +5,7 @@ use crate::config::Config;
 use anyhow::Result;
 
 pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+    crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
 
