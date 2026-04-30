@@ -150,6 +150,14 @@ impl Config {
         }
     }
 
+    /// Return a clone of this config with `presets_dir_override` replaced.
+    pub(crate) fn with_presets_dir_override(self, value: Option<PathBuf>) -> Self {
+        Self {
+            presets_dir_override: value,
+            ..self
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn validate(&self) -> Result<()> {
         todo!("Validate config")
