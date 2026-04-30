@@ -4,7 +4,7 @@ mod manifest;
 mod metadata;
 
 pub(crate) use manifest::{AppManifest, hash_content};
-pub(crate) use metadata::{AppCategory, load_embedded_categories};
+pub(crate) use metadata::{AppCategory, load_embedded_categories, load_installed_categories};
 
 use crate::colors;
 use crate::config::Config;

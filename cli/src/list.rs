@@ -1,4 +1,4 @@
-use crate::apps::load_embedded_categories;
+use crate::apps::{load_embedded_categories, load_installed_categories};
 use crate::check::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_rows};
 use crate::colors;
 use crate::config::Config;
@@ -9,7 +9,12 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     let shell_rows = build_shell_rows(config).await?;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
 
-    let app_rows = match load_embedded_categories(None) {
+    let cats_result = if config.is_external_presets {
+        load_installed_categories(config, None).await
+    } else {
+        load_embedded_categories(None)
+    };
+    let app_rows = match cats_result {
         Ok(cats) => build_app_rows(config, &cats).await?,
         Err(_) => Vec::new(),
     };

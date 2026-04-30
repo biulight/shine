@@ -1,5 +1,6 @@
 use crate::apps::{
-    AppCategory, AppManifest, hash_content, load_embedded_categories, resolve_install_destination,
+    AppCategory, AppManifest, hash_content, load_embedded_categories, load_installed_categories,
+    resolve_install_destination,
 };
 use crate::colors;
 use crate::commands::CheckCommands;
@@ -61,7 +62,11 @@ pub(crate) struct AppRow {
 
 /// Build shell preset rows.  Does not include the PATH sentinel line.
 pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
-    let categories = presets::list_categories("shell");
+    let categories = if config.is_external_presets {
+        presets::list_fs_shell_categories(config.presets_dir()).await
+    } else {
+        presets::list_categories("shell")
+    };
     if categories.is_empty() {
         return Ok(Vec::new());
     }
@@ -133,16 +138,27 @@ pub(crate) async fn build_app_rows(
                                             if dest_hash != manifest_hash {
                                                 FileStatus::UserModified
                                             } else {
-                                                let asset_key = format!(
-                                                    "app/{}/{}",
-                                                    cat.name,
-                                                    file.source_rel.display()
-                                                );
-                                                let embedded_hash =
+                                                let source_hash = if config.is_external_presets {
+                                                    let source_path = config
+                                                        .presets_dir()
+                                                        .join("app")
+                                                        .join(&cat.name)
+                                                        .join(&file.source_rel);
+                                                    tokio::fs::read(&source_path)
+                                                        .await
+                                                        .ok()
+                                                        .map(|b| hash_content(&b))
+                                                } else {
+                                                    let asset_key = format!(
+                                                        "app/{}/{}",
+                                                        cat.name,
+                                                        file.source_rel.display()
+                                                    );
                                                     presets::read_asset_bytes(&asset_key)
-                                                        .map(|b| hash_content(&b));
-                                                match embedded_hash {
-                                                    Some(emb) if emb != manifest_hash => {
+                                                        .map(|b| hash_content(&b))
+                                                };
+                                                match source_hash {
+                                                    Some(src) if src != manifest_hash => {
                                                         FileStatus::UpdateAvail
                                                     }
                                                     _ => FileStatus::UpToDate,
@@ -212,15 +228,27 @@ pub(crate) async fn build_app_rows(
                                     if dest_hash != manifest_hash {
                                         FileStatus::UserModified
                                     } else {
-                                        let asset_key = format!(
-                                            "app/{}/{}",
-                                            cat.name,
-                                            file.source_rel.display()
-                                        );
-                                        let embedded_hash = presets::read_asset_bytes(&asset_key)
-                                            .map(|b| hash_content(&b));
-                                        match embedded_hash {
-                                            Some(emb) if emb != manifest_hash => {
+                                        let source_hash = if config.is_external_presets {
+                                            let source_path = config
+                                                .presets_dir()
+                                                .join("app")
+                                                .join(&cat.name)
+                                                .join(&file.source_rel);
+                                            tokio::fs::read(&source_path)
+                                                .await
+                                                .ok()
+                                                .map(|b| hash_content(&b))
+                                        } else {
+                                            let asset_key = format!(
+                                                "app/{}/{}",
+                                                cat.name,
+                                                file.source_rel.display()
+                                            );
+                                            presets::read_asset_bytes(&asset_key)
+                                                .map(|b| hash_content(&b))
+                                        };
+                                        match source_hash {
+                                            Some(src) if src != manifest_hash => {
                                                 FileStatus::UpdateAvail
                                             }
                                             _ => FileStatus::UpToDate,
@@ -243,7 +271,21 @@ pub(crate) async fn build_app_rows(
             });
             let has_not_installed = file_statuses.contains(&FileStatus::NotInstalled);
             let cat_status = if has_installed && has_not_installed {
-                FileStatus::Partial
+                // Use the max status of installed files. Only collapse to Partial
+                // when all installed files are up-to-date; higher-severity statuses
+                // (UpdateAvail, UserModified) take priority because the user action
+                // ("shine app install") handles both updates and new files.
+                let installed_max = file_statuses
+                    .iter()
+                    .copied()
+                    .filter(|s| *s != FileStatus::NotInstalled)
+                    .max()
+                    .unwrap_or(FileStatus::Partial);
+                if installed_max == FileStatus::UpToDate {
+                    FileStatus::Partial
+                } else {
+                    installed_max
+                }
             } else {
                 file_statuses
                     .iter()
@@ -296,12 +338,16 @@ pub(crate) async fn build_app_rows(
 // ---------------------------------------------------------------------------
 
 async fn check_shell(config: &Config) -> Result<()> {
-    let categories = presets::list_categories("shell");
+    let categories = if config.is_external_presets {
+        presets::list_fs_shell_categories(config.presets_dir()).await
+    } else {
+        presets::list_categories("shell")
+    };
 
     println!("{}", colors::bold("Shell Presets"));
 
     if categories.is_empty() {
-        println!("  {}", colors::dim("(no embedded shell presets found)"));
+        println!("  {}", colors::dim("(no shell presets found)"));
         return Ok(());
     }
 
@@ -353,14 +399,27 @@ async fn check_shell(config: &Config) -> Result<()> {
 async fn check_app(config: &Config) -> Result<()> {
     println!("{}", colors::bold("App Configs"));
 
-    let categories = match load_embedded_categories(None) {
-        Ok(cats) => cats,
-        Err(e) => {
-            println!(
-                "  {}",
-                colors::dim(&format!("(failed to load embedded app presets: {e})"))
-            );
-            return Ok(());
+    let categories = if config.is_external_presets {
+        match load_installed_categories(config, None).await {
+            Ok(cats) => cats,
+            Err(e) => {
+                println!(
+                    "  {}",
+                    colors::dim(&format!("(failed to load installed app presets: {e})"))
+                );
+                return Ok(());
+            }
+        }
+    } else {
+        match load_embedded_categories(None) {
+            Ok(cats) => cats,
+            Err(e) => {
+                println!(
+                    "  {}",
+                    colors::dim(&format!("(failed to load embedded app presets: {e})"))
+                );
+                return Ok(());
+            }
         }
     };
 
