@@ -5,6 +5,22 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.10.0] — 2026-04-30
+
+### Features
+
+**External presets — manage your own preset files outside the binary**
+- Configure a custom `presets_dir` in `~/.shine/config.toml` (or via `SHINE_PRESETS`) to load shell scripts and app configs from the filesystem instead of the embedded binary
+- `shine presets export` copies all built-in presets to `presets_dir`, giving you a starting point to customize
+- `shine shell install` / `shine app install` install directly from the external directory when it is configured; the binary's embedded presets are bypassed entirely
+- `shine check` and `shine list` reflect status against the external source: `UpdateAvail` is computed by comparing installed files against the filesystem copy rather than the embedded asset
+- Command output annotates which preset source is active (external path shown in **bold cyan** when `is_external_presets` is set)
+
+**Improved partial-category status in `shine check`**
+- When a category has some files installed and some missing, `UpdateAvail` and `UserModified` now take priority over `Partial` so the most actionable status is surfaced; `Partial` is shown only when all installed files are otherwise up-to-date
+
+---
+
 ## [0.9.0] — 2026-04-29
 
 ### Features
