@@ -276,11 +276,13 @@ async fn handle_presets_export(config: &Config, dir: Option<PathBuf>, force: boo
         println!("  No files exported (empty embedded asset set).");
     }
 
-    println!();
-    println!(
-        "Tip: run `shine presets link {}` to activate this directory.",
-        target.display()
-    );
+    if !config.is_external_presets {
+        println!();
+        println!(
+            "Tip: run `shine presets link {}` to activate this directory.",
+            target.display()
+        );
+    }
 
     Ok(())
 }
