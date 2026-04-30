@@ -1,6 +1,6 @@
 use crate::apps::{
     AppCategory, AppManifest, hash_content, load_embedded_categories, load_installed_categories,
-    resolve_install_destination,
+    resolve_install_destination, source_hash_for_file,
 };
 use crate::colors;
 use crate::commands::CheckCommands;
@@ -138,25 +138,8 @@ pub(crate) async fn build_app_rows(
                                             if dest_hash != manifest_hash {
                                                 FileStatus::UserModified
                                             } else {
-                                                let source_hash = if config.is_external_presets {
-                                                    let source_path = config
-                                                        .presets_dir()
-                                                        .join("app")
-                                                        .join(&cat.name)
-                                                        .join(&file.source_rel);
-                                                    tokio::fs::read(&source_path)
-                                                        .await
-                                                        .ok()
-                                                        .map(|b| hash_content(&b))
-                                                } else {
-                                                    let asset_key = format!(
-                                                        "app/{}/{}",
-                                                        cat.name,
-                                                        file.source_rel.display()
-                                                    );
-                                                    presets::read_asset_bytes(&asset_key)
-                                                        .map(|b| hash_content(&b))
-                                                };
+                                                let source_hash =
+                                                    source_hash_for_file(config, cat, file).await;
                                                 match source_hash {
                                                     Some(src) if src != manifest_hash => {
                                                         FileStatus::UpdateAvail
@@ -228,25 +211,8 @@ pub(crate) async fn build_app_rows(
                                     if dest_hash != manifest_hash {
                                         FileStatus::UserModified
                                     } else {
-                                        let source_hash = if config.is_external_presets {
-                                            let source_path = config
-                                                .presets_dir()
-                                                .join("app")
-                                                .join(&cat.name)
-                                                .join(&file.source_rel);
-                                            tokio::fs::read(&source_path)
-                                                .await
-                                                .ok()
-                                                .map(|b| hash_content(&b))
-                                        } else {
-                                            let asset_key = format!(
-                                                "app/{}/{}",
-                                                cat.name,
-                                                file.source_rel.display()
-                                            );
-                                            presets::read_asset_bytes(&asset_key)
-                                                .map(|b| hash_content(&b))
-                                        };
+                                        let source_hash =
+                                            source_hash_for_file(config, cat, file).await;
                                         match source_hash {
                                             Some(src) if src != manifest_hash => {
                                                 FileStatus::UpdateAvail

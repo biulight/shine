@@ -30,17 +30,38 @@ pub(crate) async fn install_file(
     if dry_run {
         return Ok(InstallOutcome::DryRun);
     }
+    let content = fs::read(source)
+        .await
+        .with_context(|| format!("reading source file: {}", source.display()))?;
+    install_bytes_impl(&content, destination, is_managed, force).await
+}
 
+pub(crate) async fn install_bytes(
+    content: &[u8],
+    destination: &Path,
+    is_managed: bool,
+    dry_run: bool,
+    force: bool,
+) -> Result<InstallOutcome> {
+    if dry_run {
+        return Ok(InstallOutcome::DryRun);
+    }
+    install_bytes_impl(content, destination, is_managed, force).await
+}
+
+async fn install_bytes_impl(
+    content: &[u8],
+    destination: &Path,
+    is_managed: bool,
+    force: bool,
+) -> Result<InstallOutcome> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)
             .await
             .with_context(|| format!("creating directory: {}", parent.display()))?;
     }
 
-    let content = fs::read(source)
-        .await
-        .with_context(|| format!("reading source file: {}", source.display()))?;
-    let hash = hash_content(&content);
+    let hash = hash_content(content);
 
     if destination.exists() {
         if is_managed {
@@ -48,7 +69,7 @@ pub(crate) async fn install_file(
             if !force && hash_content(&existing) == hash {
                 return Ok(InstallOutcome::AlreadyManaged);
             }
-            fs::copy(source, destination)
+            fs::write(destination, content)
                 .await
                 .with_context(|| format!("overwriting managed file: {}", destination.display()))?;
             return Ok(InstallOutcome::Installed { hash });
@@ -58,13 +79,13 @@ pub(crate) async fn install_file(
         fs::rename(destination, &backup)
             .await
             .with_context(|| format!("backing up to: {}", backup.display()))?;
-        fs::copy(source, destination)
+        fs::write(destination, content)
             .await
             .with_context(|| format!("installing to: {}", destination.display()))?;
         return Ok(InstallOutcome::BackedUpAndInstalled { backup, hash });
     }
 
-    fs::copy(source, destination)
+    fs::write(destination, content)
         .await
         .with_context(|| format!("installing to: {}", destination.display()))?;
     Ok(InstallOutcome::Installed { hash })

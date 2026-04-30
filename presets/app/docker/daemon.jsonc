@@ -1,0 +1,6 @@
+{
+  "registry-mirrors": [
+    // tencent mirror, only for underside tencent network, if you are outside tencent network, please use another mirror
+    "https://mirror.ccs.tencentyun.com"
+  ]
+}

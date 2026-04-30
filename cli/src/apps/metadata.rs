@@ -26,6 +26,7 @@ pub(crate) struct AppFile {
     pub description: Option<String>,
     pub display_name: Option<String>,
     pub legacy_dest_annotation: Option<String>,
+    pub transforms: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +42,23 @@ struct FileToml {
     target: Option<String>,
     description: Option<String>,
     display_name: Option<String>,
+    #[serde(default)]
+    transform: Option<String>,
+    #[serde(default)]
+    transforms: Option<Vec<String>>,
+}
+
+fn resolve_transforms(file: &FileToml, context: &str) -> Result<Vec<String>> {
+    let specs = match (&file.transform, &file.transforms) {
+        (Some(_), Some(_)) => {
+            bail!("{context}: use 'transform' or 'transforms', not both")
+        }
+        (Some(t), None) => vec![t.clone()],
+        (None, Some(ts)) => ts.clone(),
+        (None, None) => vec![],
+    };
+    super::transforms::validate(&specs).with_context(|| format!("{context}: invalid transform"))?;
+    Ok(specs)
 }
 
 pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<AppCategory>> {
@@ -79,17 +97,20 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
             Some(files) => files
                 .into_iter()
                 .map(|file| {
+                    let context = format!("app/{name}/shine.toml");
                     let source_rel = normalize_relative(&file.source)
-                        .with_context(|| format!("invalid source for app/{name}/shine.toml"))?;
+                        .with_context(|| format!("invalid source for {context}"))?;
                     let target_rel =
                         normalize_relative(file.target.as_deref().unwrap_or(&file.source))
-                            .with_context(|| format!("invalid target for app/{name}/shine.toml"))?;
+                            .with_context(|| format!("invalid target for {context}"))?;
+                    let transforms = resolve_transforms(&file, &context)?;
                     Ok(AppFile {
                         source_rel,
                         target_rel,
                         description: file.description,
                         display_name: file.display_name,
                         legacy_dest_annotation: None,
+                        transforms,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -101,6 +122,7 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
+                    transforms: vec![],
                 })
                 .collect(),
         };
@@ -130,6 +152,7 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
                     description: parse_legacy_description(&bytes),
                     display_name: None,
                     legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
+                    transforms: vec![],
                 }
             })
             .collect(),
@@ -152,20 +175,20 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
             Some(files) => files
                 .into_iter()
                 .map(|file| {
-                    let source_rel = normalize_relative(&file.source).with_context(|| {
-                        format!("invalid source for {}", metadata_path.display())
-                    })?;
+                    let context = metadata_path.display().to_string();
+                    let source_rel = normalize_relative(&file.source)
+                        .with_context(|| format!("invalid source for {context}"))?;
                     let target_rel =
                         normalize_relative(file.target.as_deref().unwrap_or(&file.source))
-                            .with_context(|| {
-                                format!("invalid target for {}", metadata_path.display())
-                            })?;
+                            .with_context(|| format!("invalid target for {context}"))?;
+                    let transforms = resolve_transforms(&file, &context)?;
                     Ok(AppFile {
                         source_rel,
                         target_rel,
                         description: file.description,
                         display_name: file.display_name,
                         legacy_dest_annotation: None,
+                        transforms,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -178,6 +201,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
+                    transforms: vec![],
                 })
                 .collect(),
         };
@@ -214,6 +238,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
             description: parse_legacy_description(&bytes),
             display_name: None,
             legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
+            transforms: vec![],
         });
     }
 
@@ -381,5 +406,53 @@ mod tests {
             git.files[0].legacy_dest_annotation.as_deref(),
             Some("~/.gitconfig")
         );
+    }
+
+    #[test]
+    fn embedded_docker_has_jsonc_transform() {
+        let categories = load_embedded_categories(Some("docker")).unwrap();
+        let docker = categories.iter().find(|c| c.name == "docker").unwrap();
+        assert!(docker.uses_metadata);
+        assert_eq!(docker.destination_root.as_deref(), Some("/etc/docker"));
+        assert_eq!(docker.files.len(), 1);
+
+        let file = &docker.files[0];
+        assert_eq!(file.source_rel, std::path::Path::new("daemon.jsonc"));
+        assert_eq!(file.target_rel, std::path::Path::new("daemon.json"));
+        assert_eq!(file.transforms, vec!["jsonc-to-json"]);
+    }
+
+    #[test]
+    fn unknown_transform_rejected_at_load() {
+        let toml =
+            b"dest = \"/tmp\"\n[[files]]\nsource = \"f\"\ntransform = \"no-such-transform\"\n";
+        assert!(
+            parse_category_toml("test", toml).is_err() || {
+                // parse_category_toml only validates dest; full validation happens in load_embedded_category.
+                // Ensure resolve_transforms rejects it.
+                let file = FileToml {
+                    source: "f".to_string(),
+                    target: None,
+                    description: None,
+                    display_name: None,
+                    transform: Some("no-such-transform".to_string()),
+                    transforms: None,
+                };
+                resolve_transforms(&file, "test").is_err()
+            }
+        );
+    }
+
+    #[test]
+    fn both_transform_and_transforms_rejected() {
+        let file = FileToml {
+            source: "f".to_string(),
+            target: None,
+            description: None,
+            display_name: None,
+            transform: Some("jsonc-to-json".to_string()),
+            transforms: Some(vec!["jsonc-to-json".to_string()]),
+        };
+        assert!(resolve_transforms(&file, "test").is_err());
     }
 }

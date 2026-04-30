@@ -2,16 +2,46 @@ mod annotation;
 mod file_ops;
 mod manifest;
 mod metadata;
+mod transforms;
 
 pub(crate) use manifest::{AppManifest, hash_content};
 pub(crate) use metadata::{AppCategory, load_embedded_categories, load_installed_categories};
 
 use crate::colors;
 use crate::config::Config;
+use crate::presets;
 use anyhow::{Context, Result};
 use file_ops::{InstallOutcome, UninstallOutcome};
 use manifest::AppEntry;
 use std::path::PathBuf;
+
+/// Hash the effective install content for `file` — applies transforms if declared.
+///
+/// Returns `None` when the source cannot be read (e.g. not yet extracted).
+pub(crate) async fn source_hash_for_file(
+    config: &Config,
+    cat: &metadata::AppCategory,
+    file: &metadata::AppFile,
+) -> Option<u64> {
+    let raw = if config.is_external_presets {
+        let path = config
+            .presets_dir()
+            .join("app")
+            .join(&cat.name)
+            .join(&file.source_rel);
+        tokio::fs::read(&path).await.ok()?
+    } else {
+        let key = format!("app/{}/{}", cat.name, file.source_rel.display());
+        presets::read_asset_bytes(&key)?
+    };
+
+    let effective = if file.transforms.is_empty() {
+        raw
+    } else {
+        transforms::apply(&file.transforms, &raw).ok()?
+    };
+    Some(hash_content(&effective))
+}
 
 pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
     crate::config::print_presets_note(config);
@@ -227,14 +257,53 @@ pub(crate) async fn handle_install(
 
             let is_managed = manifest.find_by_dest(&destination).is_some();
 
-            match file_ops::install_file(&source_path, &destination, is_managed, dry_run, force)
-                .await
-            {
+            // Apply transforms (e.g. jsonc-to-json) before writing to destination.
+            let outcome = if !file.transforms.is_empty() {
+                match tokio::fs::read(&source_path).await {
+                    Err(e) => {
+                        eprintln!("  {} {display_name}: {e}", colors::symbol("✗"));
+                        continue;
+                    }
+                    Ok(raw) => match transforms::apply(&file.transforms, &raw) {
+                        Err(e) => {
+                            eprintln!(
+                                "  {} {display_name}: transform failed: {e}",
+                                colors::symbol("✗")
+                            );
+                            continue;
+                        }
+                        Ok(transformed) => {
+                            file_ops::install_bytes(
+                                &transformed,
+                                &destination,
+                                is_managed,
+                                dry_run,
+                                force,
+                            )
+                            .await
+                        }
+                    },
+                }
+            } else {
+                file_ops::install_file(&source_path, &destination, is_managed, dry_run, force).await
+            };
+
+            let transform_label = if !file.transforms.is_empty() {
+                format!(
+                    "  {}",
+                    colors::dim(&format!("[{}]", file.transforms.join(", ")))
+                )
+            } else {
+                String::new()
+            };
+
+            match outcome {
                 Ok(InstallOutcome::Installed { hash }) => {
                     println!(
-                        "  {}  {}  {}  {}",
+                        "  {}  {}{}  {}  {}",
                         colors::symbol("✓"),
                         file.source_rel.display(),
+                        transform_label,
                         colors::dim("→"),
                         colors::dim(&destination.display().to_string()),
                     );
@@ -257,9 +326,10 @@ pub(crate) async fn handle_install(
                 }
                 Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
                     println!(
-                        "  {}  {}  {}  {}  {}",
+                        "  {}  {}{}  {}  {}  {}",
                         colors::symbol("✓"),
                         file.source_rel.display(),
+                        transform_label,
                         colors::dim("→"),
                         colors::dim(&destination.display().to_string()),
                         colors::dim(&format!("(backup: {})", backup.display())),
@@ -275,9 +345,10 @@ pub(crate) async fn handle_install(
                 }
                 Ok(InstallOutcome::DryRun) => {
                     println!(
-                        "  {}  {}  {}  {}",
+                        "  {}  {}{}  {}  {}",
                         colors::dim("[dry-run]"),
                         file.source_rel.display(),
+                        transform_label,
                         colors::dim("→"),
                         colors::dim(&destination.display().to_string()),
                     );
