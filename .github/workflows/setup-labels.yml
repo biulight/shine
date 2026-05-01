@@ -1,0 +1,68 @@
+name: Setup Labels and Project
+
+on:
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  repository-projects: write
+
+jobs:
+  create-labels:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          create_label() {
+            local name="$1" color="$2" description="$3"
+            gh label create "$name" \
+              --color "$color" \
+              --description "$description" \
+              --repo "$REPO" \
+              --force
+          }
+
+          # Type labels
+          create_label "idea"        "c5def5" "Rough concept or possible improvement"
+          create_label "plan"        "d4c5f9" "Scoped work understood but not yet being implemented"
+          create_label "task"        "0075ca" "Implementation-ready work"
+          create_label "bug"         "d73a4a" "User-facing defect or regression"
+          create_label "docs"        "0052cc" "Documentation changes"
+          create_label "enhancement" "a2eeef" "User-visible improvement that is already accepted"
+
+          # Status labels
+          create_label "status: inbox"       "ededed" "Newly captured work"
+          create_label "status: next"        "fbca04" "Approved and ready to work on"
+          create_label "status: in-progress" "0e8a16" "Active implementation"
+          create_label "status: blocked"     "b60205" "Waiting on a dependency or decision"
+          create_label "status: review"      "e4e669" "Ready to verify"
+          create_label "status: done"        "c2e0c6" "Completed work about to be closed"
+
+  create-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create project board
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          # Create a user-level project (Projects v2)
+          PROJECT_ID=$(gh project create \
+            --owner "$OWNER" \
+            --title "shine" \
+            --format json 2>/dev/null | jq -r '.id' || echo "")
+
+          if [ -z "$PROJECT_ID" ]; then
+            echo "Project may already exist or could not be created."
+            echo "Please create it manually at https://github.com/users/${OWNER}/projects/new"
+            echo "Columns: Inbox / Next / In Progress / Blocked / Review / Done"
+            exit 0
+          fi
+
+          echo "Created project #${PROJECT_ID}"
+          echo "Note: Kanban columns (Inbox/Next/In Progress/Blocked/Review/Done) must be configured"
+          echo "in the project settings at https://github.com/users/${OWNER}/projects/${PROJECT_ID}/settings"
