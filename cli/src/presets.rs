@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+#[cfg(test)]
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -18,11 +19,13 @@ pub(crate) struct RemoveReport {
     pub skipped: Vec<PathBuf>,
 }
 
+#[cfg(test)]
 pub(crate) struct ScriptInfo {
     pub name: String,
     pub description: Vec<String>,
 }
 
+#[cfg(test)]
 pub(crate) struct CategoryInfo {
     pub name: String,
     pub scripts: Vec<ScriptInfo>,
@@ -139,6 +142,7 @@ pub(crate) fn parse_script_description(content: &[u8]) -> Vec<String> {
 ///
 /// Categories are the immediate subdirectories of `prefix/`. Scripts within each
 /// category are sorted by name. Returns categories in alphabetical order.
+#[cfg(test)]
 pub(crate) fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
     let normalized = prefix.trim_end_matches('/');
     let filter = format!("{normalized}/");
@@ -158,7 +162,7 @@ pub(crate) fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
         let category = &rest[..slash];
         let file_name = &rest[slash + 1..];
 
-        if file_name.is_empty() {
+        if file_name.is_empty() || !file_name.ends_with(".sh") {
             continue;
         }
 
@@ -188,6 +192,7 @@ pub(crate) fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
 /// Each immediate subdirectory of `presets_dir/shell/` is a category; `.sh` files within
 /// it are the scripts. Descriptions are parsed from each script's leading comment block.
 /// Returns categories in alphabetical order.
+#[cfg(test)]
 pub(crate) async fn list_fs_shell_categories(presets_dir: &Path) -> Vec<CategoryInfo> {
     let shell_root = presets_dir.join("shell");
     if !shell_root.is_dir() {
@@ -248,6 +253,7 @@ pub(crate) async fn list_fs_shell_categories(presets_dir: &Path) -> Vec<Category
 ///
 /// Used by `shell install` when `is_external_presets` is true, to link scripts
 /// that already exist on disk without extracting embedded assets.
+#[cfg(test)]
 pub(crate) async fn collect_fs_shell_scripts(
     presets_dir: &Path,
     prefix: &str,

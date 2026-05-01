@@ -1,8 +1,11 @@
+pub(crate) mod metadata;
+
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -29,12 +32,8 @@ pub(crate) async fn handle_install(
         None => "shell".to_string(),
     };
 
-    // When the user has configured a custom presets directory, use the scripts
-    // already present on disk. When using the default directory, extract the
-    // embedded assets into it first.
-    let sources: Vec<_> = if config.is_external_presets {
-        crate::presets::collect_fs_shell_scripts(config.presets_dir(), &prefix).await?
-    } else {
+    // When using the default presets directory, extract the embedded assets first.
+    if !config.is_external_presets {
         let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
 
         let mut shell_parts: Vec<String> = Vec::new();
@@ -56,20 +55,40 @@ pub(crate) async fn handle_install(
             colors::bold("Shell Presets"),
             shell_parts.join(&sep)
         );
+    }
 
-        report
-            .created
-            .iter()
-            .chain(report.overwritten.iter())
-            .chain(report.skipped.iter())
-            .cloned()
-            .collect()
-    };
+    let categories = metadata::load_installed_categories(config, category).await?;
+    let sources: Vec<_> = categories
+        .iter()
+        .flat_map(|cat| {
+            cat.files.iter().map(|file| {
+                config
+                    .presets_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel)
+            })
+        })
+        .collect();
 
     // Apply env-variable substitution to scripts that opt in via `# shine-template: true`.
     apply_template_to_scripts(config, &sources).await;
 
-    let link_report = crate::bin_links::link_executables(config.bin_dir(), &sources, force).await?;
+    let link_specs: Vec<_> = categories
+        .iter()
+        .flat_map(|cat| {
+            cat.files.iter().map(|file| crate::bin_links::LinkSpec {
+                source: config
+                    .presets_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel),
+                link_name: OsString::from(&file.command_name),
+            })
+        })
+        .collect();
+    let link_report =
+        crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, force).await?;
 
     let sep = colors::dim(" · ");
     let mut link_parts: Vec<String> = Vec::new();
@@ -211,9 +230,9 @@ pub(crate) async fn handle_uninstall(
 pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let categories = if config.is_external_presets {
-        crate::presets::list_fs_shell_categories(config.presets_dir()).await
+        metadata::load_installed_categories(config, None).await?
     } else {
-        crate::presets::list_categories("shell")
+        metadata::load_embedded_categories(None)?
     };
 
     if categories.is_empty() {
@@ -224,7 +243,7 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     println!("{}\n", colors::bold("Shell Preset Categories"));
 
     for cat in &categories {
-        let word = if cat.scripts.len() == 1 {
+        let word = if cat.files.len() == 1 {
             "script"
         } else {
             "scripts"
@@ -232,23 +251,21 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
         println!(
             "  {}  {}",
             cat.name,
-            colors::dim(&format!("{} {}", cat.scripts.len(), word))
+            colors::dim(&format!("{} {}", cat.files.len(), word))
         );
 
-        // Strip extensions for display and compute alignment column.
-        let stems: Vec<&str> = cat.scripts.iter().map(|s| script_stem(&s.name)).collect();
-        let max_stem = stems.iter().map(|s| s.len()).max().unwrap_or(0);
-        // 4 spaces indent before name, then gap after the longest name.
+        let names: Vec<&str> = cat.files.iter().map(|s| s.command_name.as_str()).collect();
+        let max_name = names.iter().map(|s| s.len()).max().unwrap_or(0);
         let gap = 4;
-        let desc_col = max_stem + gap;
+        let desc_col = max_name + gap;
         let continuation_indent = " ".repeat(4 + desc_col);
 
-        for (script, stem) in cat.scripts.iter().zip(stems.iter()) {
-            let padding = " ".repeat(desc_col - stem.len());
+        for (script, name) in cat.files.iter().zip(names.iter()) {
+            let padding = " ".repeat(desc_col - name.len());
             match script.description.as_slice() {
-                [] => println!("    {stem}"),
+                [] => println!("    {name}"),
                 [first, rest @ ..] => {
-                    println!("    {stem}{padding}{first}");
+                    println!("    {name}{padding}{first}");
                     for line in rest {
                         if line.is_empty() {
                             println!();
@@ -274,7 +291,7 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     println!(
         "{}",
         colors::dim(
-            "After installation, commands are available directly by name (e.g. `set_proxy`)."
+            "After installation, commands are available directly by name (e.g. `setproxy`)."
         )
     );
 
@@ -339,13 +356,6 @@ async fn apply_template_to_scripts(config: &Config, sources: &[PathBuf]) {
             let perms = std::fs::Permissions::from_mode(mode);
             let _ = tokio::fs::set_permissions(path, perms).await;
         }
-    }
-}
-
-fn script_stem(filename: &str) -> &str {
-    match filename.rfind('.') {
-        Some(i) => &filename[..i],
-        None => filename,
     }
 }
 
@@ -552,9 +562,10 @@ mod tests {
         );
         // symlinks use stem names (no .sh suffix)
         assert!(
-            config.bin_dir().join("set_proxy").exists(),
-            "bin link should be named without extension"
+            config.bin_dir().join("setproxy").exists(),
+            "bin link should use configured rename"
         );
+        assert!(!config.bin_dir().join("set_proxy").exists());
 
         handle_uninstall(&config, None, false, false).await.unwrap();
         assert!(
@@ -840,6 +851,41 @@ mod tests {
             !config.bin_dir().join("my_tool").exists(),
             "bin link should be removed"
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_presets_install_applies_metadata_rename() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\n",
+        )
+        .await
+        .unwrap();
+        let script = cat_dir.join("set_proxy.sh");
+        fs::write(&script, b"#!/bin/bash\n# Set proxy.\necho hi\n")
+            .await
+            .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script).await.unwrap().permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        fs::set_permissions(&script, perms).await.unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        assert!(config.bin_dir().join("setproxy").exists());
+        assert!(!config.bin_dir().join("set_proxy").exists());
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

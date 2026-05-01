@@ -18,6 +18,11 @@ pub(crate) struct UnlinkReport {
     pub skipped: Vec<PathBuf>,
 }
 
+pub(crate) struct LinkSpec {
+    pub source: PathBuf,
+    pub link_name: OsString,
+}
+
 /// Remove symlinks in `bin_dir` whose link target starts with `managed_root`.
 ///
 /// Non-symlinks and symlinks pointing outside `managed_root` are untouched.
@@ -92,9 +97,25 @@ pub(crate) async fn unlink_managed(
 /// - Conflicting entries (wrong target or regular file) are recorded and skipped
 ///   unless `overwrite` is true.
 /// - Two sources sharing the same filename → second is recorded as a conflict.
+#[allow(dead_code)]
 pub(crate) async fn link_executables(
     bin_dir: &Path,
     sources: &[PathBuf],
+    overwrite: bool,
+) -> Result<LinkReport> {
+    let specs: Vec<_> = sources
+        .iter()
+        .map(|source| LinkSpec {
+            source: source.clone(),
+            link_name: link_stem(source),
+        })
+        .collect();
+    link_executables_with_names(bin_dir, &specs, overwrite).await
+}
+
+pub(crate) async fn link_executables_with_names(
+    bin_dir: &Path,
+    specs: &[LinkSpec],
     overwrite: bool,
 ) -> Result<LinkReport> {
     let mut report = LinkReport {
@@ -106,18 +127,20 @@ pub(crate) async fn link_executables(
 
     let mut seen: HashSet<OsString> = HashSet::new();
 
-    for source in sources {
-        if !is_executable(source) {
+    for spec in specs {
+        if !is_executable(&spec.source) {
             continue;
         }
 
-        if source.file_name().is_none() {
+        if spec.source.file_name().is_none() {
             continue;
         }
-        let stem = link_stem(source);
+        let stem = spec.link_name.clone();
 
         if !seen.insert(stem.clone()) {
-            report.conflicts.push((bin_dir.join(&stem), source.clone()));
+            report
+                .conflicts
+                .push((bin_dir.join(&stem), spec.source.clone()));
             continue;
         }
 
@@ -126,7 +149,7 @@ pub(crate) async fn link_executables(
         match tokio::fs::symlink_metadata(&link_path).await {
             Ok(meta) if meta.file_type().is_symlink() => {
                 match tokio::fs::read_link(&link_path).await {
-                    Ok(existing) if existing == *source => {
+                    Ok(existing) if existing == spec.source => {
                         report.skipped.push(link_path);
                     }
                     _ => {
@@ -134,10 +157,10 @@ pub(crate) async fn link_executables(
                             tokio::fs::remove_file(&link_path).await.with_context(|| {
                                 format!("removing stale symlink: {link_path:?}")
                             })?;
-                            create_symlink(source, &link_path).await?;
+                            create_symlink(&spec.source, &link_path).await?;
                             report.overwritten.push(link_path);
                         } else {
-                            report.conflicts.push((link_path, source.clone()));
+                            report.conflicts.push((link_path, spec.source.clone()));
                         }
                     }
                 }
@@ -147,14 +170,14 @@ pub(crate) async fn link_executables(
                     tokio::fs::remove_file(&link_path)
                         .await
                         .with_context(|| format!("removing existing file: {link_path:?}"))?;
-                    create_symlink(source, &link_path).await?;
+                    create_symlink(&spec.source, &link_path).await?;
                     report.overwritten.push(link_path);
                 } else {
-                    report.conflicts.push((link_path, source.clone()));
+                    report.conflicts.push((link_path, spec.source.clone()));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                create_symlink(source, &link_path).await?;
+                create_symlink(&spec.source, &link_path).await?;
                 report.created.push(link_path);
             }
             Err(e) => {
@@ -369,6 +392,29 @@ mod tests {
 
         assert_eq!(report.created.len(), 1);
         assert_eq!(report.conflicts.len(), 1);
+
+        fs::remove_dir_all(&src).await.unwrap();
+        fs::remove_dir_all(&bin).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn creates_symlink_with_explicit_link_name() {
+        let (src, bin) = make_dirs().await;
+        let exe = make_executable(&src, "set_proxy.sh").await;
+        let specs = [LinkSpec {
+            source: exe.clone(),
+            link_name: OsString::from("setproxy"),
+        }];
+
+        let report = link_executables_with_names(&bin, &specs, false)
+            .await
+            .unwrap();
+
+        assert_eq!(report.created.len(), 1);
+        assert!(bin.join("setproxy").exists());
+        assert!(!bin.join("set_proxy").exists());
+        assert_eq!(fs::read_link(bin.join("setproxy")).await.unwrap(), exe);
 
         fs::remove_dir_all(&src).await.unwrap();
         fs::remove_dir_all(&bin).await.unwrap();

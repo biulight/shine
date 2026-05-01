@@ -2,7 +2,7 @@
 # 取消所有代理环境变量及工具代理配置。
 # 清除 http_proxy、https_proxy、all_proxy 等系统环境变量。
 # 同时清除 Git、NPM、Yarn、pnpm 的全局代理设置。
-# 用法: source uset_proxy
+# 用法: source usetproxy
 
 echo "🔄 取消代理配置..."
 
@@ -79,4 +79,4 @@ echo ""
 echo "📝 提示："
 echo "  - 环境变量代理已清除（仅影响当前终端会话）"
 echo "  - Git/NPM/Yarn/pnpm 的全局代理配置已清除"
-echo "  - 若要重新设置代理，请运行： source ~/bin/set_proxy.sh"
+echo "  - 若要重新设置代理，请运行： source setproxy"

@@ -3,7 +3,7 @@
 # 设置代理环境变量（http_proxy、https_proxy、all_proxy）。
 # 同时为 Git、NPM、Yarn、pnpm 配置工具代理。
 # HTTP 代理端口由 ~/.shine/env.toml 中的 HTTP_PROXY_PORT 决定。
-# 用法: source set_proxy [auto|sock5|http]
+# 用法: source setproxy [auto|sock5|http]
 # 默认 auto 模式优先使用 SOCKS5，不可用时自动回退至 HTTP。
 
 HTTP_PROXY_PORT=@@HTTP_PROXY_PORT@@
@@ -120,10 +120,10 @@ case "$MODE" in
         ;;
     *)
         echo "❌ 无效参数: $MODE"
-        echo "用法: source set_proxy.sh [auto|sock5|http]"
+        echo "用法: source setproxy [auto|sock5|http]"
         return 1
         ;;
 esac
 
 echo ""
-echo "要取消代理设置，请运行: source uset_proxy.sh"
+echo "要取消代理设置，请运行: source usetproxy"

@@ -6,7 +6,6 @@ use crate::colors;
 use crate::commands::CheckCommands;
 use crate::config::Config;
 use crate::env::EnvConfig;
-use crate::presets;
 use crate::shells::{SENTINEL_START, get_shell_config_path};
 use anyhow::Result;
 use std::collections::BTreeMap;
@@ -65,9 +64,9 @@ pub(crate) struct AppRow {
 /// Build shell preset rows.  Does not include the PATH sentinel line.
 pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     let categories = if config.is_external_presets {
-        presets::list_fs_shell_categories(config.presets_dir()).await
+        crate::shells::metadata::load_installed_categories(config, None).await?
     } else {
-        presets::list_categories("shell")
+        crate::shells::metadata::load_embedded_categories(None)?
     };
     if categories.is_empty() {
         return Ok(Vec::new());
@@ -78,9 +77,9 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     let mut rows: Vec<ShellRow> = Vec::new();
 
     for cat in &categories {
-        for script in &cat.scripts {
-            let script_path = presets_shell.join(&cat.name).join(&script.name);
-            let link_name = crate::bin_links::link_stem(std::path::Path::new(&script.name));
+        for script in &cat.files {
+            let script_path = presets_shell.join(&cat.name).join(&script.source_rel);
+            let link_name = std::ffi::OsString::from(&script.command_name);
             let link_path = bin_dir.join(&link_name);
 
             let file_exists = script_path.exists();
@@ -100,7 +99,7 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
 
             rows.push(ShellRow {
                 symbol: colors::symbol(sym),
-                label: format!("{}/{}", cat.name, script.name),
+                label: format!("{}/{}", cat.name, script.command_name),
                 status_sym: sym,
                 status_text,
                 is_installed: file_exists || link_exists,
@@ -311,9 +310,9 @@ pub(crate) async fn build_app_rows(
 
 async fn check_shell(config: &Config) -> Result<()> {
     let categories = if config.is_external_presets {
-        presets::list_fs_shell_categories(config.presets_dir()).await
+        crate::shells::metadata::load_installed_categories(config, None).await?
     } else {
-        presets::list_categories("shell")
+        crate::shells::metadata::load_embedded_categories(None)?
     };
 
     println!("{}", colors::bold("Shell Presets"));
