@@ -16,9 +16,8 @@ pub(crate) fn resolve_destination(
         }
     };
 
-    let expanded = shellexpand::full(&raw)
-        .with_context(|| format!("failed to expand destination path: {raw}"))?
-        .to_string();
+    let expanded = crate::config::full_expand(&raw)
+        .with_context(|| format!("failed to expand destination path: {raw}"))?;
 
     let path = PathBuf::from(&expanded);
 

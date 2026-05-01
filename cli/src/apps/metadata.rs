@@ -347,9 +347,8 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
     let parsed: CategoryToml = toml::from_slice(bytes)
         .with_context(|| format!("failed to parse app/{name}/shine.toml"))?;
 
-    let expanded = shellexpand::full(&parsed.dest)
-        .with_context(|| format!("failed to expand dest in app/{name}/shine.toml"))?
-        .to_string();
+    let expanded = crate::config::full_expand(&parsed.dest)
+        .with_context(|| format!("failed to expand dest in app/{name}/shine.toml"))?;
     let path = PathBuf::from(&expanded);
     if !path.is_absolute() {
         bail!("app/{name}/shine.toml dest must be absolute after expansion");

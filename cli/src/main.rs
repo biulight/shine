@@ -300,9 +300,8 @@ async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -> Re
     use anyhow::Context as _;
 
     let raw = path.to_string_lossy();
-    let expanded = shellexpand::full(&raw)
-        .with_context(|| format!("expanding path: {raw}"))?
-        .to_string();
+    let expanded =
+        crate::config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
     let expanded = PathBuf::from(expanded);
 
     if create {

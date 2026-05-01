@@ -127,7 +127,7 @@ impl Config {
         match &self.app_default_dest_root_override {
             Some(p) => {
                 let s = p.to_str().unwrap_or("~/.config");
-                PathBuf::from(shellexpand::tilde(s).to_string())
+                PathBuf::from(tilde_expand(s))
             }
             None => self.home_dir.join(".config"),
         }
@@ -314,6 +314,34 @@ fn effective_home_dir() -> PathBuf {
     UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf())
 }
 
+/// Expand a leading `~` using the effective home directory instead of `HOME`.
+/// Needed because `sudo` resets `HOME` to `/root`.
+pub(crate) fn tilde_expand(s: &str) -> String {
+    let home = effective_home_dir().to_string_lossy().into_owned();
+    shellexpand::tilde_with_context(s, || Some(home)).into_owned()
+}
+
+/// Like `shellexpand::full` but uses the effective home for both `~` and `$HOME`.
+pub(crate) fn full_expand(s: &str) -> Result<String, shellexpand::LookupError<std::env::VarError>> {
+    let home = effective_home_dir().to_string_lossy().into_owned();
+    let home2 = home.clone();
+    shellexpand::full_with_context(
+        s,
+        move || Some(home),
+        move |var| {
+            if var == "HOME" {
+                return Ok(Some(home2.clone()));
+            }
+            match std::env::var(var) {
+                Ok(v) => Ok(Some(v)),
+                Err(std::env::VarError::NotPresent) => Ok(None),
+                Err(e) => Err(e),
+            }
+        },
+    )
+    .map(|c| c.into_owned())
+}
+
 fn default_config_dir() -> Result<PathBuf> {
     Ok(effective_home_dir().join(".shine"))
 }
@@ -329,7 +357,7 @@ fn preliminary_shine_dir_from_env(default: &Path) -> PathBuf {
     if let Ok(val) = std::env::var("SHINE_CONFIG_DIR") {
         let val = val.trim().to_string();
         if !val.is_empty() {
-            return PathBuf::from(shellexpand::tilde(&val).to_string());
+            return PathBuf::from(tilde_expand(&val));
         }
     }
     default.to_owned()
@@ -366,7 +394,7 @@ fn resolve_runtime_config_dirs(
     if let Ok(val) = std::env::var("SHINE_CONFIG_DIR") {
         let val = val.trim().to_string();
         if !val.is_empty() {
-            let dir = PathBuf::from(shellexpand::tilde(&val).to_string());
+            let dir = PathBuf::from(tilde_expand(&val));
             return (dir.clone(), dir.join("presets"), true);
         }
     }
@@ -374,7 +402,7 @@ fn resolve_runtime_config_dirs(
     if let Ok(val) = std::env::var("SHINE_PRESETS") {
         let val = val.trim().to_string();
         if !val.is_empty() {
-            let presets = PathBuf::from(shellexpand::tilde(&val).to_string());
+            let presets = PathBuf::from(tilde_expand(&val));
             return (default_shine_dir.to_owned(), presets, true);
         }
     }
@@ -382,7 +410,7 @@ fn resolve_runtime_config_dirs(
     if let Some(p) = config_toml_presets
         && let Some(s) = p.to_str()
     {
-        let presets = PathBuf::from(shellexpand::tilde(s).to_string());
+        let presets = PathBuf::from(tilde_expand(s));
         return (default_shine_dir.to_owned(), presets, true);
     }
 

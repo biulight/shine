@@ -262,8 +262,7 @@ pub(crate) async fn build_app_rows(
 
             let dest_display: Option<String> = if let Some(root) = &cat.destination_root {
                 Some(
-                    shellexpand::tilde(root)
-                        .into_owned()
+                    crate::config::tilde_expand(root)
                         .replace(config.home_dir.to_string_lossy().as_ref(), "~"),
                 )
             } else if cat.files.len() == 1 {
