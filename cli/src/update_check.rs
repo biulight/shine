@@ -62,7 +62,7 @@ pub(crate) async fn check_for_update_forced(config: &Config) -> Result<UpdateSta
 
     let release = fetch_latest_release().await?;
     let latest = parse_release_tag(&release.tag_name)?;
-    store_cache(&cache_path, &latest, now_secs).await?;
+    store_cache_if_possible(&cache_path, &latest, now_secs).await;
 
     Ok(compare_versions(&current, &latest))
 }
@@ -78,7 +78,7 @@ pub(crate) async fn check_for_update(config: &Config) -> Result<UpdateStatus> {
         None => {
             let release = fetch_latest_release().await?;
             let fetched = parse_release_tag(&release.tag_name)?;
-            store_cache(&cache_path, &fetched, now_secs).await?;
+            store_cache_if_possible(&cache_path, &fetched, now_secs).await;
             fetched
         }
     };
@@ -94,7 +94,7 @@ pub(crate) async fn upgrade_to_latest_release(config: &Config) -> Result<Upgrade
 
     let release = fetch_latest_release().await?;
     let latest = parse_release_tag(&release.tag_name)?;
-    store_cache(&cache_path, &latest, now_secs).await?;
+    store_cache_if_possible(&cache_path, &latest, now_secs).await;
 
     if latest <= current {
         return Ok(UpgradeResult::AlreadyUpToDate);
@@ -104,7 +104,7 @@ pub(crate) async fn upgrade_to_latest_release(config: &Config) -> Result<Upgrade
     let archive_bytes = download_asset_bytes(&asset.download_url).await?;
     let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
     install_downloaded_archive(&archive_bytes, &current_exe).await?;
-    store_cache(&cache_path, &latest, now_secs).await?;
+    store_cache_if_possible(&cache_path, &latest, now_secs).await;
 
     Ok(UpgradeResult::Upgraded {
         previous: current,
@@ -151,6 +151,12 @@ async fn load_cached_version_if_fresh(cache_path: &Path, now_secs: u64) -> Resul
 }
 
 async fn store_cache(cache_path: &Path, latest: &Version, checked_at_unix_secs: u64) -> Result<()> {
+    if let Some(parent) = cache_path.parent() {
+        fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create update cache dir {}", parent.display()))?;
+    }
+
     let cache = UpdateCache {
         latest_version: latest.to_string(),
         checked_at_unix_secs,
@@ -160,6 +166,10 @@ async fn store_cache(cache_path: &Path, latest: &Version, checked_at_unix_secs: 
         .await
         .context("failed to write update cache")?;
     Ok(())
+}
+
+async fn store_cache_if_possible(cache_path: &Path, latest: &Version, checked_at_unix_secs: u64) {
+    let _ = store_cache(cache_path, latest, checked_at_unix_secs).await;
 }
 
 async fn fetch_latest_release() -> Result<GithubRelease> {
@@ -540,6 +550,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cached, None);
+
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn store_cache_creates_missing_parent_directory() {
+        let dir = make_temp_dir().await;
+        let cache_path = dir.join("nested").join(UPDATE_CACHE_FILE);
+
+        store_cache(&cache_path, &Version::parse("0.2.3").unwrap(), 1_000)
+            .await
+            .unwrap();
+
+        let cached = load_cached_version_if_fresh(&cache_path, 1_000 + 1)
+            .await
+            .unwrap();
+        assert_eq!(cached, Some(Version::parse("0.2.3").unwrap()));
 
         fs::remove_dir_all(dir).await.unwrap();
     }
