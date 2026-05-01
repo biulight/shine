@@ -2,6 +2,9 @@ name: Create Labels
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - copilot/create-project-and-labels
 
 permissions:
   issues: write
