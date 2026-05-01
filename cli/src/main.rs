@@ -413,8 +413,9 @@ async fn handle_self_install(dest: std::path::PathBuf) -> Result<()> {
 
     std::fs::copy(&src, &dest).with_context(|| {
         format!(
-            "failed to copy to {} — try: sudo shine self install",
-            dest.display()
+            "failed to copy to {} — try: sudo {} self install",
+            dest.display(),
+            src.display()
         )
     })?;
 
