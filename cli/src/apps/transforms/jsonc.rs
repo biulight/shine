@@ -5,9 +5,11 @@ use anyhow::{Context, Result};
 /// Output always ends with a newline so the hash is stable across installs.
 pub(super) fn apply(input: &[u8]) -> Result<Vec<u8>> {
     let text = std::str::from_utf8(input).context("jsonc-to-json: input must be valid UTF-8")?;
-    let value = jsonc_parser::parse_to_serde_value(text, &jsonc_parser::ParseOptions::default())
-        .map_err(|e| anyhow::anyhow!("jsonc-to-json: {e}"))?
-        .unwrap_or(serde_json::Value::Null);
+    let value = jsonc_parser::parse_to_serde_value::<serde_json::Value>(
+        text,
+        &jsonc_parser::ParseOptions::default(),
+    )
+    .map_err(|e| anyhow::anyhow!("jsonc-to-json: {e}"))?;
     let mut out =
         serde_json::to_vec_pretty(&value).context("jsonc-to-json: serialization failed")?;
     if out.last() != Some(&b'\n') {
