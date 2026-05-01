@@ -1,125 +1,84 @@
 # Planning Guide for Managing Ideas and Plans
 
-This document defines how to manage ideas, plans, tasks, bugs, and release work in the `shine` repository.
+This document defines the default GitHub workflow for ideas, plans, tasks, bugs, and release work in the `shine` repository.
 
 ## Purpose
 
-The goal of this workflow is to keep planning lightweight, visible, and easy to maintain for a solo-maintained or small-team open-source project.
+The workflow is intentionally lightweight. It is designed for solo maintenance or a small team and should answer three questions quickly:
 
-This process helps you:
+- What ideas have been captured?
+- What is ready to work on next?
+- What is planned for the next release?
 
-- collect ideas without losing them
-- separate rough ideas from actionable plans
-- track work in progress
-- review priorities regularly
-- keep release planning visible
+## Default Workflow
 
-## Recommended GitHub Workflow
+Use GitHub features with one clear responsibility each:
 
-Use GitHub's built-in features as follows:
+- **Issues** hold the actual content and discussion
+- **Labels** classify the issue type and current state
+- **Projects** visualize the workflow
+- **Milestones** group work into releases or phases
 
-- **Issues** for ideas, plans, tasks, and bugs
-- **Labels** for type and status
-- **Projects** for visual workflow tracking
-- **Milestones** for version or phase planning
+`docs/PLAN.md` is the rulebook. It is not the live task list.
 
-## Issue Lifecycle
+## Core Rules
 
-### 1. Inbox
-A new idea or task is captured here first.
+- Every new idea starts as an issue.
+- Prefer one issue per problem or deliverable.
+- Each issue should have one primary type label.
+- Each issue should have exactly one `status:` label.
+- Detailed discussion belongs in the issue, not in the project card.
+- Only release-relevant work needs a milestone.
 
-Typical label:
-- `status: inbox`
+## Issue Types
 
-### 2. Idea / Discussion
-The item is reviewed, discussed, or clarified.
+Use these labels as the primary classification:
 
-Typical labels:
-- `idea`
-- `discussion`
-- `status: inbox`
+- `idea` for rough concepts or possible improvements
+- `plan` for scoped work that is understood but not yet being implemented
+- `task` for implementation-ready work
+- `bug` for user-facing defects or regressions
+- `docs` for documentation changes
+- `enhancement` for a user-visible improvement that is already accepted
 
-### 3. Plan
-The idea becomes actionable and is broken down into steps.
+## Status Flow
 
-Typical labels:
-- `plan`
-- `status: next`
+Use exactly one of these labels at a time:
 
-### 4. In Progress
-Work is actively being done.
+- `status: inbox` for newly captured work
+- `status: next` for approved and ready work
+- `status: in-progress` for active implementation
+- `status: blocked` for work waiting on a dependency or decision
+- `status: review` for work ready to verify
+- `status: done` for completed work that is about to be closed
 
-Typical labels:
-- `task`
-- `status: in-progress`
+Recommended lifecycle:
 
-### 5. Blocked
-Work cannot continue yet because of a dependency, unanswered question, or missing decision.
+1. `idea` + `status: inbox`
+2. `plan` + `status: next`
+3. `task` + `status: in-progress`
+4. `status: review`
+5. `status: done`, then close the issue
 
-Typical labels:
-- `status: blocked`
+## Issue Entry Points
 
-### 6. Review
-The implementation is ready for verification.
+Use the repository issue templates:
 
-Typical labels:
-- `status: review`
+- `Idea / Plan` for new directions, proposals, and rough planning
+- `Task` for implementation-ready work
+- `Bug` for regressions and broken behavior
 
-### 7. Done
-The work is completed and the issue can be closed.
+Every planning issue should answer:
 
-Typical labels:
-- `status: done`
-
-## Labels
-
-Keep labels simple and consistent.
-
-### Type labels
-Use one or more of these labels to classify the issue:
-
-- `idea`
-- `plan`
-- `task`
-- `bug`
-- `docs`
-- `enhancement`
-
-### Status labels
-Use exactly one of these labels to represent current state:
-
-- `status: inbox`
-- `status: next`
-- `status: in-progress`
-- `status: blocked`
-- `status: review`
-- `status: done`
-
-## Milestones
-
-Use milestones to group work by version or release phase.
-
-### Version-based examples
-- `v0.1`
-- `v0.2`
-- `v1.0`
-
-### Phase-based examples
-- `foundation`
-- `core-features`
-- `polish`
-- `stabilization`
-
-### Milestone rules
-- Every meaningful feature or release-worthy change should belong to a milestone.
-- Small internal fixes may stay unassigned if they are not release-sensitive.
-- Milestones should be used to answer: “What is planned for this release?”
+- What problem are we solving?
+- Why does it matter now?
+- What is the proposed direction?
+- What is the smallest next step?
+- How do we know it is done?
 
 ## Projects
 
-Use a GitHub Project board to make work visible.
-
-Recommended columns:
+Create one GitHub Project for the repository and mirror the status flow with these columns:
 
 - `Inbox`
 - `Next`
@@ -128,52 +87,48 @@ Recommended columns:
 - `Review`
 - `Done`
 
-### Project usage rules
-- New ideas enter `Inbox`
-- Ready items move to `Next`
-- Active work moves to `In Progress`
-- Waiting items move to `Blocked`
-- Completed items move to `Done`
+Usage rules:
+
+- New issues start in `Inbox`
+- Move an item to `Next` only when it is ready to be worked on
+- Use `Blocked` only when an external dependency or decision is truly stopping progress
+- Close issues after they have reached `Done`
+
+The project board should answer "where is this work now?" and nothing more.
+
+## Milestones
+
+Use milestones only when the issue matters to a release or phase.
+
+Examples:
+
+- `v0.5`
+- `v0.6`
+- `v1.0`
+- `stabilization`
+
+Rules:
+
+- Assign a milestone when the issue should ship in a specific release or phase
+- Leave small internal chores unassigned unless timing matters
+- Use milestones to answer "what is in this release?"
 
 ## Weekly Review
 
-Once per week, spend a short time reviewing the board.
+Run a short review once per week:
 
-### Review checklist
-- Review all open issues
-- Decide whether each idea is still relevant
-- Promote valuable ideas into plans
-- Move ready work into `Next`
-- Move active work into `In Progress`
-- Close completed items
-- Remove stale items that no longer matter
+1. Review all open `idea` and `plan` issues
+2. Close stale items that no longer matter
+3. Promote useful ideas into `plan` or `task`
+4. Move ready work into `status: next`
+5. Check that active work is still in the correct milestone
 
-## How to Write a Good Issue
+## Recommended Repo Setup
 
-Every idea or plan issue should answer these questions:
+After merging this workflow, configure GitHub to match it:
 
-- What is it?
-- Why does it matter?
-- What outcome do we want?
-- What is the smallest useful next step?
-- Are there any risks or dependencies?
+1. Create the labels listed in this document
+2. Create a project board with the recommended columns
+3. Create milestones only when a release or phase is real enough to plan against
 
-## Recommended Issue Template
-
-Use this format for idea and plan issues:
-
-```md
-## Background
-Why is this needed? What problem does it solve?
-
-## Goal
-What result do we want?
-
-## Proposal
-What is the proposed solution or direction?
-
-## Risks
-What could block or complicate this work?
-
-## Next Steps
-What is the smallest actionable step?
+GitHub configuration is partly manual. The repository stores the templates and the process, while labels, projects, and milestones are maintained in the GitHub UI.

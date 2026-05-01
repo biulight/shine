@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Planning Workflow
+    url: https://github.com/biulight/shine/blob/main/docs/PLAN.md
+    about: Read the repository planning workflow before opening a new issue.

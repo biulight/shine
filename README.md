@@ -19,6 +19,17 @@ A fast Rust CLI tool for managing shell environment presets.
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
 - **Multi-shell support** — bash, zsh, fish, powershell, elvish
 
+## Planning Workflow
+
+Repository planning is managed in GitHub with a lightweight issue-based flow:
+
+- Open ideas with the `Idea / Plan` issue template
+- Promote accepted work into `Task` issues
+- Track state with `status:` labels
+- Use milestones only for release-relevant work
+
+The full workflow lives in [`docs/PLAN.md`](docs/PLAN.md).
+
 ## Installation
 
 ```bash
