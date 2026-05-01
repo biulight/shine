@@ -83,7 +83,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/shine" dist/shine
           tar -czf "dist/shine-v${VERSION}-${{ matrix.asset_target }}.tar.gz" -C dist shine
       - name: Upload packaged artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset_target }}
           path: dist/shine-v*.tar.gz
@@ -99,7 +99,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Download packaged artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
       - name: Prepare release files
