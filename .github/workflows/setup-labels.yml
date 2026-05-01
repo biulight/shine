@@ -1,19 +1,17 @@
-name: Create Labels
+name: Setup Labels and Project
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - copilot/create-project-and-labels
 
 permissions:
   issues: write
+  repository-projects: write
 
 jobs:
   create-labels:
     runs-on: ubuntu-latest
     steps:
-      - name: Create type labels
+      - name: Create labels
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -42,3 +40,29 @@ jobs:
           create_label "status: blocked"     "b60205" "Waiting on a dependency or decision"
           create_label "status: review"      "e4e669" "Ready to verify"
           create_label "status: done"        "c2e0c6" "Completed work about to be closed"
+
+  create-project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create project board
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          # Create a user-level project (Projects v2)
+          PROJECT_ID=$(gh project create \
+            --owner "$OWNER" \
+            --title "shine" \
+            --format json 2>/dev/null | jq -r '.number' || echo "")
+
+          if [ -z "$PROJECT_ID" ]; then
+            echo "Project may already exist or could not be created."
+            echo "Please create it manually at https://github.com/users/${OWNER}/projects/new"
+            echo "Columns: Inbox / Next / In Progress / Blocked / Review / Done"
+            exit 0
+          fi
+
+          echo "Created project #${PROJECT_ID}"
+          echo "Note: Kanban columns (Inbox/Next/In Progress/Blocked/Review/Done) must be configured"
+          echo "in the project settings at https://github.com/users/${OWNER}/projects/${PROJECT_ID}/settings"
