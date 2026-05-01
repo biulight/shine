@@ -5,6 +5,15 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.11.2] — 2026-05-01
+
+### Maintenance
+
+- Upgrade **reqwest** `0.12.24 → 0.13.3` (TLS feature renamed `rustls-tls` → `rustls`)
+- Upgrade **jsonc-parser** `0.26 → 0.32.3` (API: `parse_to_serde_value` now generic, returns `T` directly instead of `Option<T>`)
+
+---
+
 ## [0.11.1] — 2026-05-01
 
 ### Fixes
