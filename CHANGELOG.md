@@ -5,6 +5,14 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.11.5] — 2026-05-01
+
+### Fixes
+
+- **`sudo shine app install` / `sudo shine presets link`** — config file and all paths containing `~` now resolve to the invoking user's home directory instead of `/root`. `sudo` resets `HOME` to `/root`; shine now detects `SUDO_USER` and looks up the real home from `/etc/passwd`. Affected: config file location, `presets_dir`, `app_default_dest_root`, `SHINE_CONFIG_DIR`, `SHINE_PRESETS`, and every destination path expanded by `shellexpand`
+
+---
+
 ## [0.11.4] — 2026-05-01
 
 ### Fixes
