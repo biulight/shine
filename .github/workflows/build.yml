@@ -129,6 +129,7 @@ jobs:
     needs:
       - release
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: Create or reuse release PR
         uses: actions/github-script@v8
@@ -152,22 +153,32 @@ jobs:
               return;
             }
 
-            const title = `chore(release): merge ${context.ref.replace("refs/tags/", "")} into main`;
+            const tag = context.ref.replace("refs/tags/", "");
+            const title = `chore(release): merge ${tag} into main`;
             const body = [
               "Automated release sync PR.",
               "",
               `- Source branch: \`${head}\``,
               `- Target branch: \`${base}\``,
-              `- Release tag: \`${context.ref.replace("refs/tags/", "")}\``,
+              `- Release tag: \`${tag}\``,
             ].join("\n");
 
-            const { data: pr } = await github.rest.pulls.create({
-              owner,
-              repo,
-              title,
-              head,
-              base,
-              body,
-            });
-
-            core.info(`Created PR #${pr.number}`);
+            try {
+              const { data: pr } = await github.rest.pulls.create({
+                owner,
+                repo,
+                title,
+                head,
+                base,
+                body,
+              });
+              core.info(`Created PR #${pr.number}`);
+            } catch (err) {
+              core.warning(
+                `Could not create release PR automatically: ${err.message}\n` +
+                `To fix, go to Settings → Actions → General and enable ` +
+                `"Allow GitHub Actions to create and approve pull requests", ` +
+                `then open the PR manually: ` +
+                `https://github.com/${owner}/${repo}/compare/${base}...${head}`
+              );
+            }
