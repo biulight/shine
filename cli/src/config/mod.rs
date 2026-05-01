@@ -54,8 +54,7 @@ pub(crate) struct Config {
 
 impl Config {
     pub(crate) async fn load_or_init() -> Result<Self> {
-        let home_dir =
-            UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf());
+        let home_dir = effective_home_dir();
         let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
 
         // Pre-read config.toml (from the expected shine_dir) to extract an optional
@@ -249,8 +248,7 @@ pub(crate) fn print_presets_note(config: &Config) {
 
 impl Default for Config {
     fn default() -> Self {
-        let home_dir =
-            UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf());
+        let home_dir = effective_home_dir();
         let shine_dir = home_dir.join(".shine");
 
         Self {
@@ -268,17 +266,56 @@ impl Default for Config {
     }
 }
 
-fn default_config_dir() -> Result<PathBuf> {
-    if let Ok(home) = std::env::var("HOME")
-        && !home.is_empty()
-    {
-        return Ok(PathBuf::from(home).join(".shine"));
+/// Return the home directory of the original (pre-sudo) user when the process
+/// is running under `sudo`, or `None` if not applicable.
+///
+/// `sudo` sets `SUDO_USER` to the invoking user's login name and resets `HOME`
+/// to root's home, causing the config to be read from the wrong directory.
+/// We resolve the correct home by looking up the user in the passwd database.
+#[cfg(unix)]
+fn sudo_user_home() -> Option<PathBuf> {
+    let sudo_user = std::env::var("SUDO_USER").ok()?;
+    let sudo_user = sudo_user.trim();
+    if sudo_user.is_empty() || sudo_user == "root" {
+        return None;
     }
+    // /etc/passwd is authoritative for local accounts on both Linux and macOS.
+    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
+    for line in passwd.lines() {
+        let mut fields = line.splitn(7, ':');
+        let username = fields.next()?;
+        if username != sudo_user {
+            continue;
+        }
+        // passwd field order: name:password:uid:gid:gecos:home:shell
+        let home = fields.nth(4)?; // skip password, uid, gid, gecos (index 1-4)
+        if !home.is_empty() {
+            return Some(PathBuf::from(home));
+        }
+    }
+    None
+}
 
-    let home = UserDirs::new()
-        .map(|u| u.home_dir().to_path_buf())
-        .context("Could not find user home directory")?;
-    Ok(home.join(".shine"))
+#[cfg(not(unix))]
+fn sudo_user_home() -> Option<PathBuf> {
+    None
+}
+
+fn effective_home_dir() -> PathBuf {
+    if let Some(home) = sudo_user_home() {
+        return home;
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let home = home.trim().to_string();
+        if !home.is_empty() {
+            return PathBuf::from(home);
+        }
+    }
+    UserDirs::new().map_or_else(|| PathBuf::from("."), |u| u.home_dir().to_path_buf())
+}
+
+fn default_config_dir() -> Result<PathBuf> {
+    Ok(effective_home_dir().join(".shine"))
 }
 
 fn default_config_and_presets_dir() -> Result<(PathBuf, PathBuf)> {
