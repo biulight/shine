@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 mod apps;
@@ -14,7 +14,7 @@ mod shells;
 mod update_check;
 
 use crate::config::Config;
-use commands::{AppCommands, CheckCommands, PresetsCommands, ShellCommands};
+use commands::{AppCommands, CheckCommands, PresetsCommands, SelfCommands, ShellCommands};
 use update_check::UpdateStatus;
 
 /// `Shine` - Quick config for sys
@@ -29,7 +29,7 @@ struct Cli {
     command: Commands,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Subcommand, Debug)]
 enum Commands {
     /// Initialize quick shells
     Shell {
@@ -62,6 +62,12 @@ enum Commands {
     Update,
     /// Download and install the latest shine release for this platform
     Upgrade,
+    /// Manage the shine binary itself
+    #[command(name = "self")]
+    Self_ {
+        #[command(subcommand)]
+        command: SelfCommands,
+    },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -95,7 +101,7 @@ async fn main() -> Result<()> {
     // or `shine upgrade`, which do their own forced fetch below.
     if !matches!(
         cli.command,
-        Commands::Update | Commands::Upgrade | Commands::Presets { .. }
+        Commands::Update | Commands::Upgrade | Commands::Presets { .. } | Commands::Self_ { .. }
     ) {
         match update_check::check_for_update(&config).await {
             Ok(UpdateStatus::UpToDate) => {}
@@ -159,6 +165,9 @@ async fn main() -> Result<()> {
         },
         Commands::List => Box::pin(list::handle_list(&config)).await,
         Commands::Check { command } => Box::pin(check::handle_check(&config, command)).await,
+        Commands::Self_ { command } => match command {
+            SelfCommands::Install { dest } => handle_self_install(dest).await,
+        },
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
             ShellCommands::Install { category, force } => {
@@ -380,6 +389,42 @@ async fn handle_presets_unlink(config: &Config) -> Result<()> {
     println!(
         "{}",
         colors::dim("Built-in embedded presets will be used on the next run.")
+    );
+
+    Ok(())
+}
+
+async fn handle_self_install(dest: std::path::PathBuf) -> Result<()> {
+    use anyhow::Context as _;
+
+    let src = std::env::current_exe().context("failed to resolve current executable path")?;
+
+    if dest.exists() {
+        let canonical_src = src.canonicalize().unwrap_or_else(|_| src.clone());
+        let canonical_dest = dest.canonicalize().unwrap_or_else(|_| dest.clone());
+        if canonical_src == canonical_dest {
+            println!(
+                "{}",
+                colors::dim(&format!("already installed at {}", dest.display()))
+            );
+            return Ok(());
+        }
+    }
+
+    std::fs::copy(&src, &dest).with_context(|| {
+        format!(
+            "failed to copy to {} — try: sudo shine self install",
+            dest.display()
+        )
+    })?;
+
+    println!(
+        "{}",
+        colors::green(&format!("installed to {}", dest.display()))
+    );
+    println!(
+        "{}",
+        colors::dim("You can now run `sudo shine` without specifying the full path.")
     );
 
     Ok(())

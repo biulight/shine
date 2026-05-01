@@ -5,6 +5,18 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.11.3] — 2026-05-01
+
+### Features
+
+- **`shine self install [--dest <PATH>]`** — copies the current binary to `/usr/local/bin/shine` (or a custom path) so `sudo shine` resolves correctly without specifying the full path
+
+### Fixes
+
+- **`shine check` / `shine list` / `shine presets`** — commands were silently unregistered in the debug binary due to the `Commands` enum deriving `Parser` instead of `Subcommand`; corrected to `#[derive(Subcommand)]`
+
+---
+
 ## [0.11.2] — 2026-05-01
 
 ### Maintenance
