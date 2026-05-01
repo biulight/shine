@@ -5,6 +5,14 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.11.4] — 2026-05-01
+
+### Fixes
+
+- **`shine self install`** — permission-denied error now shows the full binary path in the hint (e.g. `sudo /home/felix/.local/bin/shine self install`) instead of the bare `shine` name that sudo cannot resolve
+
+---
+
 ## [0.11.3] — 2026-05-01
 
 ### Features
