@@ -30,6 +30,14 @@ Repository planning is managed in GitHub with a lightweight issue-based flow:
 
 The full workflow lives in [`docs/PLAN.md`](docs/PLAN.md).
 
+## Release Branch Workflow
+
+- `release` is the primary integration and release branch.
+- Regular pushes and feature PRs should target `release`.
+- Version tags (`v*`) should be created from `release`; CI will build artifacts and create the GitHub Release.
+- After CI creates the GitHub Release, it automatically opens a PR from `release` to `main`.
+- `main` is reserved for that post-release sync PR instead of day-to-day development.
+
 ## Installation
 
 ```bash
