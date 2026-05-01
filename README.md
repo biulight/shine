@@ -313,7 +313,8 @@ All `install`, `check`, and `list` commands will automatically read from the ext
 
 - Newer `major` or `minor` release: prints an upgrade reminder and continues
 - Newer `patch` release: requires you to upgrade before continuing
-- Network/API/cache failures: silently skipped, command execution continues
+- Network/API failures: silently skipped, command execution continues
+- Cache writes are best-effort: if `~/.shine/update-check.json` cannot be written, the update result is still used for the current command
 
 Manual commands:
 
@@ -321,6 +322,8 @@ Manual commands:
 shine update   # force-check the latest release, do not install
 shine upgrade  # download and install the latest release for this platform
 ```
+
+If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
 ### install.sh options
 

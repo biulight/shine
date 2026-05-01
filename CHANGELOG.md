@@ -5,6 +5,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.13.1] — 2026-05-02
+
+### Fixes
+
+- **`shine update` / `shine upgrade`** — update checks no longer fail just because `~/.shine/update-check.json` cannot be written. Shine now recreates the cache directory when needed, and treats cache persistence as best-effort after a successful GitHub release check.
+
 ## [0.13.0] — 2026-05-02
 
 ### Features
