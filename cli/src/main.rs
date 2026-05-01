@@ -166,7 +166,7 @@ async fn main() -> Result<()> {
         Commands::List => Box::pin(list::handle_list(&config)).await,
         Commands::Check { command } => Box::pin(check::handle_check(&config, command)).await,
         Commands::Self_ { command } => match command {
-            SelfCommands::Install { dest } => handle_self_install(dest).await,
+            SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
         },
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
@@ -244,6 +244,7 @@ async fn handle_upgrade(config: &Config) -> Result<()> {
                 "{}",
                 colors::green(&format!("Upgraded shine from {previous} to {latest}."))
             );
+            sync_self_install_dest(config).await;
         }
         Err(e) => {
             bail!("Upgrade failed: {e}");
@@ -251,6 +252,36 @@ async fn handle_upgrade(config: &Config) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// After a successful upgrade, try to sync the new binary to the self-install destination.
+/// If the copy fails due to permissions, print a targeted hint instead of failing.
+async fn sync_self_install_dest(config: &Config) {
+    let dest = match &config.self_install_dest {
+        Some(d) => d,
+        None => return,
+    };
+    let Ok(src) = std::env::current_exe() else {
+        return;
+    };
+    match std::fs::copy(&src, dest) {
+        Ok(_) => println!(
+            "{}",
+            colors::green(&format!("Synced system copy at {}", dest.display()))
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => println!(
+            "{}",
+            colors::yellow(&format!(
+                "System copy at {} needs manual sync — run: sudo {} self install",
+                dest.display(),
+                src.display()
+            ))
+        ),
+        Err(e) => eprintln!(
+            "Warning: failed to sync system copy at {}: {e}",
+            dest.display()
+        ),
+    }
 }
 
 async fn handle_presets_export(config: &Config, dir: Option<PathBuf>, force: bool) -> Result<()> {
@@ -393,7 +424,7 @@ async fn handle_presets_unlink(config: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn handle_self_install(dest: std::path::PathBuf) -> Result<()> {
+async fn handle_self_install(mut config: Config, dest: std::path::PathBuf) -> Result<()> {
     use anyhow::Context as _;
 
     let src = std::env::current_exe().context("failed to resolve current executable path")?;
@@ -417,6 +448,13 @@ async fn handle_self_install(dest: std::path::PathBuf) -> Result<()> {
             src.display()
         )
     })?;
+
+    // Remember where we installed so `shine upgrade` can sync this copy automatically.
+    config.self_install_dest = Some(dest.clone());
+    config
+        .save()
+        .await
+        .context("failed to save self_install_dest to config")?;
 
     println!(
         "{}",

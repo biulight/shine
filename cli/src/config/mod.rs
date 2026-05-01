@@ -50,6 +50,14 @@ pub(crate) struct Config {
     /// embedded assets, and list commands enumerate the on-disk folder.
     #[serde(skip)]
     pub is_external_presets: bool,
+    /// Path where `shine self install` last copied the binary.
+    /// When set, `shine upgrade` will try to sync the new binary there automatically.
+    #[serde(
+        rename = "self_install_dest",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub self_install_dest: Option<PathBuf>,
 }
 
 impl Config {
@@ -146,6 +154,7 @@ impl Config {
             presets_dir_override: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
+            self_install_dest: None,
         }
     }
 
@@ -262,6 +271,7 @@ impl Default for Config {
             presets_dir_override: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
+            self_install_dest: None,
         }
     }
 }
@@ -446,6 +456,7 @@ mod tests {
             presets_dir_override: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
+            self_install_dest: None,
         }
     }
 
@@ -560,6 +571,7 @@ mod tests {
             presets_dir_override: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
+            self_install_dest: None,
         };
         assert!(config.save().await.is_err());
     }
