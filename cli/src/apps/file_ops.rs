@@ -151,6 +151,7 @@ mod tests {
             destination: dest.to_path_buf(),
             backup: None,
             content_hash: hash,
+            uses_env: false,
         }
     }
 
@@ -279,6 +280,7 @@ mod tests {
             destination: dest.clone(),
             backup: Some(backup.clone()),
             content_hash: hash_content(content),
+            uses_env: false,
         };
         let outcome = uninstall_entry(&entry, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::RestoredBackup { .. }));

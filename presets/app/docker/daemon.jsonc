@@ -1,8 +1,8 @@
 {
   // proxy settings
   "proxies": {
-    "http-proxy": "http://127.0.0.1:6152",
-    "https-proxy": "http://127.0.0.1:6152",
+    "http-proxy": "http://127.0.0.1:@@HTTP_PROXY_PORT@@",
+    "https-proxy": "http://127.0.0.1:@@HTTP_PROXY_PORT@@",
     "no-proxy": "*.test.example.com,.example.org,127.0.0.0/8"
   }
 //  "registry-mirrors": [

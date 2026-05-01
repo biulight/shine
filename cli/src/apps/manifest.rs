@@ -19,6 +19,10 @@ pub(crate) struct AppEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup: Option<PathBuf>,
     pub content_hash: u64,
+    /// True when the `template` transform was applied during install.
+    /// Used by `shine env upgrade` to skip files that never used env vars.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub uses_env: bool,
 }
 
 pub(crate) fn hash_content(bytes: &[u8]) -> u64 {
@@ -103,6 +107,7 @@ mod tests {
             destination: PathBuf::from(dest),
             backup: None,
             content_hash: 42,
+            uses_env: false,
         }
     }
 
@@ -151,12 +156,14 @@ mod tests {
             destination: PathBuf::from("/tmp/foo.toml"),
             backup: None,
             content_hash: 1,
+            uses_env: false,
         });
         manifest.upsert(AppEntry {
             source: "app/x/foo.toml".to_string(),
             destination: PathBuf::from("/tmp/foo.toml"),
             backup: None,
             content_hash: 2,
+            uses_env: false,
         });
         assert_eq!(manifest.entries.len(), 1);
         assert_eq!(manifest.entries[0].content_hash, 2);

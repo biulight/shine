@@ -5,6 +5,28 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.12.0] — 2026-05-01
+
+### Features
+
+- **`~/.shine/env.toml`** — new user-editable environment config file, seeded on first run with `HTTP_PROXY_PORT = "6152"` and `SOCKS5_PROXY_PORT = "6153"`. Values are substituted into preset files that use the new `template` transform (`@@VAR_NAME@@` placeholder syntax).
+
+- **`shine env` subcommand** — manage env variables:
+  - `shine env show` — list all variables and their values
+  - `shine env set KEY VALUE` — set a variable, preserving existing comments
+  - `shine env get KEY` — print a single variable value
+  - `shine env path` — print the path of env.toml
+
+- **`shine env upgrade`** — re-render all installed preset files that used the `template` transform with the current env values. Detects user-modified destinations (skips them with a warning) and supports `--dry-run`.
+
+- **`template` transform** — new transform step for app presets (`transforms = ["template", "jsonc-to-json"]`). Replaces `@@VAR_NAME@@` placeholders from `env.toml`. Errors on undefined variables (all missing names reported at once).
+
+- **Shell preset template support** — shell scripts may opt into substitution by adding `# shine-template: true` after the shebang. The `proxy/set_proxy.sh` preset now uses `@@HTTP_PROXY_PORT@@` and `@@SOCKS5_PROXY_PORT@@` so ports are driven by `env.toml`.
+
+- **Docker preset updated** — `daemon.jsonc` now uses `@@HTTP_PROXY_PORT@@`; the `shine.toml` chains `["template", "jsonc-to-json"]` transforms so the installed `daemon.json` reflects the configured port automatically.
+
+---
+
 ## [0.11.5] — 2026-05-01
 
 ### Fixes

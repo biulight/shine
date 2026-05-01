@@ -5,9 +5,11 @@ use crate::apps::{
 use crate::colors;
 use crate::commands::CheckCommands;
 use crate::config::Config;
+use crate::env::EnvConfig;
 use crate::presets;
 use crate::shells::{SENTINEL_START, get_shell_config_path};
 use anyhow::Result;
+use std::collections::BTreeMap;
 
 pub(crate) async fn handle_check(config: &Config, command: Option<CheckCommands>) -> Result<()> {
     crate::config::print_presets_note(config);
@@ -115,6 +117,9 @@ pub(crate) async fn build_app_rows(
     categories: &[AppCategory],
 ) -> Result<Vec<AppRow>> {
     let manifest = AppManifest::load(config.shine_dir()).await?;
+    let env = EnvConfig::load_or_init(config.shine_dir()).await.ok();
+    let empty_map = BTreeMap::new();
+    let env_map = env.as_ref().map(|e| e.as_map()).unwrap_or(&empty_map);
     let mut rows: Vec<AppRow> = Vec::new();
 
     for cat in categories {
@@ -138,8 +143,10 @@ pub(crate) async fn build_app_rows(
                                             if dest_hash != manifest_hash {
                                                 FileStatus::UserModified
                                             } else {
-                                                let source_hash =
-                                                    source_hash_for_file(config, cat, file).await;
+                                                let source_hash = source_hash_for_file(
+                                                    config, cat, file, env_map,
+                                                )
+                                                .await;
                                                 match source_hash {
                                                     Some(src) if src != manifest_hash => {
                                                         FileStatus::UpdateAvail
@@ -212,7 +219,7 @@ pub(crate) async fn build_app_rows(
                                         FileStatus::UserModified
                                     } else {
                                         let source_hash =
-                                            source_hash_for_file(config, cat, file).await;
+                                            source_hash_for_file(config, cat, file, env_map).await;
                                         match source_hash {
                                             Some(src) if src != manifest_hash => {
                                                 FileStatus::UpdateAvail

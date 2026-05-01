@@ -76,6 +76,30 @@ pub(crate) fn parse_dest_annotation(content: &[u8]) -> Option<String> {
     extract_annotation_from_line(candidate)
 }
 
+/// Return `true` if the script opts into env-variable substitution.
+///
+/// Looks for `# shine-template: true` in the shebang or leading comment block.
+pub(crate) fn parse_template_annotation(content: &[u8]) -> bool {
+    let text = match std::str::from_utf8(content) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    for line in text.lines() {
+        if line.starts_with("#!") {
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if trimmed == "# shine-template: true" {
+            return true;
+        }
+        // Stop scanning once we leave the leading comment block.
+        if !trimmed.starts_with('#') && !trimmed.is_empty() {
+            break;
+        }
+    }
+    false
+}
+
 /// Parse the leading comment block from a shell script, skipping the shebang line
 /// and any `shine-dest:` annotation line.
 ///
@@ -90,6 +114,9 @@ pub(crate) fn parse_script_description(content: &[u8]) -> Vec<String> {
             continue;
         }
         if extract_annotation_from_line(line).is_some() {
+            continue;
+        }
+        if line.trim_start() == "# shine-template: true" {
             continue;
         }
         if let Some(rest) = line.strip_prefix("# ") {

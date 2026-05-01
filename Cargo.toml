@@ -4,7 +4,7 @@ default-members = ["cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.11.5"
+version = "0.12.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Felix Jiang <biulight007@gmail.com>"]

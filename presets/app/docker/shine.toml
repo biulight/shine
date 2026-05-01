@@ -5,4 +5,4 @@ dest = "/etc/docker"
 source      = "daemon.jsonc"
 target      = "daemon.json"
 description = "Docker daemon options (mirrors, runtime, etc.)"
-transform   = "jsonc-to-json"
+transforms  = ["template", "jsonc-to-json"]

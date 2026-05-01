@@ -1,12 +1,13 @@
 #!/bin/bash
+# shine-template: true
 # 设置代理环境变量（http_proxy、https_proxy、all_proxy）。
 # 同时为 Git、NPM、Yarn、pnpm 配置工具代理。
-# HTTP 代理端口: 6152，SOCKS5 代理端口: 6153。
+# HTTP 代理端口由 ~/.shine/env.toml 中的 HTTP_PROXY_PORT 决定。
 # 用法: source set_proxy [auto|sock5|http]
 # 默认 auto 模式优先使用 SOCKS5，不可用时自动回退至 HTTP。
 
-HTTP_PROXY_PORT=6152
-SOCKS5_PROXY_PORT=6153
+HTTP_PROXY_PORT=@@HTTP_PROXY_PORT@@
+SOCKS5_PROXY_PORT=@@SOCKS5_PROXY_PORT@@
 HTTP_PROXY="http://127.0.0.1:${HTTP_PROXY_PORT}"
 SOCKS5_PROXY="socks5://127.0.0.1:${SOCKS5_PROXY_PORT}"
 
@@ -125,4 +126,4 @@ case "$MODE" in
 esac
 
 echo ""
-echo "要取消代理设置，请运行: source unset_proxy.sh"
+echo "要取消代理设置，请运行: source uset_proxy.sh"

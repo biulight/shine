@@ -4,15 +4,17 @@ mod manifest;
 mod metadata;
 mod transforms;
 
-pub(crate) use manifest::{AppManifest, hash_content};
+pub(crate) use manifest::{AppEntry, AppManifest, hash_content};
 pub(crate) use metadata::{AppCategory, load_embedded_categories, load_installed_categories};
+pub(crate) use transforms::apply as apply_transforms;
 
 use crate::colors;
 use crate::config::Config;
+use crate::env::EnvConfig;
 use crate::presets;
 use anyhow::{Context, Result};
 use file_ops::{InstallOutcome, UninstallOutcome};
-use manifest::AppEntry;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Hash the effective install content for `file` — applies transforms if declared.
@@ -22,6 +24,7 @@ pub(crate) async fn source_hash_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
     file: &metadata::AppFile,
+    env: &BTreeMap<String, String>,
 ) -> Option<u64> {
     let raw = if config.is_external_presets {
         let path = config
@@ -38,7 +41,7 @@ pub(crate) async fn source_hash_for_file(
     let effective = if file.transforms.is_empty() {
         raw
     } else {
-        transforms::apply(&file.transforms, &raw).ok()?
+        transforms::apply(&file.transforms, &raw, env).ok()?
     };
     Some(hash_content(&effective))
 }
@@ -219,6 +222,10 @@ pub(crate) async fn handle_install(
         None => "app".to_string(),
     };
 
+    // Load env config once — used by the `template` transform.
+    let env = EnvConfig::load_or_init(config.shine_dir()).await?;
+    let env_map = env.as_map().clone();
+
     // When the user has configured a custom presets directory, the app preset
     // files are already there — skip the embedded-asset extraction step.
     if !config.is_external_presets {
@@ -257,14 +264,16 @@ pub(crate) async fn handle_install(
 
             let is_managed = manifest.find_by_dest(&destination).is_some();
 
-            // Apply transforms (e.g. jsonc-to-json) before writing to destination.
+            let file_uses_env = file.transforms.contains(&"template".to_string());
+
+            // Apply transforms (e.g. jsonc-to-json, template) before writing to destination.
             let outcome = if !file.transforms.is_empty() {
                 match tokio::fs::read(&source_path).await {
                     Err(e) => {
                         eprintln!("  {} {display_name}: {e:#}", colors::symbol("✗"));
                         continue;
                     }
-                    Ok(raw) => match transforms::apply(&file.transforms, &raw) {
+                    Ok(raw) => match transforms::apply(&file.transforms, &raw, &env_map) {
                         Err(e) => {
                             eprintln!(
                                 "  {} {display_name}: transform failed: {e:#}",
@@ -312,6 +321,7 @@ pub(crate) async fn handle_install(
                         destination,
                         backup: None,
                         content_hash: hash,
+                        uses_env: file_uses_env,
                     });
                     installed += 1;
                 }
@@ -339,6 +349,7 @@ pub(crate) async fn handle_install(
                         destination,
                         backup: Some(backup),
                         content_hash: hash,
+                        uses_env: file_uses_env,
                     });
                     installed += 1;
                     backed_up += 1;

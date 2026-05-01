@@ -1,5 +1,6 @@
 use crate::colors;
 use crate::config::Config;
+use crate::env::EnvConfig;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -64,6 +65,9 @@ pub(crate) async fn handle_install(
             .cloned()
             .collect()
     };
+
+    // Apply env-variable substitution to scripts that opt in via `# shine-template: true`.
+    apply_template_to_scripts(config, &sources).await;
 
     let link_report = crate::bin_links::link_executables(config.bin_dir(), &sources, force).await?;
 
@@ -275,6 +279,67 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// For each script that declares `# shine-template: true`, read its current on-disk
+/// content, substitute env variables (from `~/.shine/env.toml`), and write the result
+/// back in place, preserving the file's permissions.
+async fn apply_template_to_scripts(config: &Config, sources: &[PathBuf]) {
+    let env = match EnvConfig::load_or_init(config.shine_dir()).await {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Warning: could not load env.toml: {e:#}");
+            return;
+        }
+    };
+    let env_map = env.as_map().clone();
+
+    for path in sources {
+        let content = match tokio::fs::read(path).await {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        if !crate::presets::parse_template_annotation(&content) {
+            continue;
+        }
+
+        let rendered =
+            match crate::apps::apply_transforms(&["template".to_string()], &content, &env_map) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!(
+                        "Warning: template substitution failed for {}: {e:#}",
+                        path.display()
+                    );
+                    continue;
+                }
+            };
+
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::metadata(path)
+                .await
+                .map(|m| m.permissions().mode())
+                .unwrap_or(0o755)
+        };
+
+        if let Err(e) = tokio::fs::write(path, &rendered).await {
+            eprintln!(
+                "Warning: failed to write templated script {}: {e:#}",
+                path.display()
+            );
+            continue;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(mode);
+            let _ = tokio::fs::set_permissions(path, perms).await;
+        }
+    }
 }
 
 fn script_stem(filename: &str) -> &str {

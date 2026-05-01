@@ -418,7 +418,7 @@ mod tests {
         let file = &docker.files[0];
         assert_eq!(file.source_rel, std::path::Path::new("daemon.jsonc"));
         assert_eq!(file.target_rel, std::path::Path::new("daemon.json"));
-        assert_eq!(file.transforms, vec!["jsonc-to-json"]);
+        assert_eq!(file.transforms, vec!["template", "jsonc-to-json"]);
     }
 
     #[test]

@@ -8,13 +8,16 @@ mod check;
 mod colors;
 mod commands;
 mod config;
+mod env;
 mod list;
 mod presets;
 mod shells;
 mod update_check;
 
 use crate::config::Config;
-use commands::{AppCommands, CheckCommands, PresetsCommands, SelfCommands, ShellCommands};
+use commands::{
+    AppCommands, CheckCommands, EnvCommands, PresetsCommands, SelfCommands, ShellCommands,
+};
 use update_check::UpdateStatus;
 
 /// `Shine` - Quick config for sys
@@ -67,6 +70,11 @@ enum Commands {
     Self_ {
         #[command(subcommand)]
         command: SelfCommands,
+    },
+    /// Manage environment variables used during preset installation
+    Env {
+        #[command(subcommand)]
+        command: EnvCommands,
     },
 }
 
@@ -187,7 +195,59 @@ async fn main() -> Result<()> {
                 .await
             }
         },
+        Commands::Env { command } => match command {
+            EnvCommands::Path => handle_env_path(&config).await,
+            EnvCommands::Show => handle_env_show(&config).await,
+            EnvCommands::Set { key, value } => handle_env_set(&config, key, value).await,
+            EnvCommands::Get { key } => handle_env_get(&config, key).await,
+            EnvCommands::Upgrade { dry_run } => {
+                Box::pin(env::upgrade::handle_upgrade(&config, dry_run)).await
+            }
+        },
     }
+}
+
+async fn handle_env_path(config: &Config) -> Result<()> {
+    let path = config.shine_dir().join("env.toml");
+    println!("{}", path.display());
+    Ok(())
+}
+
+async fn handle_env_show(config: &Config) -> Result<()> {
+    let env = env::EnvConfig::load_or_init(config.shine_dir()).await?;
+    let path = config.shine_dir().join("env.toml");
+    println!("{}", colors::dim(&format!("# {}", path.display())));
+    for (k, v) in env.iter() {
+        println!("{k} = \"{v}\"");
+    }
+    Ok(())
+}
+
+async fn handle_env_set(config: &Config, key: String, value: String) -> Result<()> {
+    let mut env = env::EnvConfig::load_or_init(config.shine_dir()).await?;
+    env.set(&key, &value);
+    env.save(config.shine_dir()).await?;
+    println!("{}", colors::green(&format!("set {key} = \"{value}\"")));
+    println!(
+        "{}",
+        colors::dim("Run `shine env upgrade` to apply to already-installed presets.")
+    );
+    Ok(())
+}
+
+async fn handle_env_get(config: &Config, key: String) -> Result<()> {
+    let env = env::EnvConfig::load_or_init(config.shine_dir()).await?;
+    match env.get(&key) {
+        Some(v) => println!("{v}"),
+        None => {
+            eprintln!(
+                "{}",
+                colors::yellow(&format!("{key} is not set in env.toml"))
+            );
+            std::process::exit(1);
+        }
+    }
+    Ok(())
 }
 
 async fn handle_update(config: &Config) -> Result<()> {
