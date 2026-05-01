@@ -5,6 +5,18 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.13.0] — 2026-05-02
+
+### Features
+
+- **Shell preset rename support** — shell categories may now define `presets/shell/<category>/shine.toml` with `[[files]]` entries using `source` and optional `target`, so installed command names no longer have to match script filenames
+
+- **Proxy commands renamed** — the bundled proxy preset now installs `setproxy` and `usetproxy` as the public shell commands while keeping the underlying script files as `set_proxy.sh` and `uset_proxy.sh`
+
+### Docs
+
+- Updated README examples and directory layout to show the new proxy command names and document shell preset `shine.toml` rename metadata
+
 ## [0.12.0] — 2026-05-01
 
 ### Features

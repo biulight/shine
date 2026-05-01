@@ -50,9 +50,9 @@ shine shell list
 Shell Preset Categories
 
   proxy  2 scripts
-    set_proxy     Set HTTP/HTTPS proxy environment variables.
+    setproxy      Set HTTP/HTTPS proxy environment variables.
                   ...
-    uset_proxy    Unset all proxy environment variables.
+    usetproxy     Unset all proxy environment variables.
                   ...
 
   tools  1 script
@@ -218,8 +218,8 @@ Shows only items that are currently installed or configured — a quick "what's 
 
 ```
 Shell Presets
-  ✓  proxy/set_proxy.sh   installed
-  ✓  proxy/uset_proxy.sh  installed
+  ✓  proxy/setproxy       installed
+  ✓  proxy/usetproxy      installed
 
 App Configs
   ✓  git      →  ~/.gitconfig                    up-to-date
@@ -242,9 +242,9 @@ Shows the status of every managed preset and config file in one view:
 
 ```
 Shell Presets
-  ✓  proxy/set_proxy.sh   installed
-  ✓  proxy/uset_proxy.sh  installed
-  ✗  tools/test_tools.sh  not installed
+  ✓  proxy/setproxy       installed
+  ✓  proxy/usetproxy      installed
+  ✗  tools/test_tools     not installed
   ✓  PATH configured      ~/.zshrc
 
 App Configs
@@ -315,16 +315,16 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ## Bundled Presets
 
-### shell/proxy — `set_proxy` / `uset_proxy`
+### shell/proxy — `setproxy` / `usetproxy`
 
 One-command proxy management for the entire development environment.
 
 **Set proxy:**
 
 ```bash
-source set_proxy           # auto-detect SOCKS5 or fall back to HTTP
-source set_proxy sock5     # force SOCKS5
-source set_proxy http      # force HTTP
+source setproxy           # auto-detect SOCKS5 or fall back to HTTP
+source setproxy sock5     # force SOCKS5
+source setproxy http      # force HTTP
 ```
 
 Configures simultaneously:
@@ -332,12 +332,12 @@ Configures simultaneously:
 - Git global config (`http.proxy`, `https.proxy`)
 - npm / yarn / pnpm proxy settings
 
-Default ports: HTTP `6152`, SOCKS5 `6153` (edit `~/.shine/presets/shell/proxy/set_proxy.sh` to change).
+Default ports: HTTP `6152`, SOCKS5 `6153` (edit `~/.shine/env.toml` to change).
 
 **Unset proxy:**
 
 ```bash
-source uset_proxy
+source usetproxy
 ```
 
 Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy config.
@@ -345,6 +345,24 @@ Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy confi
 ### shell/tools — `test_tools`
 
 Verifies that shine-installed shell tools are callable from the current environment.
+
+### Shell preset metadata
+
+Shell preset categories may optionally define `presets/shell/<category>/shine.toml` to control installed command names:
+
+```toml
+description = "Proxy helper commands"
+
+[[files]]
+source = "set_proxy.sh"
+target = "setproxy"
+
+[[files]]
+source = "uset_proxy.sh"
+target = "usetproxy"
+```
+
+`source` points at the script file stored under the category directory. `target` controls the command name linked into `~/.shine/bin/`. When `target` is omitted, shine falls back to the script stem.
 
 ## Configuration
 
@@ -378,8 +396,8 @@ app_default_dest_root = "~/.config"
 ├── app-manifest.toml
 ├── config.toml
 ├── bin/
-│   ├── set_proxy        # symlink → presets/shell/proxy/set_proxy.sh
-│   ├── uset_proxy       # symlink → presets/shell/proxy/uset_proxy.sh
+│   ├── setproxy         # symlink → presets/shell/proxy/set_proxy.sh
+│   ├── usetproxy        # symlink → presets/shell/proxy/uset_proxy.sh
 │   └── test_tools       # symlink → presets/shell/tools/test_tools.sh
 └── presets/
     ├── app/
@@ -391,6 +409,7 @@ app_default_dest_root = "~/.config"
     │       └── starship.toml
     └── shell/
         ├── proxy/
+        │   ├── shine.toml
         │   ├── set_proxy.sh
         │   └── uset_proxy.sh
         └── tools/
