@@ -131,6 +131,12 @@ impl Config {
             .expect("config_path is always under the shine config directory")
     }
 
+    /// Directory where template-rendered shell scripts are written.
+    /// Always inside shine_dir so it is never confused with user-owned presets.
+    pub(crate) fn rendered_dir(&self) -> PathBuf {
+        self.shine_dir().join("rendered")
+    }
+
     pub(crate) fn app_default_dest_root(&self) -> PathBuf {
         match &self.app_default_dest_root_override {
             Some(p) => {
