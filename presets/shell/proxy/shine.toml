@@ -3,7 +3,9 @@ description = "Proxy helper commands for the current shell session."
 [[files]]
 source = "set_proxy.sh"
 target = "setproxy"
+needs_source = true
 
 [[files]]
 source = "uset_proxy.sh"
 target = "usetproxy"
+needs_source = true

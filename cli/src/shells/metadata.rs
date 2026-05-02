@@ -21,6 +21,7 @@ pub(crate) struct ShellFile {
     pub source_rel: PathBuf,
     pub command_name: String,
     pub description: Vec<String>,
+    pub needs_source: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,6 +34,7 @@ struct CategoryToml {
 struct FileToml {
     source: String,
     target: Option<String>,
+    needs_source: Option<bool>,
 }
 
 pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<ShellCategory>> {
@@ -65,6 +67,7 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
             Some(files) => files
                 .into_iter()
                 .map(|file| {
+                    let needs_source = file.needs_source.unwrap_or(false);
                     let source_rel = normalize_shell_source(&file.source)
                         .with_context(|| format!("invalid source in shell/{name}/shine.toml"))?;
                     let command_name = resolve_command_name(&source_rel, file.target.as_deref())
@@ -77,6 +80,7 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
                         source_rel,
                         command_name,
                         description: presets::parse_script_description(&bytes),
+                        needs_source,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -90,6 +94,7 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
                         source_rel,
                         command_name,
                         description: presets::parse_script_description(&bytes),
+                        needs_source: false,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -114,6 +119,7 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
                 Ok(ShellFile {
                     command_name: default_command_name(&source_rel)?,
                     description: presets::parse_script_description(&bytes),
+                    needs_source: false,
                     source_rel,
                 })
             })
@@ -135,6 +141,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
             Some(files) => files
                 .into_iter()
                 .map(|file| {
+                    let needs_source = file.needs_source.unwrap_or(false);
                     let source_rel = normalize_shell_source(&file.source).with_context(|| {
                         format!("invalid source in {}", metadata_path.display())
                     })?;
@@ -142,7 +149,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
                         .with_context(|| {
                             format!("invalid target in {}", metadata_path.display())
                         })?;
-                    Ok((source_rel, command_name))
+                    Ok((source_rel, command_name, needs_source))
                 })
                 .collect::<Result<Vec<_>>>()?,
             None => collect_fs_scripts(&category_root)
@@ -150,13 +157,13 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
                 .into_iter()
                 .map(|source_rel| {
                     let command_name = default_command_name(&source_rel)?;
-                    Ok((source_rel, command_name))
+                    Ok((source_rel, command_name, false))
                 })
                 .collect::<Result<Vec<_>>>()?,
         };
 
         let mut shell_files = Vec::new();
-        for (source_rel, command_name) in files {
+        for (source_rel, command_name, needs_source) in files {
             let source_path = category_root.join(&source_rel);
             if !source_path.exists() {
                 bail!(
@@ -171,6 +178,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
                 source_rel,
                 command_name,
                 description: presets::parse_script_description(&bytes),
+                needs_source,
             });
         }
 
@@ -191,6 +199,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
         files.push(ShellFile {
             command_name: default_command_name(&source_rel)?,
             description: presets::parse_script_description(&bytes),
+            needs_source: false,
             source_rel,
         });
     }
