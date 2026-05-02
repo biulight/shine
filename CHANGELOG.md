@@ -5,6 +5,34 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.13.2] — 2026-05-03
+
+### Features
+
+- **`shine sys list` and `shine sys init`** — new `sys` subcommand group for system-level initialization. `shine sys list` enumerates available OS init presets and marks the current platform with a ▶ indicator. `shine sys init [--dry-run]` detects the running OS and executes the corresponding script from `presets/sys/<os>/init.sh`.
+
+- **Ubuntu init preset** — idempotent bootstrap script that installs Neovim (from GitHub Releases tarball to guarantee v0.10+ — Ubuntu 22.04 apt only ships 0.6.x), AstroNvim, and Atuin (via the official installer). macOS has a placeholder stub.
+
+- **Proxy host and no-proxy configurable via `env.toml`** — `PROXY_HOST` (default `127.0.0.1`) and `PROXY_NO_PROXY` (default `localhost,127.0.0.1,::1`) are now seeded into `env.toml` on first run and backfilled automatically into existing files on upgrade. Both `presets/app/docker/daemon.jsonc` and `presets/shell/proxy/set_proxy.sh` now use these variables, so changing the proxy host once in `env.toml` and running `shine env upgrade` updates all installed files.
+
+- **`shine env upgrade` processes shell scripts** — previously only app manifest entries were re-rendered; shell scripts that declare `# shine-template: true` are now also processed. Rendered outputs are written to `~/.shine/rendered/shell/` so user-owned templates in `presets/` are never modified.
+
+- **Rendered shell scripts isolated from presets** — shell scripts with template substitution are now rendered to `~/.shine/rendered/shell/<category>/` rather than being written back into the presets directory. This ensures external-preset users (after `shine presets export`) keep clean, editable templates. Existing bin symlinks that still point to the old presets location are migrated transparently during `shine env upgrade`.
+
+### Fixes
+
+- **`shine shell uninstall`** — now removes symlinks pointing to both the legacy presets location and the new rendered location, so no stale links are left after uninstall.
+
+- **CI** — `open-main-pr` workflow job now handles PR creation permission errors gracefully instead of failing the entire workflow.
+
+---
+
+## [0.13.1] — 2026-05-02
+
+### Fixes
+
+- **`shine update` / `shine upgrade`** — update checks no longer fail just because `~/.shine/update-check.json` cannot be written. Shine now recreates the cache directory when needed, and treats cache persistence as best-effort after a successful GitHub release check.
+
 ## [0.13.0] — 2026-05-02
 
 ### Features

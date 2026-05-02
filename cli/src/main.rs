@@ -12,11 +12,13 @@ mod env;
 mod list;
 mod presets;
 mod shells;
+mod sys;
 mod update_check;
 
 use crate::config::Config;
 use commands::{
     AppCommands, CheckCommands, EnvCommands, PresetsCommands, SelfCommands, ShellCommands,
+    SysCommands,
 };
 use update_check::UpdateStatus;
 
@@ -75,6 +77,11 @@ enum Commands {
     Env {
         #[command(subcommand)]
         command: EnvCommands,
+    },
+    /// Initialize or inspect system-level presets for the current OS
+    Sys {
+        #[command(subcommand)]
+        command: SysCommands,
     },
 }
 
@@ -203,6 +210,10 @@ async fn main() -> Result<()> {
             EnvCommands::Upgrade { dry_run } => {
                 Box::pin(env::upgrade::handle_upgrade(&config, dry_run)).await
             }
+        },
+        Commands::Sys { command } => match command {
+            SysCommands::List => Box::pin(sys::handle_list(&config)).await,
+            SysCommands::Init { dry_run } => Box::pin(sys::handle_init(&config, dry_run)).await,
         },
     }
 }

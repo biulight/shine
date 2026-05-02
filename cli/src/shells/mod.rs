@@ -58,32 +58,52 @@ pub(crate) async fn handle_install(
     }
 
     let categories = metadata::load_installed_categories(config, category).await?;
-    let sources: Vec<_> = categories
+    // Build (template_source, rendered_dest) pairs for all scripts.
+    // apply_template_to_scripts renders source → rendered_dir, never modifies presets_dir.
+    let script_pairs: Vec<(PathBuf, PathBuf)> = categories
         .iter()
         .flat_map(|cat| {
             cat.files.iter().map(|file| {
-                config
+                let source = config
                     .presets_dir()
                     .join("shell")
                     .join(&cat.name)
-                    .join(&file.source_rel)
+                    .join(&file.source_rel);
+                let rendered = config
+                    .rendered_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                (source, rendered)
             })
         })
         .collect();
 
     // Apply env-variable substitution to scripts that opt in via `# shine-template: true`.
-    apply_template_to_scripts(config, &sources).await;
+    // Output goes to rendered_dir; presets_dir templates are left untouched.
+    apply_template_to_scripts(config, &script_pairs).await;
 
+    // Symlinks point to the rendered file when one was produced, otherwise to the
+    // raw source in presets_dir (non-template scripts).
     let link_specs: Vec<_> = categories
         .iter()
         .flat_map(|cat| {
-            cat.files.iter().map(|file| crate::bin_links::LinkSpec {
-                source: config
+            cat.files.iter().map(|file| {
+                let source = config
                     .presets_dir()
                     .join("shell")
                     .join(&cat.name)
-                    .join(&file.source_rel),
-                link_name: OsString::from(&file.command_name),
+                    .join(&file.source_rel);
+                let rendered = config
+                    .rendered_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                let effective = if rendered.exists() { rendered } else { source };
+                crate::bin_links::LinkSpec {
+                    source: effective,
+                    link_name: OsString::from(&file.command_name),
+                }
             })
         })
         .collect();
@@ -140,17 +160,28 @@ pub(crate) async fn handle_uninstall(
     let sep = colors::dim(" · ");
 
     // When a category is given, scope removal to that category's subdirectory.
-    let managed_root = match category {
+    let managed_presets_root = match category {
         Some(cat) => config.presets_dir().join("shell").join(cat),
         None => config.presets_dir().to_path_buf(),
+    };
+    let managed_rendered_root = match category {
+        Some(cat) => config.rendered_dir().join("shell").join(cat),
+        None => config.rendered_dir().join("shell"),
     };
     let prefix = match category {
         Some(cat) => format!("shell/{cat}"),
         None => "shell".to_owned(),
     };
 
-    let unlink_report =
-        crate::bin_links::unlink_managed(config.bin_dir(), &managed_root, dry_run).await?;
+    // Remove symlinks pointing to presets_dir (old-style) or rendered_dir (new-style).
+    let unlink_presets =
+        crate::bin_links::unlink_managed(config.bin_dir(), &managed_presets_root, dry_run).await?;
+    let unlink_rendered =
+        crate::bin_links::unlink_managed(config.bin_dir(), &managed_rendered_root, dry_run).await?;
+    let unlink_report = crate::bin_links::UnlinkReport {
+        removed: [unlink_presets.removed, unlink_rendered.removed].concat(),
+        skipped: [unlink_presets.skipped, unlink_rendered.skipped].concat(),
+    };
     let mut link_parts: Vec<String> = Vec::new();
     if !unlink_report.removed.is_empty() {
         link_parts.push(colors::green(&format!(
@@ -217,6 +248,15 @@ pub(crate) async fn handle_uninstall(
             colors::symbol("✓"),
             colors::dim("managed directories purged (if empty)"),
         );
+    }
+
+    // Remove rendered_dir files — always shine-managed regardless of external-presets mode.
+    if !dry_run && managed_rendered_root.exists() {
+        tokio::fs::remove_dir_all(&managed_rendered_root)
+            .await
+            .with_context(|| {
+                format!("removing rendered dir: {}", managed_rendered_root.display())
+            })?;
     }
 
     // Only remove the PATH sentinel when uninstalling all shell presets.
@@ -298,10 +338,11 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// For each script that declares `# shine-template: true`, read its current on-disk
-/// content, substitute env variables (from `~/.shine/env.toml`), and write the result
-/// back in place, preserving the file's permissions.
-async fn apply_template_to_scripts(config: &Config, sources: &[PathBuf]) {
+/// For each script that declares `# shine-template: true`, read the template from
+/// `source_path` (presets_dir — never modified), substitute env variables from
+/// `~/.shine/env.toml`, and write the rendered result to `rendered_path`
+/// (rendered_dir — always shine-managed).  File permissions are copied from source.
+async fn apply_template_to_scripts(config: &Config, script_pairs: &[(PathBuf, PathBuf)]) {
     let env = match EnvConfig::load_or_init(config.shine_dir()).await {
         Ok(e) => e,
         Err(e) => {
@@ -311,8 +352,8 @@ async fn apply_template_to_scripts(config: &Config, sources: &[PathBuf]) {
     };
     let env_map = env.as_map().clone();
 
-    for path in sources {
-        let content = match tokio::fs::read(path).await {
+    for (source_path, rendered_path) in script_pairs {
+        let content = match tokio::fs::read(source_path).await {
             Ok(b) => b,
             Err(_) => continue,
         };
@@ -327,7 +368,7 @@ async fn apply_template_to_scripts(config: &Config, sources: &[PathBuf]) {
                 Err(e) => {
                     eprintln!(
                         "Warning: template substitution failed for {}: {e:#}",
-                        path.display()
+                        source_path.display()
                     );
                     continue;
                 }
@@ -336,16 +377,20 @@ async fn apply_template_to_scripts(config: &Config, sources: &[PathBuf]) {
         #[cfg(unix)]
         let mode = {
             use std::os::unix::fs::PermissionsExt;
-            tokio::fs::metadata(path)
+            tokio::fs::metadata(source_path)
                 .await
                 .map(|m| m.permissions().mode())
                 .unwrap_or(0o755)
         };
 
-        if let Err(e) = tokio::fs::write(path, &rendered).await {
+        if let Some(parent) = rendered_path.parent() {
+            tokio::fs::create_dir_all(parent).await.ok();
+        }
+
+        if let Err(e) = tokio::fs::write(rendered_path, &rendered).await {
             eprintln!(
-                "Warning: failed to write templated script {}: {e:#}",
-                path.display()
+                "Warning: failed to write rendered script {}: {e:#}",
+                rendered_path.display()
             );
             continue;
         }
@@ -354,7 +399,7 @@ async fn apply_template_to_scripts(config: &Config, sources: &[PathBuf]) {
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(mode);
-            let _ = tokio::fs::set_permissions(path, perms).await;
+            let _ = tokio::fs::set_permissions(rendered_path, perms).await;
         }
     }
 }

@@ -9,7 +9,12 @@ use tokio::io::AsyncWriteExt;
 const ENV_FILE: &str = "env.toml";
 
 /// Default variable values seeded into a new env.toml.
-const DEFAULTS: &[(&str, &str)] = &[("HTTP_PROXY_PORT", "6152"), ("SOCKS5_PROXY_PORT", "6153")];
+const DEFAULTS: &[(&str, &str)] = &[
+    ("HTTP_PROXY_PORT", "6152"),
+    ("SOCKS5_PROXY_PORT", "6153"),
+    ("PROXY_HOST", "127.0.0.1"),
+    ("PROXY_NO_PROXY", "localhost,127.0.0.1,::1"),
+];
 
 /// User-editable environment variables stored in `~/.shine/env.toml`.
 ///
@@ -32,11 +37,26 @@ impl EnvConfig {
                 .with_context(|| format!("reading {}", path.display()))?;
             let table: toml::Table =
                 toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
-            let vars = table
+            let mut vars: BTreeMap<String, String> = table
                 .into_iter()
                 .filter_map(|(k, v)| v.as_str().map(|s| (k, s.to_string())))
                 .collect();
-            Ok(Self { vars })
+
+            // Backfill any DEFAULTS keys missing from the existing file so that
+            // users who upgrade get new variables (e.g. PROXY_HOST) without
+            // having to manually edit their env.toml.
+            let mut needs_save = false;
+            for (k, v) in DEFAULTS {
+                if !vars.contains_key(*k) {
+                    vars.insert(k.to_string(), v.to_string());
+                    needs_save = true;
+                }
+            }
+            let config = Self { vars };
+            if needs_save {
+                config.save(shine_dir).await?;
+            }
+            Ok(config)
         } else {
             let config = Self {
                 vars: DEFAULTS
@@ -135,7 +155,32 @@ mod tests {
 
         assert_eq!(env.get("HTTP_PROXY_PORT"), Some("6152"));
         assert_eq!(env.get("SOCKS5_PROXY_PORT"), Some("6153"));
+        assert_eq!(env.get("PROXY_HOST"), Some("127.0.0.1"));
+        assert_eq!(env.get("PROXY_NO_PROXY"), Some("localhost,127.0.0.1,::1"));
         assert!(dir.join("env.toml").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_or_init_backfills_missing_defaults() {
+        let dir = make_temp_dir().await;
+        // Write a file that only has the old keys (no PROXY_HOST / PROXY_NO_PROXY).
+        fs::write(
+            dir.join("env.toml"),
+            "HTTP_PROXY_PORT = \"7890\"\nSOCKS5_PROXY_PORT = \"7891\"\n",
+        )
+        .await
+        .unwrap();
+
+        let env = EnvConfig::load_or_init(&dir).await.unwrap();
+
+        // Original values preserved.
+        assert_eq!(env.get("HTTP_PROXY_PORT"), Some("7890"));
+        assert_eq!(env.get("SOCKS5_PROXY_PORT"), Some("7891"));
+        // Missing defaults backfilled.
+        assert_eq!(env.get("PROXY_HOST"), Some("127.0.0.1"));
+        assert_eq!(env.get("PROXY_NO_PROXY"), Some("localhost,127.0.0.1,::1"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

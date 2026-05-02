@@ -8,14 +8,15 @@
 
 HTTP_PROXY_PORT=@@HTTP_PROXY_PORT@@
 SOCKS5_PROXY_PORT=@@SOCKS5_PROXY_PORT@@
-HTTP_PROXY="http://127.0.0.1:${HTTP_PROXY_PORT}"
-SOCKS5_PROXY="socks5://127.0.0.1:${SOCKS5_PROXY_PORT}"
+PROXY_HOST=@@PROXY_HOST@@
+HTTP_PROXY="http://${PROXY_HOST}:${HTTP_PROXY_PORT}"
+SOCKS5_PROXY="socks5://${PROXY_HOST}:${SOCKS5_PROXY_PORT}"
 
 echo "🚀 设置代理配置..."
 
 # 检测SOCKS5代理是否可用
 check_socks5_proxy() {
-    if command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 ${SOCKS5_PROXY_PORT} 2>/dev/null; then
+    if command -v nc >/dev/null 2>&1 && nc -z ${PROXY_HOST} ${SOCKS5_PROXY_PORT} 2>/dev/null; then
         echo "🔍 使用netcat检测到SOCKS5代理端口开放"
         return 0
     fi
@@ -27,7 +28,7 @@ check_socks5_proxy() {
         echo "🔍 使用netstat检测到SOCKS5代理端口监听中"
         return 0
     fi
-    if command -v telnet >/dev/null 2>&1 && timeout 2 telnet 127.0.0.1 ${SOCKS5_PROXY_PORT} </dev/null >/dev/null 2>&1; then
+    if command -v telnet >/dev/null 2>&1 && timeout 2 telnet ${PROXY_HOST} ${SOCKS5_PROXY_PORT} </dev/null >/dev/null 2>&1; then
         echo "🔍 使用telnet检测到SOCKS5代理可连接"
         return 0
     fi
@@ -50,7 +51,7 @@ set_proxy() {
     export NO_PROXY="localhost,127.0.0.1,::1,.local"
 
     # Git、NPM等工具通常不支持SOCKS5，统一使用HTTP代理
-    local tool_proxy="http://127.0.0.1:${HTTP_PROXY_PORT}"
+    local tool_proxy="http://${PROXY_HOST}:${HTTP_PROXY_PORT}"
 
     echo "🔧 配置Git代理..."
     git config --global http.proxy "${tool_proxy}"
