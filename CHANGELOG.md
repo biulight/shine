@@ -5,6 +5,14 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.13.3] — 2026-05-03
+
+### Fixes
+
+- **`setproxy` / `usetproxy` now work without `source` prefix** — running `setproxy` directly in a terminal no longer silently drops environment variables. `shine shell install` now writes shell wrapper functions (`setproxy() { source ... }`) into the shell config sentinel block for any preset declared with `needs_source = true`, so proxy env vars are properly exported to the calling shell. The `proxy` category presets carry this flag automatically.
+
+---
+
 ## [0.13.2] — 2026-05-03
 
 ### Features
