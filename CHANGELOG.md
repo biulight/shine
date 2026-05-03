@@ -12,10 +12,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - **Command update flow refactor** — `shine self upgrade` now handles binary upgrades, while top-level `shine upgrade` force-updates installed shell and app configs.
 - **`shine update` status preflight** — manual update checks now show installed config status before checking the latest release.
 - **Simplified `shine list`** — the installed-only list now shows only configured items without status labels.
+- **Env config moved into `config.toml`** — template variables now live under `[env]` in `~/.shine/config.toml`. Existing `env.toml` files are migrated automatically and removed after a successful migration.
 
 ### Breaking Changes
 
 - Removed the public `shine env upgrade` command. After changing env values, run `shine upgrade` to apply them to installed presets.
+- Removed the public `shine env path` command because env values now live in `config.toml`.
 
 ### Fixes
 

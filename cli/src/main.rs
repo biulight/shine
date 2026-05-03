@@ -205,7 +205,6 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Env { command } => match command {
-            EnvCommands::Path => handle_env_path(&config).await,
             EnvCommands::Show => handle_env_show(&config).await,
             EnvCommands::Set { key, value } => handle_env_set(&config, key, value).await,
             EnvCommands::Get { key } => handle_env_get(&config, key).await,
@@ -217,16 +216,15 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn handle_env_path(config: &Config) -> Result<()> {
-    let path = config.shine_dir().join("env.toml");
-    println!("{}", path.display());
-    Ok(())
-}
-
 async fn handle_env_show(config: &Config) -> Result<()> {
-    let env = env::EnvConfig::load_or_init(config.shine_dir()).await?;
-    let path = config.shine_dir().join("env.toml");
-    println!("{}", colors::dim(&format!("# {}", path.display())));
+    let env = env::EnvConfig::load_or_init(config).await?;
+    println!(
+        "{}",
+        colors::dim(&format!(
+            "# {} [env]",
+            config.shine_dir().join("config.toml").display()
+        ))
+    );
     for (k, v) in env.iter() {
         println!("{k} = \"{v}\"");
     }
@@ -234,9 +232,9 @@ async fn handle_env_show(config: &Config) -> Result<()> {
 }
 
 async fn handle_env_set(config: &Config, key: String, value: String) -> Result<()> {
-    let mut env = env::EnvConfig::load_or_init(config.shine_dir()).await?;
+    let mut env = env::EnvConfig::load_or_init(config).await?;
     env.set(&key, &value);
-    env.save(config.shine_dir()).await?;
+    env.save(config).await?;
     println!("{}", colors::green(&format!("set {key} = \"{value}\"")));
     println!(
         "{}",
@@ -246,13 +244,13 @@ async fn handle_env_set(config: &Config, key: String, value: String) -> Result<(
 }
 
 async fn handle_env_get(config: &Config, key: String) -> Result<()> {
-    let env = env::EnvConfig::load_or_init(config.shine_dir()).await?;
+    let env = env::EnvConfig::load_or_init(config).await?;
     match env.get(&key) {
         Some(v) => println!("{v}"),
         None => {
             eprintln!(
                 "{}",
-                colors::yellow(&format!("{key} is not set in env.toml"))
+                colors::yellow(&format!("{key} is not set in config.toml [env]"))
             );
             std::process::exit(1);
         }
@@ -666,6 +664,7 @@ mod tests {
     fn cli_rejects_removed_env_upgrade_commands() {
         assert!(Cli::try_parse_from(["shine", "env", "upgrade"]).is_err());
         assert!(Cli::try_parse_from(["shine", "env", "update"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "env", "path"]).is_err());
     }
 
     #[tokio::test]

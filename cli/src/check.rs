@@ -116,7 +116,7 @@ pub(crate) async fn build_app_rows(
     categories: &[AppCategory],
 ) -> Result<Vec<AppRow>> {
     let manifest = AppManifest::load(config.shine_dir()).await?;
-    let env = EnvConfig::load_or_init(config.shine_dir()).await.ok();
+    let env = EnvConfig::load_or_init(config).await.ok();
     let empty_map = BTreeMap::new();
     let env_map = env.as_ref().map(|e| e.as_map()).unwrap_or(&empty_map);
     let mut rows: Vec<AppRow> = Vec::new();

@@ -353,7 +353,7 @@ Configures simultaneously:
 - Git global config (`http.proxy`, `https.proxy`)
 - npm / yarn / pnpm proxy settings
 
-Default ports: HTTP `6152`, SOCKS5 `6153` (edit `~/.shine/env.toml` to change).
+Default ports: HTTP `6152`, SOCKS5 `6153` (edit `[env]` in `~/.shine/config.toml` to change).
 
 **Unset proxy:**
 
@@ -408,6 +408,16 @@ You can also change the fallback install root for app presets that do not carry 
 
 ```toml
 app_default_dest_root = "~/.config"
+```
+
+Template variables live in the `[env]` table:
+
+```toml
+[env]
+HTTP_PROXY_PORT = "6152"
+SOCKS5_PROXY_PORT = "6153"
+PROXY_HOST = "127.0.0.1"
+PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
 ```
 
 ## Directory Layout

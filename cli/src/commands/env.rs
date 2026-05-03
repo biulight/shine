@@ -2,11 +2,9 @@ use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum EnvCommands {
-    /// Show the path of env.toml
-    Path,
     /// List all env variables
     Show,
-    /// Set a variable (creates env.toml if needed)
+    /// Set a variable in config.toml [env]
     Set {
         /// Variable name (e.g. HTTP_PROXY_PORT)
         key: String,

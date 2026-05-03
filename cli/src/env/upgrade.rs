@@ -6,7 +6,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 pub(crate) async fn handle_upgrade(config: &Config, dry_run: bool) -> Result<()> {
-    let env = EnvConfig::load_or_init(config.shine_dir()).await?;
+    let env = EnvConfig::load_or_init(config).await?;
     let env_map = env.as_map().clone();
 
     if dry_run {

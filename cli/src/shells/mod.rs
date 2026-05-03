@@ -395,13 +395,13 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
 
 /// For each script that declares `# shine-template: true`, read the template from
 /// `source_path` (presets_dir — never modified), substitute env variables from
-/// `~/.shine/env.toml`, and write the rendered result to `rendered_path`
+/// `config.toml` `[env]`, and write the rendered result to `rendered_path`
 /// (rendered_dir — always shine-managed).  File permissions are copied from source.
 async fn apply_template_to_scripts(config: &Config, script_pairs: &[(PathBuf, PathBuf)]) {
-    let env = match EnvConfig::load_or_init(config.shine_dir()).await {
+    let env = match EnvConfig::load_or_init(config).await {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("Warning: could not load env.toml: {e:#}");
+            eprintln!("Warning: could not load config.toml [env]: {e:#}");
             return;
         }
     };

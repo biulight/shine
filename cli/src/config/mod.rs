@@ -2,9 +2,26 @@ use crate::shells::ShellType;
 use anyhow::{Context, Result, bail};
 use directories::UserDirs;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
+
+const LEGACY_ENV_FILE: &str = "env.toml";
+
+pub(crate) const DEFAULT_ENV_VARS: &[(&str, &str)] = &[
+    ("HTTP_PROXY_PORT", "6152"),
+    ("SOCKS5_PROXY_PORT", "6153"),
+    ("PROXY_HOST", "127.0.0.1"),
+    ("PROXY_NO_PROXY", "localhost,127.0.0.1,::1"),
+];
+
+pub(crate) fn default_env_map() -> BTreeMap<String, String> {
+    DEFAULT_ENV_VARS
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct Config {
@@ -58,6 +75,9 @@ pub(crate) struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub self_install_dest: Option<PathBuf>,
+    /// Environment variables substituted into template-enabled presets.
+    #[serde(default = "default_env_map")]
+    pub env: BTreeMap<String, String>,
 }
 
 impl Config {
@@ -95,6 +115,7 @@ impl Config {
                 .await
                 .context("Failed to read config file")?;
 
+            let config_has_env = config_toml_has_env_table(&contents);
             let mut config: Config =
                 toml::from_str(&contents).context("Failed to parse config file")?;
             config.config_path = config_path.clone();
@@ -102,9 +123,10 @@ impl Config {
             config.bin_dir = bin_dir;
             config.home_dir = home_dir;
             config.is_external_presets = is_external_presets;
+            config.migrate_env(config_has_env).await?;
             Ok(config)
         } else {
-            let config = Config {
+            let mut config = Config {
                 config_path: config_path.clone(),
                 presets_dir,
                 bin_dir,
@@ -112,6 +134,7 @@ impl Config {
                 is_external_presets,
                 ..Config::default()
             };
+            config.migrate_env(false).await?;
             config.save().await?;
             Ok(config)
         }
@@ -161,6 +184,7 @@ impl Config {
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
+            env: default_env_map(),
         }
     }
 
@@ -247,6 +271,54 @@ impl Config {
         }
         bail!("config path must not be empty");
     }
+
+    async fn migrate_env(&mut self, config_has_env: bool) -> Result<()> {
+        let mut needs_save = !config_has_env;
+
+        let legacy_path = self.shine_dir().join(LEGACY_ENV_FILE);
+        let legacy_env = read_legacy_env_file(&legacy_path).await?;
+        let has_legacy = legacy_env.is_some();
+
+        if let Some(vars) = legacy_env {
+            for (key, value) in vars {
+                if config_has_env {
+                    if let std::collections::btree_map::Entry::Vacant(entry) = self.env.entry(key) {
+                        entry.insert(value);
+                        needs_save = true;
+                    }
+                } else {
+                    self.env.insert(key, value);
+                    needs_save = true;
+                }
+            }
+        }
+
+        for (key, value) in DEFAULT_ENV_VARS {
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                self.env.entry(key.to_string())
+            {
+                entry.insert(value.to_string());
+                needs_save = true;
+            }
+        }
+
+        if needs_save {
+            self.save().await?;
+        }
+
+        if has_legacy {
+            match fs::remove_file(&legacy_path).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("failed to remove {}", legacy_path.display()));
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Print a note showing the active external presets directory.
@@ -278,8 +350,31 @@ impl Default for Config {
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
+            env: default_env_map(),
         }
     }
+}
+
+fn config_toml_has_env_table(contents: &str) -> bool {
+    toml::from_str::<toml::Table>(contents)
+        .map(|table| table.contains_key("env"))
+        .unwrap_or(false)
+}
+
+async fn read_legacy_env_file(path: &Path) -> Result<Option<BTreeMap<String, String>>> {
+    let content = match fs::read_to_string(path).await {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+
+    let table: toml::Table =
+        toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+    let vars = table
+        .into_iter()
+        .filter_map(|(key, value)| value.as_str().map(|value| (key, value.to_string())))
+        .collect();
+    Ok(Some(vars))
 }
 
 /// Return the home directory of the original (pre-sudo) user when the process
@@ -463,6 +558,7 @@ mod tests {
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
+            env: default_env_map(),
         }
     }
 
@@ -578,6 +674,7 @@ mod tests {
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
+            env: default_env_map(),
         };
         assert!(config.save().await.is_err());
     }
@@ -599,6 +696,100 @@ mod tests {
         let config = Config::load_or_init().await.unwrap();
         assert!(config.bin_dir().exists(), "bin dir should be created");
         assert_eq!(config.bin_dir(), dir.join("bin"));
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_or_init_creates_env_table_in_config() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+
+        let config = Config::load_or_init().await.unwrap();
+
+        assert_eq!(
+            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
+            Some("6152")
+        );
+        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
+        let parsed: toml::Table = toml::from_str(&content).unwrap();
+        assert!(
+            parsed.get("env").is_some(),
+            "config.toml should contain [env]"
+        );
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_or_init_migrates_legacy_env_file_and_deletes_it() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        fs::write(
+            dir.join("env.toml"),
+            "HTTP_PROXY_PORT = \"7890\"\nCUSTOM_TOKEN = \"abc\"\n",
+        )
+        .await
+        .unwrap();
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+
+        let config = Config::load_or_init().await.unwrap();
+
+        assert_eq!(
+            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
+            Some("7890")
+        );
+        assert_eq!(
+            config.env.get("CUSTOM_TOKEN").map(String::as_str),
+            Some("abc")
+        );
+        assert!(
+            !dir.join("env.toml").exists(),
+            "legacy env.toml should be removed"
+        );
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn config_env_wins_over_legacy_env_file() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        fs::write(
+            dir.join("config.toml"),
+            "[env]\nHTTP_PROXY_PORT = \"1111\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            dir.join("env.toml"),
+            "HTTP_PROXY_PORT = \"2222\"\nCUSTOM_TOKEN = \"abc\"\n",
+        )
+        .await
+        .unwrap();
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+
+        let config = Config::load_or_init().await.unwrap();
+
+        assert_eq!(
+            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
+            Some("1111")
+        );
+        assert_eq!(
+            config.env.get("CUSTOM_TOKEN").map(String::as_str),
+            Some("abc")
+        );
+        assert!(
+            !dir.join("env.toml").exists(),
+            "legacy env.toml should be removed"
+        );
 
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();

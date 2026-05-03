@@ -223,7 +223,7 @@ pub(crate) async fn handle_install(
     };
 
     // Load env config once — used by the `template` transform.
-    let env = EnvConfig::load_or_init(config.shine_dir()).await?;
+    let env = EnvConfig::load_or_init(config).await?;
     let env_map = env.as_map().clone();
 
     // When the user has configured a custom presets directory, the app preset
@@ -404,7 +404,7 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    let env = EnvConfig::load_or_init(config.shine_dir()).await?;
+    let env = EnvConfig::load_or_init(config).await?;
     let env_map = env.as_map().clone();
 
     if !config.is_external_presets {
