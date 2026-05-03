@@ -13,14 +13,17 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - **`shine update` status preflight** — manual update checks now show installed config status before checking the latest release.
 - **Simplified `shine list`** — the installed-only list now shows only configured items without status labels.
 - **Env config moved into `config.toml`** — template variables now live under `[env]` in `~/.shine/config.toml`. Existing `env.toml` files are migrated automatically and removed after a successful migration.
+- **Ubuntu `shine sys init` now installs Yazi** — the bundled Ubuntu system init preset now installs Yazi from the latest official release, pulls in the required preview/runtime dependencies, and creates an `fd` compatibility symlink for Debian-based systems that ship `fdfind`.
 
 ### Breaking Changes
 
 - Removed the public `shine env upgrade` command. After changing env values, run `shine upgrade` to apply them to installed presets.
 - Removed the public `shine env path` command because env values now live in `config.toml`.
+- Removed the public `shine check` command. Use `shine update` for installed configuration status.
 
 ### Fixes
 
+- **External shell template update detection** — `shine update` now reports updates for installed shell scripts when an external `presets_dir` template, such as `shell/proxy/set_proxy.sh`, changes and needs to be re-rendered with the current `[env]` values.
 - **`shine self install` overwrite behavior** — installing from a newer binary now stages to a temporary file and atomically replaces the old destination. Running the already-installed system copy now fails with an actionable message instead of pretending to reinstall itself.
 
 ---

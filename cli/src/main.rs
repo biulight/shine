@@ -17,8 +17,7 @@ mod update_check;
 
 use crate::config::Config;
 use commands::{
-    AppCommands, CheckCommands, EnvCommands, PresetsCommands, SelfCommands, ShellCommands,
-    SysCommands,
+    AppCommands, EnvCommands, PresetsCommands, SelfCommands, ShellCommands, SysCommands,
 };
 use update_check::UpdateStatus;
 
@@ -45,11 +44,6 @@ enum Commands {
     App {
         #[command(subcommand)]
         command: AppCommands,
-    },
-    /// Check which shine configurations are applied locally
-    Check {
-        #[command(subcommand)]
-        command: Option<CheckCommands>,
     },
     Completions {
         /// Target shell
@@ -180,7 +174,6 @@ async fn main() -> Result<()> {
             PresetsCommands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
         },
         Commands::List => Box::pin(list::handle_list(&config)).await,
-        Commands::Check { command } => Box::pin(check::handle_check(&config, command)).await,
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade => handle_self_upgrade(&config).await,
@@ -665,6 +658,13 @@ mod tests {
         assert!(Cli::try_parse_from(["shine", "env", "upgrade"]).is_err());
         assert!(Cli::try_parse_from(["shine", "env", "update"]).is_err());
         assert!(Cli::try_parse_from(["shine", "env", "path"]).is_err());
+    }
+
+    #[test]
+    fn cli_rejects_removed_check_commands() {
+        assert!(Cli::try_parse_from(["shine", "check"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "check", "app"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "check", "shell"]).is_err());
     }
 
     #[tokio::test]

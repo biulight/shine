@@ -1,28 +1,13 @@
 use crate::apps::{
-    AppCategory, AppManifest, hash_content, load_embedded_categories, load_installed_categories,
-    resolve_install_destination, source_hash_for_file,
+    AppCategory, AppManifest, apply_transforms, hash_content, resolve_install_destination,
+    source_hash_for_file,
 };
 use crate::colors;
-use crate::commands::CheckCommands;
 use crate::config::Config;
 use crate::env::EnvConfig;
-use crate::shells::{SENTINEL_START, get_shell_config_path};
 use anyhow::Result;
 use std::collections::BTreeMap;
-
-pub(crate) async fn handle_check(config: &Config, command: Option<CheckCommands>) -> Result<()> {
-    crate::config::print_presets_note(config);
-    match command {
-        None => {
-            check_shell(config).await?;
-            println!();
-            check_app(config).await?;
-        }
-        Some(CheckCommands::Shell) => check_shell(config).await?,
-        Some(CheckCommands::App) => check_app(config).await?,
-    }
-    Ok(())
-}
+use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // Shared row types
@@ -79,6 +64,12 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     for cat in &categories {
         for script in &cat.files {
             let script_path = presets_shell.join(&cat.name).join(&script.source_rel);
+            let source_key = format!("shell/{}/{}", cat.name, script.source_rel.display());
+            let rendered_path = config
+                .rendered_dir()
+                .join("shell")
+                .join(&cat.name)
+                .join(&script.source_rel);
             let link_name = std::ffi::OsString::from(&script.command_name);
             let link_path = bin_dir.join(&link_name);
 
@@ -97,6 +88,21 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 (false, false) => ("✗", "not installed"),
             };
 
+            let (sym, status_text) = match shell_template_status(
+                config,
+                &source_key,
+                &script_path,
+                &rendered_path,
+            )
+            .await
+            {
+                Some(FileStatus::UpdateAvail) if file_exists || link_exists => {
+                    ("↑", "update available")
+                }
+                Some(FileStatus::Missing) if link_exists => ("!", "rendered script missing"),
+                _ => (sym, status_text),
+            };
+
             rows.push(ShellRow {
                 symbol: colors::symbol(sym),
                 label: format!("{}/{}", cat.name, script.command_name),
@@ -108,6 +114,36 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     }
 
     Ok(rows)
+}
+
+async fn shell_template_status(
+    config: &Config,
+    source_key: &str,
+    script_path: &Path,
+    rendered_path: &Path,
+) -> Option<FileStatus> {
+    let source_bytes = if config.is_external_presets {
+        tokio::fs::read(script_path).await.ok()?
+    } else {
+        crate::presets::read_asset_bytes(source_key)?
+    };
+    if !crate::presets::parse_template_annotation(&source_bytes) {
+        return None;
+    }
+
+    if !rendered_path.exists() {
+        return Some(FileStatus::Missing);
+    }
+
+    let env = EnvConfig::load_or_init(config).await.ok()?;
+    let rendered = apply_transforms(&["template".to_string()], &source_bytes, env.as_map()).ok()?;
+    let current = tokio::fs::read(rendered_path).await.ok()?;
+
+    if rendered == current {
+        Some(FileStatus::UpToDate)
+    } else {
+        Some(FileStatus::UpdateAvail)
+    }
 }
 
 /// Build app config rows for the given pre-loaded categories.
@@ -304,171 +340,62 @@ pub(crate) async fn build_app_rows(
     Ok(rows)
 }
 
-// ---------------------------------------------------------------------------
-// check_shell / check_app — thin wrappers that print everything
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use tokio::fs;
 
-async fn check_shell(config: &Config) -> Result<()> {
-    let categories = if config.is_external_presets {
-        crate::shells::metadata::load_installed_categories(config, None).await?
-    } else {
-        crate::shells::metadata::load_embedded_categories(None)?
-    };
-
-    println!("{}", colors::bold("Shell Presets"));
-
-    if categories.is_empty() {
-        println!("  {}", colors::dim("(no shell presets found)"));
-        return Ok(());
+    async fn make_temp_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("shine-check-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).await.unwrap();
+        dir
     }
 
-    let rows = build_shell_rows(config).await?;
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_template_shell_change_reports_update_available() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/proxy");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+        )
+        .await
+        .unwrap();
+        let script = cat_dir.join("set_proxy.sh");
+        fs::write(
+            &script,
+            b"#!/bin/bash\n# shine-template: true\necho @@PROXY_HOST@@\n",
+        )
+        .await
+        .unwrap();
 
-    let label_width = rows.iter().map(|r| r.label.len()).max().unwrap_or(0);
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-    for row in &rows {
-        let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
-        println!(
-            "  {}  {}{}  {}",
-            row.symbol,
-            row.label,
-            pad,
-            colors::status_label(row.status_text, row.status_sym),
-        );
+        crate::shells::handle_install(&config, Some("proxy"), false)
+            .await
+            .unwrap();
+
+        fs::write(
+            &script,
+            b"#!/bin/bash\n# shine-template: true\necho changed @@PROXY_HOST@@\n",
+        )
+        .await
+        .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "proxy/setproxy")
+            .expect("proxy/setproxy row should exist");
+
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
-
-    // PATH sentinel check
-    let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
-    let (path_sym, path_label, path_detail) = match tokio::fs::read_to_string(&config_path).await {
-        Ok(content) if content.contains(SENTINEL_START) => {
-            ("✓", "PATH configured", config_path.display().to_string())
-        }
-        Ok(_) => (
-            "✗",
-            "PATH not configured",
-            config_path.display().to_string(),
-        ),
-        Err(_) => (
-            "✗",
-            "PATH not configured",
-            format!("shell config not found: {}", config_path.display()),
-        ),
-    };
-
-    let path_label_pad = " ".repeat(label_width.saturating_sub(path_label.len()));
-    println!(
-        "  {}  {}{}  {}",
-        colors::symbol(path_sym),
-        path_label,
-        path_label_pad,
-        colors::dim(&path_detail),
-    );
-
-    Ok(())
-}
-
-async fn check_app(config: &Config) -> Result<()> {
-    println!("{}", colors::bold("App Configs"));
-
-    let categories = if config.is_external_presets {
-        match load_installed_categories(config, None).await {
-            Ok(cats) => cats,
-            Err(e) => {
-                println!(
-                    "  {}",
-                    colors::dim(&format!("(failed to load installed app presets: {e})"))
-                );
-                return Ok(());
-            }
-        }
-    } else {
-        match load_embedded_categories(None) {
-            Ok(cats) => cats,
-            Err(e) => {
-                println!(
-                    "  {}",
-                    colors::dim(&format!("(failed to load embedded app presets: {e})"))
-                );
-                return Ok(());
-            }
-        }
-    };
-
-    if categories.is_empty() {
-        println!("  {}", colors::dim("(no embedded app presets found)"));
-        return Ok(());
-    }
-
-    let rows = build_app_rows(config, &categories).await?;
-
-    let mut up_to_date = 0usize;
-    let mut update_available = 0usize;
-    let mut user_modified = 0usize;
-    let mut missing = 0usize;
-    let mut not_installed = 0usize;
-
-    let label_width = rows.iter().map(|r| r.label.len()).max().unwrap_or(0);
-
-    for row in &rows {
-        let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
-        let dest_part = row
-            .dest
-            .as_deref()
-            .map(|d| format!("  {}  {}", colors::dim("→"), colors::dim(d)))
-            .unwrap_or_default();
-
-        let run_hint = if row.sym == "↑" {
-            format!("  {}", colors::dim("run `shine upgrade`"))
-        } else {
-            String::new()
-        };
-
-        println!(
-            "  {}  {}{}{}  {}{}",
-            colors::symbol(row.sym),
-            row.label,
-            pad,
-            dest_part,
-            colors::status_label(row.status_text, row.sym),
-            run_hint,
-        );
-
-        match row.file_status {
-            FileStatus::Missing => missing += 1,
-            FileStatus::UserModified | FileStatus::Partial => user_modified += 1,
-            FileStatus::UpdateAvail => update_available += 1,
-            FileStatus::UpToDate => up_to_date += 1,
-            FileStatus::NotInstalled => not_installed += 1,
-        }
-    }
-
-    let total = up_to_date + update_available + user_modified + missing + not_installed;
-    if total == 0 {
-        println!("  {}", colors::dim("(no app presets found)"));
-        return Ok(());
-    }
-
-    let mut parts: Vec<String> = Vec::new();
-    if up_to_date > 0 {
-        parts.push(colors::green(&format!("{up_to_date} up-to-date")));
-    }
-    if update_available > 0 {
-        parts.push(colors::cyan(&format!(
-            "{update_available} update available"
-        )));
-    }
-    if user_modified > 0 {
-        parts.push(colors::yellow(&format!("{user_modified} user-modified")));
-    }
-    if missing > 0 {
-        parts.push(colors::yellow(&format!("{missing} destination missing")));
-    }
-    if not_installed > 0 {
-        parts.push(colors::dim(&format!("{not_installed} not installed")));
-    }
-
-    let sep = colors::dim(" · ");
-    println!("\n{}  {}", colors::bold("Summary"), parts.join(&sep));
-
-    Ok(())
 }

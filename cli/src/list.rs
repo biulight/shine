@@ -45,12 +45,18 @@ pub(crate) async fn handle_status_list(config: &Config) -> Result<()> {
 
         for row in &installed_shell {
             let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
+            let run_hint = if row.status_sym == "↑" {
+                format!("  {}", colors::dim("run `shine upgrade`"))
+            } else {
+                String::new()
+            };
             println!(
-                "  {}  {}{}  {}",
+                "  {}  {}{}  {}{}",
                 row.symbol,
                 row.label,
                 pad,
                 colors::status_label(row.status_text, row.status_sym),
+                run_hint,
             );
         }
     }

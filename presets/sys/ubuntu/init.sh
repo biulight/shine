@@ -1,5 +1,5 @@
 #!/bin/bash
-# Initialize Ubuntu system: installs Neovim (v0.10+), AstroNvim, and Atuin.
+# Initialize Ubuntu system: installs Neovim (v0.10+), AstroNvim, Atuin, and Yazi.
 set -euo pipefail
 
 ARCH=$(uname -m)
@@ -59,8 +59,72 @@ install_atuin() {
     curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 }
 
+# --- Yazi ---
+
+install_yazi_dependencies() {
+    local packages=()
+    local package
+
+    for package in file ffmpeg 7zip jq poppler-utils fd-find ripgrep fzf zoxide imagemagick xclip; do
+        if ! dpkg -s "$package" &>/dev/null; then
+            packages+=("$package")
+        fi
+    done
+
+    if [[ ${#packages[@]} -eq 0 ]]; then
+        echo "Yazi dependencies: already installed."
+        return
+    fi
+
+    echo "Installing Yazi dependencies: ${packages[*]}"
+    sudo apt-get update
+    sudo apt-get install -y "${packages[@]}"
+}
+
+ensure_fd_alias() {
+    if command -v fd &>/dev/null; then
+        return
+    fi
+    if ! command -v fdfind &>/dev/null; then
+        return
+    fi
+
+    echo "Creating fd -> fdfind symlink..."
+    sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+}
+
+install_yazi() {
+    install_yazi_dependencies
+
+    if command -v yazi &>/dev/null; then
+        echo "Yazi: already installed ($(yazi --version | head -1))."
+        ensure_fd_alias
+        return
+    fi
+
+    local target
+    case "$ARCH" in
+        x86_64)  target="x86_64-unknown-linux-gnu" ;;
+        aarch64) target="aarch64-unknown-linux-gnu" ;;
+        *) echo "Unsupported arch for Yazi: $ARCH" >&2; return 1 ;;
+    esac
+
+    echo "Installing Yazi from the latest official release..."
+    local version package tmp
+    version=$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/sxyazi/yazi/releases/latest | sed 's#.*/tag/v##')
+    package="yazi-${target}.deb"
+    tmp="/tmp/${package}"
+    curl -fsSL "https://github.com/sxyazi/yazi/releases/download/v${version}/${package}" -o "$tmp"
+    sudo apt-get install -y "$tmp"
+    rm -f "$tmp"
+
+    ensure_fd_alias
+    echo "Yazi installed ($(yazi --version | head -1))."
+}
+
 install_neovim
 install_astronvim
 install_atuin
+install_yazi
 
 echo "Done."
