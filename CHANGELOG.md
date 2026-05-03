@@ -18,6 +18,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Removed the public `shine env upgrade` command. After changing env values, run `shine upgrade` to apply them to installed presets.
 - Removed the public `shine env path` command because env values now live in `config.toml`.
+- Removed the public `shine check` command. Use `shine update` for installed configuration status.
 
 ### Fixes
 

@@ -187,7 +187,7 @@ transform   = "jsonc-to-json"
   ✓  daemon.jsonc  [jsonc-to-json]  →  /etc/docker/daemon.json
 ```
 
-`shine check` compares the **transformed** output against the installed file — a source change that produces identical JSON output is reported as **up-to-date**.
+`shine update` compares the **transformed** output against the installed file — a source change that produces identical JSON output is reported as **up-to-date**.
 
 **Supported transforms**
 
@@ -233,7 +233,7 @@ When a category is specified only that category's managed files are removed; oth
 shine list
 ```
 
-Shows only items that are currently installed or configured — a quick "what's set up on this machine" view. Unlike `shine check`, entries that are not installed are omitted and status details are not shown.
+Shows only items that are currently installed or configured — a quick "what's set up on this machine" view. Entries that are not installed are omitted and status details are not shown.
 
 ```
 Shell Presets
@@ -247,15 +247,13 @@ App Configs
 
 If nothing is installed yet, `shine list` prints a hint to run `shine shell install` or `shine app install`.
 
-### Check configuration status
+### Update status and release check
 
 ```bash
-shine check           # check both shell presets and app configs
-shine check shell     # shell presets only
-shine check app       # app configs only
+shine update
 ```
 
-Shows the status of every managed preset and config file in one view:
+Shows installed configuration status, then checks for a newer shine release:
 
 ```
 Shell Presets
