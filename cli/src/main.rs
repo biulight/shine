@@ -510,7 +510,7 @@ async fn handle_presets_unlink(config: &Config) -> Result<()> {
 }
 
 async fn handle_self_install(mut config: Config, dest: std::path::PathBuf) -> Result<()> {
-    use anyhow::Context as _;
+    use anyhow::{Context as _, bail};
 
     let src = std::env::current_exe().context("failed to resolve current executable path")?;
 
@@ -518,15 +518,14 @@ async fn handle_self_install(mut config: Config, dest: std::path::PathBuf) -> Re
         let canonical_src = src.canonicalize().unwrap_or_else(|_| src.clone());
         let canonical_dest = dest.canonicalize().unwrap_or_else(|_| dest.clone());
         if canonical_src == canonical_dest {
-            println!(
-                "{}",
-                colors::dim(&format!("already installed at {}", dest.display()))
+            bail!(
+                "source and destination are the same binary: {}. Run the newer binary by full path, e.g. `sudo /path/to/new/shine self install`, to overwrite this copy.",
+                dest.display()
             );
-            return Ok(());
         }
     }
 
-    std::fs::copy(&src, &dest).with_context(|| {
+    install_binary_atomically(&src, &dest).with_context(|| {
         format!(
             "failed to copy to {} — try: sudo {} self install",
             dest.display(),
@@ -553,6 +552,43 @@ async fn handle_self_install(mut config: Config, dest: std::path::PathBuf) -> Re
     Ok(())
 }
 
+fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    use anyhow::Context as _;
+
+    let parent = dest
+        .parent()
+        .with_context(|| format!("destination has no parent: {}", dest.display()))?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create destination dir: {}", parent.display()))?;
+
+    let temp = parent.join(format!(".shine-self-install-{}", uuid::Uuid::new_v4()));
+    std::fs::copy(src, &temp).with_context(|| {
+        format!(
+            "failed to stage binary from {} to {}",
+            src.display(),
+            temp.display()
+        )
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(src)
+            .map(|m| m.permissions().mode())
+            .unwrap_or(0o755);
+        let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(mode));
+    }
+
+    match std::fs::rename(&temp, dest) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(err)
+                .with_context(|| format!("failed to replace {} with staged binary", dest.display()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,6 +611,38 @@ mod tests {
 
     fn config_in(dir: &std::path::Path) -> Config {
         Config::new_for_test(dir)
+    }
+
+    #[test]
+    fn install_binary_atomically_overwrites_existing_dest() {
+        let dir = std::env::temp_dir().join(format!("shine-self-install-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("new-shine");
+        let dest = dir.join("shine");
+
+        std::fs::write(&src, b"new").unwrap();
+        std::fs::write(&dest, b"old").unwrap();
+
+        install_binary_atomically(&src, &dest).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn self_install_errors_when_source_is_destination() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+        let current = std::env::current_exe().unwrap();
+
+        let err = handle_self_install(config, current).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("source and destination are the same binary"),
+            "error should explain self-overwrite: {err:#}"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[test]

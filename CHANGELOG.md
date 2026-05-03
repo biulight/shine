@@ -17,6 +17,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Removed the public `shine env upgrade` command. After changing env values, run `shine upgrade` to apply them to installed presets.
 
+### Fixes
+
+- **`shine self install` overwrite behavior** — installing from a newer binary now stages to a temporary file and atomically replaces the old destination. Running the already-installed system copy now fails with an actionable message instead of pretending to reinstall itself.
+
 ---
 
 ## [0.13.3] — 2026-05-03
