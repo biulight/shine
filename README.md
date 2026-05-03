@@ -18,6 +18,7 @@ A fast Rust CLI tool for managing shell environment presets.
 - **App preset installer** — install annotated config files like `~/.gitconfig` or `~/.config/starship/starship.toml`
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
 - **Multi-shell support** — bash, zsh, fish, powershell, elvish
+- **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
 
 ## Planning Workflow
 
@@ -128,6 +129,28 @@ App Preset Categories
 Run `shine app install <CATEGORY>` to install a specific category.
 Run `shine app install` to install all.
 ```
+
+### List available system init presets
+
+```bash
+shine sys list
+```
+
+Lists the built-in OS bootstrap presets and marks the current platform with `▶`.
+
+### Run system init for the current OS
+
+```bash
+shine sys init
+shine sys init --dry-run
+```
+
+`shine sys init` detects the current OS and runs `presets/sys/<os>/init.sh`.
+
+Current built-in presets:
+
+- `ubuntu` — installs Neovim, AstroNvim, Atuin, and Yazi. The Yazi step installs the latest official `.deb`, common preview/runtime dependencies, and an `fd` compatibility symlink on Debian/Ubuntu systems.
+- `macos` — placeholder preset, not implemented yet.
 
 ### Show app preset details
 
