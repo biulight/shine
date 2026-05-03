@@ -18,10 +18,4 @@ pub(crate) enum EnvCommands {
         /// Variable name
         key: String,
     },
-    /// Re-render installed preset files that use env variables
-    Upgrade {
-        /// Print what would change without writing
-        #[arg(long)]
-        dry_run: bool,
-    },
 }

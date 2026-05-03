@@ -153,6 +153,54 @@ pub(crate) async fn handle_install(
     Ok(())
 }
 
+pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
+    let categories = if config.is_external_presets {
+        metadata::load_installed_categories(config, None).await?
+    } else {
+        metadata::load_embedded_categories(None)?
+    };
+
+    let mut installed_categories = Vec::new();
+    for cat in &categories {
+        let has_installed_file = cat.files.iter().any(|file| {
+            let source = config
+                .presets_dir()
+                .join("shell")
+                .join(&cat.name)
+                .join(&file.source_rel);
+            let rendered = config
+                .rendered_dir()
+                .join("shell")
+                .join(&cat.name)
+                .join(&file.source_rel);
+            let link = config.bin_dir().join(&file.command_name);
+            source.exists() || rendered.exists() || link.exists()
+        });
+        if has_installed_file {
+            installed_categories.push(cat.name.clone());
+        }
+    }
+
+    if installed_categories.is_empty() {
+        println!("{}", colors::dim("No installed shell presets found."));
+        return Ok(());
+    }
+
+    println!(
+        "{}  {}",
+        colors::bold("Shell Presets"),
+        colors::dim(&format!(
+            "{} installed categories",
+            installed_categories.len()
+        ))
+    );
+    for category in installed_categories {
+        handle_install(config, Some(&category), true).await?;
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn handle_uninstall(
     config: &Config,
     category: Option<&str>,

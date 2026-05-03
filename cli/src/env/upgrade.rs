@@ -32,7 +32,7 @@ pub(crate) async fn handle_upgrade(config: &Config, dry_run: bool) -> Result<()>
         println!(
             "{}",
             colors::dim(
-                "Install a preset that uses the `template` transform to enable env upgrade."
+                "Install a preset that uses the `template` transform to enable config upgrade."
             )
         );
         return Ok(());
@@ -41,7 +41,7 @@ pub(crate) async fn handle_upgrade(config: &Config, dry_run: bool) -> Result<()>
     let total = app_candidates.len() + shell_entries.len();
     println!(
         "{}  {}",
-        colors::bold("Env Upgrade"),
+        colors::bold("Env Templates"),
         colors::dim(&format!("{total} file(s) to check"))
     );
 

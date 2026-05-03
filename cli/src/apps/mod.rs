@@ -14,7 +14,7 @@ use crate::env::EnvConfig;
 use crate::presets;
 use anyhow::{Context, Result};
 use file_ops::{InstallOutcome, UninstallOutcome};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 /// Hash the effective install content for `file` — applies transforms if declared.
@@ -394,6 +394,178 @@ pub(crate) async fn handle_install(
     println!("\n{}  {}", colors::bold("Done"), summary_parts.join(&sep));
 
     Ok(())
+}
+
+pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
+    crate::config::print_presets_note(config);
+    let mut manifest = AppManifest::load(config.shine_dir()).await?;
+    if manifest.entries.is_empty() {
+        println!("{}", colors::dim("No installed app configs found."));
+        return Ok(());
+    }
+
+    let env = EnvConfig::load_or_init(config.shine_dir()).await?;
+    let env_map = env.as_map().clone();
+
+    if !config.is_external_presets {
+        let categories: BTreeSet<String> = manifest
+            .entries
+            .iter()
+            .filter_map(|entry| app_category_from_source(&entry.source))
+            .collect();
+        for category in categories {
+            let prefix = format!("app/{category}");
+            let _ = crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
+        }
+    }
+
+    println!(
+        "{}  {}",
+        colors::bold("App Configs"),
+        colors::dim(&format!("{} installed file(s)", manifest.entries.len()))
+    );
+
+    let mut updated = 0usize;
+    let mut skipped = 0usize;
+
+    for entry in manifest.entries.clone() {
+        let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
+            eprintln!(
+                "  {} {}: invalid source, skipped",
+                colors::symbol("!"),
+                entry.source
+            );
+            skipped += 1;
+            continue;
+        };
+
+        let categories = if config.is_external_presets {
+            metadata::load_installed_categories(config, Some(cat_name)).await?
+        } else {
+            metadata::load_embedded_categories(Some(cat_name))?
+        };
+        let Some(cat) = categories.iter().find(|cat| cat.name == cat_name) else {
+            eprintln!(
+                "  {} {}: category not found, skipped",
+                colors::symbol("!"),
+                entry.source
+            );
+            skipped += 1;
+            continue;
+        };
+        let Some(file) = cat
+            .files
+            .iter()
+            .find(|file| file.source_rel.to_string_lossy().as_ref() == file_rel)
+        else {
+            eprintln!(
+                "  {} {}: source not found, skipped",
+                colors::symbol("!"),
+                entry.source
+            );
+            skipped += 1;
+            continue;
+        };
+
+        let raw = if config.is_external_presets {
+            let path = config
+                .presets_dir()
+                .join("app")
+                .join(cat_name)
+                .join(&file.source_rel);
+            match tokio::fs::read(&path).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+                    skipped += 1;
+                    continue;
+                }
+            }
+        } else {
+            match presets::read_asset_bytes(&entry.source) {
+                Some(bytes) => bytes,
+                None => {
+                    eprintln!(
+                        "  {} {}: embedded source not found, skipped",
+                        colors::symbol("!"),
+                        entry.source
+                    );
+                    skipped += 1;
+                    continue;
+                }
+            }
+        };
+
+        let content = if file.transforms.is_empty() {
+            raw
+        } else {
+            match transforms::apply(&file.transforms, &raw, &env_map) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!(
+                        "  {} {}: transform failed: {e:#}",
+                        colors::symbol("✗"),
+                        entry.source
+                    );
+                    skipped += 1;
+                    continue;
+                }
+            }
+        };
+
+        match file_ops::install_bytes(&content, &entry.destination, true, false, true).await {
+            Ok(InstallOutcome::Installed { hash })
+            | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
+                println!(
+                    "  {}  {}  {}  {}",
+                    colors::symbol("✓"),
+                    entry.source,
+                    colors::dim("→"),
+                    colors::dim(&entry.destination.display().to_string()),
+                );
+                manifest.upsert(AppEntry {
+                    content_hash: hash,
+                    uses_env: file.transforms.contains(&"template".to_string()),
+                    ..entry
+                });
+                updated += 1;
+            }
+            Ok(InstallOutcome::AlreadyManaged) | Ok(InstallOutcome::DryRun) => {
+                println!("  {}  {}", colors::dim("-"), entry.source);
+                skipped += 1;
+            }
+            Err(e) => {
+                eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+                skipped += 1;
+            }
+        }
+    }
+
+    manifest.save(config.shine_dir()).await?;
+
+    let mut summary_parts: Vec<String> = Vec::new();
+    if updated > 0 {
+        summary_parts.push(colors::green(&format!("{updated} updated")));
+    }
+    if skipped > 0 {
+        summary_parts.push(colors::dim(&format!("{skipped} skipped")));
+    }
+    let sep = colors::dim(" · ");
+    println!("\n{}  {}", colors::bold("Done"), summary_parts.join(&sep));
+
+    Ok(())
+}
+
+fn app_category_from_source(source: &str) -> Option<String> {
+    app_source_parts(source).map(|(category, _)| category.to_string())
+}
+
+fn app_source_parts(source: &str) -> Option<(&str, &str)> {
+    let mut parts = source.splitn(3, '/');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some("app"), Some(category), Some(file)) => Some((category, file)),
+        _ => None,
+    }
 }
 
 pub(crate) async fn handle_uninstall(

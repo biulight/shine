@@ -5,6 +5,20 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.14.0] — 2026-05-03
+
+### Features
+
+- **Command update flow refactor** — `shine self upgrade` now handles binary upgrades, while top-level `shine upgrade` force-updates installed shell and app configs.
+- **`shine update` status preflight** — manual update checks now show installed config status before checking the latest release.
+- **Simplified `shine list`** — the installed-only list now shows only configured items without status labels.
+
+### Breaking Changes
+
+- Removed the public `shine env upgrade` command. After changing env values, run `shine upgrade` to apply them to installed presets.
+
+---
+
 ## [0.13.3] — 2026-05-03
 
 ### Fixes

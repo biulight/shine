@@ -51,7 +51,7 @@ pub(crate) struct Config {
     #[serde(skip)]
     pub is_external_presets: bool,
     /// Path where `shine self install` last copied the binary.
-    /// When set, `shine upgrade` will try to sync the new binary there automatically.
+    /// When set, `shine self upgrade` will try to sync the new binary there automatically.
     #[serde(
         rename = "self_install_dest",
         default,

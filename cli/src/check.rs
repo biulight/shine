@@ -246,7 +246,7 @@ pub(crate) async fn build_app_rows(
                 // Use the max status of installed files. Only collapse to Partial
                 // when all installed files are up-to-date; higher-severity statuses
                 // (UpdateAvail, UserModified) take priority because the user action
-                // ("shine app install") handles both updates and new files.
+                // ("shine upgrade") handles updates for installed files.
                 let installed_max = file_statuses
                     .iter()
                     .copied()
@@ -418,7 +418,7 @@ async fn check_app(config: &Config) -> Result<()> {
             .unwrap_or_default();
 
         let run_hint = if row.sym == "↑" {
-            format!("  {}", colors::dim("run `shine app install`"))
+            format!("  {}", colors::dim("run `shine upgrade`"))
         } else {
             String::new()
         };

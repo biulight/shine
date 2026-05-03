@@ -20,7 +20,7 @@ pub(crate) struct AppEntry {
     pub backup: Option<PathBuf>,
     pub content_hash: u64,
     /// True when the `template` transform was applied during install.
-    /// Used by `shine env upgrade` to skip files that never used env vars.
+    /// Used by config upgrade to skip files that never used env vars.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub uses_env: bool,
 }

@@ -63,9 +63,9 @@ enum Commands {
         #[command(subcommand)]
         command: PresetsCommands,
     },
-    /// Check for a newer version of shine
+    /// Show installed config status and check for a newer version of shine
     Update,
-    /// Download and install the latest shine release for this platform
+    /// Force-update installed shell and app configs
     Upgrade,
     /// Manage the shine binary itself
     #[command(name = "self")]
@@ -112,24 +112,25 @@ async fn main() -> Result<()> {
 
     let config = Box::pin(Config::load_or_init()).await?;
 
-    // Skip the background version check when the user explicitly runs `shine update`
-    // or `shine upgrade`, which do their own forced fetch below.
+    // Skip the background version check for update/self commands. `shine update`
+    // and `shine self upgrade` do their own forced fetch below; `shine self install`
+    // should remain available even when the current binary is version-gated.
     if !matches!(
         cli.command,
-        Commands::Update | Commands::Upgrade | Commands::Presets { .. } | Commands::Self_ { .. }
+        Commands::Update | Commands::Presets { .. } | Commands::Self_ { .. }
     ) {
         match update_check::check_for_update(&config).await {
             Ok(UpdateStatus::UpToDate) => {}
             Ok(UpdateStatus::UpdateAvailable { latest }) => {
                 eprintln!(
-                    "A newer version of shine is available: {} -> {}. Run `shine upgrade` when convenient.",
+                    "A newer version of shine is available: {} -> {}. Run `shine self upgrade` when convenient.",
                     env!("CARGO_PKG_VERSION"),
                     latest
                 );
             }
             Ok(UpdateStatus::UpdateRequired { latest }) => {
                 bail!(
-                    "A newer patch release of shine is required: {} -> {}. Run `shine upgrade` before continuing.",
+                    "A newer patch release of shine is required: {} -> {}. Run `shine self upgrade` before continuing.",
                     env!("CARGO_PKG_VERSION"),
                     latest
                 );
@@ -168,7 +169,7 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Update => handle_update(&config).await,
-        Commands::Upgrade => handle_upgrade(&config).await,
+        Commands::Upgrade => handle_config_upgrade(&config).await,
         Commands::Presets { command } => match command {
             PresetsCommands::Export { dir, force } => {
                 Box::pin(handle_presets_export(&config, dir, force)).await
@@ -182,6 +183,7 @@ async fn main() -> Result<()> {
         Commands::Check { command } => Box::pin(check::handle_check(&config, command)).await,
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
+            SelfCommands::Upgrade => handle_self_upgrade(&config).await,
         },
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
@@ -207,9 +209,6 @@ async fn main() -> Result<()> {
             EnvCommands::Show => handle_env_show(&config).await,
             EnvCommands::Set { key, value } => handle_env_set(&config, key, value).await,
             EnvCommands::Get { key } => handle_env_get(&config, key).await,
-            EnvCommands::Upgrade { dry_run } => {
-                Box::pin(env::upgrade::handle_upgrade(&config, dry_run)).await
-            }
         },
         Commands::Sys { command } => match command {
             SysCommands::List => Box::pin(sys::handle_list(&config)).await,
@@ -241,7 +240,7 @@ async fn handle_env_set(config: &Config, key: String, value: String) -> Result<(
     println!("{}", colors::green(&format!("set {key} = \"{value}\"")));
     println!(
         "{}",
-        colors::dim("Run `shine env upgrade` to apply to already-installed presets.")
+        colors::dim("Run `shine upgrade` to apply to already-installed presets.")
     );
     Ok(())
 }
@@ -262,6 +261,9 @@ async fn handle_env_get(config: &Config, key: String) -> Result<()> {
 }
 
 async fn handle_update(config: &Config) -> Result<()> {
+    Box::pin(list::handle_status_list(config)).await?;
+    println!();
+
     let current = env!("CARGO_PKG_VERSION");
     println!("Checking for updates (current: {current})...");
 
@@ -279,7 +281,7 @@ async fn handle_update(config: &Config) -> Result<()> {
                     "A newer version of shine is available: {current} -> {latest}."
                 ))
             );
-            println!("Run `shine upgrade` to install it.");
+            println!("Run `shine self upgrade` to install it.");
         }
         Ok(UpdateStatus::UpdateRequired { latest }) => {
             println!(
@@ -288,7 +290,7 @@ async fn handle_update(config: &Config) -> Result<()> {
                     "A newer patch release of shine is available: {current} -> {latest}."
                 ))
             );
-            println!("Run `shine upgrade` to install it.");
+            println!("Run `shine self upgrade` to install it.");
         }
         Err(e) => {
             eprintln!("Update check failed: {e}");
@@ -299,7 +301,7 @@ async fn handle_update(config: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn handle_upgrade(config: &Config) -> Result<()> {
+async fn handle_self_upgrade(config: &Config) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
     println!("Checking for upgrades (current: {current})...");
 
@@ -325,7 +327,19 @@ async fn handle_upgrade(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// After a successful upgrade, try to sync the new binary to the self-install destination.
+async fn handle_config_upgrade(config: &Config) -> Result<()> {
+    println!("{}", colors::bold("Upgrading installed configs"));
+
+    Box::pin(env::upgrade::handle_upgrade(config, false)).await?;
+    println!();
+    Box::pin(shells::handle_upgrade_installed(config)).await?;
+    println!();
+    Box::pin(apps::handle_upgrade_installed(config)).await?;
+
+    Ok(())
+}
+
+/// After a successful self-upgrade, try to sync the new binary to the self-install destination.
 /// If the copy fails due to permissions, print a targeted hint instead of failing.
 async fn sync_self_install_dest(config: &Config) {
     let dest = match &config.self_install_dest {
@@ -520,7 +534,7 @@ async fn handle_self_install(mut config: Config, dest: std::path::PathBuf) -> Re
         )
     })?;
 
-    // Remember where we installed so `shine upgrade` can sync this copy automatically.
+    // Remember where we installed so `shine self upgrade` can sync this copy automatically.
     config.self_install_dest = Some(dest.clone());
     config
         .save()
@@ -561,6 +575,29 @@ mod tests {
 
     fn config_in(dir: &std::path::Path) -> Config {
         Config::new_for_test(dir)
+    }
+
+    #[test]
+    fn cli_accepts_refactored_update_commands() {
+        let cli = Cli::try_parse_from(["shine", "self", "upgrade"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Self_ {
+                command: SelfCommands::Upgrade
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "update"]).unwrap();
+        assert!(matches!(cli.command, Commands::Update));
+
+        let cli = Cli::try_parse_from(["shine", "upgrade"]).unwrap();
+        assert!(matches!(cli.command, Commands::Upgrade));
+    }
+
+    #[test]
+    fn cli_rejects_removed_env_upgrade_commands() {
+        assert!(Cli::try_parse_from(["shine", "env", "upgrade"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "env", "update"]).is_err());
     }
 
     #[tokio::test]

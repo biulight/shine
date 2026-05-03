@@ -4,7 +4,7 @@ use crate::colors;
 use crate::config::Config;
 use anyhow::Result;
 
-pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+pub(crate) async fn handle_status_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
@@ -82,7 +82,7 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
                 .unwrap_or_default();
 
             let run_hint = if row.sym == "↑" {
-                format!("  {}", colors::dim("run `shine app install`"))
+                format!("  {}", colors::dim("run `shine upgrade`"))
             } else {
                 String::new()
             };
@@ -126,6 +126,63 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
         if !parts.is_empty() {
             let sep = colors::dim(" · ");
             println!("\n{}  {}", colors::bold("Summary"), parts.join(&sep));
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+    crate::config::print_presets_note(config);
+    let shell_rows = build_shell_rows(config).await?;
+    let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
+
+    let cats_result = if config.is_external_presets {
+        load_installed_categories(config, None).await
+    } else {
+        load_embedded_categories(None)
+    };
+    let app_rows = match cats_result {
+        Ok(cats) => build_app_rows(config, &cats).await?,
+        Err(_) => Vec::new(),
+    };
+    let installed_app: Vec<&AppRow> = app_rows
+        .iter()
+        .filter(|r| r.file_status != FileStatus::NotInstalled)
+        .collect();
+
+    let any = !installed_shell.is_empty() || !installed_app.is_empty();
+
+    if !any {
+        println!(
+            "{}",
+            colors::dim("Nothing installed yet. Run `shine shell install` or `shine app install`.")
+        );
+        return Ok(());
+    }
+
+    if !installed_shell.is_empty() {
+        println!("{}", colors::bold("Shell Presets"));
+        for row in &installed_shell {
+            println!("  {}", row.label);
+        }
+    }
+
+    if !installed_app.is_empty() {
+        if !installed_shell.is_empty() {
+            println!();
+        }
+        println!("{}", colors::bold("App Configs"));
+        for row in &installed_app {
+            match row.dest.as_deref() {
+                Some(dest) => println!(
+                    "  {}  {}  {}",
+                    row.label,
+                    colors::dim("→"),
+                    colors::dim(dest)
+                ),
+                None => println!("  {}", row.label),
+            }
         }
     }
 
