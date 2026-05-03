@@ -189,6 +189,8 @@ transform   = "jsonc-to-json"
 
 `shine update` compares the **transformed** output against the installed file — a source change that produces identical JSON output is reported as **up-to-date**.
 
+Shell scripts that opt into template substitution with `# shine-template: true` are checked the same way. `shine update` re-renders the source script with the current `[env]` values and reports `update available` when the rendered output differs from the installed script, including when the source lives in an external `presets_dir`.
+
 **Supported transforms**
 
 | Name | From | To | Description |
@@ -301,7 +303,7 @@ Then export the defaults there as a starting point:
 SHINE_PRESETS=~/dotfiles/shine-presets shine presets export
 ```
 
-All `install`, `check`, and `list` commands will automatically read from the external directory when `presets_dir` is configured. The active preset source is printed in each command's output so you always know which files are being used.
+All `install`, `update`, and `list` commands will automatically read from the external directory when `presets_dir` is configured. The active preset source is printed in each command's output so you always know which files are being used.
 
 ### Runtime update policy
 

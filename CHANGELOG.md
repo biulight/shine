@@ -22,6 +22,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Fixes
 
+- **External shell template update detection** — `shine update` now reports updates for installed shell scripts when an external `presets_dir` template, such as `shell/proxy/set_proxy.sh`, changes and needs to be re-rendered with the current `[env]` values.
 - **`shine self install` overwrite behavior** — installing from a newer binary now stages to a temporary file and atomically replaces the old destination. Running the already-installed system copy now fails with an actionable message instead of pretending to reinstall itself.
 
 ---

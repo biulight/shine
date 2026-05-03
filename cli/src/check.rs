@@ -1,11 +1,13 @@
 use crate::apps::{
-    AppCategory, AppManifest, hash_content, resolve_install_destination, source_hash_for_file,
+    AppCategory, AppManifest, apply_transforms, hash_content, resolve_install_destination,
+    source_hash_for_file,
 };
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
 use anyhow::Result;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // Shared row types
@@ -62,6 +64,12 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     for cat in &categories {
         for script in &cat.files {
             let script_path = presets_shell.join(&cat.name).join(&script.source_rel);
+            let source_key = format!("shell/{}/{}", cat.name, script.source_rel.display());
+            let rendered_path = config
+                .rendered_dir()
+                .join("shell")
+                .join(&cat.name)
+                .join(&script.source_rel);
             let link_name = std::ffi::OsString::from(&script.command_name);
             let link_path = bin_dir.join(&link_name);
 
@@ -80,6 +88,21 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 (false, false) => ("✗", "not installed"),
             };
 
+            let (sym, status_text) = match shell_template_status(
+                config,
+                &source_key,
+                &script_path,
+                &rendered_path,
+            )
+            .await
+            {
+                Some(FileStatus::UpdateAvail) if file_exists || link_exists => {
+                    ("↑", "update available")
+                }
+                Some(FileStatus::Missing) if link_exists => ("!", "rendered script missing"),
+                _ => (sym, status_text),
+            };
+
             rows.push(ShellRow {
                 symbol: colors::symbol(sym),
                 label: format!("{}/{}", cat.name, script.command_name),
@@ -91,6 +114,36 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     }
 
     Ok(rows)
+}
+
+async fn shell_template_status(
+    config: &Config,
+    source_key: &str,
+    script_path: &Path,
+    rendered_path: &Path,
+) -> Option<FileStatus> {
+    let source_bytes = if config.is_external_presets {
+        tokio::fs::read(script_path).await.ok()?
+    } else {
+        crate::presets::read_asset_bytes(source_key)?
+    };
+    if !crate::presets::parse_template_annotation(&source_bytes) {
+        return None;
+    }
+
+    if !rendered_path.exists() {
+        return Some(FileStatus::Missing);
+    }
+
+    let env = EnvConfig::load_or_init(config).await.ok()?;
+    let rendered = apply_transforms(&["template".to_string()], &source_bytes, env.as_map()).ok()?;
+    let current = tokio::fs::read(rendered_path).await.ok()?;
+
+    if rendered == current {
+        Some(FileStatus::UpToDate)
+    } else {
+        Some(FileStatus::UpdateAvail)
+    }
 }
 
 /// Build app config rows for the given pre-loaded categories.
@@ -285,4 +338,64 @@ pub(crate) async fn build_app_rows(
     }
 
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use tokio::fs;
+
+    async fn make_temp_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("shine-check-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).await.unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_template_shell_change_reports_update_available() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/proxy");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+        )
+        .await
+        .unwrap();
+        let script = cat_dir.join("set_proxy.sh");
+        fs::write(
+            &script,
+            b"#!/bin/bash\n# shine-template: true\necho @@PROXY_HOST@@\n",
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        crate::shells::handle_install(&config, Some("proxy"), false)
+            .await
+            .unwrap();
+
+        fs::write(
+            &script,
+            b"#!/bin/bash\n# shine-template: true\necho changed @@PROXY_HOST@@\n",
+        )
+        .await
+        .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "proxy/setproxy")
+            .expect("proxy/setproxy row should exist");
+
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
 }
