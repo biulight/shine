@@ -11,7 +11,7 @@ A fast Rust CLI tool for managing shell environment presets.
 - **Symlink-based bin directory** — `~/.shine/bin/` holds flat symlinks to installed scripts; add it to `PATH` once
 - **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
 - **Category install/uninstall** — install or uninstall all presets or a specific subset (e.g. `proxy`)
-- **Installed-only view** — `shine list` shows only what is currently set up on this machine
+- **Installed-only view** — `shine list` shows installed items without status noise
 - **Safe uninstall** — removes only shine-managed files; user-created files are never touched
 - **Dry-run support** — preview any destructive operation before it runs
 - **TOML config** — `~/.shine/config.toml` with comment preservation on updates
@@ -233,18 +233,16 @@ When a category is specified only that category's managed files are removed; oth
 shine list
 ```
 
-Shows only items that are currently installed or configured — a quick "what's set up on this machine" view. Unlike `shine check`, entries that are not installed are omitted.
+Shows only items that are currently installed or configured — a quick "what's set up on this machine" view. Unlike `shine check`, entries that are not installed are omitted and status details are not shown.
 
 ```
 Shell Presets
-  ✓  proxy/setproxy       installed
-  ✓  proxy/usetproxy      installed
+  proxy/setproxy
+  proxy/usetproxy
 
 App Configs
-  ✓  git      →  ~/.gitconfig                    up-to-date
-  ↑  starship →  ~/.config/starship/starship.toml  update available
-
-Summary  2 shell · 2 app
+  git       →  ~/.gitconfig
+  starship  →  ~/.config/starship/starship.toml
 ```
 
 If nothing is installed yet, `shine list` prints a hint to run `shine shell install` or `shine app install`.
@@ -269,7 +267,7 @@ Shell Presets
 App Configs
   ✓  JetBrains/IdeaVim  →  ~/.ideavimrc              up-to-date
   ✓  git                →  ~/.gitconfig               up-to-date
-  ↑  starship           →  ~/.config/starship/...     update available  run `shine app install`
+  ↑  starship           →  ~/.config/starship/...     update available  run `shine upgrade`
   ✗  vim                →  ~/.vim                     not installed
 
 Summary  2 up-to-date · 1 update available · 1 not installed
@@ -280,7 +278,7 @@ Status symbols:
 | Symbol | Meaning |
 |--------|---------|
 | `✓` | Installed and up-to-date |
-| `↑` | Update available — run `shine app install` |
+| `↑` | Update available — run `shine upgrade` |
 | `~` | User-modified or partial install |
 | `!` | Destination missing (was installed) |
 | `✗` | Not installed |
@@ -312,15 +310,16 @@ All `install`, `check`, and `list` commands will automatically read from the ext
 `shine` checks the latest GitHub Release for `biulight/shine` before executing commands and caches the result for 24 hours under `~/.shine/`.
 
 - Newer `major` or `minor` release: prints an upgrade reminder and continues
-- Newer `patch` release: requires you to upgrade before continuing
+- Newer `patch` release: requires `shine self upgrade` before continuing
 - Network/API failures: silently skipped, command execution continues
 - Cache writes are best-effort: if `~/.shine/update-check.json` cannot be written, the update result is still used for the current command
 
 Manual commands:
 
 ```bash
-shine update   # force-check the latest release, do not install
-shine upgrade  # download and install the latest release for this platform
+shine update        # show installed config status, then force-check the latest release
+shine self upgrade  # download and install the latest release for this platform
+shine upgrade       # force-update installed shell and app configs
 ```
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
@@ -354,7 +353,7 @@ Configures simultaneously:
 - Git global config (`http.proxy`, `https.proxy`)
 - npm / yarn / pnpm proxy settings
 
-Default ports: HTTP `6152`, SOCKS5 `6153` (edit `~/.shine/env.toml` to change).
+Default ports: HTTP `6152`, SOCKS5 `6153` (edit `[env]` in `~/.shine/config.toml` to change).
 
 **Unset proxy:**
 
@@ -409,6 +408,16 @@ You can also change the fallback install root for app presets that do not carry 
 
 ```toml
 app_default_dest_root = "~/.config"
+```
+
+Template variables live in the `[env]` table:
+
+```toml
+[env]
+HTTP_PROXY_PORT = "6152"
+SOCKS5_PROXY_PORT = "6153"
+PROXY_HOST = "127.0.0.1"
+PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
 ```
 
 ## Directory Layout

@@ -5,6 +5,34 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.14.0] — 2026-05-03
+
+### Features
+
+- **Command update flow refactor** — `shine self upgrade` now handles binary upgrades, while top-level `shine upgrade` force-updates installed shell and app configs.
+- **`shine update` status preflight** — manual update checks now show installed config status before checking the latest release.
+- **Simplified `shine list`** — the installed-only list now shows only configured items without status labels.
+- **Env config moved into `config.toml`** — template variables now live under `[env]` in `~/.shine/config.toml`. Existing `env.toml` files are migrated automatically and removed after a successful migration.
+
+### Breaking Changes
+
+- Removed the public `shine env upgrade` command. After changing env values, run `shine upgrade` to apply them to installed presets.
+- Removed the public `shine env path` command because env values now live in `config.toml`.
+
+### Fixes
+
+- **`shine self install` overwrite behavior** — installing from a newer binary now stages to a temporary file and atomically replaces the old destination. Running the already-installed system copy now fails with an actionable message instead of pretending to reinstall itself.
+
+---
+
+## [0.13.3] — 2026-05-03
+
+### Fixes
+
+- **`setproxy` / `usetproxy` now work without `source` prefix** — running `setproxy` directly in a terminal no longer silently drops environment variables. `shine shell install` now writes shell wrapper functions (`setproxy() { source ... }`) into the shell config sentinel block for any preset declared with `needs_source = true`, so proxy env vars are properly exported to the calling shell. The `proxy` category presets carry this flag automatically.
+
+---
+
 ## [0.13.2] — 2026-05-03
 
 ### Features

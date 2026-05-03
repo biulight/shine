@@ -142,7 +142,62 @@ pub(crate) async fn handle_install(
         link_parts.join(&sep)
     );
 
-    append_path_to_shell_config(config, force).await?;
+    let source_commands: Vec<String> = categories
+        .iter()
+        .flat_map(|cat| cat.files.iter())
+        .filter(|f| f.needs_source)
+        .map(|f| f.command_name.clone())
+        .collect();
+
+    append_path_to_shell_config(config, force, &source_commands).await?;
+    Ok(())
+}
+
+pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
+    let categories = if config.is_external_presets {
+        metadata::load_installed_categories(config, None).await?
+    } else {
+        metadata::load_embedded_categories(None)?
+    };
+
+    let mut installed_categories = Vec::new();
+    for cat in &categories {
+        let has_installed_file = cat.files.iter().any(|file| {
+            let source = config
+                .presets_dir()
+                .join("shell")
+                .join(&cat.name)
+                .join(&file.source_rel);
+            let rendered = config
+                .rendered_dir()
+                .join("shell")
+                .join(&cat.name)
+                .join(&file.source_rel);
+            let link = config.bin_dir().join(&file.command_name);
+            source.exists() || rendered.exists() || link.exists()
+        });
+        if has_installed_file {
+            installed_categories.push(cat.name.clone());
+        }
+    }
+
+    if installed_categories.is_empty() {
+        println!("{}", colors::dim("No installed shell presets found."));
+        return Ok(());
+    }
+
+    println!(
+        "{}  {}",
+        colors::bold("Shell Presets"),
+        colors::dim(&format!(
+            "{} installed categories",
+            installed_categories.len()
+        ))
+    );
+    for category in installed_categories {
+        handle_install(config, Some(&category), true).await?;
+    }
+
     Ok(())
 }
 
@@ -340,13 +395,13 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
 
 /// For each script that declares `# shine-template: true`, read the template from
 /// `source_path` (presets_dir — never modified), substitute env variables from
-/// `~/.shine/env.toml`, and write the rendered result to `rendered_path`
+/// `config.toml` `[env]`, and write the rendered result to `rendered_path`
 /// (rendered_dir — always shine-managed).  File permissions are copied from source.
 async fn apply_template_to_scripts(config: &Config, script_pairs: &[(PathBuf, PathBuf)]) {
-    let env = match EnvConfig::load_or_init(config.shine_dir()).await {
+    let env = match EnvConfig::load_or_init(config).await {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("Warning: could not load env.toml: {e:#}");
+            eprintln!("Warning: could not load config.toml [env]: {e:#}");
             return;
         }
     };
@@ -405,17 +460,39 @@ async fn apply_template_to_scripts(config: &Config, script_pairs: &[(PathBuf, Pa
 }
 
 /// Build the PATH export snippet for the given shell, using `$HOME` when possible.
-fn path_export_snippet(shell: &ShellType, bin_dir: &Path, home_dir: &Path) -> String {
+/// For commands that need sourcing, wrapper functions are appended so that the user
+/// can type `setproxy` directly without prefixing `source`.
+fn path_export_snippet(
+    shell: &ShellType,
+    bin_dir: &Path,
+    home_dir: &Path,
+    source_commands: &[String],
+) -> String {
     let bin_str = match bin_dir.strip_prefix(home_dir) {
         Ok(rel) => format!("$HOME/{}", rel.display()),
         Err(_) => bin_dir.display().to_string(),
     };
-    let body = match shell {
+    let mut body = match shell {
         ShellType::Fish => format!("fish_add_path \"{bin_str}\""),
         _ => format!(
             "if [[ \":$PATH:\" != *\":{bin_str}:\"* ]]; then\n  export PATH=\"{bin_str}:$PATH\"\nfi"
         ),
     };
+    // Wrapper functions for scripts that must be sourced to export env vars.
+    for cmd in source_commands {
+        match shell {
+            ShellType::Fish => {
+                body.push_str(&format!(
+                    "\nfunction {cmd}\n  source \"{bin_str}/{cmd}\" $argv\nend"
+                ));
+            }
+            _ => {
+                body.push_str(&format!(
+                    "\n{cmd}() {{ source \"{bin_str}/{cmd}\" \"$@\"; }}"
+                ));
+            }
+        }
+    }
     format!("{SENTINEL_START}\n{body}\n{SENTINEL_END}\n")
 }
 
@@ -444,7 +521,11 @@ fn remove_sentinel_block(content: &str) -> String {
     format!("{}{}", &content[..block_start], &content[end..])
 }
 
-async fn append_path_to_shell_config(config: &Config, force: bool) -> Result<()> {
+async fn append_path_to_shell_config(
+    config: &Config,
+    force: bool,
+    source_commands: &[String],
+) -> Result<()> {
     let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
 
     if let Some(parent) = config_path.parent() {
@@ -475,7 +556,12 @@ async fn append_path_to_shell_config(config: &Config, force: bool) -> Result<()>
     let existing = tokio::fs::read_to_string(&config_path)
         .await
         .unwrap_or_default();
-    let snippet = path_export_snippet(&config.shell_type, config.bin_dir(), &config.home_dir);
+    let snippet = path_export_snippet(
+        &config.shell_type,
+        config.bin_dir(),
+        &config.home_dir,
+        source_commands,
+    );
 
     // Write the complete new content atomically so the file is closed (and thus
     // fully visible to subsequent reads) before this function returns.
@@ -682,7 +768,7 @@ mod tests {
     fn snippet_uses_home_relative_path() {
         let home = PathBuf::from("/home/user");
         let bin = home.join(".shine/bin");
-        let snippet = path_export_snippet(&ShellType::Zsh, &bin, &home);
+        let snippet = path_export_snippet(&ShellType::Zsh, &bin, &home, &[]);
         assert!(
             snippet.contains("$HOME/.shine/bin"),
             "should use $HOME: {snippet}"
@@ -695,7 +781,7 @@ mod tests {
     fn snippet_uses_absolute_path_when_outside_home() {
         let home = PathBuf::from("/home/user");
         let bin = PathBuf::from("/opt/shine/bin");
-        let snippet = path_export_snippet(&ShellType::Zsh, &bin, &home);
+        let snippet = path_export_snippet(&ShellType::Zsh, &bin, &home, &[]);
         assert!(
             snippet.contains("/opt/shine/bin"),
             "should use absolute: {snippet}"
@@ -707,7 +793,7 @@ mod tests {
     fn snippet_fish_uses_fish_add_path() {
         let home = PathBuf::from("/home/user");
         let bin = home.join("bin");
-        let snippet = path_export_snippet(&ShellType::Fish, &bin, &home);
+        let snippet = path_export_snippet(&ShellType::Fish, &bin, &home, &[]);
         assert!(
             snippet.contains("fish_add_path"),
             "fish should use fish_add_path: {snippet}"
@@ -719,13 +805,36 @@ mod tests {
         let home = PathBuf::from("/home/user");
         let bin = home.join("bin");
         for shell in [ShellType::Bash, ShellType::Zsh] {
-            let snippet = path_export_snippet(&shell, &bin, &home);
+            let snippet = path_export_snippet(&shell, &bin, &home, &[]);
             assert!(
                 snippet.contains("if [["),
                 "{shell:?} should have if-guard: {snippet}"
             );
             assert!(snippet.contains("export PATH="));
         }
+    }
+
+    #[test]
+    fn snippet_source_commands_generate_wrapper_functions() {
+        let home = PathBuf::from("/home/user");
+        let bin = home.join(".shine/bin");
+        let cmds = vec!["setproxy".to_string(), "usetproxy".to_string()];
+        for shell in [ShellType::Bash, ShellType::Zsh] {
+            let snippet = path_export_snippet(&shell, &bin, &home, &cmds);
+            assert!(
+                snippet.contains("setproxy() { source"),
+                "{shell:?} should have setproxy wrapper: {snippet}"
+            );
+            assert!(
+                snippet.contains("usetproxy() { source"),
+                "{shell:?} should have usetproxy wrapper: {snippet}"
+            );
+        }
+        let fish_snippet = path_export_snippet(&ShellType::Fish, &bin, &home, &cmds);
+        assert!(
+            fish_snippet.contains("function setproxy"),
+            "fish should have setproxy function: {fish_snippet}"
+        );
     }
 
     #[test]
@@ -747,7 +856,9 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config, false).await.unwrap();
+        append_path_to_shell_config(&config, false, &[])
+            .await
+            .unwrap();
 
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let content = fs::read_to_string(&config_path).await.unwrap();
@@ -762,8 +873,12 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config, false).await.unwrap();
-        append_path_to_shell_config(&config, false).await.unwrap();
+        append_path_to_shell_config(&config, false, &[])
+            .await
+            .unwrap();
+        append_path_to_shell_config(&config, false, &[])
+            .await
+            .unwrap();
 
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let content = fs::read_to_string(&config_path).await.unwrap();
@@ -776,7 +891,9 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        append_path_to_shell_config(&config, false).await.unwrap();
+        append_path_to_shell_config(&config, false, &[])
+            .await
+            .unwrap();
         remove_path_from_shell_config(&config).await.unwrap();
 
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();

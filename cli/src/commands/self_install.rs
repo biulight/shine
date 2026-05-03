@@ -8,4 +8,6 @@ pub enum SelfCommands {
         #[arg(long, value_name = "PATH", default_value = "/usr/local/bin/shine")]
         dest: std::path::PathBuf,
     },
+    /// Download and install the latest shine release for this platform
+    Upgrade,
 }
