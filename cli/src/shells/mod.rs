@@ -660,6 +660,12 @@ fn remove_sentinel_block(content: &str) -> String {
     format!("{}{}", &content[..block_start], &content[end..])
 }
 
+fn sentinel_block(content: &str) -> Option<&str> {
+    let start = content.find(SENTINEL_START)?;
+    let end = content[start..].find(SENTINEL_END)? + start + SENTINEL_END.len();
+    Some(&content[start..end])
+}
+
 async fn append_path_to_shell_config(
     config: &Config,
     force: bool,
@@ -676,12 +682,20 @@ async fn append_path_to_shell_config(
     let existing = tokio::fs::read_to_string(&config_path)
         .await
         .unwrap_or_default();
+    let snippet = path_export_snippet(
+        &config.shell_type,
+        config.bin_dir(),
+        &config.home_dir,
+        source_commands,
+    );
 
-    if existing.contains(SENTINEL_START) {
-        if !force {
+    if let Some(existing_block) = sentinel_block(&existing) {
+        let expected_block = snippet.trim_end_matches('\n');
+        if !force && existing_block == expected_block {
             return Ok(PathUpdateStatus::AlreadyConfigured);
         }
-        // Force: remove old sentinel block and re-add with current snippet.
+        // Force or stale managed block: remove old sentinel block and re-add
+        // with the current PATH setup and source wrapper functions.
         let cleaned = remove_sentinel_block(&existing);
         tokio::fs::write(&config_path, cleaned.as_bytes())
             .await
@@ -691,12 +705,6 @@ async fn append_path_to_shell_config(
     let existing = tokio::fs::read_to_string(&config_path)
         .await
         .unwrap_or_default();
-    let snippet = path_export_snippet(
-        &config.shell_type,
-        config.bin_dir(),
-        &config.home_dir,
-        source_commands,
-    );
 
     // Write the complete new content atomically so the file is closed (and thus
     // fully visible to subsequent reads) before this function returns.
@@ -1018,6 +1026,87 @@ mod tests {
         let content = fs::read_to_string(&config_path).await.unwrap();
         let count = content.matches(SENTINEL_START).count();
         assert_eq!(count, 1, "sentinel should appear exactly once");
+    }
+
+    #[tokio::test]
+    async fn append_is_idempotent_with_source_wrappers() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
+
+        append_path_to_shell_config(&config, false, &source_commands)
+            .await
+            .unwrap();
+        append_path_to_shell_config(&config, false, &source_commands)
+            .await
+            .unwrap();
+
+        let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
+        let content = fs::read_to_string(&config_path).await.unwrap();
+        assert_eq!(
+            content.matches(SENTINEL_START).count(),
+            1,
+            "sentinel should appear exactly once"
+        );
+        assert_eq!(
+            content.matches("\nsetproxy() { source").count(),
+            1,
+            "setproxy wrapper should not be duplicated: {content}"
+        );
+        assert_eq!(
+            content.matches("\nusetproxy() { source").count(),
+            1,
+            "usetproxy wrapper should not be duplicated: {content}"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn append_refreshes_stale_sentinel_with_source_wrappers() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).await.unwrap();
+        }
+        fs::write(
+            &config_path,
+            format!(
+                "before\n\n{SENTINEL_START}\nif [[ \":$PATH:\" != *\":$HOME/.shine/bin:\"* ]]; then\n  export PATH=\"$HOME/.shine/bin:$PATH\"\nfi\n{SENTINEL_END}\nafter\n"
+            ),
+        )
+        .await
+        .unwrap();
+
+        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
+        let status = append_path_to_shell_config(&config, false, &source_commands)
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(status, PathUpdateStatus::Updated(_)),
+            "stale sentinel should be refreshed"
+        );
+        let content = fs::read_to_string(&config_path).await.unwrap();
+        assert!(
+            content.contains("setproxy() { source"),
+            "setproxy wrapper should be added: {content}"
+        );
+        assert!(
+            content.contains("usetproxy() { source"),
+            "usetproxy wrapper should be added: {content}"
+        );
+        assert!(
+            content.contains("before"),
+            "non-managed content should be preserved"
+        );
+        assert!(
+            content.contains("after"),
+            "non-managed content should be preserved"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
