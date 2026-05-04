@@ -14,6 +14,7 @@ const SENTINEL_END: &str = "# <<< shine <<<";
 
 #[derive(Debug, Default)]
 pub(crate) struct ShellUpgradeReport {
+    pub templates_updated: usize,
     pub links_created: usize,
     pub links_updated: usize,
     pub link_conflicts: usize,
@@ -74,7 +75,7 @@ pub(crate) async fn handle_install(
     let categories = metadata::load_installed_categories(config, category).await?;
     // Build (template_source, rendered_dest) pairs for all scripts.
     // apply_template_to_scripts renders source → rendered_dir, never modifies presets_dir.
-    let script_pairs: Vec<(PathBuf, PathBuf)> = categories
+    let script_pairs: Vec<ScriptTemplate> = categories
         .iter()
         .flat_map(|cat| {
             cat.files.iter().map(|file| {
@@ -88,14 +89,18 @@ pub(crate) async fn handle_install(
                     .join("shell")
                     .join(&cat.name)
                     .join(&file.source_rel);
-                (source, rendered)
+                ScriptTemplate {
+                    source_path: source,
+                    rendered_path: rendered,
+                    display_name: format!("{}/{}", cat.name, file.command_name),
+                }
             })
         })
         .collect();
 
     // Apply env-variable substitution to scripts that opt in via `# shine-template: true`.
     // Output goes to rendered_dir; presets_dir templates are left untouched.
-    apply_template_to_scripts(config, &script_pairs).await?;
+    let _ = apply_template_to_scripts(config, &script_pairs).await?;
 
     // Symlinks point to the rendered file when one was produced, otherwise to the
     // raw source in presets_dir (non-template scripts).
@@ -238,7 +243,7 @@ pub(crate) async fn handle_upgrade_installed(
         });
     }
 
-    let script_pairs: Vec<(PathBuf, PathBuf)> = categories
+    let script_pairs: Vec<ScriptTemplate> = categories
         .iter()
         .flat_map(|cat| {
             cat.files.iter().map(|file| {
@@ -252,11 +257,18 @@ pub(crate) async fn handle_upgrade_installed(
                     .join("shell")
                     .join(&cat.name)
                     .join(&file.source_rel);
-                (source, rendered)
+                ScriptTemplate {
+                    source_path: source,
+                    rendered_path: rendered,
+                    display_name: format!("{}/{}", cat.name, file.command_name),
+                }
             })
         })
         .collect();
-    apply_template_to_scripts(config, &script_pairs).await?;
+    let template_report = apply_template_to_scripts(config, &script_pairs).await?;
+    for name in &template_report.updated {
+        println!("  {}  {}", colors::symbol("✓"), name);
+    }
 
     let link_specs: Vec<_> = categories
         .iter()
@@ -334,6 +346,7 @@ pub(crate) async fn handle_upgrade_installed(
     };
 
     Ok(ShellUpgradeReport {
+        templates_updated: template_report.updated.len(),
         links_created: link_report.created.len(),
         links_updated: link_report.overwritten.len(),
         link_conflicts: link_report.conflicts.len(),
@@ -544,15 +557,27 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
 /// `source_path` (presets_dir — never modified), substitute env variables from
 /// `config.toml` `[env]`, and write the rendered result to `rendered_path`
 /// (rendered_dir — always shine-managed).  File permissions are copied from source.
+struct ScriptTemplate {
+    source_path: PathBuf,
+    rendered_path: PathBuf,
+    display_name: String,
+}
+
+#[derive(Default)]
+struct TemplateRenderReport {
+    updated: Vec<String>,
+}
+
 async fn apply_template_to_scripts(
     config: &Config,
-    script_pairs: &[(PathBuf, PathBuf)],
-) -> Result<()> {
+    script_pairs: &[ScriptTemplate],
+) -> Result<TemplateRenderReport> {
     let env = EnvConfig::load_or_init(config).await?;
     let env_map = env.as_map().clone();
+    let mut report = TemplateRenderReport::default();
 
-    for (source_path, rendered_path) in script_pairs {
-        let content = match tokio::fs::read(source_path).await {
+    for script in script_pairs {
+        let content = match tokio::fs::read(&script.source_path).await {
             Ok(b) => b,
             Err(_) => continue,
         };
@@ -566,45 +591,59 @@ async fn apply_template_to_scripts(
                 Ok(b) => b,
                 Err(e) => bail!(
                     "template substitution failed for {}: {e:#}",
-                    source_path.display()
+                    script.source_path.display()
                 ),
             };
 
         #[cfg(unix)]
         let mode = {
             use std::os::unix::fs::PermissionsExt;
-            tokio::fs::metadata(source_path)
+            tokio::fs::metadata(&script.source_path)
                 .await
                 .map(|m| m.permissions().mode())
                 .unwrap_or(0o755)
         };
 
-        if let Some(parent) = rendered_path.parent() {
+        let was_changed = tokio::fs::read(&script.rendered_path)
+            .await
+            .map(|current| current != rendered)
+            .unwrap_or(true);
+
+        if let Some(parent) = script.rendered_path.parent() {
             tokio::fs::create_dir_all(parent).await.with_context(|| {
                 format!("creating rendered script directory: {}", parent.display())
             })?;
         }
 
-        tokio::fs::write(rendered_path, &rendered)
+        tokio::fs::write(&script.rendered_path, &rendered)
             .await
-            .with_context(|| format!("writing rendered script: {}", rendered_path.display()))?;
+            .with_context(|| {
+                format!(
+                    "writing rendered script: {}",
+                    script.rendered_path.display()
+                )
+            })?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(mode);
-            tokio::fs::set_permissions(rendered_path, perms)
+            tokio::fs::set_permissions(&script.rendered_path, perms)
                 .await
                 .with_context(|| {
                     format!(
                         "setting rendered script permissions: {}",
-                        rendered_path.display()
+                        script.rendered_path.display()
                     )
                 })?;
         }
+
+        if was_changed {
+            report.updated.push(script.display_name.clone());
+        }
     }
 
-    Ok(())
+    Ok(report)
 }
 
 /// Build the PATH export snippet for the given shell, using `$HOME` when possible.
@@ -1378,8 +1417,20 @@ mod tests {
             "tools preset should start as present but not installed"
         );
 
-        handle_upgrade_installed(&config, false).await.unwrap();
+        fs::write(
+            &setproxy,
+            b"#!/bin/bash\n# shine-template: true\necho changed @@PROXY_HOST@@\n",
+        )
+        .await
+        .unwrap();
+        make_executable(&setproxy).await;
 
+        let report = handle_upgrade_installed(&config, false).await.unwrap();
+
+        assert_eq!(
+            report.templates_updated, 1,
+            "changed shell template should be reported under shell presets"
+        );
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(
             !config.bin_dir().join("test_tools").exists(),

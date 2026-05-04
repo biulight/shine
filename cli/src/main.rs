@@ -337,6 +337,7 @@ async fn handle_config_upgrade(config: &Config, verbose: bool) -> Result<()> {
     let app_report = Box::pin(apps::handle_upgrade_installed(config)).await?;
 
     let updated = env_report.updated
+        + shell_report.templates_updated
         + shell_report.links_created
         + shell_report.links_updated
         + usize::from(shell_report.path_changed)
