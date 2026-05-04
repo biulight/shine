@@ -5,6 +5,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.14.4] — 2026-05-04
+
+### Fixes
+
+- Fixed `shine upgrade` for existing proxy installs so stale shell config blocks are refreshed with the `setproxy` / `usetproxy` source wrapper functions. Upgraded installs can use `setproxy` directly again without manually prefixing `source`.
+
 ## [0.14.3] — 2026-05-04
 
 ### Fixes
