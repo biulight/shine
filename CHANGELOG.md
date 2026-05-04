@@ -5,6 +5,14 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.14.3] — 2026-05-04
+
+### Fixes
+
+- Reduced `shine upgrade` output noise by printing a single external-presets note and one final summary.
+- Added `shine upgrade --verbose` for expanded env-template checks while keeping the default output focused on actionable changes.
+- Suppressed shell PATH status during `shine upgrade` when the shell config is already correctly configured.
+
 ## [0.14.2] — 2026-05-04
 
 ### Features

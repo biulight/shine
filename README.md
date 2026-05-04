@@ -357,6 +357,7 @@ Manual commands:
 shine update        # show installed config status, then force-check the latest release
 shine self upgrade  # download and install the latest release for this platform
 shine upgrade       # force-update installed shell and app configs
+shine upgrade --verbose  # include env-template check details
 ```
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
