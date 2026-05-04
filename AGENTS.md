@@ -32,6 +32,27 @@ typos                          # spell-check
 
 Pre-commit runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo deny check`, `typos`, and `cargo nextest run` on every commit. All must pass before committing.
 
+## Verification Notes
+
+- In sandboxed environments, prefer `cargo ... --target-dir target` for ad hoc builds/tests/runs. This keeps build artifacts in the repo-local ignored `target/` directory and avoids permission failures from a global Cargo target dir.
+- Most `shine` commands call `Config::load_or_init()` and may create config state even for read-oriented commands. Use a repo-local ignored config dir when verifying CLI behavior:
+
+```bash
+mkdir -p .tmp-home/.shine
+env SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine cargo run --target-dir target -- app list
+```
+
+- `SHINE_CONFIG_DIR` has higher priority than `SHINE_PRESETS` and `config.toml` `presets_dir`. When it is set, the runtime presets directory is `$SHINE_CONFIG_DIR/presets/`.
+- Built-in app listing commands read embedded presets unless an external presets mode is active:
+  - Without `SHINE_CONFIG_DIR`, `SHINE_PRESETS`, or `presets_dir`, use `cargo run --target-dir target -- app list` and `cargo run --target-dir target -- app info <category>` to verify embedded app metadata.
+  - With `SHINE_CONFIG_DIR` set, `app list` / `app info` verify presets from `$SHINE_CONFIG_DIR/presets/app/`; copy the preset under test there first, or unset `SHINE_CONFIG_DIR`.
+- `app install <category> --dry-run` uses the runtime presets directory when external presets mode is active. With `SHINE_CONFIG_DIR` set, copy the preset under test into `.tmp-home/.shine/presets/app/<category>/` before running install dry-runs.
+- For metadata-driven app presets, verify with:
+  - a targeted unit test for destination resolution or metadata parsing
+  - `cargo run --target-dir target -- app list`
+  - `cargo run --target-dir target -- app info <category>`
+  - `cargo run --target-dir target -- app install <category> --dry-run`
+
 ## Architecture
 
 ### Workspace layout

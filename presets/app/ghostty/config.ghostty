@@ -1,0 +1,22 @@
+# window-width = 160
+# window-height = 50
+
+font-family = "JetBrains Mono Nerd Font"
+font-size = 14
+font-thicken = true
+
+theme = light:Catppuccin Latte,dark:Catppuccin Mocha
+
+background-opacity = 0.9
+background-blur-radius = 20
+
+window-save-state = always
+
+clipboard-paste-protection = true
+clipboard-paste-bracketed-safe = true
+
+scrollback-limit = 25000000
+
+keybind = global:ctrl+backslash=toggle_quick_terminal
+quick-terminal-position = top
+quick-terminal-autohide = true
