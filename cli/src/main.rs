@@ -17,7 +17,7 @@ mod update_check;
 
 use crate::config::Config;
 use commands::{
-    AppCommands, EnvCommands, PresetsCommands, SelfCommands, ShellCommands, SysCommands,
+    AppCommands, EnvCommands, ExportCommand, LinkCommand, SelfCommands, ShellCommands, SysCommands,
 };
 use update_check::UpdateStatus;
 
@@ -52,11 +52,12 @@ enum Commands {
     },
     /// List installed shell presets and app configs
     List,
-    /// Manage the external presets directory (link, unlink, export)
-    Presets {
-        #[command(subcommand)]
-        command: PresetsCommands,
-    },
+    /// Copy built-in presets to a directory for local customization
+    Export(ExportCommand),
+    /// Set the external presets directory in ~/.shine/config.toml
+    Link(LinkCommand),
+    /// Remove the external presets directory from ~/.shine/config.toml
+    Unlink,
     /// Show installed config status and check for a newer version of shine
     Update,
     /// Force-update installed shell and app configs
@@ -111,7 +112,11 @@ async fn main() -> Result<()> {
     // should remain available even when the current binary is version-gated.
     if !matches!(
         cli.command,
-        Commands::Update | Commands::Presets { .. } | Commands::Self_ { .. }
+        Commands::Update
+            | Commands::Export(..)
+            | Commands::Link(..)
+            | Commands::Unlink
+            | Commands::Self_ { .. }
     ) {
         match update_check::check_for_update(&config).await {
             Ok(UpdateStatus::UpToDate) => {}
@@ -164,15 +169,13 @@ async fn main() -> Result<()> {
         },
         Commands::Update => handle_update(&config).await,
         Commands::Upgrade => handle_config_upgrade(&config).await,
-        Commands::Presets { command } => match command {
-            PresetsCommands::Export { dir, force } => {
-                Box::pin(handle_presets_export(&config, dir, force)).await
-            }
-            PresetsCommands::Link { path, create } => {
-                Box::pin(handle_presets_link(&config, path, create)).await
-            }
-            PresetsCommands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
-        },
+        Commands::Export(ExportCommand { dir, force }) => {
+            Box::pin(handle_presets_export(&config, dir, force)).await
+        }
+        Commands::Link(LinkCommand { path, create }) => {
+            Box::pin(handle_presets_link(&config, path, create)).await
+        }
+        Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
         Commands::List => Box::pin(list::handle_list(&config)).await,
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
@@ -395,7 +398,7 @@ async fn handle_presets_export(config: &Config, dir: Option<PathBuf>, force: boo
     if !config.is_external_presets {
         println!();
         println!(
-            "Tip: run `shine presets link {}` to activate this directory.",
+            "Tip: run `shine link {}` to activate this directory.",
             target.display()
         );
     }
@@ -470,7 +473,7 @@ async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -> Re
     println!("{}", colors::external_presets_note(&absolute));
     println!(
         "{}",
-        colors::dim("Run `shine presets export` to populate the directory with built-in presets.")
+        colors::dim("Run `shine export` to populate the directory with built-in presets.")
     );
 
     Ok(())
@@ -654,6 +657,27 @@ mod tests {
     }
 
     #[test]
+    fn cli_accepts_top_level_presets_commands() {
+        let cli = Cli::try_parse_from(["shine", "export"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Export(ExportCommand {
+                dir: None,
+                force: false
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "link", "/tmp/presets", "--create"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Link(LinkCommand { create: true, .. })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "unlink"]).unwrap();
+        assert!(matches!(cli.command, Commands::Unlink));
+    }
+
+    #[test]
     fn cli_rejects_removed_env_upgrade_commands() {
         assert!(Cli::try_parse_from(["shine", "env", "upgrade"]).is_err());
         assert!(Cli::try_parse_from(["shine", "env", "update"]).is_err());
@@ -665,6 +689,14 @@ mod tests {
         assert!(Cli::try_parse_from(["shine", "check"]).is_err());
         assert!(Cli::try_parse_from(["shine", "check", "app"]).is_err());
         assert!(Cli::try_parse_from(["shine", "check", "shell"]).is_err());
+    }
+
+    #[test]
+    fn cli_rejects_removed_presets_subcommands() {
+        assert!(Cli::try_parse_from(["shine", "presets"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "presets", "export"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "presets", "link", "/tmp/presets"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "presets", "unlink"]).is_err());
     }
 
     #[tokio::test]

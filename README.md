@@ -7,7 +7,7 @@ A fast Rust CLI tool for managing shell environment presets.
 ## Features
 
 - **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
-- **External presets** — point `presets_dir` at your own directory (e.g. a dotfiles repo) and `shine` reads from there instead; `shine presets export` seeds it with the built-ins
+- **External presets** — point `presets_dir` at your own directory (e.g. a dotfiles repo) and `shine` reads from there instead; `shine export` seeds it with the built-ins
 - **Symlink-based bin directory** — `~/.shine/bin/` holds flat symlinks to installed scripts; add it to `PATH` once
 - **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
 - **Category install/uninstall** — install or uninstall all presets or a specific subset (e.g. `proxy`)
@@ -316,10 +316,17 @@ Status symbols:
 ### Export and customize presets
 
 ```bash
-shine presets export
+shine export
 ```
 
 Copies all built-in shell scripts and app configs into your configured `presets_dir` (default `~/.shine/presets/`). Once exported you can edit the files freely — `shine` will read from the filesystem copy instead of the embedded binary on subsequent installs.
+
+To switch `shine` to a custom preset source directory with the CLI:
+
+```bash
+shine link ~/dotfiles/shine-presets --create
+shine export
+```
 
 To use a custom directory as your preset source, set `presets_dir` in `~/.shine/config.toml`:
 
@@ -330,7 +337,7 @@ presets_dir = "~/dotfiles/shine-presets"
 Then export the defaults there as a starting point:
 
 ```bash
-SHINE_PRESETS=~/dotfiles/shine-presets shine presets export
+SHINE_PRESETS=~/dotfiles/shine-presets shine export
 ```
 
 All `install`, `update`, and `list` commands will automatically read from the external directory when `presets_dir` is configured. The active preset source is printed in each command's output so you always know which files are being used.

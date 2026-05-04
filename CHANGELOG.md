@@ -5,6 +5,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.14.2] — 2026-05-04
+
+### Features
+
+- Simplified external preset management commands: `shine export`, `shine link`, and `shine unlink` are now top-level commands, and the old `shine presets ...` entrypoints were removed.
+
 ## [0.14.1] — 2026-05-04
 
 ### Features
