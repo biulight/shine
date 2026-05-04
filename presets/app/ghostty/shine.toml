@@ -1,0 +1,2 @@
+description = "Ghostty terminal configuration."
+dest = "~/.config/ghostty"

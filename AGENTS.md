@@ -32,6 +32,27 @@ typos                          # spell-check
 
 Pre-commit runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo deny check`, `typos`, and `cargo nextest run` on every commit. All must pass before committing.
 
+## Verification Notes
+
+- In sandboxed environments, prefer `cargo ... --target-dir target` for ad hoc builds/tests/runs. This avoids permission failures when Cargo tries to use a global target dir such as `~/.target/`.
+- `shine` may write `~/.shine/config.toml` even for read-oriented commands like `app list` or `app info`, because `Config::load_or_init()` initializes config on first run.
+- When verifying CLI behavior under sandbox restrictions, point `SHINE_CONFIG_DIR` at a writable repo-local temp directory, for example:
+
+```bash
+mkdir -p .tmp-home/.shine
+env SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine cargo run --target-dir target -- app list
+```
+
+- Important: `SHINE_CONFIG_DIR` has higher priority than `SHINE_PRESETS`. Once `SHINE_CONFIG_DIR` is set, presets are read from `$SHINE_CONFIG_DIR/presets/`.
+- For app-preset verification with `SHINE_CONFIG_DIR` set, either:
+  - copy the preset under test into `.tmp-home/.shine/presets/app/<category>/`, or
+  - avoid overriding `SHINE_CONFIG_DIR` if the real `~/.shine` is writable.
+- For metadata-driven app presets, verify with:
+  - a targeted unit test for `resolve_install_destination(...)`
+  - `cargo run --target-dir target -- app list`
+  - `cargo run --target-dir target -- app info <category>`
+  - `cargo run --target-dir target -- app install <category> --dry-run`
+
 ## Architecture
 
 ### Workspace layout

@@ -941,6 +941,40 @@ mod tests {
     #[cfg(unix)]
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
+    async fn install_places_ghostty_config_under_config_root() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        presets::extract_prefix("app/ghostty", config.presets_dir(), false)
+            .await
+            .unwrap();
+
+        let categories = metadata::load_installed_categories(&config, Some("ghostty"))
+            .await
+            .unwrap();
+        let ghostty = categories.iter().find(|c| c.name == "ghostty").unwrap();
+        let config_file = ghostty
+            .files
+            .iter()
+            .find(|f| f.source_rel == std::path::Path::new("config.ghostty"))
+            .unwrap();
+        let destination = resolve_install_destination(ghostty, config_file, &config).unwrap();
+        assert_eq!(
+            destination,
+            dir.join(".config/ghostty").join("config.ghostty")
+        );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
     async fn uninstall_specific_category_only_removes_that_category() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
