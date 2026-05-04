@@ -171,3 +171,5 @@ Real user-facing bug fixes must **not** use these scopes — use the affected fe
 1. Create `presets/shell/<category>/your_script.sh` with a `#!/bin/bash` shebang and a multi-line `# description` comment block immediately after it.
 2. `cargo build` will re-embed automatically (tracked by `build.rs`).
 3. `shine shell list` will display the new category; `shine shell install <category>` will install it.
+
+@RTK.md

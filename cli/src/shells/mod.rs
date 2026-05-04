@@ -12,6 +12,20 @@ use std::str::FromStr;
 pub(crate) const SENTINEL_START: &str = "# >>> shine >>>";
 const SENTINEL_END: &str = "# <<< shine <<<";
 
+#[derive(Debug, Default)]
+pub(crate) struct ShellUpgradeReport {
+    pub links_created: usize,
+    pub links_updated: usize,
+    pub link_conflicts: usize,
+    pub path_changed: bool,
+}
+
+#[derive(Debug)]
+enum PathUpdateStatus {
+    AlreadyConfigured,
+    Updated(PathBuf),
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) enum ShellType {
     Bash,
@@ -149,11 +163,24 @@ pub(crate) async fn handle_install(
         .map(|f| f.command_name.clone())
         .collect();
 
-    append_path_to_shell_config(config, force, &source_commands).await?;
+    match append_path_to_shell_config(config, force, &source_commands).await? {
+        PathUpdateStatus::AlreadyConfigured => {
+            println!(
+                "Shell config ({}): already configured, skipped",
+                get_shell_config_path(&config.shell_type, &config.home_dir)?.display()
+            );
+        }
+        PathUpdateStatus::Updated(path) => {
+            println!("Shell config ({}): PATH updated", path.display());
+        }
+    }
     Ok(())
 }
 
-pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
+pub(crate) async fn handle_upgrade_installed(
+    config: &Config,
+    verbose: bool,
+) -> Result<ShellUpgradeReport> {
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
     } else {
@@ -182,8 +209,10 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
     }
 
     if installed_categories.is_empty() {
-        println!("{}", colors::dim("No installed shell presets found."));
-        return Ok(());
+        if verbose {
+            println!("{}", colors::dim("No installed shell presets found."));
+        }
+        return Ok(ShellUpgradeReport::default());
     }
 
     println!(
@@ -194,11 +223,121 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
             installed_categories.len()
         ))
     );
-    for category in installed_categories {
-        handle_install(config, Some(&category), true).await?;
+
+    if !config.is_external_presets {
+        for category in &installed_categories {
+            let prefix = format!("shell/{category}");
+            let _ = crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
+        }
     }
 
-    Ok(())
+    let categories = metadata::load_installed_categories(config, None).await?;
+    let categories: Vec<_> = categories
+        .into_iter()
+        .filter(|cat| installed_categories.contains(&cat.name))
+        .collect();
+
+    let script_pairs: Vec<(PathBuf, PathBuf)> = categories
+        .iter()
+        .flat_map(|cat| {
+            cat.files.iter().map(|file| {
+                let source = config
+                    .presets_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                let rendered = config
+                    .rendered_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                (source, rendered)
+            })
+        })
+        .collect();
+    apply_template_to_scripts(config, &script_pairs).await;
+
+    let link_specs: Vec<_> = categories
+        .iter()
+        .flat_map(|cat| {
+            cat.files.iter().map(|file| {
+                let source = config
+                    .presets_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                let rendered = config
+                    .rendered_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                let effective = if rendered.exists() { rendered } else { source };
+                crate::bin_links::LinkSpec {
+                    source: effective,
+                    link_name: OsString::from(&file.command_name),
+                }
+            })
+        })
+        .collect();
+    let link_report =
+        crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
+
+    let mut link_parts: Vec<String> = Vec::new();
+    if !link_report.created.is_empty() {
+        link_parts.push(colors::green(&format!(
+            "{} created",
+            link_report.created.len()
+        )));
+    }
+    if !link_report.overwritten.is_empty() {
+        link_parts.push(colors::green(&format!(
+            "{} updated",
+            link_report.overwritten.len()
+        )));
+    }
+    if verbose && !link_report.skipped.is_empty() {
+        link_parts.push(colors::dim(&format!(
+            "{} up to date",
+            link_report.skipped.len()
+        )));
+    }
+    if !link_report.conflicts.is_empty() {
+        link_parts.push(colors::yellow(&format!(
+            "{} conflicts",
+            link_report.conflicts.len()
+        )));
+    }
+    if !link_parts.is_empty() {
+        let sep = colors::dim(" · ");
+        println!(
+            "{}     {}",
+            colors::bold("Bin Links    "),
+            link_parts.join(&sep)
+        );
+    }
+
+    let source_commands: Vec<String> = categories
+        .iter()
+        .flat_map(|cat| cat.files.iter())
+        .filter(|f| f.needs_source)
+        .map(|f| f.command_name.clone())
+        .collect();
+
+    let path_status = append_path_to_shell_config(config, false, &source_commands).await?;
+    let path_changed = match path_status {
+        PathUpdateStatus::AlreadyConfigured => false,
+        PathUpdateStatus::Updated(path) => {
+            println!("Shell config ({}): PATH updated", path.display());
+            true
+        }
+    };
+
+    Ok(ShellUpgradeReport {
+        links_created: link_report.created.len(),
+        links_updated: link_report.overwritten.len(),
+        link_conflicts: link_report.conflicts.len(),
+        path_changed,
+    })
 }
 
 pub(crate) async fn handle_uninstall(
@@ -521,36 +660,23 @@ fn remove_sentinel_block(content: &str) -> String {
     format!("{}{}", &content[..block_start], &content[end..])
 }
 
+fn sentinel_block(content: &str) -> Option<&str> {
+    let start = content.find(SENTINEL_START)?;
+    let end = content[start..].find(SENTINEL_END)? + start + SENTINEL_END.len();
+    Some(&content[start..end])
+}
+
 async fn append_path_to_shell_config(
     config: &Config,
     force: bool,
     source_commands: &[String],
-) -> Result<()> {
+) -> Result<PathUpdateStatus> {
     let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
 
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .with_context(|| format!("creating directory for shell config: {parent:?}"))?;
-    }
-
-    let existing = tokio::fs::read_to_string(&config_path)
-        .await
-        .unwrap_or_default();
-
-    if existing.contains(SENTINEL_START) {
-        if !force {
-            println!(
-                "Shell config ({}): already configured, skipped",
-                config_path.display()
-            );
-            return Ok(());
-        }
-        // Force: remove old sentinel block and re-add with current snippet.
-        let cleaned = remove_sentinel_block(&existing);
-        tokio::fs::write(&config_path, cleaned.as_bytes())
-            .await
-            .with_context(|| format!("rewriting shell config: {config_path:?}"))?;
     }
 
     let existing = tokio::fs::read_to_string(&config_path)
@@ -563,6 +689,23 @@ async fn append_path_to_shell_config(
         source_commands,
     );
 
+    if let Some(existing_block) = sentinel_block(&existing) {
+        let expected_block = snippet.trim_end_matches('\n');
+        if !force && existing_block == expected_block {
+            return Ok(PathUpdateStatus::AlreadyConfigured);
+        }
+        // Force or stale managed block: remove old sentinel block and re-add
+        // with the current PATH setup and source wrapper functions.
+        let cleaned = remove_sentinel_block(&existing);
+        tokio::fs::write(&config_path, cleaned.as_bytes())
+            .await
+            .with_context(|| format!("rewriting shell config: {config_path:?}"))?;
+    }
+
+    let existing = tokio::fs::read_to_string(&config_path)
+        .await
+        .unwrap_or_default();
+
     // Write the complete new content atomically so the file is closed (and thus
     // fully visible to subsequent reads) before this function returns.
     let new_content = format!("{existing}\n{snippet}");
@@ -570,8 +713,7 @@ async fn append_path_to_shell_config(
         .await
         .with_context(|| format!("writing to shell config: {config_path:?}"))?;
 
-    println!("Shell config ({}): PATH updated", config_path.display());
-    Ok(())
+    Ok(PathUpdateStatus::Updated(config_path))
 }
 
 async fn remove_path_from_shell_config(config: &Config) -> Result<()> {
@@ -884,6 +1026,87 @@ mod tests {
         let content = fs::read_to_string(&config_path).await.unwrap();
         let count = content.matches(SENTINEL_START).count();
         assert_eq!(count, 1, "sentinel should appear exactly once");
+    }
+
+    #[tokio::test]
+    async fn append_is_idempotent_with_source_wrappers() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
+
+        append_path_to_shell_config(&config, false, &source_commands)
+            .await
+            .unwrap();
+        append_path_to_shell_config(&config, false, &source_commands)
+            .await
+            .unwrap();
+
+        let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
+        let content = fs::read_to_string(&config_path).await.unwrap();
+        assert_eq!(
+            content.matches(SENTINEL_START).count(),
+            1,
+            "sentinel should appear exactly once"
+        );
+        assert_eq!(
+            content.matches("\nsetproxy() { source").count(),
+            1,
+            "setproxy wrapper should not be duplicated: {content}"
+        );
+        assert_eq!(
+            content.matches("\nusetproxy() { source").count(),
+            1,
+            "usetproxy wrapper should not be duplicated: {content}"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn append_refreshes_stale_sentinel_with_source_wrappers() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).await.unwrap();
+        }
+        fs::write(
+            &config_path,
+            format!(
+                "before\n\n{SENTINEL_START}\nif [[ \":$PATH:\" != *\":$HOME/.shine/bin:\"* ]]; then\n  export PATH=\"$HOME/.shine/bin:$PATH\"\nfi\n{SENTINEL_END}\nafter\n"
+            ),
+        )
+        .await
+        .unwrap();
+
+        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
+        let status = append_path_to_shell_config(&config, false, &source_commands)
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(status, PathUpdateStatus::Updated(_)),
+            "stale sentinel should be refreshed"
+        );
+        let content = fs::read_to_string(&config_path).await.unwrap();
+        assert!(
+            content.contains("setproxy() { source"),
+            "setproxy wrapper should be added: {content}"
+        );
+        assert!(
+            content.contains("usetproxy() { source"),
+            "usetproxy wrapper should be added: {content}"
+        );
+        assert!(
+            content.contains("before"),
+            "non-managed content should be preserved"
+        );
+        assert!(
+            content.contains("after"),
+            "non-managed content should be preserved"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]

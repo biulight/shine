@@ -396,12 +396,16 @@ pub(crate) async fn handle_install(
     Ok(())
 }
 
-pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
-    crate::config::print_presets_note(config);
+#[derive(Debug, Default)]
+pub(crate) struct AppUpgradeReport {
+    pub updated: usize,
+    pub skipped: usize,
+}
+
+pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgradeReport> {
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
     if manifest.entries.is_empty() {
-        println!("{}", colors::dim("No installed app configs found."));
-        return Ok(());
+        return Ok(AppUpgradeReport::default());
     }
 
     let env = EnvConfig::load_or_init(config).await?;
@@ -513,6 +517,33 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
             }
         };
 
+        let new_hash = hash_content(&content);
+        match tokio::fs::read(&entry.destination).await {
+            Ok(current) => {
+                let current_hash = hash_content(&current);
+                if current_hash != entry.content_hash {
+                    eprintln!(
+                        "  {} {}: user-modified, skipped",
+                        colors::symbol("!"),
+                        entry.source
+                    );
+                    skipped += 1;
+                    continue;
+                }
+                if new_hash == entry.content_hash {
+                    println!("  {}  {}", colors::dim("-"), entry.source);
+                    skipped += 1;
+                    continue;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+                skipped += 1;
+                continue;
+            }
+        }
+
         match file_ops::install_bytes(&content, &entry.destination, true, false, true).await {
             Ok(InstallOutcome::Installed { hash })
             | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
@@ -543,17 +574,7 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
 
     manifest.save(config.shine_dir()).await?;
 
-    let mut summary_parts: Vec<String> = Vec::new();
-    if updated > 0 {
-        summary_parts.push(colors::green(&format!("{updated} updated")));
-    }
-    if skipped > 0 {
-        summary_parts.push(colors::dim(&format!("{skipped} skipped")));
-    }
-    let sep = colors::dim(" · ");
-    println!("\n{}  {}", colors::bold("Done"), summary_parts.join(&sep));
-
-    Ok(())
+    Ok(AppUpgradeReport { updated, skipped })
 }
 
 fn app_category_from_source(source: &str) -> Option<String> {
@@ -790,6 +811,18 @@ mod tests {
         dir
     }
 
+    async fn write_external_sample_app(dir: &std::path::Path, body: &[u8]) {
+        let cat_dir = dir.join("presets/app/sample");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n",
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join("daemon.jsonc"), body).await.unwrap();
+    }
+
     #[cfg(unix)]
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
@@ -894,6 +927,109 @@ mod tests {
             count_first,
             "re-install must not duplicate manifest entries"
         );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_skips_up_to_date_app_config() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(
+            &dir,
+            b"{\n  // proxy\n  \"proxy\": \"@@PROXY_HOST@@:@@HTTP_PROXY_PORT@@\"\n}\n",
+        )
+        .await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        let dest = dir.join(".config/sample/daemon.json");
+        let before = fs::read(&dest).await.unwrap();
+
+        let report = handle_upgrade_installed(&config).await.unwrap();
+
+        assert_eq!(report.updated, 0, "up-to-date app config must not update");
+        assert_eq!(report.skipped, 1, "up-to-date app config should be skipped");
+        assert_eq!(fs::read(&dest).await.unwrap(), before);
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_updates_app_config_when_source_changes() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        let dest = dir.join(".config/sample/daemon.json");
+        let before = fs::read(&dest).await.unwrap();
+        let manifest_before = AppManifest::load(config.shine_dir()).await.unwrap();
+        let hash_before = manifest_before.entries[0].content_hash;
+
+        write_external_sample_app(
+            &dir,
+            b"{\n  \"proxy\": \"@@PROXY_HOST@@\",\n  \"updated\": true\n}\n",
+        )
+        .await;
+        let report = handle_upgrade_installed(&config).await.unwrap();
+
+        assert_eq!(report.updated, 1, "changed source should update");
+        assert_eq!(report.skipped, 0);
+        assert_ne!(fs::read(&dest).await.unwrap(), before);
+        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert_ne!(manifest_after.entries[0].content_hash, hash_before);
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_skips_user_modified_app_config() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        let dest = dir.join(".config/sample/daemon.json");
+        fs::write(&dest, b"{\"user\":true}\n").await.unwrap();
+
+        let report = handle_upgrade_installed(&config).await.unwrap();
+
+        assert_eq!(
+            report.updated, 0,
+            "user-modified app config must not update"
+        );
+        assert_eq!(report.skipped, 1);
+        assert_eq!(fs::read(&dest).await.unwrap(), b"{\"user\":true}\n");
 
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();

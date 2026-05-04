@@ -5,6 +5,33 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.14.5] — 2026-05-04
+
+### Fixes
+
+- Fixed `shine upgrade` so app configs that are already up to date, such as `app/docker/daemon.jsonc`, are skipped instead of rewritten and counted as updated.
+- Preserved user-modified app config destinations during upgrade by skipping them instead of force-overwriting managed files.
+
+## [0.14.4] — 2026-05-04
+
+### Fixes
+
+- Fixed `shine upgrade` for existing proxy installs so stale shell config blocks are refreshed with the `setproxy` / `usetproxy` source wrapper functions. Upgraded installs can use `setproxy` directly again without manually prefixing `source`.
+
+## [0.14.3] — 2026-05-04
+
+### Fixes
+
+- Reduced `shine upgrade` output noise by printing a single external-presets note and one final summary.
+- Added `shine upgrade --verbose` for expanded env-template checks while keeping the default output focused on actionable changes.
+- Suppressed shell PATH status during `shine upgrade` when the shell config is already correctly configured.
+
+## [0.14.2] — 2026-05-04
+
+### Features
+
+- Simplified external preset management commands: `shine export`, `shine link`, and `shine unlink` are now top-level commands, and the old `shine presets ...` entrypoints were removed.
+
 ## [0.14.1] — 2026-05-04
 
 ### Features

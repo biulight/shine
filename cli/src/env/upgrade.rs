@@ -5,7 +5,18 @@ use crate::env::EnvConfig;
 use anyhow::Result;
 use std::path::PathBuf;
 
-pub(crate) async fn handle_upgrade(config: &Config, dry_run: bool) -> Result<()> {
+#[derive(Debug, Default)]
+pub(crate) struct EnvUpgradeReport {
+    pub updated: usize,
+    pub skipped: usize,
+    pub user_modified: usize,
+}
+
+pub(crate) async fn handle_upgrade(
+    config: &Config,
+    dry_run: bool,
+    verbose: bool,
+) -> Result<EnvUpgradeReport> {
     let env = EnvConfig::load_or_init(config).await?;
     let env_map = env.as_map().clone();
 
@@ -25,25 +36,29 @@ pub(crate) async fn handle_upgrade(config: &Config, dry_run: bool) -> Result<()>
     let shell_entries = collect_shell_entries(config).await;
 
     if app_candidates.is_empty() && shell_entries.is_empty() {
-        println!(
-            "{}",
-            colors::dim("No env-templated files found in the manifest.")
-        );
-        println!(
-            "{}",
-            colors::dim(
-                "Install a preset that uses the `template` transform to enable config upgrade."
-            )
-        );
-        return Ok(());
+        if verbose {
+            println!(
+                "{}",
+                colors::dim("No env-templated files found in the manifest.")
+            );
+            println!(
+                "{}",
+                colors::dim(
+                    "Install a preset that uses the `template` transform to enable config upgrade."
+                )
+            );
+        }
+        return Ok(EnvUpgradeReport::default());
     }
 
     let total = app_candidates.len() + shell_entries.len();
-    println!(
-        "{}  {}",
-        colors::bold("Env Templates"),
-        colors::dim(&format!("{total} file(s) to check"))
-    );
+    if verbose {
+        println!(
+            "{}  {}",
+            colors::bold("Env Templates"),
+            colors::dim(&format!("{total} file(s) to check"))
+        );
+    }
 
     let mut updated = 0usize;
     let mut skipped = 0usize;
@@ -97,21 +112,25 @@ pub(crate) async fn handle_upgrade(config: &Config, dry_run: bool) -> Result<()>
         }
 
         if new_hash == entry.content_hash {
-            println!(
-                "  {}  {}",
-                colors::dim("-"),
-                colors::dim(&entry.destination.display().to_string()),
-            );
+            if verbose {
+                println!(
+                    "  {}  {}",
+                    colors::dim("-"),
+                    colors::dim(&entry.destination.display().to_string()),
+                );
+            }
             skipped += 1;
             continue;
         }
 
         if dry_run {
-            println!(
-                "  {}  {}",
-                colors::dim("[dry-run]"),
-                entry.destination.display(),
-            );
+            if verbose {
+                println!(
+                    "  {}  {}",
+                    colors::dim("[dry-run]"),
+                    entry.destination.display(),
+                );
+            }
             skipped += 1;
             continue;
         }
@@ -120,11 +139,13 @@ pub(crate) async fn handle_upgrade(config: &Config, dry_run: bool) -> Result<()>
             tokio::fs::create_dir_all(parent).await.ok();
         }
         tokio::fs::write(&entry.destination, &rendered).await?;
-        println!(
-            "  {}  {}",
-            colors::symbol("✓"),
-            colors::dim(&entry.destination.display().to_string()),
-        );
+        if verbose {
+            println!(
+                "  {}  {}",
+                colors::symbol("✓"),
+                colors::dim(&entry.destination.display().to_string()),
+            );
+        }
         manifest.upsert(AppEntry {
             content_hash: new_hash,
             ..entry.clone()
@@ -176,21 +197,25 @@ pub(crate) async fn handle_upgrade(config: &Config, dry_run: bool) -> Result<()>
             .await
             .unwrap_or_default();
         if rendered == current {
-            println!(
-                "  {}  {}",
-                colors::dim("-"),
-                colors::dim(&entry.rendered_path.display().to_string()),
-            );
+            if verbose {
+                println!(
+                    "  {}  {}",
+                    colors::dim("-"),
+                    colors::dim(&entry.rendered_path.display().to_string()),
+                );
+            }
             skipped += 1;
             continue;
         }
 
         if dry_run {
-            println!(
-                "  {}  {}",
-                colors::dim("[dry-run]"),
-                entry.rendered_path.display(),
-            );
+            if verbose {
+                println!(
+                    "  {}  {}",
+                    colors::dim("[dry-run]"),
+                    entry.rendered_path.display(),
+                );
+            }
             skipped += 1;
             continue;
         }
@@ -220,30 +245,21 @@ pub(crate) async fn handle_upgrade(config: &Config, dry_run: bool) -> Result<()>
         // Migrate old-style bin symlink (presets_dir → rendered_dir) if needed.
         migrate_bin_symlink(config, entry).await;
 
-        println!(
-            "  {}  {}",
-            colors::symbol("✓"),
-            colors::dim(&entry.rendered_path.display().to_string()),
-        );
+        if verbose {
+            println!(
+                "  {}  {}",
+                colors::symbol("✓"),
+                colors::dim(&entry.rendered_path.display().to_string()),
+            );
+        }
         updated += 1;
     }
 
-    let mut summary: Vec<String> = Vec::new();
-    if updated > 0 {
-        summary.push(colors::green(&format!("{updated} updated")));
-    }
-    if user_modified > 0 {
-        summary.push(colors::yellow(&format!(
-            "{user_modified} user-modified (kept)"
-        )));
-    }
-    if skipped > 0 {
-        summary.push(colors::dim(&format!("{skipped} skipped")));
-    }
-    let sep = colors::dim(" · ");
-    println!("\n{}  {}", colors::bold("Done"), summary.join(&sep));
-
-    Ok(())
+    Ok(EnvUpgradeReport {
+        updated,
+        skipped,
+        user_modified,
+    })
 }
 
 struct ShellEntry {
