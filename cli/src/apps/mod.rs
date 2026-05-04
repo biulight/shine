@@ -531,7 +531,6 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
                     continue;
                 }
                 if new_hash == entry.content_hash {
-                    println!("  {}  {}", colors::dim("-"), entry.source);
                     skipped += 1;
                     continue;
                 }
@@ -562,7 +561,6 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
                 updated += 1;
             }
             Ok(InstallOutcome::AlreadyManaged) | Ok(InstallOutcome::DryRun) => {
-                println!("  {}  {}", colors::dim("-"), entry.source);
                 skipped += 1;
             }
             Err(e) => {
