@@ -5,6 +5,15 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.14.6] — 2026-05-05
+
+### Fixes
+
+- Fixed `shine upgrade` so external shell presets only upgrade commands that are already installed, preventing preset-only scripts such as `tools/test_tools` from being installed unexpectedly.
+- Made shell template rendering fail fast when `~/.shine/rendered` cannot be written, instead of continuing and linking raw template scripts.
+- Reduced default `shine upgrade` noise by hiding skipped app config rows while still counting them in the final summary.
+- Reported shell template updates under **Shell Presets** and app template updates under **App Configs**, so entries such as `proxy/setproxy` and `docker/daemon.jsonc` appear in the section that owns the change.
+
 ## [0.14.5] — 2026-05-04
 
 ### Fixes
