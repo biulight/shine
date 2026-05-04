@@ -343,7 +343,7 @@ async fn handle_config_upgrade(config: &Config, verbose: bool) -> Result<()> {
         + usize::from(shell_report.path_changed)
         + app_report.updated;
     let skipped = env_report.skipped + app_report.skipped;
-    let user_modified = env_report.user_modified;
+    let user_modified = env_report.user_modified + app_report.user_modified;
 
     let mut summary: Vec<String> = Vec::new();
     if updated > 0 {

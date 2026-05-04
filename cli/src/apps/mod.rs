@@ -400,6 +400,7 @@ pub(crate) async fn handle_install(
 pub(crate) struct AppUpgradeReport {
     pub updated: usize,
     pub skipped: usize,
+    pub user_modified: usize,
 }
 
 pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgradeReport> {
@@ -431,6 +432,7 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
 
     let mut updated = 0usize;
     let mut skipped = 0usize;
+    let mut user_modified = 0usize;
 
     for entry in manifest.entries.clone() {
         let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
@@ -470,6 +472,10 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
             skipped += 1;
             continue;
         };
+        let display_name = file
+            .display_name
+            .clone()
+            .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
 
         let raw = if config.is_external_presets {
             let path = config
@@ -527,6 +533,7 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
                         colors::symbol("!"),
                         entry.source
                     );
+                    user_modified += 1;
                     skipped += 1;
                     continue;
                 }
@@ -549,7 +556,7 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
                 println!(
                     "  {}  {}  {}  {}",
                     colors::symbol("✓"),
-                    entry.source,
+                    display_name,
                     colors::dim("→"),
                     colors::dim(&entry.destination.display().to_string()),
                 );
@@ -572,7 +579,11 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
 
     manifest.save(config.shine_dir()).await?;
 
-    Ok(AppUpgradeReport { updated, skipped })
+    Ok(AppUpgradeReport {
+        updated,
+        skipped,
+        user_modified,
+    })
 }
 
 fn app_category_from_source(source: &str) -> Option<String> {
