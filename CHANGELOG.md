@@ -5,6 +5,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.14.5] — 2026-05-04
+
+### Fixes
+
+- Fixed `shine upgrade` so app configs that are already up to date, such as `app/docker/daemon.jsonc`, are skipped instead of rewritten and counted as updated.
+- Preserved user-modified app config destinations during upgrade by skipping them instead of force-overwriting managed files.
+
 ## [0.14.4] — 2026-05-04
 
 ### Fixes
