@@ -95,7 +95,7 @@ pub(crate) async fn handle_install(
 
     // Apply env-variable substitution to scripts that opt in via `# shine-template: true`.
     // Output goes to rendered_dir; presets_dir templates are left untouched.
-    apply_template_to_scripts(config, &script_pairs).await;
+    apply_template_to_scripts(config, &script_pairs).await?;
 
     // Symlinks point to the rendered file when one was produced, otherwise to the
     // raw source in presets_dir (non-template scripts).
@@ -256,7 +256,7 @@ pub(crate) async fn handle_upgrade_installed(
             })
         })
         .collect();
-    apply_template_to_scripts(config, &script_pairs).await;
+    apply_template_to_scripts(config, &script_pairs).await?;
 
     let link_specs: Vec<_> = categories
         .iter()
@@ -544,14 +544,11 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
 /// `source_path` (presets_dir — never modified), substitute env variables from
 /// `config.toml` `[env]`, and write the rendered result to `rendered_path`
 /// (rendered_dir — always shine-managed).  File permissions are copied from source.
-async fn apply_template_to_scripts(config: &Config, script_pairs: &[(PathBuf, PathBuf)]) {
-    let env = match EnvConfig::load_or_init(config).await {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("Warning: could not load config.toml [env]: {e:#}");
-            return;
-        }
-    };
+async fn apply_template_to_scripts(
+    config: &Config,
+    script_pairs: &[(PathBuf, PathBuf)],
+) -> Result<()> {
+    let env = EnvConfig::load_or_init(config).await?;
     let env_map = env.as_map().clone();
 
     for (source_path, rendered_path) in script_pairs {
@@ -567,13 +564,10 @@ async fn apply_template_to_scripts(config: &Config, script_pairs: &[(PathBuf, Pa
         let rendered =
             match crate::apps::apply_transforms(&["template".to_string()], &content, &env_map) {
                 Ok(b) => b,
-                Err(e) => {
-                    eprintln!(
-                        "Warning: template substitution failed for {}: {e:#}",
-                        source_path.display()
-                    );
-                    continue;
-                }
+                Err(e) => bail!(
+                    "template substitution failed for {}: {e:#}",
+                    source_path.display()
+                ),
             };
 
         #[cfg(unix)]
@@ -586,24 +580,31 @@ async fn apply_template_to_scripts(config: &Config, script_pairs: &[(PathBuf, Pa
         };
 
         if let Some(parent) = rendered_path.parent() {
-            tokio::fs::create_dir_all(parent).await.ok();
+            tokio::fs::create_dir_all(parent).await.with_context(|| {
+                format!("creating rendered script directory: {}", parent.display())
+            })?;
         }
 
-        if let Err(e) = tokio::fs::write(rendered_path, &rendered).await {
-            eprintln!(
-                "Warning: failed to write rendered script {}: {e:#}",
-                rendered_path.display()
-            );
-            continue;
-        }
+        tokio::fs::write(rendered_path, &rendered)
+            .await
+            .with_context(|| format!("writing rendered script: {}", rendered_path.display()))?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = std::fs::Permissions::from_mode(mode);
-            let _ = tokio::fs::set_permissions(rendered_path, perms).await;
+            tokio::fs::set_permissions(rendered_path, perms)
+                .await
+                .with_context(|| {
+                    format!(
+                        "setting rendered script permissions: {}",
+                        rendered_path.display()
+                    )
+                })?;
         }
     }
+
+    Ok(())
 }
 
 /// Build the PATH export snippet for the given shell, using `$HOME` when possible.
@@ -1287,6 +1288,51 @@ mod tests {
 
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(!config.bin_dir().join("set_proxy").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn template_render_error_does_not_link_raw_script() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/proxy");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+        )
+        .await
+        .unwrap();
+        let script = cat_dir.join("set_proxy.sh");
+        fs::write(
+            &script,
+            b"#!/bin/bash\n# shine-template: true\necho @@PROXY_HOST@@\n",
+        )
+        .await
+        .unwrap();
+        make_executable(&script).await;
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        fs::write(config.rendered_dir(), b"not a directory")
+            .await
+            .unwrap();
+
+        let err = handle_install(&config, Some("proxy"), false)
+            .await
+            .expect_err("install should fail when rendered_dir cannot be created");
+
+        assert!(
+            err.to_string()
+                .contains("creating rendered script directory"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            !config.bin_dir().join("setproxy").exists(),
+            "failed render must not link the raw template script"
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
