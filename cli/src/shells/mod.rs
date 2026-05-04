@@ -181,39 +181,35 @@ pub(crate) async fn handle_upgrade_installed(
     config: &Config,
     verbose: bool,
 ) -> Result<ShellUpgradeReport> {
-    let categories = if config.is_external_presets {
+    let all_categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
     } else {
         metadata::load_embedded_categories(None)?
     };
 
-    let mut installed_categories = Vec::new();
-    for cat in &categories {
-        let has_installed_file = cat.files.iter().any(|file| {
-            let source = config
-                .presets_dir()
-                .join("shell")
-                .join(&cat.name)
-                .join(&file.source_rel);
-            let rendered = config
-                .rendered_dir()
-                .join("shell")
-                .join(&cat.name)
-                .join(&file.source_rel);
-            let link = config.bin_dir().join(&file.command_name);
-            source.exists() || rendered.exists() || link.exists()
-        });
-        if has_installed_file {
-            installed_categories.push(cat.name.clone());
-        }
-    }
+    let installed_commands: Vec<(String, String)> = all_categories
+        .iter()
+        .flat_map(|cat| {
+            cat.files.iter().filter_map(|file| {
+                let link = config.bin_dir().join(&file.command_name);
+                shell_link_exists(&link).then(|| (cat.name.clone(), file.command_name.clone()))
+            })
+        })
+        .collect();
 
-    if installed_categories.is_empty() {
+    if installed_commands.is_empty() {
         if verbose {
             println!("{}", colors::dim("No installed shell presets found."));
         }
         return Ok(ShellUpgradeReport::default());
     }
+
+    let installed_categories: Vec<String> = installed_commands
+        .iter()
+        .map(|(cat_name, _)| cat_name.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
 
     println!(
         "{}  {}",
@@ -232,10 +228,15 @@ pub(crate) async fn handle_upgrade_installed(
     }
 
     let categories = metadata::load_installed_categories(config, None).await?;
-    let categories: Vec<_> = categories
+    let mut categories: Vec<_> = categories
         .into_iter()
         .filter(|cat| installed_categories.contains(&cat.name))
         .collect();
+    for cat in &mut categories {
+        cat.files.retain(|file| {
+            installed_commands.contains(&(cat.name.clone(), file.command_name.clone()))
+        });
+    }
 
     let script_pairs: Vec<(PathBuf, PathBuf)> = categories
         .iter()
@@ -338,6 +339,13 @@ pub(crate) async fn handle_upgrade_installed(
         link_conflicts: link_report.conflicts.len(),
         path_changed,
     })
+}
+
+fn shell_link_exists(link: &Path) -> bool {
+    link.exists()
+        || std::fs::symlink_metadata(link)
+            .map(|meta| meta.file_type().is_symlink())
+            .unwrap_or(false)
 }
 
 pub(crate) async fn handle_uninstall(
@@ -808,6 +816,14 @@ mod tests {
     }
 
     #[cfg(unix)]
+    async fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).await.unwrap().permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        fs::set_permissions(path, perms).await.unwrap();
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn install_then_uninstall_roundtrip() {
         let dir = make_temp_dir().await;
@@ -1271,6 +1287,58 @@ mod tests {
 
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(!config.bin_dir().join("set_proxy").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_presets_upgrade_does_not_install_preset_only_scripts() {
+        let dir = make_temp_dir().await;
+        let proxy_dir = dir.join("presets/shell/proxy");
+        let tools_dir = dir.join("presets/shell/tools");
+        fs::create_dir_all(&proxy_dir).await.unwrap();
+        fs::create_dir_all(&tools_dir).await.unwrap();
+
+        fs::write(
+            proxy_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+        )
+        .await
+        .unwrap();
+        let setproxy = proxy_dir.join("set_proxy.sh");
+        fs::write(
+            &setproxy,
+            b"#!/bin/bash\n# shine-template: true\necho @@PROXY_HOST@@\n",
+        )
+        .await
+        .unwrap();
+        make_executable(&setproxy).await;
+
+        let test_tools = tools_dir.join("test_tools.sh");
+        fs::write(&test_tools, b"#!/bin/bash\n# Test tools.\necho tools\n")
+            .await
+            .unwrap();
+        make_executable(&test_tools).await;
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("proxy"), false).await.unwrap();
+        assert!(config.bin_dir().join("setproxy").exists());
+        assert!(
+            !config.bin_dir().join("test_tools").exists(),
+            "tools preset should start as present but not installed"
+        );
+
+        handle_upgrade_installed(&config, false).await.unwrap();
+
+        assert!(config.bin_dir().join("setproxy").exists());
+        assert!(
+            !config.bin_dir().join("test_tools").exists(),
+            "upgrade must not install preset-only scripts"
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
