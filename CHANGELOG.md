@@ -5,6 +5,17 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.14.1] — 2026-05-04
+
+### Features
+
+- Added bundled **Ghostty** app preset. `shine app install ghostty` now installs `config.ghostty` to `~/.config/ghostty/config.ghostty`.
+
+### Docs
+
+- Updated README app preset examples to include Ghostty and refreshed the documented preset layout.
+- Added repo-local verification notes for sandboxed `shine` CLI checks, including `--target-dir target` and `SHINE_CONFIG_DIR` caveats.
+
 ## [0.14.0] — 2026-05-03
 
 ### Features

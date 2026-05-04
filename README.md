@@ -15,7 +15,7 @@ A fast Rust CLI tool for managing shell environment presets.
 - **Safe uninstall** — removes only shine-managed files; user-created files are never touched
 - **Dry-run support** — preview any destructive operation before it runs
 - **TOML config** — `~/.shine/config.toml` with comment preservation on updates
-- **App preset installer** — install annotated config files like `~/.gitconfig` or `~/.config/starship/starship.toml`
+- **App preset installer** — install managed config files like `~/.gitconfig`, `~/.config/starship/starship.toml`, or `~/.config/ghostty/config.ghostty`
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
 - **Multi-shell support** — bash, zsh, fish, powershell, elvish
 - **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
@@ -122,6 +122,7 @@ shine app list
 App Preset Categories
 
   JetBrains  JetBrains IDEs configuration.
+  ghostty    Ghostty terminal configuration.
   git        Personal git configuration with common aliases and sensible defaults.
   starship   Starship prompt: minimal left-prompt with git branch and status.
   vim        Vim configuration directory with base config and machine-local overrides.  2 files
@@ -156,6 +157,7 @@ Current built-in presets:
 
 ```bash
 shine app info starship
+shine app info ghostty
 shine app info vim
 ```
 
@@ -165,6 +167,7 @@ Prints the description, destination, and file list for a single category, with p
 
 ```bash
 shine app install             # install all app categories
+shine app install ghostty     # install only one category
 shine app install starship    # install only one category
 shine app install --dry-run   # preview destination writes
 ```
@@ -172,12 +175,13 @@ shine app install --dry-run   # preview destination writes
 `shine app install` first extracts bundled files to `~/.shine/presets/app/`, then copies them to their final destinations.
 
 ```
-Installing  3 files available
+Installing  4 files available
+  ✓  config.ghostty  →  ~/.config/ghostty/config.ghostty
   ✓  gitconfig   →  ~/.gitconfig
   ✓  starship.toml  →  ~/.config/starship/starship.toml
   -  vimrc  already up to date
 
-Done  2 installed · 1 skipped
+Done  3 installed · 1 skipped
 ```
 
 If `presets/app/<CATEGORY>/shine.toml` exists, that category uses directory-level metadata:
@@ -240,6 +244,7 @@ If the destination already exists and is not managed by `shine`, it is moved asi
 
 ```bash
 shine app uninstall                # uninstall all app categories
+shine app uninstall ghostty        # uninstall only the ghostty category
 shine app uninstall starship       # uninstall only the starship category
 shine app uninstall --dry-run      # preview without changes
 shine app uninstall --purge        # also remove presets and manifest
@@ -267,6 +272,7 @@ Shell Presets
 
 App Configs
   git       →  ~/.gitconfig
+  ghostty   →  ~/.config/ghostty/config.ghostty
   starship  →  ~/.config/starship/starship.toml
 ```
 
@@ -290,10 +296,11 @@ Shell Presets
 App Configs
   ✓  JetBrains/IdeaVim  →  ~/.ideavimrc              up-to-date
   ✓  git                →  ~/.gitconfig               up-to-date
+  ✓  ghostty            →  ~/.config/ghostty/...      up-to-date
   ↑  starship           →  ~/.config/starship/...     update available  run `shine upgrade`
   ✗  vim                →  ~/.vim                     not installed
 
-Summary  2 up-to-date · 1 update available · 1 not installed
+Summary  3 up-to-date · 1 update available · 1 not installed
 ```
 
 Status symbols:
@@ -457,6 +464,9 @@ PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
     ├── app/
     │   ├── JetBrains/
     │   │   └── .ideavimrc
+    │   ├── ghostty/
+    │   │   ├── config.ghostty
+    │   │   └── shine.toml
     │   ├── git/
     │   │   └── gitconfig
     │   └── starship/
@@ -475,6 +485,7 @@ Installed app files live at their annotated destinations, for example:
 ```text
 ~/.gitconfig
 ~/.ideavimrc
+~/.config/ghostty/config.ghostty
 ~/.config/starship/starship.toml
 ```
 
