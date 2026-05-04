@@ -12,6 +12,20 @@ use std::str::FromStr;
 pub(crate) const SENTINEL_START: &str = "# >>> shine >>>";
 const SENTINEL_END: &str = "# <<< shine <<<";
 
+#[derive(Debug, Default)]
+pub(crate) struct ShellUpgradeReport {
+    pub links_created: usize,
+    pub links_updated: usize,
+    pub link_conflicts: usize,
+    pub path_changed: bool,
+}
+
+#[derive(Debug)]
+enum PathUpdateStatus {
+    AlreadyConfigured,
+    Updated(PathBuf),
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) enum ShellType {
     Bash,
@@ -149,11 +163,24 @@ pub(crate) async fn handle_install(
         .map(|f| f.command_name.clone())
         .collect();
 
-    append_path_to_shell_config(config, force, &source_commands).await?;
+    match append_path_to_shell_config(config, force, &source_commands).await? {
+        PathUpdateStatus::AlreadyConfigured => {
+            println!(
+                "Shell config ({}): already configured, skipped",
+                get_shell_config_path(&config.shell_type, &config.home_dir)?.display()
+            );
+        }
+        PathUpdateStatus::Updated(path) => {
+            println!("Shell config ({}): PATH updated", path.display());
+        }
+    }
     Ok(())
 }
 
-pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
+pub(crate) async fn handle_upgrade_installed(
+    config: &Config,
+    verbose: bool,
+) -> Result<ShellUpgradeReport> {
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
     } else {
@@ -182,8 +209,10 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
     }
 
     if installed_categories.is_empty() {
-        println!("{}", colors::dim("No installed shell presets found."));
-        return Ok(());
+        if verbose {
+            println!("{}", colors::dim("No installed shell presets found."));
+        }
+        return Ok(ShellUpgradeReport::default());
     }
 
     println!(
@@ -194,11 +223,121 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
             installed_categories.len()
         ))
     );
-    for category in installed_categories {
-        handle_install(config, Some(&category), true).await?;
+
+    if !config.is_external_presets {
+        for category in &installed_categories {
+            let prefix = format!("shell/{category}");
+            let _ = crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
+        }
     }
 
-    Ok(())
+    let categories = metadata::load_installed_categories(config, None).await?;
+    let categories: Vec<_> = categories
+        .into_iter()
+        .filter(|cat| installed_categories.contains(&cat.name))
+        .collect();
+
+    let script_pairs: Vec<(PathBuf, PathBuf)> = categories
+        .iter()
+        .flat_map(|cat| {
+            cat.files.iter().map(|file| {
+                let source = config
+                    .presets_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                let rendered = config
+                    .rendered_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                (source, rendered)
+            })
+        })
+        .collect();
+    apply_template_to_scripts(config, &script_pairs).await;
+
+    let link_specs: Vec<_> = categories
+        .iter()
+        .flat_map(|cat| {
+            cat.files.iter().map(|file| {
+                let source = config
+                    .presets_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                let rendered = config
+                    .rendered_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                let effective = if rendered.exists() { rendered } else { source };
+                crate::bin_links::LinkSpec {
+                    source: effective,
+                    link_name: OsString::from(&file.command_name),
+                }
+            })
+        })
+        .collect();
+    let link_report =
+        crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
+
+    let mut link_parts: Vec<String> = Vec::new();
+    if !link_report.created.is_empty() {
+        link_parts.push(colors::green(&format!(
+            "{} created",
+            link_report.created.len()
+        )));
+    }
+    if !link_report.overwritten.is_empty() {
+        link_parts.push(colors::green(&format!(
+            "{} updated",
+            link_report.overwritten.len()
+        )));
+    }
+    if verbose && !link_report.skipped.is_empty() {
+        link_parts.push(colors::dim(&format!(
+            "{} up to date",
+            link_report.skipped.len()
+        )));
+    }
+    if !link_report.conflicts.is_empty() {
+        link_parts.push(colors::yellow(&format!(
+            "{} conflicts",
+            link_report.conflicts.len()
+        )));
+    }
+    if !link_parts.is_empty() {
+        let sep = colors::dim(" · ");
+        println!(
+            "{}     {}",
+            colors::bold("Bin Links    "),
+            link_parts.join(&sep)
+        );
+    }
+
+    let source_commands: Vec<String> = categories
+        .iter()
+        .flat_map(|cat| cat.files.iter())
+        .filter(|f| f.needs_source)
+        .map(|f| f.command_name.clone())
+        .collect();
+
+    let path_status = append_path_to_shell_config(config, false, &source_commands).await?;
+    let path_changed = match path_status {
+        PathUpdateStatus::AlreadyConfigured => false,
+        PathUpdateStatus::Updated(path) => {
+            println!("Shell config ({}): PATH updated", path.display());
+            true
+        }
+    };
+
+    Ok(ShellUpgradeReport {
+        links_created: link_report.created.len(),
+        links_updated: link_report.overwritten.len(),
+        link_conflicts: link_report.conflicts.len(),
+        path_changed,
+    })
 }
 
 pub(crate) async fn handle_uninstall(
@@ -525,7 +664,7 @@ async fn append_path_to_shell_config(
     config: &Config,
     force: bool,
     source_commands: &[String],
-) -> Result<()> {
+) -> Result<PathUpdateStatus> {
     let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
 
     if let Some(parent) = config_path.parent() {
@@ -540,11 +679,7 @@ async fn append_path_to_shell_config(
 
     if existing.contains(SENTINEL_START) {
         if !force {
-            println!(
-                "Shell config ({}): already configured, skipped",
-                config_path.display()
-            );
-            return Ok(());
+            return Ok(PathUpdateStatus::AlreadyConfigured);
         }
         // Force: remove old sentinel block and re-add with current snippet.
         let cleaned = remove_sentinel_block(&existing);
@@ -570,8 +705,7 @@ async fn append_path_to_shell_config(
         .await
         .with_context(|| format!("writing to shell config: {config_path:?}"))?;
 
-    println!("Shell config ({}): PATH updated", config_path.display());
-    Ok(())
+    Ok(PathUpdateStatus::Updated(config_path))
 }
 
 async fn remove_path_from_shell_config(config: &Config) -> Result<()> {

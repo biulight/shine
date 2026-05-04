@@ -61,7 +61,7 @@ enum Commands {
     /// Show installed config status and check for a newer version of shine
     Update,
     /// Force-update installed shell and app configs
-    Upgrade,
+    Upgrade(UpgradeCommand),
     /// Manage the shine binary itself
     #[command(name = "self")]
     Self_ {
@@ -92,6 +92,13 @@ enum CompletionShell {
     PowerShell,
     #[value(name = "elvish")]
     Elvish,
+}
+
+#[derive(Parser, Debug)]
+struct UpgradeCommand {
+    /// Show detailed env-template checks and skipped rows
+    #[arg(long)]
+    verbose: bool,
 }
 
 #[tokio::main]
@@ -168,7 +175,7 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Update => handle_update(&config).await,
-        Commands::Upgrade => handle_config_upgrade(&config).await,
+        Commands::Upgrade(cmd) => handle_config_upgrade(&config, cmd.verbose).await,
         Commands::Export(ExportCommand { dir, force }) => {
             Box::pin(handle_presets_export(&config, dir, force)).await
         }
@@ -321,14 +328,45 @@ async fn handle_self_upgrade(config: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn handle_config_upgrade(config: &Config) -> Result<()> {
+async fn handle_config_upgrade(config: &Config, verbose: bool) -> Result<()> {
     println!("{}", colors::bold("Upgrading installed configs"));
+    crate::config::print_presets_note(config);
 
-    Box::pin(env::upgrade::handle_upgrade(config, false)).await?;
-    println!();
-    Box::pin(shells::handle_upgrade_installed(config)).await?;
-    println!();
-    Box::pin(apps::handle_upgrade_installed(config)).await?;
+    let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
+    let shell_report = Box::pin(shells::handle_upgrade_installed(config, verbose)).await?;
+    let app_report = Box::pin(apps::handle_upgrade_installed(config)).await?;
+
+    let updated = env_report.updated
+        + shell_report.links_created
+        + shell_report.links_updated
+        + usize::from(shell_report.path_changed)
+        + app_report.updated;
+    let skipped = env_report.skipped + app_report.skipped;
+    let user_modified = env_report.user_modified;
+
+    let mut summary: Vec<String> = Vec::new();
+    if updated > 0 {
+        summary.push(colors::green(&format!("{updated} updated")));
+    }
+    if user_modified > 0 {
+        summary.push(colors::yellow(&format!(
+            "{user_modified} user-modified (kept)"
+        )));
+    }
+    if shell_report.link_conflicts > 0 {
+        summary.push(colors::yellow(&format!(
+            "{} link conflicts",
+            shell_report.link_conflicts
+        )));
+    }
+    if skipped > 0 {
+        summary.push(colors::dim(&format!("{skipped} skipped")));
+    }
+    if summary.is_empty() {
+        summary.push(colors::dim("nothing changed"));
+    }
+    let sep = colors::dim(" · ");
+    println!("\n{}  {}", colors::bold("Done"), summary.join(&sep));
 
     Ok(())
 }
@@ -653,7 +691,16 @@ mod tests {
         assert!(matches!(cli.command, Commands::Update));
 
         let cli = Cli::try_parse_from(["shine", "upgrade"]).unwrap();
-        assert!(matches!(cli.command, Commands::Upgrade));
+        assert!(matches!(
+            cli.command,
+            Commands::Upgrade(UpgradeCommand { verbose: false })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "upgrade", "--verbose"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Upgrade(UpgradeCommand { verbose: true })
+        ));
     }
 
     #[test]

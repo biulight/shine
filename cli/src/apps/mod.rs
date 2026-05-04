@@ -396,12 +396,16 @@ pub(crate) async fn handle_install(
     Ok(())
 }
 
-pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
-    crate::config::print_presets_note(config);
+#[derive(Debug, Default)]
+pub(crate) struct AppUpgradeReport {
+    pub updated: usize,
+    pub skipped: usize,
+}
+
+pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgradeReport> {
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
     if manifest.entries.is_empty() {
-        println!("{}", colors::dim("No installed app configs found."));
-        return Ok(());
+        return Ok(AppUpgradeReport::default());
     }
 
     let env = EnvConfig::load_or_init(config).await?;
@@ -543,17 +547,7 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<()> {
 
     manifest.save(config.shine_dir()).await?;
 
-    let mut summary_parts: Vec<String> = Vec::new();
-    if updated > 0 {
-        summary_parts.push(colors::green(&format!("{updated} updated")));
-    }
-    if skipped > 0 {
-        summary_parts.push(colors::dim(&format!("{skipped} skipped")));
-    }
-    let sep = colors::dim(" · ");
-    println!("\n{}  {}", colors::bold("Done"), summary_parts.join(&sep));
-
-    Ok(())
+    Ok(AppUpgradeReport { updated, skipped })
 }
 
 fn app_category_from_source(source: &str) -> Option<String> {
