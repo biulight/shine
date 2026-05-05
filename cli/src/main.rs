@@ -68,7 +68,7 @@ enum Commands {
     /// Remove the external presets directory from ~/.shine/config.toml
     Unlink,
     /// Show installed config status and check for a newer version of shine
-    Update,
+    Update(UpdateCommand),
     /// Force-update installed shell and app configs
     Upgrade(UpgradeCommand),
     /// Manage the shine binary itself
@@ -118,6 +118,13 @@ impl CompletionShell {
 }
 
 #[derive(Parser, Debug)]
+struct UpdateCommand {
+    /// Show installed entries that are already current or need attention
+    #[arg(long)]
+    verbose: bool,
+}
+
+#[derive(Parser, Debug)]
 struct UpgradeCommand {
     /// Show detailed env-template checks and skipped rows
     #[arg(long)]
@@ -147,7 +154,7 @@ async fn main() -> Result<()> {
     // should remain available even when the current binary is version-gated.
     if !matches!(
         cli.command,
-        Commands::Update
+        Commands::Update(..)
             | Commands::Export(..)
             | Commands::Link(..)
             | Commands::Unlink
@@ -198,7 +205,7 @@ async fn main() -> Result<()> {
                 .await
             }
         },
-        Commands::Update => handle_update(&config).await,
+        Commands::Update(cmd) => handle_update(&config, cmd.verbose).await,
         Commands::Upgrade(cmd) => handle_config_upgrade(&config, cmd.verbose).await,
         Commands::Export(ExportCommand { dir, force }) => {
             Box::pin(handle_presets_export(&config, dir, force)).await
@@ -295,21 +302,33 @@ async fn handle_env_get(config: &Config, key: String) -> Result<()> {
     Ok(())
 }
 
-async fn handle_update(config: &Config) -> Result<()> {
-    Box::pin(list::handle_status_list(config)).await?;
-    println!();
+async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
+    let mut printed_update = if verbose {
+        Box::pin(list::handle_status_list(config)).await?;
+        println!();
+        true
+    } else {
+        Box::pin(list::handle_update_list(config)).await?
+    };
 
     let current = env!("CARGO_PKG_VERSION");
-    println!("Checking for updates (current: {current})...");
+    if verbose {
+        println!("Checking for updates (current: {current})...");
+    }
 
     match update_check::check_for_update_forced(config).await {
         Ok(UpdateStatus::UpToDate) => {
-            println!(
-                "{}",
-                colors::green(&format!("shine {current} is up to date."))
-            );
+            if verbose {
+                println!(
+                    "{}",
+                    colors::green(&format!("shine {current} is up to date."))
+                );
+            }
         }
         Ok(UpdateStatus::UpdateAvailable { latest }) => {
+            if printed_update && !verbose {
+                println!();
+            }
             println!(
                 "{}",
                 colors::yellow(&format!(
@@ -317,8 +336,12 @@ async fn handle_update(config: &Config) -> Result<()> {
                 ))
             );
             println!("Run `shine self upgrade` to install it.");
+            printed_update = true;
         }
         Ok(UpdateStatus::UpdateRequired { latest }) => {
+            if printed_update && !verbose {
+                println!();
+            }
             println!(
                 "{}",
                 colors::yellow(&format!(
@@ -326,11 +349,16 @@ async fn handle_update(config: &Config) -> Result<()> {
                 ))
             );
             println!("Run `shine self upgrade` to install it.");
+            printed_update = true;
         }
         Err(e) => {
             eprintln!("Update check failed: {e}");
             std::process::exit(1);
         }
+    }
+
+    if !printed_update {
+        println!("{}", colors::dim("Nothing to update."));
     }
 
     Ok(())
@@ -784,7 +812,16 @@ mod tests {
         ));
 
         let cli = Cli::try_parse_from(["shine", "update"]).unwrap();
-        assert!(matches!(cli.command, Commands::Update));
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand { verbose: false })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "update", "--verbose"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand { verbose: true })
+        ));
 
         let cli = Cli::try_parse_from(["shine", "upgrade"]).unwrap();
         assert!(matches!(

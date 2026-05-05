@@ -179,7 +179,7 @@ async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShowFile>> {
             }
 
             let status = match (source_exists || rendered_exists, link_exists) {
-                (true, true) => "installed",
+                (true, true) => "up-to-date",
                 (true, false) => "preset present, bin symlink missing",
                 (false, true) => "bin symlink present, script missing",
                 (false, false) => "not installed",
@@ -525,7 +525,7 @@ mod tests {
             rendered_path: PathBuf::from(format!("/tmp/rendered/{source}")),
             link_path: PathBuf::from(format!("/tmp/bin/{command}")),
             link_target: None,
-            status: "installed",
+            status: "up-to-date",
         }
     }
 

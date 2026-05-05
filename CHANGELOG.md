@@ -5,6 +5,17 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.17.0] — 2026-05-05
+
+### Features
+
+- Changed `shine update` to show only available shell, app, and self updates by default, with `--verbose` preserving the full installed status view.
+- Aligned shell preset status wording with app configs by showing installed shell presets as `up-to-date`.
+
+### Docs
+
+- Updated README examples for the focused `shine update` output and refreshed the pinned install example to `0.17.0`.
+
 ## [0.16.1] — 2026-05-05
 
 ### Fixes
