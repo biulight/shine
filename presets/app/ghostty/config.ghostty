@@ -2,11 +2,15 @@
 # window-height = 50
 
 font-family = "JetBrains Mono Nerd Font"
-font-size = 14
+font-size = 13
 font-thicken = true
 
-theme = light:Catppuccin Latte,dark:Catppuccin Mocha
+# theme = light:Catppuccin Latte,dark:Catppuccin Mocha
+theme = Alien Blood
 
+# background-image = "/Users/felix/Resource/Wallpaper/wallhaven-exzjwl.png"
+background-image-fit = cover
+background-image-opacity = 0.5
 background-opacity = 0.9
 background-blur-radius = 20
 
