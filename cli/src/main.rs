@@ -347,12 +347,16 @@ async fn handle_self_upgrade(config: &Config) -> Result<()> {
                 colors::green(&format!("shine {current} is up to date."))
             );
         }
-        Ok(update_check::UpgradeResult::Upgraded { previous, latest }) => {
+        Ok(update_check::UpgradeResult::Upgraded {
+            previous,
+            latest,
+            installed_path,
+        }) => {
             println!(
                 "{}",
                 colors::green(&format!("Upgraded shine from {previous} to {latest}."))
             );
-            sync_self_install_dest(config).await;
+            sync_self_install_dest(config, &installed_path).await;
         }
         Err(e) => {
             bail!("Upgrade failed: {e}");
@@ -408,15 +412,12 @@ async fn handle_config_upgrade(config: &Config, verbose: bool) -> Result<()> {
 
 /// After a successful self-upgrade, try to sync the new binary to the self-install destination.
 /// If the copy fails due to permissions, print a targeted hint instead of failing.
-async fn sync_self_install_dest(config: &Config) {
+async fn sync_self_install_dest(config: &Config, src: &std::path::Path) {
     let dest = match &config.self_install_dest {
         Some(d) => d,
         None => return,
     };
-    let Ok(src) = std::env::current_exe() else {
-        return;
-    };
-    match sync_self_install_dest_from(&src, dest) {
+    match sync_self_install_dest_from(src, dest) {
         Ok(SelfInstallSync::Synced) => println!(
             "{}",
             colors::green(&format!("Synced system copy at {}", dest.display()))
