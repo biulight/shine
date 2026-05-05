@@ -12,6 +12,7 @@ mod env;
 mod list;
 mod presets;
 mod shells;
+mod show;
 mod sys;
 mod update_check;
 
@@ -52,6 +53,12 @@ enum Commands {
     },
     /// List installed shell presets and app configs
     List,
+    /// Show the full content and details for an installed config or shell preset
+    Show {
+        /// Installed item to show (e.g. git, starship, proxy, setproxy)
+        #[arg(value_name = "TARGET")]
+        target: String,
+    },
     /// Copy built-in presets to a directory for local customization
     Export(ExportCommand),
     /// Set the external presets directory in ~/.shine/config.toml
@@ -153,6 +160,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Completions { .. } => unreachable!(),
         Commands::App { command } => match command {
+            AppCommands::Init { force } => apps::handle_init_template(force).await,
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
             AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
             AppCommands::Install {
@@ -184,11 +192,13 @@ async fn main() -> Result<()> {
         }
         Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
         Commands::List => Box::pin(list::handle_list(&config)).await,
+        Commands::Show { target } => Box::pin(show::handle_show(&config, &target)).await,
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade => handle_self_upgrade(&config).await,
         },
         Commands::Shell { command } => match command {
+            ShellCommands::Init { force } => shells::handle_init_template(force).await,
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
             ShellCommands::Install { category, force } => {
                 Box::pin(shells::handle_install(&config, category.as_deref(), force)).await
@@ -337,12 +347,13 @@ async fn handle_config_upgrade(config: &Config, verbose: bool) -> Result<()> {
     let app_report = Box::pin(apps::handle_upgrade_installed(config)).await?;
 
     let updated = env_report.updated
+        + shell_report.templates_updated
         + shell_report.links_created
         + shell_report.links_updated
         + usize::from(shell_report.path_changed)
         + app_report.updated;
     let skipped = env_report.skipped + app_report.skipped;
-    let user_modified = env_report.user_modified;
+    let user_modified = env_report.user_modified + app_report.user_modified;
 
     let mut summary: Vec<String> = Vec::new();
     if updated > 0 {
@@ -722,6 +733,50 @@ mod tests {
 
         let cli = Cli::try_parse_from(["shine", "unlink"]).unwrap();
         assert!(matches!(cli.command, Commands::Unlink));
+    }
+
+    #[test]
+    fn cli_accepts_show_command() {
+        let cli = Cli::try_parse_from(["shine", "show", "setproxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Show { target } if target == "setproxy"
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_shell_and_app_init_commands() {
+        let cli = Cli::try_parse_from(["shine", "shell", "init"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Shell {
+                command: ShellCommands::Init { force: false }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "shell", "init", "--force"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Shell {
+                command: ShellCommands::Init { force: true }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "app", "init"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Init { force: false }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "app", "init", "-f"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Init { force: true }
+            }
+        ));
     }
 
     #[test]

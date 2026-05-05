@@ -16,6 +16,7 @@ A fast Rust CLI tool for managing shell environment presets.
 - **Dry-run support** — preview any destructive operation before it runs
 - **TOML config** — `~/.shine/config.toml` with comment preservation on updates
 - **App preset installer** — install managed config files like `~/.gitconfig`, `~/.config/starship/starship.toml`, or `~/.config/ghostty/config.ghostty`
+- **Installed content inspection** — `shine show <target>` prints metadata and full content for installed app configs and shell presets
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
 - **Multi-shell support** — bash, zsh, fish, powershell, elvish
 - **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
@@ -278,6 +279,24 @@ App Configs
 
 If nothing is installed yet, `shine list` prints a hint to run `shine shell install` or `shine app install`.
 
+### Show installed config details
+
+```bash
+shine show git
+shine show starship
+shine show proxy
+shine show setproxy
+```
+
+Shows metadata and the full installed content for a managed app config or shell preset. The target is matched against installed categories, command names, display names, source filenames, and destination basenames. If a short target is ambiguous, use the canonical form shown in the error:
+
+```bash
+shine show app/git
+shine show shell/proxy/setproxy
+```
+
+For app configs, `shine show` reads the installed destination file. For shell presets, it reads the effective script target, including rendered template scripts under `~/.shine/rendered/` when applicable.
+
 ### Update status and release check
 
 ```bash
@@ -368,7 +387,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.5.0 sh install.sh
+SHINE_VERSION=0.15.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 

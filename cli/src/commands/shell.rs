@@ -2,6 +2,12 @@ use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 pub enum ShellCommands {
+    /// Generate a shell preset shine.toml template in the current directory
+    Init {
+        /// Overwrite shine.toml if it already exists
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
     /// List available shell preset categories and their scripts
     List,
     /// Install shell presets and create bin symlinks.
