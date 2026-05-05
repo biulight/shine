@@ -12,6 +12,7 @@ path = "src/main.rs"
 utils = { path = "../utils" }
 anyhow = { workspace = true }
 clap = { version = "4.6.1", features = ["derive"] }
+clap_complete = "4.5"
 directories = { workspace = true }
 serde = { version = "1.0.228", features = ["derive"] }
 shellexpand = "3.1.2"

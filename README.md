@@ -117,6 +117,16 @@ When a category is specified only that category's files and symlinks are removed
 
 `--purge` removes the target directory (the whole `~/.shine/presets/shell/` tree when no category is given, or only `~/.shine/presets/shell/<category>/` when one is specified). It never removes `~/.shine/config.toml` or the root `~/.shine/` directory.
 
+### Generate shell completions
+
+```bash
+shine completions bash > ~/.local/share/bash-completion/completions/shine
+shine completions zsh > ~/.zfunc/_shine
+shine completions fish > ~/.config/fish/completions/shine.fish
+```
+
+`shine completions <shell>` prints a completion script to `stdout` for manual installation. It supports `bash`, `zsh`, and `fish` only, and it does not modify your shell config automatically.
+
 ### List available app presets
 
 ```bash

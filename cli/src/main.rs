@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{Generator, generate};
 use std::path::PathBuf;
 
 mod apps;
@@ -97,6 +98,24 @@ enum CompletionShell {
     Zsh,
 }
 
+impl CompletionShell {
+    fn generate(self) {
+        let mut command = Cli::command();
+        let mut stdout = std::io::stdout();
+        match self {
+            CompletionShell::Bash => {
+                write_completions(clap_complete::shells::Bash, &mut command, &mut stdout)
+            }
+            CompletionShell::Fish => {
+                write_completions(clap_complete::shells::Fish, &mut command, &mut stdout)
+            }
+            CompletionShell::Zsh => {
+                write_completions(clap_complete::shells::Zsh, &mut command, &mut stdout)
+            }
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 struct UpgradeCommand {
     /// Show detailed env-template checks and skipped rows
@@ -107,6 +126,11 @@ struct UpgradeCommand {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Commands::Completions { shell } = &cli.command {
+        shell.generate();
+        return Ok(());
+    }
 
     if let Some(config_dir) = &cli.config_dir {
         if config_dir.trim().is_empty() {
@@ -146,11 +170,6 @@ async fn main() -> Result<()> {
             }
             Err(_) => {}
         }
-    }
-
-    if let Commands::Completions { shell: _ } = &cli.command {
-        let _stdout = std::io::stdout().lock();
-        return Ok(());
     }
 
     match cli.command {
@@ -223,6 +242,14 @@ async fn main() -> Result<()> {
             SysCommands::Init { dry_run } => Box::pin(sys::handle_init(&config, dry_run)).await,
         },
     }
+}
+
+fn write_completions<G: Generator>(
+    generator: G,
+    command: &mut clap::Command,
+    out: &mut dyn std::io::Write,
+) {
+    generate(generator, command, command.get_name().to_string(), out);
 }
 
 async fn handle_env_show(config: &Config) -> Result<()> {
@@ -839,6 +866,47 @@ mod tests {
     fn cli_completions_rejects_unsupported_shells() {
         assert!(Cli::try_parse_from(["shine", "completions", "powershell"]).is_err());
         assert!(Cli::try_parse_from(["shine", "completions", "elvish"]).is_err());
+    }
+
+    #[test]
+    fn cli_completions_accepts_supported_shells() {
+        assert!(Cli::try_parse_from(["shine", "completions", "bash"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "completions", "fish"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "completions", "zsh"]).is_ok());
+    }
+
+    #[test]
+    fn completions_output_is_non_empty_for_supported_shells() {
+        for shell in [
+            CompletionShell::Bash,
+            CompletionShell::Fish,
+            CompletionShell::Zsh,
+        ] {
+            let mut command = Cli::command();
+            let mut output = Vec::new();
+
+            match shell {
+                CompletionShell::Bash => {
+                    write_completions(clap_complete::shells::Bash, &mut command, &mut output)
+                }
+                CompletionShell::Fish => {
+                    write_completions(clap_complete::shells::Fish, &mut command, &mut output)
+                }
+                CompletionShell::Zsh => {
+                    write_completions(clap_complete::shells::Zsh, &mut command, &mut output)
+                }
+            }
+
+            let script = String::from_utf8(output).unwrap();
+            assert!(
+                !script.trim().is_empty(),
+                "completion script should not be empty"
+            );
+            assert!(
+                script.contains("shine"),
+                "completion script should mention the command name"
+            );
+        }
     }
 
     #[test]
