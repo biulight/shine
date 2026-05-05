@@ -5,6 +5,23 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.16.0] — 2026-05-05
+
+### Features
+
+- Added `shine completions <shell>` for `bash`, `zsh`, and `fish`, so shell completion scripts can be generated for manual installation.
+- Refreshed the bundled Ghostty preset with updated theme and background settings.
+
+### Docs
+
+- Documented shell completion generation and installation examples.
+- Clarified that `shine` currently supports Unix-like environments with `bash`, `zsh`, and `fish`, and does not support Windows, PowerShell, or Elvish yet.
+- Updated the pinned `install.sh` example to `0.16.0`.
+
+### Fixes
+
+- Added a top-level help description for `shine completions`, so the command is discoverable from `shine --help`.
+
 ## [0.15.1] — 2026-05-05
 
 ### Fixes
