@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{Generator, generate};
 use std::path::PathBuf;
 
 mod apps;
@@ -46,6 +47,7 @@ enum Commands {
         #[command(subcommand)]
         command: AppCommands,
     },
+    #[command(about = "Generate shell completion scripts for manual installation")]
     Completions {
         /// Target shell
         #[arg(value_enum)]
@@ -95,10 +97,24 @@ enum CompletionShell {
     Fish,
     #[value(name = "zsh")]
     Zsh,
-    #[value(name = "powershell")]
-    PowerShell,
-    #[value(name = "elvish")]
-    Elvish,
+}
+
+impl CompletionShell {
+    fn generate(self) {
+        let mut command = Cli::command();
+        let mut stdout = std::io::stdout();
+        match self {
+            CompletionShell::Bash => {
+                write_completions(clap_complete::shells::Bash, &mut command, &mut stdout)
+            }
+            CompletionShell::Fish => {
+                write_completions(clap_complete::shells::Fish, &mut command, &mut stdout)
+            }
+            CompletionShell::Zsh => {
+                write_completions(clap_complete::shells::Zsh, &mut command, &mut stdout)
+            }
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -111,6 +127,11 @@ struct UpgradeCommand {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Commands::Completions { shell } = &cli.command {
+        shell.generate();
+        return Ok(());
+    }
 
     if let Some(config_dir) = &cli.config_dir {
         if config_dir.trim().is_empty() {
@@ -150,11 +171,6 @@ async fn main() -> Result<()> {
             }
             Err(_) => {}
         }
-    }
-
-    if let Commands::Completions { shell: _ } = &cli.command {
-        let _stdout = std::io::stdout().lock();
-        return Ok(());
     }
 
     match cli.command {
@@ -227,6 +243,14 @@ async fn main() -> Result<()> {
             SysCommands::Init { dry_run } => Box::pin(sys::handle_init(&config, dry_run)).await,
         },
     }
+}
+
+fn write_completions<G: Generator>(
+    generator: G,
+    command: &mut clap::Command,
+    out: &mut dyn std::io::Write,
+) {
+    generate(generator, command, command.get_name().to_string(), out);
 }
 
 async fn handle_env_show(config: &Config) -> Result<()> {
@@ -323,12 +347,16 @@ async fn handle_self_upgrade(config: &Config) -> Result<()> {
                 colors::green(&format!("shine {current} is up to date."))
             );
         }
-        Ok(update_check::UpgradeResult::Upgraded { previous, latest }) => {
+        Ok(update_check::UpgradeResult::Upgraded {
+            previous,
+            latest,
+            installed_path,
+        }) => {
             println!(
                 "{}",
                 colors::green(&format!("Upgraded shine from {previous} to {latest}."))
             );
-            sync_self_install_dest(config).await;
+            sync_self_install_dest(config, &installed_path).await;
         }
         Err(e) => {
             bail!("Upgrade failed: {e}");
@@ -384,20 +412,18 @@ async fn handle_config_upgrade(config: &Config, verbose: bool) -> Result<()> {
 
 /// After a successful self-upgrade, try to sync the new binary to the self-install destination.
 /// If the copy fails due to permissions, print a targeted hint instead of failing.
-async fn sync_self_install_dest(config: &Config) {
+async fn sync_self_install_dest(config: &Config, src: &std::path::Path) {
     let dest = match &config.self_install_dest {
         Some(d) => d,
         None => return,
     };
-    let Ok(src) = std::env::current_exe() else {
-        return;
-    };
-    match std::fs::copy(&src, dest) {
-        Ok(_) => println!(
+    match sync_self_install_dest_from(src, dest) {
+        Ok(SelfInstallSync::Synced) => println!(
             "{}",
             colors::green(&format!("Synced system copy at {}", dest.display()))
         ),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => println!(
+        Ok(SelfInstallSync::AlreadyCurrent) => {}
+        Err(e) if has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied) => println!(
             "{}",
             colors::yellow(&format!(
                 "System copy at {} needs manual sync — run: sudo {} self install",
@@ -410,6 +436,34 @@ async fn sync_self_install_dest(config: &Config) {
             dest.display()
         ),
     }
+}
+
+enum SelfInstallSync {
+    Synced,
+    AlreadyCurrent,
+}
+
+fn sync_self_install_dest_from(
+    src: &std::path::Path,
+    dest: &std::path::Path,
+) -> Result<SelfInstallSync> {
+    if dest.exists() {
+        let canonical_src = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
+        let canonical_dest = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
+        if canonical_src == canonical_dest {
+            return Ok(SelfInstallSync::AlreadyCurrent);
+        }
+    }
+
+    install_binary_atomically(src, dest).map(|()| SelfInstallSync::Synced)
+}
+
+fn has_io_error_kind(err: &anyhow::Error, kind: std::io::ErrorKind) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_err| io_err.kind() == kind)
+    })
 }
 
 async fn handle_presets_export(config: &Config, dir: Option<PathBuf>, force: bool) -> Result<()> {
@@ -672,6 +726,37 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn sync_self_install_dest_creates_missing_parent() {
+        let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
+        let src = dir.join("new-shine");
+        let dest = dir.join("usr/local/bin/shine");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&src, b"new").unwrap();
+
+        let outcome = sync_self_install_dest_from(&src, &dest).unwrap();
+
+        assert!(matches!(outcome, SelfInstallSync::Synced));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sync_self_install_dest_skips_current_exe_path() {
+        let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
+        let src = dir.join("shine");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&src, b"new").unwrap();
+
+        let outcome = sync_self_install_dest_from(&src, &src).unwrap();
+
+        assert!(matches!(outcome, SelfInstallSync::AlreadyCurrent));
+        assert_eq!(std::fs::read(&src).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[tokio::test]
     async fn self_install_errors_when_source_is_destination() {
         let dir = make_temp_dir().await;
@@ -777,6 +862,53 @@ mod tests {
                 command: AppCommands::Init { force: true }
             }
         ));
+    }
+
+    #[test]
+    fn cli_completions_rejects_unsupported_shells() {
+        assert!(Cli::try_parse_from(["shine", "completions", "powershell"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "completions", "elvish"]).is_err());
+    }
+
+    #[test]
+    fn cli_completions_accepts_supported_shells() {
+        assert!(Cli::try_parse_from(["shine", "completions", "bash"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "completions", "fish"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "completions", "zsh"]).is_ok());
+    }
+
+    #[test]
+    fn completions_output_is_non_empty_for_supported_shells() {
+        for shell in [
+            CompletionShell::Bash,
+            CompletionShell::Fish,
+            CompletionShell::Zsh,
+        ] {
+            let mut command = Cli::command();
+            let mut output = Vec::new();
+
+            match shell {
+                CompletionShell::Bash => {
+                    write_completions(clap_complete::shells::Bash, &mut command, &mut output)
+                }
+                CompletionShell::Fish => {
+                    write_completions(clap_complete::shells::Fish, &mut command, &mut output)
+                }
+                CompletionShell::Zsh => {
+                    write_completions(clap_complete::shells::Zsh, &mut command, &mut output)
+                }
+            }
+
+            let script = String::from_utf8(output).unwrap();
+            assert!(
+                !script.trim().is_empty(),
+                "completion script should not be empty"
+            );
+            assert!(
+                script.contains("shine"),
+                "completion script should mention the command name"
+            );
+        }
     }
 
     #[test]

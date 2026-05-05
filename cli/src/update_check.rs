@@ -5,7 +5,7 @@ use reqwest::header::{ACCEPT, HeaderMap, HeaderValue, USER_AGENT};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tar::Archive;
 use tokio::fs;
@@ -25,7 +25,11 @@ pub(crate) enum UpdateStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UpgradeResult {
     AlreadyUpToDate,
-    Upgraded { previous: Version, latest: Version },
+    Upgraded {
+        previous: Version,
+        latest: Version,
+        installed_path: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -109,6 +113,7 @@ pub(crate) async fn upgrade_to_latest_release(config: &Config) -> Result<Upgrade
     Ok(UpgradeResult::Upgraded {
         previous: current,
         latest,
+        installed_path: current_exe,
     })
 }
 
