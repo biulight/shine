@@ -315,25 +315,17 @@ For app configs, `shine show` reads the installed destination file. For shell pr
 
 ```bash
 shine update
+shine update --verbose
 ```
 
-Shows installed configuration status, then checks for a newer shine release:
+Shows only available installed configuration updates, then checks for a newer shine release. Use `--verbose` to include installed entries that are already up-to-date or need attention:
 
 ```
 Shell Presets
-  ✓  proxy/setproxy       installed
-  ✓  proxy/usetproxy      installed
-  ✗  tools/test_tools     not installed
-  ✓  PATH configured      ~/.zshrc
+  ↑  proxy/setproxy       update available  run `shine upgrade`
 
 App Configs
-  ✓  JetBrains/IdeaVim  →  ~/.ideavimrc              up-to-date
-  ✓  git                →  ~/.gitconfig               up-to-date
-  ✓  ghostty            →  ~/.config/ghostty/...      up-to-date
   ↑  starship           →  ~/.config/starship/...     update available  run `shine upgrade`
-  ✗  vim                →  ~/.vim                     not installed
-
-Summary  3 up-to-date · 1 update available · 1 not installed
 ```
 
 Status symbols:
@@ -387,7 +379,8 @@ All `install`, `update`, and `list` commands will automatically read from the ex
 Manual commands:
 
 ```bash
-shine update        # show installed config status, then force-check the latest release
+shine update        # show available updates, then force-check the latest release
+shine update --verbose  # include up-to-date and non-update status rows
 shine self upgrade  # download and install the latest release for this platform
 shine upgrade       # force-update installed shell and app configs
 shine upgrade --verbose  # include env-template check details
@@ -401,7 +394,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.16.1 sh install.sh
+SHINE_VERSION=0.17.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
