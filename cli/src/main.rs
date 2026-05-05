@@ -47,6 +47,7 @@ enum Commands {
         #[command(subcommand)]
         command: AppCommands,
     },
+    #[command(about = "Generate shell completion scripts for manual installation")]
     Completions {
         /// Target shell
         #[arg(value_enum)]
