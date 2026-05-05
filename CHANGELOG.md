@@ -5,6 +5,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.16.1] — 2026-05-05
+
+### Fixes
+
+- Fixed `shine self upgrade` so syncing a remembered `shine self install` destination copies from the newly installed binary path instead of the deleted backup path left behind by the running process.
+
 ## [0.16.0] — 2026-05-05
 
 ### Features
