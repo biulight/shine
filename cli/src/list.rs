@@ -4,6 +4,87 @@ use crate::colors;
 use crate::config::Config;
 use anyhow::Result;
 
+pub(crate) async fn handle_update_list(config: &Config) -> Result<bool> {
+    let shell_rows = build_shell_rows(config).await?;
+    let update_shell: Vec<&ShellRow> = shell_rows
+        .iter()
+        .filter(|r| r.is_installed && r.status_sym == "↑")
+        .collect();
+
+    let cats_result = if config.is_external_presets {
+        load_installed_categories(config, None).await
+    } else {
+        load_embedded_categories(None)
+    };
+    let app_rows = match cats_result {
+        Ok(cats) => build_app_rows(config, &cats).await?,
+        Err(_) => Vec::new(),
+    };
+    let update_app: Vec<&AppRow> = app_rows
+        .iter()
+        .filter(|r| r.file_status == FileStatus::UpdateAvail)
+        .collect();
+
+    let any = !update_shell.is_empty() || !update_app.is_empty();
+    if !any {
+        return Ok(false);
+    }
+
+    crate::config::print_presets_note(config);
+
+    if !update_shell.is_empty() {
+        println!("{}", colors::bold("Shell Presets"));
+
+        let label_width = update_shell
+            .iter()
+            .map(|r| r.label.len())
+            .max()
+            .unwrap_or(0);
+
+        for row in &update_shell {
+            let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
+            println!(
+                "  {}  {}{}  {}  {}",
+                row.symbol,
+                row.label,
+                pad,
+                colors::status_label(row.status_text, row.status_sym),
+                colors::dim("run `shine upgrade`"),
+            );
+        }
+    }
+
+    if !update_app.is_empty() {
+        if !update_shell.is_empty() {
+            println!();
+        }
+        println!("{}", colors::bold("App Configs"));
+
+        let label_width = update_app.iter().map(|r| r.label.len()).max().unwrap_or(0);
+
+        for row in &update_app {
+            let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
+            let dest_part = row
+                .dest
+                .as_deref()
+                .map(|d| format!("  {}  {}", colors::dim("→"), colors::dim(d)))
+                .unwrap_or_default();
+
+            println!(
+                "  {}  {}{}{}  {}  {}",
+                colors::symbol(row.sym),
+                row.label,
+                pad,
+                dest_part,
+                colors::status_label(row.status_text, row.sym),
+                colors::dim("run `shine upgrade`"),
+            );
+        }
+    }
+
+    Ok(true)
+}
+
 pub(crate) async fn handle_status_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;

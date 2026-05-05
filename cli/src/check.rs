@@ -82,7 +82,7 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
             };
 
             let (sym, status_text) = match (file_exists, link_exists) {
-                (true, true) => ("✓", "installed"),
+                (true, true) => ("✓", "up-to-date"),
                 (true, false) => ("~", "preset present, bin symlink missing"),
                 (false, true) => ("~", "bin symlink present, preset missing"),
                 (false, false) => ("✗", "not installed"),
@@ -350,6 +350,50 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shine-check-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).await.unwrap();
         dir
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn installed_shell_rows_report_up_to_date() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/proxy");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+        )
+        .await
+        .unwrap();
+        let script = cat_dir.join("set_proxy.sh");
+        fs::write(&script, b"#!/bin/bash\necho proxy\n")
+            .await
+            .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&script).await.unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&script, perms).await.unwrap();
+        }
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        crate::shells::handle_install(&config, Some("proxy"), false)
+            .await
+            .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "proxy/setproxy")
+            .expect("proxy/setproxy row should exist");
+
+        assert_eq!(row.status_sym, "✓");
+        assert_eq!(row.status_text, "up-to-date");
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[cfg(unix)]
