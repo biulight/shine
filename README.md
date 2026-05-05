@@ -18,8 +18,10 @@ A fast Rust CLI tool for managing shell environment presets.
 - **App preset installer** — install managed config files like `~/.gitconfig`, `~/.config/starship/starship.toml`, or `~/.config/ghostty/config.ghostty`
 - **Installed content inspection** — `shine show <target>` prints metadata and full content for installed app configs and shell presets
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
-- **Multi-shell support** — bash, zsh, fish, powershell, elvish
+- **Multi-shell support** — bash, zsh, fish
 - **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
+
+Current support scope: `shine` supports Unix-like environments with `bash`, `zsh`, and `fish`. Windows, PowerShell, and Elvish are not supported yet.
 
 ## Planning Workflow
 
@@ -51,6 +53,8 @@ Or install from source:
 ```bash
 cargo install --path cli
 ```
+
+`shine` does not support Windows yet. Use a Unix-like environment with `bash`, `zsh`, or `fish`.
 
 Or build from source:
 

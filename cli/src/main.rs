@@ -95,10 +95,6 @@ enum CompletionShell {
     Fish,
     #[value(name = "zsh")]
     Zsh,
-    #[value(name = "powershell")]
-    PowerShell,
-    #[value(name = "elvish")]
-    Elvish,
 }
 
 #[derive(Parser, Debug)]
@@ -837,6 +833,12 @@ mod tests {
                 command: AppCommands::Init { force: true }
             }
         ));
+    }
+
+    #[test]
+    fn cli_completions_rejects_unsupported_shells() {
+        assert!(Cli::try_parse_from(["shine", "completions", "powershell"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "completions", "elvish"]).is_err());
     }
 
     #[test]
