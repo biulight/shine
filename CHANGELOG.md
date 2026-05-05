@@ -5,6 +5,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.15.1] — 2026-05-05
+
+### Fixes
+
+- Fixed `shine self upgrade` so the remembered `shine self install` destination is synced atomically and recreated when its parent directory is missing, avoiding a noisy warning for stale `/usr/local/bin/shine` paths.
+
 ## [0.15.0] — 2026-05-05
 
 ### Features
