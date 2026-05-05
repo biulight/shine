@@ -392,12 +392,13 @@ async fn sync_self_install_dest(config: &Config) {
     let Ok(src) = std::env::current_exe() else {
         return;
     };
-    match std::fs::copy(&src, dest) {
-        Ok(_) => println!(
+    match sync_self_install_dest_from(&src, dest) {
+        Ok(SelfInstallSync::Synced) => println!(
             "{}",
             colors::green(&format!("Synced system copy at {}", dest.display()))
         ),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => println!(
+        Ok(SelfInstallSync::AlreadyCurrent) => {}
+        Err(e) if has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied) => println!(
             "{}",
             colors::yellow(&format!(
                 "System copy at {} needs manual sync — run: sudo {} self install",
@@ -410,6 +411,34 @@ async fn sync_self_install_dest(config: &Config) {
             dest.display()
         ),
     }
+}
+
+enum SelfInstallSync {
+    Synced,
+    AlreadyCurrent,
+}
+
+fn sync_self_install_dest_from(
+    src: &std::path::Path,
+    dest: &std::path::Path,
+) -> Result<SelfInstallSync> {
+    if dest.exists() {
+        let canonical_src = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
+        let canonical_dest = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
+        if canonical_src == canonical_dest {
+            return Ok(SelfInstallSync::AlreadyCurrent);
+        }
+    }
+
+    install_binary_atomically(src, dest).map(|()| SelfInstallSync::Synced)
+}
+
+fn has_io_error_kind(err: &anyhow::Error, kind: std::io::ErrorKind) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_err| io_err.kind() == kind)
+    })
 }
 
 async fn handle_presets_export(config: &Config, dir: Option<PathBuf>, force: bool) -> Result<()> {
@@ -669,6 +698,37 @@ mod tests {
         install_binary_atomically(&src, &dest).unwrap();
 
         assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sync_self_install_dest_creates_missing_parent() {
+        let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
+        let src = dir.join("new-shine");
+        let dest = dir.join("usr/local/bin/shine");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&src, b"new").unwrap();
+
+        let outcome = sync_self_install_dest_from(&src, &dest).unwrap();
+
+        assert!(matches!(outcome, SelfInstallSync::Synced));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sync_self_install_dest_skips_current_exe_path() {
+        let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
+        let src = dir.join("shine");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&src, b"new").unwrap();
+
+        let outcome = sync_self_install_dest_from(&src, &src).unwrap();
+
+        assert!(matches!(outcome, SelfInstallSync::AlreadyCurrent));
+        assert_eq!(std::fs::read(&src).unwrap(), b"new");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
