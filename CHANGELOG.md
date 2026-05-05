@@ -7,6 +7,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [0.14.6] — 2026-05-05
 
+### Features
+
+- Added `shine show <target>` to inspect installed app configs and shell presets, including metadata and full installed file or effective script content.
+
 ### Fixes
 
 - Fixed `shine upgrade` so external shell presets only upgrade commands that are already installed, preventing preset-only scripts such as `tools/test_tools` from being installed unexpectedly.

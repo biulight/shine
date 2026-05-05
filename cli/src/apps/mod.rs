@@ -5,7 +5,9 @@ mod metadata;
 mod transforms;
 
 pub(crate) use manifest::{AppEntry, AppManifest, hash_content};
-pub(crate) use metadata::{AppCategory, load_embedded_categories, load_installed_categories};
+pub(crate) use metadata::{
+    AppCategory, AppFile, load_embedded_categories, load_installed_categories,
+};
 pub(crate) use transforms::apply as apply_transforms;
 
 use crate::colors;

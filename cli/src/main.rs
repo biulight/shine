@@ -12,6 +12,7 @@ mod env;
 mod list;
 mod presets;
 mod shells;
+mod show;
 mod sys;
 mod update_check;
 
@@ -52,6 +53,12 @@ enum Commands {
     },
     /// List installed shell presets and app configs
     List,
+    /// Show the full content and details for an installed config or shell preset
+    Show {
+        /// Installed item to show (e.g. git, starship, proxy, setproxy)
+        #[arg(value_name = "TARGET")]
+        target: String,
+    },
     /// Copy built-in presets to a directory for local customization
     Export(ExportCommand),
     /// Set the external presets directory in ~/.shine/config.toml
@@ -185,6 +192,7 @@ async fn main() -> Result<()> {
         }
         Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
         Commands::List => Box::pin(list::handle_list(&config)).await,
+        Commands::Show { target } => Box::pin(show::handle_show(&config, &target)).await,
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade => handle_self_upgrade(&config).await,
@@ -725,6 +733,15 @@ mod tests {
 
         let cli = Cli::try_parse_from(["shine", "unlink"]).unwrap();
         assert!(matches!(cli.command, Commands::Unlink));
+    }
+
+    #[test]
+    fn cli_accepts_show_command() {
+        let cli = Cli::try_parse_from(["shine", "show", "setproxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Show { target } if target == "setproxy"
+        ));
     }
 
     #[test]
