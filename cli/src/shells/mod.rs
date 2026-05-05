@@ -12,6 +12,15 @@ use std::str::FromStr;
 pub(crate) const SENTINEL_START: &str = "# >>> shine >>>";
 const SENTINEL_END: &str = "# <<< shine <<<";
 
+const SHELL_TEMPLATE: &str = r#"# Shell preset metadata for shine.
+description = "My shell helper commands."
+
+[[files]]
+source = "my_tool.sh"
+target = "mytool"
+needs_source = false
+"#;
+
 #[derive(Debug, Default)]
 pub(crate) struct ShellUpgradeReport {
     pub templates_updated: usize,
@@ -34,6 +43,29 @@ pub(crate) enum ShellType {
     Zsh,
     PowerShell,
     Elvish,
+}
+
+pub(crate) async fn handle_init_template(force: bool) -> Result<()> {
+    let dir = std::env::current_dir().context("reading current directory")?;
+    let (path, overwritten) = write_init_template_at(&dir, force).await?;
+    if overwritten {
+        println!("Updated shell preset template: {}", path.display());
+    } else {
+        println!("Created shell preset template: {}", path.display());
+    }
+    Ok(())
+}
+
+async fn write_init_template_at(dir: &Path, force: bool) -> Result<(PathBuf, bool)> {
+    let path = dir.join("shine.toml");
+    let exists = path.exists();
+    if exists && !force {
+        bail!("shine.toml already exists; use --force to overwrite");
+    }
+    tokio::fs::write(&path, SHELL_TEMPLATE)
+        .await
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok((path, exists))
 }
 
 pub(crate) async fn handle_install(
@@ -1327,6 +1359,62 @@ mod tests {
 
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(!config.bin_dir().join("set_proxy").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_template_creates_parseable_shell_metadata() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+
+        let (path, overwritten) = write_init_template_at(&cat_dir, false).await.unwrap();
+        fs::write(
+            cat_dir.join("my_tool.sh"),
+            b"#!/bin/bash\n# My tool.\necho hi\n",
+        )
+        .await
+        .unwrap();
+
+        let config = Config::new_for_test(&dir);
+        let categories = metadata::load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap();
+
+        assert_eq!(path, cat_dir.join("shine.toml"));
+        assert!(!overwritten);
+        assert_eq!(categories.len(), 1);
+        assert_eq!(
+            categories[0].description.as_deref(),
+            Some("My shell helper commands.")
+        );
+        assert_eq!(
+            categories[0].files[0].source_rel,
+            PathBuf::from("my_tool.sh")
+        );
+        assert_eq!(categories[0].files[0].command_name, "mytool");
+        assert!(!categories[0].files[0].needs_source);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_template_refuses_existing_file_unless_forced() {
+        let dir = make_temp_dir().await;
+        fs::write(dir.join("shine.toml"), b"old").await.unwrap();
+
+        let err = write_init_template_at(&dir, false).await.unwrap_err();
+        assert!(
+            err.to_string().contains("use --force to overwrite"),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(fs::read(dir.join("shine.toml")).await.unwrap(), b"old");
+
+        let (_path, overwritten) = write_init_template_at(&dir, true).await.unwrap();
+        assert!(overwritten);
+        let content = fs::read_to_string(dir.join("shine.toml")).await.unwrap();
+        assert!(content.contains("target = \"mytool\""));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

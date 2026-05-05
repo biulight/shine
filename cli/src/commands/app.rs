@@ -2,6 +2,12 @@ use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 pub enum AppCommands {
+    /// Generate an app preset shine.toml template in the current directory
+    Init {
+        /// Overwrite shine.toml if it already exists
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
     /// List available app preset categories and their destination paths
     List,
     /// Show detailed information about a specific app preset category

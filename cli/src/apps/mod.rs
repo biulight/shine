@@ -15,7 +15,43 @@ use crate::presets;
 use anyhow::{Context, Result};
 use file_ops::{InstallOutcome, UninstallOutcome};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+const APP_TEMPLATE: &str = r#"# App preset metadata for shine.
+description = "My app configuration."
+dest = "~/.config/my-app"
+
+[[files]]
+source = "config.toml"
+target = "config.toml"
+description = "Main application config"
+display_name = "config.toml"
+# Known transforms: "template", "jsonc-to-json".
+transforms = []
+"#;
+
+pub(crate) async fn handle_init_template(force: bool) -> Result<()> {
+    let dir = std::env::current_dir().context("reading current directory")?;
+    let (path, overwritten) = write_init_template_at(&dir, force).await?;
+    if overwritten {
+        println!("Updated app preset template: {}", path.display());
+    } else {
+        println!("Created app preset template: {}", path.display());
+    }
+    Ok(())
+}
+
+async fn write_init_template_at(dir: &Path, force: bool) -> Result<(PathBuf, bool)> {
+    let path = dir.join("shine.toml");
+    let exists = path.exists();
+    if exists && !force {
+        anyhow::bail!("shine.toml already exists; use --force to overwrite");
+    }
+    tokio::fs::write(&path, APP_TEMPLATE)
+        .await
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok((path, exists))
+}
 
 /// Hash the effective install content for `file` — applies transforms if declared.
 ///
@@ -830,6 +866,65 @@ mod tests {
         .await
         .unwrap();
         fs::write(cat_dir.join("daemon.jsonc"), body).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_template_creates_parseable_app_metadata() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/app/sample");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+
+        let (path, overwritten) = write_init_template_at(&cat_dir, false).await.unwrap();
+        fs::write(cat_dir.join("config.toml"), b"name = \"sample\"\n")
+            .await
+            .unwrap();
+
+        let config = Config::new_for_test(&dir);
+        let categories = metadata::load_installed_categories(&config, Some("sample"))
+            .await
+            .unwrap();
+
+        assert_eq!(path, cat_dir.join("shine.toml"));
+        assert!(!overwritten);
+        assert_eq!(categories.len(), 1);
+        assert_eq!(
+            categories[0].description.as_deref(),
+            Some("My app configuration.")
+        );
+        assert_eq!(
+            categories[0].destination_root.as_deref(),
+            Some("~/.config/my-app")
+        );
+        assert_eq!(
+            categories[0].files[0].source_rel,
+            PathBuf::from("config.toml")
+        );
+        assert_eq!(
+            categories[0].files[0].target_rel,
+            PathBuf::from("config.toml")
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_template_refuses_existing_file_unless_forced() {
+        let dir = make_temp_dir().await;
+        fs::write(dir.join("shine.toml"), b"old").await.unwrap();
+
+        let err = write_init_template_at(&dir, false).await.unwrap_err();
+        assert!(
+            err.to_string().contains("use --force to overwrite"),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(fs::read(dir.join("shine.toml")).await.unwrap(), b"old");
+
+        let (_path, overwritten) = write_init_template_at(&dir, true).await.unwrap();
+        assert!(overwritten);
+        let content = fs::read_to_string(dir.join("shine.toml")).await.unwrap();
+        assert!(content.contains("dest = \"~/.config/my-app\""));
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[cfg(unix)]

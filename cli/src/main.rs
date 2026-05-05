@@ -153,6 +153,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Completions { .. } => unreachable!(),
         Commands::App { command } => match command {
+            AppCommands::Init { force } => apps::handle_init_template(force).await,
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
             AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
             AppCommands::Install {
@@ -189,6 +190,7 @@ async fn main() -> Result<()> {
             SelfCommands::Upgrade => handle_self_upgrade(&config).await,
         },
         Commands::Shell { command } => match command {
+            ShellCommands::Init { force } => shells::handle_init_template(force).await,
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
             ShellCommands::Install { category, force } => {
                 Box::pin(shells::handle_install(&config, category.as_deref(), force)).await
@@ -723,6 +725,41 @@ mod tests {
 
         let cli = Cli::try_parse_from(["shine", "unlink"]).unwrap();
         assert!(matches!(cli.command, Commands::Unlink));
+    }
+
+    #[test]
+    fn cli_accepts_shell_and_app_init_commands() {
+        let cli = Cli::try_parse_from(["shine", "shell", "init"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Shell {
+                command: ShellCommands::Init { force: false }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "shell", "init", "--force"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Shell {
+                command: ShellCommands::Init { force: true }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "app", "init"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Init { force: false }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "app", "init", "-f"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Init { force: true }
+            }
+        ));
     }
 
     #[test]
