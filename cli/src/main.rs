@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Generator, generate};
 use std::path::PathBuf;
 
@@ -37,6 +37,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Initialize the current directory as a shine presets directory
+    Init(InitCommand),
     /// Initialize quick shells
     Shell {
         #[command(subcommand)]
@@ -87,6 +89,13 @@ enum Commands {
         #[command(subcommand)]
         command: SysCommands,
     },
+}
+
+#[derive(Args, Debug)]
+struct InitCommand {
+    /// Skip the confirmation prompt
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -147,6 +156,10 @@ async fn main() -> Result<()> {
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", config_dir) }
     }
 
+    if let Commands::Init(cmd) = &cli.command {
+        return handle_init(cmd.yes).await;
+    }
+
     let config = Box::pin(Config::load_or_init()).await?;
 
     // Skip the background version check for update/self commands. `shine update`
@@ -181,6 +194,7 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
+        Commands::Init(_) => unreachable!(),
         Commands::Completions { .. } => unreachable!(),
         Commands::App { command } => match command {
             AppCommands::Init { force } => apps::handle_init_template(force).await,
@@ -250,6 +264,44 @@ async fn main() -> Result<()> {
             SysCommands::Init { dry_run } => Box::pin(sys::handle_init(&config, dry_run)).await,
         },
     }
+}
+
+async fn handle_init(yes: bool) -> Result<()> {
+    let current_dir = std::env::current_dir()?;
+    let display_dir = tokio::fs::canonicalize(&current_dir)
+        .await
+        .unwrap_or(current_dir);
+
+    if !yes && !confirm_init(&display_dir)? {
+        println!("{}", colors::dim("Init cancelled."));
+        return Ok(());
+    }
+
+    let path = Config::init_current_dir_config().await?;
+    println!(
+        "{}",
+        colors::green(&format!("Initialized shine config at {}", path.display()))
+    );
+    println!(
+        "{}",
+        colors::dim(&format!("presets_dir = {}", display_dir.display()))
+    );
+    Ok(())
+}
+
+fn confirm_init(dir: &std::path::Path) -> Result<bool> {
+    use std::io::Write as _;
+
+    print!(
+        "Initialize {} as the shine presets directory? [y/N] ",
+        dir.display()
+    );
+    std::io::stdout().flush()?;
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let answer = input.trim();
+    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 fn write_completions<G: Generator>(
@@ -855,6 +907,21 @@ mod tests {
 
         let cli = Cli::try_parse_from(["shine", "unlink"]).unwrap();
         assert!(matches!(cli.command, Commands::Unlink));
+    }
+
+    #[test]
+    fn cli_accepts_top_level_init_command() {
+        let cli = Cli::try_parse_from(["shine", "init"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Init(InitCommand { yes: false })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "init", "--yes"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Init(InitCommand { yes: true })
+        ));
     }
 
     #[test]

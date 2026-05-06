@@ -5,6 +5,22 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.18.0] — 2026-05-06
+
+### Features
+
+- Added `shine init` to initialize the current directory as a project-local presets source by writing `config.toml` with `presets_dir` set to that directory.
+- Added current-directory `config.toml` discovery and `.env.toml` environment overrides for project-local preset repositories.
+
+### Fixes
+
+- Hid shell presets from `shine list` when the preset source exists but the managed bin symlink is missing, so the installed-only view only shows callable shell commands.
+
+### Docs
+
+- Documented project-local initialization, `.env.toml`, and the refined `shine list` behavior.
+- Updated the pinned `install.sh` example to `0.18.0`.
+
 ## [0.17.0] — 2026-05-05
 
 ### Features

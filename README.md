@@ -8,6 +8,7 @@ A fast Rust CLI tool for managing shell environment presets.
 
 - **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
 - **External presets** — point `presets_dir` at your own directory (e.g. a dotfiles repo) and `shine` reads from there instead; `shine export` seeds it with the built-ins
+- **Project-local presets** — run `shine init` inside a presets repo to create a local `config.toml` that points `presets_dir` at the current directory
 - **Symlink-based bin directory** — `~/.shine/bin/` holds flat symlinks to installed scripts; add it to `PATH` once
 - **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
 - **Category install/uninstall** — install or uninstall all presets or a specific subset (e.g. `proxy`)
@@ -279,6 +280,7 @@ shine list
 ```
 
 Shows only items that are currently installed or configured — a quick "what's set up on this machine" view. Entries that are not installed are omitted and status details are not shown.
+Shell presets whose source file exists but whose command symlink is missing are also omitted, because they are not callable from `~/.shine/bin/`.
 
 ```
 Shell Presets
@@ -367,6 +369,17 @@ SHINE_PRESETS=~/dotfiles/shine-presets shine export
 
 All `install`, `update`, and `list` commands will automatically read from the external directory when `presets_dir` is configured. The active preset source is printed in each command's output so you always know which files are being used.
 
+### Initialize a presets directory
+
+```bash
+cd ~/dotfiles/shine-presets
+shine init
+```
+
+`shine init` creates `config.toml` in the current directory and sets `presets_dir` to that directory. On later runs from the same directory, `shine` reads this local config first, while runtime state such as `bin/`, rendered template scripts, update-check cache, and app manifests still lives under `~/.shine/`.
+
+The command asks for confirmation before writing. Use `shine init --yes` for scripts.
+
 ### Runtime update policy
 
 `shine` checks the latest GitHub Release for `biulight/shine` before executing commands and caches the result for 24 hours under `~/.shine/`.
@@ -394,7 +407,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.17.0 sh install.sh
+SHINE_VERSION=0.18.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -451,7 +464,7 @@ target = "usetproxy"
 
 ## Configuration
 
-`~/.shine/config.toml` is created automatically on first run.
+`~/.shine/config.toml` is created automatically on first run. If the current directory has a `config.toml`, `shine` uses that file as the active config instead.
 
 Override directories at runtime:
 
@@ -466,7 +479,9 @@ Or persist a custom presets directory in `~/.shine/config.toml`:
 presets_dir = "/custom/presets"
 ```
 
-Priority: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `config.toml[presets_dir]` > default.
+Config discovery prefers `./config.toml` in the current directory when present; otherwise it uses the global config under `~/.shine/` or `SHINE_CONFIG_DIR`.
+
+Preset source priority is: `SHINE_PRESETS` > active `config.toml[presets_dir]` > default. When `SHINE_CONFIG_DIR` is set and no local `config.toml` is active, it also sets the default presets directory to `$SHINE_CONFIG_DIR/presets`.
 
 You can also change the fallback install root for app presets that do not carry a `shine-dest:` annotation:
 
@@ -482,6 +497,13 @@ HTTP_PROXY_PORT = "6152"
 SOCKS5_PROXY_PORT = "6153"
 PROXY_HOST = "127.0.0.1"
 PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
+```
+
+For project-local overrides, place a flat `.env.toml` in the current directory. Values from `.env.toml` override matching keys from `config.toml [env]` without modifying either file:
+
+```toml
+HTTP_PROXY_PORT = "7890"
+PROXY_HOST = "127.0.0.1"
 ```
 
 ## Directory Layout
