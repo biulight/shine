@@ -9,8 +9,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
-- Added `shine init` to initialize the current directory as a project-local presets source by writing `config.toml` with `presets_dir` set to that directory.
-- Added current-directory `config.toml` discovery and `.env.toml` environment overrides for project-local preset repositories.
+- Added `shine init` to initialize the current directory as a project-local presets source by writing a Git-portable `shine.config.toml` with `presets_dir = "."`.
+- Added ancestor `shine.config.toml` discovery, relative `presets_dir` resolution from the config directory, and `shine.env.toml` environment overrides for project-local preset repositories.
 
 ### Fixes
 
@@ -18,7 +18,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Docs
 
-- Documented project-local initialization, `.env.toml`, and the refined `shine list` behavior.
+- Documented project-local initialization, `shine.env.toml`, and the refined `shine list` behavior.
 - Updated the pinned `install.sh` example to `0.18.0`.
 
 ## [0.17.0] — 2026-05-05

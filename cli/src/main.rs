@@ -65,9 +65,9 @@ enum Commands {
     },
     /// Copy built-in presets to a directory for local customization
     Export(ExportCommand),
-    /// Set the external presets directory in ~/.shine/config.toml
+    /// Set the external presets directory in the active config
     Link(LinkCommand),
-    /// Remove the external presets directory from ~/.shine/config.toml
+    /// Remove the external presets directory from the active config
     Unlink,
     /// Show installed config status and check for a newer version of shine
     Update(UpdateCommand),
@@ -316,10 +316,7 @@ async fn handle_env_show(config: &Config) -> Result<()> {
     let env = env::EnvConfig::load_or_init(config).await?;
     println!(
         "{}",
-        colors::dim(&format!(
-            "# {} [env]",
-            config.shine_dir().join("config.toml").display()
-        ))
+        colors::dim(&format!("# {} [env]", config.config_path().display()))
     );
     for (k, v) in env.iter() {
         println!("{k} = \"{v}\"");
@@ -346,7 +343,7 @@ async fn handle_env_get(config: &Config, key: String) -> Result<()> {
         None => {
             eprintln!(
                 "{}",
-                colors::yellow(&format!("{key} is not set in config.toml [env]"))
+                colors::yellow(&format!("{key} is not set in the active config [env]"))
             );
             std::process::exit(1);
         }
@@ -648,7 +645,7 @@ async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -> Re
             "{}",
             colors::yellow(
                 "Warning: SHINE_CONFIG_DIR or SHINE_PRESETS is set and takes priority over \
-                 config.toml at runtime. Unset the env var for this setting to take effect."
+                 the active config at runtime. Unset the env var for this setting to take effect."
             )
         );
     }
@@ -676,7 +673,7 @@ async fn handle_presets_unlink(config: &Config) -> Result<()> {
 
     println!(
         "{}",
-        colors::green("External presets directory removed from config.toml.")
+        colors::green("External presets directory removed from the active config.")
     );
     println!(
         "{}",

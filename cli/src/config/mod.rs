@@ -8,8 +8,11 @@ use tokio::fs::{self, OpenOptions};
 use tokio::io::AsyncWriteExt;
 
 const LEGACY_ENV_FILE: &str = "env.toml";
-const LOCAL_CONFIG_FILE: &str = "config.toml";
-const LOCAL_ENV_FILE: &str = ".env.toml";
+const GLOBAL_CONFIG_FILE: &str = "config.toml";
+const PROJECT_CONFIG_FILE: &str = "shine.config.toml";
+const LEGACY_PROJECT_CONFIG_FILE: &str = "config.toml";
+const PROJECT_ENV_FILE: &str = "shine.env.toml";
+const LEGACY_PROJECT_ENV_FILE: &str = ".env.toml";
 
 pub(crate) const DEFAULT_ENV_VARS: &[(&str, &str)] = &[
     ("HTTP_PROXY_PORT", "6152"),
@@ -33,7 +36,7 @@ pub(crate) struct Config {
     /// Bin directory for symlinks - computed from home
     #[serde(skip)]
     bin_dir: PathBuf,
-    /// Path to config.toml - computed from home
+    /// Path to the active config file.
     #[serde(skip)]
     config_path: PathBuf,
     /// Directory used for shine runtime state.
@@ -49,7 +52,7 @@ pub(crate) struct Config {
     pub schema_version: u32,
     #[serde(skip)]
     pub shell_type: ShellType,
-    /// Optional persistent presets_dir override stored in config.toml.
+    /// Optional persistent presets_dir override stored in the active config.
     /// Takes effect when neither SHINE_CONFIG_DIR nor SHINE_PRESETS is set.
     #[serde(
         rename = "presets_dir",
@@ -66,7 +69,7 @@ pub(crate) struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub app_default_dest_root_override: Option<PathBuf>,
-    /// `true` when the presets directory is provided by the user (via env var or config.toml
+    /// `true` when the presets directory is provided by the user (via env var or config
     /// `presets_dir` key) rather than the default `~/.shine/presets/`.
     /// When `true`, install commands read presets from disk directly without extracting
     /// embedded assets, and list commands enumerate the on-disk folder.
@@ -88,15 +91,19 @@ pub(crate) struct Config {
 impl Config {
     pub(crate) async fn init_current_dir_config() -> Result<PathBuf> {
         let current_dir = std::env::current_dir().context("resolving current directory")?;
-        let config_path = current_dir.join(LOCAL_CONFIG_FILE);
-
-        if config_path.exists() {
-            bail!("config.toml already exists in {}", current_dir.display());
+        if let Some(project_config) = find_project_config(&current_dir) {
+            bail!(
+                "{} already exists; current directory is already under a shine project at {}",
+                project_config.path.display(),
+                project_config.root.display()
+            );
         }
+
+        let config_path = current_dir.join(PROJECT_CONFIG_FILE);
 
         let presets_dir = tokio::fs::canonicalize(&current_dir)
             .await
-            .unwrap_or(current_dir);
+            .unwrap_or_else(|_| current_dir.clone());
         let (default_shine_dir, _) = default_config_and_presets_dir()?;
         let shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
 
@@ -106,7 +113,7 @@ impl Config {
             presets_dir: presets_dir.clone(),
             bin_dir: shine_dir.join("bin"),
             home_dir: effective_home_dir(),
-            presets_dir_override: Some(presets_dir),
+            presets_dir_override: Some(PathBuf::from(".")),
             is_external_presets: true,
             ..Config::default()
         };
@@ -119,24 +126,39 @@ impl Config {
         let home_dir = effective_home_dir();
         let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
         let current_dir = std::env::current_dir().context("resolving current directory")?;
-        let local_config_path = current_dir.join(LOCAL_CONFIG_FILE);
-        let has_local_config = local_config_path.exists();
+        let project_config = find_project_config(&current_dir);
+        if let Some(project_config) = &project_config
+            && project_config.is_legacy
+        {
+            eprintln!(
+                "Warning: project config {} is deprecated; rename it to {}.",
+                project_config.path.display(),
+                project_config.root.join(PROJECT_CONFIG_FILE).display()
+            );
+        }
+        let has_project_config = project_config.is_some();
 
-        // Pre-read config.toml (from the expected shine_dir) to extract an optional
+        // Pre-read the active config to extract an optional
         // presets_dir override before the full resolution pass.
         let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
-        let config_path = if has_local_config {
-            local_config_path
-        } else {
-            preliminary_shine_dir.join(LOCAL_CONFIG_FILE)
-        };
+        let config_path = project_config
+            .as_ref()
+            .map(|project| project.path.clone())
+            .unwrap_or_else(|| preliminary_shine_dir.join(GLOBAL_CONFIG_FILE));
+        let config_dir = config_path
+            .parent()
+            .context("Config path must have a parent directory")?
+            .to_path_buf();
         let toml_presets = read_presets_override_from_toml(&config_path).await;
+        let toml_presets = toml_presets
+            .as_deref()
+            .map(|path| resolve_config_presets_path(path, &config_dir));
 
         let (shine_dir, presets_dir, is_external_presets) = resolve_runtime_config_dirs(
             &default_shine_dir,
             &default_presets_dir,
             toml_presets.as_deref(),
-            has_local_config,
+            has_project_config,
         );
 
         let bin_dir = shine_dir.join("bin");
@@ -166,7 +188,9 @@ impl Config {
             config.home_dir = home_dir;
             config.is_external_presets = is_external_presets;
             config.migrate_env(config_has_env).await?;
-            config.apply_local_env_override(&current_dir).await?;
+            if let Some(project_config) = &project_config {
+                config.apply_project_env_override(project_config).await?;
+            }
             Ok(config)
         } else {
             let mut config = Config {
@@ -179,7 +203,6 @@ impl Config {
                 ..Config::default()
             };
             config.migrate_env(false).await?;
-            config.apply_local_env_override(&current_dir).await?;
             config.save().await?;
             Ok(config)
         }
@@ -195,6 +218,10 @@ impl Config {
 
     pub(crate) fn shine_dir(&self) -> &Path {
         &self.shine_dir
+    }
+
+    pub(crate) fn config_path(&self) -> &Path {
+        &self.config_path
     }
 
     /// Directory where template-rendered shell scripts are written.
@@ -364,11 +391,25 @@ impl Config {
         Ok(())
     }
 
-    async fn apply_local_env_override(&mut self, current_dir: &Path) -> Result<()> {
-        let local_env_path = current_dir.join(LOCAL_ENV_FILE);
-        let Some(vars) = read_env_file(&local_env_path).await? else {
+    async fn apply_project_env_override(&mut self, project_config: &ProjectConfig) -> Result<()> {
+        let env_path = project_config.root.join(PROJECT_ENV_FILE);
+        let (env_path, is_legacy) = if env_path.exists() {
+            (env_path, false)
+        } else {
+            let legacy_env_path = project_config.root.join(LEGACY_PROJECT_ENV_FILE);
+            (legacy_env_path, true)
+        };
+        let Some(vars) = read_env_file(&env_path).await? else {
             return Ok(());
         };
+
+        if is_legacy {
+            eprintln!(
+                "Warning: project env {} is deprecated; rename it to {}.",
+                env_path.display(),
+                project_config.root.join(PROJECT_ENV_FILE).display()
+            );
+        }
 
         for (key, value) in vars {
             self.env.insert(key, value);
@@ -524,8 +565,63 @@ fn default_config_and_presets_dir() -> Result<(PathBuf, PathBuf)> {
     Ok((config_dir.clone(), config_dir.join("presets")))
 }
 
+#[derive(Clone, Debug)]
+struct ProjectConfig {
+    path: PathBuf,
+    root: PathBuf,
+    is_legacy: bool,
+}
+
+fn find_project_config(start: &Path) -> Option<ProjectConfig> {
+    find_ancestor_file(start, PROJECT_CONFIG_FILE)
+        .map(|path| ProjectConfig {
+            root: path
+                .parent()
+                .expect("project config path must have a parent")
+                .to_path_buf(),
+            path,
+            is_legacy: false,
+        })
+        .or_else(|| {
+            find_ancestor_file(start, LEGACY_PROJECT_CONFIG_FILE)
+                .filter(|path| config_file_has_presets_dir(path))
+                .map(|path| ProjectConfig {
+                    root: path
+                        .parent()
+                        .expect("legacy project config path must have a parent")
+                        .to_path_buf(),
+                    path,
+                    is_legacy: true,
+                })
+        })
+}
+
+fn find_ancestor_file(start: &Path, file_name: &str) -> Option<PathBuf> {
+    for dir in start.ancestors() {
+        let path = dir.join(file_name);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn config_file_has_presets_dir(path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    #[derive(Deserialize)]
+    struct MinimalConfig {
+        #[serde(default)]
+        presets_dir: Option<PathBuf>,
+    }
+    toml::from_str::<MinimalConfig>(&content)
+        .map(|config| config.presets_dir.is_some())
+        .unwrap_or(false)
+}
+
 /// Return the shine root dir implied by `SHINE_CONFIG_DIR`, or `default` if unset.
-/// Used for a preliminary read of config.toml before full resolution.
+/// Used for a preliminary read of global config before full resolution.
 fn preliminary_shine_dir_from_env(default: &Path) -> PathBuf {
     if let Ok(val) = std::env::var("SHINE_CONFIG_DIR") {
         let val = val.trim().to_string();
@@ -536,7 +632,7 @@ fn preliminary_shine_dir_from_env(default: &Path) -> PathBuf {
     default.to_owned()
 }
 
-/// Attempt to read the `presets_dir` key from an existing config.toml without
+/// Attempt to read the `presets_dir` key from an existing config without
 /// doing a full parse. Returns `None` if the file is absent, unreadable, or the
 /// key is not set.
 async fn read_presets_override_from_toml(config_path: &Path) -> Option<PathBuf> {
@@ -550,12 +646,26 @@ async fn read_presets_override_from_toml(config_path: &Path) -> Option<PathBuf> 
     partial.presets_dir
 }
 
+fn resolve_config_presets_path(path: &Path, config_dir: &Path) -> PathBuf {
+    if let Some(s) = path.to_str()
+        && s.starts_with('~')
+    {
+        return PathBuf::from(tilde_expand(s));
+    }
+
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        config_dir.join(path)
+    }
+}
+
 /// Resolve the runtime (shine_dir, presets_dir) pair.
 ///
 /// Priority (highest first):
-///   1. `SHINE_CONFIG_DIR` — overrides both shine_dir and presets_dir
+///   1. `SHINE_CONFIG_DIR` — overrides both shine_dir and presets_dir unless project config is active
 ///   2. `SHINE_PRESETS`    — overrides presets_dir only
-///   3. `config_toml_presets` — presets_dir from config.toml `presets_dir` key
+///   3. `config_toml_presets` — presets_dir from active config `presets_dir` key
 ///   4. defaults
 ///
 /// Returns `(shine_dir, presets_dir, is_external_presets)`.
@@ -844,44 +954,50 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
-    async fn load_or_init_prefers_current_dir_config_but_keeps_state_dir() {
+    async fn load_or_init_discovers_project_config_from_child_dir() {
         let _guard = env_lock();
         let original_dir = std::env::current_dir().unwrap();
         let project_dir = make_temp_dir().await;
+        let child_dir = project_dir.join("presets/shell/proxy");
+        fs::create_dir_all(&child_dir).await.unwrap();
         let state_dir = make_temp_dir().await;
-        let presets_dir = project_dir.join("custom-presets");
-        fs::create_dir_all(&presets_dir).await.unwrap();
         fs::write(
-            project_dir.join("config.toml"),
-            format!(
-                "presets_dir = \"{}\"\n[env]\nHTTP_PROXY_PORT = \"1111\"\nCONFIG_ONLY = \"config\"\n",
-                presets_dir.display()
-            ),
+            project_dir.join("shine.config.toml"),
+            "presets_dir = \".\"\n[env]\nHTTP_PROXY_PORT = \"1111\"\nCONFIG_ONLY = \"config\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            project_dir.join("shine.env.toml"),
+            "HTTP_PROXY_PORT = \"2222\"\nDOTENV_ONLY = \"dotenv\"\n",
         )
         .await
         .unwrap();
         fs::write(
             project_dir.join(".env.toml"),
-            "HTTP_PROXY_PORT = \"2222\"\nDOTENV_ONLY = \"dotenv\"\n",
+            "HTTP_PROXY_PORT = \"3333\"\n",
         )
         .await
         .unwrap();
 
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
         unsafe { std::env::remove_var("SHINE_PRESETS") };
-        std::env::set_current_dir(&project_dir).unwrap();
+        std::env::set_current_dir(&child_dir).unwrap();
 
         let config = Config::load_or_init().await.unwrap();
 
         assert_eq!(
             fs::canonicalize(&config.config_path).await.unwrap(),
-            fs::canonicalize(project_dir.join("config.toml"))
+            fs::canonicalize(project_dir.join("shine.config.toml"))
                 .await
                 .unwrap()
         );
         assert_eq!(config.shine_dir(), state_dir);
         assert_eq!(config.bin_dir(), state_dir.join("bin"));
-        assert_eq!(config.presets_dir(), presets_dir);
+        assert_eq!(
+            fs::canonicalize(config.presets_dir()).await.unwrap(),
+            fs::canonicalize(&project_dir).await.unwrap()
+        );
         assert_eq!(
             config.env.get("HTTP_PROXY_PORT").map(String::as_str),
             Some("2222")
@@ -901,6 +1017,93 @@ mod tests {
         fs::remove_dir_all(&state_dir).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn project_config_discovery_prefers_new_name_over_legacy_config() {
+        let project_dir = make_temp_dir().await;
+        let child_dir = project_dir.join("subdir");
+        fs::create_dir_all(&child_dir).await.unwrap();
+        fs::write(
+            project_dir.join("shine.config.toml"),
+            "presets_dir = \".\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            project_dir.join("config.toml"),
+            "presets_dir = \"legacy\"\n",
+        )
+        .await
+        .unwrap();
+
+        let config = find_project_config(&child_dir).expect("project config should be found");
+
+        assert_eq!(config.path, project_dir.join("shine.config.toml"));
+        assert!(!config.is_legacy);
+
+        fs::remove_dir_all(&project_dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_config_without_presets_dir_is_not_project_config() {
+        let project_dir = make_temp_dir().await;
+        fs::write(project_dir.join("config.toml"), "name = \"other-app\"\n")
+            .await
+            .unwrap();
+
+        assert!(find_project_config(&project_dir).is_none());
+
+        fs::remove_dir_all(&project_dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_or_init_supports_legacy_project_config_and_env_when_new_files_absent() {
+        let _guard = env_lock();
+        let original_dir = std::env::current_dir().unwrap();
+        let project_dir = make_temp_dir().await;
+        let child_dir = project_dir.join("subdir");
+        fs::create_dir_all(&child_dir).await.unwrap();
+        let state_dir = make_temp_dir().await;
+        fs::write(
+            project_dir.join("config.toml"),
+            "presets_dir = \".\"\n[env]\nHTTP_PROXY_PORT = \"1111\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            project_dir.join(".env.toml"),
+            "HTTP_PROXY_PORT = \"3333\"\n",
+        )
+        .await
+        .unwrap();
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        std::env::set_current_dir(&child_dir).unwrap();
+
+        let config = Config::load_or_init().await.unwrap();
+
+        assert_eq!(
+            fs::canonicalize(&config.config_path).await.unwrap(),
+            fs::canonicalize(project_dir.join("config.toml"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            fs::canonicalize(config.presets_dir()).await.unwrap(),
+            fs::canonicalize(&project_dir).await.unwrap()
+        );
+        assert_eq!(
+            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
+            Some("3333")
+        );
+
+        restore_current_dir(&original_dir);
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&project_dir).await.unwrap();
+        fs::remove_dir_all(&state_dir).await.unwrap();
+    }
+
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn init_current_dir_config_writes_presets_dir_and_refuses_existing_file() {
@@ -912,7 +1115,7 @@ mod tests {
         let path = Config::init_current_dir_config().await.unwrap();
         assert_eq!(
             path.file_name().and_then(|name| name.to_str()),
-            Some("config.toml")
+            Some("shine.config.toml")
         );
         assert_eq!(
             fs::canonicalize(path.parent().unwrap()).await.unwrap(),
@@ -921,10 +1124,9 @@ mod tests {
 
         let content = fs::read_to_string(&path).await.unwrap();
         let parsed: toml::Table = toml::from_str(&content).unwrap();
-        let canonical_project_dir = fs::canonicalize(&project_dir).await.unwrap();
         assert_eq!(
             parsed.get("presets_dir").and_then(|value| value.as_str()),
-            Some(canonical_project_dir.to_str().unwrap())
+            Some(".")
         );
 
         let err = Config::init_current_dir_config().await.unwrap_err();
