@@ -407,7 +407,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.18.0 sh install.sh
+SHINE_VERSION=0.19.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
