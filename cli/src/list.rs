@@ -4,6 +4,8 @@ use crate::colors;
 use crate::config::Config;
 use anyhow::Result;
 
+const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
+
 pub(crate) async fn handle_update_list(config: &Config) -> Result<bool> {
     let shell_rows = build_shell_rows(config).await?;
     let update_shell: Vec<&ShellRow> = shell_rows
@@ -222,7 +224,10 @@ pub(crate) async fn handle_status_list(config: &Config) -> Result<()> {
 pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;
-    let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
+    let installed_shell: Vec<&ShellRow> = shell_rows
+        .iter()
+        .filter(|r| should_show_shell_in_simple_list(r))
+        .collect();
 
     let cats_result = if config.is_external_presets {
         load_installed_categories(config, None).await
@@ -274,4 +279,53 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn should_show_shell_in_simple_list(row: &ShellRow) -> bool {
+    row.is_installed && row.status_text != SHELL_PRESET_PRESENT_LINK_MISSING
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shell_row(status_text: &'static str, is_installed: bool) -> ShellRow {
+        ShellRow {
+            symbol: String::new(),
+            label: "proxy/setproxy".to_string(),
+            status_sym: "~",
+            status_text,
+            is_installed,
+        }
+    }
+
+    #[test]
+    fn simple_list_hides_preset_present_when_bin_symlink_missing() {
+        let row = shell_row(SHELL_PRESET_PRESENT_LINK_MISSING, true);
+
+        assert!(!should_show_shell_in_simple_list(&row));
+    }
+
+    #[test]
+    fn simple_list_keeps_other_installed_shell_states() {
+        assert!(should_show_shell_in_simple_list(&shell_row(
+            "up-to-date",
+            true
+        )));
+        assert!(should_show_shell_in_simple_list(&shell_row(
+            "bin symlink present, preset missing",
+            true
+        )));
+        assert!(should_show_shell_in_simple_list(&shell_row(
+            "update available",
+            true
+        )));
+    }
+
+    #[test]
+    fn simple_list_hides_uninstalled_shell_rows() {
+        let row = shell_row("not installed", false);
+
+        assert!(!should_show_shell_in_simple_list(&row));
+    }
 }
