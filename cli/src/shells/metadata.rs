@@ -397,16 +397,16 @@ mod tests {
     }
 
     #[test]
-    fn embedded_cc_category_uses_source_wrapper() {
-        let categories = load_embedded_categories(Some("cc")).unwrap();
-        let cc = categories.iter().find(|cat| cat.name == "cc").unwrap();
+    fn embedded_agent_category_uses_ccenv_source_wrapper() {
+        let categories = load_embedded_categories(Some("agent")).unwrap();
+        let agent = categories.iter().find(|cat| cat.name == "agent").unwrap();
 
-        assert_eq!(cc.files.len(), 1);
-        assert_eq!(cc.files[0].command_name, "cc");
-        assert_eq!(cc.files[0].source_rel, PathBuf::from("cc.sh"));
-        assert!(cc.files[0].needs_source);
+        assert_eq!(agent.files.len(), 1);
+        assert_eq!(agent.files[0].command_name, "ccenv");
+        assert_eq!(agent.files[0].source_rel, PathBuf::from("cc.sh"));
+        assert!(agent.files[0].needs_source);
 
-        let bytes = presets::read_asset_bytes("shell/cc/cc.sh").unwrap();
+        let bytes = presets::read_asset_bytes("shell/agent/cc.sh").unwrap();
         assert!(presets::parse_template_annotation(&bytes));
     }
 

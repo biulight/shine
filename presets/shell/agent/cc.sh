@@ -2,7 +2,7 @@
 # shine-template: true
 # Configure Claude Code to use DeepSeek in the current shell session.
 # Reads the DeepSeek API key from shine.env.toml.
-# Use: cc
+# Use: ccenv
 
 cc_is_sourced() {
     if [ -n "${ZSH_EVAL_CONTEXT:-}" ]; then
@@ -19,7 +19,7 @@ cc_is_sourced() {
 }
 
 cc_fail() {
-    echo "cc: $1" >&2
+    echo "ccenv: $1" >&2
     return 1
 }
 
@@ -59,13 +59,13 @@ cc_configure_deepseek() {
     export CLAUDE_CODE_SUBAGENT_MODEL="deepseek-v4-flash"
     export CLAUDE_CODE_EFFORT_LEVEL="max"
 
-    echo "cc: Claude Code environment configured for DeepSeek."
-    echo "cc: Run 'claude' when you are ready to start Claude Code."
+    echo "ccenv: Claude Code environment configured for DeepSeek."
+    echo "ccenv: Run 'claude' when you are ready to start Claude Code."
 }
 
 if ! cc_is_sourced; then
-    echo "cc: this command must be sourced to update the current shell environment." >&2
-    echo "cc: run 'source cc', or install with 'shine shell install cc' and reload your shell." >&2
+    echo "ccenv: this command must be sourced to update the current shell environment." >&2
+    echo "ccenv: run 'source ccenv', or install with 'shine shell install agent' and reload your shell." >&2
     exit 1
 fi
 

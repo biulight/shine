@@ -1540,15 +1540,15 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn embedded_cc_renders_deepseek_key_from_env_config() {
+    async fn embedded_agent_ccenv_renders_deepseek_key_from_env_config() {
         let dir = make_temp_dir().await;
         let config = config_with_deepseek_key(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("cc"), false).await.unwrap();
+        handle_install(&config, Some("agent"), false).await.unwrap();
 
-        let rendered = config.rendered_dir().join("shell/cc/cc.sh");
+        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             rendered_content.contains("test-deepseek-key"),
@@ -1559,7 +1559,7 @@ mod tests {
             "rendered cc script should not contain the template placeholder"
         );
         assert_eq!(
-            fs::read_link(config.bin_dir().join("cc")).await.unwrap(),
+            fs::read_link(config.bin_dir().join("ccenv")).await.unwrap(),
             rendered
         );
 
@@ -1568,15 +1568,15 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn embedded_cc_install_fails_without_deepseek_key() {
+    async fn embedded_agent_install_fails_without_deepseek_key() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        let err = handle_install(&config, Some("cc"), false)
+        let err = handle_install(&config, Some("agent"), false)
             .await
-            .expect_err("cc install should fail when DEEPSEEK_API_KEY is missing");
+            .expect_err("agent install should fail when DEEPSEEK_API_KEY is missing");
 
         let message = err.to_string();
         assert!(
@@ -1584,7 +1584,7 @@ mod tests {
             "error should mention missing DeepSeek key: {err:#}"
         );
         assert!(
-            !config.bin_dir().join("cc").exists(),
+            !config.bin_dir().join("ccenv").exists(),
             "failed cc render must not link the raw template script"
         );
 

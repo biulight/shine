@@ -75,8 +75,8 @@ shine shell list
 ```
 Shell Preset Categories
 
-  cc  1 script
-    cc            Configure Claude Code to use DeepSeek in the current shell session.
+  agent  1 script
+    ccenv         Configure Claude Code to use DeepSeek in the current shell session.
                   ...
 
   proxy  2 scripts
@@ -104,7 +104,7 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-Installing all shell presets includes `cc`, which requires `DEEPSEEK_API_KEY` in the active env config.
+Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` in the active env config.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped.
 
 ### Uninstall shell presets
@@ -448,7 +448,7 @@ usetproxy
 
 Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy config.
 
-### shell/cc — `cc`
+### shell/agent — `ccenv`
 
 Configures the current shell for Claude Code with the DeepSeek provider.
 
@@ -461,8 +461,8 @@ DEEPSEEK_API_KEY = "..."
 Then install and use the helper:
 
 ```bash
-shine shell install cc
-cc
+shine shell install agent
+ccenv
 ```
 
 ### shell/tools — `test_tools`
