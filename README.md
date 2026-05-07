@@ -420,10 +420,13 @@ One-command proxy management for the entire development environment.
 **Set proxy:**
 
 ```bash
-source setproxy           # auto-detect SOCKS5 or fall back to HTTP
-source setproxy sock5     # force SOCKS5
-source setproxy http      # force HTTP
+setproxy           # auto-detect SOCKS5 or fall back to HTTP
+setproxy sock5     # force SOCKS5
+setproxy http      # force HTTP
 ```
+
+After a fresh `shine shell install proxy`, reload your shell config once (for example,
+`source ~/.zshrc`) or open a new shell before using `setproxy` directly.
 
 Configures simultaneously:
 - Shell environment variables (`http_proxy`, `https_proxy`, `all_proxy`, …)
@@ -435,7 +438,7 @@ Default ports: HTTP `6152`, SOCKS5 `6153` (edit `[env]` in `~/.shine/config.toml
 **Unset proxy:**
 
 ```bash
-source usetproxy
+usetproxy
 ```
 
 Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy config.

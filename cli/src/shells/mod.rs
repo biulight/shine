@@ -200,17 +200,19 @@ pub(crate) async fn handle_install(
         .map(|f| f.command_name.clone())
         .collect();
 
+    let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
     match append_path_to_shell_config(config, force, &source_commands).await? {
         PathUpdateStatus::AlreadyConfigured => {
             println!(
                 "Shell config ({}): already configured, skipped",
-                get_shell_config_path(&config.shell_type, &config.home_dir)?.display()
+                shell_config_path.display()
             );
         }
         PathUpdateStatus::Updated(path) => {
             println!("Shell config ({}): PATH updated", path.display());
         }
     }
+    print_source_command_activation_hint(config, &shell_config_path, &source_commands);
     Ok(())
 }
 
@@ -715,6 +717,34 @@ fn path_export_snippet(
     format!("{SENTINEL_START}\n{body}\n{SENTINEL_END}\n")
 }
 
+fn shell_source_command(shell: &ShellType, config_path: &Path) -> String {
+    let quoted = shell_quote(config_path);
+    match shell {
+        ShellType::PowerShell => format!(". {quoted}"),
+        _ => format!("source {quoted}"),
+    }
+}
+
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+fn print_source_command_activation_hint(
+    config: &Config,
+    shell_config_path: &Path,
+    source_commands: &[String],
+) {
+    if source_commands.is_empty() {
+        return;
+    }
+
+    println!(
+        "Current shell: run `{}` once, or open a new shell, before using {}.",
+        shell_source_command(&config.shell_type, shell_config_path),
+        source_commands.join(", ")
+    );
+}
+
 /// Remove the shine sentinel block from `content`, including one preceding blank line.
 fn remove_sentinel_block(content: &str) -> String {
     let start = match content.find(SENTINEL_START) {
@@ -1065,6 +1095,42 @@ mod tests {
             fish_snippet.contains("function setproxy"),
             "fish should have setproxy function: {fish_snippet}"
         );
+    }
+
+    #[test]
+    fn source_activation_command_quotes_shell_config_path() {
+        let path = PathBuf::from("/home/user/my config/.zshrc");
+        assert_eq!(
+            shell_source_command(&ShellType::Zsh, &path),
+            "source '/home/user/my config/.zshrc'"
+        );
+        assert_eq!(
+            shell_source_command(&ShellType::PowerShell, &path),
+            ". '/home/user/my config/.zshrc'"
+        );
+    }
+
+    #[test]
+    fn proxy_scripts_fail_fast_when_not_sourced() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let preset_dir = manifest_dir.join("../presets/shell/proxy");
+
+        for script in ["set_proxy.sh", "uset_proxy.sh"] {
+            let output = std::process::Command::new("bash")
+                .arg(preset_dir.join(script))
+                .output()
+                .expect("proxy script should run under bash");
+
+            assert!(
+                !output.status.success(),
+                "{script} should fail when executed directly"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("must be sourced"),
+                "{script} should explain source requirement: {stderr}"
+            );
+        }
     }
 
     #[test]

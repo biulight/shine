@@ -4,6 +4,13 @@
 # 同时清除 Git、NPM、Yarn、pnpm 的全局代理设置。
 # 用法: source usetproxy
 
+if ! (return 0 2>/dev/null); then
+    echo "usetproxy must be sourced to update the current shell environment." >&2
+    echo "Run: source usetproxy" >&2
+    echo "If you just installed it, first reload your shell config or open a new shell." >&2
+    exit 1
+fi
+
 echo "🔄 取消代理配置..."
 
 # 显示当前代理设置（如果有的话）
