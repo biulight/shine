@@ -1552,11 +1552,11 @@ mod tests {
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             rendered_content.contains("test-deepseek-key"),
-            "rendered cc script should contain configured DeepSeek key"
+            "rendered agent script should contain configured DeepSeek key"
         );
         assert!(
             !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
-            "rendered cc script should not contain the template placeholder"
+            "rendered agent script should not contain the template placeholder"
         );
         assert_eq!(
             fs::read_link(config.bin_dir().join("ccenv")).await.unwrap(),
@@ -1585,7 +1585,7 @@ mod tests {
         );
         assert!(
             !config.bin_dir().join("ccenv").exists(),
-            "failed cc render must not link the raw template script"
+            "failed agent render must not link the raw template script"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
