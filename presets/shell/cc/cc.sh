@@ -1,6 +1,7 @@
 #!/bin/bash
+# shine-template: true
 # Configure Claude Code to use DeepSeek in the current shell session.
-# Reads the DeepSeek API key from DEEPSEEK_API_KEY.
+# Reads the DeepSeek API key from shine.env.toml.
 # Use: cc
 
 cc_is_sourced() {
@@ -43,13 +44,14 @@ cc_select_provider() {
 }
 
 cc_configure_deepseek() {
-    if [ -z "${DEEPSEEK_API_KEY:-}" ]; then
-        cc_fail "DEEPSEEK_API_KEY is not set. Run: export DEEPSEEK_API_KEY=<your DeepSeek API key>"
+    local deepseek_api_key="@@DEEPSEEK_API_KEY@@"
+    if [ -z "${deepseek_api_key}" ]; then
+        cc_fail "DEEPSEEK_API_KEY is not set. Add DEEPSEEK_API_KEY = \"...\" to shine.env.toml."
         return 1
     fi
 
     export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
-    export ANTHROPIC_AUTH_TOKEN="$DEEPSEEK_API_KEY"
+    export ANTHROPIC_AUTH_TOKEN="$deepseek_api_key"
     export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
     export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
     export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"

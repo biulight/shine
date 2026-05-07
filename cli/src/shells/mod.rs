@@ -925,11 +925,19 @@ mod tests {
         fs::set_permissions(path, perms).await.unwrap();
     }
 
+    fn config_with_deepseek_key(dir: &Path) -> Config {
+        let mut config = Config::new_for_test(dir);
+        config
+            .env
+            .insert("DEEPSEEK_API_KEY".into(), "test-deepseek-key".into());
+        config
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn install_then_uninstall_roundtrip() {
         let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
+        let config = config_with_deepseek_key(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -982,7 +990,7 @@ mod tests {
     #[tokio::test]
     async fn uninstall_purge_removes_managed_dirs_but_not_config() {
         let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
+        let config = config_with_deepseek_key(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -1007,7 +1015,7 @@ mod tests {
     #[tokio::test]
     async fn uninstall_dry_run_leaves_everything_intact() {
         let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
+        let config = config_with_deepseek_key(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -1293,7 +1301,7 @@ mod tests {
     #[tokio::test]
     async fn uninstall_dry_run_does_not_modify_shell_config() {
         let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
+        let config = config_with_deepseek_key(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -1525,6 +1533,59 @@ mod tests {
         assert!(
             !config.bin_dir().join("setproxy").exists(),
             "failed render must not link the raw template script"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn embedded_cc_renders_deepseek_key_from_env_config() {
+        let dir = make_temp_dir().await;
+        let config = config_with_deepseek_key(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("cc"), false).await.unwrap();
+
+        let rendered = config.rendered_dir().join("shell/cc/cc.sh");
+        let rendered_content = fs::read_to_string(&rendered).await.unwrap();
+        assert!(
+            rendered_content.contains("test-deepseek-key"),
+            "rendered cc script should contain configured DeepSeek key"
+        );
+        assert!(
+            !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
+            "rendered cc script should not contain the template placeholder"
+        );
+        assert_eq!(
+            fs::read_link(config.bin_dir().join("cc")).await.unwrap(),
+            rendered
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn embedded_cc_install_fails_without_deepseek_key() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        let err = handle_install(&config, Some("cc"), false)
+            .await
+            .expect_err("cc install should fail when DEEPSEEK_API_KEY is missing");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("DEEPSEEK_API_KEY"),
+            "error should mention missing DeepSeek key: {err:#}"
+        );
+        assert!(
+            !config.bin_dir().join("cc").exists(),
+            "failed cc render must not link the raw template script"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();

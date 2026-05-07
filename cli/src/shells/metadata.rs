@@ -405,6 +405,9 @@ mod tests {
         assert_eq!(cc.files[0].command_name, "cc");
         assert_eq!(cc.files[0].source_rel, PathBuf::from("cc.sh"));
         assert!(cc.files[0].needs_source);
+
+        let bytes = presets::read_asset_bytes("shell/cc/cc.sh").unwrap();
+        assert!(presets::parse_template_annotation(&bytes));
     }
 
     #[tokio::test]

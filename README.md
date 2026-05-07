@@ -75,6 +75,10 @@ shine shell list
 ```
 Shell Preset Categories
 
+  cc  1 script
+    cc            Configure Claude Code to use DeepSeek in the current shell session.
+                  ...
+
   proxy  2 scripts
     setproxy      Set HTTP/HTTPS proxy environment variables.
                   ...
@@ -96,10 +100,11 @@ shine shell install proxy      # install only the proxy category
 Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, etc.):
 
 ```
-Shell Presets  3 created
-Bin Links      3 created
+Shell Presets  4 created
+Bin Links      4 created
 ```
 
+Installing all shell presets includes `cc`, which requires `DEEPSEEK_API_KEY` in the active env config.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped.
 
 ### Uninstall shell presets
@@ -442,6 +447,23 @@ usetproxy
 ```
 
 Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy config.
+
+### shell/cc — `cc`
+
+Configures the current shell for Claude Code with the DeepSeek provider.
+
+Add your key to the project-local env file next to `shine.config.toml`:
+
+```toml
+DEEPSEEK_API_KEY = "..."
+```
+
+Then install and use the helper:
+
+```bash
+shine shell install cc
+cc
+```
 
 ### shell/tools — `test_tools`
 
