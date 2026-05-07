@@ -1,0 +1,6 @@
+description = "Claude Code provider environment helpers."
+
+[[files]]
+source = "cc.sh"
+target = "cc"
+needs_source = true
