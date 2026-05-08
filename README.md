@@ -75,6 +75,10 @@ shine shell list
 ```
 Shell Preset Categories
 
+  agent  1 script
+    ccenv         Configure Claude Code to use DeepSeek in the current shell session.
+                  ...
+
   proxy  2 scripts
     setproxy      Set HTTP/HTTPS proxy environment variables.
                   ...
@@ -96,10 +100,11 @@ shine shell install proxy      # install only the proxy category
 Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, etc.):
 
 ```
-Shell Presets  3 created
-Bin Links      3 created
+Shell Presets  4 created
+Bin Links      4 created
 ```
 
+Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` in the active env config.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped.
 
 ### Uninstall shell presets
@@ -407,7 +412,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.19.0 sh install.sh
+SHINE_VERSION=0.20.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -420,10 +425,13 @@ One-command proxy management for the entire development environment.
 **Set proxy:**
 
 ```bash
-source setproxy           # auto-detect SOCKS5 or fall back to HTTP
-source setproxy sock5     # force SOCKS5
-source setproxy http      # force HTTP
+setproxy           # auto-detect SOCKS5 or fall back to HTTP
+setproxy sock5     # force SOCKS5
+setproxy http      # force HTTP
 ```
+
+After a fresh `shine shell install proxy`, reload your shell config once (for example,
+`source ~/.zshrc`) or open a new shell before using `setproxy` directly.
 
 Configures simultaneously:
 - Shell environment variables (`http_proxy`, `https_proxy`, `all_proxy`, …)
@@ -435,10 +443,27 @@ Default ports: HTTP `6152`, SOCKS5 `6153` (edit `[env]` in `~/.shine/config.toml
 **Unset proxy:**
 
 ```bash
-source usetproxy
+usetproxy
 ```
 
 Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy config.
+
+### shell/agent — `ccenv`
+
+Configures the current shell for Claude Code with the DeepSeek provider.
+
+Add your key to the project-local env file next to `shine.config.toml`:
+
+```toml
+DEEPSEEK_API_KEY = "..."
+```
+
+Then install and use the helper:
+
+```bash
+shine shell install agent
+ccenv
+```
 
 ### shell/tools — `test_tools`
 

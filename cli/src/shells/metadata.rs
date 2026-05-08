@@ -396,6 +396,20 @@ mod tests {
         assert!(!names.contains(&"set_proxy"));
     }
 
+    #[test]
+    fn embedded_agent_category_uses_ccenv_source_wrapper() {
+        let categories = load_embedded_categories(Some("agent")).unwrap();
+        let agent = categories.iter().find(|cat| cat.name == "agent").unwrap();
+
+        assert_eq!(agent.files.len(), 1);
+        assert_eq!(agent.files[0].command_name, "ccenv");
+        assert_eq!(agent.files[0].source_rel, PathBuf::from("cc.sh"));
+        assert!(agent.files[0].needs_source);
+
+        let bytes = presets::read_asset_bytes("shell/agent/cc.sh").unwrap();
+        assert!(presets::parse_template_annotation(&bytes));
+    }
+
     #[tokio::test]
     async fn installed_metadata_applies_target_names() {
         let dir = make_temp_dir().await;

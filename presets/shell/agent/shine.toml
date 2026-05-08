@@ -1,0 +1,6 @@
+description = "AI agent provider environment helpers."
+
+[[files]]
+source = "cc.sh"
+target = "ccenv"
+needs_source = true

@@ -6,6 +6,13 @@
 # 用法: source setproxy [auto|sock5|http]
 # 默认 auto 模式优先使用 SOCKS5，不可用时自动回退至 HTTP。
 
+if ! (return 0 2>/dev/null); then
+    echo "setproxy must be sourced to update the current shell environment." >&2
+    echo "Run: source setproxy [auto|sock5|http]" >&2
+    echo "If you just installed it, first reload your shell config or open a new shell." >&2
+    exit 1
+fi
+
 HTTP_PROXY_PORT=@@HTTP_PROXY_PORT@@
 SOCKS5_PROXY_PORT=@@SOCKS5_PROXY_PORT@@
 PROXY_HOST=@@PROXY_HOST@@

@@ -5,6 +5,24 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.20.0] — 2026-05-08
+
+### Features
+
+- Added an `agent` shell preset with `ccenv`, which configures Claude Code to use the DeepSeek provider from `shine.env.toml`.
+- Added metadata for source-required shell helpers, so commands like `ccenv` can be exposed with clearer installed names and usage expectations.
+
+### Fixes
+
+- Clarified proxy helper activation by detecting direct execution and instructing users to source `setproxy` and `usetproxy` when needed.
+- Updated the Claude Code helper to read `DEEPSEEK_API_KEY` from the active env config.
+
+### Docs
+
+- Documented the new `agent` preset, updated shell preset examples, and refreshed the pinned `install.sh` example to `0.20.0`.
+
+---
+
 ## [0.19.0] — 2026-05-07
 
 ### Features

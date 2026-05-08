@@ -200,17 +200,19 @@ pub(crate) async fn handle_install(
         .map(|f| f.command_name.clone())
         .collect();
 
+    let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
     match append_path_to_shell_config(config, force, &source_commands).await? {
         PathUpdateStatus::AlreadyConfigured => {
             println!(
                 "Shell config ({}): already configured, skipped",
-                get_shell_config_path(&config.shell_type, &config.home_dir)?.display()
+                shell_config_path.display()
             );
         }
         PathUpdateStatus::Updated(path) => {
             println!("Shell config ({}): PATH updated", path.display());
         }
     }
+    print_source_command_activation_hint(config, &shell_config_path, &source_commands);
     Ok(())
 }
 
@@ -715,6 +717,34 @@ fn path_export_snippet(
     format!("{SENTINEL_START}\n{body}\n{SENTINEL_END}\n")
 }
 
+fn shell_source_command(shell: &ShellType, config_path: &Path) -> String {
+    let quoted = shell_quote(config_path);
+    match shell {
+        ShellType::PowerShell => format!(". {quoted}"),
+        _ => format!("source {quoted}"),
+    }
+}
+
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+fn print_source_command_activation_hint(
+    config: &Config,
+    shell_config_path: &Path,
+    source_commands: &[String],
+) {
+    if source_commands.is_empty() {
+        return;
+    }
+
+    println!(
+        "Current shell: run `{}` once, or open a new shell, before using {}.",
+        shell_source_command(&config.shell_type, shell_config_path),
+        source_commands.join(", ")
+    );
+}
+
 /// Remove the shine sentinel block from `content`, including one preceding blank line.
 fn remove_sentinel_block(content: &str) -> String {
     let start = match content.find(SENTINEL_START) {
@@ -895,11 +925,19 @@ mod tests {
         fs::set_permissions(path, perms).await.unwrap();
     }
 
+    fn config_with_deepseek_key(dir: &Path) -> Config {
+        let mut config = Config::new_for_test(dir);
+        config
+            .env
+            .insert("DEEPSEEK_API_KEY".into(), "test-deepseek-key".into());
+        config
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn install_then_uninstall_roundtrip() {
         let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
+        let config = config_with_deepseek_key(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -952,7 +990,7 @@ mod tests {
     #[tokio::test]
     async fn uninstall_purge_removes_managed_dirs_but_not_config() {
         let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
+        let config = config_with_deepseek_key(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -977,7 +1015,7 @@ mod tests {
     #[tokio::test]
     async fn uninstall_dry_run_leaves_everything_intact() {
         let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
+        let config = config_with_deepseek_key(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -1065,6 +1103,42 @@ mod tests {
             fish_snippet.contains("function setproxy"),
             "fish should have setproxy function: {fish_snippet}"
         );
+    }
+
+    #[test]
+    fn source_activation_command_quotes_shell_config_path() {
+        let path = PathBuf::from("/home/user/my config/.zshrc");
+        assert_eq!(
+            shell_source_command(&ShellType::Zsh, &path),
+            "source '/home/user/my config/.zshrc'"
+        );
+        assert_eq!(
+            shell_source_command(&ShellType::PowerShell, &path),
+            ". '/home/user/my config/.zshrc'"
+        );
+    }
+
+    #[test]
+    fn proxy_scripts_fail_fast_when_not_sourced() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let preset_dir = manifest_dir.join("../presets/shell/proxy");
+
+        for script in ["set_proxy.sh", "uset_proxy.sh"] {
+            let output = std::process::Command::new("bash")
+                .arg(preset_dir.join(script))
+                .output()
+                .expect("proxy script should run under bash");
+
+            assert!(
+                !output.status.success(),
+                "{script} should fail when executed directly"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("must be sourced"),
+                "{script} should explain source requirement: {stderr}"
+            );
+        }
     }
 
     #[test]
@@ -1227,7 +1301,7 @@ mod tests {
     #[tokio::test]
     async fn uninstall_dry_run_does_not_modify_shell_config() {
         let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
+        let config = config_with_deepseek_key(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -1459,6 +1533,59 @@ mod tests {
         assert!(
             !config.bin_dir().join("setproxy").exists(),
             "failed render must not link the raw template script"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn embedded_agent_ccenv_renders_deepseek_key_from_env_config() {
+        let dir = make_temp_dir().await;
+        let config = config_with_deepseek_key(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("agent"), false).await.unwrap();
+
+        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let rendered_content = fs::read_to_string(&rendered).await.unwrap();
+        assert!(
+            rendered_content.contains("test-deepseek-key"),
+            "rendered agent script should contain configured DeepSeek key"
+        );
+        assert!(
+            !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
+            "rendered agent script should not contain the template placeholder"
+        );
+        assert_eq!(
+            fs::read_link(config.bin_dir().join("ccenv")).await.unwrap(),
+            rendered
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn embedded_agent_install_fails_without_deepseek_key() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        let err = handle_install(&config, Some("agent"), false)
+            .await
+            .expect_err("agent install should fail when DEEPSEEK_API_KEY is missing");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("DEEPSEEK_API_KEY"),
+            "error should mention missing DeepSeek key: {err:#}"
+        );
+        assert!(
+            !config.bin_dir().join("ccenv").exists(),
+            "failed agent render must not link the raw template script"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
