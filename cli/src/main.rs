@@ -22,7 +22,7 @@ use crate::config::Config;
 use commands::{
     AppCommands, EnvCommands, ExportCommand, LinkCommand, SelfCommands, ShellCommands, SysCommands,
 };
-use update_check::UpdateStatus;
+use update_check::{ReleaseChannel, UpdateStatus};
 
 /// `Shine` - Quick config for sys
 #[derive(Parser, Debug)]
@@ -234,7 +234,7 @@ async fn main() -> Result<()> {
         Commands::Show { target } => Box::pin(show::handle_show(&config, &target)).await,
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
-            SelfCommands::Upgrade => handle_self_upgrade(&config).await,
+            SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
         },
         Commands::Shell { command } => match command {
             ShellCommands::Init { force } => shells::handle_init_template(force).await,
@@ -428,26 +428,43 @@ async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-async fn handle_self_upgrade(config: &Config) -> Result<()> {
+async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
-    println!("Checking for upgrades (current: {current})...");
+    let selected_channel = channel.unwrap_or(ReleaseChannel::Stable);
+    let force_install = channel.is_some();
+    println!(
+        "Checking for {} upgrades (current: {current})...",
+        selected_channel.as_str()
+    );
 
-    match update_check::upgrade_to_latest_release(config).await {
-        Ok(update_check::UpgradeResult::AlreadyUpToDate) => {
+    match update_check::upgrade_to_release(config, selected_channel, force_install).await {
+        Ok(update_check::UpgradeResult::AlreadyUpToDate { channel, latest }) => {
             println!(
                 "{}",
-                colors::green(&format!("shine {current} is up to date."))
+                colors::green(&format!(
+                    "shine {current} is up to date on the {} channel ({latest}).",
+                    channel.as_str()
+                ))
             );
         }
         Ok(update_check::UpgradeResult::Upgraded {
+            channel,
             previous,
-            latest,
+            release_tag,
             installed_path,
         }) => {
-            println!(
-                "{}",
-                colors::green(&format!("Upgraded shine from {previous} to {latest}."))
-            );
+            match channel {
+                ReleaseChannel::Stable => println!(
+                    "{}",
+                    colors::green(&format!("Upgraded shine from {previous} to {release_tag}."))
+                ),
+                ReleaseChannel::Preview => println!(
+                    "{}",
+                    colors::green(&format!(
+                        "Installed shine preview from {release_tag} over {previous}."
+                    ))
+                ),
+            }
             sync_self_install_dest(config, &installed_path).await;
         }
         Err(e) => {
@@ -871,7 +888,18 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Self_ {
-                command: SelfCommands::Upgrade
+                command: SelfCommands::Upgrade { channel: None }
+            }
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "self", "upgrade", "--channel", "preview"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Self_ {
+                command: SelfCommands::Upgrade {
+                    channel: Some(ReleaseChannel::Preview)
+                }
             }
         ));
 

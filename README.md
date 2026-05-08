@@ -399,10 +399,14 @@ Manual commands:
 ```bash
 shine update        # show available updates, then force-check the latest release
 shine update --verbose  # include up-to-date and non-update status rows
-shine self upgrade  # download and install the latest release for this platform
+shine self upgrade  # download and install the latest stable release for this platform
+shine self upgrade --channel stable   # explicitly reinstall the stable release
+shine self upgrade --channel preview  # install the moving preview prerelease
 shine upgrade       # force-update installed shell and app configs
 shine upgrade --verbose  # include env-template check details
 ```
+
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
