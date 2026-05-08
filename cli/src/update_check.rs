@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::{config::Config, version};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueEnum;
 use flate2::read::GzDecoder;
@@ -436,7 +436,7 @@ fn default_headers() -> Result<HeaderMap> {
     );
     headers.insert(
         USER_AGENT,
-        HeaderValue::from_str(&format!("shine/{}", env!("CARGO_PKG_VERSION")))
+        HeaderValue::from_str(&format!("shine/{}", version::package()))
             .context("invalid user-agent header")?,
     );
     Ok(headers)

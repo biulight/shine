@@ -17,6 +17,7 @@ mod shells;
 mod show;
 mod sys;
 mod update_check;
+mod version;
 
 use crate::config::Config;
 use commands::{
@@ -27,7 +28,7 @@ use update_check::{ReleaseChannel, UpdateStatus};
 /// `Shine` - Quick config for sys
 #[derive(Parser, Debug)]
 #[command(name = "shine")]
-#[command(version, about, long_about = None)]
+#[command(version = crate::version::display(), about, long_about = None)]
 struct Cli {
     #[arg(long, global = true)]
     config_dir: Option<String>,
@@ -180,14 +181,14 @@ async fn main() -> Result<()> {
             Ok(UpdateStatus::UpdateAvailable { latest }) => {
                 eprintln!(
                     "A newer version of shine is available: {} -> {}. Run `shine self upgrade` when convenient.",
-                    env!("CARGO_PKG_VERSION"),
+                    version::display(),
                     latest
                 );
             }
             Ok(UpdateStatus::UpdateRequired { latest }) => {
                 bail!(
                     "A newer patch release of shine is required: {} -> {}. Run `shine self upgrade` before continuing.",
-                    env!("CARGO_PKG_VERSION"),
+                    version::display(),
                     latest
                 );
             }
@@ -375,7 +376,7 @@ async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
         Box::pin(list::handle_update_list(config)).await?
     };
 
-    let current = env!("CARGO_PKG_VERSION");
+    let current = version::display();
     if verbose {
         println!("Checking for updates (current: {current})...");
     }
@@ -429,7 +430,7 @@ async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
 }
 
 async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
-    let current = env!("CARGO_PKG_VERSION");
+    let current = version::display();
     let selected_channel = channel.unwrap_or(ReleaseChannel::Stable);
     let force_install = channel.is_some();
     println!(
@@ -449,19 +450,19 @@ async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -
         }
         Ok(update_check::UpgradeResult::Upgraded {
             channel,
-            previous,
+            previous: _,
             release_tag,
             installed_path,
         }) => {
             match channel {
                 ReleaseChannel::Stable => println!(
                     "{}",
-                    colors::green(&format!("Upgraded shine from {previous} to {release_tag}."))
+                    colors::green(&format!("Upgraded shine from {current} to {release_tag}."))
                 ),
                 ReleaseChannel::Preview => println!(
                     "{}",
                     colors::green(&format!(
-                        "Installed shine preview from {release_tag} over {previous}."
+                        "Installed shine preview from {release_tag} over {current}."
                     ))
                 ),
             }

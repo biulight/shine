@@ -38,7 +38,12 @@ jobs:
       - name: Build release binary
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release -p cli --target ${{ matrix.target }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" = "branch" ]; then
+            export SHINE_VERSION_METADATA="preview.${GITHUB_SHA::7}"
+          fi
+          cargo build --release -p cli --target ${{ matrix.target }}
       - name: Package archive
         env:
           ASSET_TARGET: ${{ matrix.asset_target }}
