@@ -1,10 +1,10 @@
 #!/bin/bash
 # shine-template: true
-# 设置代理环境变量（http_proxy、https_proxy、all_proxy）。
-# 同时为 Git、NPM、Yarn、pnpm 配置工具代理。
-# HTTP 代理端口由 ~/.shine/env.toml 中的 HTTP_PROXY_PORT 决定。
-# 用法: source setproxy [auto|sock5|http]
-# 默认 auto 模式优先使用 SOCKS5，不可用时自动回退至 HTTP。
+# Set proxy environment variables (`http_proxy`, `https_proxy`, `all_proxy`).
+# Also configure tool proxies for Git, NPM, Yarn, and pnpm.
+# The HTTP proxy port is controlled by `HTTP_PROXY_PORT` in `~/.shine/env.toml`.
+# Usage: source setproxy [auto|sock5|http]
+# In `auto` mode, SOCKS5 is preferred and HTTP is used as a fallback.
 
 if ! (return 0 2>/dev/null); then
     echo "setproxy must be sourced to update the current shell environment." >&2
@@ -19,30 +19,30 @@ PROXY_HOST=@@PROXY_HOST@@
 HTTP_PROXY="http://${PROXY_HOST}:${HTTP_PROXY_PORT}"
 SOCKS5_PROXY="socks5://${PROXY_HOST}:${SOCKS5_PROXY_PORT}"
 
-echo "🚀 设置代理配置..."
+echo "🚀 Setting up proxy configuration..."
 
-# 检测SOCKS5代理是否可用
+# Check whether the SOCKS5 proxy is available.
 check_socks5_proxy() {
     if command -v nc >/dev/null 2>&1 && nc -z ${PROXY_HOST} ${SOCKS5_PROXY_PORT} 2>/dev/null; then
-        echo "🔍 使用netcat检测到SOCKS5代理端口开放"
+        echo "🔍 Detected an open SOCKS5 proxy port with netcat"
         return 0
     fi
     if command -v lsof >/dev/null 2>&1 && lsof -i :${SOCKS5_PROXY_PORT} >/dev/null 2>&1; then
-        echo "🔍 使用lsof检测到SOCKS5代理端口被监听"
+        echo "🔍 Detected the SOCKS5 proxy port being listened to with lsof"
         return 0
     fi
     if command -v netstat >/dev/null 2>&1 && netstat -an 2>/dev/null | grep -q ":${SOCKS5_PROXY_PORT}.*LISTEN"; then
-        echo "🔍 使用netstat检测到SOCKS5代理端口监听中"
+        echo "🔍 Detected the SOCKS5 proxy port in LISTEN state with netstat"
         return 0
     fi
     if command -v telnet >/dev/null 2>&1 && timeout 2 telnet ${PROXY_HOST} ${SOCKS5_PROXY_PORT} </dev/null >/dev/null 2>&1; then
-        echo "🔍 使用telnet检测到SOCKS5代理可连接"
+        echo "🔍 Detected a reachable SOCKS5 proxy with telnet"
         return 0
     fi
     return 1
 }
 
-# 设置代理函数
+# Set proxy function.
 set_proxy() {
     local proxy_address=$1
     local proxy_type=$2
@@ -57,14 +57,14 @@ set_proxy() {
     export no_proxy="localhost,127.0.0.1,::1,.local"
     export NO_PROXY="localhost,127.0.0.1,::1,.local"
 
-    # Git、NPM等工具通常不支持SOCKS5，统一使用HTTP代理
+    # Git, NPM, and similar tools typically do not support SOCKS5, so use HTTP proxy uniformly.
     local tool_proxy="http://${PROXY_HOST}:${HTTP_PROXY_PORT}"
 
-    echo "🔧 配置Git代理..."
+    echo "🔧 Configuring Git proxy..."
     git config --global http.proxy "${tool_proxy}"
     git config --global https.proxy "${tool_proxy}"
 
-    echo "📦 配置NPM代理..."
+    echo "📦 Configuring NPM proxy..."
     npm config set proxy "${tool_proxy}"
     npm config set https-proxy "${tool_proxy}"
     npm config set registry https://registry.npmjs.org/
@@ -73,17 +73,17 @@ set_proxy() {
         yarn_version=$(yarn --version)
         case "$yarn_version" in
             1.*)
-                echo "🧶 配置Yarn@${yarn_version}代理..."
+                echo "🧶 Configuring Yarn@${yarn_version} proxy..."
                 yarn config set proxy "${tool_proxy}"
                 yarn config set https-proxy "${tool_proxy}"
                 ;;
             2.*|3.*)
-                echo "🧶 配置Yarn@${yarn_version}代理..."
+                echo "🧶 Configuring Yarn@${yarn_version} proxy..."
                 yarn config set httpProxy "${tool_proxy}"
                 yarn config set httpsProxy "${tool_proxy}"
                 ;;
             *)
-                echo "⚠️ 未知的Yarn版本: ${yarn_version}，尝试使用通用配置"
+                echo "⚠️ Unknown Yarn version: ${yarn_version}; trying a generic configuration"
                 yarn config set proxy "${tool_proxy}"
                 yarn config set https-proxy "${tool_proxy}"
                 ;;
@@ -91,47 +91,47 @@ set_proxy() {
     fi
 
     if command -v pnpm >/dev/null 2>&1; then
-        echo "📌 配置pnpm代理..."
+        echo "📌 Configuring pnpm proxy..."
         pnpm config set proxy "${tool_proxy}"
         pnpm config set https-proxy "${tool_proxy}"
     fi
 
-    echo "✅ 代理设置完成！"
+    echo "✅ Proxy setup complete!"
     echo ""
-    echo "当前代理配置："
-    echo "系统代理类型: ${proxy_type}"
-    echo "系统代理地址: ${proxy_address}"
-    echo "工具代理地址: ${tool_proxy}"
+    echo "Current proxy configuration:"
+    echo "System proxy type: ${proxy_type}"
+    echo "System proxy address: ${proxy_address}"
+    echo "Tool proxy address: ${tool_proxy}"
 }
 
-# 根据传入参数选择代理模式
-MODE=${1:-auto} # 默认为auto模式
+# Select proxy mode from the provided argument.
+MODE=${1:-auto} # Defaults to auto mode.
 
 case "$MODE" in
     auto)
-        echo "🔄 自动模式：优先检测SOCKS5代理..."
+        echo "🔄 Auto mode: checking SOCKS5 proxy first..."
         if check_socks5_proxy; then
-            echo "✅ SOCKS5代理可用，优先使用SOCKS5代理"
+            echo "✅ SOCKS5 proxy is available; using SOCKS5 first"
             set_proxy "${SOCKS5_PROXY}" "SOCKS5"
         else
-            echo "⚠️  SOCKS5代理不可用，回退到HTTP代理"
+            echo "⚠️ SOCKS5 proxy is unavailable; falling back to HTTP proxy"
             set_proxy "${HTTP_PROXY}" "HTTP"
         fi
         ;;
     sock5)
-        echo "🔒 强制使用SOCKS5代理..."
+        echo "🔒 Forcing SOCKS5 proxy..."
         set_proxy "${SOCKS5_PROXY}" "SOCKS5"
         ;;
     http)
-        echo "🌐 强制使用HTTP代理..."
+        echo "🌐 Forcing HTTP proxy..."
         set_proxy "${HTTP_PROXY}" "HTTP"
         ;;
     *)
-        echo "❌ 无效参数: $MODE"
-        echo "用法: source setproxy [auto|sock5|http]"
+        echo "❌ Invalid argument: $MODE"
+        echo "Usage: source setproxy [auto|sock5|http]"
         return 1
         ;;
 esac
 
 echo ""
-echo "要取消代理设置，请运行: source usetproxy"
+echo "To remove the proxy settings, run: source usetproxy"

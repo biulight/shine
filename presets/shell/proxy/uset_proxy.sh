@@ -1,8 +1,8 @@
 #!/bin/bash
-# 取消所有代理环境变量及工具代理配置。
-# 清除 http_proxy、https_proxy、all_proxy 等系统环境变量。
-# 同时清除 Git、NPM、Yarn、pnpm 的全局代理设置。
-# 用法: source usetproxy
+# Remove all proxy environment variables and tool proxy settings.
+# Clear system environment variables such as `http_proxy`, `https_proxy`, and `all_proxy`.
+# Also clear the global proxy settings for Git, NPM, Yarn, and pnpm.
+# Usage: source usetproxy
 
 if ! (return 0 2>/dev/null); then
     echo "usetproxy must be sourced to update the current shell environment." >&2
@@ -11,11 +11,11 @@ if ! (return 0 2>/dev/null); then
     exit 1
 fi
 
-echo "🔄 取消代理配置..."
+echo "🔄 Removing proxy configuration..."
 
-# 显示当前代理设置（如果有的话）
+# Show the current proxy settings, if any.
 if [ -n "$http_proxy" ] || [ -n "$HTTP_PROXY" ]; then
-    echo "🔍 当前检测到的代理设置："
+    echo "🔍 Current detected proxy settings:"
     [ -n "$http_proxy" ] && echo "  http_proxy: $http_proxy"
     [ -n "$https_proxy" ] && echo "  https_proxy: $https_proxy"
     [ -n "$HTTP_PROXY" ] && echo "  HTTP_PROXY: $HTTP_PROXY"
@@ -24,11 +24,11 @@ if [ -n "$http_proxy" ] || [ -n "$HTTP_PROXY" ]; then
     [ -n "$ALL_PROXY" ] && echo "  ALL_PROXY: $ALL_PROXY"
     echo ""
 else
-    echo "ℹ️  当前没有检测到代理环境变量"
+    echo "ℹ️ No proxy environment variables were detected"
 fi
 
-# 取消系统环境变量代理
-echo "🧹 清除系统环境变量代理..."
+# Clear system environment variable proxies.
+echo "🧹 Clearing system environment variable proxies..."
 unset http_proxy
 unset https_proxy
 unset HTTP_PROXY
@@ -38,52 +38,52 @@ unset ALL_PROXY
 unset no_proxy
 unset NO_PROXY
 
-# 取消Git代理
-echo "🔧 取消Git代理..."
-git config --global --unset http.proxy 2>/dev/null || echo "  ℹ️ Git http.proxy 未设置或已清除"
-git config --global --unset https.proxy 2>/dev/null || echo "  ℹ️ Git https.proxy 未设置或已清除"
+# Clear Git proxy settings.
+echo "🔧 Clearing Git proxy..."
+git config --global --unset http.proxy 2>/dev/null || echo "  ℹ️ Git http.proxy was not set or has already been cleared"
+git config --global --unset https.proxy 2>/dev/null || echo "  ℹ️ Git https.proxy was not set or has already been cleared"
 
-# 取消NPM代理
-echo "📦 取消NPM代理..."
-npm config delete proxy 2>/dev/null || echo "  ℹ️ NPM proxy 未设置或已清除"
-npm config delete https-proxy 2>/dev/null || echo "  ℹ️ NPM https-proxy 未设置或已清除"
+# Clear NPM proxy settings.
+echo "📦 Clearing NPM proxy..."
+npm config delete proxy 2>/dev/null || echo "  ℹ️ NPM proxy was not set or has already been cleared"
+npm config delete https-proxy 2>/dev/null || echo "  ℹ️ NPM https-proxy was not set or has already been cleared"
 
-# 取消Yarn代理（如果有的话）
+# Clear Yarn proxy settings, if available.
 if command -v yarn >/dev/null 2>&1; then
-    echo "🧶 取消Yarn代理..."
+    echo "🧶 Clearing Yarn proxy..."
     yarn_version=$(yarn --version)
     case "$yarn_version" in
         1.*)
-            yarn config delete proxy 2>/dev/null || echo "  ℹ️ Yarn proxy 未设置或已清除"
-            yarn config delete https-proxy 2>/dev/null || echo "  ℹ️ Yarn https-proxy 未设置或已清除"
+            yarn config delete proxy 2>/dev/null || echo "  ℹ️ Yarn proxy was not set or has already been cleared"
+            yarn config delete https-proxy 2>/dev/null || echo "  ℹ️ Yarn https-proxy was not set or has already been cleared"
             ;;
         2.*|3.*)
-            yarn config delete httpProxy 2>/dev/null || echo "  ℹ️ Yarn httpProxy 未设置或已清除"
-            yarn config delete httpsProxy 2>/dev/null || echo "  ℹ️ Yarn httpsProxy 未设置或已清除"
+            yarn config delete httpProxy 2>/dev/null || echo "  ℹ️ Yarn httpProxy was not set or has already been cleared"
+            yarn config delete httpsProxy 2>/dev/null || echo "  ℹ️ Yarn httpsProxy was not set or has already been cleared"
             ;;
         *)
-            echo "⚠️ 未知的Yarn版本: ${yarn_version}，尝试使用通用配置"
-            yarn config delete proxy 2>/dev/null || echo "  ℹ️ Yarn proxy 未设置或已清除"
-            yarn config delete https-proxy 2>/dev/null || echo "  ℹ️ Yarn https-proxy 未设置或已清除"
+            echo "⚠️ Unknown Yarn version: ${yarn_version}; trying a generic configuration"
+            yarn config delete proxy 2>/dev/null || echo "  ℹ️ Yarn proxy was not set or has already been cleared"
+            yarn config delete https-proxy 2>/dev/null || echo "  ℹ️ Yarn https-proxy was not set or has already been cleared"
             ;;
     esac
 else
-    echo "ℹ️ Yarn 未安装，跳过"
+    echo "ℹ️ Yarn is not installed; skipping"
 fi
 
-# 取消pnpm代理（如果有的话）
+# Clear pnpm proxy settings, if available.
 if command -v pnpm >/dev/null 2>&1; then
-    echo "📌 取消pnpm代理..."
-    pnpm config delete proxy 2>/dev/null || echo "  ℹ️ pnpm proxy 未设置或已清除"
-    pnpm config delete https-proxy 2>/dev/null || echo "  ℹ️ pnpm https-proxy 未设置或已清除"
+    echo "📌 Clearing pnpm proxy..."
+    pnpm config delete proxy 2>/dev/null || echo "  ℹ️ pnpm proxy was not set or has already been cleared"
+    pnpm config delete https-proxy 2>/dev/null || echo "  ℹ️ pnpm https-proxy was not set or has already been cleared"
 else
-    echo "ℹ️ pnpm 未安装，跳过"
+    echo "ℹ️ pnpm is not installed; skipping"
 fi
 
 echo ""
-echo "✅ 代理设置已取消！"
+echo "✅ Proxy settings have been removed!"
 echo ""
-echo "📝 提示："
-echo "  - 环境变量代理已清除（仅影响当前终端会话）"
-echo "  - Git/NPM/Yarn/pnpm 的全局代理配置已清除"
-echo "  - 若要重新设置代理，请运行： source setproxy"
+echo "📝 Notes:"
+echo "  - Environment variable proxies have been cleared (current terminal session only)"
+echo "  - Global proxy settings for Git/NPM/Yarn/pnpm have been cleared"
+echo "  - To set the proxy again, run: source setproxy"
