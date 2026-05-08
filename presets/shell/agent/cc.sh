@@ -1,7 +1,7 @@
 #!/bin/bash
 # shine-template: true
 # Configure Claude Code to use DeepSeek in the current shell session.
-# Reads the DeepSeek API key from shine.env.toml.
+# Reads the DeepSeek API key or a base64-encoded GPG secret from shine.env.toml.
 # Use: ccenv
 
 cc_is_sourced() {
@@ -45,13 +45,24 @@ cc_select_provider() {
 
 cc_configure_deepseek() {
     local deepseek_api_key="@@DEEPSEEK_API_KEY@@"
-    if [ -z "${deepseek_api_key}" ]; then
-        cc_fail "DEEPSEEK_API_KEY is not set. Add DEEPSEEK_API_KEY = \"...\" to shine.env.toml."
+    local anthropic_auth_token
+
+    if shine env get DEEPSEEK_API_KEY_GPG_SECRET >/dev/null 2>&1; then
+        if ! anthropic_auth_token="$(shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET)"; then
+            cc_fail "failed to decrypt DEEPSEEK_API_KEY_GPG_SECRET with gpg"
+            return 1
+        fi
+    else
+        anthropic_auth_token="$deepseek_api_key"
+    fi
+
+    if [ -z "${anthropic_auth_token}" ]; then
+        cc_fail "DeepSeek API key is not set. Add DEEPSEEK_API_KEY or DEEPSEEK_API_KEY_GPG_SECRET to shine.env.toml."
         return 1
     fi
 
     export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
-    export ANTHROPIC_AUTH_TOKEN="$deepseek_api_key"
+    export ANTHROPIC_AUTH_TOKEN="$anthropic_auth_token"
     export ANTHROPIC_MODEL="deepseek-v4-pro[1m]"
     export ANTHROPIC_DEFAULT_OPUS_MODEL="deepseek-v4-pro[1m]"
     export ANTHROPIC_DEFAULT_SONNET_MODEL="deepseek-v4-pro[1m]"

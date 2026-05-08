@@ -11,6 +11,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Added an `agent` shell preset with `ccenv`, which configures Claude Code to use the DeepSeek provider from `shine.env.toml`.
 - Added metadata for source-required shell helpers, so commands like `ccenv` can be exposed with clearer installed names and usage expectations.
+- Added support for `DEEPSEEK_API_KEY_GPG_SECRET`, a base64-encoded GPG secret for `ccenv` that can be decrypted through reusable `shine env decrypt` GPG/YubiKey support at runtime.
 
 ### Fixes
 

@@ -104,7 +104,7 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` in the active env config.
+Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` or `DEEPSEEK_API_KEY_GPG_SECRET` in the active env config before use.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped.
 
 ### Uninstall shell presets
@@ -458,12 +458,35 @@ Add your key to the project-local env file next to `shine.config.toml`:
 DEEPSEEK_API_KEY = "..."
 ```
 
+Or store a base64-encoded GPG secret instead:
+
+```toml
+DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
+```
+
+Create the encrypted value with your existing GPG key. If the private key is
+backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
+
+```bash
+printf '%s' "$DEEPSEEK_API_KEY" | gpg --encrypt --recipient <key-id> | base64 | tr -d '\n'
+```
+
+You can also decrypt any base64 GPG secret from the active env config directly:
+
+```bash
+shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
+```
+
 Then install and use the helper:
 
 ```bash
 shine shell install agent
 ccenv
 ```
+
+When both `DEEPSEEK_API_KEY_GPG_SECRET` and `DEEPSEEK_API_KEY` are set, the
+encrypted secret wins. A GPG decode/decrypt failure stops `ccenv` instead of
+falling back to plaintext.
 
 ### shell/tools — `test_tools`
 

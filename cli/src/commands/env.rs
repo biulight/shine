@@ -16,4 +16,9 @@ pub(crate) enum EnvCommands {
         /// Variable name
         key: String,
     },
+    /// Decode and decrypt a base64-encoded GPG secret from [env]
+    Decrypt {
+        /// Variable name containing base64-encoded GPG ciphertext
+        key: String,
+    },
 }

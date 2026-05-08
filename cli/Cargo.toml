@@ -16,7 +16,7 @@ clap_complete = "4.5"
 directories = { workspace = true }
 serde = { version = "1.0.228", features = ["derive"] }
 shellexpand = "3.1.2"
-tokio = { version = "1.52.1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "fs"] }
+tokio = { version = "1.52.1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "fs", "process"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }

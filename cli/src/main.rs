@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Generator, generate};
 use std::path::PathBuf;
@@ -12,6 +12,7 @@ mod config;
 mod env;
 mod list;
 mod presets;
+mod secret;
 mod shells;
 mod show;
 mod sys;
@@ -172,6 +173,7 @@ async fn main() -> Result<()> {
             | Commands::Link(..)
             | Commands::Unlink
             | Commands::Self_ { .. }
+            | Commands::Env { .. }
     ) {
         match update_check::check_for_update(&config).await {
             Ok(UpdateStatus::UpToDate) => {}
@@ -258,6 +260,7 @@ async fn main() -> Result<()> {
             EnvCommands::Show => handle_env_show(&config).await,
             EnvCommands::Set { key, value } => handle_env_set(&config, key, value).await,
             EnvCommands::Get { key } => handle_env_get(&config, key).await,
+            EnvCommands::Decrypt { key } => handle_env_decrypt(&config, key).await,
         },
         Commands::Sys { command } => match command {
             SysCommands::List => Box::pin(sys::handle_list(&config)).await,
@@ -348,6 +351,18 @@ async fn handle_env_get(config: &Config, key: String) -> Result<()> {
             std::process::exit(1);
         }
     }
+    Ok(())
+}
+
+async fn handle_env_decrypt(config: &Config, key: String) -> Result<()> {
+    let env = env::EnvConfig::load_or_init(config).await?;
+    let Some(value) = env.get(&key) else {
+        bail!("{key} is not set in the active config [env]");
+    };
+    let plaintext = secret::decrypt_base64_gpg_secret(value)
+        .await
+        .with_context(|| format!("decrypting {key}"))?;
+    print!("{plaintext}");
     Ok(())
 }
 
