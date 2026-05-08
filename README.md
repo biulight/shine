@@ -456,7 +456,8 @@ Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy confi
 
 Configures the current shell for Claude Code with the DeepSeek provider.
 
-Add your key to the project-local env file next to `shine.config.toml`:
+Add your key to the global env override at `~/.shine/shine.env.toml`, or to a
+project-local env file next to `shine.config.toml`:
 
 ```toml
 DEEPSEEK_API_KEY = "..."
@@ -516,7 +517,10 @@ target = "usetproxy"
 
 ## Configuration
 
-`~/.shine/config.toml` is created automatically on first run. Project-local preset repos can additionally use `shine.config.toml`.
+`~/.shine/config.toml` is created automatically on first run. The global config
+keeps the generic `config.toml` name because `~/.shine/` is already a
+shine-specific directory. Project-local preset repos can additionally use
+`shine.config.toml` to avoid colliding with other tools' `config.toml` files.
 
 Override directories at runtime:
 
@@ -551,7 +555,13 @@ PROXY_HOST = "127.0.0.1"
 PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
 ```
 
-For project-local overrides, place a flat `shine.env.toml` next to `shine.config.toml`. Values from `shine.env.toml` override matching keys from the active config's `[env]` table without modifying either file. Legacy `.env.toml` files are still recognized when `shine.env.toml` is absent.
+For global overrides, place a flat `shine.env.toml` next to the global config at
+`~/.shine/shine.env.toml`. For project-local overrides, place a flat
+`shine.env.toml` next to `shine.config.toml`. Values from `shine.env.toml`
+override matching keys from the active config's `[env]` table without modifying
+either file. When both global and project-local env files are present, the
+project-local file wins. Legacy project `.env.toml` files are still recognized
+when project `shine.env.toml` is absent.
 
 ```toml
 HTTP_PROXY_PORT = "7890"
@@ -564,6 +574,7 @@ PROXY_HOST = "127.0.0.1"
 ~/.shine/
 ├── app-manifest.toml
 ├── config.toml
+├── shine.env.toml    # optional flat env overrides
 ├── bin/
 │   ├── setproxy         # symlink → presets/shell/proxy/set_proxy.sh
 │   ├── usetproxy        # symlink → presets/shell/proxy/uset_proxy.sh

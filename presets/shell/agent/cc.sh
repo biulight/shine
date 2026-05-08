@@ -1,7 +1,7 @@
 #!/bin/bash
 # shine-template: true
 # Configure Claude Code to use DeepSeek in the current shell session.
-# Reads the DeepSeek API key or a base64-encoded GPG secret from shine.env.toml.
+# Reads the DeepSeek API key or a base64-encoded GPG secret from the active shine env config.
 # Use: ccenv
 
 cc_is_sourced() {
@@ -57,7 +57,7 @@ cc_configure_deepseek() {
     fi
 
     if [ -z "${anthropic_auth_token}" ]; then
-        cc_fail "DeepSeek API key is not set. Add DEEPSEEK_API_KEY or DEEPSEEK_API_KEY_GPG_SECRET to shine.env.toml."
+        cc_fail "DeepSeek API key is not set. Add DEEPSEEK_API_KEY or DEEPSEEK_API_KEY_GPG_SECRET to the active shine env config."
         return 1
     fi
 

@@ -5,6 +5,14 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## Unreleased
+
+### Fixes
+
+- Read global `~/.shine/shine.env.toml` overrides even when no external `presets_dir` is configured, while keeping `~/.shine/config.toml` as the global config filename.
+
+---
+
 ## [0.21.0] — 2026-05-08
 
 ### Features
