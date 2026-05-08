@@ -79,6 +79,10 @@ jobs:
           This prerelease is overwritten on every push to the release branch.
           EOF
           find dist -type f -name 'shine-preview-*.tar.gz' -print
+      - name: Delete existing preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete preview --repo "$GITHUB_REPOSITORY" --yes || true
       - name: Publish preview release
         uses: softprops/action-gh-release@v3
         with:
