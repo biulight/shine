@@ -5,6 +5,26 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.21.0] — 2026-05-08
+
+### Features
+
+- Added `shine env decrypt <KEY>`, so presets and shell helpers can decrypt base64-encoded GPG secrets from the active env config at runtime instead of duplicating decryption logic.
+- Added stable and preview self-upgrade channels, including `shine self upgrade --channel preview` for installing the moving `preview` prerelease and `--channel stable` for explicitly reinstalling the latest stable release.
+- Marked preview binaries at build time so `shine --version` reports build metadata such as `0.21.0+preview.<shortsha>` while stable builds remain `0.21.0`.
+
+### Internal
+
+- Added a dedicated preview release packaging workflow that publishes fixed-name `shine-preview-{target}.tar.gz` assets from the release branch and injects `SHINE_VERSION_METADATA=preview.${GITHUB_SHA::7}` without changing stable archive names or update ordering.
+
+### Docs
+
+- Refreshed the pinned `install.sh` example to `0.21.0`.
+- Documented that preview binaries report `+preview.<shortsha>` in `shine --version` while stable binaries keep the plain release version.
+- Translated bundled preset comments and helper text from Chinese to English for the Vim, proxy, and tools presets.
+
+---
+
 ## [0.20.0] — 2026-05-08
 
 ### Features
