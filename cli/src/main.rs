@@ -262,6 +262,9 @@ async fn main() -> Result<()> {
             EnvCommands::Set { key, value } => handle_env_set(&config, key, value).await,
             EnvCommands::Get { key } => handle_env_get(&config, key).await,
             EnvCommands::Decrypt { key } => handle_env_decrypt(&config, key).await,
+            EnvCommands::Encrypt(cmd) => {
+                handle_env_encrypt(&config, cmd.recipient, cmd.set, cmd.from).await
+            }
         },
         Commands::Sys { command } => match command {
             SysCommands::List => Box::pin(sys::handle_list(&config)).await,
@@ -364,6 +367,41 @@ async fn handle_env_decrypt(config: &Config, key: String) -> Result<()> {
         .await
         .with_context(|| format!("decrypting {key}"))?;
     print!("{plaintext}");
+    Ok(())
+}
+
+async fn handle_env_encrypt(
+    config: &Config,
+    recipient: String,
+    set_key: Option<String>,
+    from_key: Option<String>,
+) -> Result<()> {
+    use std::io::Read as _;
+
+    let plaintext = if let Some(key) = from_key {
+        let env = env::EnvConfig::load_or_init(config).await?;
+        let Some(value) = env.get(&key) else {
+            bail!("{key} is not set in the active config [env]");
+        };
+        value.as_bytes().to_vec()
+    } else {
+        let mut input = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut input)
+            .context("reading secret from stdin")?;
+        input
+    };
+    let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, &recipient)
+        .await
+        .with_context(|| format!("encrypting secret for {recipient}"))?;
+    if let Some(key) = set_key {
+        let mut env = env::EnvConfig::load_or_init(config).await?;
+        env.set(&key, &encoded);
+        env.save(config).await?;
+        println!("{}", colors::green(&format!("set {key} = \"{encoded}\"")));
+    } else {
+        println!("{encoded}");
+    }
     Ok(())
 }
 

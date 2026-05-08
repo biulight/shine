@@ -472,7 +472,7 @@ Create the encrypted value with your existing GPG key. If the private key is
 backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
 
 ```bash
-printf '%s' "$DEEPSEEK_API_KEY" | gpg --encrypt --recipient <key-id> | base64 | tr -d '\n'
+shine env encrypt -r <key-id> --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 ```
 
 You can also decrypt any base64 GPG secret from the active env config directly:

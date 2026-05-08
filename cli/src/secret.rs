@@ -22,6 +22,24 @@ pub(crate) async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<St
     decrypt_gpg_file(encrypted_file.path()).await
 }
 
+pub(crate) async fn encrypt_gpg_secret_to_base64(
+    plaintext: &[u8],
+    recipient: &str,
+) -> Result<String> {
+    if plaintext.is_empty() {
+        bail!("secret is empty");
+    }
+    if recipient.trim().is_empty() {
+        bail!("recipient is empty");
+    }
+
+    ensure_command("base64").await?;
+    ensure_command("gpg").await?;
+
+    let encrypted = encrypt_gpg(plaintext, recipient).await?;
+    encode_base64_single_line(&encrypted).await
+}
+
 async fn ensure_command(name: &str) -> Result<()> {
     let status = Command::new("sh")
         .arg("-c")
@@ -69,15 +87,56 @@ async fn decrypt_gpg_file(path: &Path) -> Result<String> {
     let output = Command::new("gpg")
         .arg("--decrypt")
         .arg(path)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
-        .output()
-        .await
+        .spawn()
         .with_context(|| "running gpg --decrypt")?;
+
+    let output = output
+        .wait_with_output()
+        .await
+        .context("waiting for gpg --decrypt")?;
     if !output.status.success() {
         bail!("gpg decrypt failed");
     }
 
     String::from_utf8(output.stdout).context("decrypted secret is not valid UTF-8")
+}
+
+async fn encrypt_gpg(plaintext: &[u8], recipient: &str) -> Result<Vec<u8>> {
+    let output = Command::new("gpg")
+        .arg("--encrypt")
+        .arg("-r")
+        .arg(recipient)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .with_context(|| "running gpg --encrypt")?;
+
+    let output = write_stdin_and_wait(output, plaintext).await?;
+    if !output.status.success() {
+        bail!("gpg encrypt failed");
+    }
+    Ok(output.stdout)
+}
+
+async fn encode_base64_single_line(input: &[u8]) -> Result<String> {
+    let output = Command::new("base64")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .with_context(|| "running base64")?;
+
+    let output = write_stdin_and_wait(output, input).await?;
+    if !output.status.success() {
+        bail!("base64 encode failed");
+    }
+
+    let encoded = String::from_utf8(output.stdout).context("base64 output is not valid UTF-8")?;
+    Ok(encoded.split_whitespace().collect())
 }
 
 async fn write_stdin_and_wait(
@@ -135,5 +194,21 @@ mod tests {
     async fn empty_secret_fails_before_external_commands() {
         let err = decrypt_base64_gpg_secret("").await.unwrap_err();
         assert!(err.to_string().contains("secret is empty"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn empty_plaintext_fails_before_external_commands() {
+        let err = encrypt_gpg_secret_to_base64(b"", "test@example.com")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("secret is empty"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn empty_recipient_fails_before_external_commands() {
+        let err = encrypt_gpg_secret_to_base64(b"secret", "")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("recipient is empty"), "{err:#}");
     }
 }

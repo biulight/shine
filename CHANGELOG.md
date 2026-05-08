@@ -10,6 +10,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 ### Features
 
 - Added `shine env decrypt <KEY>`, so presets and shell helpers can decrypt base64-encoded GPG secrets from the active env config at runtime instead of duplicating decryption logic.
+- Added `shine env encrypt --recipient <key-id>` to generate reusable base64-encoded GPG secrets from stdin, with `--from <KEY>` and `--set <KEY>` for encrypting and storing active `[env]` values directly.
 - Added stable and preview self-upgrade channels, including `shine self upgrade --channel preview` for installing the moving `preview` prerelease and `--channel stable` for explicitly reinstalling the latest stable release.
 - Marked preview binaries at build time so `shine --version` reports build metadata such as `0.21.0+preview.<shortsha>` while stable builds remain `0.21.0`.
 
