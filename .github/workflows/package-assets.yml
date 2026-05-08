@@ -1,0 +1,61 @@
+name: package assets
+
+on:
+  workflow_call:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_target: linux-x86_64
+          - runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            asset_target: linux-aarch64
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            asset_target: darwin-aarch64
+          - runner: macos-14
+            target: x86_64-apple-darwin
+            asset_target: darwin-x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Install Linux cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release -p cli --target ${{ matrix.target }}
+      - name: Package archive
+        env:
+          ASSET_TARGET: ${{ matrix.asset_target }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/shine" dist/shine
+          if [ "$REF_TYPE" = "tag" ]; then
+            VERSION="${REF_NAME#v}"
+            ARCHIVE="shine-v${VERSION}-${ASSET_TARGET}.tar.gz"
+          else
+            ARCHIVE="shine-preview-${ASSET_TARGET}.tar.gz"
+          fi
+          tar -czf "dist/${ARCHIVE}" -C dist shine
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.asset_target }}
+          path: dist/*.tar.gz
