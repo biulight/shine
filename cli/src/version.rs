@@ -33,15 +33,15 @@ mod tests {
 
     #[test]
     fn format_version_without_metadata_returns_package_version() {
-        assert_eq!(format_version("0.20.0", None), "0.20.0");
-        assert_eq!(format_version("0.20.0", Some("")), "0.20.0");
+        assert_eq!(format_version("0.21.0", None), "0.21.0");
+        assert_eq!(format_version("0.21.0", Some("")), "0.21.0");
     }
 
     #[test]
     fn format_version_with_preview_metadata_appends_build_metadata() {
         assert_eq!(
-            format_version("0.20.0", Some("preview.abc1234")),
-            "0.20.0+preview.abc1234"
+            format_version("0.21.0", Some("preview.abc1234")),
+            "0.21.0+preview.abc1234"
         );
     }
 }
