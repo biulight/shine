@@ -150,6 +150,16 @@ Do **not** use `git cliff` to generate CHANGELOG entries. Write entries manually
 
 Keep entries concise and user-facing. Internal refactors can be grouped under **Internal**.
 
+## Release Versioning
+
+When deciding whether to bump the release version, always compare the current branch against the most recent **stable** release tag, not the moving `preview` tag.
+
+- Treat `preview` as a prerelease channel marker only; it is not the previous release baseline.
+- Use the latest `v*` tag such as `v0.20.0` as the baseline for release notes and version-bump decisions.
+- Do not rely on `git describe --tags --abbrev=0` by itself in this repo, because it may resolve to `preview`.
+- Prefer commands that filter for stable tags explicitly, for example `git tag --list 'v*' --sort=-version:refname | head -1`.
+- If there are user-facing features since the last stable tag, bump `minor`; if there are only user-facing fixes, bump `patch`.
+
 ### Commit scope convention for internal fixes
 
 Fix commits that exist only because new feature code in the same release introduced them (clippy noise, lint, formatting, typos) must use one of these scopes so `git cliff` automatically skips them:

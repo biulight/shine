@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Generator, generate};
 use std::path::PathBuf;
@@ -12,21 +12,23 @@ mod config;
 mod env;
 mod list;
 mod presets;
+mod secret;
 mod shells;
 mod show;
 mod sys;
 mod update_check;
+mod version;
 
 use crate::config::Config;
 use commands::{
     AppCommands, EnvCommands, ExportCommand, LinkCommand, SelfCommands, ShellCommands, SysCommands,
 };
-use update_check::UpdateStatus;
+use update_check::{ReleaseChannel, UpdateStatus};
 
 /// `Shine` - Quick config for sys
 #[derive(Parser, Debug)]
 #[command(name = "shine")]
-#[command(version, about, long_about = None)]
+#[command(version = crate::version::display(), about, long_about = None)]
 struct Cli {
     #[arg(long, global = true)]
     config_dir: Option<String>,
@@ -172,20 +174,21 @@ async fn main() -> Result<()> {
             | Commands::Link(..)
             | Commands::Unlink
             | Commands::Self_ { .. }
+            | Commands::Env { .. }
     ) {
         match update_check::check_for_update(&config).await {
             Ok(UpdateStatus::UpToDate) => {}
             Ok(UpdateStatus::UpdateAvailable { latest }) => {
                 eprintln!(
                     "A newer version of shine is available: {} -> {}. Run `shine self upgrade` when convenient.",
-                    env!("CARGO_PKG_VERSION"),
+                    version::display(),
                     latest
                 );
             }
             Ok(UpdateStatus::UpdateRequired { latest }) => {
                 bail!(
                     "A newer patch release of shine is required: {} -> {}. Run `shine self upgrade` before continuing.",
-                    env!("CARGO_PKG_VERSION"),
+                    version::display(),
                     latest
                 );
             }
@@ -232,7 +235,7 @@ async fn main() -> Result<()> {
         Commands::Show { target } => Box::pin(show::handle_show(&config, &target)).await,
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
-            SelfCommands::Upgrade => handle_self_upgrade(&config).await,
+            SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
         },
         Commands::Shell { command } => match command {
             ShellCommands::Init { force } => shells::handle_init_template(force).await,
@@ -258,6 +261,10 @@ async fn main() -> Result<()> {
             EnvCommands::Show => handle_env_show(&config).await,
             EnvCommands::Set { key, value } => handle_env_set(&config, key, value).await,
             EnvCommands::Get { key } => handle_env_get(&config, key).await,
+            EnvCommands::Decrypt { key } => handle_env_decrypt(&config, key).await,
+            EnvCommands::Encrypt(cmd) => {
+                handle_env_encrypt(&config, cmd.recipient, cmd.set, cmd.from).await
+            }
         },
         Commands::Sys { command } => match command {
             SysCommands::List => Box::pin(sys::handle_list(&config)).await,
@@ -351,6 +358,53 @@ async fn handle_env_get(config: &Config, key: String) -> Result<()> {
     Ok(())
 }
 
+async fn handle_env_decrypt(config: &Config, key: String) -> Result<()> {
+    let env = env::EnvConfig::load_or_init(config).await?;
+    let Some(value) = env.get(&key) else {
+        bail!("{key} is not set in the active config [env]");
+    };
+    let plaintext = secret::decrypt_base64_gpg_secret(value)
+        .await
+        .with_context(|| format!("decrypting {key}"))?;
+    print!("{plaintext}");
+    Ok(())
+}
+
+async fn handle_env_encrypt(
+    config: &Config,
+    recipient: String,
+    set_key: Option<String>,
+    from_key: Option<String>,
+) -> Result<()> {
+    use std::io::Read as _;
+
+    let plaintext = if let Some(key) = from_key {
+        let env = env::EnvConfig::load_or_init(config).await?;
+        let Some(value) = env.get(&key) else {
+            bail!("{key} is not set in the active config [env]");
+        };
+        value.as_bytes().to_vec()
+    } else {
+        let mut input = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut input)
+            .context("reading secret from stdin")?;
+        input
+    };
+    let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, &recipient)
+        .await
+        .with_context(|| format!("encrypting secret for {recipient}"))?;
+    if let Some(key) = set_key {
+        let mut env = env::EnvConfig::load_or_init(config).await?;
+        env.set(&key, &encoded);
+        env.save(config).await?;
+        println!("{}", colors::green(&format!("set {key} = \"{encoded}\"")));
+    } else {
+        println!("{encoded}");
+    }
+    Ok(())
+}
+
 async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
     let mut printed_update = if verbose {
         Box::pin(list::handle_status_list(config)).await?;
@@ -360,7 +414,7 @@ async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
         Box::pin(list::handle_update_list(config)).await?
     };
 
-    let current = env!("CARGO_PKG_VERSION");
+    let current = version::display();
     if verbose {
         println!("Checking for updates (current: {current})...");
     }
@@ -413,26 +467,43 @@ async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-async fn handle_self_upgrade(config: &Config) -> Result<()> {
-    let current = env!("CARGO_PKG_VERSION");
-    println!("Checking for upgrades (current: {current})...");
+async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
+    let current = version::display();
+    let selected_channel = channel.unwrap_or(ReleaseChannel::Stable);
+    let force_install = channel.is_some();
+    println!(
+        "Checking for {} upgrades (current: {current})...",
+        selected_channel.as_str()
+    );
 
-    match update_check::upgrade_to_latest_release(config).await {
-        Ok(update_check::UpgradeResult::AlreadyUpToDate) => {
+    match update_check::upgrade_to_release(config, selected_channel, force_install).await {
+        Ok(update_check::UpgradeResult::AlreadyUpToDate { channel, latest }) => {
             println!(
                 "{}",
-                colors::green(&format!("shine {current} is up to date."))
+                colors::green(&format!(
+                    "shine {current} is up to date on the {} channel ({latest}).",
+                    channel.as_str()
+                ))
             );
         }
         Ok(update_check::UpgradeResult::Upgraded {
-            previous,
-            latest,
+            channel,
+            previous: _,
+            release_tag,
             installed_path,
         }) => {
-            println!(
-                "{}",
-                colors::green(&format!("Upgraded shine from {previous} to {latest}."))
-            );
+            match channel {
+                ReleaseChannel::Stable => println!(
+                    "{}",
+                    colors::green(&format!("Upgraded shine from {current} to {release_tag}."))
+                ),
+                ReleaseChannel::Preview => println!(
+                    "{}",
+                    colors::green(&format!(
+                        "Installed shine preview from {release_tag} over {current}."
+                    ))
+                ),
+            }
             sync_self_install_dest(config, &installed_path).await;
         }
         Err(e) => {
@@ -856,7 +927,18 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Self_ {
-                command: SelfCommands::Upgrade
+                command: SelfCommands::Upgrade { channel: None }
+            }
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "self", "upgrade", "--channel", "preview"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Self_ {
+                command: SelfCommands::Upgrade {
+                    channel: Some(ReleaseChannel::Preview)
+                }
             }
         ));
 

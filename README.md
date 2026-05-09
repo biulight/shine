@@ -104,7 +104,7 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` in the active env config.
+Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` or `DEEPSEEK_API_KEY_GPG_SECRET` in the active env config before use.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped.
 
 ### Uninstall shell presets
@@ -399,10 +399,14 @@ Manual commands:
 ```bash
 shine update        # show available updates, then force-check the latest release
 shine update --verbose  # include up-to-date and non-update status rows
-shine self upgrade  # download and install the latest release for this platform
+shine self upgrade  # download and install the latest stable release for this platform
+shine self upgrade --channel stable   # explicitly reinstall the stable release
+shine self upgrade --channel preview  # install the moving preview prerelease
 shine upgrade       # force-update installed shell and app configs
 shine upgrade --verbose  # include env-template check details
 ```
+
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.21.1+preview.abc1234`, while stable binaries continue to report `0.21.1`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -412,7 +416,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.20.0 sh install.sh
+SHINE_VERSION=0.21.1 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -452,10 +456,30 @@ Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy confi
 
 Configures the current shell for Claude Code with the DeepSeek provider.
 
-Add your key to the project-local env file next to `shine.config.toml`:
+Add your key to the global env override at `~/.shine/shine.env.toml`, or to a
+project-local env file next to `shine.config.toml`:
 
 ```toml
 DEEPSEEK_API_KEY = "..."
+```
+
+Or store a base64-encoded GPG secret instead:
+
+```toml
+DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
+```
+
+Create the encrypted value with your existing GPG key. If the private key is
+backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
+
+```bash
+shine env encrypt -r <key-id> --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
+```
+
+You can also decrypt any base64 GPG secret from the active env config directly:
+
+```bash
+shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
 ```
 
 Then install and use the helper:
@@ -464,6 +488,10 @@ Then install and use the helper:
 shine shell install agent
 ccenv
 ```
+
+When both `DEEPSEEK_API_KEY_GPG_SECRET` and `DEEPSEEK_API_KEY` are set, the
+encrypted secret wins. A GPG decode/decrypt failure stops `ccenv` instead of
+falling back to plaintext.
 
 ### shell/tools — `test_tools`
 
@@ -489,7 +517,10 @@ target = "usetproxy"
 
 ## Configuration
 
-`~/.shine/config.toml` is created automatically on first run. Project-local preset repos can additionally use `shine.config.toml`.
+`~/.shine/config.toml` is created automatically on first run. The global config
+keeps the generic `config.toml` name because `~/.shine/` is already a
+shine-specific directory. Project-local preset repos can additionally use
+`shine.config.toml` to avoid colliding with other tools' `config.toml` files.
 
 Override directories at runtime:
 
@@ -524,7 +555,13 @@ PROXY_HOST = "127.0.0.1"
 PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
 ```
 
-For project-local overrides, place a flat `shine.env.toml` next to `shine.config.toml`. Values from `shine.env.toml` override matching keys from the active config's `[env]` table without modifying either file. Legacy `.env.toml` files are still recognized when `shine.env.toml` is absent.
+For global overrides, place a flat `shine.env.toml` next to the global config at
+`~/.shine/shine.env.toml`. For project-local overrides, place a flat
+`shine.env.toml` next to `shine.config.toml`. Values from `shine.env.toml`
+override matching keys from the active config's `[env]` table without modifying
+either file. When both global and project-local env files are present, the
+project-local file wins. Legacy project `.env.toml` files are still recognized
+when project `shine.env.toml` is absent.
 
 ```toml
 HTTP_PROXY_PORT = "7890"
@@ -537,6 +574,7 @@ PROXY_HOST = "127.0.0.1"
 ~/.shine/
 ├── app-manifest.toml
 ├── config.toml
+├── shine.env.toml    # optional flat env overrides
 ├── bin/
 │   ├── setproxy         # symlink → presets/shell/proxy/set_proxy.sh
 │   ├── usetproxy        # symlink → presets/shell/proxy/uset_proxy.sh

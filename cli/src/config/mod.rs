@@ -188,6 +188,7 @@ impl Config {
             config.home_dir = home_dir;
             config.is_external_presets = is_external_presets;
             config.migrate_env(config_has_env).await?;
+            config.apply_global_env_override().await?;
             if let Some(project_config) = &project_config {
                 config.apply_project_env_override(project_config).await?;
             }
@@ -203,7 +204,7 @@ impl Config {
                 ..Config::default()
             };
             config.migrate_env(false).await?;
-            config.save().await?;
+            config.apply_global_env_override().await?;
             Ok(config)
         }
     }
@@ -386,6 +387,19 @@ impl Config {
                         .with_context(|| format!("failed to remove {}", legacy_path.display()));
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    async fn apply_global_env_override(&mut self) -> Result<()> {
+        let env_path = self.shine_dir().join(PROJECT_ENV_FILE);
+        let Some(vars) = read_env_file(&env_path).await? else {
+            return Ok(());
+        };
+
+        for (key, value) in vars {
+            self.env.insert(key, value);
         }
 
         Ok(())
@@ -954,6 +968,51 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
+    async fn load_or_init_reads_global_shine_env_without_presets_dir() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        fs::write(
+            dir.join("config.toml"),
+            "[env]\nHTTP_PROXY_PORT = \"1111\"\nCONFIG_ONLY = \"config\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            dir.join("shine.env.toml"),
+            "HTTP_PROXY_PORT = \"2222\"\nSIDECAR_ONLY = \"sidecar\"\n",
+        )
+        .await
+        .unwrap();
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+
+        let config = Config::load_or_init().await.unwrap();
+
+        assert_eq!(
+            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
+            Some("2222")
+        );
+        assert_eq!(
+            config.env.get("CONFIG_ONLY").map(String::as_str),
+            Some("config")
+        );
+        assert_eq!(
+            config.env.get("SIDECAR_ONLY").map(String::as_str),
+            Some("sidecar")
+        );
+        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
+        assert!(
+            !content.contains("SIDECAR_ONLY"),
+            "global shine.env.toml overrides should not be written into config.toml"
+        );
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
     async fn load_or_init_discovers_project_config_from_child_dir() {
         let _guard = env_lock();
         let original_dir = std::env::current_dir().unwrap();
@@ -1009,6 +1068,63 @@ mod tests {
         assert_eq!(
             config.env.get("DOTENV_ONLY").map(String::as_str),
             Some("dotenv")
+        );
+
+        restore_current_dir(&original_dir);
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&project_dir).await.unwrap();
+        fs::remove_dir_all(&state_dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn project_shine_env_overrides_global_shine_env() {
+        let _guard = env_lock();
+        let original_dir = std::env::current_dir().unwrap();
+        let project_dir = make_temp_dir().await;
+        let child_dir = project_dir.join("subdir");
+        fs::create_dir_all(&child_dir).await.unwrap();
+        let state_dir = make_temp_dir().await;
+        fs::write(
+            project_dir.join("shine.config.toml"),
+            "presets_dir = \".\"\n[env]\nHTTP_PROXY_PORT = \"1111\"\nCONFIG_ONLY = \"config\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            state_dir.join("shine.env.toml"),
+            "HTTP_PROXY_PORT = \"2222\"\nGLOBAL_ONLY = \"global\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            project_dir.join("shine.env.toml"),
+            "HTTP_PROXY_PORT = \"3333\"\nPROJECT_ONLY = \"project\"\n",
+        )
+        .await
+        .unwrap();
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        std::env::set_current_dir(&child_dir).unwrap();
+
+        let config = Config::load_or_init().await.unwrap();
+
+        assert_eq!(
+            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
+            Some("3333")
+        );
+        assert_eq!(
+            config.env.get("CONFIG_ONLY").map(String::as_str),
+            Some("config")
+        );
+        assert_eq!(
+            config.env.get("GLOBAL_ONLY").map(String::as_str),
+            Some("global")
+        );
+        assert_eq!(
+            config.env.get("PROJECT_ONLY").map(String::as_str),
+            Some("project")
         );
 
         restore_current_dir(&original_dir);

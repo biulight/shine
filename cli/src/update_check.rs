@@ -1,5 +1,6 @@
-use crate::config::Config;
+use crate::{config::Config, version};
 use anyhow::{Context, Result, anyhow, bail};
+use clap::ValueEnum;
 use flate2::read::GzDecoder;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue, USER_AGENT};
 use semver::Version;
@@ -12,8 +13,25 @@ use tokio::fs;
 
 const GITHUB_LATEST_RELEASE_URL: &str =
     "https://api.github.com/repos/biulight/shine/releases/latest";
+const GITHUB_PREVIEW_RELEASE_URL: &str =
+    "https://api.github.com/repos/biulight/shine/releases/tags/preview";
 const UPDATE_CACHE_FILE: &str = "update-check.json";
 const UPDATE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ReleaseChannel {
+    Stable,
+    Preview,
+}
+
+impl ReleaseChannel {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Preview => "preview",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UpdateStatus {
@@ -24,10 +42,14 @@ pub(crate) enum UpdateStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum UpgradeResult {
-    AlreadyUpToDate,
-    Upgraded {
-        previous: Version,
+    AlreadyUpToDate {
+        channel: ReleaseChannel,
         latest: Version,
+    },
+    Upgraded {
+        channel: ReleaseChannel,
+        previous: Version,
+        release_tag: String,
         installed_path: PathBuf,
     },
 }
@@ -52,7 +74,7 @@ struct GithubReleaseAsset {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReleaseAsset {
-    version: Version,
+    release_tag: String,
     target: String,
     download_url: String,
 }
@@ -90,29 +112,56 @@ pub(crate) async fn check_for_update(config: &Config) -> Result<UpdateStatus> {
     Ok(compare_versions(&current, &latest))
 }
 
-pub(crate) async fn upgrade_to_latest_release(config: &Config) -> Result<UpgradeResult> {
+pub(crate) async fn upgrade_to_release(
+    config: &Config,
+    channel: ReleaseChannel,
+    force_install: bool,
+) -> Result<UpgradeResult> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .context("current package version must be valid semver")?;
-    let now_secs = unix_timestamp_now()?;
-    let cache_path = config.shine_dir().join(UPDATE_CACHE_FILE);
 
-    let release = fetch_latest_release().await?;
-    let latest = parse_release_tag(&release.tag_name)?;
-    store_cache_if_possible(&cache_path, &latest, now_secs).await;
+    let release = fetch_release(channel).await?;
+    let latest = match channel {
+        ReleaseChannel::Stable => {
+            let latest = parse_release_tag(&release.tag_name)?;
+            let now_secs = unix_timestamp_now()?;
+            let cache_path = config.shine_dir().join(UPDATE_CACHE_FILE);
+            store_cache_if_possible(&cache_path, &latest, now_secs).await;
+            Some(latest)
+        }
+        ReleaseChannel::Preview => None,
+    };
 
-    if latest <= current {
-        return Ok(UpgradeResult::AlreadyUpToDate);
+    if channel == ReleaseChannel::Stable
+        && !force_install
+        && latest.as_ref().is_some_and(|latest| latest <= &current)
+    {
+        return Ok(UpgradeResult::AlreadyUpToDate {
+            channel,
+            latest: latest.expect("stable release has a parsed version"),
+        });
     }
 
-    let asset = find_release_asset(&release, std::env::consts::OS, std::env::consts::ARCH)?;
+    let asset = find_release_asset(
+        &release,
+        channel,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )?;
     let archive_bytes = download_asset_bytes(&asset.download_url).await?;
     let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
     install_downloaded_archive(&archive_bytes, &current_exe).await?;
-    store_cache_if_possible(&cache_path, &latest, now_secs).await;
+
+    if let Some(latest) = &latest {
+        let now_secs = unix_timestamp_now()?;
+        let cache_path = config.shine_dir().join(UPDATE_CACHE_FILE);
+        store_cache_if_possible(&cache_path, latest, now_secs).await;
+    }
 
     Ok(UpgradeResult::Upgraded {
+        channel,
         previous: current,
-        latest,
+        release_tag: asset.release_tag,
         installed_path: current_exe,
     })
 }
@@ -178,17 +227,30 @@ async fn store_cache_if_possible(cache_path: &Path, latest: &Version, checked_at
 }
 
 async fn fetch_latest_release() -> Result<GithubRelease> {
+    fetch_release(ReleaseChannel::Stable).await
+}
+
+async fn fetch_release(channel: ReleaseChannel) -> Result<GithubRelease> {
     let client = github_client()?;
+    let url = match channel {
+        ReleaseChannel::Stable => GITHUB_LATEST_RELEASE_URL,
+        ReleaseChannel::Preview => GITHUB_PREVIEW_RELEASE_URL,
+    };
     client
-        .get(GITHUB_LATEST_RELEASE_URL)
+        .get(url)
         .send()
         .await
-        .context("failed to query GitHub latest release")?
+        .with_context(|| format!("failed to query GitHub {} release", channel.as_str()))?
         .error_for_status()
-        .context("GitHub latest release request failed")?
+        .with_context(|| format!("GitHub {} release request failed", channel.as_str()))?
         .json::<GithubRelease>()
         .await
-        .context("failed to decode GitHub latest release response")
+        .with_context(|| {
+            format!(
+                "failed to decode GitHub {} release response",
+                channel.as_str()
+            )
+        })
 }
 
 async fn download_asset_bytes(download_url: &str) -> Result<Vec<u8>> {
@@ -296,10 +358,14 @@ fn extract_binary_from_archive(archive_bytes: &[u8]) -> Result<Vec<u8>> {
     bail!("release archive does not contain a shine binary")
 }
 
-fn find_release_asset(release: &GithubRelease, os: &str, arch: &str) -> Result<ReleaseAsset> {
-    let version = parse_release_tag(&release.tag_name)?;
+fn find_release_asset(
+    release: &GithubRelease,
+    channel: ReleaseChannel,
+    os: &str,
+    arch: &str,
+) -> Result<ReleaseAsset> {
     let target = platform_target(os, arch)?;
-    let expected_name = asset_file_name(&version, &target);
+    let expected_name = asset_file_name(release, channel, &target)?;
 
     let asset = release
         .assets
@@ -312,7 +378,7 @@ fn find_release_asset(release: &GithubRelease, os: &str, arch: &str) -> Result<R
         })?;
 
     Ok(ReleaseAsset {
-        version,
+        release_tag: release.tag_name.clone(),
         target,
         download_url: asset.browser_download_url.clone(),
     })
@@ -334,8 +400,18 @@ fn platform_target(os: &str, arch: &str) -> Result<String> {
     Ok(format!("{normalized_os}-{normalized_arch}"))
 }
 
-fn asset_file_name(version: &Version, target: &str) -> String {
-    format!("shine-v{version}-{target}.tar.gz")
+fn asset_file_name(
+    release: &GithubRelease,
+    channel: ReleaseChannel,
+    target: &str,
+) -> Result<String> {
+    match channel {
+        ReleaseChannel::Stable => {
+            let version = parse_release_tag(&release.tag_name)?;
+            Ok(format!("shine-v{version}-{target}.tar.gz"))
+        }
+        ReleaseChannel::Preview => Ok(format!("shine-preview-{target}.tar.gz")),
+    }
 }
 
 fn parse_release_tag(tag_name: &str) -> Result<Version> {
@@ -360,7 +436,7 @@ fn default_headers() -> Result<HeaderMap> {
     );
     headers.insert(
         USER_AGENT,
-        HeaderValue::from_str(&format!("shine/{}", env!("CARGO_PKG_VERSION")))
+        HeaderValue::from_str(&format!("shine/{}", version::package()))
             .context("invalid user-agent header")?,
     );
     Ok(headers)
@@ -454,16 +530,31 @@ mod tests {
     }
 
     #[test]
-    fn asset_file_name_uses_versioned_target_name() {
-        let version = Version::parse("1.2.3").unwrap();
+    fn asset_file_name_uses_versioned_target_name_for_stable() {
+        let release = GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            assets: vec![],
+        };
         assert_eq!(
-            asset_file_name(&version, "darwin-aarch64"),
+            asset_file_name(&release, ReleaseChannel::Stable, "darwin-aarch64").unwrap(),
             "shine-v1.2.3-darwin-aarch64.tar.gz"
         );
     }
 
     #[test]
-    fn find_release_asset_selects_matching_asset() {
+    fn asset_file_name_uses_fixed_target_name_for_preview() {
+        let release = GithubRelease {
+            tag_name: "preview".to_string(),
+            assets: vec![],
+        };
+        assert_eq!(
+            asset_file_name(&release, ReleaseChannel::Preview, "linux-x86_64").unwrap(),
+            "shine-preview-linux-x86_64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn find_release_asset_selects_matching_stable_asset() {
         let release = GithubRelease {
             tag_name: "v1.2.3".to_string(),
             assets: vec![
@@ -478,10 +569,28 @@ mod tests {
             ],
         };
 
-        let asset = find_release_asset(&release, "macos", "aarch64").unwrap();
-        assert_eq!(asset.version, Version::parse("1.2.3").unwrap());
+        let asset =
+            find_release_asset(&release, ReleaseChannel::Stable, "macos", "aarch64").unwrap();
+        assert_eq!(asset.release_tag, "v1.2.3");
         assert_eq!(asset.target, "darwin-aarch64");
         assert_eq!(asset.download_url, "https://example.test/macos");
+    }
+
+    #[test]
+    fn find_release_asset_selects_matching_preview_asset_without_semver_tag() {
+        let release = GithubRelease {
+            tag_name: "preview".to_string(),
+            assets: vec![GithubReleaseAsset {
+                name: "shine-preview-linux-x86_64.tar.gz".to_string(),
+                browser_download_url: "https://example.test/preview".to_string(),
+            }],
+        };
+
+        let asset =
+            find_release_asset(&release, ReleaseChannel::Preview, "linux", "x86_64").unwrap();
+        assert_eq!(asset.release_tag, "preview");
+        assert_eq!(asset.target, "linux-x86_64");
+        assert_eq!(asset.download_url, "https://example.test/preview");
     }
 
     #[test]
@@ -491,7 +600,8 @@ mod tests {
             assets: vec![],
         };
 
-        let error = find_release_asset(&release, "linux", "x86_64").unwrap_err();
+        let error =
+            find_release_asset(&release, ReleaseChannel::Stable, "linux", "x86_64").unwrap_err();
         assert!(
             error
                 .to_string()
