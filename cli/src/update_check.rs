@@ -226,6 +226,13 @@ async fn store_cache_if_possible(cache_path: &Path, latest: &Version, checked_at
     let _ = store_cache(cache_path, latest, checked_at_unix_secs).await;
 }
 
+/// Removes the on-disk update cache so the next command performs a fresh fetch
+/// rather than reading a stale "update required" entry left behind by a failed upgrade.
+pub(crate) async fn invalidate_update_cache(config: &Config) {
+    let cache_path = config.shine_dir().join(UPDATE_CACHE_FILE);
+    let _ = fs::remove_file(&cache_path).await;
+}
+
 async fn fetch_latest_release() -> Result<GithubRelease> {
     fetch_release(ReleaseChannel::Stable).await
 }
@@ -682,6 +689,44 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cached, Some(Version::parse("0.2.3").unwrap()));
+
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalidate_update_cache_removes_existing_cache_file() {
+        use crate::config::Config;
+
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let cache_path = dir.join(UPDATE_CACHE_FILE);
+
+        store_cache(&cache_path, &Version::parse("0.2.3").unwrap(), 1_000)
+            .await
+            .unwrap();
+        assert!(
+            cache_path.exists(),
+            "cache file should exist before invalidation"
+        );
+
+        invalidate_update_cache(&config).await;
+        assert!(
+            !cache_path.exists(),
+            "cache file should be removed after invalidation"
+        );
+
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalidate_update_cache_is_a_no_op_when_cache_absent() {
+        use crate::config::Config;
+
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+
+        // Should not return an error when the cache file does not exist.
+        invalidate_update_cache(&config).await;
 
         fs::remove_dir_all(dir).await.unwrap();
     }

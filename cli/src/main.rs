@@ -507,6 +507,7 @@ async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -
             sync_self_install_dest(config, &installed_path).await;
         }
         Err(e) => {
+            update_check::invalidate_update_cache(config).await;
             bail!("Upgrade failed: {e}");
         }
     }
