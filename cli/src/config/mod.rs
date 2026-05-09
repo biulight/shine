@@ -41,6 +41,9 @@ pub(crate) struct Config {
     /// Path to the active config file.
     #[serde(skip)]
     config_path: PathBuf,
+    /// True when this config was loaded from a project presets config.
+    #[serde(skip)]
+    is_project_config: bool,
     /// Directory used for shine runtime state.
     #[serde(skip)]
     shine_dir: PathBuf,
@@ -113,6 +116,7 @@ impl Config {
 
         let config = Config {
             config_path: config_path.clone(),
+            is_project_config: true,
             shine_dir: shine_dir.clone(),
             presets_dir: presets_dir.clone(),
             bin_dir: shine_dir.join("bin"),
@@ -186,6 +190,7 @@ impl Config {
             let mut config: Config =
                 toml::from_str(&contents).context("Failed to parse config file")?;
             config.config_path = config_path.clone();
+            config.is_project_config = has_project_config;
             config.shine_dir = shine_dir;
             config.presets_dir = presets_dir;
             config.bin_dir = bin_dir;
@@ -200,6 +205,7 @@ impl Config {
         } else {
             let mut config = Config {
                 config_path: config_path.clone(),
+                is_project_config: has_project_config,
                 shine_dir,
                 presets_dir,
                 bin_dir,
@@ -273,6 +279,7 @@ impl Config {
             let mut config: Config =
                 toml::from_str(&contents).context("Failed to parse global config file")?;
             config.config_path = config_path.clone();
+            config.is_project_config = false;
             config.shine_dir = shine_dir;
             config.presets_dir = presets_dir;
             config.bin_dir = bin_dir;
@@ -282,6 +289,7 @@ impl Config {
         } else {
             let config = Config {
                 config_path: config_path.clone(),
+                is_project_config: false,
                 shine_dir,
                 presets_dir,
                 bin_dir,
@@ -354,6 +362,7 @@ impl Config {
     pub(crate) fn new_for_test(dir: &Path) -> Self {
         Self {
             config_path: dir.join("config.toml"),
+            is_project_config: false,
             shine_dir: dir.to_path_buf(),
             presets_dir: dir.join("presets"),
             bin_dir: dir.join("bin"),
@@ -391,16 +400,14 @@ impl Config {
             .parent()
             .context("Config path must have a parent directory")?;
 
-        let new_toml =
-            toml::to_string_pretty(&config_to_save).context("Failed to serialize config")?;
+        let new_table = config_to_save.serialize_table_for_save()?;
+        let new_toml = toml::to_string_pretty(&new_table).context("Failed to serialize config")?;
 
         let toml_str = if config_path.exists() {
             let existing = fs::read_to_string(&config_path).await.unwrap_or_default();
             if existing.is_empty() {
                 new_toml
             } else {
-                let new_table: toml::Table =
-                    toml::from_str(&new_toml).context("Failed to round-trip serialize config")?;
                 let mut doc: toml_edit::DocumentMut = existing
                     .parse()
                     .context("Fail to parse existing config for comment preservation")?;
@@ -441,6 +448,19 @@ impl Config {
             .with_context(|| format!("Failed to rename temp file to {:?}", config_path))?;
 
         Ok(())
+    }
+
+    fn serialize_table_for_save(&self) -> Result<toml::Table> {
+        let serialized = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        let mut table: toml::Table =
+            toml::from_str(&serialized).context("Failed to round-trip serialize config")?;
+
+        if self.is_project_config {
+            table.remove("schema_version");
+            table.remove("last_cleared_schema_version");
+        }
+
+        Ok(table)
     }
 
     async fn resolve_config_path_for_save(&self) -> Result<PathBuf> {
@@ -564,6 +584,7 @@ impl Default for Config {
             presets_dir: shine_dir.join("presets"),
             bin_dir: shine_dir.join("bin"),
             config_path: shine_dir.join("config.toml"),
+            is_project_config: false,
             shine_dir,
             home_dir,
             file_name: "config.toml".to_string(),
@@ -862,6 +883,7 @@ mod tests {
     fn config_in(dir: &Path) -> Config {
         Config {
             config_path: dir.join("config.toml"),
+            is_project_config: false,
             shine_dir: dir.to_path_buf(),
             presets_dir: dir.join("presets"),
             bin_dir: dir.join("bin"),
@@ -1003,6 +1025,7 @@ mod tests {
     async fn save_returns_error_for_path_without_parent() {
         let config = Config {
             config_path: PathBuf::from("config.toml"),
+            is_project_config: false,
             shine_dir: PathBuf::from("shine"),
             presets_dir: PathBuf::from("presets"),
             bin_dir: PathBuf::from("bin"),
@@ -1437,6 +1460,14 @@ mod tests {
             parsed.get("presets_dir").and_then(|value| value.as_str()),
             Some(".")
         );
+        assert!(
+            !parsed.contains_key("schema_version"),
+            "project config must not persist runtime schema_version"
+        );
+        assert!(
+            !parsed.contains_key("last_cleared_schema_version"),
+            "project config must not persist runtime clear state"
+        );
 
         let err = Config::init_current_dir_config().await.unwrap_err();
         assert!(
@@ -1446,6 +1477,46 @@ mod tests {
 
         restore_current_dir(&original_dir);
         fs::remove_dir_all(&project_dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn project_config_save_removes_runtime_schema_fields() {
+        let _guard = env_lock();
+        let original_dir = std::env::current_dir().unwrap();
+        let project_dir = make_temp_dir().await;
+        let state_dir = make_temp_dir().await;
+        fs::write(
+            project_dir.join("shine.config.toml"),
+            "schema_version = 0\nlast_cleared_schema_version = 0\npresets_dir = \".\"\n",
+        )
+        .await
+        .unwrap();
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        std::env::set_current_dir(&project_dir).unwrap();
+
+        let config = Config::load_or_init().await.unwrap();
+        assert_eq!(config.schema_version, 0);
+        assert_eq!(config.last_cleared_schema_version, Some(0));
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(project_dir.join("shine.config.toml"))
+            .await
+            .unwrap();
+        let parsed: toml::Table = toml::from_str(&content).unwrap();
+        assert_eq!(
+            parsed.get("presets_dir").and_then(|value| value.as_str()),
+            Some(".")
+        );
+        assert!(!parsed.contains_key("schema_version"));
+        assert!(!parsed.contains_key("last_cleared_schema_version"));
+
+        restore_current_dir(&original_dir);
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&project_dir).await.unwrap();
+        fs::remove_dir_all(&state_dir).await.unwrap();
     }
 
     #[allow(clippy::await_holding_lock)]
