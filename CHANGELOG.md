@@ -5,6 +5,26 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.21.3] — 2026-05-09
+
+### Bug Fixes
+
+- Fixed a deadlock edge case where a failed `shine self upgrade` (e.g. GitHub API unreachable) would leave the update cache intact, causing every subsequent command to be permanently blocked by the "newer patch release required" gate until the network recovered. The cache is now cleared on upgrade failure so the next invocation either re-checks live or proceeds silently when the network is still down.
+
+---
+
+## [0.21.2] — 2026-05-09
+
+### Features
+
+- Renamed the top-level installed-content inspection command from `shine show <target>` to `shine info <target>`.
+
+### Docs
+
+- Updated the README examples and usage text to use `shine info`.
+
+---
+
 ## [0.21.1] — 2026-05-09
 
 ### Fixes

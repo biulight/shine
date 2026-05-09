@@ -60,8 +60,8 @@ enum Commands {
     /// List installed shell presets and app configs
     List,
     /// Show the full content and details for an installed config or shell preset
-    Show {
-        /// Installed item to show (e.g. git, starship, proxy, setproxy)
+    Info {
+        /// Installed item to inspect (e.g. git, starship, proxy, setproxy)
         #[arg(value_name = "TARGET")]
         target: String,
     },
@@ -232,7 +232,7 @@ async fn main() -> Result<()> {
         }
         Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
         Commands::List => Box::pin(list::handle_list(&config)).await,
-        Commands::Show { target } => Box::pin(show::handle_show(&config, &target)).await,
+        Commands::Info { target } => Box::pin(show::handle_show(&config, &target)).await,
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
@@ -507,6 +507,7 @@ async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -
             sync_self_install_dest(config, &installed_path).await;
         }
         Err(e) => {
+            update_check::invalidate_update_cache(config).await;
             bail!("Upgrade failed: {e}");
         }
     }
@@ -1004,12 +1005,18 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_show_command() {
-        let cli = Cli::try_parse_from(["shine", "show", "setproxy"]).unwrap();
+    fn cli_accepts_info_command() {
+        let cli = Cli::try_parse_from(["shine", "info", "setproxy"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Show { target } if target == "setproxy"
+            Commands::Info { target } if target == "setproxy"
         ));
+    }
+
+    #[test]
+    fn cli_rejects_legacy_show_command() {
+        let err = Cli::try_parse_from(["shine", "show", "setproxy"]).unwrap_err();
+        assert!(err.to_string().contains("unrecognized subcommand 'show'"));
     }
 
     #[test]

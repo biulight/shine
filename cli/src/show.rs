@@ -279,7 +279,7 @@ fn build_candidates(
 fn resolve_target(target: &str, candidates: &[TargetCandidate]) -> Result<Vec<ShowRef>> {
     let trimmed = target.trim();
     if trimmed.is_empty() {
-        bail!("show target must not be empty");
+        bail!("info target must not be empty");
     }
 
     let exact: Vec<_> = candidates
@@ -322,7 +322,7 @@ fn ambiguity(target: &str, matches: Vec<&TargetCandidate>) -> Result<Vec<ShowRef
         .into_iter()
         .collect::<Vec<_>>()
         .join(", ");
-    bail!("ambiguous show target '{target}'. Use one of: {choices}");
+    bail!("ambiguous info target '{target}'. Use one of: {choices}");
 }
 
 async fn print_app_file(config: &Config, item: &AppShowFile) -> Result<()> {
@@ -557,7 +557,7 @@ mod tests {
         let shell_files = vec![shell_file("proxy", "setproxy", "set_proxy.sh")];
         let candidates = build_candidates(&app_files, &shell_files);
         let err = resolve_target("proxy", &candidates).unwrap_err();
-        assert!(err.to_string().contains("ambiguous show target"));
+        assert!(err.to_string().contains("ambiguous info target"));
         assert!(err.to_string().contains("app/proxy"));
         assert!(err.to_string().contains("shell/proxy"));
     }
