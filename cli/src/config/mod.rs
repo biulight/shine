@@ -14,6 +14,8 @@ const LEGACY_PROJECT_CONFIG_FILE: &str = "config.toml";
 const PROJECT_ENV_FILE: &str = "shine.env.toml";
 const LEGACY_PROJECT_ENV_FILE: &str = ".env.toml";
 
+pub(crate) const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 1;
+
 pub(crate) const DEFAULT_ENV_VARS: &[(&str, &str)] = &[
     ("HTTP_PROXY_PORT", "6152"),
     ("SOCKS5_PROXY_PORT", "6153"),
@@ -50,6 +52,8 @@ pub(crate) struct Config {
     file_name: String,
     #[serde(default)]
     pub schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_cleared_schema_version: Option<u32>,
     #[serde(skip)]
     pub shell_type: ShellType,
     /// Optional persistent presets_dir override stored in the active config.
@@ -209,6 +213,111 @@ impl Config {
         }
     }
 
+    pub(crate) async fn load_global_runtime_or_init() -> Result<Self> {
+        let (mut config, exists) = Self::load_global_runtime_base().await?;
+
+        fs::create_dir_all(config.shine_dir())
+            .await
+            .with_context(|| "creating shine config dir")?;
+        fs::create_dir_all(config.presets_dir())
+            .await
+            .with_context(|| "creating presets dir")?;
+        fs::create_dir_all(config.bin_dir())
+            .await
+            .with_context(|| "creating bin dir")?;
+
+        let config_has_env = if exists {
+            let contents = fs::read_to_string(config.config_path())
+                .await
+                .context("Failed to read global config file")?;
+            config_toml_has_env_table(&contents)
+        } else {
+            false
+        };
+        config.migrate_env(config_has_env).await?;
+        config.apply_global_env_override().await?;
+        Ok(config)
+    }
+
+    pub(crate) async fn load_global_runtime_for_dry_run() -> Result<Self> {
+        let (config, _) = Self::load_global_runtime_base().await?;
+        Ok(config)
+    }
+
+    async fn load_global_runtime_base() -> Result<(Self, bool)> {
+        let home_dir = effective_home_dir();
+        let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
+        let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
+        let config_path = preliminary_shine_dir.join(GLOBAL_CONFIG_FILE);
+        let config_dir = config_path
+            .parent()
+            .context("Config path must have a parent directory")?
+            .to_path_buf();
+        let toml_presets = read_presets_override_from_toml(&config_path).await;
+        let toml_presets = toml_presets
+            .as_deref()
+            .map(|path| resolve_config_presets_path(path, &config_dir));
+
+        let (shine_dir, presets_dir, is_external_presets) = resolve_runtime_config_dirs(
+            &default_shine_dir,
+            &default_presets_dir,
+            toml_presets.as_deref(),
+            false,
+        );
+        let bin_dir = shine_dir.join("bin");
+
+        if config_path.exists() {
+            let contents = fs::read_to_string(&config_path)
+                .await
+                .context("Failed to read global config file")?;
+            let mut config: Config =
+                toml::from_str(&contents).context("Failed to parse global config file")?;
+            config.config_path = config_path.clone();
+            config.shine_dir = shine_dir;
+            config.presets_dir = presets_dir;
+            config.bin_dir = bin_dir;
+            config.home_dir = home_dir;
+            config.is_external_presets = is_external_presets;
+            Ok((config, true))
+        } else {
+            let config = Config {
+                config_path: config_path.clone(),
+                shine_dir,
+                presets_dir,
+                bin_dir,
+                home_dir,
+                is_external_presets,
+                ..Config::default()
+            };
+            Ok((config, false))
+        }
+    }
+
+    pub(crate) async fn read_global_runtime_schema_version() -> Result<u32> {
+        let (default_shine_dir, _) = default_config_and_presets_dir()?;
+        let config_path =
+            preliminary_shine_dir_from_env(&default_shine_dir).join(GLOBAL_CONFIG_FILE);
+        let content = match fs::read_to_string(&config_path).await {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(CURRENT_RUNTIME_SCHEMA_VERSION);
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("Failed to read {}", config_path.display()));
+            }
+        };
+
+        #[derive(Deserialize)]
+        struct MinimalConfig {
+            #[serde(default)]
+            schema_version: u32,
+        }
+
+        toml::from_str::<MinimalConfig>(&content)
+            .map(|config| config.schema_version)
+            .with_context(|| format!("Failed to parse {}", config_path.display()))
+    }
+
     pub(crate) fn presets_dir(&self) -> &Path {
         &self.presets_dir
     }
@@ -250,7 +359,8 @@ impl Config {
             bin_dir: dir.join("bin"),
             home_dir: dir.to_path_buf(),
             file_name: "config.toml".to_string(),
-            schema_version: 0,
+            schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+            last_cleared_schema_version: None,
             shell_type: ShellType::default(),
             presets_dir_override: None,
             app_default_dest_root_override: None,
@@ -457,7 +567,8 @@ impl Default for Config {
             shine_dir,
             home_dir,
             file_name: "config.toml".to_string(),
-            schema_version: 0,
+            schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+            last_cleared_schema_version: None,
             shell_type: ShellType::default(),
             presets_dir_override: None,
             app_default_dest_root_override: None,
@@ -756,7 +867,8 @@ mod tests {
             bin_dir: dir.join("bin"),
             home_dir: dir.join("home"),
             file_name: "config.toml".to_string(),
-            schema_version: 0,
+            schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+            last_cleared_schema_version: None,
             shell_type: ShellType::default(),
             presets_dir_override: None,
             app_default_dest_root_override: None,
@@ -785,7 +897,10 @@ mod tests {
 
         let content = fs::read_to_string(&config.config_path).await.unwrap();
         let parsed: toml::Table = toml::from_str(&content).unwrap();
-        assert_eq!(parsed["schema_version"].as_integer(), Some(0));
+        assert_eq!(
+            parsed["schema_version"].as_integer(),
+            Some(CURRENT_RUNTIME_SCHEMA_VERSION.into())
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -828,9 +943,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn save_writes_last_cleared_schema_version_when_set() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.last_cleared_schema_version = Some(1);
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let parsed: toml::Table = toml::from_str(&content).unwrap();
+        assert_eq!(parsed["last_cleared_schema_version"].as_integer(), Some(1));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn save_merges_preserves_comments() {
         let dir = make_temp_dir().await;
-        let config = config_in(&dir);
+        let mut config = config_in(&dir);
+        config.schema_version = 0;
         fs::write(&config.config_path, "# keep this\nschema_version = 0\n")
             .await
             .unwrap();
@@ -877,7 +1008,8 @@ mod tests {
             bin_dir: PathBuf::from("bin"),
             home_dir: PathBuf::from("home"),
             file_name: "config.toml".to_string(),
-            schema_version: 0,
+            schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
+            last_cleared_schema_version: None,
             shell_type: ShellType::default(),
             presets_dir_override: None,
             app_default_dest_root_override: None,
@@ -1074,6 +1206,67 @@ mod tests {
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_global_runtime_ignores_project_config() {
+        let _guard = env_lock();
+        let original_dir = std::env::current_dir().unwrap();
+        let project_dir = make_temp_dir().await;
+        let child_dir = project_dir.join("subdir");
+        fs::create_dir_all(&child_dir).await.unwrap();
+        let state_dir = make_temp_dir().await;
+        fs::write(
+            project_dir.join("shine.config.toml"),
+            "schema_version = 7\npresets_dir = \".\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            state_dir.join("config.toml"),
+            "schema_version = 0\nlast_cleared_schema_version = 0\n",
+        )
+        .await
+        .unwrap();
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        std::env::set_current_dir(&child_dir).unwrap();
+
+        let config = Config::load_global_runtime_or_init().await.unwrap();
+
+        assert_eq!(
+            fs::canonicalize(config.config_path()).await.unwrap(),
+            fs::canonicalize(state_dir.join("config.toml"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(config.schema_version, 0);
+        assert_eq!(config.last_cleared_schema_version, Some(0));
+        assert_eq!(config.shine_dir(), state_dir);
+
+        restore_current_dir(&original_dir);
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&project_dir).await.unwrap();
+        fs::remove_dir_all(&state_dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_global_runtime_for_dry_run_does_not_create_state() {
+        let _guard = env_lock();
+        let dir = std::env::temp_dir().join(format!("shine-dry-run-{}", uuid::Uuid::new_v4()));
+        assert!(!dir.exists());
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+
+        let config = Config::load_global_runtime_for_dry_run().await.unwrap();
+
+        assert_eq!(config.config_path(), dir.join("config.toml"));
+        assert_eq!(config.schema_version, CURRENT_RUNTIME_SCHEMA_VERSION);
+        assert!(!dir.exists(), "dry-run loader must not create state dir");
+
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
     }
 
     #[allow(clippy::await_holding_lock)]
