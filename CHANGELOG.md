@@ -5,6 +5,18 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.21.2] — 2026-05-09
+
+### Features
+
+- Renamed the top-level installed-content inspection command from `shine show <target>` to `shine info <target>`.
+
+### Docs
+
+- Updated the README examples and usage text to use `shine info`.
+
+---
+
 ## [0.21.1] — 2026-05-09
 
 ### Fixes
