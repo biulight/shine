@@ -1,4 +1,4 @@
-description = "Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, and Yazi setup steps."
+description = "Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, Yazi, and ZeroTier setup steps."
 default_profile = "recommended"
 
 [[items]]
@@ -20,6 +20,11 @@ description = "Install the Atuin shell history sync client."
 id = "yazi"
 label = "Yazi"
 description = "Install Yazi plus its preview/runtime dependencies."
+
+[[items]]
+id = "zerotier"
+label = "ZeroTier"
+description = "Install the ZeroTier Linux client for optional private network access."
 
 [profiles.recommended]
 items = ["neovim", "astronvim", "atuin", "yazi"]
