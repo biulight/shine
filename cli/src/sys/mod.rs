@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, bail};
 use console::{Style, style};
 use dialoguer::{MultiSelect, theme::ColorfulTheme};
-use owo_colors::{OwoColorize, Stream};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
@@ -401,18 +400,14 @@ fn select_items_interactively(manifest: &SysManifest) -> Result<ResolvedSelectio
 }
 
 fn format_interactive_item(item: &SysItem) -> String {
-    let label = item
-        .label
-        .if_supports_color(Stream::Stderr, |text| text.bold())
-        .to_string();
+    let label = style(item.label.as_str()).for_stderr().bold().to_string();
     if item.description.is_empty() {
         return label;
     }
 
-    let description = item
-        .description
-        .as_str()
-        .if_supports_color(Stream::Stderr, |text| text.dimmed())
+    let description = style(item.description.as_str())
+        .for_stderr()
+        .dim()
         .to_string();
     format!("{label}  ·  {description}")
 }
@@ -515,9 +510,10 @@ async fn list_fs_sys_entries(presets_dir: &Path) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use std::path::PathBuf;
     use tokio::fs;
 
-    async fn make_temp_dir() -> std::path::PathBuf {
+    async fn make_temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("shine-sys-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).await.unwrap();
         dir
