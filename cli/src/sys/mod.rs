@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
-use dialoguer::MultiSelect;
+use console::{Style, style};
+use dialoguer::{MultiSelect, theme::ColorfulTheme};
+use owo_colors::{OwoColorize, Stream};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
@@ -63,6 +65,25 @@ impl SelectionSource {
             Self::Interactive => "interactive selection".to_string(),
             Self::NoItems => "no selectable items".to_string(),
         }
+    }
+}
+
+fn sys_init_theme() -> ColorfulTheme {
+    ColorfulTheme {
+        prompt_prefix: style(">".to_string()).for_stderr().cyan().bold(),
+        prompt_suffix: style("".to_string()).for_stderr(),
+        success_prefix: style("✓".to_string()).for_stderr().green(),
+        success_suffix: style("".to_string()).for_stderr(),
+        active_item_prefix: style("›".to_string()).for_stderr().cyan().bold(),
+        inactive_item_prefix: style(" ".to_string()).for_stderr(),
+        checked_item_prefix: style("[x]".to_string()).for_stderr().green(),
+        unchecked_item_prefix: style("[ ]".to_string()).for_stderr().black().bright(),
+        prompt_style: Style::new().for_stderr().bold(),
+        active_item_style: Style::new().for_stderr().cyan(),
+        inactive_item_style: Style::new().for_stderr(),
+        values_style: Style::new().for_stderr().cyan(),
+        hint_style: Style::new().for_stderr().black().bright(),
+        ..ColorfulTheme::default()
     }
 }
 
@@ -175,14 +196,7 @@ async fn handle_init_for_os(
     }
 
     println!("Running system init for {}...", colors::bold(os_id));
-    println!(
-        "{}",
-        colors::dim(&format!("Selection: {}", selection.source.describe()))
-    );
-    println!(
-        "{}",
-        colors::dim(&format!("Items: {}", selection.item_ids.join(", ")))
-    );
+    print_selection_summary(&selection);
     println!();
 
     let status = std::process::Command::new("bash")
@@ -362,23 +376,17 @@ fn default_flags(manifest: &SysManifest) -> Vec<bool> {
 }
 
 fn select_items_interactively(manifest: &SysManifest) -> Result<ResolvedSelection> {
-    let labels: Vec<String> = manifest
-        .items
-        .iter()
-        .map(|item| {
-            if item.description.is_empty() {
-                item.label.clone()
-            } else {
-                format!("{} - {}", item.label, item.description)
-            }
-        })
-        .collect();
+    print_interactive_header(manifest);
+
+    let labels: Vec<String> = manifest.items.iter().map(format_interactive_item).collect();
     let defaults = default_flags(manifest);
 
-    let selection = MultiSelect::new()
+    let selection = MultiSelect::with_theme(&sys_init_theme())
         .with_prompt("Select system init items")
         .items(&labels)
         .defaults(&defaults)
+        .report(false)
+        .max_length(8)
         .interact()?;
 
     let item_ids = selection
@@ -390,6 +398,54 @@ fn select_items_interactively(manifest: &SysManifest) -> Result<ResolvedSelectio
         item_ids,
         source: SelectionSource::Interactive,
     })
+}
+
+fn format_interactive_item(item: &SysItem) -> String {
+    let label = item
+        .label
+        .if_supports_color(Stream::Stderr, |text| text.bold())
+        .to_string();
+    if item.description.is_empty() {
+        return label;
+    }
+
+    let description = item
+        .description
+        .as_str()
+        .if_supports_color(Stream::Stderr, |text| text.dimmed())
+        .to_string();
+    format!("{label}  ·  {description}")
+}
+
+fn print_interactive_header(manifest: &SysManifest) {
+    println!("{}", colors::bold("System Init"));
+    if let Some(default_profile) = manifest.default_profile.as_deref() {
+        println!(
+            "{}",
+            colors::dim(&format!("Default profile: {default_profile}"))
+        );
+    }
+    println!("{}", colors::dim("Use Space to toggle, Enter to confirm."));
+    println!();
+}
+
+fn print_selection_summary(selection: &ResolvedSelection) {
+    println!(
+        "{}",
+        colors::dim(&format!("Selection: {}", selection.source.describe()))
+    );
+    println!(
+        "{}",
+        colors::dim(&format!("Items: {}", format_item_ids(&selection.item_ids)))
+    );
+}
+
+fn format_item_ids(item_ids: &[String]) -> String {
+    if item_ids.is_empty() {
+        "(none)".to_string()
+    } else {
+        item_ids.join(", ")
+    }
 }
 
 fn list_embedded_sys_entries() -> Vec<(String, String)> {
@@ -626,6 +682,37 @@ description = "Placeholder"
         let selection = resolve_selection(&manifest, None, false).unwrap();
         assert!(selection.item_ids.is_empty());
         assert_eq!(selection.source, SelectionSource::NoItems);
+    }
+
+    #[test]
+    fn format_interactive_item_includes_separator_and_description() {
+        let item = SysItem {
+            id: "neovim".to_string(),
+            label: "Neovim".to_string(),
+            description: "Install Neovim".to_string(),
+            default: false,
+        };
+        let rendered = format_interactive_item(&item);
+        assert!(rendered.contains("Neovim"));
+        assert!(rendered.contains("·"));
+        assert!(rendered.contains("Install Neovim"));
+    }
+
+    #[test]
+    fn format_interactive_item_omits_separator_without_description() {
+        let item = SysItem {
+            id: "atuin".to_string(),
+            label: "Atuin".to_string(),
+            description: String::new(),
+            default: false,
+        };
+        let rendered = format_interactive_item(&item);
+        assert_eq!(rendered, "Atuin");
+    }
+
+    #[test]
+    fn format_item_ids_handles_empty_selection() {
+        assert_eq!(format_item_ids(&[]), "(none)");
     }
 
     #[test]
