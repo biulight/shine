@@ -44,7 +44,7 @@ pub(crate) enum UpdateStatus {
 pub(crate) enum UpgradeResult {
     AlreadyUpToDate {
         channel: ReleaseChannel,
-        latest: Version,
+        latest: String,
     },
     Upgraded {
         channel: ReleaseChannel,
@@ -64,6 +64,8 @@ struct UpdateCache {
 #[derive(Debug, Clone, Deserialize)]
 struct GithubRelease {
     tag_name: String,
+    #[serde(default)]
+    body: String,
     assets: Vec<GithubReleaseAsset>,
 }
 
@@ -120,6 +122,7 @@ pub(crate) async fn upgrade_to_release(
 ) -> Result<UpgradeResult> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .context("current package version must be valid semver")?;
+    let current_display = version::display();
 
     let release = fetch_release(channel).await?;
     let latest = match channel {
@@ -133,13 +136,24 @@ pub(crate) async fn upgrade_to_release(
         ReleaseChannel::Preview => None,
     };
 
+    if channel == ReleaseChannel::Preview
+        && preview_release_version_label(&release).as_deref() == Some(current_display)
+    {
+        return Ok(UpgradeResult::AlreadyUpToDate {
+            channel,
+            latest: current_display.to_string(),
+        });
+    }
+
     if channel == ReleaseChannel::Stable
         && !force_install
         && latest.as_ref().is_some_and(|latest| latest <= &current)
     {
         return Ok(UpgradeResult::AlreadyUpToDate {
             channel,
-            latest: latest.expect("stable release has a parsed version"),
+            latest: latest
+                .expect("stable release has a parsed version")
+                .to_string(),
         });
     }
 
@@ -296,6 +310,24 @@ async fn installed_version_label(current_exe: &Path, fallback: &str) -> String {
 
 fn parse_binary_version_output(output: &str) -> Option<&str> {
     output.trim().strip_prefix("shine ")
+}
+
+fn preview_release_version_label(release: &GithubRelease) -> Option<String> {
+    let commit = parse_preview_release_commit(&release.body)?;
+    let short_commit: String = commit.chars().take(7).collect();
+    if short_commit.len() != 7 {
+        return None;
+    }
+
+    Some(format!("{}+preview.{short_commit}", version::package()))
+}
+
+fn parse_preview_release_commit(body: &str) -> Option<&str> {
+    body.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("- Commit: `")
+            .and_then(|rest| rest.strip_suffix('`'))
+    })
 }
 
 fn github_client() -> Result<reqwest::Client> {
@@ -576,6 +608,7 @@ mod tests {
     fn asset_file_name_uses_versioned_target_name_for_stable() {
         let release = GithubRelease {
             tag_name: "v1.2.3".to_string(),
+            body: String::new(),
             assets: vec![],
         };
         assert_eq!(
@@ -588,6 +621,7 @@ mod tests {
     fn asset_file_name_uses_fixed_target_name_for_preview() {
         let release = GithubRelease {
             tag_name: "preview".to_string(),
+            body: String::new(),
             assets: vec![],
         };
         assert_eq!(
@@ -600,6 +634,7 @@ mod tests {
     fn find_release_asset_selects_matching_stable_asset() {
         let release = GithubRelease {
             tag_name: "v1.2.3".to_string(),
+            body: String::new(),
             assets: vec![
                 GithubReleaseAsset {
                     name: "shine-v1.2.3-linux-x86_64.tar.gz".to_string(),
@@ -623,6 +658,7 @@ mod tests {
     fn find_release_asset_selects_matching_preview_asset_without_semver_tag() {
         let release = GithubRelease {
             tag_name: "preview".to_string(),
+            body: String::new(),
             assets: vec![GithubReleaseAsset {
                 name: "shine-preview-linux-x86_64.tar.gz".to_string(),
                 browser_download_url: "https://example.test/preview".to_string(),
@@ -640,6 +676,7 @@ mod tests {
     fn find_release_asset_errors_when_target_missing() {
         let release = GithubRelease {
             tag_name: "v1.2.3".to_string(),
+            body: String::new(),
             assets: vec![],
         };
 
@@ -649,6 +686,32 @@ mod tests {
             error
                 .to_string()
                 .contains("no release asset named shine-v1.2.3-linux-x86_64.tar.gz")
+        );
+    }
+
+    #[test]
+    fn parse_preview_release_commit_reads_commit_line_from_release_body() {
+        let body = "Automated preview build from the release branch.\n- Commit: `a618d4af0a8ec0f0d0c5d4f6f9e3e2970cb12345`\n";
+
+        assert_eq!(
+            parse_preview_release_commit(body),
+            Some("a618d4af0a8ec0f0d0c5d4f6f9e3e2970cb12345")
+        );
+    }
+
+    #[test]
+    fn preview_release_version_label_uses_package_version_and_short_commit() {
+        let release = GithubRelease {
+            tag_name: "preview".to_string(),
+            body:
+                "Automated preview build.\n- Commit: `a618d4af0a8ec0f0d0c5d4f6f9e3e2970cb12345`\n"
+                    .to_string(),
+            assets: vec![],
+        };
+
+        assert_eq!(
+            preview_release_version_label(&release),
+            Some(format!("{}+preview.a618d4a", version::package()))
         );
     }
 
