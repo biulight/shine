@@ -44,9 +44,13 @@ git config --global --unset http.proxy 2>/dev/null || echo "  ℹ️ Git http.pr
 git config --global --unset https.proxy 2>/dev/null || echo "  ℹ️ Git https.proxy was not set or has already been cleared"
 
 # Clear NPM proxy settings.
-echo "📦 Clearing NPM proxy..."
-npm config delete proxy 2>/dev/null || echo "  ℹ️ NPM proxy was not set or has already been cleared"
-npm config delete https-proxy 2>/dev/null || echo "  ℹ️ NPM https-proxy was not set or has already been cleared"
+if command -v npm >/dev/null 2>&1; then
+    echo "📦 Clearing NPM proxy..."
+    npm config delete proxy 2>/dev/null || echo "  ℹ️ NPM proxy was not set or has already been cleared"
+    npm config delete https-proxy 2>/dev/null || echo "  ℹ️ NPM https-proxy was not set or has already been cleared"
+else
+    echo "ℹ️ NPM is not installed; skipping"
+fi
 
 # Clear Yarn proxy settings, if available.
 if command -v yarn >/dev/null 2>&1; then

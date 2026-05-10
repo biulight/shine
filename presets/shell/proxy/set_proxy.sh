@@ -64,10 +64,14 @@ set_proxy() {
     git config --global http.proxy "${tool_proxy}"
     git config --global https.proxy "${tool_proxy}"
 
-    echo "📦 Configuring NPM proxy..."
-    npm config set proxy "${tool_proxy}"
-    npm config set https-proxy "${tool_proxy}"
-    npm config set registry https://registry.npmjs.org/
+    if command -v npm >/dev/null 2>&1; then
+        echo "📦 Configuring NPM proxy..."
+        npm config set proxy "${tool_proxy}"
+        npm config set https-proxy "${tool_proxy}"
+        npm config set registry https://registry.npmjs.org/
+    else
+        echo "ℹ️ NPM is not installed; skipping"
+    fi
 
     if command -v yarn >/dev/null 2>&1; then
         yarn_version=$(yarn --version)
