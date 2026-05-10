@@ -534,17 +534,20 @@ async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -
             channel,
             previous: _,
             release_tag,
+            installed_version,
             installed_path,
         }) => {
             match channel {
                 ReleaseChannel::Stable => println!(
                     "{}",
-                    colors::green(&format!("Upgraded shine from {current} to {release_tag}."))
+                    colors::green(&format!(
+                        "Upgraded shine from {current} to {installed_version}."
+                    ))
                 ),
                 ReleaseChannel::Preview => println!(
                     "{}",
                     colors::green(&format!(
-                        "Installed shine preview from {release_tag} over {current}."
+                        "Installed shine preview from {current} to {installed_version} ({release_tag})."
                     ))
                 ),
             }

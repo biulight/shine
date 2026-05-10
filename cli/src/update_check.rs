@@ -50,6 +50,7 @@ pub(crate) enum UpgradeResult {
         channel: ReleaseChannel,
         previous: Version,
         release_tag: String,
+        installed_version: String,
         installed_path: PathBuf,
     },
 }
@@ -151,6 +152,7 @@ pub(crate) async fn upgrade_to_release(
     let archive_bytes = download_asset_bytes(&asset.download_url).await?;
     let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
     install_downloaded_archive(&archive_bytes, &current_exe).await?;
+    let installed_version = installed_version_label(&current_exe, &asset.release_tag).await;
 
     if let Some(latest) = &latest {
         let now_secs = unix_timestamp_now()?;
@@ -162,6 +164,7 @@ pub(crate) async fn upgrade_to_release(
         channel,
         previous: current,
         release_tag: asset.release_tag,
+        installed_version,
         installed_path: current_exe,
     })
 }
@@ -273,6 +276,26 @@ async fn download_asset_bytes(download_url: &str) -> Result<Vec<u8>> {
         .await
         .context("failed to read release asset bytes")
         .map(|bytes| bytes.to_vec())
+}
+
+async fn installed_version_label(current_exe: &Path, fallback: &str) -> String {
+    match tokio::process::Command::new(current_exe)
+        .arg("--version")
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            parse_binary_version_output(&stdout)
+                .map(str::to_string)
+                .unwrap_or_else(|| fallback.to_string())
+        }
+        _ => fallback.to_string(),
+    }
+}
+
+fn parse_binary_version_output(output: &str) -> Option<&str> {
+    output.trim().strip_prefix("shine ")
 }
 
 fn github_client() -> Result<reqwest::Client> {
@@ -525,6 +548,19 @@ mod tests {
     #[test]
     fn parse_release_tag_rejects_prerelease_versions() {
         assert!(parse_release_tag("v1.2.3-beta.1").is_err());
+    }
+
+    #[test]
+    fn parse_binary_version_output_reads_shine_version() {
+        assert_eq!(
+            parse_binary_version_output("shine 0.21.3+preview.5ed8416\n"),
+            Some("0.21.3+preview.5ed8416")
+        );
+    }
+
+    #[test]
+    fn parse_binary_version_output_rejects_unexpected_output() {
+        assert_eq!(parse_binary_version_output("0.21.3"), None);
     }
 
     #[test]
