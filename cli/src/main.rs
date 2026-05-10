@@ -6,6 +6,7 @@ use std::path::PathBuf;
 mod apps;
 mod bin_links;
 mod check;
+mod clear;
 mod colors;
 mod commands;
 mod config;
@@ -75,6 +76,8 @@ enum Commands {
     Update(UpdateCommand),
     /// Force-update installed shell and app configs
     Upgrade(UpgradeCommand),
+    /// Clear old shine-owned runtime state after schema changes
+    Clear(ClearCommand),
     /// Manage the shine binary itself
     #[command(name = "self")]
     Self_ {
@@ -142,6 +145,13 @@ struct UpgradeCommand {
     verbose: bool,
 }
 
+#[derive(Parser, Debug)]
+struct ClearCommand {
+    /// Print cleanup steps without changing files
+    #[arg(long)]
+    dry_run: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -162,7 +172,18 @@ async fn main() -> Result<()> {
         return handle_init(cmd.yes).await;
     }
 
+    if let Commands::Clear(cmd) = &cli.command {
+        let config = if cmd.dry_run {
+            Box::pin(Config::load_global_runtime_for_dry_run()).await?
+        } else {
+            Box::pin(Config::load_global_runtime_or_init()).await?
+        };
+        return Box::pin(clear::handle_clear(&config, cmd.dry_run)).await;
+    }
+
     let config = Box::pin(Config::load_or_init()).await?;
+
+    warn_if_runtime_schema_pending(&cli.command).await;
 
     // Skip the background version check for update/self commands. `shine update`
     // and `shine self upgrade` do their own forced fetch below; `shine self install`
@@ -173,6 +194,7 @@ async fn main() -> Result<()> {
             | Commands::Export(..)
             | Commands::Link(..)
             | Commands::Unlink
+            | Commands::Clear(..)
             | Commands::Self_ { .. }
             | Commands::Env { .. }
     ) {
@@ -199,6 +221,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Init(_) => unreachable!(),
         Commands::Completions { .. } => unreachable!(),
+        Commands::Clear(_) => unreachable!(),
         Commands::App { command } => match command {
             AppCommands::Init { force } => apps::handle_init_template(force).await,
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
@@ -268,9 +291,30 @@ async fn main() -> Result<()> {
         },
         Commands::Sys { command } => match command {
             SysCommands::List => Box::pin(sys::handle_list(&config)).await,
-            SysCommands::Init { dry_run } => Box::pin(sys::handle_init(&config, dry_run)).await,
+            SysCommands::Init { preset, dry_run } => {
+                Box::pin(sys::handle_init(&config, preset.as_deref(), dry_run)).await
+            }
         },
     }
+}
+
+async fn warn_if_runtime_schema_pending(command: &Commands) {
+    if !should_warn_runtime_schema(command) {
+        return;
+    }
+
+    if let Ok(schema_version) = Config::read_global_runtime_schema_version().await
+        && let Some(warning) = clear::pending_schema_warning(schema_version)
+    {
+        eprintln!("{}", colors::yellow(&warning));
+    }
+}
+
+fn should_warn_runtime_schema(command: &Commands) -> bool {
+    !matches!(
+        command,
+        Commands::Init(_) | Commands::Completions { .. } | Commands::Clear(_)
+    )
 }
 
 async fn handle_init(yes: bool) -> Result<()> {
@@ -490,17 +534,20 @@ async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -
             channel,
             previous: _,
             release_tag,
+            installed_version,
             installed_path,
         }) => {
             match channel {
                 ReleaseChannel::Stable => println!(
                     "{}",
-                    colors::green(&format!("Upgraded shine from {current} to {release_tag}."))
+                    colors::green(&format!(
+                        "Upgraded shine from {current} to {installed_version}."
+                    ))
                 ),
                 ReleaseChannel::Preview => println!(
                     "{}",
                     colors::green(&format!(
-                        "Installed shine preview from {release_tag} over {current}."
+                        "Installed shine preview from {current} to {installed_version} ({release_tag})."
                     ))
                 ),
             }
@@ -966,6 +1013,18 @@ mod tests {
             cli.command,
             Commands::Upgrade(UpgradeCommand { verbose: true })
         ));
+
+        let cli = Cli::try_parse_from(["shine", "clear"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Clear(ClearCommand { dry_run: false })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "clear", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Clear(ClearCommand { dry_run: true })
+        ));
     }
 
     #[test]
@@ -1002,6 +1061,21 @@ mod tests {
             cli.command,
             Commands::Init(InitCommand { yes: true })
         ));
+    }
+
+    #[test]
+    fn runtime_schema_warning_is_skipped_for_lifecycle_commands() {
+        let init = Commands::Init(InitCommand { yes: false });
+        let completions = Commands::Completions {
+            shell: CompletionShell::Bash,
+        };
+        let clear = Commands::Clear(ClearCommand { dry_run: false });
+        let list = Commands::List;
+
+        assert!(!should_warn_runtime_schema(&init));
+        assert!(!should_warn_runtime_schema(&completions));
+        assert!(!should_warn_runtime_schema(&clear));
+        assert!(should_warn_runtime_schema(&list));
     }
 
     #[test]
@@ -1051,6 +1125,61 @@ mod tests {
             Commands::App {
                 command: AppCommands::Init { force: true }
             }
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_sys_init_options() {
+        let cli = Cli::try_parse_from(["shine", "sys", "init"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Init {
+                    preset: None,
+                    dry_run: false
+                }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "init", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Init {
+                    preset: None,
+                    dry_run: true
+                }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "init", "--preset", "recommended"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Init {
+                    preset: Some(ref preset),
+                    dry_run: false
+                }
+            } if preset == "recommended"
+        ));
+
+        let cli = Cli::try_parse_from([
+            "shine",
+            "sys",
+            "init",
+            "--preset",
+            "recommended",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Init {
+                    preset: Some(ref preset),
+                    dry_run: true
+                }
+            } if preset == "recommended"
         ));
     }
 

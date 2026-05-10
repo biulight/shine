@@ -1,1 +1,30 @@
-description = "Initialize Ubuntu system: installs Neovim (v0.10+), AstroNvim, Atuin, and Yazi."
+description = "Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, Yazi, and ZeroTier setup steps."
+default_profile = "recommended"
+
+[[items]]
+id = "neovim"
+label = "Neovim"
+description = "Install the latest stable Neovim release (v0.10+)."
+
+[[items]]
+id = "astronvim"
+label = "AstroNvim"
+description = "Install the AstroNvim template into ~/.config/nvim."
+
+[[items]]
+id = "atuin"
+label = "Atuin"
+description = "Install the Atuin shell history sync client."
+
+[[items]]
+id = "yazi"
+label = "Yazi"
+description = "Install Yazi plus its preview/runtime dependencies."
+
+[[items]]
+id = "zerotier"
+label = "ZeroTier"
+description = "Install the ZeroTier Linux client for optional private network access."
+
+[profiles.recommended]
+items = ["neovim", "astronvim", "atuin", "yazi"]

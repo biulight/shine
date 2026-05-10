@@ -1,8 +1,8 @@
 # shine
 
-A fast Rust CLI tool for managing shell environment presets.
+A Rust CLI for managing shell presets, app configs, and system bootstrap presets.
 
-`shine` embeds reusable shell scripts (proxy setup, etc.) into its binary and installs them to a predictable location (`~/.shine/`), creating symlinks in `~/.shine/bin/` so you can add one directory to your `PATH` and gain instant access to all managed scripts.
+`shine` bundles reusable shell scripts, app configuration presets, and OS bootstrap presets into a single binary. It installs managed assets under `~/.shine/`, links shell commands into `~/.shine/bin/`, and can also copy app config files to their final destinations.
 
 ## Features
 
@@ -164,14 +164,35 @@ Lists the built-in OS bootstrap presets and marks the current platform with `▶
 
 ```bash
 shine sys init
+shine sys init --preset recommended
 shine sys init --dry-run
 ```
 
-`shine sys init` detects the current OS and runs `presets/sys/<os>/init.sh`.
+`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs `presets/sys/<os>/init.sh <item>...`.
+
+- In a TTY, `shine sys init` opens an interactive multi-select with defaults taken from the preset's `default_profile`.
+- `shine sys init --preset <PROFILE>` skips the prompt and applies that named profile directly.
+- Without a TTY, `shine sys init` falls back to `default_profile`.
+- `shine sys init --dry-run` prints the resolved items, exact bash invocation, and script content without executing anything.
+
+System init presets use this metadata shape:
+
+```toml
+description = "Initialize Ubuntu system with selectable setup steps."
+default_profile = "recommended"
+
+[[items]]
+id = "neovim"
+label = "Neovim"
+description = "Install the latest stable Neovim release."
+
+[profiles.recommended]
+items = ["neovim"]
+```
 
 Current built-in presets:
 
-- `ubuntu` — installs Neovim, AstroNvim, Atuin, and Yazi. The Yazi step installs the latest official `.deb`, common preview/runtime dependencies, and an `fd` compatibility symlink on Debian/Ubuntu systems.
+- `ubuntu` — offers selectable Neovim, AstroNvim, Atuin, and Yazi steps. The `recommended` profile includes all four. The Yazi step installs the latest official `.deb`, common preview/runtime dependencies, and an `fd` compatibility symlink on Debian/Ubuntu systems.
 - `macos` — placeholder preset, not implemented yet.
 
 ### Show app preset details
@@ -216,7 +237,7 @@ When `shine.toml` defines `files`, only those entries are installed. When it omi
 
 #### File transforms
 
-A `[[files]]` entry may declare a `transform` to process the source file before it is written to the destination. Use `target` to rename the file at the destination if the transform changes the format:
+A `[[files]]` entry may declare a `transforms` pipeline to process the source file before it is written to the destination. Use `target` to rename the file at the destination if a transform changes the format:
 
 ```toml
 description = "Docker daemon configuration"
@@ -226,10 +247,10 @@ dest = "/etc/docker"
 source      = "daemon.jsonc"
 target      = "daemon.json"
 description = "Docker daemon options"
-transform   = "jsonc-to-json"
+transforms  = ["jsonc-to-json"]
 ```
 
-`shine install` output shows the transform step:
+`shine app install` output shows the transform step:
 
 ```
   ✓  daemon.jsonc  [jsonc-to-json]  →  /etc/docker/daemon.json
@@ -245,11 +266,13 @@ Shell scripts that opt into template substitution with `# shine-template: true` 
 |---|---|---|---|
 | `jsonc-to-json` | `.jsonc` | `.json` | Strip `//` and `/* */` comments, trailing commas; emit canonical JSON |
 
-For a pipeline of transforms, use the `transforms` array instead:
+Use the same `transforms` array for single-step or multi-step pipelines:
 
 ```toml
 transforms = ["jsonc-to-json"]
 ```
+
+For backward compatibility, `transform = "jsonc-to-json"` is also accepted for a single transform, but new presets should prefer `transforms = [...]`.
 
 If no `shine.toml` exists, `shine` falls back to the legacy file-level rules: a preset file may start with a `shine-dest:` annotation for an explicit absolute target after `~` expansion. Without that annotation, `shine` installs to:
 
@@ -406,7 +429,7 @@ shine upgrade       # force-update installed shell and app configs
 shine upgrade --verbose  # include env-template check details
 ```
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.21.1+preview.abc1234`, while stable binaries continue to report `0.21.1`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.21.4+preview.abc1234`, while stable binaries continue to report `0.21.4`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -416,7 +439,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.21.1 sh install.sh
+SHINE_VERSION=0.21.4 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Initialize Ubuntu system: installs Neovim (v0.10+), AstroNvim, Atuin, and Yazi.
+# Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, Yazi, and ZeroTier steps.
 set -euo pipefail
 
 ARCH=$(uname -m)
@@ -122,9 +122,50 @@ install_yazi() {
     echo "Yazi installed ($(yazi --version | head -1))."
 }
 
-install_neovim
-install_astronvim
-install_atuin
-install_yazi
+# --- ZeroTier ---
 
-echo "Done."
+install_zerotier() {
+    if command -v zerotier-cli &>/dev/null || command -v zerotier-one &>/dev/null; then
+        if command -v zerotier-cli &>/dev/null; then
+            echo "ZeroTier: already installed ($(zerotier-cli -v))."
+        else
+            echo "ZeroTier: already installed."
+        fi
+        return
+    fi
+
+    echo "Installing ZeroTier..."
+    curl -s https://install.zerotier.com | sudo bash
+
+    echo "ZeroTier installed."
+    echo "Next steps for custom planet/network setup:"
+    echo "  1. Replace the planet file under /var/lib/zerotier-one."
+    echo "  2. Restart the service: sudo service zerotier-one restart"
+    echo "  3. Join your network: sudo zerotier-cli join <NETWORK_ID>"
+    echo "  4. Approve the member in ZeroTier Central."
+    echo "  5. Verify peers: sudo zerotier-cli peers"
+    echo "     Look for a peer with role planet."
+}
+
+run_item() {
+    case "${1:-}" in
+        neovim) install_neovim ;;
+        astronvim) install_astronvim ;;
+        atuin) install_atuin ;;
+        yazi) install_yazi ;;
+        zerotier) install_zerotier ;;
+        "") return 0 ;;
+        *)
+            echo "Unknown sys init item: $1" >&2
+            return 1
+            ;;
+    esac
+}
+
+for item in "$@"; do
+    run_item "$item"
+done
+
+if [[ $# -gt 0 ]]; then
+    echo "Done."
+fi
