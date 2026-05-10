@@ -5,6 +5,18 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.21.4] — 2026-05-10
+
+### Bug Fixes
+
+- Fixed `shine self upgrade --channel preview` so it no longer reinstalls the binary when the installed preview build already matches the current `+preview.<shortsha>` version.
+
+### Docs
+
+- Updated the preview self-upgrade documentation to clarify that matching preview builds are treated as up to date.
+
+---
+
 ## [0.21.3] — 2026-05-09
 
 ### Features
