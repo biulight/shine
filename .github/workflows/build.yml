@@ -90,7 +90,7 @@ jobs:
           name: Preview
           body_path: PREVIEW_BODY.md
           prerelease: true
-          make_latest: "false"
+          make_latest: "legacy"
           overwrite_files: true
           fail_on_unmatched_files: true
           files: dist/**/*.tar.gz
