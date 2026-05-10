@@ -164,14 +164,35 @@ Lists the built-in OS bootstrap presets and marks the current platform with `▶
 
 ```bash
 shine sys init
+shine sys init --preset recommended
 shine sys init --dry-run
 ```
 
-`shine sys init` detects the current OS and runs `presets/sys/<os>/init.sh`.
+`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs `presets/sys/<os>/init.sh <item>...`.
+
+- In a TTY, `shine sys init` opens an interactive multi-select with defaults taken from the preset's `default_profile`.
+- `shine sys init --preset <PROFILE>` skips the prompt and applies that named profile directly.
+- Without a TTY, `shine sys init` falls back to `default_profile`.
+- `shine sys init --dry-run` prints the resolved items, exact bash invocation, and script content without executing anything.
+
+System init presets use this metadata shape:
+
+```toml
+description = "Initialize Ubuntu system with selectable setup steps."
+default_profile = "recommended"
+
+[[items]]
+id = "neovim"
+label = "Neovim"
+description = "Install the latest stable Neovim release."
+
+[profiles.recommended]
+items = ["neovim"]
+```
 
 Current built-in presets:
 
-- `ubuntu` — installs Neovim, AstroNvim, Atuin, and Yazi. The Yazi step installs the latest official `.deb`, common preview/runtime dependencies, and an `fd` compatibility symlink on Debian/Ubuntu systems.
+- `ubuntu` — offers selectable Neovim, AstroNvim, Atuin, and Yazi steps. The `recommended` profile includes all four. The Yazi step installs the latest official `.deb`, common preview/runtime dependencies, and an `fd` compatibility symlink on Debian/Ubuntu systems.
 - `macos` — placeholder preset, not implemented yet.
 
 ### Show app preset details

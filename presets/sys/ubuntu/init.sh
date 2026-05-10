@@ -1,5 +1,5 @@
 #!/bin/bash
-# Initialize Ubuntu system: installs Neovim (v0.10+), AstroNvim, Atuin, and Yazi.
+# Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, and Yazi steps.
 set -euo pipefail
 
 ARCH=$(uname -m)
@@ -122,9 +122,24 @@ install_yazi() {
     echo "Yazi installed ($(yazi --version | head -1))."
 }
 
-install_neovim
-install_astronvim
-install_atuin
-install_yazi
+run_item() {
+    case "${1:-}" in
+        neovim) install_neovim ;;
+        astronvim) install_astronvim ;;
+        atuin) install_atuin ;;
+        yazi) install_yazi ;;
+        "") return 0 ;;
+        *)
+            echo "Unknown sys init item: $1" >&2
+            return 1
+            ;;
+    esac
+}
 
-echo "Done."
+for item in "$@"; do
+    run_item "$item"
+done
+
+if [[ $# -gt 0 ]]; then
+    echo "Done."
+fi

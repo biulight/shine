@@ -7,6 +7,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [0.21.3] — 2026-05-09
 
+### Features
+
+- Added preset-driven `shine sys init` selection. System init presets can now define selectable items and named profiles in `presets/sys/<os>/shine.toml`, `shine sys init` offers an interactive multi-select in TTY sessions, and `shine sys init --preset <profile>` supports the same flow for scripts and automation.
+
 ### Bug Fixes
 
 - Fixed a deadlock edge case where a failed `shine self upgrade` (e.g. GitHub API unreachable) would leave the update cache intact, causing every subsequent command to be permanently blocked by the "newer patch release required" gate until the network recovered. The cache is now cleared on upgrade failure so the next invocation either re-checks live or proceeds silently when the network is still down.

@@ -291,7 +291,9 @@ async fn main() -> Result<()> {
         },
         Commands::Sys { command } => match command {
             SysCommands::List => Box::pin(sys::handle_list(&config)).await,
-            SysCommands::Init { dry_run } => Box::pin(sys::handle_init(&config, dry_run)).await,
+            SysCommands::Init { preset, dry_run } => {
+                Box::pin(sys::handle_init(&config, preset.as_deref(), dry_run)).await
+            }
         },
     }
 }
@@ -1120,6 +1122,61 @@ mod tests {
             Commands::App {
                 command: AppCommands::Init { force: true }
             }
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_sys_init_options() {
+        let cli = Cli::try_parse_from(["shine", "sys", "init"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Init {
+                    preset: None,
+                    dry_run: false
+                }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "init", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Init {
+                    preset: None,
+                    dry_run: true
+                }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "init", "--preset", "recommended"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Init {
+                    preset: Some(ref preset),
+                    dry_run: false
+                }
+            } if preset == "recommended"
+        ));
+
+        let cli = Cli::try_parse_from([
+            "shine",
+            "sys",
+            "init",
+            "--preset",
+            "recommended",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Init {
+                    preset: Some(ref preset),
+                    dry_run: true
+                }
+            } if preset == "recommended"
         ));
     }
 
