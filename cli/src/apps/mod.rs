@@ -1257,17 +1257,17 @@ mod tests {
         let light_theme = fs::read_to_string(dir.join(".config/ghostty/themes/shine-light"))
             .await
             .unwrap();
-        assert!(light_theme.contains("background = #f0f2f6"));
-        assert!(light_theme.contains("palette = 4=#1c64f2"));
-        assert!(light_theme.contains("cursor-color = #fc6008"));
+        assert!(light_theme.contains("background = #fdf6e3"));
+        assert!(light_theme.contains("palette = 4=#268bd2"));
+        assert!(light_theme.contains("cursor-color = #657b83"));
         assert!(light_theme.contains("background-image = /tmp/shine-light-wallpaper.png"));
 
         let dark_theme = fs::read_to_string(dir.join(".config/ghostty/themes/shine-dark"))
             .await
             .unwrap();
-        assert!(dark_theme.contains("background = #1a1a1a"));
-        assert!(dark_theme.contains("palette = 12=#84b4f8"));
-        assert!(dark_theme.contains("cursor-color = #f8b080"));
+        assert!(dark_theme.contains("background = #0f1610"));
+        assert!(dark_theme.contains("palette = 10=#18e000"));
+        assert!(dark_theme.contains("cursor-color = #73fa91"));
         assert!(dark_theme.contains("background-image = /tmp/shine-dark-wallpaper.png"));
 
         unsafe { std::env::remove_var("HOME") };
