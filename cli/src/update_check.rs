@@ -49,6 +49,7 @@ pub(crate) enum UpgradeResult {
     Upgraded {
         channel: ReleaseChannel,
         previous: Version,
+        previous_display: String,
         release_tag: String,
         installed_version: String,
         installed_path: PathBuf,
@@ -177,6 +178,7 @@ pub(crate) async fn upgrade_to_release(
     Ok(UpgradeResult::Upgraded {
         channel,
         previous: current,
+        previous_display: current_display.to_string(),
         release_tag: asset.release_tag,
         installed_version,
         installed_path: current_exe,

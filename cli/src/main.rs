@@ -533,24 +533,20 @@ async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -
         Ok(update_check::UpgradeResult::Upgraded {
             channel,
             previous: _,
+            previous_display,
             release_tag,
             installed_version,
             installed_path,
         }) => {
-            match channel {
-                ReleaseChannel::Stable => println!(
-                    "{}",
-                    colors::green(&format!(
-                        "Upgraded shine from {current} to {installed_version}."
-                    ))
-                ),
-                ReleaseChannel::Preview => println!(
-                    "{}",
-                    colors::green(&format!(
-                        "Installed shine preview from {current} to {installed_version} ({release_tag})."
-                    ))
-                ),
-            }
+            println!(
+                "{}",
+                colors::green(&format_self_upgrade_message(
+                    channel,
+                    &previous_display,
+                    &installed_version,
+                    &release_tag,
+                ))
+            );
             sync_self_install_dest(config, &installed_path).await;
         }
         Err(e) => {
@@ -560,6 +556,30 @@ async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -
     }
 
     Ok(())
+}
+
+fn format_self_upgrade_message(
+    channel: ReleaseChannel,
+    previous_display: &str,
+    installed_version: &str,
+    release_tag: &str,
+) -> String {
+    match channel {
+        ReleaseChannel::Stable => {
+            format!("Upgraded shine from {previous_display} to {installed_version}.")
+        }
+        ReleaseChannel::Preview => {
+            if previous_display.contains("+preview.") {
+                format!(
+                    "Updated shine preview from {previous_display} to {installed_version} ({release_tag})."
+                )
+            } else {
+                format!(
+                    "Installed shine preview {installed_version} over stable {previous_display} ({release_tag})."
+                )
+            }
+        }
+    }
 }
 
 async fn handle_config_upgrade(config: &Config, verbose: bool) -> Result<()> {
@@ -1025,6 +1045,40 @@ mod tests {
             cli.command,
             Commands::Clear(ClearCommand { dry_run: true })
         ));
+    }
+
+    #[test]
+    fn format_self_upgrade_message_handles_stable_channel() {
+        assert_eq!(
+            format_self_upgrade_message(ReleaseChannel::Stable, "0.21.3", "0.21.4", "v0.21.4",),
+            "Upgraded shine from 0.21.3 to 0.21.4."
+        );
+    }
+
+    #[test]
+    fn format_self_upgrade_message_handles_stable_to_preview_install() {
+        assert_eq!(
+            format_self_upgrade_message(
+                ReleaseChannel::Preview,
+                "0.21.3",
+                "0.21.4+preview.237a8a0",
+                "preview",
+            ),
+            "Installed shine preview 0.21.4+preview.237a8a0 over stable 0.21.3 (preview)."
+        );
+    }
+
+    #[test]
+    fn format_self_upgrade_message_handles_preview_to_preview_update() {
+        assert_eq!(
+            format_self_upgrade_message(
+                ReleaseChannel::Preview,
+                "0.21.4+preview.1111111",
+                "0.21.4+preview.237a8a0",
+                "preview",
+            ),
+            "Updated shine preview from 0.21.4+preview.1111111 to 0.21.4+preview.237a8a0 (preview)."
+        );
     }
 
     #[test]
