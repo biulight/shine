@@ -102,5 +102,7 @@ mod tests {
         assert_eq!(env.get("SOCKS5_PROXY_PORT"), Some("6153"));
         assert_eq!(env.get("PROXY_HOST"), Some("127.0.0.1"));
         assert_eq!(env.get("PROXY_NO_PROXY"), Some("localhost,127.0.0.1,::1"));
+        assert_eq!(env.get("GHOSTTY_BG_LIGHT"), Some(""));
+        assert_eq!(env.get("GHOSTTY_BG_DARK"), Some(""));
     }
 }

@@ -422,6 +422,35 @@ mod tests {
     }
 
     #[test]
+    fn embedded_ghostty_has_theme_files_with_template_transform() {
+        let categories = load_embedded_categories(Some("ghostty")).unwrap();
+        let ghostty = categories.iter().find(|c| c.name == "ghostty").unwrap();
+        assert!(ghostty.uses_metadata);
+        assert!(ghostty.has_explicit_files);
+        assert_eq!(
+            ghostty.destination_root.as_deref(),
+            Some("~/.config/ghostty")
+        );
+        assert_eq!(ghostty.files.len(), 3);
+
+        let light = ghostty
+            .files
+            .iter()
+            .find(|f| f.source_rel == std::path::Path::new("themes/shine-light"))
+            .unwrap();
+        assert_eq!(light.target_rel, std::path::Path::new("themes/shine-light"));
+        assert_eq!(light.transforms, vec!["template"]);
+
+        let dark = ghostty
+            .files
+            .iter()
+            .find(|f| f.source_rel == std::path::Path::new("themes/shine-dark"))
+            .unwrap();
+        assert_eq!(dark.target_rel, std::path::Path::new("themes/shine-dark"));
+        assert_eq!(dark.transforms, vec!["template"]);
+    }
+
+    #[test]
     fn unknown_transform_rejected_at_load() {
         let toml =
             b"dest = \"/tmp\"\n[[files]]\nsource = \"f\"\ntransform = \"no-such-transform\"\n";
