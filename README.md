@@ -576,7 +576,13 @@ HTTP_PROXY_PORT = "6152"
 SOCKS5_PROXY_PORT = "6153"
 PROXY_HOST = "127.0.0.1"
 PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
+GHOSTTY_BG_LIGHT = ""
+GHOSTTY_BG_DARK = ""
 ```
+
+Set `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK` to enable appearance-specific
+Ghostty wallpapers. Leaving them empty keeps the bundled Ghostty preset
+installed without a background image.
 
 For global overrides, place a flat `shine.env.toml` next to the global config at
 `~/.shine/shine.env.toml`. For project-local overrides, place a flat
@@ -608,6 +614,9 @@ PROXY_HOST = "127.0.0.1"
     │   │   └── .ideavimrc
     │   ├── ghostty/
     │   │   ├── config.ghostty
+    │   │   ├── themes/
+    │   │   │   ├── shine-dark
+    │   │   │   └── shine-light
     │   │   └── shine.toml
     │   ├── git/
     │   │   └── gitconfig

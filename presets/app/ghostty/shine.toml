@@ -1,2 +1,19 @@
 description = "Ghostty terminal configuration."
 dest = "~/.config/ghostty"
+
+[[files]]
+source = "config.ghostty"
+target = "config.ghostty"
+description = "Main Ghostty configuration."
+
+[[files]]
+source = "themes/shine-light"
+target = "themes/shine-light"
+description = "Light-mode Ghostty theme with optional background image."
+transforms = ["template"]
+
+[[files]]
+source = "themes/shine-dark"
+target = "themes/shine-dark"
+description = "Dark-mode Ghostty theme with optional background image."
+transforms = ["template"]

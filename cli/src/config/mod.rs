@@ -21,6 +21,8 @@ pub(crate) const DEFAULT_ENV_VARS: &[(&str, &str)] = &[
     ("SOCKS5_PROXY_PORT", "6153"),
     ("PROXY_HOST", "127.0.0.1"),
     ("PROXY_NO_PROXY", "localhost,127.0.0.1,::1"),
+    ("GHOSTTY_BG_LIGHT", ""),
+    ("GHOSTTY_BG_DARK", ""),
 ];
 
 pub(crate) fn default_env_map() -> BTreeMap<String, String> {

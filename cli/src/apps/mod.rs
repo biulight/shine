@@ -1210,6 +1210,66 @@ mod tests {
             dir.join(".config/ghostty").join("config.ghostty")
         );
 
+        let light_theme = ghostty
+            .files
+            .iter()
+            .find(|f| f.source_rel == std::path::Path::new("themes/shine-light"))
+            .unwrap();
+        let light_destination = resolve_install_destination(ghostty, light_theme, &config).unwrap();
+        assert_eq!(
+            light_destination,
+            dir.join(".config/ghostty").join("themes/shine-light")
+        );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn install_renders_ghostty_light_and_dark_background_images() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        let mut config = Config::new_for_test(&dir);
+        config.env.insert(
+            "GHOSTTY_BG_LIGHT".into(),
+            "/tmp/shine-light-wallpaper.png".into(),
+        );
+        config.env.insert(
+            "GHOSTTY_BG_DARK".into(),
+            "/tmp/shine-dark-wallpaper.png".into(),
+        );
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("ghostty".to_string()), false, false)
+            .await
+            .unwrap();
+
+        let config_text = fs::read_to_string(dir.join(".config/ghostty/config.ghostty"))
+            .await
+            .unwrap();
+        assert!(config_text.contains("theme = light:shine-light,dark:shine-dark"));
+
+        let light_theme = fs::read_to_string(dir.join(".config/ghostty/themes/shine-light"))
+            .await
+            .unwrap();
+        assert!(light_theme.contains("background = #fdf6e3"));
+        assert!(light_theme.contains("palette = 4=#268bd2"));
+        assert!(light_theme.contains("cursor-color = #657b83"));
+        assert!(light_theme.contains("background-image = /tmp/shine-light-wallpaper.png"));
+
+        let dark_theme = fs::read_to_string(dir.join(".config/ghostty/themes/shine-dark"))
+            .await
+            .unwrap();
+        assert!(dark_theme.contains("background = #0f1610"));
+        assert!(dark_theme.contains("palette = 10=#18e000"));
+        assert!(dark_theme.contains("cursor-color = #73fa91"));
+        assert!(dark_theme.contains("background-image = /tmp/shine-dark-wallpaper.png"));
+
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
