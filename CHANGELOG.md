@@ -5,6 +5,22 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.23.0] — 2026-05-12
+
+### Features
+
+- Changed `shine info <target>` to show metadata and status by default, with `--verbose` preserving the previous full content output.
+
+### Bug Fixes
+
+- Collapsed the bundled Ghostty app preset to a single `ghostty` row in list and status output while still installing its config and theme files.
+
+### Docs
+
+- Updated README examples for the new `shine info --verbose` behavior and the aggregated Ghostty app listing.
+
+---
+
 ## [0.22.0] — 2026-05-12
 
 ### Features
