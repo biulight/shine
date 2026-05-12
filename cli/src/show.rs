@@ -47,7 +47,7 @@ struct ShellShowFile {
     status: &'static str,
 }
 
-pub(crate) async fn handle_show(config: &Config, target: &str) -> Result<()> {
+pub(crate) async fn handle_show(config: &Config, target: &str, verbose: bool) -> Result<()> {
     crate::config::print_presets_note(config);
     let app_files = collect_app_files(config).await?;
     let shell_files = collect_shell_files(config).await?;
@@ -77,7 +77,7 @@ pub(crate) async fn handle_show(config: &Config, target: &str) -> Result<()> {
                     if index > 0 {
                         println!();
                     }
-                    print_app_file(config, file).await?;
+                    print_app_file(config, file, verbose).await?;
                 }
             }
             ShowRef::AppFile { category, source } => {
@@ -85,7 +85,7 @@ pub(crate) async fn handle_show(config: &Config, target: &str) -> Result<()> {
                     .iter()
                     .find(|f| f.category.name == category && f.file.source_rel == source)
                     .ok_or_else(|| anyhow::anyhow!("installed app config not found"))?;
-                print_app_file(config, file).await?;
+                print_app_file(config, file, verbose).await?;
             }
             ShowRef::ShellCategory(category) => {
                 let mut files: Vec<_> = shell_files
@@ -98,7 +98,7 @@ pub(crate) async fn handle_show(config: &Config, target: &str) -> Result<()> {
                     if index > 0 {
                         println!();
                     }
-                    print_shell_file(file).await?;
+                    print_shell_file(file, verbose).await?;
                 }
             }
             ShowRef::ShellFile { category, command } => {
@@ -106,7 +106,7 @@ pub(crate) async fn handle_show(config: &Config, target: &str) -> Result<()> {
                     .iter()
                     .find(|f| f.category.name == category && f.file.command_name == command)
                     .ok_or_else(|| anyhow::anyhow!("installed shell preset not found"))?;
-                print_shell_file(file).await?;
+                print_shell_file(file, verbose).await?;
             }
         }
     }
@@ -325,7 +325,7 @@ fn ambiguity(target: &str, matches: Vec<&TargetCandidate>) -> Result<Vec<ShowRef
     bail!("ambiguous info target '{target}'. Use one of: {choices}");
 }
 
-async fn print_app_file(config: &Config, item: &AppShowFile) -> Result<()> {
+async fn print_app_file(config: &Config, item: &AppShowFile, verbose: bool) -> Result<()> {
     let label = fallback_app_label(&item.category, &item.file);
     let source_path = config
         .presets_dir()
@@ -363,10 +363,13 @@ async fn print_app_file(config: &Config, item: &AppShowFile) -> Result<()> {
             println!("{}       {}", colors::dim("Backup"), backup.display());
         }
     }
-    print_file_content(&item.destination, "Content").await
+    if verbose {
+        print_file_content(&item.destination, "Content").await?;
+    }
+    Ok(())
 }
 
-async fn print_shell_file(item: &ShellShowFile) -> Result<()> {
+async fn print_shell_file(item: &ShellShowFile, verbose: bool) -> Result<()> {
     let label = format!("{}/{}", item.category.name, item.file.command_name);
     println!("{}", colors::bold(&format!("Shell Preset: {label}")));
     if let Some(desc) = item.file.description.first() {
@@ -407,7 +410,10 @@ async fn print_shell_file(item: &ShellShowFile) -> Result<()> {
             item.rendered_path.display()
         );
     }
-    print_file_content(&content_path, "Content").await
+    if verbose {
+        print_file_content(&content_path, "Content").await?;
+    }
+    Ok(())
 }
 
 async fn print_file_content(path: &Path, heading: &str) -> Result<()> {
