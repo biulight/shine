@@ -5,6 +5,23 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.22.0] — 2026-05-12
+
+### Features
+
+- Expanded the bundled `ghostty` app preset with paired `shine-light` and `shine-dark` themes, including optional background-image templating via `shine env`.
+- Refined the default Ghostty preset styling by switching the shipped theme palette to Solarized and Alien Blood inspired variants.
+
+### Bug Fixes
+
+- Clarified `shine self upgrade --channel preview` status messaging when replacing a stable install with a preview build.
+
+### Docs
+
+- Updated the README release examples and Ghostty preset documentation for the new version and bundled theme files.
+
+---
+
 ## [0.21.4] — 2026-05-10
 
 ### Bug Fixes

@@ -429,7 +429,7 @@ shine upgrade       # force-update installed shell and app configs
 shine upgrade --verbose  # include env-template check details
 ```
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.21.4+preview.abc1234`, while stable binaries continue to report `0.21.4`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.22.0+preview.abc1234`, while stable binaries continue to report `0.22.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -439,11 +439,21 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.21.4 sh install.sh
+SHINE_VERSION=0.22.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
 ## Bundled Presets
+
+### app/ghostty
+
+The bundled Ghostty preset installs a main `config.ghostty` plus paired `shine-light` and `shine-dark` themes under `~/.config/ghostty/themes/`. The default config uses automatic light/dark theme switching:
+
+```text
+theme = light:shine-light,dark:shine-dark
+```
+
+Set `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK` with `shine env set` if you want the bundled themes to render a background image path during install or `shine upgrade`.
 
 ### shell/proxy — `setproxy` / `usetproxy`
 
