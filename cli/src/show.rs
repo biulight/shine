@@ -490,6 +490,7 @@ mod tests {
                 description: None,
                 destination_root: Some("~/.config".to_string()),
                 files: vec![],
+                list_mode: crate::apps::AppListMode::Files,
                 uses_metadata: true,
                 has_explicit_files: true,
             },
