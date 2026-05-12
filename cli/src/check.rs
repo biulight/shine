@@ -1,6 +1,6 @@
 use crate::apps::{
-    AppCategory, AppManifest, apply_transforms, hash_content, resolve_install_destination,
-    source_hash_for_file,
+    AppCategory, AppListMode, AppManifest, apply_transforms, hash_content,
+    resolve_install_destination, source_hash_for_file,
 };
 use crate::colors;
 use crate::config::Config;
@@ -158,45 +158,10 @@ pub(crate) async fn build_app_rows(
     let mut rows: Vec<AppRow> = Vec::new();
 
     for cat in categories {
-        if cat.has_explicit_files {
+        if cat.has_explicit_files && cat.list_mode == AppListMode::Files {
             for file in &cat.files {
-                let (dest_opt, status) = match resolve_install_destination(cat, file, config) {
-                    Err(_) => (None, FileStatus::Missing),
-                    Ok(dest) => {
-                        let manifest_entry = manifest.find_by_dest(&dest);
-                        let status = match manifest_entry {
-                            None => FileStatus::NotInstalled,
-                            Some(entry) => {
-                                if !dest.exists() {
-                                    FileStatus::Missing
-                                } else {
-                                    match tokio::fs::read(&dest).await {
-                                        Err(_) => FileStatus::Missing,
-                                        Ok(dest_bytes) => {
-                                            let dest_hash = hash_content(&dest_bytes);
-                                            let manifest_hash = entry.content_hash;
-                                            if dest_hash != manifest_hash {
-                                                FileStatus::UserModified
-                                            } else {
-                                                let source_hash = source_hash_for_file(
-                                                    config, cat, file, env_map,
-                                                )
-                                                .await;
-                                                match source_hash {
-                                                    Some(src) if src != manifest_hash => {
-                                                        FileStatus::UpdateAvail
-                                                    }
-                                                    _ => FileStatus::UpToDate,
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        };
-                        (Some(dest), status)
-                    }
-                };
+                let (dest_opt, status) =
+                    app_file_row_status(config, cat, file, &manifest, env_map).await;
 
                 let label = file
                     .display_name
@@ -229,45 +194,7 @@ pub(crate) async fn build_app_rows(
             let mut file_statuses: Vec<FileStatus> = Vec::new();
 
             for file in &cat.files {
-                let dest = match resolve_install_destination(cat, file, config) {
-                    Ok(d) => d,
-                    Err(_) => {
-                        file_statuses.push(FileStatus::Missing);
-                        continue;
-                    }
-                };
-
-                let manifest_entry = manifest.find_by_dest(&dest);
-
-                let status = match manifest_entry {
-                    None => FileStatus::NotInstalled,
-                    Some(entry) => {
-                        if !dest.exists() {
-                            FileStatus::Missing
-                        } else {
-                            match tokio::fs::read(&dest).await {
-                                Err(_) => FileStatus::Missing,
-                                Ok(dest_bytes) => {
-                                    let dest_hash = hash_content(&dest_bytes);
-                                    let manifest_hash = entry.content_hash;
-                                    if dest_hash != manifest_hash {
-                                        FileStatus::UserModified
-                                    } else {
-                                        let source_hash =
-                                            source_hash_for_file(config, cat, file, env_map).await;
-                                        match source_hash {
-                                            Some(src) if src != manifest_hash => {
-                                                FileStatus::UpdateAvail
-                                            }
-                                            _ => FileStatus::UpToDate,
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                };
-
+                let (_, status) = app_file_row_status(config, cat, file, &manifest, env_map).await;
                 file_statuses.push(status);
             }
 
@@ -340,10 +267,53 @@ pub(crate) async fn build_app_rows(
     Ok(rows)
 }
 
+async fn app_file_row_status(
+    config: &Config,
+    cat: &AppCategory,
+    file: &crate::apps::AppFile,
+    manifest: &AppManifest,
+    env: &BTreeMap<String, String>,
+) -> (Option<std::path::PathBuf>, FileStatus) {
+    match resolve_install_destination(cat, file, config) {
+        Err(_) => (None, FileStatus::Missing),
+        Ok(dest) => {
+            let status = match manifest.find_by_dest(&dest) {
+                None => FileStatus::NotInstalled,
+                Some(entry) => {
+                    if !dest.exists() {
+                        FileStatus::Missing
+                    } else {
+                        match tokio::fs::read(&dest).await {
+                            Err(_) => FileStatus::Missing,
+                            Ok(dest_bytes) => {
+                                let dest_hash = hash_content(&dest_bytes);
+                                let manifest_hash = entry.content_hash;
+                                if dest_hash != manifest_hash {
+                                    FileStatus::UserModified
+                                } else {
+                                    match source_hash_for_file(config, cat, file, env).await {
+                                        Some(src) if src != manifest_hash => {
+                                            FileStatus::UpdateAvail
+                                        }
+                                        _ => FileStatus::UpToDate,
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            (Some(dest), status)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apps::AppFile;
     use crate::config::Config;
+    use std::path::PathBuf;
     use tokio::fs;
 
     async fn make_temp_dir() -> std::path::PathBuf {
@@ -439,6 +409,49 @@ mod tests {
 
         assert_eq!(row.status_sym, "↑");
         assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn category_list_mode_aggregates_explicit_app_files() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let category = AppCategory {
+            name: "ghostty".to_string(),
+            description: Some("Ghostty terminal configuration.".to_string()),
+            destination_root: Some(dir.join(".config/ghostty").display().to_string()),
+            files: vec![
+                AppFile {
+                    source_rel: PathBuf::from("config.ghostty"),
+                    target_rel: PathBuf::from("config.ghostty"),
+                    description: None,
+                    display_name: None,
+                    legacy_dest_annotation: None,
+                    transforms: vec![],
+                },
+                AppFile {
+                    source_rel: PathBuf::from("themes/shine-light"),
+                    target_rel: PathBuf::from("themes/shine-light"),
+                    description: None,
+                    display_name: None,
+                    legacy_dest_annotation: None,
+                    transforms: vec!["template".to_string()],
+                },
+            ],
+            list_mode: AppListMode::Category,
+            uses_metadata: true,
+            has_explicit_files: true,
+        };
+
+        let rows = build_app_rows(&config, &[category]).await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "ghostty");
+        assert_eq!(rows[0].dest.as_deref(), Some("~/.config/ghostty"));
+        assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

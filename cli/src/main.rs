@@ -60,11 +60,14 @@ enum Commands {
     },
     /// List installed shell presets and app configs
     List,
-    /// Show the full content and details for an installed config or shell preset
+    /// Show details for an installed config or shell preset
     Info {
         /// Installed item to inspect (e.g. git, starship, proxy, setproxy)
         #[arg(value_name = "TARGET")]
         target: String,
+        /// Also print the installed or rendered file content
+        #[arg(long)]
+        verbose: bool,
     },
     /// Copy built-in presets to a directory for local customization
     Export(ExportCommand),
@@ -255,7 +258,9 @@ async fn main() -> Result<()> {
         }
         Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
         Commands::List => Box::pin(list::handle_list(&config)).await,
-        Commands::Info { target } => Box::pin(show::handle_show(&config, &target)).await,
+        Commands::Info { target, verbose } => {
+            Box::pin(show::handle_show(&config, &target, verbose)).await
+        }
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
@@ -1137,7 +1142,13 @@ mod tests {
         let cli = Cli::try_parse_from(["shine", "info", "setproxy"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Info { target } if target == "setproxy"
+            Commands::Info { target, verbose: false } if target == "setproxy"
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "info", "setproxy", "--verbose"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Info { target, verbose: true } if target == "setproxy"
         ));
     }
 

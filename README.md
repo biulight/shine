@@ -17,7 +17,7 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 - **Dry-run support** — preview any destructive operation before it runs
 - **TOML config** — `~/.shine/config.toml` with comment preservation on updates
 - **App preset installer** — install managed config files like `~/.gitconfig`, `~/.config/starship/starship.toml`, or `~/.config/ghostty/config.ghostty`
-- **Installed content inspection** — `shine info <target>` prints metadata and full content for installed app configs and shell presets
+- **Installed content inspection** — `shine info <target>` prints metadata for installed app configs and shell presets; add `--verbose` for full content
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
 - **Multi-shell support** — bash, zsh, fish
 - **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
@@ -317,7 +317,7 @@ Shell Presets
 
 App Configs
   git       →  ~/.gitconfig
-  ghostty   →  ~/.config/ghostty/config.ghostty
+  ghostty   →  ~/.config/ghostty
   starship  →  ~/.config/starship/starship.toml
 ```
 
@@ -330,16 +330,17 @@ shine info git
 shine info starship
 shine info proxy
 shine info setproxy
+shine info git --verbose
 ```
 
-Shows metadata and the full installed content for a managed app config or shell preset. The target is matched against installed categories, command names, display names, source filenames, and destination basenames. If a short target is ambiguous, use the canonical form shown in the error:
+Shows metadata and status for a managed app config or shell preset. Add `--verbose` to also print the installed or rendered file content. The target is matched against installed categories, command names, display names, source filenames, and destination basenames. If a short target is ambiguous, use the canonical form shown in the error:
 
 ```bash
 shine info app/git
 shine info shell/proxy/setproxy
 ```
 
-For app configs, `shine info` reads the installed destination file. For shell presets, it reads the effective script target, including rendered template scripts under `~/.shine/rendered/` when applicable.
+For app configs, `shine info --verbose` reads the installed destination file. For shell presets, it reads the effective script target, including rendered template scripts under `~/.shine/rendered/` when applicable.
 
 ### Update status and release check
 
@@ -429,7 +430,7 @@ shine upgrade       # force-update installed shell and app configs
 shine upgrade --verbose  # include env-template check details
 ```
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.21.4+preview.abc1234`, while stable binaries continue to report `0.21.4`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.23.0+preview.abc1234`, while stable binaries continue to report `0.23.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -439,11 +440,21 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.21.4 sh install.sh
+SHINE_VERSION=0.23.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
 ## Bundled Presets
+
+### app/ghostty
+
+The bundled Ghostty preset installs a main `config.ghostty` plus paired `shine-light` and `shine-dark` themes under `~/.config/ghostty/themes/`. The default config uses automatic light/dark theme switching:
+
+```text
+theme = light:shine-light,dark:shine-dark
+```
+
+Set `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK` with `shine env set` if you want the bundled themes to render a background image path during install or `shine upgrade`.
 
 ### shell/proxy — `setproxy` / `usetproxy`
 

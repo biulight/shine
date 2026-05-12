@@ -12,11 +12,18 @@ pub(crate) struct AppCategory {
     pub description: Option<String>,
     pub destination_root: Option<String>,
     pub files: Vec<AppFile>,
+    pub list_mode: AppListMode,
     #[allow(dead_code)]
     pub uses_metadata: bool,
     /// `true` when shine.toml has an explicit `[[files]]` section;
     /// `false` for auto-collected files and legacy categories.
     pub has_explicit_files: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum AppListMode {
+    Category,
+    Files,
 }
 
 #[derive(Debug, Clone)]
@@ -33,7 +40,24 @@ pub(crate) struct AppFile {
 struct CategoryToml {
     description: Option<String>,
     dest: String,
+    list_mode: Option<ListModeToml>,
     files: Option<Vec<FileToml>>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ListModeToml {
+    Category,
+    Files,
+}
+
+impl From<ListModeToml> for AppListMode {
+    fn from(value: ListModeToml) -> Self {
+        match value {
+            ListModeToml::Category => Self::Category,
+            ListModeToml::Files => Self::Files,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,6 +156,14 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
             description: parsed.description,
             destination_root: Some(parsed.dest),
             files,
+            list_mode: parsed
+                .list_mode
+                .map(Into::into)
+                .unwrap_or(if has_explicit_files {
+                    AppListMode::Files
+                } else {
+                    AppListMode::Category
+                }),
             uses_metadata: true,
             has_explicit_files,
         });
@@ -156,6 +188,7 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
                 }
             })
             .collect(),
+        list_mode: AppListMode::Category,
         uses_metadata: false,
         has_explicit_files: false,
     })
@@ -221,6 +254,14 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
             description: parsed.description,
             destination_root: Some(parsed.dest),
             files,
+            list_mode: parsed
+                .list_mode
+                .map(Into::into)
+                .unwrap_or(if has_explicit_files {
+                    AppListMode::Files
+                } else {
+                    AppListMode::Category
+                }),
             uses_metadata: true,
             has_explicit_files,
         });
@@ -247,6 +288,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
         description: None,
         destination_root: None,
         files,
+        list_mode: AppListMode::Category,
         uses_metadata: false,
         has_explicit_files: false,
     })
@@ -431,6 +473,7 @@ mod tests {
             ghostty.destination_root.as_deref(),
             Some("~/.config/ghostty")
         );
+        assert_eq!(ghostty.list_mode, AppListMode::Category);
         assert_eq!(ghostty.files.len(), 3);
 
         let light = ghostty

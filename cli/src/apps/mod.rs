@@ -6,7 +6,7 @@ mod transforms;
 
 pub(crate) use manifest::{AppEntry, AppManifest, hash_content};
 pub(crate) use metadata::{
-    AppCategory, AppFile, load_embedded_categories, load_installed_categories,
+    AppCategory, AppFile, AppListMode, load_embedded_categories, load_installed_categories,
 };
 pub(crate) use transforms::apply as apply_transforms;
 
@@ -222,7 +222,7 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
         println!("  {}{}{}{}", cat.name, name_pad, desc_part, file_count);
 
         // Per-file rows for explicit multi-file categories
-        if cat.has_explicit_files && cat.files.len() > 1 {
+        if cat.has_explicit_files && cat.list_mode == AppListMode::Files && cat.files.len() > 1 {
             for file in &cat.files {
                 let name = file.source_rel.display().to_string();
                 if let Some(desc) = &file.description {
