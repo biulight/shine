@@ -5,6 +5,19 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.23.1] — 2026-05-16
+
+### Bug Fixes
+
+- Fixed incorrect quick terminal keybind in the bundled Ghostty app preset.
+- Binary installation now reports a permission error instead of silently ignoring it.
+
+### Internal
+
+- Various code quality improvements: stable content hashing, path-traversal validation, dead code removal, and refactoring of duplicate shell template logic.
+
+---
+
 ## [0.23.0] — 2026-05-12
 
 ### Features
