@@ -26,11 +26,12 @@ pub(crate) struct AppEntry {
 }
 
 pub(crate) fn hash_content(bytes: &[u8]) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
+    // FNV-1a: stable across Rust versions, unlike DefaultHasher
+    const FNV_OFFSET: u64 = 14695981039346656037;
+    const FNV_PRIME: u64 = 1099511628211;
+    bytes.iter().fold(FNV_OFFSET, |hash, &byte| {
+        (hash ^ (byte as u64)).wrapping_mul(FNV_PRIME)
+    })
 }
 
 impl AppManifest {

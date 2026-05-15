@@ -168,6 +168,8 @@ async fn main() -> Result<()> {
         if config_dir.trim().is_empty() {
             bail!("--config-dir is required when using --config-dir")
         }
+        // SAFETY: called at program startup before the Tokio runtime spawns worker
+        // threads, so no concurrent env reads can race this write.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", config_dir) }
     }
 
@@ -287,11 +289,17 @@ async fn main() -> Result<()> {
         },
         Commands::Env { command } => match command {
             EnvCommands::Show => handle_env_show(&config).await,
-            EnvCommands::Set { key, value } => handle_env_set(&config, key, value).await,
-            EnvCommands::Get { key } => handle_env_get(&config, key).await,
-            EnvCommands::Decrypt { key } => handle_env_decrypt(&config, key).await,
+            EnvCommands::Set { key, value } => handle_env_set(&config, &key, &value).await,
+            EnvCommands::Get { key } => handle_env_get(&config, &key).await,
+            EnvCommands::Decrypt { key } => handle_env_decrypt(&config, &key).await,
             EnvCommands::Encrypt(cmd) => {
-                handle_env_encrypt(&config, cmd.recipient, cmd.set, cmd.from).await
+                handle_env_encrypt(
+                    &config,
+                    &cmd.recipient,
+                    cmd.set.as_deref(),
+                    cmd.from.as_deref(),
+                )
+                .await
             }
         },
         Commands::Sys { command } => match command {
@@ -380,9 +388,9 @@ async fn handle_env_show(config: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn handle_env_set(config: &Config, key: String, value: String) -> Result<()> {
+async fn handle_env_set(config: &Config, key: &str, value: &str) -> Result<()> {
     let mut env = env::EnvConfig::load_or_init(config).await?;
-    env.set(&key, &value);
+    env.set(key, value);
     env.save(config).await?;
     println!("{}", colors::green(&format!("set {key} = \"{value}\"")));
     println!(
@@ -392,9 +400,9 @@ async fn handle_env_set(config: &Config, key: String, value: String) -> Result<(
     Ok(())
 }
 
-async fn handle_env_get(config: &Config, key: String) -> Result<()> {
+async fn handle_env_get(config: &Config, key: &str) -> Result<()> {
     let env = env::EnvConfig::load_or_init(config).await?;
-    match env.get(&key) {
+    match env.get(key) {
         Some(v) => println!("{v}"),
         None => {
             eprintln!(
@@ -407,9 +415,9 @@ async fn handle_env_get(config: &Config, key: String) -> Result<()> {
     Ok(())
 }
 
-async fn handle_env_decrypt(config: &Config, key: String) -> Result<()> {
+async fn handle_env_decrypt(config: &Config, key: &str) -> Result<()> {
     let env = env::EnvConfig::load_or_init(config).await?;
-    let Some(value) = env.get(&key) else {
+    let Some(value) = env.get(key) else {
         bail!("{key} is not set in the active config [env]");
     };
     let plaintext = secret::decrypt_base64_gpg_secret(value)
@@ -421,15 +429,15 @@ async fn handle_env_decrypt(config: &Config, key: String) -> Result<()> {
 
 async fn handle_env_encrypt(
     config: &Config,
-    recipient: String,
-    set_key: Option<String>,
-    from_key: Option<String>,
+    recipient: &str,
+    set_key: Option<&str>,
+    from_key: Option<&str>,
 ) -> Result<()> {
     use std::io::Read as _;
 
     let plaintext = if let Some(key) = from_key {
         let env = env::EnvConfig::load_or_init(config).await?;
-        let Some(value) = env.get(&key) else {
+        let Some(value) = env.get(key) else {
             bail!("{key} is not set in the active config [env]");
         };
         value.as_bytes().to_vec()
@@ -440,12 +448,12 @@ async fn handle_env_encrypt(
             .context("reading secret from stdin")?;
         input
     };
-    let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, &recipient)
+    let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, recipient)
         .await
         .with_context(|| format!("encrypting secret for {recipient}"))?;
     if let Some(key) = set_key {
         let mut env = env::EnvConfig::load_or_init(config).await?;
-        env.set(&key, &encoded);
+        env.set(key, &encoded);
         env.save(config).await?;
         println!("{}", colors::green(&format!("set {key} = \"{encoded}\"")));
     } else {
@@ -894,7 +902,8 @@ fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> R
         let mode = std::fs::metadata(src)
             .map(|m| m.permissions().mode())
             .unwrap_or(0o755);
-        let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(mode));
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(mode))
+            .with_context(|| format!("failed to set permissions on {}", temp.display()))?;
     }
 
     match std::fs::rename(&temp, dest) {

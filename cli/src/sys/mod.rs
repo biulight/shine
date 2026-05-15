@@ -253,6 +253,9 @@ fn format_command_preview(script_path: &Path, item_ids: &[String]) -> String {
 }
 
 async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset> {
+    if os_id.contains('/') || os_id.contains('\\') || os_id.contains("..") {
+        bail!("invalid os id: {os_id:?}");
+    }
     let prefix = format!("sys/{os_id}");
     if !config.is_external_presets {
         crate::presets::extract_prefix(&prefix, config.presets_dir(), false).await?;

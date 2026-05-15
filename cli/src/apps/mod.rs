@@ -471,8 +471,9 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
     let mut updated = 0usize;
     let mut skipped = 0usize;
     let mut user_modified = 0usize;
+    let mut pending_upserts: Vec<AppEntry> = Vec::new();
 
-    for entry in manifest.entries.clone() {
+    for entry in &manifest.entries {
         let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
             eprintln!(
                 "  {} {}: invalid source, skipped",
@@ -598,10 +599,10 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
                     colors::dim("→"),
                     colors::dim(&entry.destination.display().to_string()),
                 );
-                manifest.upsert(AppEntry {
+                pending_upserts.push(AppEntry {
                     content_hash: hash,
                     uses_env: file.transforms.contains(&"template".to_string()),
-                    ..entry
+                    ..entry.clone()
                 });
                 updated += 1;
             }
@@ -615,6 +616,9 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
         }
     }
 
+    for upsert in pending_upserts {
+        manifest.upsert(upsert);
+    }
     manifest.save(config.shine_dir()).await?;
 
     Ok(AppUpgradeReport {
