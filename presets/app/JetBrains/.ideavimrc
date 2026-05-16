@@ -63,6 +63,7 @@ map gk <action>(MethodUp)
 map gp <action>(WebOpenInAction)
 map gi <action>(GotoImplementation)
 map ga '.
+map g/ <action>(FindInPath)
 
 " input in somewhere
 " 在标签内输入

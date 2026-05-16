@@ -389,11 +389,6 @@ impl Config {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn validate(&self) -> Result<()> {
-        todo!("Validate config")
-    }
-
     pub(crate) async fn save(&self) -> Result<()> {
         let config_to_save = self.clone();
         let config_path = self.resolve_config_path_for_save().await?;
@@ -426,7 +421,6 @@ impl Config {
             .and_then(|s| s.to_str())
             .unwrap_or_default();
         let temp_path = shine_dir.join(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()));
-        let _backup_path = shine_dir.join(format!("{file_name}.bak"));
 
         let mut temp_file = OpenOptions::new()
             .create_new(true)

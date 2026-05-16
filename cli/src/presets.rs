@@ -109,7 +109,9 @@ pub(crate) fn parse_template_annotation(content: &[u8]) -> bool {
 /// Collects consecutive lines starting with `# ` or bare `#` until the first
 /// non-comment, non-shebang line. Trailing empty description lines are trimmed.
 pub(crate) fn parse_script_description(content: &[u8]) -> Vec<String> {
-    let text = std::str::from_utf8(content).unwrap_or("");
+    let Ok(text) = std::str::from_utf8(content) else {
+        return vec![];
+    };
     let mut desc = Vec::new();
 
     for line in text.lines() {

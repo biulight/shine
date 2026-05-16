@@ -168,6 +168,8 @@ async fn main() -> Result<()> {
         if config_dir.trim().is_empty() {
             bail!("--config-dir is required when using --config-dir")
         }
+        // SAFETY: called at program startup before the Tokio runtime spawns worker
+        // threads, so no concurrent env reads can race this write.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", config_dir) }
     }
 
@@ -229,11 +231,12 @@ async fn main() -> Result<()> {
             AppCommands::Init { force } => apps::handle_init_template(force).await,
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
             AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
-            AppCommands::Install {
-                category,
-                force,
-                dry_run,
-            } => Box::pin(apps::handle_install(&config, category, dry_run, force)).await,
+            AppCommands::Install { category, dry_run } => {
+                Box::pin(apps::handle_install(&config, category, dry_run, false)).await
+            }
+            AppCommands::Reinstall { category, dry_run } => {
+                Box::pin(apps::handle_install(&config, category, dry_run, true)).await
+            }
             AppCommands::Uninstall {
                 category,
                 purge,
@@ -268,8 +271,11 @@ async fn main() -> Result<()> {
         Commands::Shell { command } => match command {
             ShellCommands::Init { force } => shells::handle_init_template(force).await,
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
-            ShellCommands::Install { category, force } => {
-                Box::pin(shells::handle_install(&config, category.as_deref(), force)).await
+            ShellCommands::Install { category } => {
+                Box::pin(shells::handle_install(&config, category.as_deref(), false)).await
+            }
+            ShellCommands::Reinstall { category } => {
+                Box::pin(shells::handle_install(&config, category.as_deref(), true)).await
             }
             ShellCommands::Uninstall {
                 category,
@@ -287,11 +293,17 @@ async fn main() -> Result<()> {
         },
         Commands::Env { command } => match command {
             EnvCommands::Show => handle_env_show(&config).await,
-            EnvCommands::Set { key, value } => handle_env_set(&config, key, value).await,
-            EnvCommands::Get { key } => handle_env_get(&config, key).await,
-            EnvCommands::Decrypt { key } => handle_env_decrypt(&config, key).await,
+            EnvCommands::Set { key, value } => handle_env_set(&config, &key, &value).await,
+            EnvCommands::Get { key } => handle_env_get(&config, &key).await,
+            EnvCommands::Decrypt { key } => handle_env_decrypt(&config, &key).await,
             EnvCommands::Encrypt(cmd) => {
-                handle_env_encrypt(&config, cmd.recipient, cmd.set, cmd.from).await
+                handle_env_encrypt(
+                    &config,
+                    &cmd.recipient,
+                    cmd.set.as_deref(),
+                    cmd.from.as_deref(),
+                )
+                .await
             }
         },
         Commands::Sys { command } => match command {
@@ -380,9 +392,9 @@ async fn handle_env_show(config: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn handle_env_set(config: &Config, key: String, value: String) -> Result<()> {
+async fn handle_env_set(config: &Config, key: &str, value: &str) -> Result<()> {
     let mut env = env::EnvConfig::load_or_init(config).await?;
-    env.set(&key, &value);
+    env.set(key, value);
     env.save(config).await?;
     println!("{}", colors::green(&format!("set {key} = \"{value}\"")));
     println!(
@@ -392,9 +404,9 @@ async fn handle_env_set(config: &Config, key: String, value: String) -> Result<(
     Ok(())
 }
 
-async fn handle_env_get(config: &Config, key: String) -> Result<()> {
+async fn handle_env_get(config: &Config, key: &str) -> Result<()> {
     let env = env::EnvConfig::load_or_init(config).await?;
-    match env.get(&key) {
+    match env.get(key) {
         Some(v) => println!("{v}"),
         None => {
             eprintln!(
@@ -407,9 +419,9 @@ async fn handle_env_get(config: &Config, key: String) -> Result<()> {
     Ok(())
 }
 
-async fn handle_env_decrypt(config: &Config, key: String) -> Result<()> {
+async fn handle_env_decrypt(config: &Config, key: &str) -> Result<()> {
     let env = env::EnvConfig::load_or_init(config).await?;
-    let Some(value) = env.get(&key) else {
+    let Some(value) = env.get(key) else {
         bail!("{key} is not set in the active config [env]");
     };
     let plaintext = secret::decrypt_base64_gpg_secret(value)
@@ -421,15 +433,15 @@ async fn handle_env_decrypt(config: &Config, key: String) -> Result<()> {
 
 async fn handle_env_encrypt(
     config: &Config,
-    recipient: String,
-    set_key: Option<String>,
-    from_key: Option<String>,
+    recipient: &str,
+    set_key: Option<&str>,
+    from_key: Option<&str>,
 ) -> Result<()> {
     use std::io::Read as _;
 
     let plaintext = if let Some(key) = from_key {
         let env = env::EnvConfig::load_or_init(config).await?;
-        let Some(value) = env.get(&key) else {
+        let Some(value) = env.get(key) else {
             bail!("{key} is not set in the active config [env]");
         };
         value.as_bytes().to_vec()
@@ -440,12 +452,12 @@ async fn handle_env_encrypt(
             .context("reading secret from stdin")?;
         input
     };
-    let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, &recipient)
+    let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, recipient)
         .await
         .with_context(|| format!("encrypting secret for {recipient}"))?;
     if let Some(key) = set_key {
         let mut env = env::EnvConfig::load_or_init(config).await?;
-        env.set(&key, &encoded);
+        env.set(key, &encoded);
         env.save(config).await?;
         println!("{}", colors::green(&format!("set {key} = \"{encoded}\"")));
     } else {
@@ -894,7 +906,8 @@ fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> R
         let mode = std::fs::metadata(src)
             .map(|m| m.permissions().mode())
             .unwrap_or(0o755);
-        let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(mode));
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(mode))
+            .with_context(|| format!("failed to set permissions on {}", temp.display()))?;
     }
 
     match std::fs::rename(&temp, dest) {
@@ -1191,6 +1204,51 @@ mod tests {
                 command: AppCommands::Init { force: true }
             }
         ));
+    }
+
+    #[test]
+    fn cli_accepts_shell_and_app_reinstall_commands() {
+        let cli = Cli::try_parse_from(["shine", "shell", "reinstall", "proxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Shell {
+                command: ShellCommands::Reinstall { category }
+            } if category.as_deref() == Some("proxy")
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "app", "reinstall", "ghostty"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Reinstall {
+                    category,
+                    dry_run: false
+                }
+            } if category.as_deref() == Some("ghostty")
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "app", "reinstall", "ghostty", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Reinstall {
+                    category,
+                    dry_run: true
+                }
+            } if category.as_deref() == Some("ghostty")
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_install_force_options() {
+        let err =
+            Cli::try_parse_from(["shine", "shell", "install", "proxy", "--force"]).unwrap_err();
+        assert!(err.to_string().contains("unexpected argument '--force'"));
+
+        let err =
+            Cli::try_parse_from(["shine", "app", "install", "ghostty", "--force"]).unwrap_err();
+        assert!(err.to_string().contains("unexpected argument '--force'"));
     }
 
     #[test]

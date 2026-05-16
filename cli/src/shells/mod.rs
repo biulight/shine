@@ -107,57 +107,15 @@ pub(crate) async fn handle_install(
     let categories = metadata::load_installed_categories(config, category).await?;
     // Build (template_source, rendered_dest) pairs for all scripts.
     // apply_template_to_scripts renders source → rendered_dir, never modifies presets_dir.
-    let script_pairs: Vec<ScriptTemplate> = categories
-        .iter()
-        .flat_map(|cat| {
-            cat.files.iter().map(|file| {
-                let source = config
-                    .presets_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
-                let rendered = config
-                    .rendered_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
-                ScriptTemplate {
-                    source_path: source,
-                    rendered_path: rendered,
-                    display_name: format!("{}/{}", cat.name, file.command_name),
-                }
-            })
-        })
-        .collect();
+    let script_pairs = build_script_pairs(config, &categories);
 
     // Apply env-variable substitution to scripts that opt in via `# shine-template: true`.
     // Output goes to rendered_dir; presets_dir templates are left untouched.
-    let _ = apply_template_to_scripts(config, &script_pairs).await?;
+    apply_template_to_scripts(config, &script_pairs).await?;
 
     // Symlinks point to the rendered file when one was produced, otherwise to the
     // raw source in presets_dir (non-template scripts).
-    let link_specs: Vec<_> = categories
-        .iter()
-        .flat_map(|cat| {
-            cat.files.iter().map(|file| {
-                let source = config
-                    .presets_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
-                let rendered = config
-                    .rendered_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
-                let effective = if rendered.exists() { rendered } else { source };
-                crate::bin_links::LinkSpec {
-                    source: effective,
-                    link_name: OsString::from(&file.command_name),
-                }
-            })
-        })
-        .collect();
+    let link_specs = build_link_specs(config, &categories);
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, force).await?;
 
@@ -277,55 +235,13 @@ pub(crate) async fn handle_upgrade_installed(
         });
     }
 
-    let script_pairs: Vec<ScriptTemplate> = categories
-        .iter()
-        .flat_map(|cat| {
-            cat.files.iter().map(|file| {
-                let source = config
-                    .presets_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
-                let rendered = config
-                    .rendered_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
-                ScriptTemplate {
-                    source_path: source,
-                    rendered_path: rendered,
-                    display_name: format!("{}/{}", cat.name, file.command_name),
-                }
-            })
-        })
-        .collect();
+    let script_pairs = build_script_pairs(config, &categories);
     let template_report = apply_template_to_scripts(config, &script_pairs).await?;
     for name in &template_report.updated {
         println!("  {}  {}", colors::symbol("✓"), name);
     }
 
-    let link_specs: Vec<_> = categories
-        .iter()
-        .flat_map(|cat| {
-            cat.files.iter().map(|file| {
-                let source = config
-                    .presets_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
-                let rendered = config
-                    .rendered_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
-                let effective = if rendered.exists() { rendered } else { source };
-                crate::bin_links::LinkSpec {
-                    source: effective,
-                    link_name: OsString::from(&file.command_name),
-                }
-            })
-        })
-        .collect();
+    let link_specs = build_link_specs(config, &categories);
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
 
@@ -589,6 +505,62 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
 
 /// For each script that declares `# shine-template: true`, read the template from
 /// `source_path` (presets_dir — never modified), substitute env variables from
+fn build_script_pairs(
+    config: &Config,
+    categories: &[metadata::ShellCategory],
+) -> Vec<ScriptTemplate> {
+    categories
+        .iter()
+        .flat_map(|cat| {
+            cat.files.iter().map(|file| {
+                let source = config
+                    .presets_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                let rendered = config
+                    .rendered_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                ScriptTemplate {
+                    source_path: source,
+                    rendered_path: rendered,
+                    display_name: format!("{}/{}", cat.name, file.command_name),
+                }
+            })
+        })
+        .collect()
+}
+
+fn build_link_specs(
+    config: &Config,
+    categories: &[metadata::ShellCategory],
+) -> Vec<crate::bin_links::LinkSpec> {
+    categories
+        .iter()
+        .flat_map(|cat| {
+            cat.files.iter().map(|file| {
+                let source = config
+                    .presets_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                let rendered = config
+                    .rendered_dir()
+                    .join("shell")
+                    .join(&cat.name)
+                    .join(&file.source_rel);
+                let effective = if rendered.exists() { rendered } else { source };
+                crate::bin_links::LinkSpec {
+                    source: effective,
+                    link_name: OsString::from(&file.command_name),
+                }
+            })
+        })
+        .collect()
+}
+
 /// `config.toml` `[env]`, and write the rendered result to `rendered_path`
 /// (rendered_dir — always shine-managed).  File permissions are copied from source.
 struct ScriptTemplate {

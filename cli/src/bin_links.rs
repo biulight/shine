@@ -97,7 +97,7 @@ pub(crate) async fn unlink_managed(
 /// - Conflicting entries (wrong target or regular file) are recorded and skipped
 ///   unless `overwrite` is true.
 /// - Two sources sharing the same filename → second is recorded as a conflict.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) async fn link_executables(
     bin_dir: &Path,
     sources: &[PathBuf],

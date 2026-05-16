@@ -41,9 +41,8 @@ pub(crate) async fn encrypt_gpg_secret_to_base64(
 }
 
 async fn ensure_command(name: &str) -> Result<()> {
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(format!("command -v {name} >/dev/null 2>&1"))
+    let status = Command::new("which")
+        .arg(name)
         .status()
         .await
         .with_context(|| format!("checking for {name}"))?;

@@ -95,6 +95,7 @@ Shell Preset Categories
 ```bash
 shine shell install            # install all categories
 shine shell install proxy      # install only the proxy category
+shine shell reinstall proxy    # overwrite managed files and links for proxy
 ```
 
 Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, etc.):
@@ -105,7 +106,7 @@ Bin Links      4 created
 ```
 
 Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` or `DEEPSEEK_API_KEY_GPG_SECRET` in the active env config before use.
-Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped.
+Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `reinstall` when you want to overwrite managed preset files, links, and the shell config entry.
 
 ### Uninstall shell presets
 
@@ -212,6 +213,7 @@ shine app install             # install all app categories
 shine app install ghostty     # install only one category
 shine app install starship    # install only one category
 shine app install --dry-run   # preview destination writes
+shine app reinstall ghostty   # overwrite managed files for one category
 ```
 
 `shine app install` first extracts bundled files to `~/.shine/presets/app/`, then copies them to their final destinations.
@@ -430,7 +432,7 @@ shine upgrade       # force-update installed shell and app configs
 shine upgrade --verbose  # include env-template check details
 ```
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.23.0+preview.abc1234`, while stable binaries continue to report `0.23.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.24.0+preview.abc1234`, while stable binaries continue to report `0.24.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -440,7 +442,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.23.0 sh install.sh
+SHINE_VERSION=0.24.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 

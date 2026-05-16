@@ -20,7 +20,7 @@ pub(crate) struct AppCategory {
     pub has_explicit_files: bool,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AppListMode {
     Category,
     Files,
@@ -83,6 +83,14 @@ fn resolve_transforms(file: &FileToml, context: &str) -> Result<Vec<String>> {
     };
     super::transforms::validate(&specs).with_context(|| format!("{context}: invalid transform"))?;
     Ok(specs)
+}
+
+fn default_list_mode(has_explicit_files: bool) -> AppListMode {
+    if has_explicit_files {
+        AppListMode::Files
+    } else {
+        AppListMode::Category
+    }
 }
 
 pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<AppCategory>> {
@@ -159,11 +167,7 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
             list_mode: parsed
                 .list_mode
                 .map(Into::into)
-                .unwrap_or(if has_explicit_files {
-                    AppListMode::Files
-                } else {
-                    AppListMode::Category
-                }),
+                .unwrap_or_else(|| default_list_mode(has_explicit_files)),
             uses_metadata: true,
             has_explicit_files,
         });
@@ -257,11 +261,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
             list_mode: parsed
                 .list_mode
                 .map(Into::into)
-                .unwrap_or(if has_explicit_files {
-                    AppListMode::Files
-                } else {
-                    AppListMode::Category
-                }),
+                .unwrap_or_else(|| default_list_mode(has_explicit_files)),
             uses_metadata: true,
             has_explicit_files,
         });

@@ -130,7 +130,14 @@ async fn collect_app_files(config: &Config) -> Result<Vec<AppShowFile>> {
         for file in &category.files {
             let destination = match resolve_install_destination(&category, file, config) {
                 Ok(dest) => dest,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!(
+                        "warning: skipping {}/{}: {e:#}",
+                        category.name,
+                        file.source_rel.display()
+                    );
+                    continue;
+                }
             };
             let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
                 continue;
@@ -462,7 +469,7 @@ async fn app_file_status(
     if !entry.destination.exists() {
         return FileStatus::Missing;
     }
-    match std::fs::read(&entry.destination) {
+    match tokio::fs::read(&entry.destination).await {
         Ok(bytes) if hash_content(&bytes) == entry.content_hash => {
             match source_hash_for_file(config, category, file, env).await {
                 Some(source_hash) if source_hash != entry.content_hash => FileStatus::UpdateAvail,
