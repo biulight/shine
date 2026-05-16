@@ -432,7 +432,7 @@ shine upgrade       # force-update installed shell and app configs
 shine upgrade --verbose  # include env-template check details
 ```
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.23.0+preview.abc1234`, while stable binaries continue to report `0.23.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.24.0+preview.abc1234`, while stable binaries continue to report `0.24.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -442,7 +442,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.23.0 sh install.sh
+SHINE_VERSION=0.24.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 

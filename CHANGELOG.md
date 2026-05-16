@@ -5,13 +5,21 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.24.0] — 2026-05-17
+
+### Features
+
+- Replaced forced preset installs with explicit `shine shell reinstall` and `shine app reinstall` commands.
+- Added an IdeaVim keybind for the JetBrains "Find in Path" action.
+
+---
+
 ## [0.23.1] — 2026-05-16
 
 ### Bug Fixes
 
 - Fixed incorrect quick terminal keybind in the bundled Ghostty app preset.
 - Binary installation now reports a permission error instead of silently ignoring it.
-- Replaced forced preset installs with explicit `shine shell reinstall` and `shine app reinstall` commands.
 
 ### Internal
 
