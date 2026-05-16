@@ -11,6 +11,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Fixed incorrect quick terminal keybind in the bundled Ghostty app preset.
 - Binary installation now reports a permission error instead of silently ignoring it.
+- Replaced forced preset installs with explicit `shine shell reinstall` and `shine app reinstall` commands.
 
 ### Internal
 

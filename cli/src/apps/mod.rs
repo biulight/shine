@@ -169,7 +169,7 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
         println!(
             "{}",
             colors::dim(&format!(
-                "Installed. Run `shine app install {category}` to reinstall."
+                "Installed. Run `shine app reinstall {category}` to reinstall."
             ))
         );
     } else {

@@ -17,9 +17,14 @@ pub enum ShellCommands {
         /// Run 'shine shell list' to see available categories.
         #[arg(value_name = "CATEGORY")]
         category: Option<String>,
-        /// Overwrite existing preset files, symlinks, and shell config entry
-        #[arg(long, short = 'f')]
-        force: bool,
+    },
+    /// Reinstall shell presets, overwriting managed files, symlinks, and shell config entry.
+    /// Run 'shine shell list' to see available categories.
+    Reinstall {
+        /// Preset category to reinstall (e.g. "proxy"). Reinstalls all if omitted.
+        /// Run 'shine shell list' to see available categories.
+        #[arg(value_name = "CATEGORY")]
+        category: Option<String>,
     },
     /// Uninstall shell presets and remove bin symlinks.
     /// Run 'shine shell list' to see installed categories.

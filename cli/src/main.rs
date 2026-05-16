@@ -231,11 +231,12 @@ async fn main() -> Result<()> {
             AppCommands::Init { force } => apps::handle_init_template(force).await,
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
             AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
-            AppCommands::Install {
-                category,
-                force,
-                dry_run,
-            } => Box::pin(apps::handle_install(&config, category, dry_run, force)).await,
+            AppCommands::Install { category, dry_run } => {
+                Box::pin(apps::handle_install(&config, category, dry_run, false)).await
+            }
+            AppCommands::Reinstall { category, dry_run } => {
+                Box::pin(apps::handle_install(&config, category, dry_run, true)).await
+            }
             AppCommands::Uninstall {
                 category,
                 purge,
@@ -270,8 +271,11 @@ async fn main() -> Result<()> {
         Commands::Shell { command } => match command {
             ShellCommands::Init { force } => shells::handle_init_template(force).await,
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
-            ShellCommands::Install { category, force } => {
-                Box::pin(shells::handle_install(&config, category.as_deref(), force)).await
+            ShellCommands::Install { category } => {
+                Box::pin(shells::handle_install(&config, category.as_deref(), false)).await
+            }
+            ShellCommands::Reinstall { category } => {
+                Box::pin(shells::handle_install(&config, category.as_deref(), true)).await
             }
             ShellCommands::Uninstall {
                 category,
@@ -1200,6 +1204,51 @@ mod tests {
                 command: AppCommands::Init { force: true }
             }
         ));
+    }
+
+    #[test]
+    fn cli_accepts_shell_and_app_reinstall_commands() {
+        let cli = Cli::try_parse_from(["shine", "shell", "reinstall", "proxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Shell {
+                command: ShellCommands::Reinstall { category }
+            } if category.as_deref() == Some("proxy")
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "app", "reinstall", "ghostty"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Reinstall {
+                    category,
+                    dry_run: false
+                }
+            } if category.as_deref() == Some("ghostty")
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "app", "reinstall", "ghostty", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Reinstall {
+                    category,
+                    dry_run: true
+                }
+            } if category.as_deref() == Some("ghostty")
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_install_force_options() {
+        let err =
+            Cli::try_parse_from(["shine", "shell", "install", "proxy", "--force"]).unwrap_err();
+        assert!(err.to_string().contains("unexpected argument '--force'"));
+
+        let err =
+            Cli::try_parse_from(["shine", "app", "install", "ghostty", "--force"]).unwrap_err();
+        assert!(err.to_string().contains("unexpected argument '--force'"));
     }
 
     #[test]
