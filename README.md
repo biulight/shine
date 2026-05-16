@@ -4,6 +4,8 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 
 `shine` bundles reusable shell scripts, app configuration presets, and OS bootstrap presets into a single binary. It installs managed assets under `~/.shine/`, links shell commands into `~/.shine/bin/`, and can also copy app config files to their final destinations.
 
+中文文档: [`docs/README.zh-CN.md`](docs/README.zh-CN.md)
+
 ## Features
 
 - **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
