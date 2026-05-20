@@ -65,6 +65,9 @@ enum Commands {
         /// Installed item to inspect (e.g. git, starship, proxy, setproxy)
         #[arg(value_name = "TARGET")]
         target: String,
+        /// Also print a unified diff against the expected content
+        #[arg(long)]
+        diff: bool,
         /// Also print the installed or rendered file content
         #[arg(long)]
         verbose: bool,
@@ -261,9 +264,11 @@ async fn main() -> Result<()> {
         }
         Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
         Commands::List => Box::pin(list::handle_list(&config)).await,
-        Commands::Info { target, verbose } => {
-            Box::pin(show::handle_show(&config, &target, verbose)).await
-        }
+        Commands::Info {
+            target,
+            diff,
+            verbose,
+        } => Box::pin(show::handle_show(&config, &target, diff, verbose)).await,
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
@@ -1155,13 +1160,42 @@ mod tests {
         let cli = Cli::try_parse_from(["shine", "info", "setproxy"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Info { target, verbose: false } if target == "setproxy"
+            Commands::Info {
+                target,
+                diff: false,
+                verbose: false
+            } if target == "setproxy"
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "info", "setproxy", "--diff"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Info {
+                target,
+                diff: true,
+                verbose: false
+            } if target == "setproxy"
         ));
 
         let cli = Cli::try_parse_from(["shine", "info", "setproxy", "--verbose"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Info { target, verbose: true } if target == "setproxy"
+            Commands::Info {
+                target,
+                diff: false,
+                verbose: true
+            } if target == "setproxy"
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "info", "setproxy", "--diff", "--verbose"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Info {
+                target,
+                diff: true,
+                verbose: true
+            } if target == "setproxy"
         ));
     }
 
