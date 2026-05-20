@@ -29,6 +29,10 @@ pub(crate) fn yellow(s: &str) -> String {
         .to_string()
 }
 
+pub(crate) fn red(s: &str) -> String {
+    s.if_supports_color(Stream::Stdout, |t| t.red()).to_string()
+}
+
 pub(crate) fn bold(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.bold())
         .to_string()

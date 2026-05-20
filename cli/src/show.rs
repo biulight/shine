@@ -1,6 +1,7 @@
 use crate::apps::{
     AppCategory, AppFile, AppManifest, hash_content, load_embedded_categories,
-    load_installed_categories, resolve_install_destination, source_hash_for_file,
+    load_installed_categories, resolve_install_destination, source_bytes_for_file,
+    source_hash_for_file,
 };
 use crate::check::FileStatus;
 use crate::colors;
@@ -9,6 +10,7 @@ use crate::env::EnvConfig;
 use crate::shells::metadata::load_installed_categories as load_installed_shells;
 use crate::shells::metadata::{ShellCategory, load_embedded_categories as load_embedded_shells};
 use anyhow::{Context, Result, bail};
+use similar::TextDiff;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -47,7 +49,12 @@ struct ShellShowFile {
     status: &'static str,
 }
 
-pub(crate) async fn handle_show(config: &Config, target: &str, verbose: bool) -> Result<()> {
+pub(crate) async fn handle_show(
+    config: &Config,
+    target: &str,
+    diff: bool,
+    verbose: bool,
+) -> Result<()> {
     crate::config::print_presets_note(config);
     let app_files = collect_app_files(config).await?;
     let shell_files = collect_shell_files(config).await?;
@@ -77,7 +84,7 @@ pub(crate) async fn handle_show(config: &Config, target: &str, verbose: bool) ->
                     if index > 0 {
                         println!();
                     }
-                    print_app_file(config, file, verbose).await?;
+                    print_app_file(config, file, diff, verbose).await?;
                 }
             }
             ShowRef::AppFile { category, source } => {
@@ -85,7 +92,7 @@ pub(crate) async fn handle_show(config: &Config, target: &str, verbose: bool) ->
                     .iter()
                     .find(|f| f.category.name == category && f.file.source_rel == source)
                     .ok_or_else(|| anyhow::anyhow!("installed app config not found"))?;
-                print_app_file(config, file, verbose).await?;
+                print_app_file(config, file, diff, verbose).await?;
             }
             ShowRef::ShellCategory(category) => {
                 let mut files: Vec<_> = shell_files
@@ -98,7 +105,7 @@ pub(crate) async fn handle_show(config: &Config, target: &str, verbose: bool) ->
                     if index > 0 {
                         println!();
                     }
-                    print_shell_file(file, verbose).await?;
+                    print_shell_file(config, file, diff, verbose).await?;
                 }
             }
             ShowRef::ShellFile { category, command } => {
@@ -106,7 +113,7 @@ pub(crate) async fn handle_show(config: &Config, target: &str, verbose: bool) ->
                     .iter()
                     .find(|f| f.category.name == category && f.file.command_name == command)
                     .ok_or_else(|| anyhow::anyhow!("installed shell preset not found"))?;
-                print_shell_file(file, verbose).await?;
+                print_shell_file(config, file, diff, verbose).await?;
             }
         }
     }
@@ -332,7 +339,12 @@ fn ambiguity(target: &str, matches: Vec<&TargetCandidate>) -> Result<Vec<ShowRef
     bail!("ambiguous info target '{target}'. Use one of: {choices}");
 }
 
-async fn print_app_file(config: &Config, item: &AppShowFile, verbose: bool) -> Result<()> {
+async fn print_app_file(
+    config: &Config,
+    item: &AppShowFile,
+    diff: bool,
+    verbose: bool,
+) -> Result<()> {
     let label = fallback_app_label(&item.category, &item.file);
     let source_path = config
         .presets_dir()
@@ -355,7 +367,7 @@ async fn print_app_file(config: &Config, item: &AppShowFile, verbose: bool) -> R
     println!(
         "{}       {}",
         colors::dim("Status"),
-        status_label(item.status)
+        colored_app_status(item.status)
     );
     if !item.file.transforms.is_empty() {
         println!(
@@ -370,13 +382,22 @@ async fn print_app_file(config: &Config, item: &AppShowFile, verbose: bool) -> R
             println!("{}       {}", colors::dim("Backup"), backup.display());
         }
     }
+    if diff {
+        let diff_output = app_diff_output(config, item).await?;
+        print_block("Diff", &item.destination, &diff_output);
+    }
     if verbose {
         print_file_content(&item.destination, "Content").await?;
     }
     Ok(())
 }
 
-async fn print_shell_file(item: &ShellShowFile, verbose: bool) -> Result<()> {
+async fn print_shell_file(
+    config: &Config,
+    item: &ShellShowFile,
+    diff: bool,
+    verbose: bool,
+) -> Result<()> {
     let label = format!("{}/{}", item.category.name, item.file.command_name);
     println!("{}", colors::bold(&format!("Shell Preset: {label}")));
     if let Some(desc) = item.file.description.first() {
@@ -395,7 +416,11 @@ async fn print_shell_file(item: &ShellShowFile, verbose: bool) -> Result<()> {
     if let Some(target) = &item.link_target {
         println!("{} {}", colors::dim("Link target"), target.display());
     }
-    println!("{}       {}", colors::dim("Status"), item.status);
+    println!(
+        "{}       {}",
+        colors::dim("Status"),
+        colored_shell_status(item.status)
+    );
     println!("{} {}", colors::dim("Needs source"), item.file.needs_source);
 
     let content_path = item
@@ -417,10 +442,26 @@ async fn print_shell_file(item: &ShellShowFile, verbose: bool) -> Result<()> {
             item.rendered_path.display()
         );
     }
+    if diff {
+        let diff_output = shell_diff_output(config, item, &content_path).await?;
+        print_block("Diff", &content_path, &diff_output);
+    }
     if verbose {
         print_file_content(&content_path, "Content").await?;
     }
     Ok(())
+}
+
+fn print_block(heading: &str, path: &Path, text: &str) {
+    println!();
+    println!(
+        "{}",
+        colors::dim(&format!("--- {heading}: {} ---", path.display()))
+    );
+    print!("{text}");
+    if !text.ends_with('\n') {
+        println!();
+    }
 }
 
 async fn print_file_content(path: &Path, heading: &str) -> Result<()> {
@@ -492,6 +533,183 @@ fn status_label(status: FileStatus) -> &'static str {
     }
 }
 
+fn status_sym(status: FileStatus) -> &'static str {
+    match status {
+        FileStatus::Missing => "!",
+        FileStatus::UserModified | FileStatus::Partial => "~",
+        FileStatus::UpdateAvail => "↑",
+        FileStatus::UpToDate => "✓",
+        FileStatus::NotInstalled => "✗",
+    }
+}
+
+fn colored_app_status(status: FileStatus) -> String {
+    colors::status_label(status_label(status), status_sym(status))
+}
+
+fn shell_status_sym(status: &str) -> &'static str {
+    match status {
+        "up-to-date" => "✓",
+        "update available" => "↑",
+        "preset present, bin symlink missing"
+        | "bin symlink present, script missing"
+        | "bin symlink present, preset missing" => "~",
+        "rendered script missing" => "!",
+        "not installed" => "✗",
+        _ => "~",
+    }
+}
+
+fn colored_shell_status(status: &str) -> String {
+    colors::status_label(status, shell_status_sym(status))
+}
+
+async fn app_diff_output(config: &Config, item: &AppShowFile) -> Result<String> {
+    let env = EnvConfig::load_or_init(config).await.ok();
+    let empty_map = BTreeMap::new();
+    let env_map = env.as_ref().map(|e| e.as_map()).unwrap_or(&empty_map);
+    let expected = match source_bytes_for_file(config, &item.category, &item.file, env_map).await {
+        Some(bytes) => bytes,
+        None => {
+            return Ok("Unable to render expected content from the active preset.\n".to_string());
+        }
+    };
+
+    let current = match tokio::fs::read(&item.destination).await {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(format!(
+                "Current file is missing: {}.\n",
+                item.destination.display()
+            ));
+        }
+        Err(err) => {
+            return Ok(format!(
+                "Unable to read current file {}: {err}\n",
+                item.destination.display()
+            ));
+        }
+    };
+
+    Ok(render_diff_or_note(
+        &current,
+        &expected,
+        &item.destination.display().to_string(),
+        &format!(
+            "expected: app/{}/{}",
+            item.category.name,
+            item.file.source_rel.display()
+        ),
+    ))
+}
+
+async fn shell_diff_output(
+    config: &Config,
+    item: &ShellShowFile,
+    current_path: &Path,
+) -> Result<String> {
+    let expected = match shell_expected_bytes(config, item).await? {
+        Some(bytes) => bytes,
+        None => {
+            return Ok(
+                "Unable to render expected shell content from the active preset.\n".to_string(),
+            );
+        }
+    };
+
+    let current = match tokio::fs::read(current_path).await {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(format!(
+                "Current script is missing: {}.\n",
+                current_path.display()
+            ));
+        }
+        Err(err) => {
+            return Ok(format!(
+                "Unable to read current script {}: {err}\n",
+                current_path.display()
+            ));
+        }
+    };
+
+    Ok(render_diff_or_note(
+        &current,
+        &expected,
+        &current_path.display().to_string(),
+        &format!(
+            "expected: shell/{}/{}",
+            item.category.name,
+            item.file.source_rel.display()
+        ),
+    ))
+}
+
+async fn shell_expected_bytes(config: &Config, item: &ShellShowFile) -> Result<Option<Vec<u8>>> {
+    let source = match tokio::fs::read(&item.source_path).await {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "reading shell preset source: {}",
+                    item.source_path.display()
+                )
+            });
+        }
+    };
+
+    if !crate::presets::parse_template_annotation(&source) {
+        return Ok(Some(source));
+    }
+
+    let env = EnvConfig::load_or_init(config).await?;
+    let rendered = crate::apps::apply_transforms(&["template".to_string()], &source, env.as_map())
+        .with_context(|| format!("rendering shell template: {}", item.source_path.display()))?;
+    Ok(Some(rendered))
+}
+
+fn render_diff_or_note(
+    current: &[u8],
+    expected: &[u8],
+    current_label: &str,
+    expected_label: &str,
+) -> String {
+    if current == expected {
+        return "No content differences.\n".to_string();
+    }
+
+    let current_text = String::from_utf8_lossy(current);
+    let expected_text = String::from_utf8_lossy(expected);
+    let unified = TextDiff::from_lines(current_text.as_ref(), expected_text.as_ref())
+        .unified_diff()
+        .context_radius(3)
+        .header(current_label, expected_label)
+        .to_string();
+    colorize_unified_diff(&unified)
+}
+
+fn colorize_unified_diff(diff: &str) -> String {
+    let mut out = String::new();
+    for line in diff.split_inclusive('\n') {
+        let colored =
+            if line.starts_with("@@") || line.starts_with("---") || line.starts_with("+++") {
+                colors::cyan(line.trim_end_matches('\n'))
+            } else if line.starts_with('+') && !line.starts_with("+++") {
+                colors::green(line.trim_end_matches('\n'))
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                colors::red(line.trim_end_matches('\n'))
+            } else {
+                line.trim_end_matches('\n').to_string()
+            };
+        out.push_str(&colored);
+        if line.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,6 +759,44 @@ mod tests {
             link_target: None,
             status: "up-to-date",
         }
+    }
+
+    #[test]
+    fn app_status_sym_matches_list_semantics() {
+        assert_eq!(status_sym(FileStatus::UpToDate), "✓");
+        assert_eq!(status_sym(FileStatus::UpdateAvail), "↑");
+        assert_eq!(status_sym(FileStatus::UserModified), "~");
+        assert_eq!(status_sym(FileStatus::Partial), "~");
+        assert_eq!(status_sym(FileStatus::Missing), "!");
+        assert_eq!(status_sym(FileStatus::NotInstalled), "✗");
+    }
+
+    #[test]
+    fn shell_status_sym_matches_list_semantics() {
+        assert_eq!(shell_status_sym("up-to-date"), "✓");
+        assert_eq!(shell_status_sym("update available"), "↑");
+        assert_eq!(shell_status_sym("preset present, bin symlink missing"), "~");
+        assert_eq!(shell_status_sym("bin symlink present, script missing"), "~");
+        assert_eq!(shell_status_sym("bin symlink present, preset missing"), "~");
+        assert_eq!(shell_status_sym("rendered script missing"), "!");
+        assert_eq!(shell_status_sym("not installed"), "✗");
+    }
+
+    #[test]
+    fn diff_note_is_returned_for_equal_content() {
+        assert_eq!(
+            render_diff_or_note(b"same\n", b"same\n", "current", "expected"),
+            "No content differences.\n"
+        );
+    }
+
+    #[test]
+    fn diff_output_contains_headers_and_changed_lines() {
+        let diff = render_diff_or_note(b"old\n", b"new\n", "current", "expected");
+        assert!(diff.contains("current"));
+        assert!(diff.contains("expected"));
+        assert!(diff.contains("-old"));
+        assert!(diff.contains("+new"));
     }
 
     #[test]

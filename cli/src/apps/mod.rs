@@ -58,12 +58,12 @@ async fn write_init_template_at(dir: &Path, force: bool) -> Result<(PathBuf, boo
 /// Hash the effective install content for `file` — applies transforms if declared.
 ///
 /// Returns `None` when the source cannot be read (e.g. not yet extracted).
-pub(crate) async fn source_hash_for_file(
+pub(crate) async fn source_bytes_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
     file: &metadata::AppFile,
     env: &BTreeMap<String, String>,
-) -> Option<u64> {
+) -> Option<Vec<u8>> {
     let raw = if config.is_external_presets {
         let path = config
             .presets_dir()
@@ -76,11 +76,20 @@ pub(crate) async fn source_hash_for_file(
         presets::read_asset_bytes(&key)?
     };
 
-    let effective = if file.transforms.is_empty() {
-        raw
+    if file.transforms.is_empty() {
+        Some(raw)
     } else {
-        transforms::apply(&file.transforms, &raw, env).ok()?
-    };
+        transforms::apply(&file.transforms, &raw, env).ok()
+    }
+}
+
+pub(crate) async fn source_hash_for_file(
+    config: &Config,
+    cat: &metadata::AppCategory,
+    file: &metadata::AppFile,
+    env: &BTreeMap<String, String>,
+) -> Option<u64> {
+    let effective = source_bytes_for_file(config, cat, file, env).await?;
     Some(hash_content(&effective))
 }
 

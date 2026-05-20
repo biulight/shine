@@ -5,6 +5,19 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.25.0] — 2026-05-20
+
+### Features
+
+- Added colorized status values in `shine info` output to make installed-state scans easier.
+- Added expected-content diffs to `shine info` so drift is easier to inspect before reinstalling or upgrading.
+
+### Docs
+
+- Added a Chinese README and refreshed the `shine info` release examples in both READMEs.
+
+---
+
 ## [0.24.0] — 2026-05-17
 
 ### Features
