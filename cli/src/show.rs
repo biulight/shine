@@ -355,7 +355,7 @@ async fn print_app_file(config: &Config, item: &AppShowFile, verbose: bool) -> R
     println!(
         "{}       {}",
         colors::dim("Status"),
-        status_label(item.status)
+        colored_app_status(item.status)
     );
     if !item.file.transforms.is_empty() {
         println!(
@@ -395,7 +395,11 @@ async fn print_shell_file(item: &ShellShowFile, verbose: bool) -> Result<()> {
     if let Some(target) = &item.link_target {
         println!("{} {}", colors::dim("Link target"), target.display());
     }
-    println!("{}       {}", colors::dim("Status"), item.status);
+    println!(
+        "{}       {}",
+        colors::dim("Status"),
+        colored_shell_status(item.status)
+    );
     println!("{} {}", colors::dim("Needs source"), item.file.needs_source);
 
     let content_path = item
@@ -492,6 +496,37 @@ fn status_label(status: FileStatus) -> &'static str {
     }
 }
 
+fn status_sym(status: FileStatus) -> &'static str {
+    match status {
+        FileStatus::Missing => "!",
+        FileStatus::UserModified | FileStatus::Partial => "~",
+        FileStatus::UpdateAvail => "↑",
+        FileStatus::UpToDate => "✓",
+        FileStatus::NotInstalled => "✗",
+    }
+}
+
+fn colored_app_status(status: FileStatus) -> String {
+    colors::status_label(status_label(status), status_sym(status))
+}
+
+fn shell_status_sym(status: &str) -> &'static str {
+    match status {
+        "up-to-date" => "✓",
+        "update available" => "↑",
+        "preset present, bin symlink missing"
+        | "bin symlink present, script missing"
+        | "bin symlink present, preset missing" => "~",
+        "rendered script missing" => "!",
+        "not installed" => "✗",
+        _ => "~",
+    }
+}
+
+fn colored_shell_status(status: &str) -> String {
+    colors::status_label(status, shell_status_sym(status))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,6 +576,27 @@ mod tests {
             link_target: None,
             status: "up-to-date",
         }
+    }
+
+    #[test]
+    fn app_status_sym_matches_list_semantics() {
+        assert_eq!(status_sym(FileStatus::UpToDate), "✓");
+        assert_eq!(status_sym(FileStatus::UpdateAvail), "↑");
+        assert_eq!(status_sym(FileStatus::UserModified), "~");
+        assert_eq!(status_sym(FileStatus::Partial), "~");
+        assert_eq!(status_sym(FileStatus::Missing), "!");
+        assert_eq!(status_sym(FileStatus::NotInstalled), "✗");
+    }
+
+    #[test]
+    fn shell_status_sym_matches_list_semantics() {
+        assert_eq!(shell_status_sym("up-to-date"), "✓");
+        assert_eq!(shell_status_sym("update available"), "↑");
+        assert_eq!(shell_status_sym("preset present, bin symlink missing"), "~");
+        assert_eq!(shell_status_sym("bin symlink present, script missing"), "~");
+        assert_eq!(shell_status_sym("bin symlink present, preset missing"), "~");
+        assert_eq!(shell_status_sym("rendered script missing"), "!");
+        assert_eq!(shell_status_sym("not installed"), "✗");
     }
 
     #[test]
