@@ -19,7 +19,7 @@ English README: [`../README.md`](../README.md)
 - **支持 dry-run** — 任何破坏性操作都可以先预览再执行
 - **TOML 配置** — 使用 `~/.shine/config.toml`，更新时会尽量保留注释
 - **应用预设安装器** — 可安装 `~/.gitconfig`、`~/.config/starship/starship.toml`、`~/.config/ghostty/config.ghostty` 等受管配置
-- **已安装内容检查** — `shine info <target>` 会输出已安装应用配置和 shell 预设的元数据；加 `--verbose` 可查看完整内容
+- **已安装内容检查** — `shine info <target>` 会输出已安装应用配置和 shell 预设的元数据、彩色状态和值得关注的预期内容差异；加 `--verbose` 可查看完整内容
 - **版本更新检查** — 运行时检查 GitHub Releases，并使用 24 小时缓存
 - **多 shell 支持** — bash、zsh、fish
 - **系统初始化预设** — 通过 `shine sys init` 对当前操作系统执行一组整理过的初始化步骤
@@ -337,7 +337,7 @@ shine info setproxy
 shine info git --verbose
 ```
 
-会显示受管应用配置或 shell 预设的元数据和状态。加上 `--verbose` 后，还会输出已安装或渲染后的文件内容。目标名称会与已安装类别、命令名、显示名、源文件名和目标文件 basename 进行匹配。若短名称有歧义，请使用报错中提示的规范形式：
+会显示受管应用配置或 shell 预设的元数据、彩色状态，以及在适用时显示预期内容差异。加上 `--verbose` 后，还会输出已安装或渲染后的文件内容。目标名称会与已安装类别、命令名、显示名、源文件名和目标文件 basename 进行匹配。若短名称有歧义，请使用报错中提示的规范形式：
 
 ```bash
 shine info app/git
@@ -434,7 +434,7 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.24.0+preview.abc1234`；稳定版则继续显示 `0.24.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.25.0+preview.abc1234`；稳定版则继续显示 `0.25.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -444,7 +444,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.24.0 sh install.sh
+SHINE_VERSION=0.25.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
