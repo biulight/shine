@@ -474,23 +474,40 @@ mod tests {
             Some("~/.config/ghostty")
         );
         assert_eq!(ghostty.list_mode, AppListMode::Category);
-        assert_eq!(ghostty.files.len(), 3);
+        assert_eq!(ghostty.files.len(), 4);
 
         let light = ghostty
             .files
             .iter()
-            .find(|f| f.source_rel == std::path::Path::new("themes/shine-light"))
+            .find(|f| f.source_rel == std::path::Path::new("themes/iTerm2 Solarized Light"))
             .unwrap();
-        assert_eq!(light.target_rel, std::path::Path::new("themes/shine-light"));
+        assert_eq!(
+            light.target_rel,
+            std::path::Path::new("themes/light_iTerm2 Solarized Light")
+        );
         assert_eq!(light.transforms, vec!["template"]);
 
         let dark = ghostty
             .files
             .iter()
-            .find(|f| f.source_rel == std::path::Path::new("themes/shine-dark"))
+            .find(|f| f.source_rel == std::path::Path::new("themes/Alien Blood"))
             .unwrap();
-        assert_eq!(dark.target_rel, std::path::Path::new("themes/shine-dark"));
+        assert_eq!(
+            dark.target_rel,
+            std::path::Path::new("themes/dark_Alien Blood")
+        );
         assert_eq!(dark.transforms, vec!["template"]);
+
+        let atom = ghostty
+            .files
+            .iter()
+            .find(|f| f.source_rel == std::path::Path::new("themes/Atom One Light"))
+            .unwrap();
+        assert_eq!(
+            atom.target_rel,
+            std::path::Path::new("themes/light_Atom One Light")
+        );
+        assert_eq!(atom.transforms, vec!["template"]);
     }
 
     #[test]

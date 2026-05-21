@@ -149,6 +149,9 @@ struct UpgradeCommand {
     /// Show detailed env-template checks and skipped rows
     #[arg(long)]
     verbose: bool,
+    /// Remove stale managed app files whose preset source no longer exists
+    #[arg(long)]
+    prune_stale: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -255,7 +258,9 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Update(cmd) => handle_update(&config, cmd.verbose).await,
-        Commands::Upgrade(cmd) => handle_config_upgrade(&config, cmd.verbose).await,
+        Commands::Upgrade(cmd) => {
+            handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
+        }
         Commands::Export(ExportCommand { dir, force }) => {
             Box::pin(handle_presets_export(&config, dir, force)).await
         }
@@ -604,13 +609,13 @@ fn format_self_upgrade_message(
     }
 }
 
-async fn handle_config_upgrade(config: &Config, verbose: bool) -> Result<()> {
+async fn handle_config_upgrade(config: &Config, verbose: bool, prune_stale: bool) -> Result<()> {
     println!("{}", colors::bold("Upgrading installed configs"));
     crate::config::print_presets_note(config);
 
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
     let shell_report = Box::pin(shells::handle_upgrade_installed(config, verbose)).await?;
-    let app_report = Box::pin(apps::handle_upgrade_installed(config)).await?;
+    let app_report = Box::pin(apps::handle_upgrade_installed(config, prune_stale)).await?;
 
     let updated = env_report.updated
         + shell_report.templates_updated
@@ -1048,13 +1053,28 @@ mod tests {
         let cli = Cli::try_parse_from(["shine", "upgrade"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Upgrade(UpgradeCommand { verbose: false })
+            Commands::Upgrade(UpgradeCommand {
+                verbose: false,
+                prune_stale: false
+            })
         ));
 
         let cli = Cli::try_parse_from(["shine", "upgrade", "--verbose"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Upgrade(UpgradeCommand { verbose: true })
+            Commands::Upgrade(UpgradeCommand {
+                verbose: true,
+                prune_stale: false
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "upgrade", "--prune-stale"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Upgrade(UpgradeCommand {
+                verbose: false,
+                prune_stale: true
+            })
         ));
 
         let cli = Cli::try_parse_from(["shine", "clear"]).unwrap();

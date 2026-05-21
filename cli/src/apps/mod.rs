@@ -15,9 +15,12 @@ use crate::config::Config;
 use crate::env::EnvConfig;
 use crate::presets;
 use anyhow::{Context, Result};
+use dialoguer::Confirm;
 use file_ops::{InstallOutcome, UninstallOutcome};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncWriteExt;
 
 const APP_TEMPLATE: &str = r#"# App preset metadata for shine.
 description = "My app configuration."
@@ -450,7 +453,10 @@ pub(crate) struct AppUpgradeReport {
     pub user_modified: usize,
 }
 
-pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgradeReport> {
+pub(crate) async fn handle_upgrade_installed(
+    config: &Config,
+    prune_stale: bool,
+) -> Result<AppUpgradeReport> {
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
     if manifest.entries.is_empty() {
         return Ok(AppUpgradeReport::default());
@@ -458,16 +464,32 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
 
     let env = EnvConfig::load_or_init(config).await?;
     let env_map = env.as_map().clone();
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let installed_categories: BTreeSet<String> = manifest
+        .entries
+        .iter()
+        .filter_map(|entry| app_category_from_source(&entry.source))
+        .collect();
 
     if !config.is_external_presets {
-        let categories: BTreeSet<String> = manifest
-            .entries
-            .iter()
-            .filter_map(|entry| app_category_from_source(&entry.source))
-            .collect();
-        for category in categories {
+        for category in &installed_categories {
             let prefix = format!("app/{category}");
             let _ = crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
+        }
+    }
+
+    let mut categories_by_name: BTreeMap<String, metadata::AppCategory> = BTreeMap::new();
+    for cat_name in &installed_categories {
+        if config.is_external_presets && !config.presets_dir().join("app").join(cat_name).exists() {
+            continue;
+        }
+        let categories = if config.is_external_presets {
+            metadata::load_installed_categories(config, Some(cat_name)).await?
+        } else {
+            metadata::load_embedded_categories(Some(cat_name))?
+        };
+        if let Some(cat) = categories.into_iter().find(|cat| cat.name == *cat_name) {
+            categories_by_name.insert(cat_name.clone(), cat);
         }
     }
 
@@ -481,6 +503,7 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
     let mut skipped = 0usize;
     let mut user_modified = 0usize;
     let mut pending_upserts: Vec<AppEntry> = Vec::new();
+    let mut pending_removals: Vec<PathBuf> = Vec::new();
 
     for entry in &manifest.entries {
         let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
@@ -493,18 +516,24 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
             continue;
         };
 
-        let categories = if config.is_external_presets {
-            metadata::load_installed_categories(config, Some(cat_name)).await?
-        } else {
-            metadata::load_embedded_categories(Some(cat_name))?
-        };
-        let Some(cat) = categories.iter().find(|cat| cat.name == cat_name) else {
-            eprintln!(
-                "  {} {}: category not found, skipped",
-                colors::symbol("!"),
-                entry.source
-            );
-            skipped += 1;
+        let Some(cat) = categories_by_name.get(cat_name) else {
+            match cleanup_stale_entry(entry, prune_stale, interactive).await? {
+                StaleCleanupOutcome::Removed => {
+                    pending_removals.push(entry.destination.clone());
+                    updated += 1;
+                }
+                StaleCleanupOutcome::NotFound => {
+                    pending_removals.push(entry.destination.clone());
+                    updated += 1;
+                }
+                StaleCleanupOutcome::UserModified => {
+                    user_modified += 1;
+                    skipped += 1;
+                }
+                StaleCleanupOutcome::Skipped => {
+                    skipped += 1;
+                }
+            }
             continue;
         };
         let Some(file) = cat
@@ -512,12 +541,23 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
             .iter()
             .find(|file| file.source_rel.to_string_lossy().as_ref() == file_rel)
         else {
-            eprintln!(
-                "  {} {}: source not found, skipped",
-                colors::symbol("!"),
-                entry.source
-            );
-            skipped += 1;
+            match cleanup_stale_entry(entry, prune_stale, interactive).await? {
+                StaleCleanupOutcome::Removed => {
+                    pending_removals.push(entry.destination.clone());
+                    updated += 1;
+                }
+                StaleCleanupOutcome::NotFound => {
+                    pending_removals.push(entry.destination.clone());
+                    updated += 1;
+                }
+                StaleCleanupOutcome::UserModified => {
+                    user_modified += 1;
+                    skipped += 1;
+                }
+                StaleCleanupOutcome::Skipped => {
+                    skipped += 1;
+                }
+            }
             continue;
         };
         let display_name = file
@@ -525,49 +565,12 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
             .clone()
             .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
 
-        let raw = if config.is_external_presets {
-            let path = config
-                .presets_dir()
-                .join("app")
-                .join(cat_name)
-                .join(&file.source_rel);
-            match tokio::fs::read(&path).await {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
-                    skipped += 1;
-                    continue;
-                }
-            }
-        } else {
-            match presets::read_asset_bytes(&entry.source) {
-                Some(bytes) => bytes,
-                None => {
-                    eprintln!(
-                        "  {} {}: embedded source not found, skipped",
-                        colors::symbol("!"),
-                        entry.source
-                    );
-                    skipped += 1;
-                    continue;
-                }
-            }
-        };
-
-        let content = if file.transforms.is_empty() {
-            raw
-        } else {
-            match transforms::apply(&file.transforms, &raw, &env_map) {
-                Ok(bytes) => bytes,
-                Err(e) => {
-                    eprintln!(
-                        "  {} {}: transform failed: {e:#}",
-                        colors::symbol("✗"),
-                        entry.source
-                    );
-                    skipped += 1;
-                    continue;
-                }
+        let content = match upgrade_file_content(config, cat, file, &env_map).await {
+            Ok(content) => content,
+            Err(e) => {
+                eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+                skipped += 1;
+                continue;
             }
         };
 
@@ -625,6 +628,88 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
         }
     }
 
+    for destination in pending_removals {
+        manifest.remove_by_dest(&destination);
+    }
+
+    for cat in categories_by_name.values() {
+        for file in &cat.files {
+            let destination = match resolve_install_destination(cat, file, config) {
+                Ok(destination) => destination,
+                Err(e) => {
+                    eprintln!(
+                        "  {} {}/{}: bad destination: {e:#}",
+                        colors::symbol("✗"),
+                        cat.name,
+                        file.source_rel.display()
+                    );
+                    skipped += 1;
+                    continue;
+                }
+            };
+            if manifest.find_by_dest(&destination).is_some() {
+                continue;
+            }
+
+            let source = format!("app/{}/{}", cat.name, file.source_rel.display());
+            let display_name = file
+                .display_name
+                .clone()
+                .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
+
+            if destination.exists() {
+                eprintln!(
+                    "  {} {}: destination exists and is not managed, skipped",
+                    colors::symbol("!"),
+                    source
+                );
+                skipped += 1;
+                continue;
+            }
+
+            let content = match upgrade_file_content(config, cat, file, &env_map).await {
+                Ok(content) => content,
+                Err(e) => {
+                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), source);
+                    skipped += 1;
+                    continue;
+                }
+            };
+
+            match install_new_upgrade_file(&content, &destination).await {
+                Ok(Some(hash)) => {
+                    println!(
+                        "  {}  {}  {}  {}",
+                        colors::symbol("✓"),
+                        display_name,
+                        colors::dim("→"),
+                        colors::dim(&destination.display().to_string()),
+                    );
+                    pending_upserts.push(AppEntry {
+                        source,
+                        destination,
+                        backup: None,
+                        content_hash: hash,
+                        uses_env: file.transforms.contains(&"template".to_string()),
+                    });
+                    updated += 1;
+                }
+                Ok(None) => {
+                    eprintln!(
+                        "  {} {}: destination exists and is not managed, skipped",
+                        colors::symbol("!"),
+                        source
+                    );
+                    skipped += 1;
+                }
+                Err(e) => {
+                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), source);
+                    skipped += 1;
+                }
+            }
+        }
+    }
+
     for upsert in pending_upserts {
         manifest.upsert(upsert);
     }
@@ -635,6 +720,140 @@ pub(crate) async fn handle_upgrade_installed(config: &Config) -> Result<AppUpgra
         skipped,
         user_modified,
     })
+}
+
+enum StaleCleanupOutcome {
+    Removed,
+    NotFound,
+    UserModified,
+    Skipped,
+}
+
+async fn cleanup_stale_entry(
+    entry: &AppEntry,
+    prune_stale: bool,
+    interactive: bool,
+) -> Result<StaleCleanupOutcome> {
+    if !prune_stale && interactive {
+        let prompt = format!(
+            "Preset source '{}' no longer exists. Remove managed file {}?",
+            entry.source,
+            entry.destination.display()
+        );
+        if !Confirm::new()
+            .with_prompt(prompt)
+            .default(false)
+            .interact()?
+        {
+            eprintln!(
+                "  {} {}: stale source, skipped",
+                colors::symbol("!"),
+                entry.source
+            );
+            return Ok(StaleCleanupOutcome::Skipped);
+        }
+    } else if !prune_stale {
+        eprintln!(
+            "  {} {}: stale source, skipped (use --prune-stale to clean)",
+            colors::symbol("!"),
+            entry.source
+        );
+        return Ok(StaleCleanupOutcome::Skipped);
+    }
+
+    match file_ops::uninstall_entry(entry, false).await? {
+        UninstallOutcome::Removed => {
+            println!(
+                "  {}  {}  {}",
+                colors::symbol("✓"),
+                colors::dim(&entry.destination.display().to_string()),
+                colors::dim("(removed stale managed file)"),
+            );
+            Ok(StaleCleanupOutcome::Removed)
+        }
+        UninstallOutcome::RestoredBackup { backup } => {
+            println!(
+                "  {}  {}  {}",
+                colors::symbol("✓"),
+                colors::dim(&entry.destination.display().to_string()),
+                colors::dim(&format!(
+                    "(removed stale file, restored {})",
+                    backup.display()
+                )),
+            );
+            Ok(StaleCleanupOutcome::Removed)
+        }
+        UninstallOutcome::NotFound => {
+            println!(
+                "  {}  {}  {}",
+                colors::dim("-"),
+                colors::dim(&entry.destination.display().to_string()),
+                colors::dim("stale destination missing, manifest cleaned"),
+            );
+            Ok(StaleCleanupOutcome::NotFound)
+        }
+        UninstallOutcome::UserModified => {
+            eprintln!(
+                "  {} {}: stale source but user-modified, kept",
+                colors::symbol("!"),
+                entry.source
+            );
+            Ok(StaleCleanupOutcome::UserModified)
+        }
+        UninstallOutcome::DryRun => Ok(StaleCleanupOutcome::Skipped),
+    }
+}
+
+async fn upgrade_file_content(
+    config: &Config,
+    cat: &metadata::AppCategory,
+    file: &metadata::AppFile,
+    env_map: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    let raw = if config.is_external_presets {
+        let path = config
+            .presets_dir()
+            .join("app")
+            .join(&cat.name)
+            .join(&file.source_rel);
+        tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("reading {}", path.display()))?
+    } else {
+        let source = format!("app/{}/{}", cat.name, file.source_rel.display());
+        presets::read_asset_bytes(&source)
+            .with_context(|| format!("embedded source not found: {source}"))?
+    };
+
+    if file.transforms.is_empty() {
+        Ok(raw)
+    } else {
+        transforms::apply(&file.transforms, &raw, env_map)
+            .with_context(|| format!("transform failed: {}", file.transforms.join(", ")))
+    }
+}
+
+async fn install_new_upgrade_file(content: &[u8], destination: &Path) -> Result<Option<u64>> {
+    if let Some(parent) = destination.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
+    }
+
+    let mut file = match tokio::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(destination)
+        .await
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("opening {}", destination.display())),
+    };
+    file.write_all(content)
+        .await
+        .with_context(|| format!("writing {}", destination.display()))?;
+    Ok(Some(hash_content(content)))
 }
 
 fn app_category_from_source(source: &str) -> Option<String> {
@@ -872,15 +1091,31 @@ mod tests {
     }
 
     async fn write_external_sample_app(dir: &std::path::Path, body: &[u8]) {
+        write_external_sample_app_with_extra(dir, body, None).await;
+    }
+
+    async fn write_external_sample_app_with_extra(
+        dir: &std::path::Path,
+        body: &[u8],
+        extra_body: Option<&[u8]>,
+    ) {
         let cat_dir = dir.join("presets/app/sample");
         fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n",
-        )
-        .await
-        .unwrap();
+        let mut manifest = "description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n".to_string();
+        if extra_body.is_some() {
+            manifest.push_str(
+                "\n[[files]]\nsource = \"theme.conf\"\ntarget = \"themes/theme.conf\"\ntransforms = [\"template\"]\n",
+            );
+        }
+        fs::write(cat_dir.join("shine.toml"), manifest)
+            .await
+            .unwrap();
         fs::write(cat_dir.join("daemon.jsonc"), body).await.unwrap();
+        if let Some(extra_body) = extra_body {
+            fs::write(cat_dir.join("theme.conf"), extra_body)
+                .await
+                .unwrap();
+        }
     }
 
     #[tokio::test]
@@ -1074,7 +1309,7 @@ mod tests {
         let dest = dir.join(".config/sample/daemon.json");
         let before = fs::read(&dest).await.unwrap();
 
-        let report = handle_upgrade_installed(&config).await.unwrap();
+        let report = handle_upgrade_installed(&config, false).await.unwrap();
 
         assert_eq!(report.updated, 0, "up-to-date app config must not update");
         assert_eq!(report.skipped, 1, "up-to-date app config should be skipped");
@@ -1110,13 +1345,301 @@ mod tests {
             b"{\n  \"proxy\": \"@@PROXY_HOST@@\",\n  \"updated\": true\n}\n",
         )
         .await;
-        let report = handle_upgrade_installed(&config).await.unwrap();
+        let report = handle_upgrade_installed(&config, false).await.unwrap();
 
         assert_eq!(report.updated, 1, "changed source should update");
         assert_eq!(report.skipped, 0);
         assert_ne!(fs::read(&dest).await.unwrap(), before);
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_installs_new_app_file_from_installed_category() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        write_external_sample_app_with_extra(
+            &dir,
+            b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n",
+            Some(b"background = @@GHOSTTY_BG_LIGHT@@\n"),
+        )
+        .await;
+
+        let report = handle_upgrade_installed(&config, false).await.unwrap();
+
+        let new_dest = dir.join(".config/sample/themes/theme.conf");
+        assert_eq!(report.updated, 1, "new app file should be installed");
+        assert_eq!(
+            report.skipped, 1,
+            "existing up-to-date file should be skipped"
+        );
+        assert_eq!(
+            fs::read(&new_dest).await.unwrap(),
+            b"background = \n",
+            "new file should be transformed before install"
+        );
+        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert!(
+            manifest.find_by_dest(&new_dest).is_some(),
+            "new app file should be tracked in manifest"
+        );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_skips_new_app_file_when_destination_is_unmanaged() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        write_external_sample_app_with_extra(
+            &dir,
+            b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n",
+            Some(b"background = @@GHOSTTY_BG_LIGHT@@\n"),
+        )
+        .await;
+        let new_dest = dir.join(".config/sample/themes/theme.conf");
+        fs::create_dir_all(new_dest.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(&new_dest, b"user-owned\n").await.unwrap();
+
+        let report = handle_upgrade_installed(&config, false).await.unwrap();
+
+        assert_eq!(report.updated, 0, "unmanaged existing file must not update");
+        assert_eq!(
+            report.skipped, 2,
+            "existing managed file and unmanaged new file should be skipped"
+        );
+        assert_eq!(fs::read(&new_dest).await.unwrap(), b"user-owned\n");
+        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert!(
+            manifest.find_by_dest(&new_dest).is_none(),
+            "unmanaged destination should not be added to manifest"
+        );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_prune_stale_removes_unmodified_file_and_manifest_entry() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        let dest = dir.join(".config/sample/daemon.json");
+        fs::remove_dir_all(dir.join("presets/app/sample"))
+            .await
+            .unwrap();
+
+        let report = handle_upgrade_installed(&config, true).await.unwrap();
+
+        assert_eq!(report.updated, 1, "stale cleanup should count as a change");
+        assert_eq!(report.skipped, 0);
+        assert!(!dest.exists(), "unmodified stale file should be removed");
+        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert!(
+            manifest.find_by_dest(&dest).is_none(),
+            "stale manifest entry should be removed"
+        );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_prune_stale_removes_manifest_entry_when_destination_is_missing() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        let dest = dir.join(".config/sample/daemon.json");
+        fs::remove_file(&dest).await.unwrap();
+        fs::remove_dir_all(dir.join("presets/app/sample"))
+            .await
+            .unwrap();
+
+        let report = handle_upgrade_installed(&config, true).await.unwrap();
+
+        assert_eq!(report.updated, 1, "manifest cleanup should count as change");
+        assert_eq!(report.skipped, 0);
+        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert!(
+            manifest.find_by_dest(&dest).is_none(),
+            "missing stale destination should be removed from manifest"
+        );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_without_prune_keeps_stale_file_and_manifest_entry() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        let dest = dir.join(".config/sample/daemon.json");
+        fs::remove_dir_all(dir.join("presets/app/sample"))
+            .await
+            .unwrap();
+
+        let report = handle_upgrade_installed(&config, false).await.unwrap();
+
+        assert_eq!(report.updated, 0);
+        assert_eq!(report.skipped, 1);
+        assert!(dest.exists(), "stale file should be left in place");
+        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert!(
+            manifest.find_by_dest(&dest).is_some(),
+            "stale manifest entry should remain without prune"
+        );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_prune_stale_keeps_user_modified_file() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        let dest = dir.join(".config/sample/daemon.json");
+        fs::write(&dest, b"{\"user\":true}\n").await.unwrap();
+        fs::remove_dir_all(dir.join("presets/app/sample"))
+            .await
+            .unwrap();
+
+        let report = handle_upgrade_installed(&config, true).await.unwrap();
+
+        assert_eq!(report.updated, 0);
+        assert_eq!(report.skipped, 1);
+        assert_eq!(report.user_modified, 1);
+        assert_eq!(fs::read(&dest).await.unwrap(), b"{\"user\":true}\n");
+        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert!(
+            manifest.find_by_dest(&dest).is_some(),
+            "user-modified stale entry should remain tracked"
+        );
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_prune_stale_allows_renamed_source_to_reinstall_same_destination() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"old\"\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        let cat_dir = dir.join("presets/app/sample");
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[[files]]\nsource = \"daemon-renamed.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"jsonc-to-json\"]\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            cat_dir.join("daemon-renamed.jsonc"),
+            b"{\n  \"proxy\": \"new\"\n}\n",
+        )
+        .await
+        .unwrap();
+
+        let report = handle_upgrade_installed(&config, true).await.unwrap();
+
+        let dest = dir.join(".config/sample/daemon.json");
+        assert_eq!(
+            report.updated, 2,
+            "cleanup plus reinstall should change state"
+        );
+        assert_eq!(report.skipped, 0);
+        assert_eq!(
+            fs::read(&dest).await.unwrap(),
+            b"{\n  \"proxy\": \"new\"\n}\n"
+        );
+        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let entry = manifest.find_by_dest(&dest).unwrap();
+        assert_eq!(entry.source, "app/sample/daemon-renamed.jsonc");
 
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
@@ -1141,7 +1664,7 @@ mod tests {
         let dest = dir.join(".config/sample/daemon.json");
         fs::write(&dest, b"{\"user\":true}\n").await.unwrap();
 
-        let report = handle_upgrade_installed(&config).await.unwrap();
+        let report = handle_upgrade_installed(&config, false).await.unwrap();
 
         assert_eq!(
             report.updated, 0,
@@ -1226,12 +1749,13 @@ mod tests {
         let light_theme = ghostty
             .files
             .iter()
-            .find(|f| f.source_rel == std::path::Path::new("themes/shine-light"))
+            .find(|f| f.source_rel == std::path::Path::new("themes/iTerm2 Solarized Light"))
             .unwrap();
         let light_destination = resolve_install_destination(ghostty, light_theme, &config).unwrap();
         assert_eq!(
             light_destination,
-            dir.join(".config/ghostty").join("themes/shine-light")
+            dir.join(".config/ghostty")
+                .join("themes/light_iTerm2 Solarized Light")
         );
 
         unsafe { std::env::remove_var("HOME") };
@@ -1265,17 +1789,18 @@ mod tests {
         let config_text = fs::read_to_string(dir.join(".config/ghostty/config.ghostty"))
             .await
             .unwrap();
-        assert!(config_text.contains("theme = light:shine-light,dark:shine-dark"));
+        assert!(config_text.contains("theme = light:light_Atom One Light,dark:dark_Alien Blood"));
 
-        let light_theme = fs::read_to_string(dir.join(".config/ghostty/themes/shine-light"))
-            .await
-            .unwrap();
-        assert!(light_theme.contains("background = #fdf6e3"));
-        assert!(light_theme.contains("palette = 4=#268bd2"));
-        assert!(light_theme.contains("cursor-color = #657b83"));
+        let light_theme =
+            fs::read_to_string(dir.join(".config/ghostty/themes/light_Atom One Light"))
+                .await
+                .unwrap();
+        assert!(light_theme.contains("background = #f9f9f9"));
+        assert!(light_theme.contains("palette = 4=#2f5af3"));
+        assert!(light_theme.contains("cursor-color = #bbbbbb"));
         assert!(light_theme.contains("background-image = /tmp/shine-light-wallpaper.png"));
 
-        let dark_theme = fs::read_to_string(dir.join(".config/ghostty/themes/shine-dark"))
+        let dark_theme = fs::read_to_string(dir.join(".config/ghostty/themes/dark_Alien Blood"))
             .await
             .unwrap();
         assert!(dark_theme.contains("background = #0f1610"));

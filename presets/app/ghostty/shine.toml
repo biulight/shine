@@ -8,13 +8,19 @@ target = "config.ghostty"
 description = "Main Ghostty configuration."
 
 [[files]]
-source = "themes/shine-light"
-target = "themes/shine-light"
+source = "themes/iTerm2 Solarized Light"
+target = "themes/light_iTerm2 Solarized Light"
 description = "Light-mode Ghostty theme with optional background image."
 transforms = ["template"]
 
 [[files]]
-source = "themes/shine-dark"
-target = "themes/shine-dark"
+source = "themes/Alien Blood"
+target = "themes/dark_Alien Blood"
 description = "Dark-mode Ghostty theme with optional background image."
+transforms = ["template"]
+
+[[files]]
+source = "themes/Atom One Light"
+target = "themes/light_Atom One Light"
+description = "Light-mode test Ghostty theme with optional background image."
 transforms = ["template"]

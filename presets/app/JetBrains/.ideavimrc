@@ -177,10 +177,6 @@ let g:WhichKeyDesc_f_FindInCurrentFile = "<leader>ff 当前文件查找"
 nmap <leader>ff <action>(Find)
 vmap <leader>ff <action>(Find)
 
-let g:WhichKeyDesc_f_FindInAllFile = "<leader>fa 全文件查找"
-nmap <leader>fa <action>(FindInPath)
-vmap <leader>fa <action>(FindInPath)
-
 let g:WhichKeyDesc_f_FindFileLocation = "<leader>fl 文件定位"
 nmap <leader>fl <action>(SelectInProjectView)
 vmap <leader>fl <action>(SelectInProjectView)
@@ -255,9 +251,9 @@ nmap <leader>jp <action>(OpenProjectWindows)
 
 
 " l ⭐️
-" let g:WhichKeyDesc_TagRight = "<leader>l 右切标签"
-" nnoremap <leader>l gt
-" vnoremap <leader>l gt
+let g:WhichKeyDesc_TagRight = "<leader>l 右切标签"
+nnoremap <leader>l gt
+vnoremap <leader>l gt
 
 
 " m ⭐️
