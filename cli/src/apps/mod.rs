@@ -20,8 +20,6 @@ use file_ops::{InstallOutcome, UninstallOutcome};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncWriteExt;
-
 const APP_TEMPLATE: &str = r#"# App preset metadata for shine.
 description = "My app configuration."
 dest = "~/.config/my-app"
@@ -274,7 +272,7 @@ pub(crate) async fn handle_install(
 
     // Load env config once — used by the `template` transform.
     let env = EnvConfig::load_or_init(config).await?;
-    let env_map = env.as_map().clone();
+    let env_map = env.as_map();
 
     // When the user has configured a custom presets directory, the app preset
     // files are already there — skip the embedded-asset extraction step.
@@ -314,7 +312,7 @@ pub(crate) async fn handle_install(
 
             let is_managed = manifest.find_by_dest(&destination).is_some();
 
-            let file_uses_env = file.transforms.contains(&"template".to_string());
+            let file_uses_env = file.transforms.iter().any(|t| t == "template");
 
             // Apply transforms (e.g. jsonc-to-json, template) before writing to destination.
             let outcome = if !file.transforms.is_empty() {
@@ -323,7 +321,7 @@ pub(crate) async fn handle_install(
                         eprintln!("  {} {display_name}: {e:#}", colors::symbol("✗"));
                         continue;
                     }
-                    Ok(raw) => match transforms::apply(&file.transforms, &raw, &env_map) {
+                    Ok(raw) => match transforms::apply(&file.transforms, &raw, env_map) {
                         Err(e) => {
                             eprintln!(
                                 "  {} {display_name}: transform failed: {e:#}",
@@ -463,7 +461,7 @@ pub(crate) async fn handle_upgrade_installed(
     }
 
     let env = EnvConfig::load_or_init(config).await?;
-    let env_map = env.as_map().clone();
+    let env_map = env.as_map();
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let installed_categories: BTreeSet<String> = manifest
         .entries
@@ -517,23 +515,15 @@ pub(crate) async fn handle_upgrade_installed(
         };
 
         let Some(cat) = categories_by_name.get(cat_name) else {
-            match cleanup_stale_entry(entry, prune_stale, interactive).await? {
-                StaleCleanupOutcome::Removed => {
-                    pending_removals.push(entry.destination.clone());
-                    updated += 1;
-                }
-                StaleCleanupOutcome::NotFound => {
-                    pending_removals.push(entry.destination.clone());
-                    updated += 1;
-                }
-                StaleCleanupOutcome::UserModified => {
-                    user_modified += 1;
-                    skipped += 1;
-                }
-                StaleCleanupOutcome::Skipped => {
-                    skipped += 1;
-                }
-            }
+            let outcome = cleanup_stale_entry(entry, prune_stale, interactive).await?;
+            apply_stale_outcome(
+                outcome,
+                entry.destination.clone(),
+                &mut pending_removals,
+                &mut updated,
+                &mut user_modified,
+                &mut skipped,
+            );
             continue;
         };
         let Some(file) = cat
@@ -541,31 +531,19 @@ pub(crate) async fn handle_upgrade_installed(
             .iter()
             .find(|file| file.source_rel.to_string_lossy().as_ref() == file_rel)
         else {
-            match cleanup_stale_entry(entry, prune_stale, interactive).await? {
-                StaleCleanupOutcome::Removed => {
-                    pending_removals.push(entry.destination.clone());
-                    updated += 1;
-                }
-                StaleCleanupOutcome::NotFound => {
-                    pending_removals.push(entry.destination.clone());
-                    updated += 1;
-                }
-                StaleCleanupOutcome::UserModified => {
-                    user_modified += 1;
-                    skipped += 1;
-                }
-                StaleCleanupOutcome::Skipped => {
-                    skipped += 1;
-                }
-            }
+            let outcome = cleanup_stale_entry(entry, prune_stale, interactive).await?;
+            apply_stale_outcome(
+                outcome,
+                entry.destination.clone(),
+                &mut pending_removals,
+                &mut updated,
+                &mut user_modified,
+                &mut skipped,
+            );
             continue;
         };
-        let display_name = file
-            .display_name
-            .clone()
-            .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
 
-        let content = match upgrade_file_content(config, cat, file, &env_map).await {
+        let content = match upgrade_file_content(config, cat, file, env_map).await {
             Ok(content) => content,
             Err(e) => {
                 eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
@@ -604,6 +582,11 @@ pub(crate) async fn handle_upgrade_installed(
         match file_ops::install_bytes(&content, &entry.destination, true, false, true).await {
             Ok(InstallOutcome::Installed { hash })
             | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
+                let display_name = file
+                    .display_name
+                    .as_deref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
                 println!(
                     "  {}  {}  {}  {}",
                     colors::symbol("✓"),
@@ -613,7 +596,7 @@ pub(crate) async fn handle_upgrade_installed(
                 );
                 pending_upserts.push(AppEntry {
                     content_hash: hash,
-                    uses_env: file.transforms.contains(&"template".to_string()),
+                    uses_env: file.transforms.iter().any(|t| t == "template"),
                     ..entry.clone()
                 });
                 updated += 1;
@@ -632,83 +615,11 @@ pub(crate) async fn handle_upgrade_installed(
         manifest.remove_by_dest(&destination);
     }
 
-    for cat in categories_by_name.values() {
-        for file in &cat.files {
-            let destination = match resolve_install_destination(cat, file, config) {
-                Ok(destination) => destination,
-                Err(e) => {
-                    eprintln!(
-                        "  {} {}/{}: bad destination: {e:#}",
-                        colors::symbol("✗"),
-                        cat.name,
-                        file.source_rel.display()
-                    );
-                    skipped += 1;
-                    continue;
-                }
-            };
-            if manifest.find_by_dest(&destination).is_some() {
-                continue;
-            }
-
-            let source = format!("app/{}/{}", cat.name, file.source_rel.display());
-            let display_name = file
-                .display_name
-                .clone()
-                .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-
-            if destination.exists() {
-                eprintln!(
-                    "  {} {}: destination exists and is not managed, skipped",
-                    colors::symbol("!"),
-                    source
-                );
-                skipped += 1;
-                continue;
-            }
-
-            let content = match upgrade_file_content(config, cat, file, &env_map).await {
-                Ok(content) => content,
-                Err(e) => {
-                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), source);
-                    skipped += 1;
-                    continue;
-                }
-            };
-
-            match install_new_upgrade_file(&content, &destination).await {
-                Ok(Some(hash)) => {
-                    println!(
-                        "  {}  {}  {}  {}",
-                        colors::symbol("✓"),
-                        display_name,
-                        colors::dim("→"),
-                        colors::dim(&destination.display().to_string()),
-                    );
-                    pending_upserts.push(AppEntry {
-                        source,
-                        destination,
-                        backup: None,
-                        content_hash: hash,
-                        uses_env: file.transforms.contains(&"template".to_string()),
-                    });
-                    updated += 1;
-                }
-                Ok(None) => {
-                    eprintln!(
-                        "  {} {}: destination exists and is not managed, skipped",
-                        colors::symbol("!"),
-                        source
-                    );
-                    skipped += 1;
-                }
-                Err(e) => {
-                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), source);
-                    skipped += 1;
-                }
-            }
-        }
-    }
+    let (new_updated, new_skipped, new_upserts) =
+        install_new_category_files(config, &categories_by_name, &manifest, env_map).await?;
+    updated += new_updated;
+    skipped += new_skipped;
+    pending_upserts.extend(new_upserts);
 
     for upsert in pending_upserts {
         manifest.upsert(upsert);
@@ -729,32 +640,150 @@ enum StaleCleanupOutcome {
     Skipped,
 }
 
+fn apply_stale_outcome(
+    outcome: StaleCleanupOutcome,
+    destination: PathBuf,
+    pending_removals: &mut Vec<PathBuf>,
+    updated: &mut usize,
+    user_modified: &mut usize,
+    skipped: &mut usize,
+) {
+    match outcome {
+        StaleCleanupOutcome::Removed | StaleCleanupOutcome::NotFound => {
+            pending_removals.push(destination);
+            *updated += 1;
+        }
+        StaleCleanupOutcome::UserModified => {
+            *user_modified += 1;
+            *skipped += 1;
+        }
+        StaleCleanupOutcome::Skipped => {
+            *skipped += 1;
+        }
+    }
+}
+
+async fn install_new_category_files(
+    config: &Config,
+    categories_by_name: &BTreeMap<String, metadata::AppCategory>,
+    manifest: &AppManifest,
+    env_map: &BTreeMap<String, String>,
+) -> Result<(usize, usize, Vec<AppEntry>)> {
+    let mut updated = 0usize;
+    let mut skipped = 0usize;
+    let mut new_upserts: Vec<AppEntry> = Vec::new();
+
+    for cat in categories_by_name.values() {
+        for file in &cat.files {
+            let destination = match resolve_install_destination(cat, file, config) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!(
+                        "  {} {}/{}: bad destination: {e:#}",
+                        colors::symbol("✗"),
+                        cat.name,
+                        file.source_rel.display()
+                    );
+                    skipped += 1;
+                    continue;
+                }
+            };
+            if manifest.find_by_dest(&destination).is_some() {
+                continue;
+            }
+
+            let source = format!("app/{}/{}", cat.name, file.source_rel.display());
+
+            if destination.exists() {
+                eprintln!(
+                    "  {} {}: destination exists and is not managed, skipped",
+                    colors::symbol("!"),
+                    source
+                );
+                skipped += 1;
+                continue;
+            }
+
+            let content = match upgrade_file_content(config, cat, file, env_map).await {
+                Ok(content) => content,
+                Err(e) => {
+                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), source);
+                    skipped += 1;
+                    continue;
+                }
+            };
+
+            match install_new_upgrade_file(&content, &destination).await {
+                Ok(Some(hash)) => {
+                    let display_name = file
+                        .display_name
+                        .as_deref()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
+                    println!(
+                        "  {}  {}  {}  {}",
+                        colors::symbol("✓"),
+                        display_name,
+                        colors::dim("→"),
+                        colors::dim(&destination.display().to_string()),
+                    );
+                    new_upserts.push(AppEntry {
+                        source,
+                        destination,
+                        backup: None,
+                        content_hash: hash,
+                        uses_env: file.transforms.iter().any(|t| t == "template"),
+                    });
+                    updated += 1;
+                }
+                Ok(None) => {
+                    eprintln!(
+                        "  {} {}: destination exists and is not managed, skipped",
+                        colors::symbol("!"),
+                        source
+                    );
+                    skipped += 1;
+                }
+                Err(e) => {
+                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), source);
+                    skipped += 1;
+                }
+            }
+        }
+    }
+
+    Ok((updated, skipped, new_upserts))
+}
+
 async fn cleanup_stale_entry(
     entry: &AppEntry,
     prune_stale: bool,
     interactive: bool,
 ) -> Result<StaleCleanupOutcome> {
-    if !prune_stale && interactive {
+    let should_remove = if prune_stale {
+        true
+    } else if interactive {
         let prompt = format!(
             "Preset source '{}' no longer exists. Remove managed file {}?",
             entry.source,
             entry.destination.display()
         );
-        if !Confirm::new()
+        Confirm::new()
             .with_prompt(prompt)
             .default(false)
             .interact()?
-        {
-            eprintln!(
-                "  {} {}: stale source, skipped",
-                colors::symbol("!"),
-                entry.source
-            );
-            return Ok(StaleCleanupOutcome::Skipped);
-        }
-    } else if !prune_stale {
+    } else {
         eprintln!(
             "  {} {}: stale source, skipped (use --prune-stale to clean)",
+            colors::symbol("!"),
+            entry.source
+        );
+        return Ok(StaleCleanupOutcome::Skipped);
+    };
+
+    if !should_remove {
+        eprintln!(
+            "  {} {}: stale source, skipped",
             colors::symbol("!"),
             entry.source
         );
@@ -834,6 +863,7 @@ async fn upgrade_file_content(
 }
 
 async fn install_new_upgrade_file(content: &[u8], destination: &Path) -> Result<Option<u64>> {
+    use tokio::io::AsyncWriteExt;
     if let Some(parent) = destination.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -1071,6 +1101,7 @@ pub(crate) fn resolve_install_destination(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
     use super::*;
     use crate::config::Config;
     use crate::presets;
@@ -1178,7 +1209,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_then_uninstall_roundtrip() {
         let _guard = env_lock();
@@ -1222,7 +1252,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_dry_run_leaves_everything_intact() {
         let _guard = env_lock();
@@ -1258,7 +1287,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_is_idempotent() {
         let _guard = env_lock();
@@ -1287,7 +1315,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_skips_up_to_date_app_config() {
         let _guard = env_lock();
@@ -1320,7 +1347,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_updates_app_config_when_source_changes() {
         let _guard = env_lock();
@@ -1358,7 +1384,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_installs_new_app_file_from_installed_category() {
         let _guard = env_lock();
@@ -1404,7 +1429,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_skips_new_app_file_when_destination_is_unmanaged() {
         let _guard = env_lock();
@@ -1450,7 +1474,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_prune_stale_removes_unmodified_file_and_manifest_entry() {
         let _guard = env_lock();
@@ -1486,7 +1509,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_prune_stale_removes_manifest_entry_when_destination_is_missing() {
         let _guard = env_lock();
@@ -1522,7 +1544,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_without_prune_keeps_stale_file_and_manifest_entry() {
         let _guard = env_lock();
@@ -1558,7 +1579,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_prune_stale_keeps_user_modified_file() {
         let _guard = env_lock();
@@ -1596,7 +1616,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_prune_stale_allows_renamed_source_to_reinstall_same_destination() {
         let _guard = env_lock();
@@ -1646,7 +1665,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn upgrade_skips_user_modified_app_config() {
         let _guard = env_lock();
@@ -1686,7 +1704,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_places_vim_under_directory_root() {
         let _guard = env_lock();
@@ -1717,7 +1734,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_places_ghostty_config_under_config_root() {
         let _guard = env_lock();
@@ -1763,7 +1779,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_renders_ghostty_light_and_dark_background_images() {
         let _guard = env_lock();
@@ -1813,7 +1828,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_specific_category_only_removes_that_category() {
         let _guard = env_lock();
@@ -1874,7 +1888,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_unknown_category_returns_early() {
         let _guard = env_lock();
