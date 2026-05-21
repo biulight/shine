@@ -12,7 +12,26 @@ permissions:
   contents: write
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      has_new_commits: ${{ steps.compare.outputs.result }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: compare
+        run: |
+          PREV=$(git rev-parse refs/tags/preview 2>/dev/null || echo "none")
+          if [ "$PREV" = "$GITHUB_SHA" ]; then
+            echo "result=false" >> $GITHUB_OUTPUT
+          else
+            echo "result=true" >> $GITHUB_OUTPUT
+          fi
+
   test:
+    needs: check
+    if: github.event_name == 'workflow_dispatch' || needs.check.outputs.has_new_commits == 'true'
     uses: ./.github/workflows/test.yml
 
   build-preview-assets:
