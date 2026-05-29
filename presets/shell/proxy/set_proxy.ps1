@@ -1,6 +1,7 @@
 # shine-template: true
 # Set proxy environment variables for the current PowerShell session.
-# Also configure tool proxies for Git, NPM, Yarn, and pnpm.
+# Git, npm, and pnpm inherit these values from the current PowerShell session.
+# Yarn proxy settings are updated in Yarn config because they are not reliably session-scoped.
 # Usage: setproxy [auto|sock5|http]
 
 $HttpProxyPort = '@@HTTP_PROXY_PORT@@'
@@ -52,37 +53,26 @@ function Set-ShineProxy {
     $env:no_proxy = $NoProxy
     $env:NO_PROXY = $NoProxy
 
-    if (Get-Command git -ErrorAction SilentlyContinue) {
-        Write-Host "Configuring Git proxy..."
-        git config --global http.proxy $ToolProxy
-        git config --global https.proxy $ToolProxy
-    }
+    $env:npm_config_proxy = $ToolProxy
+    $env:npm_config_https_proxy = $ToolProxy
+    $env:npm_config_registry = 'https://registry.npmjs.org/'
+    $env:NPM_CONFIG_PROXY = $ToolProxy
+    $env:NPM_CONFIG_HTTPS_PROXY = $ToolProxy
+    $env:NPM_CONFIG_REGISTRY = 'https://registry.npmjs.org/'
 
-    if (Get-Command npm -ErrorAction SilentlyContinue) {
-        Write-Host "Configuring NPM proxy..."
-        npm config set proxy $ToolProxy
-        npm config set https-proxy $ToolProxy
-        npm config set registry https://registry.npmjs.org/
-    } else {
-        Write-Host "NPM is not installed; skipping"
-    }
+    $YarnConfigured = $false
 
     if (Get-Command yarn -ErrorAction SilentlyContinue) {
         $yarnVersion = yarn --version
-        Write-Host "Configuring Yarn@$yarnVersion proxy..."
-        if ($yarnVersion -match '^(2|3)\.') {
+        Write-Host "Yarn proxy cannot be reliably scoped to this shell; updating Yarn@$yarnVersion config..."
+        if ($yarnVersion -match '^(2|3|4)\.') {
             yarn config set httpProxy $ToolProxy
             yarn config set httpsProxy $ToolProxy
         } else {
             yarn config set proxy $ToolProxy
             yarn config set https-proxy $ToolProxy
         }
-    }
-
-    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
-        Write-Host "Configuring pnpm proxy..."
-        pnpm config set proxy $ToolProxy
-        pnpm config set https-proxy $ToolProxy
+        $YarnConfigured = $true
     }
 
     Write-Host "Proxy setup complete."
@@ -91,6 +81,10 @@ function Set-ShineProxy {
     Write-Host "System proxy type: $ProxyType"
     Write-Host "System proxy address: $ProxyAddress"
     Write-Host "Tool proxy address: $ToolProxy"
+    Write-Host "Scope: current PowerShell session for Git/npm/pnpm-compatible environment variables"
+    if ($YarnConfigured) {
+        Write-Host "Yarn config was updated because Yarn proxy settings are not reliably session-scoped."
+    }
 }
 
 $Mode = if ($args.Count -gt 0) { $args[0] } else { 'auto' }

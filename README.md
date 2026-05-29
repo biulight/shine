@@ -483,7 +483,7 @@ Set `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK` with `shine env set` if you want th
 
 ### shell/proxy — `setproxy` / `usetproxy`
 
-One-command proxy management for the entire development environment.
+One-command proxy management for the current terminal session.
 
 **Set proxy:**
 
@@ -498,8 +498,10 @@ After a fresh `shine shell install proxy`, reload your shell config once (for ex
 
 Configures simultaneously:
 - Shell environment variables (`http_proxy`, `https_proxy`, `all_proxy`, …)
-- Git global config (`http.proxy`, `https.proxy`)
-- npm / yarn / pnpm proxy settings
+- npm-compatible process config (`npm_config_proxy`, `npm_config_https_proxy`) for npm and pnpm
+- Git-compatible proxy environment variables
+
+Yarn is the exception: when Yarn is installed, `setproxy` prints a notice and updates Yarn proxy config because Yarn proxy settings are not reliably scoped to the current shell.
 
 Default ports: HTTP `6152`, SOCKS5 `6153` (edit `[env]` in `~/.shine/config.toml` to change).
 
@@ -509,7 +511,7 @@ Default ports: HTTP `6152`, SOCKS5 `6153` (edit `[env]` in `~/.shine/config.toml
 usetproxy
 ```
 
-Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy config.
+Clears the session proxy environment variables. If Yarn is installed, it also removes the Yarn proxy config entries that `setproxy` may have written.
 
 ### shell/agent — `ccenv`
 

@@ -1,5 +1,5 @@
 # Remove proxy environment variables for the current PowerShell session.
-# Also clear global proxy settings for Git, NPM, Yarn, and pnpm.
+# Yarn proxy settings are also cleared because setproxy may update Yarn config.
 # Usage: usetproxy
 
 Write-Host "Removing proxy configuration..."
@@ -17,7 +17,7 @@ if ($env:http_proxy -or $env:HTTP_PROXY) {
     Write-Host "No proxy environment variables were detected"
 }
 
-Write-Host "Clearing system environment variable proxies..."
+Write-Host "Clearing session environment variable proxies..."
 $ProxyVars = @(
     'http_proxy',
     'https_proxy',
@@ -26,33 +26,24 @@ $ProxyVars = @(
     'all_proxy',
     'ALL_PROXY',
     'no_proxy',
-    'NO_PROXY'
+    'NO_PROXY',
+    'npm_config_proxy',
+    'npm_config_https_proxy',
+    'npm_config_registry',
+    'NPM_CONFIG_PROXY',
+    'NPM_CONFIG_HTTPS_PROXY',
+    'NPM_CONFIG_REGISTRY'
 )
 
 foreach ($Name in $ProxyVars) {
     Remove-Item "Env:\$Name" -ErrorAction SilentlyContinue
 }
 
-if (Get-Command git -ErrorAction SilentlyContinue) {
-    Write-Host "Clearing Git proxy..."
-    git config --global --unset http.proxy 2>$null
-    if ($LASTEXITCODE -ne 0) { Write-Host "  Git http.proxy was not set or has already been cleared" }
-    git config --global --unset https.proxy 2>$null
-    if ($LASTEXITCODE -ne 0) { Write-Host "  Git https.proxy was not set or has already been cleared" }
-}
-
-if (Get-Command npm -ErrorAction SilentlyContinue) {
-    Write-Host "Clearing NPM proxy..."
-    npm config delete proxy 2>$null
-    npm config delete https-proxy 2>$null
-} else {
-    Write-Host "NPM is not installed; skipping"
-}
-
 if (Get-Command yarn -ErrorAction SilentlyContinue) {
-    Write-Host "Clearing Yarn proxy..."
+    Write-Host "Clearing Yarn proxy config..."
+    Write-Host "  Yarn proxy settings are persistent; removing the entries set by setproxy."
     $yarnVersion = yarn --version
-    if ($yarnVersion -match '^(2|3)\.') {
+    if ($yarnVersion -match '^(2|3|4)\.') {
         yarn config delete httpProxy 2>$null
         yarn config delete httpsProxy 2>$null
     } else {
@@ -63,18 +54,11 @@ if (Get-Command yarn -ErrorAction SilentlyContinue) {
     Write-Host "Yarn is not installed; skipping"
 }
 
-if (Get-Command pnpm -ErrorAction SilentlyContinue) {
-    Write-Host "Clearing pnpm proxy..."
-    pnpm config delete proxy 2>$null
-    pnpm config delete https-proxy 2>$null
-} else {
-    Write-Host "pnpm is not installed; skipping"
-}
-
 Write-Host ""
 Write-Host "Proxy settings have been removed."
 Write-Host ""
 Write-Host "Notes:"
 Write-Host "  - Environment variable proxies have been cleared (current terminal session only)"
-Write-Host "  - Global proxy settings for Git/NPM/Yarn/pnpm have been cleared"
+Write-Host "  - Git/npm/pnpm global config was not modified"
+Write-Host "  - Yarn proxy config was cleared if Yarn was available"
 Write-Host "  - To set the proxy again, run: setproxy"

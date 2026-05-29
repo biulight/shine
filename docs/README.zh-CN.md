@@ -479,7 +479,7 @@ theme = light:shine-light,dark:shine-dark
 
 ### shell/proxy — `setproxy` / `usetproxy`
 
-用一组命令管理整个开发环境的代理配置。
+用一组命令管理当前终端会话的代理配置。
 
 **设置代理：**
 
@@ -493,8 +493,10 @@ setproxy http      # 强制使用 HTTP
 
 会同时配置：
 - shell 环境变量（`http_proxy`、`https_proxy`、`all_proxy` 等）
-- Git 全局配置（`http.proxy`、`https.proxy`）
-- npm / yarn / pnpm 代理设置
+- npm 兼容的进程配置（`npm_config_proxy`、`npm_config_https_proxy`），供 npm 和 pnpm 使用
+- Git 兼容的代理环境变量
+
+Yarn 是例外：如果检测到 Yarn，`setproxy` 会打印提示并更新 Yarn 代理配置，因为 Yarn 代理设置不能可靠地限制在当前 shell 会话中。
 
 默认端口：HTTP `6152`，SOCKS5 `6153`（如需修改，请编辑 `~/.shine/config.toml` 中的 `[env]`）。
 
@@ -504,7 +506,7 @@ setproxy http      # 强制使用 HTTP
 usetproxy
 ```
 
-会清除所有代理环境变量，并删除 git/npm/yarn/pnpm 的代理配置。
+会清除当前会话中的代理环境变量。如果已安装 Yarn，也会删除 `setproxy` 可能写入的 Yarn 代理配置项。
 
 ### shell/agent — `ccenv`
 
