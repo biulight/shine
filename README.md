@@ -427,12 +427,16 @@ Manual commands:
 ```bash
 shine update        # show available updates, then force-check the latest release
 shine update --verbose  # include up-to-date and non-update status rows
+shine self install  # copy the current binary to the platform default install path
+shine self install --dest ~/.local/bin/shine  # install to a custom path
 shine self upgrade  # download and install the latest stable release for this platform
 shine self upgrade --channel stable   # explicitly reinstall the stable release
 shine self upgrade --channel preview  # install the moving preview prerelease
 shine upgrade       # force-update installed shell and app configs
 shine upgrade --verbose  # include env-template check details
 ```
+
+`shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
 Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.25.0+preview.abc1234`, while stable binaries continue to report `0.25.0`.
 
