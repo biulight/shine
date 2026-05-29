@@ -194,7 +194,7 @@ pub(crate) async fn handle_upgrade_installed(
         .flat_map(|cat| {
             cat.files.iter().filter_map(|file| {
                 let link = crate::bin_links::command_path_for_name(
-                    &config.bin_dir(),
+                    config.bin_dir(),
                     std::ffi::OsStr::new(&file.command_name),
                 );
                 shell_link_exists(&link).then(|| (cat.name.clone(), file.command_name.clone()))
@@ -664,17 +664,17 @@ async fn apply_template_to_scripts(
     Ok(report)
 }
 
-fn env_map_for_script(
+fn env_map_for_script<'a>(
     script: &ScriptTemplate,
-    env_map: &std::collections::BTreeMap<String, String>,
-) -> std::collections::BTreeMap<String, String> {
-    let mut script_env_map = env_map.clone();
+    env_map: &'a std::collections::BTreeMap<String, String>,
+) -> std::borrow::Cow<'a, std::collections::BTreeMap<String, String>> {
     if script.display_name == "agent/ccenv" {
-        script_env_map
-            .entry("DEEPSEEK_API_KEY".to_string())
-            .or_default();
+        let mut map = env_map.clone();
+        map.entry("DEEPSEEK_API_KEY".to_string()).or_default();
+        std::borrow::Cow::Owned(map)
+    } else {
+        std::borrow::Cow::Borrowed(env_map)
     }
-    script_env_map
 }
 
 /// Build the PATH export snippet for the given shell, using `$HOME` when possible.
@@ -982,9 +982,9 @@ mod tests {
 
     fn wrapper_marker(command: &str, shell: &ShellType) -> String {
         match shell {
-            ShellType::PowerShell => format!("function {command} {{ . (Join-Path $shineBin"),
-            ShellType::Fish => format!("function {command}"),
-            _ => format!("{command}() {{ source"),
+            ShellType::PowerShell => format!("\nfunction {command} {{ . (Join-Path $shineBin"),
+            ShellType::Fish => format!("\nfunction {command}"),
+            _ => format!("\n{command}() {{ source"),
         }
     }
 

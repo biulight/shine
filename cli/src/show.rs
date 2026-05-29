@@ -184,7 +184,7 @@ async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShowFile>> {
                 .join(&category.name)
                 .join(&file.source_rel);
             let link_path = crate::bin_links::command_path_for_name(
-                &config.bin_dir(),
+                config.bin_dir(),
                 std::ffi::OsStr::new(&file.command_name),
             );
 

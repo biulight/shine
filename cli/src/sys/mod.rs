@@ -198,10 +198,11 @@ async fn handle_init_for_os(
     print_selection_summary(&selection);
     println!();
 
-    let status = std::process::Command::new("bash")
+    let status = tokio::process::Command::new("bash")
         .arg(&loaded.script_path)
         .args(&selection.item_ids)
         .status()
+        .await
         .with_context(|| format!("failed to execute {}", loaded.script_path.display()))?;
 
     if !status.success() {
@@ -295,6 +296,16 @@ fn validate_manifest(manifest: &SysManifest) -> Result<()> {
     for item in &manifest.items {
         if item.id.trim().is_empty() {
             bail!("sys init item ids must not be empty");
+        }
+        if !item
+            .id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            bail!(
+                "sys init item id `{}` contains invalid characters (allowed: a-z A-Z 0-9 - _)",
+                item.id
+            );
         }
         if item.label.trim().is_empty() {
             bail!("sys init item `{}` must have a label", item.id);

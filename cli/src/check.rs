@@ -72,7 +72,7 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 .join(&cat.name)
                 .join(&script.source_rel);
             let link_name = OsString::from(&script.command_name);
-            let link_path = crate::bin_links::command_path_for_name(&bin_dir, &link_name);
+            let link_path = crate::bin_links::command_path_for_name(bin_dir, &link_name);
 
             let file_exists = script_path.exists();
             let link_exists = link_path.exists() || {
