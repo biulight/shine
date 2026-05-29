@@ -268,7 +268,7 @@ fn collect_embedded_scripts(name: &str) -> Result<Vec<PathBuf>> {
             continue;
         }
         let rel = PathBuf::from(rest);
-        if rel.extension().and_then(|ext| ext.to_str()) != Some("sh") {
+        if !is_shell_script(&rel) {
             continue;
         }
         scripts.insert(normalize_shell_source(rest)?);
@@ -294,7 +294,7 @@ async fn collect_fs_scripts(category_root: &Path) -> Result<Vec<PathBuf>> {
                 stack.push(path);
                 continue;
             }
-            if !ft.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("sh") {
+            if !ft.is_file() || !is_shell_script(&path) {
                 continue;
             }
             let rel = path.strip_prefix(category_root).with_context(|| {
@@ -335,10 +335,17 @@ fn normalize_shell_source(path: impl AsRef<Path>) -> Result<PathBuf> {
     if normalized.file_name().and_then(|name| name.to_str()) == Some("shine.toml") {
         bail!("source path must not point to shine.toml");
     }
-    if normalized.extension().and_then(|ext| ext.to_str()) != Some("sh") {
-        bail!("source path must end with .sh");
+    if !is_shell_script(&normalized) {
+        bail!("source path must end with .sh or .ps1");
     }
     Ok(normalized)
+}
+
+fn is_shell_script(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("sh" | "ps1")
+    )
 }
 
 fn resolve_command_name(source_rel: &Path, target: Option<&str>) -> Result<String> {
@@ -435,6 +442,31 @@ mod tests {
             .unwrap();
         assert_eq!(categories.len(), 1);
         assert_eq!(categories[0].files[0].command_name, "setproxy");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_category_accepts_powershell_scripts() {
+        let dir = make_temp_dir().await;
+        let category_root = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category_root).await.unwrap();
+        fs::write(
+            category_root.join("tool.ps1"),
+            b"# Tool.\nWrite-Output hi\n",
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let categories = load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap();
+
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0].files[0].source_rel, PathBuf::from("tool.ps1"));
+        assert_eq!(categories[0].files[0].command_name, "tool");
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

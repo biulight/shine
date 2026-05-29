@@ -116,6 +116,8 @@ enum CompletionShell {
     Bash,
     #[value(name = "fish")]
     Fish,
+    #[value(name = "powershell")]
+    PowerShell,
     #[value(name = "zsh")]
     Zsh,
 }
@@ -130,6 +132,9 @@ impl CompletionShell {
             }
             CompletionShell::Fish => {
                 write_completions(clap_complete::shells::Fish, &mut command, &mut stdout)
+            }
+            CompletionShell::PowerShell => {
+                write_completions(clap_complete::shells::PowerShell, &mut command, &mut stdout)
             }
             CompletionShell::Zsh => {
                 write_completions(clap_complete::shells::Zsh, &mut command, &mut stdout)
@@ -1423,7 +1428,6 @@ mod tests {
 
     #[test]
     fn cli_completions_rejects_unsupported_shells() {
-        assert!(Cli::try_parse_from(["shine", "completions", "powershell"]).is_err());
         assert!(Cli::try_parse_from(["shine", "completions", "elvish"]).is_err());
     }
 
@@ -1431,6 +1435,7 @@ mod tests {
     fn cli_completions_accepts_supported_shells() {
         assert!(Cli::try_parse_from(["shine", "completions", "bash"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "completions", "fish"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "completions", "powershell"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "completions", "zsh"]).is_ok());
     }
 
@@ -1439,6 +1444,7 @@ mod tests {
         for shell in [
             CompletionShell::Bash,
             CompletionShell::Fish,
+            CompletionShell::PowerShell,
             CompletionShell::Zsh,
         ] {
             let mut command = Cli::command();
@@ -1450,6 +1456,9 @@ mod tests {
                 }
                 CompletionShell::Fish => {
                     write_completions(clap_complete::shells::Fish, &mut command, &mut output)
+                }
+                CompletionShell::PowerShell => {
+                    write_completions(clap_complete::shells::PowerShell, &mut command, &mut output)
                 }
                 CompletionShell::Zsh => {
                     write_completions(clap_complete::shells::Zsh, &mut command, &mut output)

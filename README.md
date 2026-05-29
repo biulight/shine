@@ -11,7 +11,7 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 - **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
 - **External presets** — point `presets_dir` at your own directory (e.g. a dotfiles repo) and `shine` reads from there instead; `shine export` seeds it with the built-ins
 - **Project-local presets** — run `shine init` inside a presets repo to create a local `shine.config.toml` that points `presets_dir` at the repo
-- **Symlink-based bin directory** — `~/.shine/bin/` holds flat symlinks to installed scripts; add it to `PATH` once
+- **Managed bin directory** — `~/.shine/bin/` holds flat symlinks on Unix and command shims on Windows
 - **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
 - **Category install/uninstall** — install or uninstall all presets or a specific subset (e.g. `proxy`)
 - **Installed-only view** — `shine list` shows installed items without status noise
@@ -21,10 +21,10 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 - **App preset installer** — install managed config files like `~/.gitconfig`, `~/.config/starship/starship.toml`, or `~/.config/ghostty/config.ghostty`
 - **Installed content inspection** — `shine info <target>` prints metadata, colorized status, and expected-content diffs for installed app configs and shell presets; add `--verbose` for full content
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
-- **Multi-shell support** — bash, zsh, fish
+- **Multi-shell support** — bash, zsh, fish, PowerShell
 - **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
 
-Current support scope: `shine` supports Unix-like environments with `bash`, `zsh`, and `fish`. Windows, PowerShell, and Elvish are not supported yet.
+Current support scope: `shine shell` supports bash, zsh, fish, and PowerShell. Windows support currently covers `shine self` and `shine shell`; app and sys presets are still Unix-oriented.
 
 ## Planning Workflow
 
@@ -57,7 +57,7 @@ Or install from source:
 cargo install --path cli
 ```
 
-`shine` does not support Windows yet. Use a Unix-like environment with `bash`, `zsh`, or `fish`.
+Windows support currently covers `shine self` and `shine shell` in PowerShell; app and sys presets remain Unix-oriented.
 
 Or build from source:
 
@@ -100,7 +100,7 @@ shine shell install proxy      # install only the proxy category
 shine shell reinstall proxy    # overwrite managed files and links for proxy
 ```
 
-Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, etc.):
+Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks or Windows shims in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, PowerShell profile, etc.):
 
 ```
 Shell Presets  4 created
@@ -120,7 +120,7 @@ shine shell uninstall --purge        # also remove empty managed directories
 shine shell uninstall proxy --purge  # uninstall proxy and remove its preset dir
 ```
 
-Removes shine-managed symlinks from `~/.shine/bin/`, preset files from `~/.shine/presets/shell/`, and the PATH entry from your shell config. User-created files are never removed.
+Removes shine-managed symlinks or shims from `~/.shine/bin/`, preset files from `~/.shine/presets/shell/`, and the PATH entry from your shell config. User-created files are never removed.
 
 When a category is specified only that category's files and symlinks are removed; the PATH entry is kept so other installed categories remain usable.
 
@@ -132,9 +132,10 @@ When a category is specified only that category's files and symlinks are removed
 shine completions bash > ~/.local/share/bash-completion/completions/shine
 shine completions zsh > ~/.zfunc/_shine
 shine completions fish > ~/.config/fish/completions/shine.fish
+shine completions powershell > shine-completions.ps1
 ```
 
-`shine completions <shell>` prints a completion script to `stdout` for manual installation. It supports `bash`, `zsh`, and `fish` only, and it does not modify your shell config automatically.
+`shine completions <shell>` prints a completion script to `stdout` for manual installation. It supports `bash`, `zsh`, `fish`, and `powershell`, and it does not modify your shell config automatically.
 
 ### List available app presets
 
@@ -477,7 +478,7 @@ setproxy http      # force HTTP
 ```
 
 After a fresh `shine shell install proxy`, reload your shell config once (for example,
-`source ~/.zshrc`) or open a new shell before using `setproxy` directly.
+`source ~/.zshrc` or `. $PROFILE`) or open a new shell before using `setproxy` directly.
 
 Configures simultaneously:
 - Shell environment variables (`http_proxy`, `https_proxy`, `all_proxy`, …)

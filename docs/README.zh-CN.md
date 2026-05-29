@@ -11,7 +11,7 @@ English README: [`../README.md`](../README.md)
 - **内置预设** — shell 脚本和应用配置会编译进二进制；安装后不需要联网
 - **外部预设目录** — 可将 `presets_dir` 指向你自己的目录（例如 dotfiles 仓库），之后 `shine` 会优先从那里读取；`shine export` 可把内置预设导出过去
 - **项目本地预设仓库** — 在预设仓库内运行 `shine init`，即可创建指向当前仓库的 `shine.config.toml`
-- **基于符号链接的 bin 目录** — `~/.shine/bin/` 中保存展平后的命令链接；把它加入一次 `PATH` 即可
+- **受管 bin 目录** — `~/.shine/bin/` 在 Unix 上保存展平后的符号链接，在 Windows 上保存命令 shim
 - **自动配置 PATH** — `install` 会自动把 `~/.shine/bin` 追加到你的 shell 配置文件
 - **按类别安装/卸载** — 可安装或卸载全部预设，也可只处理某个子集（如 `proxy`）
 - **仅显示已安装项** — `shine list` 只展示已安装内容，不输出额外状态噪音
@@ -21,10 +21,10 @@ English README: [`../README.md`](../README.md)
 - **应用预设安装器** — 可安装 `~/.gitconfig`、`~/.config/starship/starship.toml`、`~/.config/ghostty/config.ghostty` 等受管配置
 - **已安装内容检查** — `shine info <target>` 会输出已安装应用配置和 shell 预设的元数据、彩色状态和值得关注的预期内容差异；加 `--verbose` 可查看完整内容
 - **版本更新检查** — 运行时检查 GitHub Releases，并使用 24 小时缓存
-- **多 shell 支持** — bash、zsh、fish
+- **多 shell 支持** — bash、zsh、fish、PowerShell
 - **系统初始化预设** — 通过 `shine sys init` 对当前操作系统执行一组整理过的初始化步骤
 
-当前支持范围：`shine` 面向类 Unix 环境，支持 `bash`、`zsh` 和 `fish`。暂不支持 Windows、PowerShell 或 Elvish。
+当前支持范围：`shine shell` 支持 `bash`、`zsh`、`fish` 和 PowerShell。Windows 支持目前覆盖 `shine self` 和 `shine shell`；app 与 sys 预设仍以 Unix 环境为主。
 
 ## 规划流程
 
@@ -57,7 +57,7 @@ curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh
 cargo install --path cli
 ```
 
-`shine` 目前不支持 Windows。请在带有 `bash`、`zsh` 或 `fish` 的类 Unix 环境中使用。
+Windows 支持目前覆盖 PowerShell 下的 `shine self` 和 `shine shell`；app 与 sys 预设仍以 Unix 环境为主。
 
 也可以自己构建：
 
@@ -100,7 +100,7 @@ shine shell install proxy      # 仅安装 proxy 类别
 shine shell reinstall proxy    # 覆盖 proxy 的受管文件和链接
 ```
 
-它会把内置 shell 脚本解包到 `~/.shine/presets/shell/`，在 `~/.shine/bin/` 中创建符号链接，并把 PATH 条目追加到你的 shell 配置文件（`~/.zshrc`、`~/.bashrc`、`~/.config/fish/config.fish` 等）：
+它会把内置 shell 脚本解包到 `~/.shine/presets/shell/`，在 `~/.shine/bin/` 中创建符号链接或 Windows shim，并把 PATH 条目追加到你的 shell 配置文件（`~/.zshrc`、`~/.bashrc`、`~/.config/fish/config.fish`、PowerShell profile 等）：
 
 ```
 Shell Presets  4 created
@@ -120,7 +120,7 @@ shine shell uninstall --purge        # 同时删除空的受管目录
 shine shell uninstall proxy --purge  # 卸载 proxy 并删除其预设目录
 ```
 
-卸载会移除 `~/.shine/bin/` 中由 `shine` 管理的符号链接、`~/.shine/presets/shell/` 中的预设文件，以及 shell 配置中的 PATH 条目。用户自行创建的文件不会被删除。
+卸载会移除 `~/.shine/bin/` 中由 `shine` 管理的符号链接或 shim、`~/.shine/presets/shell/` 中的预设文件，以及 shell 配置中的 PATH 条目。用户自行创建的文件不会被删除。
 
 如果指定了类别，只会移除该类别的文件和链接；PATH 条目会被保留，以便其它已安装类别继续可用。
 
@@ -132,9 +132,10 @@ shine shell uninstall proxy --purge  # 卸载 proxy 并删除其预设目录
 shine completions bash > ~/.local/share/bash-completion/completions/shine
 shine completions zsh > ~/.zfunc/_shine
 shine completions fish > ~/.config/fish/completions/shine.fish
+shine completions powershell > shine-completions.ps1
 ```
 
-`shine completions <shell>` 会把补全脚本输出到 `stdout`，需要你手动安装。仅支持 `bash`、`zsh` 和 `fish`，不会自动修改 shell 配置。
+`shine completions <shell>` 会把补全脚本输出到 `stdout`，需要你手动安装。支持 `bash`、`zsh`、`fish` 和 `powershell`，不会自动修改 shell 配置。
 
 ### 查看可用的应用预设
 
@@ -472,7 +473,7 @@ setproxy sock5     # 强制使用 SOCKS5
 setproxy http      # 强制使用 HTTP
 ```
 
-如果刚执行过 `shine shell install proxy`，请先重新加载一次 shell 配置（例如 `source ~/.zshrc`），或打开一个新的 shell，然后再直接使用 `setproxy`。
+如果刚执行过 `shine shell install proxy`，请先重新加载一次 shell 配置（例如 `source ~/.zshrc` 或 `. $PROFILE`），或打开一个新的 shell，然后再直接使用 `setproxy`。
 
 会同时配置：
 - shell 环境变量（`http_proxy`、`https_proxy`、`all_proxy` 等）

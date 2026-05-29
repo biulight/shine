@@ -19,6 +19,9 @@ description = "My shell helper commands."
 source = "my_tool.sh"
 target = "mytool"
 needs_source = false
+
+# PowerShell scripts are also supported:
+# source = "my_tool.ps1"
 "#;
 
 #[derive(Debug, Default)]
@@ -684,6 +687,7 @@ fn path_export_snippet(
     };
     let mut body = match shell {
         ShellType::Fish => format!("fish_add_path \"{bin_str}\""),
+        ShellType::PowerShell => powershell_path_snippet(&bin_str),
         _ => format!(
             "if [[ \":$PATH:\" != *\":{bin_str}:\"* ]]; then\n  export PATH=\"{bin_str}:$PATH\"\nfi"
         ),
@@ -696,6 +700,17 @@ fn path_export_snippet(
                     "\nfunction {cmd}\n  source \"{bin_str}/{cmd}\" $argv\nend"
                 ));
             }
+            ShellType::PowerShell => {
+                let script_name = if cfg!(windows) {
+                    format!("{cmd}.ps1")
+                } else {
+                    cmd.clone()
+                };
+                body.push_str(&format!(
+                    "\nfunction {cmd} {{ . (Join-Path $shineBin '{}') @args }}",
+                    script_name.replace('\'', "''")
+                ));
+            }
             _ => {
                 body.push_str(&format!(
                     "\n{cmd}() {{ source \"{bin_str}/{cmd}\" \"$@\"; }}"
@@ -706,16 +721,26 @@ fn path_export_snippet(
     format!("{SENTINEL_START}\n{body}\n{SENTINEL_END}\n")
 }
 
+fn powershell_path_snippet(bin_str: &str) -> String {
+    let escaped = bin_str.replace('\'', "''");
+    format!(
+        "$shineBin = '{escaped}'\n$shinePathEntries = $env:Path -split [System.IO.Path]::PathSeparator\nif ($shinePathEntries -notcontains $shineBin) {{\n  $env:Path = \"$shineBin$([System.IO.Path]::PathSeparator)$env:Path\"\n}}"
+    )
+}
+
 fn shell_source_command(shell: &ShellType, config_path: &Path) -> String {
-    let quoted = shell_quote(config_path);
     match shell {
-        ShellType::PowerShell => format!(". {quoted}"),
-        _ => format!("source {quoted}"),
+        ShellType::PowerShell => format!(". {}", powershell_quote(config_path)),
+        _ => format!("source {}", shell_quote(config_path)),
     }
 }
 
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+fn powershell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 
 fn print_source_command_activation_hint(
@@ -843,8 +868,11 @@ async fn remove_path_from_shell_config(config: &Config) -> Result<()> {
 }
 
 pub(crate) fn get_shell() -> Result<ShellType> {
-    let shell = std::env::var("SHELL").context("Could not find $SHELL")?;
-    shell.parse()
+    match std::env::var("SHELL") {
+        Ok(shell) => shell.parse(),
+        Err(_) if cfg!(windows) => Ok(ShellType::PowerShell),
+        Err(_) => bail!("Could not find $SHELL"),
+    }
 }
 
 pub(crate) fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) -> Result<PathBuf> {
@@ -852,7 +880,13 @@ pub(crate) fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) ->
         ShellType::Bash => Ok(home_path.join(".bashrc")),
         ShellType::Fish => Ok(home_path.join(".config/fish/config.fish")),
         ShellType::Zsh => Ok(home_path.join(".zshrc")),
-        ShellType::PowerShell => Ok(home_path.join(".profile")),
+        ShellType::PowerShell => {
+            if cfg!(windows) {
+                Ok(home_path.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"))
+            } else {
+                Ok(home_path.join(".config/powershell/Microsoft.PowerShell_profile.ps1"))
+            }
+        }
         ShellType::Elvish => Ok(home_path.join(".config/elvish/rc.elv")),
     }
 }
@@ -860,15 +894,21 @@ pub(crate) fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) ->
 impl FromStr for ShellType {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.ends_with("bash") {
+        let shell_name = s
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(s)
+            .to_ascii_lowercase();
+        let normalized = shell_name.trim_end_matches(".exe");
+        if normalized == "bash" {
             Ok(ShellType::Bash)
-        } else if s.ends_with("fish") {
+        } else if normalized == "fish" {
             Ok(ShellType::Fish)
-        } else if s.ends_with("zsh") {
+        } else if normalized == "zsh" {
             Ok(ShellType::Zsh)
-        } else if s.ends_with("powershell") {
+        } else if normalized == "powershell" || normalized == "pwsh" {
             Ok(ShellType::PowerShell)
-        } else if s.ends_with("elvish") {
+        } else if normalized == "elvish" {
             Ok(ShellType::Elvish)
         } else {
             bail!("Unknown shell item type: {}", s)
@@ -1092,6 +1132,19 @@ mod tests {
             fish_snippet.contains("function setproxy"),
             "fish should have setproxy function: {fish_snippet}"
         );
+        let powershell_snippet = path_export_snippet(&ShellType::PowerShell, &bin, &home, &cmds);
+        assert!(
+            powershell_snippet.contains("$env:Path"),
+            "PowerShell should update env Path: {powershell_snippet}"
+        );
+        assert!(
+            powershell_snippet.contains("function setproxy"),
+            "PowerShell should have setproxy function: {powershell_snippet}"
+        );
+        assert!(
+            powershell_snippet.contains("Join-Path $shineBin"),
+            "PowerShell wrapper should resolve through shine bin: {powershell_snippet}"
+        );
     }
 
     #[test]
@@ -1105,6 +1158,20 @@ mod tests {
             shell_source_command(&ShellType::PowerShell, &path),
             ". '/home/user/my config/.zshrc'"
         );
+    }
+
+    #[test]
+    fn powershell_shell_detection_accepts_pwsh_names() {
+        assert!(matches!("pwsh".parse().unwrap(), ShellType::PowerShell));
+        assert!(matches!("pwsh.exe".parse().unwrap(), ShellType::PowerShell));
+        assert!(matches!(
+            r"C:\Program Files\PowerShell\7\pwsh.exe".parse().unwrap(),
+            ShellType::PowerShell
+        ));
+        assert!(matches!(
+            "powershell".parse().unwrap(),
+            ShellType::PowerShell
+        ));
     }
 
     #[test]
