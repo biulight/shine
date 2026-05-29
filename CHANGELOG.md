@@ -5,6 +5,26 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.26.0] — 2026-05-30
+
+### Features
+
+- Added Windows PowerShell shell preset support, including native `setproxy` and `usetproxy` commands.
+- Added a Windows `install.ps1` one-line installer for release assets.
+- Added `shine upgrade --prune-stale` to remove managed app files whose preset source no longer exists.
+- Added platform-specific proxy presets so PowerShell users get native `setproxy` and `usetproxy` scripts.
+
+### Bug Fixes
+
+- Changed `setproxy` to keep Git, npm, and pnpm proxy behavior scoped to the current terminal session where possible; Yarn remains explicitly reported as a persistent config exception.
+- Accepted Unix-style app destinations such as `/etc/docker` when inspecting embedded presets on Windows.
+
+### Docs
+
+- Documented the Windows installer, PowerShell proxy behavior, and session-scoped proxy defaults in the English and Chinese READMEs.
+
+---
+
 ## [0.25.0] — 2026-05-20
 
 ### Features
