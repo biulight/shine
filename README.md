@@ -550,13 +550,17 @@ description = "Proxy helper commands"
 [[files]]
 source = "set_proxy.sh"
 target = "setproxy"
+needs_source = true
+platforms = ["unix"]
 
 [[files]]
-source = "uset_proxy.sh"
-target = "usetproxy"
+source = "set_proxy.ps1"
+target = "setproxy"
+needs_source = true
+platforms = ["windows"]
 ```
 
-`source` points at the script file stored under the category directory. `target` controls the command name linked into `~/.shine/bin/`. When `target` is omitted, shine falls back to the script stem.
+`source` points at the script file stored under the category directory. `target` controls the command name linked into `~/.shine/bin/`. When `target` is omitted, shine falls back to the script stem. `platforms` is optional; supported values are `unix` and `windows`, and omitted means all platforms.
 
 ## Configuration
 
@@ -625,8 +629,8 @@ PROXY_HOST = "127.0.0.1"
 ├── config.toml
 ├── shine.env.toml    # optional flat env overrides
 ├── bin/
-│   ├── setproxy         # symlink → presets/shell/proxy/set_proxy.sh
-│   ├── usetproxy        # symlink → presets/shell/proxy/uset_proxy.sh
+│   ├── setproxy         # symlink/shim → platform proxy script
+│   ├── usetproxy        # symlink/shim → platform proxy script
 │   └── test_tools       # symlink → presets/shell/tools/test_tools.sh
 └── presets/
     ├── app/
@@ -645,7 +649,9 @@ PROXY_HOST = "127.0.0.1"
     └── shell/
         ├── proxy/
         │   ├── shine.toml
+        │   ├── set_proxy.ps1
         │   ├── set_proxy.sh
+        │   ├── uset_proxy.ps1
         │   └── uset_proxy.sh
         └── tools/
             └── test_tools.sh

@@ -541,13 +541,17 @@ description = "Proxy helper commands"
 [[files]]
 source = "set_proxy.sh"
 target = "setproxy"
+needs_source = true
+platforms = ["unix"]
 
 [[files]]
-source = "uset_proxy.sh"
-target = "usetproxy"
+source = "set_proxy.ps1"
+target = "setproxy"
+needs_source = true
+platforms = ["windows"]
 ```
 
-`source` 指向类别目录下实际存储的脚本文件。`target` 控制链接到 `~/.shine/bin/` 的命令名。若省略 `target`，`shine` 会回退到脚本文件名 stem。
+`source` 指向类别目录下实际存储的脚本文件。`target` 控制链接到 `~/.shine/bin/` 的命令名。若省略 `target`，`shine` 会回退到脚本文件名 stem。`platforms` 可选，支持 `unix` 和 `windows`；省略时表示所有平台。
 
 ## 配置
 
@@ -605,8 +609,8 @@ PROXY_HOST = "127.0.0.1"
 ├── config.toml
 ├── shine.env.toml    # 可选的扁平 env 覆盖文件
 ├── bin/
-│   ├── setproxy         # symlink → presets/shell/proxy/set_proxy.sh
-│   ├── usetproxy        # symlink → presets/shell/proxy/uset_proxy.sh
+│   ├── setproxy         # symlink/shim → 平台对应 proxy 脚本
+│   ├── usetproxy        # symlink/shim → 平台对应 proxy 脚本
 │   └── test_tools       # symlink → presets/shell/tools/test_tools.sh
 └── presets/
     ├── app/
@@ -625,7 +629,9 @@ PROXY_HOST = "127.0.0.1"
     └── shell/
         ├── proxy/
         │   ├── shine.toml
+        │   ├── set_proxy.ps1
         │   ├── set_proxy.sh
+        │   ├── uset_proxy.ps1
         │   └── uset_proxy.sh
         └── tools/
             └── test_tools.sh

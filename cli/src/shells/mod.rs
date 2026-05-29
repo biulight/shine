@@ -19,6 +19,8 @@ description = "My shell helper commands."
 source = "my_tool.sh"
 target = "mytool"
 needs_source = false
+# Optional: limit a file to specific platforms.
+# platforms = ["unix"]      # or ["windows"]
 
 # PowerShell scripts are also supported:
 # source = "my_tool.ps1"
@@ -722,10 +724,23 @@ fn path_export_snippet(
 }
 
 fn powershell_path_snippet(bin_str: &str) -> String {
-    let escaped = bin_str.replace('\'', "''");
+    let assignment = powershell_bin_assignment(bin_str);
     format!(
-        "$shineBin = '{escaped}'\n$shinePathEntries = $env:Path -split [System.IO.Path]::PathSeparator\nif ($shinePathEntries -notcontains $shineBin) {{\n  $env:Path = \"$shineBin$([System.IO.Path]::PathSeparator)$env:Path\"\n}}"
+        "{assignment}\n$shinePathEntries = $env:Path -split [System.IO.Path]::PathSeparator\nif ($shinePathEntries -notcontains $shineBin) {{\n  $env:Path = \"$shineBin$([System.IO.Path]::PathSeparator)$env:Path\"\n}}"
     )
+}
+
+fn powershell_bin_assignment(bin_str: &str) -> String {
+    let normalized = bin_str.replace('\\', "/");
+    if let Some(rel) = normalized.strip_prefix("$HOME/") {
+        let escaped = rel.replace('\'', "''");
+        format!("$shineBin = Join-Path $HOME '{escaped}'")
+    } else if normalized == "$HOME" {
+        "$shineBin = $HOME".to_string()
+    } else {
+        let escaped = bin_str.replace('\'', "''");
+        format!("$shineBin = '{escaped}'")
+    }
 }
 
 fn shell_source_command(shell: &ShellType, config_path: &Path) -> String {
@@ -962,6 +977,14 @@ mod tests {
         config
     }
 
+    fn wrapper_marker(command: &str, shell: &ShellType) -> String {
+        match shell {
+            ShellType::PowerShell => format!("function {command} {{ . (Join-Path $shineBin"),
+            ShellType::Fish => format!("function {command}"),
+            _ => format!("{command}() {{ source"),
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn install_then_uninstall_roundtrip() {
@@ -1145,6 +1168,14 @@ mod tests {
             powershell_snippet.contains("Join-Path $shineBin"),
             "PowerShell wrapper should resolve through shine bin: {powershell_snippet}"
         );
+        assert!(
+            powershell_snippet.contains("$shineBin = Join-Path $HOME '.shine/bin'"),
+            "PowerShell should expand $HOME when assigning shine bin: {powershell_snippet}"
+        );
+        assert!(
+            !powershell_snippet.contains("$shineBin = '$HOME"),
+            "PowerShell should not keep $HOME as a literal path: {powershell_snippet}"
+        );
     }
 
     #[test]
@@ -1174,6 +1205,7 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn proxy_scripts_fail_fast_when_not_sourced() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -1266,13 +1298,15 @@ mod tests {
             1,
             "sentinel should appear exactly once"
         );
+        let setproxy_marker = wrapper_marker("setproxy", &config.shell_type);
+        let usetproxy_marker = wrapper_marker("usetproxy", &config.shell_type);
         assert_eq!(
-            content.matches("\nsetproxy() { source").count(),
+            content.matches(&setproxy_marker).count(),
             1,
             "setproxy wrapper should not be duplicated: {content}"
         );
         assert_eq!(
-            content.matches("\nusetproxy() { source").count(),
+            content.matches(&usetproxy_marker).count(),
             1,
             "usetproxy wrapper should not be duplicated: {content}"
         );
@@ -1307,12 +1341,14 @@ mod tests {
             "stale sentinel should be refreshed"
         );
         let content = fs::read_to_string(&config_path).await.unwrap();
+        let setproxy_marker = wrapper_marker("setproxy", &config.shell_type);
+        let usetproxy_marker = wrapper_marker("usetproxy", &config.shell_type);
         assert!(
-            content.contains("setproxy() { source"),
+            content.contains(&setproxy_marker),
             "setproxy wrapper should be added: {content}"
         );
         assert!(
-            content.contains("usetproxy() { source"),
+            content.contains(&usetproxy_marker),
             "usetproxy wrapper should be added: {content}"
         );
         assert!(

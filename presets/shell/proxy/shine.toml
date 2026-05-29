@@ -4,8 +4,22 @@ description = "Proxy helper commands for the current shell session."
 source = "set_proxy.sh"
 target = "setproxy"
 needs_source = true
+platforms = ["unix"]
 
 [[files]]
 source = "uset_proxy.sh"
 target = "usetproxy"
 needs_source = true
+platforms = ["unix"]
+
+[[files]]
+source = "set_proxy.ps1"
+target = "setproxy"
+needs_source = true
+platforms = ["windows"]
+
+[[files]]
+source = "uset_proxy.ps1"
+target = "usetproxy"
+needs_source = true
+platforms = ["windows"]

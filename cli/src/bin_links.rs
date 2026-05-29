@@ -298,12 +298,14 @@ async fn create_windows_shims(source: &Path, ps1_path: &Path) -> Result<()> {
 fn powershell_shim_content(source: &Path) -> String {
     let target = source.display().to_string();
     let escaped = target.replace('\'', "''");
+    let bash_target = bash_compatible_path(source);
+    let bash_escaped = bash_target.replace('\'', "''");
     match source.extension().and_then(|e| e.to_str()) {
         Some("ps1") => format!(
             "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\nif ($MyInvocation.InvocationName -eq '.') {{\n  . '{escaped}' @args\n}} else {{\n  & '{escaped}' @args\n  exit $LASTEXITCODE\n}}\n"
         ),
         _ => format!(
-            "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\n& bash '{escaped}' @args\nexit $LASTEXITCODE\n"
+            "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\n& bash '{bash_escaped}' @args\nexit $LASTEXITCODE\n"
         ),
     }
 }
@@ -312,14 +314,20 @@ fn powershell_shim_content(source: &Path) -> String {
 fn cmd_shim_content(source: &Path) -> String {
     let target = source.display().to_string();
     let escaped = target.replace('\'', "''");
+    let bash_target = bash_compatible_path(source);
     match source.extension().and_then(|e| e.to_str()) {
         Some("ps1") => format!(
             "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{escaped}\" %*\r\n"
         ),
         _ => format!(
-            "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\nbash \"{target}\" %*\r\n"
+            "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\nbash \"{bash_target}\" %*\r\n"
         ),
     }
+}
+
+#[cfg(not(unix))]
+fn bash_compatible_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
 }
 
 #[cfg(not(unix))]
@@ -642,5 +650,18 @@ mod tests {
 
         assert!(report.removed.is_empty());
         assert!(report.skipped.is_empty());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn shell_shims_pass_bash_compatible_paths_on_windows() {
+        let source = PathBuf::from(r"C:\Users\me\.shine\rendered\shell\tools\test_tools.sh");
+
+        let ps1 = powershell_shim_content(&source);
+        let cmd = cmd_shim_content(&source);
+
+        assert!(ps1.contains("C:/Users/me/.shine/rendered/shell/tools/test_tools.sh"));
+        assert!(cmd.contains("C:/Users/me/.shine/rendered/shell/tools/test_tools.sh"));
+        assert!(!ps1.contains(r"& bash 'C:\Users\me"));
     }
 }
