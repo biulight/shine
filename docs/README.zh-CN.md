@@ -248,6 +248,8 @@ dest = "~/.vim"
 
 当 `shine.toml` 定义了 `files` 时，只安装列出的条目。若省略 `files`，`shine` 会把整个类别目录视为受管内容，并把除 `shine.toml` 之外的所有文件按相同相对路径映射到 `dest`。
 
+`shine app install` 写入文件前，`dest` 必须展开为当前平台的绝对路径。`/etc/docker` 这类 Unix 根路径在 Windows 上仍可作为内置 Unix 预设的展示元数据被读取，但 Windows 安装会拒绝它们，而不会把它们当作当前盘符根目录下的路径。
+
 #### 文件变换
 
 `[[files]]` 条目可以声明一个 `transforms` 管道，在写入目标前处理源文件。如果变换会改变输出格式，可用 `target` 修改目标文件名：

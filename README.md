@@ -248,6 +248,8 @@ dest = "~/.vim"
 
 When `shine.toml` defines `files`, only those entries are installed. When it omits `files`, `shine` treats the whole category directory as managed and maps every file except `shine.toml` into `dest` with the same relative path.
 
+`dest` must expand to an absolute path for the current platform before `shine app install` writes files. Unix-style roots such as `/etc/docker` remain valid metadata for listing embedded Unix presets on Windows, but Windows installs reject them instead of treating them as drive-root paths.
+
 #### File transforms
 
 A `[[files]]` entry may declare a `transforms` pipeline to process the source file before it is written to the destination. Use `target` to rename the file at the destination if a transform changes the format:
