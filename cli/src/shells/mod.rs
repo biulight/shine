@@ -193,7 +193,10 @@ pub(crate) async fn handle_upgrade_installed(
         .iter()
         .flat_map(|cat| {
             cat.files.iter().filter_map(|file| {
-                let link = config.bin_dir().join(&file.command_name);
+                let link = crate::bin_links::command_path_for_name(
+                    &config.bin_dir(),
+                    std::ffi::OsStr::new(&file.command_name),
+                );
                 shell_link_exists(&link).then(|| (cat.name.clone(), file.command_name.clone()))
             })
         })

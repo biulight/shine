@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::env::EnvConfig;
 use anyhow::Result;
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -70,8 +71,8 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 .join("shell")
                 .join(&cat.name)
                 .join(&script.source_rel);
-            let link_name = std::ffi::OsString::from(&script.command_name);
-            let link_path = bin_dir.join(&link_name);
+            let link_name = OsString::from(&script.command_name);
+            let link_path = crate::bin_links::command_path_for_name(&bin_dir, &link_name);
 
             let file_exists = script_path.exists();
             let link_exists = link_path.exists() || {
@@ -172,6 +173,7 @@ pub(crate) async fn build_app_rows(
                     d.to_string_lossy()
                         .into_owned()
                         .replace(config.home_dir.to_string_lossy().as_ref(), "~")
+                        .replace('\\', "/")
                 });
 
                 let (sym, status_text) = match status {
@@ -232,7 +234,8 @@ pub(crate) async fn build_app_rows(
             let dest_display: Option<String> = if let Some(root) = &cat.destination_root {
                 Some(
                     crate::config::tilde_expand(root)
-                        .replace(config.home_dir.to_string_lossy().as_ref(), "~"),
+                        .replace(config.home_dir.to_string_lossy().as_ref(), "~")
+                        .replace('\\', "/"),
                 )
             } else if cat.files.len() == 1 {
                 resolve_install_destination(cat, &cat.files[0], config)
@@ -240,6 +243,7 @@ pub(crate) async fn build_app_rows(
                     .map(|p| {
                         let s = p.to_string_lossy().into_owned();
                         s.replace(config.home_dir.to_string_lossy().as_ref(), "~")
+                            .replace('\\', "/")
                     })
             } else {
                 None
@@ -320,6 +324,42 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shine-check-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).await.unwrap();
         dir
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn installed_shell_rows_use_windows_shim_path() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/proxy");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"set_proxy.ps1\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join("set_proxy.ps1"), b"Write-Output proxy\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        fs::write(config.bin_dir().join("setproxy.ps1"), b"# shine-managed\n")
+            .await
+            .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "proxy/setproxy")
+            .expect("proxy/setproxy row should exist");
+
+        assert_eq!(row.status_sym, "✓");
+        assert_eq!(row.status_text, "up-to-date");
+        assert!(row.is_installed);
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[cfg(unix)]

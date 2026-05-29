@@ -183,7 +183,10 @@ async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShowFile>> {
                 .join("shell")
                 .join(&category.name)
                 .join(&file.source_rel);
-            let link_path = config.bin_dir().join(&file.command_name);
+            let link_path = crate::bin_links::command_path_for_name(
+                &config.bin_dir(),
+                std::ffi::OsStr::new(&file.command_name),
+            );
 
             let source_exists = source_path.exists();
             let rendered_exists = rendered_path.exists();

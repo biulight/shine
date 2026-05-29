@@ -1078,8 +1078,8 @@ pub(crate) fn resolve_install_destination(
     if let Some(dest_root) = &category.destination_root {
         let expanded = crate::config::full_expand(dest_root)
             .with_context(|| format!("failed to expand destination root: {dest_root}"))?;
-        let root = PathBuf::from(expanded);
-        if !root.is_absolute() {
+        let root = PathBuf::from(&expanded);
+        if !root.is_absolute() && !expanded.starts_with('/') {
             anyhow::bail!("destination root must be absolute after expansion");
         }
         if root

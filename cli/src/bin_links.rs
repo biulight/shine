@@ -159,11 +159,11 @@ pub(crate) async fn link_executables_with_names(
         if !seen.insert(stem.clone()) {
             report
                 .conflicts
-                .push((command_link_path(bin_dir, &stem), spec.source.clone()));
+                .push((command_path_for_name(bin_dir, &stem), spec.source.clone()));
             continue;
         }
 
-        let link_path = command_link_path(bin_dir, &stem);
+        let link_path = command_path_for_name(bin_dir, &stem);
 
         match tokio::fs::symlink_metadata(&link_path).await {
             Ok(meta) if meta.file_type().is_symlink() => {
@@ -212,7 +212,7 @@ pub(crate) async fn link_executables_with_names(
     Ok(report)
 }
 
-fn command_link_path(bin_dir: &Path, stem: &OsStr) -> PathBuf {
+pub(crate) fn command_path_for_name(bin_dir: &Path, stem: &OsStr) -> PathBuf {
     #[cfg(unix)]
     {
         bin_dir.join(stem)

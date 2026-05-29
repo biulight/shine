@@ -391,14 +391,18 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
 
     let expanded = crate::config::full_expand(&parsed.dest)
         .with_context(|| format!("failed to expand dest in app/{name}/shine.toml"))?;
-    let path = PathBuf::from(&expanded);
-    if !path.is_absolute() {
+    if !is_absolute_after_expansion(&expanded) {
         bail!("app/{name}/shine.toml dest must be absolute after expansion");
     }
+    let path = PathBuf::from(&expanded);
     if path.components().any(|c| c == Component::ParentDir) {
         bail!("app/{name}/shine.toml dest must not contain '..'");
     }
     Ok(parsed)
+}
+
+fn is_absolute_after_expansion(path: &str) -> bool {
+    Path::new(path).is_absolute() || path.starts_with('/')
 }
 
 fn normalize_relative(path: &str) -> Result<PathBuf> {
@@ -461,6 +465,13 @@ mod tests {
         assert_eq!(file.source_rel, std::path::Path::new("daemon.jsonc"));
         assert_eq!(file.target_rel, std::path::Path::new("daemon.json"));
         assert_eq!(file.transforms, vec!["template", "jsonc-to-json"]);
+    }
+
+    #[test]
+    fn unix_absolute_dest_is_valid_on_all_platforms() {
+        let parsed = parse_category_toml("docker", b"dest = \"/etc/docker\"\n").unwrap();
+
+        assert_eq!(parsed.dest, "/etc/docker");
     }
 
     #[test]
