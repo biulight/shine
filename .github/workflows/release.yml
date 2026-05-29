@@ -52,6 +52,7 @@ jobs:
           files: |
             dist/**/*.tar.gz
             install.sh
+            install.ps1
 
   open-main-pr:
     needs:

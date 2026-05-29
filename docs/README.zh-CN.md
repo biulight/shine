@@ -47,8 +47,16 @@ English README: [`../README.md`](../README.md)
 
 ## 安装
 
+macOS/Linux：
+
 ```bash
 curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
 或从源码安装：
@@ -439,7 +447,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
-### install.sh 选项
+### 安装脚本选项
 
 `install.sh` 默认把 `shine` 安装到 `~/.local/bin/shine`，不会修改你的 shell 配置。
 
@@ -447,6 +455,14 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
 SHINE_VERSION=0.25.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
+```
+
+`install.ps1` 默认把 `shine.exe` 安装到 `%LOCALAPPDATA%\Programs\shine\shine.exe`，不会修改你的用户 PATH。
+
+```powershell
+$env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
+$env:SHINE_VERSION = "0.25.0"; .\install.ps1
+$env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
 ## 内置预设

@@ -47,8 +47,16 @@ The full workflow lives in [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Installation
 
+macOS/Linux:
+
 ```bash
 curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
 Or install from source:
@@ -443,7 +451,7 @@ Preview upgrades install from the fixed `preview` GitHub prerelease and are not 
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
-### install.sh options
+### Installer options
 
 `install.sh` defaults to installing `shine` into `~/.local/bin/shine` without editing your shell config.
 
@@ -451,6 +459,14 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
 SHINE_VERSION=0.25.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
+```
+
+`install.ps1` defaults to installing `shine.exe` into `%LOCALAPPDATA%\Programs\shine\shine.exe` without editing your user PATH.
+
+```powershell
+$env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
+$env:SHINE_VERSION = "0.25.0"; .\install.ps1
+$env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
 ## Bundled Presets
