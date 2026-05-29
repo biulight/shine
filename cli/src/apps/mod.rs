@@ -1079,7 +1079,7 @@ pub(crate) fn resolve_install_destination(
         let expanded = crate::config::full_expand(dest_root)
             .with_context(|| format!("failed to expand destination root: {dest_root}"))?;
         let root = PathBuf::from(&expanded);
-        if !root.is_absolute() && !expanded.starts_with('/') {
+        if !is_install_destination_root_absolute(&expanded, &root) {
             anyhow::bail!("destination root must be absolute after expansion");
         }
         if root
@@ -1097,6 +1097,16 @@ pub(crate) fn resolve_install_destination(
         &file.target_rel.display().to_string(),
         config,
     )
+}
+
+#[cfg(windows)]
+fn is_install_destination_root_absolute(_expanded: &str, root: &Path) -> bool {
+    root.is_absolute()
+}
+
+#[cfg(not(windows))]
+fn is_install_destination_root_absolute(expanded: &str, root: &Path) -> bool {
+    root.is_absolute() || expanded.starts_with('/')
 }
 
 #[cfg(test)]
@@ -1701,6 +1711,40 @@ mod tests {
         let vim = categories.iter().find(|c| c.name == "vim").unwrap();
         assert!(vim.uses_metadata);
         assert_eq!(vim.destination_root.as_deref(), Some("~/.vim"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn install_rejects_unix_only_metadata_destination_on_windows() {
+        let dir = std::env::temp_dir().join("shine-apps-win-dest");
+        let config = Config::new_for_test(&dir);
+        let categories = metadata::load_embedded_categories(Some("docker")).unwrap();
+        let docker = categories.iter().find(|c| c.name == "docker").unwrap();
+        let file = docker.files.first().unwrap();
+
+        let err = resolve_install_destination(docker, file, &config).unwrap_err();
+
+        assert!(
+            err.to_string().contains("absolute"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_accepts_unix_metadata_destination_on_unix() {
+        let dir = std::env::temp_dir().join("shine-apps-unix-dest");
+        let config = Config::new_for_test(&dir);
+        let categories = metadata::load_embedded_categories(Some("docker")).unwrap();
+        let docker = categories.iter().find(|c| c.name == "docker").unwrap();
+        let file = docker.files.first().unwrap();
+
+        let destination = resolve_install_destination(docker, file, &config).unwrap();
+
+        assert_eq!(
+            destination,
+            PathBuf::from("/etc/docker").join("daemon.json")
+        );
     }
 
     #[cfg(unix)]
