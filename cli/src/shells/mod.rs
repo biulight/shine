@@ -813,8 +813,27 @@ async fn append_path_to_shell_config(
     force: bool,
     source_commands: &[String],
 ) -> Result<PathUpdateStatus> {
-    let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
+    let config_paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
+    let mut updated_path = None;
 
+    for config_path in config_paths {
+        if append_path_to_single_shell_config(config, force, source_commands, &config_path).await? {
+            updated_path.get_or_insert(config_path);
+        }
+    }
+
+    match updated_path {
+        Some(path) => Ok(PathUpdateStatus::Updated(path)),
+        None => Ok(PathUpdateStatus::AlreadyConfigured),
+    }
+}
+
+async fn append_path_to_single_shell_config(
+    config: &Config,
+    force: bool,
+    source_commands: &[String],
+    config_path: &Path,
+) -> Result<bool> {
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -834,7 +853,7 @@ async fn append_path_to_shell_config(
     if let Some(existing_block) = sentinel_block(&existing) {
         let expected_block = snippet.trim_end_matches('\n');
         if !force && existing_block == expected_block {
-            return Ok(PathUpdateStatus::AlreadyConfigured);
+            return Ok(false);
         }
         // Force or stale managed block: remove old sentinel block and re-add
         // with the current PATH setup and source wrapper functions.
@@ -855,33 +874,35 @@ async fn append_path_to_shell_config(
         .await
         .with_context(|| format!("writing to shell config: {config_path:?}"))?;
 
-    Ok(PathUpdateStatus::Updated(config_path))
+    Ok(true)
 }
 
 async fn remove_path_from_shell_config(config: &Config) -> Result<()> {
-    let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
+    let config_paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
 
-    if !config_path.exists() {
-        return Ok(());
+    for config_path in config_paths {
+        if !config_path.exists() {
+            continue;
+        }
+
+        let content = tokio::fs::read_to_string(&config_path)
+            .await
+            .with_context(|| format!("reading shell config: {config_path:?}"))?;
+
+        if !content.contains(SENTINEL_START) {
+            continue;
+        }
+
+        let cleaned = remove_sentinel_block(&content);
+        tokio::fs::write(&config_path, cleaned.as_bytes())
+            .await
+            .with_context(|| format!("writing shell config: {config_path:?}"))?;
+
+        println!(
+            "Shell config ({}): PATH entry removed",
+            config_path.display()
+        );
     }
-
-    let content = tokio::fs::read_to_string(&config_path)
-        .await
-        .with_context(|| format!("reading shell config: {config_path:?}"))?;
-
-    if !content.contains(SENTINEL_START) {
-        return Ok(());
-    }
-
-    let cleaned = remove_sentinel_block(&content);
-    tokio::fs::write(&config_path, cleaned.as_bytes())
-        .await
-        .with_context(|| format!("writing shell config: {config_path:?}"))?;
-
-    println!(
-        "Shell config ({}): PATH entry removed",
-        config_path.display()
-    );
     Ok(())
 }
 
@@ -894,18 +915,30 @@ pub(crate) fn get_shell() -> Result<ShellType> {
 }
 
 pub(crate) fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) -> Result<PathBuf> {
+    Ok(get_shell_config_paths(shell_type, home_path)?
+        .into_iter()
+        .next()
+        .expect("shell config paths should never be empty"))
+}
+
+fn get_shell_config_paths(shell_type: &ShellType, home_path: &Path) -> Result<Vec<PathBuf>> {
     match shell_type {
-        ShellType::Bash => Ok(home_path.join(".bashrc")),
-        ShellType::Fish => Ok(home_path.join(".config/fish/config.fish")),
-        ShellType::Zsh => Ok(home_path.join(".zshrc")),
+        ShellType::Bash => Ok(vec![home_path.join(".bashrc")]),
+        ShellType::Fish => Ok(vec![home_path.join(".config/fish/config.fish")]),
+        ShellType::Zsh => Ok(vec![home_path.join(".zshrc")]),
         ShellType::PowerShell => {
             if cfg!(windows) {
-                Ok(home_path.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"))
+                Ok(vec![
+                    home_path.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+                    home_path.join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+                ])
             } else {
-                Ok(home_path.join(".config/powershell/Microsoft.PowerShell_profile.ps1"))
+                Ok(vec![home_path.join(
+                    ".config/powershell/Microsoft.PowerShell_profile.ps1",
+                )])
             }
         }
-        ShellType::Elvish => Ok(home_path.join(".config/elvish/rc.elv")),
+        ShellType::Elvish => Ok(vec![home_path.join(".config/elvish/rc.elv")]),
     }
 }
 
@@ -978,6 +1011,28 @@ mod tests {
             .env
             .insert("DEEPSEEK_API_KEY".into(), "test-deepseek-key".into());
         config
+    }
+
+    fn agent_ccenv_link_path(config: &Config) -> PathBuf {
+        crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("ccenv"))
+    }
+
+    #[cfg(unix)]
+    async fn assert_agent_ccenv_link_points_to(config: &Config, rendered: &Path) {
+        let link = agent_ccenv_link_path(config);
+        assert_eq!(fs::read_link(&link).await.unwrap(), rendered);
+    }
+
+    #[cfg(not(unix))]
+    async fn assert_agent_ccenv_link_points_to(config: &Config, rendered: &Path) {
+        let link = agent_ccenv_link_path(config);
+        let shim = fs::read_to_string(&link).await.unwrap();
+        let shim = shim.replace('\\', "/");
+        let rendered = rendered.display().to_string().replace('\\', "/");
+        assert!(
+            shim.contains(&rendered),
+            "Windows shim should point to rendered ccenv script: {shim}"
+        );
     }
 
     fn wrapper_marker(command: &str, shell: &ShellType) -> String {
@@ -1317,6 +1372,35 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn append_writes_both_windows_powershell_profiles() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.shell_type = ShellType::PowerShell;
+        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
+
+        append_path_to_shell_config(&config, false, &source_commands)
+            .await
+            .unwrap();
+
+        for config_path in get_shell_config_paths(&config.shell_type, &config.home_dir).unwrap() {
+            let content = fs::read_to_string(&config_path).await.unwrap();
+            assert!(
+                content.contains("function setproxy"),
+                "setproxy wrapper should be added to {}: {content}",
+                config_path.display()
+            );
+            assert!(
+                content.contains("function usetproxy"),
+                "usetproxy wrapper should be added to {}: {content}",
+                config_path.display()
+            );
+        }
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[tokio::test]
     async fn append_refreshes_stale_sentinel_with_source_wrappers() {
         let dir = make_temp_dir().await;
@@ -1633,7 +1717,6 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn embedded_agent_ccenv_renders_deepseek_key_from_env_config() {
         let dir = make_temp_dir().await;
@@ -1643,7 +1726,10 @@ mod tests {
 
         handle_install(&config, Some("agent"), false).await.unwrap();
 
-        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             rendered_content.contains("test-deepseek-key"),
@@ -1653,15 +1739,11 @@ mod tests {
             !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
             "rendered agent script should not contain the template placeholder"
         );
-        assert_eq!(
-            fs::read_link(config.bin_dir().join("ccenv")).await.unwrap(),
-            rendered
-        );
+        assert_agent_ccenv_link_points_to(&config, &rendered).await;
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn embedded_agent_ccenv_does_not_render_deepseek_gpg_secret() {
         let dir = make_temp_dir().await;
@@ -1675,7 +1757,10 @@ mod tests {
 
         handle_install(&config, Some("agent"), false).await.unwrap();
 
-        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             !rendered_content.contains("test-base64-gpg-secret"),
@@ -1685,15 +1770,11 @@ mod tests {
             !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
             "rendered agent script should not contain the key template placeholder"
         );
-        assert_eq!(
-            fs::read_link(config.bin_dir().join("ccenv")).await.unwrap(),
-            rendered
-        );
+        assert_agent_ccenv_link_points_to(&config, &rendered).await;
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn embedded_agent_install_succeeds_without_deepseek_secret() {
         let dir = make_temp_dir().await;
@@ -1703,7 +1784,10 @@ mod tests {
 
         handle_install(&config, Some("agent"), false).await.unwrap();
 
-        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             rendered_content.contains(
@@ -1716,7 +1800,7 @@ mod tests {
             "rendered agent script should not contain the key template placeholder"
         );
         assert!(
-            config.bin_dir().join("ccenv").exists(),
+            agent_ccenv_link_path(&config).exists(),
             "agent install should link ccenv even when secrets are configured later"
         );
 
@@ -1725,13 +1809,15 @@ mod tests {
 
     #[test]
     fn embedded_agent_ccenv_uses_cli_decrypt_and_priority_path() {
-        let bytes = crate::presets::read_asset_bytes("shell/agent/cc.sh").unwrap();
-        let script = String::from_utf8(bytes).unwrap();
+        for path in ["shell/agent/cc.sh", "shell/agent/cc.ps1"] {
+            let bytes = crate::presets::read_asset_bytes(path).unwrap();
+            let script = String::from_utf8(bytes).unwrap();
 
-        assert!(script.contains("shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET"));
-        assert!(script.contains("shine env get DEEPSEEK_API_KEY_GPG_SECRET"));
-        assert!(script.contains("DEEPSEEK_API_KEY_GPG_SECRET"));
-        assert!(!script.contains("@@DEEPSEEK_API_KEY_GPG_SECRET@@"));
+            assert!(script.contains("shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET"));
+            assert!(script.contains("shine env get DEEPSEEK_API_KEY_GPG_SECRET"));
+            assert!(script.contains("DEEPSEEK_API_KEY_GPG_SECRET"));
+            assert!(!script.contains("@@DEEPSEEK_API_KEY_GPG_SECRET@@"));
+        }
     }
 
     #[cfg(unix)]

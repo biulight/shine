@@ -515,10 +515,11 @@ mod tests {
 
         assert_eq!(agent.files.len(), 1);
         assert_eq!(agent.files[0].command_name, "ccenv");
-        assert_eq!(agent.files[0].source_rel, PathBuf::from("cc.sh"));
+        let expected = if cfg!(windows) { "cc.ps1" } else { "cc.sh" };
+        assert_eq!(agent.files[0].source_rel, PathBuf::from(expected));
         assert!(agent.files[0].needs_source);
 
-        let bytes = presets::read_asset_bytes("shell/agent/cc.sh").unwrap();
+        let bytes = presets::read_asset_bytes(&format!("shell/agent/{expected}")).unwrap();
         assert!(presets::parse_template_annotation(&bytes));
     }
 
