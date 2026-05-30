@@ -1050,13 +1050,7 @@ pub(crate) async fn handle_uninstall(
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
 
     let entries: Vec<_> = if let Some(cat) = category {
-        let prefix = format!("app/{cat}/");
-        let filtered: Vec<_> = manifest
-            .entries
-            .iter()
-            .filter(|e| e.source.starts_with(&prefix))
-            .cloned()
-            .collect();
+        let filtered = uninstall_entries_for_category(config, &manifest, cat).await?;
         if filtered.is_empty() {
             println!(
                 "{}",
@@ -1222,6 +1216,55 @@ pub(crate) async fn handle_uninstall(
     println!("\n{}  {}", colors::bold("Done"), summary_parts.join(&sep));
 
     Ok(())
+}
+
+async fn uninstall_entries_for_category(
+    config: &Config,
+    manifest: &AppManifest,
+    category: &str,
+) -> Result<Vec<AppEntry>> {
+    let prefix = format!("app/{category}/");
+    let mut entries_by_dest: BTreeMap<PathBuf, AppEntry> = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.source.starts_with(&prefix))
+        .map(|entry| (entry.destination.clone(), entry.clone()))
+        .collect();
+
+    let categories = if config.is_external_presets {
+        metadata::load_installed_categories(config, Some(category)).await?
+    } else {
+        metadata::load_embedded_categories(Some(category))?
+    };
+
+    for cat in categories.iter().filter(|cat| cat.name == category) {
+        append_manifest_entries_for_category_destinations(
+            config,
+            manifest,
+            cat,
+            &mut entries_by_dest,
+        );
+    }
+
+    Ok(entries_by_dest.into_values().collect())
+}
+
+fn append_manifest_entries_for_category_destinations(
+    config: &Config,
+    manifest: &AppManifest,
+    category: &metadata::AppCategory,
+    entries_by_dest: &mut BTreeMap<PathBuf, AppEntry>,
+) {
+    for file in &category.files {
+        let Ok(destination) = resolve_install_destination(category, file, config) else {
+            continue;
+        };
+        if let Some(entry) = manifest.find_by_dest(&destination) {
+            entries_by_dest
+                .entry(entry.destination.clone())
+                .or_insert_with(|| entry.clone());
+        }
+    }
 }
 
 pub(crate) fn resolve_install_destination(
@@ -1452,6 +1495,56 @@ mod tests {
         }
 
         unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn uninstall_category_selection_matches_current_destination() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let destination_root = dir.join(".docker");
+        let destination = destination_root.join("daemon.json");
+        let category = AppCategory {
+            name: "docker-engine".to_string(),
+            description: None,
+            destination_root: Some(destination_root.display().to_string()),
+            files: vec![AppFile {
+                source_rel: PathBuf::from("daemon.jsonc"),
+                target_rel: PathBuf::from("daemon.json"),
+                description: None,
+                display_name: None,
+                legacy_dest_annotation: None,
+                transforms: vec![],
+                install_strategy: AppInstallStrategy::Copy,
+            }],
+            list_mode: AppListMode::Files,
+            uses_metadata: true,
+            has_explicit_files: true,
+        };
+        let manifest = AppManifest {
+            entries: vec![AppEntry {
+                source: "app/docker/daemon.jsonc".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: 42,
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+            }],
+        };
+        let mut entries_by_dest = BTreeMap::new();
+
+        append_manifest_entries_for_category_destinations(
+            &config,
+            &manifest,
+            &category,
+            &mut entries_by_dest,
+        );
+
+        assert!(
+            entries_by_dest.contains_key(&destination),
+            "category uninstall should find legacy manifest entries by current destination"
+        );
+
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

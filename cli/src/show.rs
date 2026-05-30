@@ -329,14 +329,7 @@ fn resolve_target(target: &str, candidates: &[TargetCandidate]) -> Result<Vec<Sh
         return ambiguity(trimmed, alias);
     }
 
-    let available = candidates
-        .iter()
-        .map(|c| c.canonical.as_str())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>()
-        .join(", ");
-    bail!("installed item not found: {trimmed}. Available installed targets: {available}");
+    bail!("{}", missing_target_message(trimmed, candidates));
 }
 
 fn ambiguity(target: &str, matches: Vec<&TargetCandidate>) -> Result<Vec<ShowRef>> {
@@ -348,6 +341,63 @@ fn ambiguity(target: &str, matches: Vec<&TargetCandidate>) -> Result<Vec<ShowRef
         .collect::<Vec<_>>()
         .join(", ");
     bail!("ambiguous info target '{target}'. Use one of: {choices}");
+}
+
+fn missing_target_message(target: &str, candidates: &[TargetCandidate]) -> String {
+    let suggestions = suggested_targets(target, candidates);
+    let mut message = format!("installed item not found: {target}");
+
+    if suggestions.is_empty() {
+        let available = candidates
+            .iter()
+            .map(|c| c.canonical.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        if !available.is_empty() {
+            message.push_str("\n\nAvailable installed targets:");
+            for target in available {
+                message.push_str(&format!("\n  {target}"));
+            }
+        }
+    } else {
+        message.push_str("\n\nDid you mean:");
+        for target in suggestions {
+            message.push_str(&format!("\n  {target}"));
+        }
+    }
+
+    message.push_str("\n\nRun `shine list` to see installed targets.");
+    message
+}
+
+fn suggested_targets(target: &str, candidates: &[TargetCandidate]) -> Vec<String> {
+    let needle = target.to_ascii_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+
+    candidates
+        .iter()
+        .filter(|candidate| is_suggested_target(&needle, candidate))
+        .map(|candidate| candidate.canonical.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn is_suggested_target(needle: &str, candidate: &TargetCandidate) -> bool {
+    std::iter::once(candidate.canonical.as_str())
+        .chain(candidate.aliases.iter().map(String::as_str))
+        .any(|value| {
+            let value = value.to_ascii_lowercase();
+            value.contains(needle)
+                || value
+                    .split(['/', '-', '_', '.'])
+                    .filter(|part| !part.is_empty())
+                    .any(|part| part == needle || part.starts_with(needle))
+        })
 }
 
 async fn print_app_file(
@@ -863,8 +913,38 @@ mod tests {
     fn reports_missing_target() {
         let candidates = build_candidates(&[], &[shell_file("proxy", "setproxy", "set_proxy.sh")]);
         let err = resolve_target("missing", &candidates).unwrap_err();
-        assert!(err.to_string().contains("installed item not found"));
-        assert!(err.to_string().contains("shell/proxy/setproxy"));
+        let message = err.to_string();
+        assert!(message.contains("installed item not found: missing"));
+        assert!(message.contains("Available installed targets:"));
+        assert!(message.contains("  shell/proxy"));
+        assert!(message.contains("  shell/proxy/setproxy"));
+        assert!(message.contains("Run `shine list` to see installed targets."));
+    }
+
+    #[test]
+    fn reports_missing_target_with_suggestions() {
+        let app_files = vec![
+            app_file(
+                "docker-desktop",
+                "settings-store.jsonc",
+                "/tmp/settings-store.json",
+            ),
+            app_file("docker-engine", "daemon.jsonc", "/tmp/daemon.json"),
+        ];
+        let shell_files = vec![shell_file("proxy", "setproxy", "set_proxy.sh")];
+        let candidates = build_candidates(&app_files, &shell_files);
+
+        let err = resolve_target("docker", &candidates).unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("installed item not found: docker"));
+        assert!(message.contains("Did you mean:"));
+        assert!(message.contains("  app/docker-desktop"));
+        assert!(message.contains("  app/docker-desktop/settings-store.jsonc"));
+        assert!(message.contains("  app/docker-engine"));
+        assert!(message.contains("  app/docker-engine/daemon.jsonc"));
+        assert!(!message.contains("shell/proxy"));
+        assert!(message.contains("Run `shine list` to see installed targets."));
     }
 
     #[cfg(windows)]
