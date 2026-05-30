@@ -12,6 +12,7 @@ mod commands;
 mod config;
 mod env;
 mod list;
+mod path_display;
 mod platform;
 mod presets;
 mod secret;

@@ -3,6 +3,7 @@ pub(crate) mod metadata;
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::path_display;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -900,7 +901,7 @@ async fn remove_path_from_shell_config(config: &Config) -> Result<()> {
 
         println!(
             "Shell config ({}): PATH entry removed",
-            config_path.display()
+            path_display::format_home(&config_path, &config.home_dir)
         );
     }
     Ok(())

@@ -7,6 +7,7 @@ use crate::check::FileStatus;
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::path_display;
 use crate::shells::metadata::load_installed_categories as load_installed_shells;
 use crate::shells::metadata::{ShellCategory, load_embedded_categories as load_embedded_shells};
 use anyhow::{Context, Result, bail};
@@ -368,11 +369,15 @@ async fn print_app_file(
     } else if let Some(desc) = &item.category.description {
         println!("{}  {desc}", colors::dim("Description"));
     }
-    println!("{}       {}", colors::dim("Source"), source_path.display());
+    println!(
+        "{}       {}",
+        colors::dim("Source"),
+        path_display::format_home(&source_path, &config.home_dir)
+    );
     println!(
         "{}  {}",
         colors::dim("Destination"),
-        item.destination.display()
+        path_display::format_home(&item.destination, &config.home_dir)
     );
     println!(
         "{}       {}",
@@ -389,7 +394,11 @@ async fn print_app_file(
     if let Some(entry) = &item.manifest_entry {
         println!("{} {}", colors::dim("Manifest hash"), entry.content_hash);
         if let Some(backup) = &entry.backup {
-            println!("{}       {}", colors::dim("Backup"), backup.display());
+            println!(
+                "{}       {}",
+                colors::dim("Backup"),
+                path_display::format_home(backup, &config.home_dir)
+            );
         }
     }
     if diff {
@@ -416,15 +425,19 @@ async fn print_shell_file(
     println!(
         "{}       {}",
         colors::dim("Source"),
-        item.source_path.display()
+        path_display::format_home(&item.source_path, &config.home_dir)
     );
     println!(
         "{}     {}",
         colors::dim("Bin link"),
-        item.link_path.display()
+        path_display::format_home(&item.link_path, &config.home_dir)
     );
     if let Some(target) = &item.link_target {
-        println!("{} {}", colors::dim("Link target"), target.display());
+        println!(
+            "{} {}",
+            colors::dim("Link target"),
+            path_display::format_home(target, &config.home_dir)
+        );
     }
     println!(
         "{}       {}",
@@ -449,7 +462,7 @@ async fn print_shell_file(
         println!(
             "{}     {}",
             colors::dim("Rendered"),
-            item.rendered_path.display()
+            path_display::format_home(&item.rendered_path, &config.home_dir)
         );
     }
     if diff {
@@ -466,7 +479,10 @@ fn print_heading(heading: &str, path: &Path) {
     println!();
     println!(
         "{}",
-        colors::dim(&format!("--- {heading}: {} ---", path.display()))
+        colors::dim(&format!(
+            "--- {heading}: {} ---",
+            path_display::format(path)
+        ))
     );
 }
 

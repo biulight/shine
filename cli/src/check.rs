@@ -5,6 +5,7 @@ use crate::apps::{
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::path_display;
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -169,12 +170,7 @@ pub(crate) async fn build_app_rows(
                     .clone()
                     .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
 
-                let dest_str = dest_opt.map(|d| {
-                    d.to_string_lossy()
-                        .into_owned()
-                        .replace(config.home_dir.to_string_lossy().as_ref(), "~")
-                        .replace('\\', "/")
-                });
+                let dest_str = dest_opt.map(|d| path_display::format_home(&d, &config.home_dir));
 
                 let (sym, status_text) = match status {
                     FileStatus::Missing => ("!", "destination missing"),
@@ -232,19 +228,11 @@ pub(crate) async fn build_app_rows(
             };
 
             let dest_display: Option<String> = if let Some(root) = &cat.destination_root {
-                Some(
-                    crate::config::tilde_expand(root)
-                        .replace(config.home_dir.to_string_lossy().as_ref(), "~")
-                        .replace('\\', "/"),
-                )
+                Some(path_display::format_tilde_path(root, &config.home_dir))
             } else if cat.files.len() == 1 {
                 resolve_install_destination(cat, &cat.files[0], config)
                     .ok()
-                    .map(|p| {
-                        let s = p.to_string_lossy().into_owned();
-                        s.replace(config.home_dir.to_string_lossy().as_ref(), "~")
-                            .replace('\\', "/")
-                    })
+                    .map(|p| path_display::format_home(&p, &config.home_dir))
             } else {
                 None
             };
@@ -523,6 +511,30 @@ mod tests {
         assert_eq!(rows[0].label, "docker-engine/daemon.jsonc");
         assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
         assert_eq!(rows[0].dest.as_deref(), Some("~/.docker/daemon.json"));
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_docker_desktop_row_uses_forward_slash_destination() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let categories = crate::apps::load_embedded_categories(Some("docker-desktop")).unwrap();
+        let rows = build_app_rows(&config, &categories).await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "docker-desktop/settings-store.jsonc");
+        assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
+        assert_eq!(
+            rows[0].dest.as_deref(),
+            Some("~/AppData/Roaming/Docker/settings-store.json")
+        );
 
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();

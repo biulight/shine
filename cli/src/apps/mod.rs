@@ -14,6 +14,7 @@ pub(crate) use transforms::apply as apply_transforms;
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::path_display;
 use crate::presets;
 use anyhow::{Context, Result};
 use dialoguer::Confirm;
@@ -166,7 +167,11 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
     println!();
 
     if let Some(dest_root) = &cat.destination_root {
-        println!("  {}  {}", colors::dim("Destination"), dest_root);
+        println!(
+            "  {}  {}",
+            colors::dim("Destination"),
+            path_display::format_tilde_path(dest_root, &config.home_dir)
+        );
     }
     println!("  {}  {}", colors::dim("Files      "), cat.files.len());
     println!();
@@ -214,7 +219,7 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
                 format!(
                     "{}  {}{}",
                     colors::dim("→"),
-                    colors::dim(&dest.display().to_string()),
+                    colors::dim(&path_display::format_home(&dest, &config.home_dir)),
                     status
                 )
             }
@@ -437,7 +442,7 @@ pub(crate) async fn handle_install(
                         file.source_rel.display(),
                         transform_label,
                         colors::dim("→"),
-                        colors::dim(&destination.display().to_string()),
+                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
                     );
                     manifest.upsert(AppEntry {
                         source: format!("app/{}/{}", cat.name, file.source_rel.display()),
@@ -465,8 +470,11 @@ pub(crate) async fn handle_install(
                         file.source_rel.display(),
                         transform_label,
                         colors::dim("→"),
-                        colors::dim(&destination.display().to_string()),
-                        colors::dim(&format!("(backup: {})", backup.display())),
+                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
+                        colors::dim(&format!(
+                            "(backup: {})",
+                            path_display::format_home(&backup, &config.home_dir)
+                        )),
                     );
                     manifest.upsert(AppEntry {
                         source: format!("app/{}/{}", cat.name, file.source_rel.display()),
@@ -486,7 +494,7 @@ pub(crate) async fn handle_install(
                         file.source_rel.display(),
                         transform_label,
                         colors::dim("→"),
-                        colors::dim(&destination.display().to_string()),
+                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
                     );
                     skipped += 1;
                 }
@@ -592,7 +600,7 @@ pub(crate) async fn handle_upgrade_installed(
         };
 
         let Some(cat) = categories_by_name.get(cat_name) else {
-            let outcome = cleanup_stale_entry(entry, prune_stale, interactive).await?;
+            let outcome = cleanup_stale_entry(config, entry, prune_stale, interactive).await?;
             apply_stale_outcome(
                 outcome,
                 entry.destination.clone(),
@@ -608,7 +616,7 @@ pub(crate) async fn handle_upgrade_installed(
             .iter()
             .find(|file| file.source_rel.to_string_lossy().as_ref() == file_rel)
         else {
-            let outcome = cleanup_stale_entry(entry, prune_stale, interactive).await?;
+            let outcome = cleanup_stale_entry(config, entry, prune_stale, interactive).await?;
             apply_stale_outcome(
                 outcome,
                 entry.destination.clone(),
@@ -694,7 +702,10 @@ pub(crate) async fn handle_upgrade_installed(
                     colors::symbol("✓"),
                     display_name,
                     colors::dim("→"),
-                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim(&path_display::format_home(
+                        &entry.destination,
+                        &config.home_dir
+                    )),
                 );
                 pending_upserts.push(AppEntry {
                     content_hash: hash,
@@ -839,7 +850,7 @@ async fn install_new_category_files(
                         colors::symbol("✓"),
                         display_name,
                         colors::dim("→"),
-                        colors::dim(&destination.display().to_string()),
+                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
                     );
                     new_upserts.push(AppEntry {
                         source,
@@ -874,6 +885,7 @@ async fn install_new_category_files(
 }
 
 async fn cleanup_stale_entry(
+    config: &Config,
     entry: &AppEntry,
     prune_stale: bool,
     interactive: bool,
@@ -884,7 +896,7 @@ async fn cleanup_stale_entry(
         let prompt = format!(
             "Preset source '{}' no longer exists. Remove managed file {}?",
             entry.source,
-            entry.destination.display()
+            path_display::format_home(&entry.destination, &config.home_dir)
         );
         Confirm::new()
             .with_prompt(prompt)
@@ -913,7 +925,10 @@ async fn cleanup_stale_entry(
             println!(
                 "  {}  {}  {}",
                 colors::symbol("✓"),
-                colors::dim(&entry.destination.display().to_string()),
+                colors::dim(&path_display::format_home(
+                    &entry.destination,
+                    &config.home_dir
+                )),
                 colors::dim("(removed stale managed file)"),
             );
             Ok(StaleCleanupOutcome::Removed)
@@ -922,10 +937,13 @@ async fn cleanup_stale_entry(
             println!(
                 "  {}  {}  {}",
                 colors::symbol("✓"),
-                colors::dim(&entry.destination.display().to_string()),
+                colors::dim(&path_display::format_home(
+                    &entry.destination,
+                    &config.home_dir
+                )),
                 colors::dim(&format!(
                     "(removed stale file, restored {})",
-                    backup.display()
+                    path_display::format_home(&backup, &config.home_dir)
                 )),
             );
             Ok(StaleCleanupOutcome::Removed)
@@ -934,7 +952,10 @@ async fn cleanup_stale_entry(
             println!(
                 "  {}  {}  {}",
                 colors::dim("-"),
-                colors::dim(&entry.destination.display().to_string()),
+                colors::dim(&path_display::format_home(
+                    &entry.destination,
+                    &config.home_dir
+                )),
                 colors::dim("stale destination missing, manifest cleaned"),
             );
             Ok(StaleCleanupOutcome::NotFound)
@@ -1059,7 +1080,10 @@ pub(crate) async fn handle_uninstall(
                 println!(
                     "  {}  {}",
                     colors::symbol("✓"),
-                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim(&path_display::format_home(
+                        &entry.destination,
+                        &config.home_dir
+                    )),
                 );
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
@@ -1068,8 +1092,14 @@ pub(crate) async fn handle_uninstall(
                 println!(
                     "  {}  {}  {}",
                     colors::symbol("✓"),
-                    colors::dim(&entry.destination.display().to_string()),
-                    colors::dim(&format!("(restored {})", backup.display())),
+                    colors::dim(&path_display::format_home(
+                        &entry.destination,
+                        &config.home_dir
+                    )),
+                    colors::dim(&format!(
+                        "(restored {})",
+                        path_display::format_home(&backup, &config.home_dir)
+                    )),
                 );
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
@@ -1079,7 +1109,10 @@ pub(crate) async fn handle_uninstall(
                 println!(
                     "  {}  {}  {}",
                     colors::dim("-"),
-                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim(&path_display::format_home(
+                        &entry.destination,
+                        &config.home_dir
+                    )),
                     colors::dim("not found, skipped"),
                 );
                 manifest.remove_by_dest(&entry.destination);
@@ -1089,7 +1122,7 @@ pub(crate) async fn handle_uninstall(
                 println!(
                     "  {}  {}  {}",
                     colors::symbol("!"),
-                    entry.destination.display(),
+                    path_display::format_home(&entry.destination, &config.home_dir),
                     colors::yellow("modified after install, left in place"),
                 );
                 user_modified += 1;
@@ -1098,7 +1131,10 @@ pub(crate) async fn handle_uninstall(
                 println!(
                     "  {}  {}",
                     colors::dim("[dry-run]"),
-                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim(&path_display::format_home(
+                        &entry.destination,
+                        &config.home_dir
+                    )),
                 );
                 skipped += 1;
             }
@@ -1106,7 +1142,7 @@ pub(crate) async fn handle_uninstall(
                 eprintln!(
                     "  {} {}: {e}",
                     colors::symbol("✗"),
-                    entry.destination.display()
+                    path_display::format_home(&entry.destination, &config.home_dir)
                 );
             }
         }
