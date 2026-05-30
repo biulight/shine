@@ -35,6 +35,7 @@ struct FileToml {
     source: String,
     target: Option<String>,
     needs_source: Option<bool>,
+    platforms: Option<Vec<String>>,
 }
 
 pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<ShellCategory>> {
@@ -66,7 +67,13 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
         let files = match parsed.files {
             Some(files) => files
                 .into_iter()
+                .filter_map(|file| match file_matches_current_platform(name, &file) {
+                    Ok(true) => Some(Ok(file)),
+                    Ok(false) => None,
+                    Err(err) => Some(Err(err)),
+                })
                 .map(|file| {
+                    let file = file?;
                     let needs_source = file.needs_source.unwrap_or(false);
                     let source_rel = normalize_shell_source(&file.source)
                         .with_context(|| format!("invalid source in shell/{name}/shine.toml"))?;
@@ -140,7 +147,13 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
         let files = match parsed.files {
             Some(files) => files
                 .into_iter()
+                .filter_map(|file| match file_matches_current_platform(name, &file) {
+                    Ok(true) => Some(Ok(file)),
+                    Ok(false) => None,
+                    Err(err) => Some(Err(err)),
+                })
                 .map(|file| {
+                    let file = file?;
                     let needs_source = file.needs_source.unwrap_or(false);
                     let source_rel = normalize_shell_source(&file.source).with_context(|| {
                         format!("invalid source in {}", metadata_path.display())
@@ -216,6 +229,34 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
     toml::from_slice(bytes).with_context(|| format!("failed to parse shell/{name}/shine.toml"))
 }
 
+fn file_matches_current_platform(category: &str, file: &FileToml) -> Result<bool> {
+    file_matches_platform(category, file, current_platform())
+}
+
+fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Result<bool> {
+    let Some(platforms) = &file.platforms else {
+        return Ok(true);
+    };
+
+    let mut matches = false;
+    for platform in platforms {
+        let normalized = platform.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "windows" | "unix" => {
+                matches |= normalized == current;
+            }
+            _ => bail!(
+                "shell/{category}/shine.toml has unsupported platform `{platform}`; expected `windows` or `unix`"
+            ),
+        }
+    }
+    Ok(matches)
+}
+
+fn current_platform() -> &'static str {
+    if cfg!(windows) { "windows" } else { "unix" }
+}
+
 fn collect_embedded_category_names(filter: Option<&str>) -> Vec<String> {
     let mut names = BTreeSet::new();
     for asset_path in presets::asset_paths("shell") {
@@ -268,7 +309,7 @@ fn collect_embedded_scripts(name: &str) -> Result<Vec<PathBuf>> {
             continue;
         }
         let rel = PathBuf::from(rest);
-        if rel.extension().and_then(|ext| ext.to_str()) != Some("sh") {
+        if !is_shell_script(&rel) {
             continue;
         }
         scripts.insert(normalize_shell_source(rest)?);
@@ -294,7 +335,7 @@ async fn collect_fs_scripts(category_root: &Path) -> Result<Vec<PathBuf>> {
                 stack.push(path);
                 continue;
             }
-            if !ft.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("sh") {
+            if !ft.is_file() || !is_shell_script(&path) {
                 continue;
             }
             let rel = path.strip_prefix(category_root).with_context(|| {
@@ -335,10 +376,17 @@ fn normalize_shell_source(path: impl AsRef<Path>) -> Result<PathBuf> {
     if normalized.file_name().and_then(|name| name.to_str()) == Some("shine.toml") {
         bail!("source path must not point to shine.toml");
     }
-    if normalized.extension().and_then(|ext| ext.to_str()) != Some("sh") {
-        bail!("source path must end with .sh");
+    if !is_shell_script(&normalized) {
+        bail!("source path must end with .sh or .ps1");
     }
     Ok(normalized)
+}
+
+fn is_shell_script(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("sh" | "ps1")
+    )
 }
 
 fn resolve_command_name(source_rel: &Path, target: Option<&str>) -> Result<String> {
@@ -397,16 +445,81 @@ mod tests {
     }
 
     #[test]
+    fn embedded_proxy_category_uses_platform_specific_scripts() {
+        let categories = load_embedded_categories(Some("proxy")).unwrap();
+        let proxy = categories.iter().find(|cat| cat.name == "proxy").unwrap();
+        let sources: Vec<_> = proxy
+            .files
+            .iter()
+            .map(|file| file.source_rel.as_path())
+            .collect();
+
+        if cfg!(windows) {
+            assert!(sources.contains(&Path::new("set_proxy.ps1")));
+            assert!(sources.contains(&Path::new("uset_proxy.ps1")));
+            assert!(!sources.contains(&Path::new("set_proxy.sh")));
+            assert!(!sources.contains(&Path::new("uset_proxy.sh")));
+        } else {
+            assert!(sources.contains(&Path::new("set_proxy.sh")));
+            assert!(sources.contains(&Path::new("uset_proxy.sh")));
+            assert!(!sources.contains(&Path::new("set_proxy.ps1")));
+            assert!(!sources.contains(&Path::new("uset_proxy.ps1")));
+        }
+    }
+
+    #[test]
+    fn metadata_platform_filter_accepts_current_platform() {
+        let file = FileToml {
+            source: "set_proxy.ps1".to_string(),
+            target: Some("setproxy".to_string()),
+            needs_source: Some(true),
+            platforms: Some(vec!["windows".to_string()]),
+        };
+
+        assert!(file_matches_platform("proxy", &file, "windows").unwrap());
+        assert!(!file_matches_platform("proxy", &file, "unix").unwrap());
+    }
+
+    #[test]
+    fn metadata_platform_filter_defaults_to_all_platforms() {
+        let file = FileToml {
+            source: "set_proxy.sh".to_string(),
+            target: Some("setproxy".to_string()),
+            needs_source: Some(true),
+            platforms: None,
+        };
+
+        assert!(file_matches_platform("proxy", &file, "windows").unwrap());
+        assert!(file_matches_platform("proxy", &file, "unix").unwrap());
+    }
+
+    #[test]
+    fn metadata_platform_filter_rejects_unknown_platforms() {
+        let file = FileToml {
+            source: "set_proxy.sh".to_string(),
+            target: Some("setproxy".to_string()),
+            needs_source: Some(true),
+            platforms: Some(vec!["plan9".to_string()]),
+        };
+
+        let err = file_matches_platform("proxy", &file, "unix")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unsupported platform `plan9`"));
+    }
+
+    #[test]
     fn embedded_agent_category_uses_ccenv_source_wrapper() {
         let categories = load_embedded_categories(Some("agent")).unwrap();
         let agent = categories.iter().find(|cat| cat.name == "agent").unwrap();
 
         assert_eq!(agent.files.len(), 1);
         assert_eq!(agent.files[0].command_name, "ccenv");
-        assert_eq!(agent.files[0].source_rel, PathBuf::from("cc.sh"));
+        let expected = if cfg!(windows) { "cc.ps1" } else { "cc.sh" };
+        assert_eq!(agent.files[0].source_rel, PathBuf::from(expected));
         assert!(agent.files[0].needs_source);
 
-        let bytes = presets::read_asset_bytes("shell/agent/cc.sh").unwrap();
+        let bytes = presets::read_asset_bytes(&format!("shell/agent/{expected}")).unwrap();
         assert!(presets::parse_template_annotation(&bytes));
     }
 
@@ -435,6 +548,64 @@ mod tests {
             .unwrap();
         assert_eq!(categories.len(), 1);
         assert_eq!(categories[0].files[0].command_name, "setproxy");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_category_accepts_powershell_scripts() {
+        let dir = make_temp_dir().await;
+        let category_root = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category_root).await.unwrap();
+        fs::write(
+            category_root.join("tool.ps1"),
+            b"# Tool.\nWrite-Output hi\n",
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let categories = load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap();
+
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0].files[0].source_rel, PathBuf::from("tool.ps1"));
+        assert_eq!(categories[0].files[0].command_name, "tool");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_filters_platform_specific_files() {
+        let dir = make_temp_dir().await;
+        let category_root = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category_root).await.unwrap();
+        fs::write(
+            category_root.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"tool\"\nplatforms = [\"unix\"]\n\n[[files]]\nsource = \"tool.ps1\"\ntarget = \"tool\"\nplatforms = [\"windows\"]\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category_root.join("tool.sh"), b"#!/bin/bash\n")
+            .await
+            .unwrap();
+        fs::write(category_root.join("tool.ps1"), b"Write-Output hi\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let categories = load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap();
+
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0].files.len(), 1);
+        let expected = if cfg!(windows) { "tool.ps1" } else { "tool.sh" };
+        assert_eq!(categories[0].files[0].source_rel, PathBuf::from(expected));
+        assert_eq!(categories[0].files[0].command_name, "tool");
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

@@ -12,6 +12,7 @@ mod commands;
 mod config;
 mod env;
 mod list;
+mod platform;
 mod presets;
 mod secret;
 mod shells;
@@ -115,6 +116,8 @@ enum CompletionShell {
     Bash,
     #[value(name = "fish")]
     Fish,
+    #[value(name = "powershell")]
+    PowerShell,
     #[value(name = "zsh")]
     Zsh,
 }
@@ -129,6 +132,9 @@ impl CompletionShell {
             }
             CompletionShell::Fish => {
                 write_completions(clap_complete::shells::Fish, &mut command, &mut stdout)
+            }
+            CompletionShell::PowerShell => {
+                write_completions(clap_complete::shells::PowerShell, &mut command, &mut stdout)
             }
             CompletionShell::Zsh => {
                 write_completions(clap_complete::shells::Zsh, &mut command, &mut stdout)
@@ -149,6 +155,9 @@ struct UpgradeCommand {
     /// Show detailed env-template checks and skipped rows
     #[arg(long)]
     verbose: bool,
+    /// Remove stale managed app files whose preset source no longer exists
+    #[arg(long)]
+    prune_stale: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -255,7 +264,9 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Update(cmd) => handle_update(&config, cmd.verbose).await,
-        Commands::Upgrade(cmd) => handle_config_upgrade(&config, cmd.verbose).await,
+        Commands::Upgrade(cmd) => {
+            handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
+        }
         Commands::Export(ExportCommand { dir, force }) => {
             Box::pin(handle_presets_export(&config, dir, force)).await
         }
@@ -604,13 +615,13 @@ fn format_self_upgrade_message(
     }
 }
 
-async fn handle_config_upgrade(config: &Config, verbose: bool) -> Result<()> {
+async fn handle_config_upgrade(config: &Config, verbose: bool, prune_stale: bool) -> Result<()> {
     println!("{}", colors::bold("Upgrading installed configs"));
     crate::config::print_presets_note(config);
 
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
     let shell_report = Box::pin(shells::handle_upgrade_installed(config, verbose)).await?;
-    let app_report = Box::pin(apps::handle_upgrade_installed(config)).await?;
+    let app_report = Box::pin(apps::handle_upgrade_installed(config, prune_stale)).await?;
 
     let updated = env_report.updated
         + shell_report.templates_updated
@@ -661,14 +672,21 @@ async fn sync_self_install_dest(config: &Config, src: &std::path::Path) {
             colors::green(&format!("Synced system copy at {}", dest.display()))
         ),
         Ok(SelfInstallSync::AlreadyCurrent) => {}
-        Err(e) if has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied) => println!(
-            "{}",
-            colors::yellow(&format!(
-                "System copy at {} needs manual sync — run: sudo {} self install",
-                dest.display(),
-                src.display()
-            ))
-        ),
+        Err(e) if has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied) => {
+            let hint = if cfg!(windows) {
+                format!(
+                    "Installed copy at {} needs manual sync; rerun from an elevated terminal if needed.",
+                    dest.display()
+                )
+            } else {
+                format!(
+                    "System copy at {} needs manual sync — run: sudo {} self install",
+                    dest.display(),
+                    src.display()
+                )
+            };
+            println!("{}", colors::yellow(&hint));
+        }
         Err(e) => eprintln!(
             "Warning: failed to sync system copy at {}: {e}",
             dest.display()
@@ -844,29 +862,33 @@ async fn handle_presets_unlink(config: &Config) -> Result<()> {
     Ok(())
 }
 
-async fn handle_self_install(mut config: Config, dest: std::path::PathBuf) -> Result<()> {
+async fn handle_self_install(mut config: Config, dest: Option<std::path::PathBuf>) -> Result<()> {
     use anyhow::{Context as _, bail};
 
     let src = std::env::current_exe().context("failed to resolve current executable path")?;
+    let dest = match dest {
+        Some(dest) => dest,
+        None => platform::default_self_install_dest()?,
+    };
 
     if dest.exists() {
         let canonical_src = src.canonicalize().unwrap_or_else(|_| src.clone());
         let canonical_dest = dest.canonicalize().unwrap_or_else(|_| dest.clone());
         if canonical_src == canonical_dest {
+            let example = if cfg!(windows) {
+                r"C:\path\to\new\shine.exe self install"
+            } else {
+                "sudo /path/to/new/shine self install"
+            };
             bail!(
-                "source and destination are the same binary: {}. Run the newer binary by full path, e.g. `sudo /path/to/new/shine self install`, to overwrite this copy.",
+                "source and destination are the same binary: {}. Run the newer binary by full path, e.g. `{example}`, to overwrite this copy.",
                 dest.display()
             );
         }
     }
 
-    install_binary_atomically(&src, &dest).with_context(|| {
-        format!(
-            "failed to copy to {} — try: sudo {} self install",
-            dest.display(),
-            src.display()
-        )
-    })?;
+    install_binary_atomically(&src, &dest)
+        .with_context(|| self_install_failure_hint(&src, &dest))?;
 
     // Remember where we installed so `shine self upgrade` can sync this copy automatically.
     config.self_install_dest = Some(dest.clone());
@@ -879,12 +901,42 @@ async fn handle_self_install(mut config: Config, dest: std::path::PathBuf) -> Re
         "{}",
         colors::green(&format!("installed to {}", dest.display()))
     );
-    println!(
-        "{}",
-        colors::dim("You can now run `sudo shine` without specifying the full path.")
-    );
+    print_self_install_activation_hint(&dest);
 
     Ok(())
+}
+
+fn self_install_failure_hint(src: &std::path::Path, dest: &std::path::Path) -> String {
+    if cfg!(windows) {
+        format!("failed to copy to {}", dest.display())
+    } else {
+        format!(
+            "failed to copy to {} — try: sudo {} self install",
+            dest.display(),
+            src.display()
+        )
+    }
+}
+
+fn print_self_install_activation_hint(dest: &std::path::Path) {
+    let Some(dir) = dest.parent() else {
+        return;
+    };
+    if platform::current_path_contains_dir(dir) {
+        println!(
+            "{}",
+            colors::dim("The install directory is already on PATH.")
+        );
+    } else {
+        println!(
+            "{}",
+            colors::yellow(&format!(
+                "Install directory is not on PATH: {}",
+                dir.display()
+            ))
+        );
+        println!("{}", colors::dim(&platform::path_install_hint(dir)));
+    }
 }
 
 fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
@@ -1002,7 +1054,9 @@ mod tests {
         let config = config_in(&dir);
         let current = std::env::current_exe().unwrap();
 
-        let err = handle_self_install(config, current).await.unwrap_err();
+        let err = handle_self_install(config, Some(current))
+            .await
+            .unwrap_err();
         assert!(
             err.to_string()
                 .contains("source and destination are the same binary"),
@@ -1014,6 +1068,23 @@ mod tests {
 
     #[test]
     fn cli_accepts_refactored_update_commands() {
+        let cli = Cli::try_parse_from(["shine", "self", "install"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Self_ {
+                command: SelfCommands::Install { dest: None }
+            }
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "self", "install", "--dest", "/tmp/shine"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Self_ {
+                command: SelfCommands::Install { dest: Some(ref path) }
+            } if path.as_path() == std::path::Path::new("/tmp/shine")
+        ));
+
         let cli = Cli::try_parse_from(["shine", "self", "upgrade"]).unwrap();
         assert!(matches!(
             cli.command,
@@ -1048,13 +1119,28 @@ mod tests {
         let cli = Cli::try_parse_from(["shine", "upgrade"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Upgrade(UpgradeCommand { verbose: false })
+            Commands::Upgrade(UpgradeCommand {
+                verbose: false,
+                prune_stale: false
+            })
         ));
 
         let cli = Cli::try_parse_from(["shine", "upgrade", "--verbose"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Upgrade(UpgradeCommand { verbose: true })
+            Commands::Upgrade(UpgradeCommand {
+                verbose: true,
+                prune_stale: false
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "upgrade", "--prune-stale"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Upgrade(UpgradeCommand {
+                verbose: false,
+                prune_stale: true
+            })
         ));
 
         let cli = Cli::try_parse_from(["shine", "clear"]).unwrap();
@@ -1342,7 +1428,6 @@ mod tests {
 
     #[test]
     fn cli_completions_rejects_unsupported_shells() {
-        assert!(Cli::try_parse_from(["shine", "completions", "powershell"]).is_err());
         assert!(Cli::try_parse_from(["shine", "completions", "elvish"]).is_err());
     }
 
@@ -1350,6 +1435,7 @@ mod tests {
     fn cli_completions_accepts_supported_shells() {
         assert!(Cli::try_parse_from(["shine", "completions", "bash"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "completions", "fish"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "completions", "powershell"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "completions", "zsh"]).is_ok());
     }
 
@@ -1358,6 +1444,7 @@ mod tests {
         for shell in [
             CompletionShell::Bash,
             CompletionShell::Fish,
+            CompletionShell::PowerShell,
             CompletionShell::Zsh,
         ] {
             let mut command = Cli::command();
@@ -1369,6 +1456,9 @@ mod tests {
                 }
                 CompletionShell::Fish => {
                     write_completions(clap_complete::shells::Fish, &mut command, &mut output)
+                }
+                CompletionShell::PowerShell => {
+                    write_completions(clap_complete::shells::PowerShell, &mut command, &mut output)
                 }
                 CompletionShell::Zsh => {
                     write_completions(clap_complete::shells::Zsh, &mut command, &mut output)

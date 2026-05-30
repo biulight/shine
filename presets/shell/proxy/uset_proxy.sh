@@ -1,7 +1,6 @@
 #!/bin/bash
-# Remove all proxy environment variables and tool proxy settings.
-# Clear system environment variables such as `http_proxy`, `https_proxy`, and `all_proxy`.
-# Also clear the global proxy settings for Git, NPM, Yarn, and pnpm.
+# Remove proxy environment variables for the current shell session.
+# Yarn proxy settings are also cleared because setproxy may update Yarn config.
 # Usage: source usetproxy
 
 if ! (return 0 2>/dev/null); then
@@ -27,8 +26,8 @@ else
     echo "ℹ️ No proxy environment variables were detected"
 fi
 
-# Clear system environment variable proxies.
-echo "🧹 Clearing system environment variable proxies..."
+# Clear session environment variable proxies.
+echo "🧹 Clearing session environment variable proxies..."
 unset http_proxy
 unset https_proxy
 unset HTTP_PROXY
@@ -37,31 +36,24 @@ unset all_proxy
 unset ALL_PROXY
 unset no_proxy
 unset NO_PROXY
-
-# Clear Git proxy settings.
-echo "🔧 Clearing Git proxy..."
-git config --global --unset http.proxy 2>/dev/null || echo "  ℹ️ Git http.proxy was not set or has already been cleared"
-git config --global --unset https.proxy 2>/dev/null || echo "  ℹ️ Git https.proxy was not set or has already been cleared"
-
-# Clear NPM proxy settings.
-if command -v npm >/dev/null 2>&1; then
-    echo "📦 Clearing NPM proxy..."
-    npm config delete proxy 2>/dev/null || echo "  ℹ️ NPM proxy was not set or has already been cleared"
-    npm config delete https-proxy 2>/dev/null || echo "  ℹ️ NPM https-proxy was not set or has already been cleared"
-else
-    echo "ℹ️ NPM is not installed; skipping"
-fi
+unset npm_config_proxy
+unset npm_config_https_proxy
+unset npm_config_registry
+unset NPM_CONFIG_PROXY
+unset NPM_CONFIG_HTTPS_PROXY
+unset NPM_CONFIG_REGISTRY
 
 # Clear Yarn proxy settings, if available.
 if command -v yarn >/dev/null 2>&1; then
-    echo "🧶 Clearing Yarn proxy..."
+    echo "🧶 Clearing Yarn proxy config..."
+    echo "  Yarn proxy settings are persistent; removing the entries set by setproxy."
     yarn_version=$(yarn --version)
     case "$yarn_version" in
         1.*)
             yarn config delete proxy 2>/dev/null || echo "  ℹ️ Yarn proxy was not set or has already been cleared"
             yarn config delete https-proxy 2>/dev/null || echo "  ℹ️ Yarn https-proxy was not set or has already been cleared"
             ;;
-        2.*|3.*)
+        2.*|3.*|4.*)
             yarn config delete httpProxy 2>/dev/null || echo "  ℹ️ Yarn httpProxy was not set or has already been cleared"
             yarn config delete httpsProxy 2>/dev/null || echo "  ℹ️ Yarn httpsProxy was not set or has already been cleared"
             ;;
@@ -75,19 +67,11 @@ else
     echo "ℹ️ Yarn is not installed; skipping"
 fi
 
-# Clear pnpm proxy settings, if available.
-if command -v pnpm >/dev/null 2>&1; then
-    echo "📌 Clearing pnpm proxy..."
-    pnpm config delete proxy 2>/dev/null || echo "  ℹ️ pnpm proxy was not set or has already been cleared"
-    pnpm config delete https-proxy 2>/dev/null || echo "  ℹ️ pnpm https-proxy was not set or has already been cleared"
-else
-    echo "ℹ️ pnpm is not installed; skipping"
-fi
-
 echo ""
 echo "✅ Proxy settings have been removed!"
 echo ""
 echo "📝 Notes:"
 echo "  - Environment variable proxies have been cleared (current terminal session only)"
-echo "  - Global proxy settings for Git/NPM/Yarn/pnpm have been cleared"
+echo "  - Git/npm/pnpm global config was not modified"
+echo "  - Yarn proxy config was cleared if Yarn was available"
 echo "  - To set the proxy again, run: source setproxy"

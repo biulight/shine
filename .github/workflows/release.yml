@@ -1,15 +1,9 @@
-name: build
+name: release
 
 on:
   push:
-    branches:
-      - release
     tags:
       - v*
-  pull_request:
-    branches:
-      - release
-      - main
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -20,83 +14,13 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          submodules: recursive
-      - name: Install Rust
-        run: rustup toolchain install stable --component llvm-tools-preview
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
-      - uses: Swatinem/rust-cache@v2
-      - name: Check code format
-        run: cargo fmt -- --check
-      - name: Check the package for errors
-        run: cargo check --all
-      - name: Lint rust sources
-        run: cargo clippy --all-targets --all-features --tests --benches -- -D warnings
-      - name: Execute rust tests
-        run: cargo nextest run --all-features
+    uses: ./.github/workflows/test.yml
 
   build-release-assets:
-    if: github.ref == 'refs/heads/release' || startsWith(github.ref, 'refs/tags/')
     needs: test
     uses: ./.github/workflows/package-assets.yml
 
-  preview-release:
-    if: github.ref == 'refs/heads/release'
-    needs:
-      - test
-      - build-release-assets
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Update preview tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -fa preview "$GITHUB_SHA" -m "Preview $GITHUB_SHA"
-          git push --force origin refs/tags/preview
-      - name: Download packaged artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: dist
-      - name: Prepare preview release files
-        run: |
-          cat > PREVIEW_BODY.md <<EOF
-          Automated preview build from the release branch.
-
-          - Source branch: \`release\`
-          - Commit: \`${GITHUB_SHA}\`
-          - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-
-          This prerelease is overwritten on every push to the release branch.
-          EOF
-          find dist -type f -name 'shine-preview-*.tar.gz' -print
-      - name: Delete existing preview release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release delete preview --repo "$GITHUB_REPOSITORY" --yes || true
-      - name: Publish preview release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: preview
-          name: Preview
-          body_path: PREVIEW_BODY.md
-          prerelease: true
-          make_latest: "legacy"
-          overwrite_files: true
-          fail_on_unmatched_files: true
-          files: dist/**/*.tar.gz
-
   release:
-    if: startsWith(github.ref, 'refs/tags/')
     needs:
       - test
       - build-release-assets
@@ -128,9 +52,9 @@ jobs:
           files: |
             dist/**/*.tar.gz
             install.sh
+            install.ps1
 
   open-main-pr:
-    if: startsWith(github.ref, 'refs/tags/')
     needs:
       - release
     runs-on: ubuntu-latest

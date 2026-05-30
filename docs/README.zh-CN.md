@@ -11,7 +11,7 @@ English README: [`../README.md`](../README.md)
 - **内置预设** — shell 脚本和应用配置会编译进二进制；安装后不需要联网
 - **外部预设目录** — 可将 `presets_dir` 指向你自己的目录（例如 dotfiles 仓库），之后 `shine` 会优先从那里读取；`shine export` 可把内置预设导出过去
 - **项目本地预设仓库** — 在预设仓库内运行 `shine init`，即可创建指向当前仓库的 `shine.config.toml`
-- **基于符号链接的 bin 目录** — `~/.shine/bin/` 中保存展平后的命令链接；把它加入一次 `PATH` 即可
+- **受管 bin 目录** — `~/.shine/bin/` 在 Unix 上保存展平后的符号链接，在 Windows 上保存命令 shim
 - **自动配置 PATH** — `install` 会自动把 `~/.shine/bin` 追加到你的 shell 配置文件
 - **按类别安装/卸载** — 可安装或卸载全部预设，也可只处理某个子集（如 `proxy`）
 - **仅显示已安装项** — `shine list` 只展示已安装内容，不输出额外状态噪音
@@ -21,10 +21,10 @@ English README: [`../README.md`](../README.md)
 - **应用预设安装器** — 可安装 `~/.gitconfig`、`~/.config/starship/starship.toml`、`~/.config/ghostty/config.ghostty` 等受管配置
 - **已安装内容检查** — `shine info <target>` 会输出已安装应用配置和 shell 预设的元数据、彩色状态和值得关注的预期内容差异；加 `--verbose` 可查看完整内容
 - **版本更新检查** — 运行时检查 GitHub Releases，并使用 24 小时缓存
-- **多 shell 支持** — bash、zsh、fish
+- **多 shell 支持** — bash、zsh、fish、PowerShell；当同一类别在 Unix 和 Windows 需要不同文件时，可按平台声明 shell 预设条目
 - **系统初始化预设** — 通过 `shine sys init` 对当前操作系统执行一组整理过的初始化步骤
 
-当前支持范围：`shine` 面向类 Unix 环境，支持 `bash`、`zsh` 和 `fish`。暂不支持 Windows、PowerShell 或 Elvish。
+当前支持范围：`shine shell` 支持 `bash`、`zsh`、`fish` 和 PowerShell。Windows 支持目前覆盖 `shine self` 和 `shine shell`，也包括像 `ccenv` 这样的 PowerShell source 型辅助函数；app 与 sys 预设仍以 Unix 环境为主。
 
 ## 规划流程
 
@@ -47,8 +47,16 @@ English README: [`../README.md`](../README.md)
 
 ## 安装
 
+macOS/Linux：
+
 ```bash
 curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
 或从源码安装：
@@ -57,7 +65,7 @@ curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh
 cargo install --path cli
 ```
 
-`shine` 目前不支持 Windows。请在带有 `bash`、`zsh` 或 `fish` 的类 Unix 环境中使用。
+Windows 支持目前覆盖 PowerShell 下的 `shine self` 和 `shine shell`，并会同时更新 `powershell.exe` 与 `pwsh.exe` 对应的 profile；app 与 sys 预设仍以 Unix 环境为主。
 
 也可以自己构建：
 
@@ -100,7 +108,7 @@ shine shell install proxy      # 仅安装 proxy 类别
 shine shell reinstall proxy    # 覆盖 proxy 的受管文件和链接
 ```
 
-它会把内置 shell 脚本解包到 `~/.shine/presets/shell/`，在 `~/.shine/bin/` 中创建符号链接，并把 PATH 条目追加到你的 shell 配置文件（`~/.zshrc`、`~/.bashrc`、`~/.config/fish/config.fish` 等）：
+它会把内置 shell 脚本解包到 `~/.shine/presets/shell/`，在 `~/.shine/bin/` 中创建符号链接或 Windows shim，并把 PATH 条目追加到你的 shell 配置文件（`~/.zshrc`、`~/.bashrc`、`~/.config/fish/config.fish`、PowerShell profile 等）：
 
 ```
 Shell Presets  4 created
@@ -109,6 +117,13 @@ Bin Links      4 created
 
 安装全部 shell 预设时会包含 `agent`，该类别在使用前需要在当前 env 配置中提供 `DEEPSEEK_API_KEY` 或 `DEEPSEEK_API_KEY_GPG_SECRET`。
 重复运行 `install` 是安全的：已存在的文件、正确的符号链接以及已配置好的 PATH 条目都会被跳过。若你想覆盖受管预设文件、链接和 shell 配置中的 PATH 条目，请使用 `reinstall`。
+
+shell 元数据可以通过 `platforms = ["unix"]` 或 `platforms = ["windows"]` 只在特定平台暴露某些条目。内置的 `agent` 类别就使用了这个机制：Unix shell 下的 `ccenv` 来自 `cc.sh`，Windows PowerShell 下的 `ccenv` 来自 `cc.ps1`。
+
+在 Windows 上，PowerShell 的 PATH 注入会同时更新这两个 profile 文件，确保 `powershell.exe` 和 `pwsh.exe` 都能看到同一条 `~/.shine/bin` 配置：
+
+- `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1`
+- `~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1`
 
 ### 卸载 shell 预设
 
@@ -120,7 +135,7 @@ shine shell uninstall --purge        # 同时删除空的受管目录
 shine shell uninstall proxy --purge  # 卸载 proxy 并删除其预设目录
 ```
 
-卸载会移除 `~/.shine/bin/` 中由 `shine` 管理的符号链接、`~/.shine/presets/shell/` 中的预设文件，以及 shell 配置中的 PATH 条目。用户自行创建的文件不会被删除。
+卸载会移除 `~/.shine/bin/` 中由 `shine` 管理的符号链接或 shim、`~/.shine/presets/shell/` 中的预设文件，以及 shell 配置中的 PATH 条目。用户自行创建的文件不会被删除。
 
 如果指定了类别，只会移除该类别的文件和链接；PATH 条目会被保留，以便其它已安装类别继续可用。
 
@@ -132,9 +147,10 @@ shine shell uninstall proxy --purge  # 卸载 proxy 并删除其预设目录
 shine completions bash > ~/.local/share/bash-completion/completions/shine
 shine completions zsh > ~/.zfunc/_shine
 shine completions fish > ~/.config/fish/completions/shine.fish
+shine completions powershell > shine-completions.ps1
 ```
 
-`shine completions <shell>` 会把补全脚本输出到 `stdout`，需要你手动安装。仅支持 `bash`、`zsh` 和 `fish`，不会自动修改 shell 配置。
+`shine completions <shell>` 会把补全脚本输出到 `stdout`，需要你手动安装。支持 `bash`、`zsh`、`fish` 和 `powershell`，不会自动修改 shell 配置。
 
 ### 查看可用的应用预设
 
@@ -238,6 +254,8 @@ dest = "~/.vim"
 ```
 
 当 `shine.toml` 定义了 `files` 时，只安装列出的条目。若省略 `files`，`shine` 会把整个类别目录视为受管内容，并把除 `shine.toml` 之外的所有文件按相同相对路径映射到 `dest`。
+
+`shine app install` 写入文件前，`dest` 必须展开为当前平台的绝对路径。`/etc/docker` 这类 Unix 根路径在 Windows 上仍可作为内置 Unix 预设的展示元数据被读取，但 Windows 安装会拒绝它们，而不会把它们当作当前盘符根目录下的路径。
 
 #### 文件变换
 
@@ -434,18 +452,26 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.25.0+preview.abc1234`；稳定版则继续显示 `0.25.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.26.0+preview.abc1234`；稳定版则继续显示 `0.26.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
-### install.sh 选项
+### 安装脚本选项
 
 `install.sh` 默认把 `shine` 安装到 `~/.local/bin/shine`，不会修改你的 shell 配置。
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.25.0 sh install.sh
+SHINE_VERSION=0.26.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
+```
+
+`install.ps1` 默认把 `shine.exe` 安装到 `%LOCALAPPDATA%\Programs\shine\shine.exe`，不会修改你的用户 PATH。
+
+```powershell
+$env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
+$env:SHINE_VERSION = "0.26.0"; .\install.ps1
+$env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
 ## 内置预设
@@ -462,7 +488,7 @@ theme = light:shine-light,dark:shine-dark
 
 ### shell/proxy — `setproxy` / `usetproxy`
 
-用一组命令管理整个开发环境的代理配置。
+用一组命令管理当前终端会话的代理配置。
 
 **设置代理：**
 
@@ -472,12 +498,14 @@ setproxy sock5     # 强制使用 SOCKS5
 setproxy http      # 强制使用 HTTP
 ```
 
-如果刚执行过 `shine shell install proxy`，请先重新加载一次 shell 配置（例如 `source ~/.zshrc`），或打开一个新的 shell，然后再直接使用 `setproxy`。
+如果刚执行过 `shine shell install proxy`，请先重新加载一次 shell 配置（例如 `source ~/.zshrc` 或 `. $PROFILE`），或打开一个新的 shell，然后再直接使用 `setproxy`。
 
 会同时配置：
 - shell 环境变量（`http_proxy`、`https_proxy`、`all_proxy` 等）
-- Git 全局配置（`http.proxy`、`https.proxy`）
-- npm / yarn / pnpm 代理设置
+- npm 兼容的进程配置（`npm_config_proxy`、`npm_config_https_proxy`），供 npm 和 pnpm 使用
+- Git 兼容的代理环境变量
+
+Yarn 是例外：如果检测到 Yarn，`setproxy` 会打印提示并更新 Yarn 代理配置，因为 Yarn 代理设置不能可靠地限制在当前 shell 会话中。
 
 默认端口：HTTP `6152`，SOCKS5 `6153`（如需修改，请编辑 `~/.shine/config.toml` 中的 `[env]`）。
 
@@ -487,7 +515,7 @@ setproxy http      # 强制使用 HTTP
 usetproxy
 ```
 
-会清除所有代理环境变量，并删除 git/npm/yarn/pnpm 的代理配置。
+会清除当前会话中的代理环境变量。如果已安装 Yarn，也会删除 `setproxy` 可能写入的 Yarn 代理配置项。
 
 ### shell/agent — `ccenv`
 
@@ -540,13 +568,17 @@ description = "Proxy helper commands"
 [[files]]
 source = "set_proxy.sh"
 target = "setproxy"
+needs_source = true
+platforms = ["unix"]
 
 [[files]]
-source = "uset_proxy.sh"
-target = "usetproxy"
+source = "set_proxy.ps1"
+target = "setproxy"
+needs_source = true
+platforms = ["windows"]
 ```
 
-`source` 指向类别目录下实际存储的脚本文件。`target` 控制链接到 `~/.shine/bin/` 的命令名。若省略 `target`，`shine` 会回退到脚本文件名 stem。
+`source` 指向类别目录下实际存储的脚本文件。`target` 控制链接到 `~/.shine/bin/` 的命令名。若省略 `target`，`shine` 会回退到脚本文件名 stem。`platforms` 可选，支持 `unix` 和 `windows`；省略时表示所有平台。
 
 ## 配置
 
@@ -604,8 +636,8 @@ PROXY_HOST = "127.0.0.1"
 ├── config.toml
 ├── shine.env.toml    # 可选的扁平 env 覆盖文件
 ├── bin/
-│   ├── setproxy         # symlink → presets/shell/proxy/set_proxy.sh
-│   ├── usetproxy        # symlink → presets/shell/proxy/uset_proxy.sh
+│   ├── setproxy         # symlink/shim → 平台对应 proxy 脚本
+│   ├── usetproxy        # symlink/shim → 平台对应 proxy 脚本
 │   └── test_tools       # symlink → presets/shell/tools/test_tools.sh
 └── presets/
     ├── app/
@@ -624,7 +656,9 @@ PROXY_HOST = "127.0.0.1"
     └── shell/
         ├── proxy/
         │   ├── shine.toml
+        │   ├── set_proxy.ps1
         │   ├── set_proxy.sh
+        │   ├── uset_proxy.ps1
         │   └── uset_proxy.sh
         └── tools/
             └── test_tools.sh

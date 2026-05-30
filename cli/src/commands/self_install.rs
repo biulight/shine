@@ -3,11 +3,11 @@ use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 pub enum SelfCommands {
-    /// Copy the shine binary to a system-wide location so `sudo shine` works
+    /// Copy the shine binary to a platform-specific install location
     Install {
-        /// Destination path (default: /usr/local/bin/shine)
-        #[arg(long, value_name = "PATH", default_value = "/usr/local/bin/shine")]
-        dest: std::path::PathBuf,
+        /// Destination path (default: /usr/local/bin/shine on Unix, %LOCALAPPDATA%\Programs\shine\shine.exe on Windows)
+        #[arg(long, value_name = "PATH")]
+        dest: Option<std::path::PathBuf>,
     },
     /// Download and install a shine release for this platform
     Upgrade {

@@ -1,4 +1,4 @@
-use crate::{config::Config, version};
+use crate::{config::Config, platform, version};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueEnum;
 use flate2::read::GzDecoder;
@@ -166,7 +166,12 @@ pub(crate) async fn upgrade_to_release(
     )?;
     let archive_bytes = download_asset_bytes(&asset.download_url).await?;
     let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
-    install_downloaded_archive(&archive_bytes, &current_exe).await?;
+    install_downloaded_archive(
+        &archive_bytes,
+        &current_exe,
+        platform::current_executable_name(),
+    )
+    .await?;
     let installed_version = installed_version_label(&current_exe, &asset.release_tag).await;
 
     if let Some(latest) = &latest {
@@ -340,8 +345,12 @@ fn github_client() -> Result<reqwest::Client> {
         .context("failed to build GitHub client")
 }
 
-async fn install_downloaded_archive(archive_bytes: &[u8], current_exe: &Path) -> Result<()> {
-    let extracted = extract_binary_from_archive(archive_bytes)?;
+async fn install_downloaded_archive(
+    archive_bytes: &[u8],
+    current_exe: &Path,
+    binary_name: &str,
+) -> Result<()> {
+    let extracted = extract_binary_from_archive(archive_bytes, binary_name)?;
 
     let parent_dir = current_exe
         .parent()
@@ -361,10 +370,17 @@ async fn install_downloaded_archive(archive_bytes: &[u8], current_exe: &Path) ->
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
             let _ = fs::remove_file(&staged_path).await;
-            bail!(
-                "cannot replace {} due to insufficient permissions; reinstall with install.sh into a user-writable directory such as ~/.local/bin",
-                current_exe.display()
-            );
+            if cfg!(windows) {
+                bail!(
+                    "cannot replace {} due to insufficient permissions; rerun from an elevated terminal or install to a user-writable path",
+                    current_exe.display()
+                );
+            } else {
+                bail!(
+                    "cannot replace {} due to insufficient permissions; reinstall with install.sh into a user-writable directory such as ~/.local/bin",
+                    current_exe.display()
+                );
+            }
         }
         Err(err) => {
             let _ = fs::remove_file(&staged_path).await;
@@ -395,7 +411,7 @@ async fn install_downloaded_archive(archive_bytes: &[u8], current_exe: &Path) ->
     }
 }
 
-fn extract_binary_from_archive(archive_bytes: &[u8]) -> Result<Vec<u8>> {
+fn extract_binary_from_archive(archive_bytes: &[u8], binary_name: &str) -> Result<Vec<u8>> {
     let decoder = GzDecoder::new(std::io::Cursor::new(archive_bytes));
     let mut archive = Archive::new(decoder);
 
@@ -408,7 +424,7 @@ fn extract_binary_from_archive(archive_bytes: &[u8]) -> Result<Vec<u8>> {
             .path()
             .context("failed to inspect archive entry path")?;
 
-        if path.file_name() == Some(OsStr::new("shine")) {
+        if path.file_name() == Some(OsStr::new(binary_name)) {
             let mut extracted = Vec::new();
             std::io::copy(&mut entry, &mut extracted)
                 .context("failed to extract shine binary from release archive")?;
@@ -419,7 +435,7 @@ fn extract_binary_from_archive(archive_bytes: &[u8]) -> Result<Vec<u8>> {
         }
     }
 
-    bail!("release archive does not contain a shine binary")
+    bail!("release archive does not contain a {binary_name} binary")
 }
 
 fn find_release_asset(
@@ -449,19 +465,7 @@ fn find_release_asset(
 }
 
 fn platform_target(os: &str, arch: &str) -> Result<String> {
-    let normalized_os = match os {
-        "macos" => "darwin",
-        "linux" => "linux",
-        other => bail!("unsupported operating system: {other}"),
-    };
-
-    let normalized_arch = match arch {
-        "x86_64" => "x86_64",
-        "aarch64" => "aarch64",
-        other => bail!("unsupported architecture: {other}"),
-    };
-
-    Ok(format!("{normalized_os}-{normalized_arch}"))
+    platform::release_target(os, arch)
 }
 
 fn asset_file_name(
@@ -535,7 +539,9 @@ async fn set_executable_permissions(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{Compression, write::GzEncoder};
     use std::path::PathBuf;
+    use tar::{Builder, Header};
 
     async fn make_temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("shine-update-check-{}", uuid::Uuid::new_v4()));
@@ -597,6 +603,32 @@ mod tests {
         assert_eq!(parse_binary_version_output("0.21.3"), None);
     }
 
+    fn archive_with_file(name: &str, content: &[u8]) -> Vec<u8> {
+        let encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut builder = Builder::new(encoder);
+        let mut header = Header::new_gnu();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, name, content)
+            .expect("archive entry should be written");
+        let encoder = builder.into_inner().expect("archive should finish");
+        encoder.finish().expect("gzip should finish")
+    }
+
+    #[test]
+    fn extract_binary_from_archive_uses_platform_binary_name() {
+        let archive = archive_with_file("shine.exe", b"windows-binary");
+        assert_eq!(
+            extract_binary_from_archive(&archive, "shine.exe").unwrap(),
+            b"windows-binary"
+        );
+
+        let err = extract_binary_from_archive(&archive, "shine").unwrap_err();
+        assert!(err.to_string().contains("shine binary"));
+    }
+
     #[test]
     fn platform_target_maps_supported_targets() {
         assert_eq!(
@@ -604,6 +636,14 @@ mod tests {
             "darwin-aarch64"
         );
         assert_eq!(platform_target("linux", "x86_64").unwrap(), "linux-x86_64");
+        assert_eq!(
+            platform_target("windows", "x86_64").unwrap(),
+            "windows-x86_64"
+        );
+        assert_eq!(
+            platform_target("windows", "aarch64").unwrap(),
+            "windows-aarch64"
+        );
     }
 
     #[test]
@@ -629,6 +669,10 @@ mod tests {
         assert_eq!(
             asset_file_name(&release, ReleaseChannel::Preview, "linux-x86_64").unwrap(),
             "shine-preview-linux-x86_64.tar.gz"
+        );
+        assert_eq!(
+            asset_file_name(&release, ReleaseChannel::Preview, "windows-x86_64").unwrap(),
+            "shine-preview-windows-x86_64.tar.gz"
         );
     }
 
@@ -672,6 +716,24 @@ mod tests {
         assert_eq!(asset.release_tag, "preview");
         assert_eq!(asset.target, "linux-x86_64");
         assert_eq!(asset.download_url, "https://example.test/preview");
+    }
+
+    #[test]
+    fn find_release_asset_selects_matching_windows_asset() {
+        let release = GithubRelease {
+            tag_name: "v1.2.3".to_string(),
+            body: String::new(),
+            assets: vec![GithubReleaseAsset {
+                name: "shine-v1.2.3-windows-x86_64.tar.gz".to_string(),
+                browser_download_url: "https://example.test/windows".to_string(),
+            }],
+        };
+
+        let asset =
+            find_release_asset(&release, ReleaseChannel::Stable, "windows", "x86_64").unwrap();
+        assert_eq!(asset.release_tag, "v1.2.3");
+        assert_eq!(asset.target, "windows-x86_64");
+        assert_eq!(asset.download_url, "https://example.test/windows");
     }
 
     #[test]

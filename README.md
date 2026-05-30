@@ -11,7 +11,7 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 - **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
 - **External presets** — point `presets_dir` at your own directory (e.g. a dotfiles repo) and `shine` reads from there instead; `shine export` seeds it with the built-ins
 - **Project-local presets** — run `shine init` inside a presets repo to create a local `shine.config.toml` that points `presets_dir` at the repo
-- **Symlink-based bin directory** — `~/.shine/bin/` holds flat symlinks to installed scripts; add it to `PATH` once
+- **Managed bin directory** — `~/.shine/bin/` holds flat symlinks on Unix and command shims on Windows
 - **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
 - **Category install/uninstall** — install or uninstall all presets or a specific subset (e.g. `proxy`)
 - **Installed-only view** — `shine list` shows installed items without status noise
@@ -21,10 +21,10 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 - **App preset installer** — install managed config files like `~/.gitconfig`, `~/.config/starship/starship.toml`, or `~/.config/ghostty/config.ghostty`
 - **Installed content inspection** — `shine info <target>` prints metadata, colorized status, and expected-content diffs for installed app configs and shell presets; add `--verbose` for full content
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
-- **Multi-shell support** — bash, zsh, fish
+- **Multi-shell support** — bash, zsh, fish, PowerShell, with per-platform shell preset entries when a category needs different files on Unix and Windows
 - **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
 
-Current support scope: `shine` supports Unix-like environments with `bash`, `zsh`, and `fish`. Windows, PowerShell, and Elvish are not supported yet.
+Current support scope: `shine shell` supports bash, zsh, fish, and PowerShell. Windows support currently covers `shine self` and `shine shell`, including sourced PowerShell helpers such as `ccenv`; app and sys presets are still Unix-oriented.
 
 ## Planning Workflow
 
@@ -47,8 +47,16 @@ The full workflow lives in [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Installation
 
+macOS/Linux:
+
 ```bash
 curl -fsSL https://github.com/biulight/shine/releases/latest/download/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 ```
 
 Or install from source:
@@ -57,7 +65,7 @@ Or install from source:
 cargo install --path cli
 ```
 
-`shine` does not support Windows yet. Use a Unix-like environment with `bash`, `zsh`, or `fish`.
+Windows support currently covers `shine self` and `shine shell` in PowerShell, including profile updates for both `powershell.exe` and `pwsh.exe`; app and sys presets remain Unix-oriented.
 
 Or build from source:
 
@@ -79,7 +87,7 @@ Shell Preset Categories
 
   agent  1 script
     ccenv         Configure Claude Code to use DeepSeek in the current shell session.
-                  ...
+                   ...
 
   proxy  2 scripts
     setproxy      Set HTTP/HTTPS proxy environment variables.
@@ -100,7 +108,7 @@ shine shell install proxy      # install only the proxy category
 shine shell reinstall proxy    # overwrite managed files and links for proxy
 ```
 
-Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, etc.):
+Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks or Windows shims in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, PowerShell profile, etc.):
 
 ```
 Shell Presets  4 created
@@ -109,6 +117,13 @@ Bin Links      4 created
 
 Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` or `DEEPSEEK_API_KEY_GPG_SECRET` in the active env config before use.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `reinstall` when you want to overwrite managed preset files, links, and the shell config entry.
+
+Shell metadata can scope entries to `platforms = ["unix"]` or `platforms = ["windows"]`. The built-in `agent` category uses this to expose `ccenv` from `cc.sh` on Unix shells and from `cc.ps1` on Windows PowerShell.
+
+On Windows, PowerShell PATH setup updates both supported profile locations so `powershell.exe` and `pwsh.exe` see the same `~/.shine/bin` entry:
+
+- `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1`
+- `~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1`
 
 ### Uninstall shell presets
 
@@ -120,7 +135,7 @@ shine shell uninstall --purge        # also remove empty managed directories
 shine shell uninstall proxy --purge  # uninstall proxy and remove its preset dir
 ```
 
-Removes shine-managed symlinks from `~/.shine/bin/`, preset files from `~/.shine/presets/shell/`, and the PATH entry from your shell config. User-created files are never removed.
+Removes shine-managed symlinks or shims from `~/.shine/bin/`, preset files from `~/.shine/presets/shell/`, and the PATH entry from your shell config. User-created files are never removed.
 
 When a category is specified only that category's files and symlinks are removed; the PATH entry is kept so other installed categories remain usable.
 
@@ -132,9 +147,10 @@ When a category is specified only that category's files and symlinks are removed
 shine completions bash > ~/.local/share/bash-completion/completions/shine
 shine completions zsh > ~/.zfunc/_shine
 shine completions fish > ~/.config/fish/completions/shine.fish
+shine completions powershell > shine-completions.ps1
 ```
 
-`shine completions <shell>` prints a completion script to `stdout` for manual installation. It supports `bash`, `zsh`, and `fish` only, and it does not modify your shell config automatically.
+`shine completions <shell>` prints a completion script to `stdout` for manual installation. It supports `bash`, `zsh`, `fish`, and `powershell`, and it does not modify your shell config automatically.
 
 ### List available app presets
 
@@ -238,6 +254,8 @@ dest = "~/.vim"
 ```
 
 When `shine.toml` defines `files`, only those entries are installed. When it omits `files`, `shine` treats the whole category directory as managed and maps every file except `shine.toml` into `dest` with the same relative path.
+
+`dest` must expand to an absolute path for the current platform before `shine app install` writes files. Unix-style roots such as `/etc/docker` remain valid metadata for listing embedded Unix presets on Windows, but Windows installs reject them instead of treating them as drive-root paths.
 
 #### File transforms
 
@@ -427,6 +445,8 @@ Manual commands:
 ```bash
 shine update        # show available updates, then force-check the latest release
 shine update --verbose  # include up-to-date and non-update status rows
+shine self install  # copy the current binary to the platform default install path
+shine self install --dest ~/.local/bin/shine  # install to a custom path
 shine self upgrade  # download and install the latest stable release for this platform
 shine self upgrade --channel stable   # explicitly reinstall the stable release
 shine self upgrade --channel preview  # install the moving preview prerelease
@@ -434,18 +454,28 @@ shine upgrade       # force-update installed shell and app configs
 shine upgrade --verbose  # include env-template check details
 ```
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.25.0+preview.abc1234`, while stable binaries continue to report `0.25.0`.
+`shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
+
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.26.0+preview.abc1234`, while stable binaries continue to report `0.26.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
-### install.sh options
+### Installer options
 
 `install.sh` defaults to installing `shine` into `~/.local/bin/shine` without editing your shell config.
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.25.0 sh install.sh
+SHINE_VERSION=0.26.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
+```
+
+`install.ps1` defaults to installing `shine.exe` into `%LOCALAPPDATA%\Programs\shine\shine.exe` without editing your user PATH.
+
+```powershell
+$env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
+$env:SHINE_VERSION = "0.26.0"; .\install.ps1
+$env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
 ## Bundled Presets
@@ -462,7 +492,7 @@ Set `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK` with `shine env set` if you want th
 
 ### shell/proxy — `setproxy` / `usetproxy`
 
-One-command proxy management for the entire development environment.
+One-command proxy management for the current terminal session.
 
 **Set proxy:**
 
@@ -473,12 +503,14 @@ setproxy http      # force HTTP
 ```
 
 After a fresh `shine shell install proxy`, reload your shell config once (for example,
-`source ~/.zshrc`) or open a new shell before using `setproxy` directly.
+`source ~/.zshrc` or `. $PROFILE`) or open a new shell before using `setproxy` directly.
 
 Configures simultaneously:
 - Shell environment variables (`http_proxy`, `https_proxy`, `all_proxy`, …)
-- Git global config (`http.proxy`, `https.proxy`)
-- npm / yarn / pnpm proxy settings
+- npm-compatible process config (`npm_config_proxy`, `npm_config_https_proxy`) for npm and pnpm
+- Git-compatible proxy environment variables
+
+Yarn is the exception: when Yarn is installed, `setproxy` prints a notice and updates Yarn proxy config because Yarn proxy settings are not reliably scoped to the current shell.
 
 Default ports: HTTP `6152`, SOCKS5 `6153` (edit `[env]` in `~/.shine/config.toml` to change).
 
@@ -488,7 +520,7 @@ Default ports: HTTP `6152`, SOCKS5 `6153` (edit `[env]` in `~/.shine/config.toml
 usetproxy
 ```
 
-Clears all proxy environment variables and removes git/npm/yarn/pnpm proxy config.
+Clears the session proxy environment variables. If Yarn is installed, it also removes the Yarn proxy config entries that `setproxy` may have written.
 
 ### shell/agent — `ccenv`
 
@@ -545,13 +577,17 @@ description = "Proxy helper commands"
 [[files]]
 source = "set_proxy.sh"
 target = "setproxy"
+needs_source = true
+platforms = ["unix"]
 
 [[files]]
-source = "uset_proxy.sh"
-target = "usetproxy"
+source = "set_proxy.ps1"
+target = "setproxy"
+needs_source = true
+platforms = ["windows"]
 ```
 
-`source` points at the script file stored under the category directory. `target` controls the command name linked into `~/.shine/bin/`. When `target` is omitted, shine falls back to the script stem.
+`source` points at the script file stored under the category directory. `target` controls the command name linked into `~/.shine/bin/`. When `target` is omitted, shine falls back to the script stem. `platforms` is optional; supported values are `unix` and `windows`, and omitted means all platforms.
 
 ## Configuration
 
@@ -620,8 +656,8 @@ PROXY_HOST = "127.0.0.1"
 ├── config.toml
 ├── shine.env.toml    # optional flat env overrides
 ├── bin/
-│   ├── setproxy         # symlink → presets/shell/proxy/set_proxy.sh
-│   ├── usetproxy        # symlink → presets/shell/proxy/uset_proxy.sh
+│   ├── setproxy         # symlink/shim → platform proxy script
+│   ├── usetproxy        # symlink/shim → platform proxy script
 │   └── test_tools       # symlink → presets/shell/tools/test_tools.sh
 └── presets/
     ├── app/
@@ -640,7 +676,9 @@ PROXY_HOST = "127.0.0.1"
     └── shell/
         ├── proxy/
         │   ├── shine.toml
+        │   ├── set_proxy.ps1
         │   ├── set_proxy.sh
+        │   ├── uset_proxy.ps1
         │   └── uset_proxy.sh
         └── tools/
             └── test_tools.sh

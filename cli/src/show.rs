@@ -183,7 +183,10 @@ async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShowFile>> {
                 .join("shell")
                 .join(&category.name)
                 .join(&file.source_rel);
-            let link_path = config.bin_dir().join(&file.command_name);
+            let link_path = crate::bin_links::command_path_for_name(
+                config.bin_dir(),
+                std::ffi::OsStr::new(&file.command_name),
+            );
 
             let source_exists = source_path.exists();
             let rendered_exists = rendered_path.exists();
@@ -452,12 +455,16 @@ async fn print_shell_file(
     Ok(())
 }
 
-fn print_block(heading: &str, path: &Path, text: &str) {
+fn print_heading(heading: &str, path: &Path) {
     println!();
     println!(
         "{}",
         colors::dim(&format!("--- {heading}: {} ---", path.display()))
     );
+}
+
+fn print_block(heading: &str, path: &Path, text: &str) {
+    print_heading(heading, path);
     print!("{text}");
     if !text.ends_with('\n') {
         println!();
@@ -465,11 +472,7 @@ fn print_block(heading: &str, path: &Path, text: &str) {
 }
 
 async fn print_file_content(path: &Path, heading: &str) -> Result<()> {
-    println!();
-    println!(
-        "{}",
-        colors::dim(&format!("--- {heading}: {} ---", path.display()))
-    );
+    print_heading(heading, path);
     let bytes = tokio::fs::read(path)
         .await
         .with_context(|| format!("reading installed content: {}", path.display()))?;
@@ -522,31 +525,26 @@ async fn app_file_status(
     }
 }
 
-fn status_label(status: FileStatus) -> &'static str {
+fn status_parts(status: FileStatus) -> (&'static str, &'static str) {
     match status {
-        FileStatus::Missing => "destination missing",
-        FileStatus::UserModified => "user modified",
-        FileStatus::UpdateAvail => "update available",
-        FileStatus::Partial => "partial install",
-        FileStatus::UpToDate => "up-to-date",
-        FileStatus::NotInstalled => "not installed",
+        FileStatus::Missing => ("destination missing", "!"),
+        FileStatus::UserModified => ("user modified", "~"),
+        FileStatus::UpdateAvail => ("update available", "↑"),
+        FileStatus::Partial => ("partial install", "~"),
+        FileStatus::UpToDate => ("up-to-date", "✓"),
+        FileStatus::NotInstalled => ("not installed", "✗"),
     }
 }
 
 fn status_sym(status: FileStatus) -> &'static str {
-    match status {
-        FileStatus::Missing => "!",
-        FileStatus::UserModified | FileStatus::Partial => "~",
-        FileStatus::UpdateAvail => "↑",
-        FileStatus::UpToDate => "✓",
-        FileStatus::NotInstalled => "✗",
-    }
+    status_parts(status).1
 }
 
 fn colored_app_status(status: FileStatus) -> String {
-    colors::status_label(status_label(status), status_sym(status))
+    colors::status_label(status_parts(status).0, status_sym(status))
 }
 
+// status is a free-form &'static str produced by the shell subsystem; _ => "~" is intentional.
 fn shell_status_sym(status: &str) -> &'static str {
     match status {
         "up-to-date" => "✓",
@@ -594,7 +592,7 @@ async fn app_diff_output(config: &Config, item: &AppShowFile) -> Result<String> 
     Ok(render_diff_or_note(
         &current,
         &expected,
-        &item.destination.display().to_string(),
+        &item.destination.to_string_lossy(),
         &format!(
             "expected: app/{}/{}",
             item.category.name,
@@ -636,7 +634,7 @@ async fn shell_diff_output(
     Ok(render_diff_or_note(
         &current,
         &expected,
-        &current_path.display().to_string(),
+        &current_path.to_string_lossy(),
         &format!(
             "expected: shell/{}/{}",
             item.category.name,
@@ -690,7 +688,7 @@ fn render_diff_or_note(
 }
 
 fn colorize_unified_diff(diff: &str) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(diff.len());
     for line in diff.split_inclusive('\n') {
         let colored =
             if line.starts_with("@@") || line.starts_with("---") || line.starts_with("+++") {

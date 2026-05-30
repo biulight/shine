@@ -1,0 +1,86 @@
+name: preview
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      has_new_commits: ${{ steps.compare.outputs.result }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: compare
+        run: |
+          PREV=$(git rev-parse refs/tags/preview^{} 2>/dev/null || echo "none")
+          if [ "$PREV" = "$GITHUB_SHA" ]; then
+            echo "result=false" >> $GITHUB_OUTPUT
+          else
+            echo "result=true" >> $GITHUB_OUTPUT
+          fi
+
+  test:
+    needs: check
+    if: github.event_name == 'workflow_dispatch' || needs.check.outputs.has_new_commits == 'true'
+    uses: ./.github/workflows/test.yml
+
+  build-preview-assets:
+    needs: test
+    uses: ./.github/workflows/package-assets.yml
+
+  preview-release:
+    needs:
+      - test
+      - build-preview-assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Update preview tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa preview "$GITHUB_SHA" -m "Preview $GITHUB_SHA"
+          git push --force origin refs/tags/preview
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+      - name: Prepare preview release files
+        run: |
+          cat > PREVIEW_BODY.md <<EOF
+          Automated preview build from the release branch.
+
+          - Source branch: \`release\`
+          - Commit: \`${GITHUB_SHA}\`
+          - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          This prerelease is overwritten daily.
+          EOF
+          find dist -type f -name 'shine-preview-*.tar.gz' -print
+      - name: Delete existing preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete preview --repo "$GITHUB_REPOSITORY" --yes || true
+      - name: Publish preview release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: preview
+          name: Preview
+          body_path: PREVIEW_BODY.md
+          prerelease: true
+          make_latest: "legacy"
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: dist/**/*.tar.gz

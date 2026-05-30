@@ -1,10 +1,14 @@
 use anyhow::{Context, Result};
 use std::collections::HashSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 #[cfg(not(unix))]
 const EXECUTABLE_EXTENSIONS: &[&str] = &["sh", "ps1"];
+#[cfg(not(unix))]
+const SHIM_MANAGED_MARKER: &str = "# shine-managed";
+#[cfg(not(unix))]
+const SHIM_TARGET_PREFIX: &str = "# shine-target: ";
 
 pub(crate) struct LinkReport {
     pub created: Vec<PathBuf>,
@@ -55,6 +59,21 @@ pub(crate) async fn unlink_managed(
             Err(_) => continue,
         };
 
+        #[cfg(not(unix))]
+        if !meta.file_type().is_symlink() {
+            match shim_target(&path).await {
+                Ok(Some(target)) if target.starts_with(managed_root) => {
+                    if !dry_run {
+                        remove_link(&path).await?;
+                    }
+                    report.removed.push(path);
+                }
+                _ => report.skipped.push(path),
+            }
+            continue;
+        }
+
+        #[cfg(unix)]
         if !meta.file_type().is_symlink() {
             report.skipped.push(path);
             continue;
@@ -140,11 +159,11 @@ pub(crate) async fn link_executables_with_names(
         if !seen.insert(stem.clone()) {
             report
                 .conflicts
-                .push((bin_dir.join(&stem), spec.source.clone()));
+                .push((command_path_for_name(bin_dir, &stem), spec.source.clone()));
             continue;
         }
 
-        let link_path = bin_dir.join(&stem);
+        let link_path = command_path_for_name(bin_dir, &stem);
 
         match tokio::fs::symlink_metadata(&link_path).await {
             Ok(meta) if meta.file_type().is_symlink() => {
@@ -157,7 +176,7 @@ pub(crate) async fn link_executables_with_names(
                             tokio::fs::remove_file(&link_path).await.with_context(|| {
                                 format!("removing stale symlink: {link_path:?}")
                             })?;
-                            create_symlink(&spec.source, &link_path).await?;
+                            create_link(&spec.source, &link_path).await?;
                             report.overwritten.push(link_path);
                         } else {
                             report.conflicts.push((link_path, spec.source.clone()));
@@ -166,18 +185,22 @@ pub(crate) async fn link_executables_with_names(
                 }
             }
             Ok(_) => {
+                #[cfg(not(unix))]
+                if windows_shim_points_to(&link_path, &spec.source).await? {
+                    report.skipped.push(link_path);
+                    continue;
+                }
+
                 if overwrite {
-                    tokio::fs::remove_file(&link_path)
-                        .await
-                        .with_context(|| format!("removing existing file: {link_path:?}"))?;
-                    create_symlink(&spec.source, &link_path).await?;
+                    remove_link(&link_path).await?;
+                    create_link(&spec.source, &link_path).await?;
                     report.overwritten.push(link_path);
                 } else {
                     report.conflicts.push((link_path, spec.source.clone()));
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                create_symlink(&spec.source, &link_path).await?;
+                create_link(&spec.source, &link_path).await?;
                 report.created.push(link_path);
             }
             Err(e) => {
@@ -187,6 +210,19 @@ pub(crate) async fn link_executables_with_names(
     }
 
     Ok(report)
+}
+
+pub(crate) fn command_path_for_name(bin_dir: &Path, stem: &OsStr) -> PathBuf {
+    #[cfg(unix)]
+    {
+        bin_dir.join(stem)
+    }
+    #[cfg(not(unix))]
+    {
+        let mut name = stem.to_os_string();
+        name.push(".ps1");
+        bin_dir.join(name)
+    }
 }
 
 pub(crate) fn link_stem(path: &Path) -> std::ffi::OsString {
@@ -215,7 +251,7 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-async fn create_symlink(source: &Path, link_path: &Path) -> Result<()> {
+async fn create_link(source: &Path, link_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         tokio::fs::symlink(source, link_path)
@@ -224,13 +260,114 @@ async fn create_symlink(source: &Path, link_path: &Path) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
-        eprintln!(
-            "[shine] bin symlinks not yet supported on this platform; skipping {:?}",
-            link_path
-        );
-        let _ = (source, link_path);
-        Ok(())
+        create_windows_shims(source, link_path).await
     }
+}
+
+async fn remove_link(link_path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        tokio::fs::remove_file(link_path)
+            .await
+            .with_context(|| format!("removing existing file: {link_path:?}"))
+    }
+    #[cfg(not(unix))]
+    {
+        remove_windows_shims(link_path).await
+    }
+}
+
+#[cfg(not(unix))]
+async fn create_windows_shims(source: &Path, ps1_path: &Path) -> Result<()> {
+    let cmd_path = ps1_path.with_extension("cmd");
+    if let Some(parent) = ps1_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("creating bin dir: {parent:?}"))?;
+    }
+    tokio::fs::write(ps1_path, powershell_shim_content(source))
+        .await
+        .with_context(|| format!("writing PowerShell shim: {ps1_path:?}"))?;
+    tokio::fs::write(&cmd_path, cmd_shim_content(source))
+        .await
+        .with_context(|| format!("writing cmd shim: {cmd_path:?}"))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn powershell_shim_content(source: &Path) -> String {
+    let target = source.display().to_string();
+    let escaped = target.replace('\'', "''");
+    let bash_target = bash_compatible_path(source);
+    let bash_escaped = bash_target.replace('\'', "''");
+    match source.extension().and_then(|e| e.to_str()) {
+        Some("ps1") => format!(
+            "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\nif ($MyInvocation.InvocationName -eq '.') {{\n  . '{escaped}' @args\n}} else {{\n  & '{escaped}' @args\n  exit $LASTEXITCODE\n}}\n"
+        ),
+        _ => format!(
+            "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\n& bash '{bash_escaped}' @args\nexit $LASTEXITCODE\n"
+        ),
+    }
+}
+
+#[cfg(not(unix))]
+fn cmd_shim_content(source: &Path) -> String {
+    let target = source.display().to_string();
+    let escaped = target.replace('\'', "''");
+    let bash_target = bash_compatible_path(source);
+    match source.extension().and_then(|e| e.to_str()) {
+        Some("ps1") => format!(
+            "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{escaped}\" %*\r\n"
+        ),
+        _ => format!(
+            "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\nbash \"{bash_target}\" %*\r\n"
+        ),
+    }
+}
+
+#[cfg(not(unix))]
+fn bash_compatible_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
+#[cfg(not(unix))]
+async fn windows_shim_points_to(link_path: &Path, source: &Path) -> Result<bool> {
+    Ok(shim_target(link_path)
+        .await?
+        .is_some_and(|target| target == source))
+}
+
+#[cfg(not(unix))]
+async fn shim_target(path: &Path) -> Result<Option<PathBuf>> {
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("reading shim: {path:?}")),
+    };
+    if !content.contains(SHIM_MANAGED_MARKER) {
+        return Ok(None);
+    }
+    Ok(content.lines().find_map(|line| {
+        line.strip_prefix(SHIM_TARGET_PREFIX)
+            .or_else(|| line.strip_prefix("REM shine-target: "))
+            .map(PathBuf::from)
+    }))
+}
+
+#[cfg(not(unix))]
+async fn remove_windows_shims(ps1_path: &Path) -> Result<()> {
+    let cmd_path = ps1_path.with_extension("cmd");
+    match tokio::fs::remove_file(ps1_path).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err).with_context(|| format!("removing shim: {ps1_path:?}")),
+    }
+    match tokio::fs::remove_file(&cmd_path).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err).with_context(|| format!("removing shim: {cmd_path:?}")),
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -513,5 +650,18 @@ mod tests {
 
         assert!(report.removed.is_empty());
         assert!(report.skipped.is_empty());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn shell_shims_pass_bash_compatible_paths_on_windows() {
+        let source = PathBuf::from(r"C:\Users\me\.shine\rendered\shell\tools\test_tools.sh");
+
+        let ps1 = powershell_shim_content(&source);
+        let cmd = cmd_shim_content(&source);
+
+        assert!(ps1.contains("C:/Users/me/.shine/rendered/shell/tools/test_tools.sh"));
+        assert!(cmd.contains("C:/Users/me/.shine/rendered/shell/tools/test_tools.sh"));
+        assert!(!ps1.contains(r"& bash 'C:\Users\me"));
     }
 }

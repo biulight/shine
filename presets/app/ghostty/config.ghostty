@@ -1,13 +1,9 @@
-# window-width = 160
-# window-height = 50
-
 font-family = "JetBrains Mono Nerd Font"
 font-size = 13
 font-thicken = true
 
-# shine installs `themes/shine-light` and `themes/shine-dark`.
 # Set GHOSTTY_BG_LIGHT / GHOSTTY_BG_DARK in `shine env` to populate them.
-theme = light:shine-light,dark:shine-dark
+theme = light:light_Atom One Light,dark:dark_Alien Blood
 
 background-image-fit = cover
 background-image-opacity = 0.3

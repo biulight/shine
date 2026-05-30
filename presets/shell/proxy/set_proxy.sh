@@ -1,7 +1,8 @@
 #!/bin/bash
 # shine-template: true
 # Set proxy environment variables (`http_proxy`, `https_proxy`, `all_proxy`).
-# Also configure tool proxies for Git, NPM, Yarn, and pnpm.
+# Git, npm, and pnpm inherit these values from the current shell.
+# Yarn proxy settings are updated in Yarn config because they are not reliably session-scoped.
 # The HTTP proxy port is controlled by `HTTP_PROXY_PORT` in `~/.shine/env.toml`.
 # Usage: source setproxy [auto|sock5|http]
 # In `auto` mode, SOCKS5 is preferred and HTTP is used as a fallback.
@@ -57,47 +58,40 @@ set_proxy() {
     export no_proxy="localhost,127.0.0.1,::1,.local"
     export NO_PROXY="localhost,127.0.0.1,::1,.local"
 
-    # Git, NPM, and similar tools typically do not support SOCKS5, so use HTTP proxy uniformly.
+    # npm and pnpm read npm_config_* values from the process environment.
     local tool_proxy="http://${PROXY_HOST}:${HTTP_PROXY_PORT}"
+    export npm_config_proxy="${tool_proxy}"
+    export npm_config_https_proxy="${tool_proxy}"
+    export npm_config_registry="https://registry.npmjs.org/"
+    export NPM_CONFIG_PROXY="${tool_proxy}"
+    export NPM_CONFIG_HTTPS_PROXY="${tool_proxy}"
+    export NPM_CONFIG_REGISTRY="https://registry.npmjs.org/"
 
-    echo "🔧 Configuring Git proxy..."
-    git config --global http.proxy "${tool_proxy}"
-    git config --global https.proxy "${tool_proxy}"
-
-    if command -v npm >/dev/null 2>&1; then
-        echo "📦 Configuring NPM proxy..."
-        npm config set proxy "${tool_proxy}"
-        npm config set https-proxy "${tool_proxy}"
-        npm config set registry https://registry.npmjs.org/
-    else
-        echo "ℹ️ NPM is not installed; skipping"
-    fi
+    local yarn_configured=0
 
     if command -v yarn >/dev/null 2>&1; then
         yarn_version=$(yarn --version)
         case "$yarn_version" in
             1.*)
-                echo "🧶 Configuring Yarn@${yarn_version} proxy..."
+                echo "🧶 Yarn proxy cannot be reliably scoped to this shell; updating Yarn@${yarn_version} config..."
                 yarn config set proxy "${tool_proxy}"
                 yarn config set https-proxy "${tool_proxy}"
+                yarn_configured=1
                 ;;
-            2.*|3.*)
-                echo "🧶 Configuring Yarn@${yarn_version} proxy..."
+            2.*|3.*|4.*)
+                echo "🧶 Yarn proxy cannot be reliably scoped to this shell; updating Yarn@${yarn_version} config..."
                 yarn config set httpProxy "${tool_proxy}"
                 yarn config set httpsProxy "${tool_proxy}"
+                yarn_configured=1
                 ;;
             *)
                 echo "⚠️ Unknown Yarn version: ${yarn_version}; trying a generic configuration"
+                echo "🧶 Yarn proxy cannot be reliably scoped to this shell; updating Yarn config..."
                 yarn config set proxy "${tool_proxy}"
                 yarn config set https-proxy "${tool_proxy}"
+                yarn_configured=1
                 ;;
         esac
-    fi
-
-    if command -v pnpm >/dev/null 2>&1; then
-        echo "📌 Configuring pnpm proxy..."
-        pnpm config set proxy "${tool_proxy}"
-        pnpm config set https-proxy "${tool_proxy}"
     fi
 
     echo "✅ Proxy setup complete!"
@@ -106,6 +100,10 @@ set_proxy() {
     echo "System proxy type: ${proxy_type}"
     echo "System proxy address: ${proxy_address}"
     echo "Tool proxy address: ${tool_proxy}"
+    echo "Scope: current shell session for Git/npm/pnpm-compatible environment variables"
+    if [ "$yarn_configured" -eq 1 ]; then
+        echo "Yarn config was updated because Yarn proxy settings are not reliably session-scoped."
+    fi
 }
 
 # Select proxy mode from the provided argument.

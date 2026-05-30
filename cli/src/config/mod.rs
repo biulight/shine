@@ -716,24 +716,24 @@ struct ProjectConfig {
 
 fn find_project_config(start: &Path) -> Option<ProjectConfig> {
     find_ancestor_file(start, PROJECT_CONFIG_FILE)
-        .map(|path| ProjectConfig {
-            root: path
-                .parent()
-                .expect("project config path must have a parent")
-                .to_path_buf(),
-            path,
-            is_legacy: false,
+        .and_then(|path| {
+            let root = path.parent()?.to_path_buf();
+            Some(ProjectConfig {
+                root,
+                path,
+                is_legacy: false,
+            })
         })
         .or_else(|| {
             find_ancestor_file(start, LEGACY_PROJECT_CONFIG_FILE)
                 .filter(|path| config_file_has_presets_dir(path))
-                .map(|path| ProjectConfig {
-                    root: path
-                        .parent()
-                        .expect("legacy project config path must have a parent")
-                        .to_path_buf(),
-                    path,
-                    is_legacy: true,
+                .and_then(|path| {
+                    let root = path.parent()?.to_path_buf();
+                    Some(ProjectConfig {
+                        root,
+                        path,
+                        is_legacy: true,
+                    })
                 })
         })
 }
@@ -873,7 +873,7 @@ mod tests {
         ENV_LOCK
             .get_or_init(|| Mutex::new(()))
             .lock()
-            .expect("environment lock must not be poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn config_in(dir: &Path) -> Config {
@@ -1051,12 +1051,16 @@ mod tests {
     async fn load_or_init_creates_bin_dir() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
 
         let config = Config::load_or_init().await.unwrap();
         assert!(config.bin_dir().exists(), "bin dir should be created");
         assert_eq!(config.bin_dir(), dir.join("bin"));
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1066,6 +1070,8 @@ mod tests {
     async fn load_or_init_creates_env_table_in_config() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
 
         let config = Config::load_or_init().await.unwrap();
@@ -1081,6 +1087,8 @@ mod tests {
             "config.toml should contain [env]"
         );
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1096,6 +1104,8 @@ mod tests {
         )
         .await
         .unwrap();
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
 
         let config = Config::load_or_init().await.unwrap();
@@ -1113,6 +1123,8 @@ mod tests {
             "legacy env.toml should be removed"
         );
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1135,7 +1147,11 @@ mod tests {
         .await
         .unwrap();
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
 
         let config = Config::load_or_init().await.unwrap();
@@ -1158,6 +1174,8 @@ mod tests {
             "global shine.env.toml overrides should not be written into config.toml"
         );
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1190,7 +1208,11 @@ mod tests {
         .await
         .unwrap();
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
         std::env::set_current_dir(&child_dir).unwrap();
 
@@ -1222,6 +1244,8 @@ mod tests {
         );
 
         restore_current_dir(&original_dir);
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
@@ -1249,6 +1273,8 @@ mod tests {
         .await
         .unwrap();
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
         std::env::set_current_dir(&child_dir).unwrap();
 
@@ -1265,6 +1291,8 @@ mod tests {
         assert_eq!(config.shine_dir(), state_dir);
 
         restore_current_dir(&original_dir);
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
@@ -1277,6 +1305,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shine-dry-run-{}", uuid::Uuid::new_v4()));
         assert!(!dir.exists());
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
 
         let config = Config::load_global_runtime_for_dry_run().await.unwrap();
@@ -1285,6 +1315,8 @@ mod tests {
         assert_eq!(config.schema_version, CURRENT_RUNTIME_SCHEMA_VERSION);
         assert!(!dir.exists(), "dry-run loader must not create state dir");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
     }
 
@@ -1316,7 +1348,11 @@ mod tests {
         .await
         .unwrap();
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
         std::env::set_current_dir(&child_dir).unwrap();
 
@@ -1340,6 +1376,8 @@ mod tests {
         );
 
         restore_current_dir(&original_dir);
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
@@ -1405,7 +1443,11 @@ mod tests {
         .await
         .unwrap();
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
         std::env::set_current_dir(&child_dir).unwrap();
 
@@ -1427,6 +1469,8 @@ mod tests {
         );
 
         restore_current_dir(&original_dir);
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
@@ -1489,6 +1533,8 @@ mod tests {
         .await
         .unwrap();
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
         std::env::set_current_dir(&project_dir).unwrap();
 
@@ -1510,6 +1556,8 @@ mod tests {
         assert!(!parsed.contains_key("last_cleared_schema_version"));
 
         restore_current_dir(&original_dir);
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();
@@ -1532,6 +1580,8 @@ mod tests {
         )
         .await
         .unwrap();
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
 
         let config = Config::load_or_init().await.unwrap();
@@ -1549,6 +1599,8 @@ mod tests {
             "legacy env.toml should be removed"
         );
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1562,9 +1614,13 @@ mod tests {
         let default_presets = PathBuf::from("/home/user/.shine/presets");
         let custom = std::env::temp_dir().join("shine-override-test");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom.to_str().unwrap()) };
         let (shine, presets, _) =
             resolve_runtime_config_dirs(&default_shine, &default_presets, None, false);
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
 
         assert_eq!(shine, custom);
@@ -1578,10 +1634,16 @@ mod tests {
         let default_presets = PathBuf::from("/home/user/.shine/presets");
         let custom_presets = std::env::temp_dir().join("my-presets");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_PRESETS", custom_presets.to_str().unwrap()) };
         let (shine, presets, _) =
             resolve_runtime_config_dirs(&default_shine, &default_presets, None, false);
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
 
         assert_eq!(shine, default_shine);
@@ -1596,11 +1658,19 @@ mod tests {
         let custom_dir = std::env::temp_dir().join("shine-cfg-dir");
         let custom_presets = std::env::temp_dir().join("shine-presets-ignored");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom_dir.to_str().unwrap()) };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_PRESETS", custom_presets.to_str().unwrap()) };
         let (shine, presets, _) =
             resolve_runtime_config_dirs(&default_shine, &default_presets, None, false);
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
 
         assert_eq!(shine, custom_dir);
@@ -1615,7 +1685,11 @@ mod tests {
         let custom_dir = std::env::temp_dir().join("shine-local-state");
         let toml_presets = PathBuf::from("/project/presets");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom_dir.to_str().unwrap()) };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
         let (shine, presets, _) = resolve_runtime_config_dirs(
             &default_shine,
@@ -1623,6 +1697,8 @@ mod tests {
             Some(toml_presets.as_path()),
             true,
         );
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
 
         assert_eq!(shine, custom_dir);
@@ -1636,7 +1712,11 @@ mod tests {
         let default_presets = PathBuf::from("/home/user/.shine/presets");
         let toml_presets = PathBuf::from("/custom/presets");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
         let (shine, presets, _) = resolve_runtime_config_dirs(
             &default_shine,
@@ -1657,7 +1737,11 @@ mod tests {
         let env_presets = std::env::temp_dir().join("env-presets");
         let toml_presets = PathBuf::from("/toml/presets");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_PRESETS", env_presets.to_str().unwrap()) };
         let (_, presets, _) = resolve_runtime_config_dirs(
             &default_shine,
@@ -1665,6 +1749,8 @@ mod tests {
             Some(toml_presets.as_path()),
             false,
         );
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
 
         assert_eq!(presets, env_presets);
@@ -1753,8 +1839,12 @@ mod tests {
         let presets = PathBuf::from("/home/user/.shine/presets");
         let custom = std::env::temp_dir().join("shine-ext-test");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", custom.to_str().unwrap()) };
         let (_, _, is_external) = resolve_runtime_config_dirs(&default, &presets, None, false);
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
 
         assert!(
@@ -1770,9 +1860,15 @@ mod tests {
         let presets = PathBuf::from("/home/user/.shine/presets");
         let custom = std::env::temp_dir().join("shine-ext-presets");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_PRESETS", custom.to_str().unwrap()) };
         let (_, _, is_external) = resolve_runtime_config_dirs(&default, &presets, None, false);
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
 
         assert!(is_external, "SHINE_PRESETS should set is_external_presets");
@@ -1785,7 +1881,11 @@ mod tests {
         let presets = PathBuf::from("/home/user/.shine/presets");
         let toml_override = PathBuf::from("/toml/presets");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
         let (_, _, is_external) =
             resolve_runtime_config_dirs(&default, &presets, Some(toml_override.as_path()), false);
@@ -1802,7 +1902,11 @@ mod tests {
         let default = PathBuf::from("/home/user/.shine");
         let presets = PathBuf::from("/home/user/.shine/presets");
 
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
         let (_, _, is_external) = resolve_runtime_config_dirs(&default, &presets, None, false);
 

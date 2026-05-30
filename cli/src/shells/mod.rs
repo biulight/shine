@@ -19,6 +19,11 @@ description = "My shell helper commands."
 source = "my_tool.sh"
 target = "mytool"
 needs_source = false
+# Optional: limit a file to specific platforms.
+# platforms = ["unix"]      # or ["windows"]
+
+# PowerShell scripts are also supported:
+# source = "my_tool.ps1"
 "#;
 
 #[derive(Debug, Default)]
@@ -188,7 +193,10 @@ pub(crate) async fn handle_upgrade_installed(
         .iter()
         .flat_map(|cat| {
             cat.files.iter().filter_map(|file| {
-                let link = config.bin_dir().join(&file.command_name);
+                let link = crate::bin_links::command_path_for_name(
+                    config.bin_dir(),
+                    std::ffi::OsStr::new(&file.command_name),
+                );
                 shell_link_exists(&link).then(|| (cat.name.clone(), file.command_name.clone()))
             })
         })
@@ -656,17 +664,17 @@ async fn apply_template_to_scripts(
     Ok(report)
 }
 
-fn env_map_for_script(
+fn env_map_for_script<'a>(
     script: &ScriptTemplate,
-    env_map: &std::collections::BTreeMap<String, String>,
-) -> std::collections::BTreeMap<String, String> {
-    let mut script_env_map = env_map.clone();
+    env_map: &'a std::collections::BTreeMap<String, String>,
+) -> std::borrow::Cow<'a, std::collections::BTreeMap<String, String>> {
     if script.display_name == "agent/ccenv" {
-        script_env_map
-            .entry("DEEPSEEK_API_KEY".to_string())
-            .or_default();
+        let mut map = env_map.clone();
+        map.entry("DEEPSEEK_API_KEY".to_string()).or_default();
+        std::borrow::Cow::Owned(map)
+    } else {
+        std::borrow::Cow::Borrowed(env_map)
     }
-    script_env_map
 }
 
 /// Build the PATH export snippet for the given shell, using `$HOME` when possible.
@@ -684,6 +692,7 @@ fn path_export_snippet(
     };
     let mut body = match shell {
         ShellType::Fish => format!("fish_add_path \"{bin_str}\""),
+        ShellType::PowerShell => powershell_path_snippet(&bin_str),
         _ => format!(
             "if [[ \":$PATH:\" != *\":{bin_str}:\"* ]]; then\n  export PATH=\"{bin_str}:$PATH\"\nfi"
         ),
@@ -696,6 +705,17 @@ fn path_export_snippet(
                     "\nfunction {cmd}\n  source \"{bin_str}/{cmd}\" $argv\nend"
                 ));
             }
+            ShellType::PowerShell => {
+                let script_name = if cfg!(windows) {
+                    format!("{cmd}.ps1")
+                } else {
+                    cmd.clone()
+                };
+                body.push_str(&format!(
+                    "\nfunction {cmd} {{ . (Join-Path $shineBin '{}') @args }}",
+                    script_name.replace('\'', "''")
+                ));
+            }
             _ => {
                 body.push_str(&format!(
                     "\n{cmd}() {{ source \"{bin_str}/{cmd}\" \"$@\"; }}"
@@ -706,16 +726,39 @@ fn path_export_snippet(
     format!("{SENTINEL_START}\n{body}\n{SENTINEL_END}\n")
 }
 
+fn powershell_path_snippet(bin_str: &str) -> String {
+    let assignment = powershell_bin_assignment(bin_str);
+    format!(
+        "{assignment}\n$shinePathEntries = $env:Path -split [System.IO.Path]::PathSeparator\nif ($shinePathEntries -notcontains $shineBin) {{\n  $env:Path = \"$shineBin$([System.IO.Path]::PathSeparator)$env:Path\"\n}}"
+    )
+}
+
+fn powershell_bin_assignment(bin_str: &str) -> String {
+    let normalized = bin_str.replace('\\', "/");
+    if let Some(rel) = normalized.strip_prefix("$HOME/") {
+        let escaped = rel.replace('\'', "''");
+        format!("$shineBin = Join-Path $HOME '{escaped}'")
+    } else if normalized == "$HOME" {
+        "$shineBin = $HOME".to_string()
+    } else {
+        let escaped = bin_str.replace('\'', "''");
+        format!("$shineBin = '{escaped}'")
+    }
+}
+
 fn shell_source_command(shell: &ShellType, config_path: &Path) -> String {
-    let quoted = shell_quote(config_path);
     match shell {
-        ShellType::PowerShell => format!(". {quoted}"),
-        _ => format!("source {quoted}"),
+        ShellType::PowerShell => format!(". {}", powershell_quote(config_path)),
+        _ => format!("source {}", shell_quote(config_path)),
     }
 }
 
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+fn powershell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 
 fn print_source_command_activation_hint(
@@ -770,8 +813,27 @@ async fn append_path_to_shell_config(
     force: bool,
     source_commands: &[String],
 ) -> Result<PathUpdateStatus> {
-    let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
+    let config_paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
+    let mut updated_path = None;
 
+    for config_path in config_paths {
+        if append_path_to_single_shell_config(config, force, source_commands, &config_path).await? {
+            updated_path.get_or_insert(config_path);
+        }
+    }
+
+    match updated_path {
+        Some(path) => Ok(PathUpdateStatus::Updated(path)),
+        None => Ok(PathUpdateStatus::AlreadyConfigured),
+    }
+}
+
+async fn append_path_to_single_shell_config(
+    config: &Config,
+    force: bool,
+    source_commands: &[String],
+    config_path: &Path,
+) -> Result<bool> {
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -791,7 +853,7 @@ async fn append_path_to_shell_config(
     if let Some(existing_block) = sentinel_block(&existing) {
         let expected_block = snippet.trim_end_matches('\n');
         if !force && existing_block == expected_block {
-            return Ok(PathUpdateStatus::AlreadyConfigured);
+            return Ok(false);
         }
         // Force or stale managed block: remove old sentinel block and re-add
         // with the current PATH setup and source wrapper functions.
@@ -812,63 +874,92 @@ async fn append_path_to_shell_config(
         .await
         .with_context(|| format!("writing to shell config: {config_path:?}"))?;
 
-    Ok(PathUpdateStatus::Updated(config_path))
+    Ok(true)
 }
 
 async fn remove_path_from_shell_config(config: &Config) -> Result<()> {
-    let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
+    let config_paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
 
-    if !config_path.exists() {
-        return Ok(());
+    for config_path in config_paths {
+        if !config_path.exists() {
+            continue;
+        }
+
+        let content = tokio::fs::read_to_string(&config_path)
+            .await
+            .with_context(|| format!("reading shell config: {config_path:?}"))?;
+
+        if !content.contains(SENTINEL_START) {
+            continue;
+        }
+
+        let cleaned = remove_sentinel_block(&content);
+        tokio::fs::write(&config_path, cleaned.as_bytes())
+            .await
+            .with_context(|| format!("writing shell config: {config_path:?}"))?;
+
+        println!(
+            "Shell config ({}): PATH entry removed",
+            config_path.display()
+        );
     }
-
-    let content = tokio::fs::read_to_string(&config_path)
-        .await
-        .with_context(|| format!("reading shell config: {config_path:?}"))?;
-
-    if !content.contains(SENTINEL_START) {
-        return Ok(());
-    }
-
-    let cleaned = remove_sentinel_block(&content);
-    tokio::fs::write(&config_path, cleaned.as_bytes())
-        .await
-        .with_context(|| format!("writing shell config: {config_path:?}"))?;
-
-    println!(
-        "Shell config ({}): PATH entry removed",
-        config_path.display()
-    );
     Ok(())
 }
 
 pub(crate) fn get_shell() -> Result<ShellType> {
-    let shell = std::env::var("SHELL").context("Could not find $SHELL")?;
-    shell.parse()
+    match std::env::var("SHELL") {
+        Ok(shell) => shell.parse(),
+        Err(_) if cfg!(windows) => Ok(ShellType::PowerShell),
+        Err(_) => bail!("Could not find $SHELL"),
+    }
 }
 
 pub(crate) fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) -> Result<PathBuf> {
+    Ok(get_shell_config_paths(shell_type, home_path)?
+        .into_iter()
+        .next()
+        .expect("shell config paths should never be empty"))
+}
+
+fn get_shell_config_paths(shell_type: &ShellType, home_path: &Path) -> Result<Vec<PathBuf>> {
     match shell_type {
-        ShellType::Bash => Ok(home_path.join(".bashrc")),
-        ShellType::Fish => Ok(home_path.join(".config/fish/config.fish")),
-        ShellType::Zsh => Ok(home_path.join(".zshrc")),
-        ShellType::PowerShell => Ok(home_path.join(".profile")),
-        ShellType::Elvish => Ok(home_path.join(".config/elvish/rc.elv")),
+        ShellType::Bash => Ok(vec![home_path.join(".bashrc")]),
+        ShellType::Fish => Ok(vec![home_path.join(".config/fish/config.fish")]),
+        ShellType::Zsh => Ok(vec![home_path.join(".zshrc")]),
+        ShellType::PowerShell => {
+            if cfg!(windows) {
+                Ok(vec![
+                    home_path.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+                    home_path.join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+                ])
+            } else {
+                Ok(vec![home_path.join(
+                    ".config/powershell/Microsoft.PowerShell_profile.ps1",
+                )])
+            }
+        }
+        ShellType::Elvish => Ok(vec![home_path.join(".config/elvish/rc.elv")]),
     }
 }
 
 impl FromStr for ShellType {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.ends_with("bash") {
+        let shell_name = s
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(s)
+            .to_ascii_lowercase();
+        let normalized = shell_name.trim_end_matches(".exe");
+        if normalized == "bash" {
             Ok(ShellType::Bash)
-        } else if s.ends_with("fish") {
+        } else if normalized == "fish" {
             Ok(ShellType::Fish)
-        } else if s.ends_with("zsh") {
+        } else if normalized == "zsh" {
             Ok(ShellType::Zsh)
-        } else if s.ends_with("powershell") {
+        } else if normalized == "powershell" || normalized == "pwsh" {
             Ok(ShellType::PowerShell)
-        } else if s.ends_with("elvish") {
+        } else if normalized == "elvish" {
             Ok(ShellType::Elvish)
         } else {
             bail!("Unknown shell item type: {}", s)
@@ -920,6 +1011,36 @@ mod tests {
             .env
             .insert("DEEPSEEK_API_KEY".into(), "test-deepseek-key".into());
         config
+    }
+
+    fn agent_ccenv_link_path(config: &Config) -> PathBuf {
+        crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("ccenv"))
+    }
+
+    #[cfg(unix)]
+    async fn assert_agent_ccenv_link_points_to(config: &Config, rendered: &Path) {
+        let link = agent_ccenv_link_path(config);
+        assert_eq!(fs::read_link(&link).await.unwrap(), rendered);
+    }
+
+    #[cfg(not(unix))]
+    async fn assert_agent_ccenv_link_points_to(config: &Config, rendered: &Path) {
+        let link = agent_ccenv_link_path(config);
+        let shim = fs::read_to_string(&link).await.unwrap();
+        let shim = shim.replace('\\', "/");
+        let rendered = rendered.display().to_string().replace('\\', "/");
+        assert!(
+            shim.contains(&rendered),
+            "Windows shim should point to rendered ccenv script: {shim}"
+        );
+    }
+
+    fn wrapper_marker(command: &str, shell: &ShellType) -> String {
+        match shell {
+            ShellType::PowerShell => format!("\nfunction {command} {{ . (Join-Path $shineBin"),
+            ShellType::Fish => format!("\nfunction {command}"),
+            _ => format!("\n{command}() {{ source"),
+        }
     }
 
     #[cfg(unix)]
@@ -1092,6 +1213,27 @@ mod tests {
             fish_snippet.contains("function setproxy"),
             "fish should have setproxy function: {fish_snippet}"
         );
+        let powershell_snippet = path_export_snippet(&ShellType::PowerShell, &bin, &home, &cmds);
+        assert!(
+            powershell_snippet.contains("$env:Path"),
+            "PowerShell should update env Path: {powershell_snippet}"
+        );
+        assert!(
+            powershell_snippet.contains("function setproxy"),
+            "PowerShell should have setproxy function: {powershell_snippet}"
+        );
+        assert!(
+            powershell_snippet.contains("Join-Path $shineBin"),
+            "PowerShell wrapper should resolve through shine bin: {powershell_snippet}"
+        );
+        assert!(
+            powershell_snippet.contains("$shineBin = Join-Path $HOME '.shine/bin'"),
+            "PowerShell should expand $HOME when assigning shine bin: {powershell_snippet}"
+        );
+        assert!(
+            !powershell_snippet.contains("$shineBin = '$HOME"),
+            "PowerShell should not keep $HOME as a literal path: {powershell_snippet}"
+        );
     }
 
     #[test]
@@ -1107,6 +1249,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn powershell_shell_detection_accepts_pwsh_names() {
+        assert!(matches!("pwsh".parse().unwrap(), ShellType::PowerShell));
+        assert!(matches!("pwsh.exe".parse().unwrap(), ShellType::PowerShell));
+        assert!(matches!(
+            r"C:\Program Files\PowerShell\7\pwsh.exe".parse().unwrap(),
+            ShellType::PowerShell
+        ));
+        assert!(matches!(
+            "powershell".parse().unwrap(),
+            ShellType::PowerShell
+        ));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn proxy_scripts_fail_fast_when_not_sourced() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -1199,16 +1356,47 @@ mod tests {
             1,
             "sentinel should appear exactly once"
         );
+        let setproxy_marker = wrapper_marker("setproxy", &config.shell_type);
+        let usetproxy_marker = wrapper_marker("usetproxy", &config.shell_type);
         assert_eq!(
-            content.matches("\nsetproxy() { source").count(),
+            content.matches(&setproxy_marker).count(),
             1,
             "setproxy wrapper should not be duplicated: {content}"
         );
         assert_eq!(
-            content.matches("\nusetproxy() { source").count(),
+            content.matches(&usetproxy_marker).count(),
             1,
             "usetproxy wrapper should not be duplicated: {content}"
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn append_writes_both_windows_powershell_profiles() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.shell_type = ShellType::PowerShell;
+        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
+
+        append_path_to_shell_config(&config, false, &source_commands)
+            .await
+            .unwrap();
+
+        for config_path in get_shell_config_paths(&config.shell_type, &config.home_dir).unwrap() {
+            let content = fs::read_to_string(&config_path).await.unwrap();
+            assert!(
+                content.contains("function setproxy"),
+                "setproxy wrapper should be added to {}: {content}",
+                config_path.display()
+            );
+            assert!(
+                content.contains("function usetproxy"),
+                "usetproxy wrapper should be added to {}: {content}",
+                config_path.display()
+            );
+        }
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1240,12 +1428,14 @@ mod tests {
             "stale sentinel should be refreshed"
         );
         let content = fs::read_to_string(&config_path).await.unwrap();
+        let setproxy_marker = wrapper_marker("setproxy", &config.shell_type);
+        let usetproxy_marker = wrapper_marker("usetproxy", &config.shell_type);
         assert!(
-            content.contains("setproxy() { source"),
+            content.contains(&setproxy_marker),
             "setproxy wrapper should be added: {content}"
         );
         assert!(
-            content.contains("usetproxy() { source"),
+            content.contains(&usetproxy_marker),
             "usetproxy wrapper should be added: {content}"
         );
         assert!(
@@ -1527,7 +1717,6 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn embedded_agent_ccenv_renders_deepseek_key_from_env_config() {
         let dir = make_temp_dir().await;
@@ -1537,7 +1726,10 @@ mod tests {
 
         handle_install(&config, Some("agent"), false).await.unwrap();
 
-        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             rendered_content.contains("test-deepseek-key"),
@@ -1547,15 +1739,11 @@ mod tests {
             !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
             "rendered agent script should not contain the template placeholder"
         );
-        assert_eq!(
-            fs::read_link(config.bin_dir().join("ccenv")).await.unwrap(),
-            rendered
-        );
+        assert_agent_ccenv_link_points_to(&config, &rendered).await;
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn embedded_agent_ccenv_does_not_render_deepseek_gpg_secret() {
         let dir = make_temp_dir().await;
@@ -1569,7 +1757,10 @@ mod tests {
 
         handle_install(&config, Some("agent"), false).await.unwrap();
 
-        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             !rendered_content.contains("test-base64-gpg-secret"),
@@ -1579,15 +1770,11 @@ mod tests {
             !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
             "rendered agent script should not contain the key template placeholder"
         );
-        assert_eq!(
-            fs::read_link(config.bin_dir().join("ccenv")).await.unwrap(),
-            rendered
-        );
+        assert_agent_ccenv_link_points_to(&config, &rendered).await;
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn embedded_agent_install_succeeds_without_deepseek_secret() {
         let dir = make_temp_dir().await;
@@ -1597,7 +1784,10 @@ mod tests {
 
         handle_install(&config, Some("agent"), false).await.unwrap();
 
-        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             rendered_content.contains(
@@ -1610,7 +1800,7 @@ mod tests {
             "rendered agent script should not contain the key template placeholder"
         );
         assert!(
-            config.bin_dir().join("ccenv").exists(),
+            agent_ccenv_link_path(&config).exists(),
             "agent install should link ccenv even when secrets are configured later"
         );
 
@@ -1619,13 +1809,15 @@ mod tests {
 
     #[test]
     fn embedded_agent_ccenv_uses_cli_decrypt_and_priority_path() {
-        let bytes = crate::presets::read_asset_bytes("shell/agent/cc.sh").unwrap();
-        let script = String::from_utf8(bytes).unwrap();
+        for path in ["shell/agent/cc.sh", "shell/agent/cc.ps1"] {
+            let bytes = crate::presets::read_asset_bytes(path).unwrap();
+            let script = String::from_utf8(bytes).unwrap();
 
-        assert!(script.contains("shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET"));
-        assert!(script.contains("shine env get DEEPSEEK_API_KEY_GPG_SECRET"));
-        assert!(script.contains("DEEPSEEK_API_KEY_GPG_SECRET"));
-        assert!(!script.contains("@@DEEPSEEK_API_KEY_GPG_SECRET@@"));
+            assert!(script.contains("shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET"));
+            assert!(script.contains("shine env get DEEPSEEK_API_KEY_GPG_SECRET"));
+            assert!(script.contains("DEEPSEEK_API_KEY_GPG_SECRET"));
+            assert!(!script.contains("@@DEEPSEEK_API_KEY_GPG_SECRET@@"));
+        }
     }
 
     #[cfg(unix)]
