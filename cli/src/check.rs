@@ -39,6 +39,7 @@ pub(crate) struct ShellRow {
 pub(crate) struct AppRow {
     pub(crate) sym: &'static str,
     pub(crate) label: String,
+    pub(crate) simple_label: String,
     pub(crate) dest: Option<String>,
     pub(crate) status_text: &'static str,
     pub(crate) file_status: FileStatus,
@@ -169,6 +170,11 @@ pub(crate) async fn build_app_rows(
                     .display_name
                     .clone()
                     .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
+                let simple_label = if cat.files.len() == 1 {
+                    cat.name.clone()
+                } else {
+                    label.clone()
+                };
 
                 let dest_str = dest_opt.map(|d| path_display::format_home(&d, &config.home_dir));
 
@@ -183,6 +189,7 @@ pub(crate) async fn build_app_rows(
                 rows.push(AppRow {
                     sym,
                     label,
+                    simple_label,
                     dest: dest_str,
                     status_text,
                     file_status: status,
@@ -249,6 +256,7 @@ pub(crate) async fn build_app_rows(
             rows.push(AppRow {
                 sym,
                 label: cat.name.clone(),
+                simple_label: cat.name.clone(),
                 dest: dest_display,
                 status_text,
                 file_status: cat_status,
@@ -489,8 +497,55 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "ghostty");
+        assert_eq!(rows[0].simple_label, "ghostty");
         assert_eq!(rows[0].dest.as_deref(), Some("~/.config/ghostty"));
         assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn file_list_mode_keeps_file_labels_for_multi_file_app_simple_list() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let category = AppCategory {
+            name: "sample".to_string(),
+            description: None,
+            destination_root: Some(dir.join(".config/sample").display().to_string()),
+            files: vec![
+                AppFile {
+                    source_rel: PathBuf::from("config.toml"),
+                    target_rel: PathBuf::from("config.toml"),
+                    description: None,
+                    display_name: None,
+                    legacy_dest_annotation: None,
+                    transforms: vec![],
+                    install_strategy: AppInstallStrategy::Copy,
+                },
+                AppFile {
+                    source_rel: PathBuf::from("theme.toml"),
+                    target_rel: PathBuf::from("theme.toml"),
+                    description: None,
+                    display_name: None,
+                    legacy_dest_annotation: None,
+                    transforms: vec![],
+                    install_strategy: AppInstallStrategy::Copy,
+                },
+            ],
+            list_mode: AppListMode::Files,
+            uses_metadata: true,
+            has_explicit_files: true,
+        };
+
+        let rows = build_app_rows(&config, &[category]).await.unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].label, "sample/config.toml");
+        assert_eq!(rows[0].simple_label, "sample/config.toml");
+        assert_eq!(rows[1].label, "sample/theme.toml");
+        assert_eq!(rows[1].simple_label, "sample/theme.toml");
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -509,6 +564,7 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "docker-engine/daemon.jsonc");
+        assert_eq!(rows[0].simple_label, "docker-engine");
         assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
         assert_eq!(rows[0].dest.as_deref(), Some("~/.docker/daemon.json"));
 
@@ -530,6 +586,7 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "docker-desktop/settings-store.jsonc");
+        assert_eq!(rows[0].simple_label, "docker-desktop");
         assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
         assert_eq!(
             rows[0].dest.as_deref(),
