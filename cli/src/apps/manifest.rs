@@ -12,6 +12,22 @@ pub(crate) struct AppManifest {
     pub entries: Vec<AppEntry>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(tag = "mode", rename_all = "kebab-case")]
+pub(crate) enum AppInstallStrategy {
+    #[default]
+    Copy,
+    JsonMerge {
+        managed_keys: Vec<String>,
+    },
+}
+
+impl AppInstallStrategy {
+    pub(crate) fn is_copy(&self) -> bool {
+        matches!(self, Self::Copy)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct AppEntry {
     pub source: String,
@@ -19,6 +35,8 @@ pub(crate) struct AppEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup: Option<PathBuf>,
     pub content_hash: u64,
+    #[serde(default, skip_serializing_if = "AppInstallStrategy::is_copy")]
+    pub install_strategy: AppInstallStrategy,
     /// True when the `template` transform was applied during install.
     /// Used by config upgrade to skip files that never used env vars.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -108,6 +126,7 @@ mod tests {
             destination: PathBuf::from(dest),
             backup: None,
             content_hash: 42,
+            install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
         }
     }
@@ -157,6 +176,7 @@ mod tests {
             destination: PathBuf::from("/tmp/foo.toml"),
             backup: None,
             content_hash: 1,
+            install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
         });
         manifest.upsert(AppEntry {
@@ -164,6 +184,7 @@ mod tests {
             destination: PathBuf::from("/tmp/foo.toml"),
             backup: None,
             content_hash: 2,
+            install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
         });
         assert_eq!(manifest.entries.len(), 1);
@@ -213,5 +234,19 @@ mod tests {
         let h1 = hash_content(b"hello");
         let h2 = hash_content(b"world");
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn install_strategy_defaults_to_copy() {
+        let entry: AppEntry = toml::from_str(
+            r#"
+source = "app/test/foo.toml"
+destination = "/tmp/foo.toml"
+content_hash = 7
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(entry.install_strategy, AppInstallStrategy::Copy);
     }
 }

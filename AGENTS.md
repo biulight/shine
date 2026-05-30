@@ -108,7 +108,8 @@ shine/
     │   └── tools/   test_tools.sh
     ├── app/
     │   ├── archey4/    config.json, shine.toml
-    │   ├── docker/     daemon.jsonc, shine.toml
+    │   ├── docker-desktop/ settings-store.jsonc, shine.toml
+    │   ├── docker-engine/  daemon.jsonc, shine.toml
     │   ├── fastfetch/  config.jsonc, shine.toml
     │   ├── ghostty/    config.ghostty, shine.toml
     │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig)
@@ -161,7 +162,7 @@ shine/
 
 Two transforms can be applied to preset files at install time (declared in `shine.toml` as `transforms = [...]`):
 
-- **`jsonc-to-json`** — strips JSONC-style comments so pure-JSON apps can consume the output (used by `docker/daemon.jsonc`, `fastfetch/config.jsonc`).
+- **`jsonc-to-json`** — strips JSONC-style comments so pure-JSON apps can consume the output (used by `docker-engine/daemon.jsonc`, `docker-desktop/settings-store.jsonc`, `fastfetch/config.jsonc`).
 - **`template`** — substitutes `@@VAR_NAME@@` placeholders from the active `[env]` config table.
 
 Transforms compose in declaration order: `transforms = ["jsonc-to-json", "template"]`.

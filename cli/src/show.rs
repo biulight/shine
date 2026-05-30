@@ -1,5 +1,5 @@
 use crate::apps::{
-    AppCategory, AppFile, AppManifest, hash_content, load_embedded_categories,
+    AppCategory, AppFile, AppManifest, installed_content_hash, load_embedded_categories,
     load_installed_categories, resolve_install_destination, source_bytes_for_file,
     source_hash_for_file,
 };
@@ -521,13 +521,18 @@ async fn app_file_status(
         return FileStatus::Missing;
     }
     match tokio::fs::read(&entry.destination).await {
-        Ok(bytes) if hash_content(&bytes) == entry.content_hash => {
-            match source_hash_for_file(config, category, file, env).await {
-                Some(source_hash) if source_hash != entry.content_hash => FileStatus::UpdateAvail,
-                _ => FileStatus::UpToDate,
+        Ok(bytes) => match installed_content_hash(file, &bytes) {
+            Ok(Some(installed_hash)) if installed_hash == entry.content_hash => {
+                match source_hash_for_file(config, category, file, env).await {
+                    Some(source_hash) if source_hash != entry.content_hash => {
+                        FileStatus::UpdateAvail
+                    }
+                    _ => FileStatus::UpToDate,
+                }
             }
-        }
-        Ok(_) => FileStatus::UserModified,
+            Ok(None) => FileStatus::Missing,
+            Ok(Some(_)) | Err(_) => FileStatus::UserModified,
+        },
         Err(_) => FileStatus::Missing,
     }
 }
@@ -737,6 +742,7 @@ mod tests {
                 display_name: None,
                 legacy_dest_annotation: None,
                 transforms: vec![],
+                install_strategy: crate::apps::AppInstallStrategy::Copy,
             },
             destination: PathBuf::from(dest),
             status: FileStatus::UpToDate,
@@ -847,7 +853,7 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn unsupported_embedded_app_without_manifest_is_ignored() {
+    async fn renamed_docker_category_has_no_legacy_alias() {
         let dir = std::env::temp_dir().join(format!("shine-show-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
 

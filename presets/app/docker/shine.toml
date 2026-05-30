@@ -1,8 +1,0 @@
-description = "Docker daemon configuration"
-dest = "/etc/docker"
-
-[[files]]
-source      = "daemon.jsonc"
-target      = "daemon.json"
-description = "Docker daemon options (mirrors, runtime, etc.)"
-transforms  = ["template", "jsonc-to-json"]

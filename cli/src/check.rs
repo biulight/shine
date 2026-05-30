@@ -1,5 +1,5 @@
 use crate::apps::{
-    AppCategory, AppListMode, AppManifest, apply_transforms, hash_content,
+    AppCategory, AppListMode, AppManifest, apply_transforms, installed_content_hash,
     resolve_install_destination, source_hash_for_file,
 };
 use crate::colors;
@@ -290,17 +290,18 @@ async fn app_file_row_status(
                         match tokio::fs::read(&dest).await {
                             Err(_) => FileStatus::Missing,
                             Ok(dest_bytes) => {
-                                let dest_hash = hash_content(&dest_bytes);
                                 let manifest_hash = entry.content_hash;
-                                if dest_hash != manifest_hash {
-                                    FileStatus::UserModified
-                                } else {
-                                    match source_hash_for_file(config, cat, file, env).await {
-                                        Some(src) if src != manifest_hash => {
-                                            FileStatus::UpdateAvail
+                                match installed_content_hash(file, &dest_bytes) {
+                                    Ok(Some(dest_hash)) if dest_hash == manifest_hash => {
+                                        match source_hash_for_file(config, cat, file, env).await {
+                                            Some(src) if src != manifest_hash => {
+                                                FileStatus::UpdateAvail
+                                            }
+                                            _ => FileStatus::UpToDate,
                                         }
-                                        _ => FileStatus::UpToDate,
                                     }
+                                    Ok(None) => FileStatus::Missing,
+                                    Ok(Some(_)) | Err(_) => FileStatus::UserModified,
                                 }
                             }
                         }
@@ -315,10 +316,18 @@ async fn app_file_row_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::AppFile;
+    use crate::apps::{AppFile, AppInstallStrategy};
     use crate::config::Config;
     use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
     use tokio::fs;
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock must not be poisoned")
+    }
 
     async fn make_temp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("shine-check-{}", uuid::Uuid::new_v4()));
@@ -471,6 +480,7 @@ mod tests {
                     display_name: None,
                     legacy_dest_annotation: None,
                     transforms: vec![],
+                    install_strategy: AppInstallStrategy::Copy,
                 },
                 AppFile {
                     source_rel: PathBuf::from("themes/shine-light"),
@@ -479,6 +489,7 @@ mod tests {
                     display_name: None,
                     legacy_dest_annotation: None,
                     transforms: vec!["template".to_string()],
+                    install_strategy: AppInstallStrategy::Copy,
                 },
             ],
             list_mode: AppListMode::Category,
@@ -498,19 +509,22 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn unresolved_app_destinations_do_not_appear_installed() {
+    async fn windows_docker_engine_row_uses_engine_destination() {
+        let _guard = env_lock();
         let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        let categories = crate::apps::load_embedded_categories(Some("docker")).unwrap();
+        let categories = crate::apps::load_embedded_categories(Some("docker-engine")).unwrap();
         let rows = build_app_rows(&config, &categories).await.unwrap();
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].label, "docker/daemon.jsonc");
+        assert_eq!(rows[0].label, "docker-engine/daemon.jsonc");
         assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
-        assert_eq!(rows[0].dest, None);
+        assert_eq!(rows[0].dest.as_deref(), Some("~/.docker/daemon.json"));
 
+        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }

@@ -20,22 +20,6 @@ pub(crate) enum UninstallOutcome {
     DryRun,
 }
 
-pub(crate) async fn install_file(
-    source: &Path,
-    destination: &Path,
-    is_managed: bool,
-    dry_run: bool,
-    force: bool,
-) -> Result<InstallOutcome> {
-    if dry_run {
-        return Ok(InstallOutcome::DryRun);
-    }
-    let content = fs::read(source)
-        .await
-        .with_context(|| format!("reading source file: {}", source.display()))?;
-    install_bytes_impl(&content, destination, is_managed, force).await
-}
-
 pub(crate) async fn install_bytes(
     content: &[u8],
     destination: &Path,
@@ -137,6 +121,7 @@ fn backup_path(dest: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apps::AppInstallStrategy;
     use crate::apps::manifest::AppEntry;
 
     async fn make_temp_dir() -> PathBuf {
@@ -151,6 +136,7 @@ mod tests {
             destination: dest.to_path_buf(),
             backup: None,
             content_hash: hash,
+            install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
         }
     }
@@ -158,11 +144,9 @@ mod tests {
     #[tokio::test]
     async fn install_to_empty_destination() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("dest.toml");
-        fs::write(&source, b"content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, false, false, false)
+        let outcome = install_bytes(b"content", &dest, false, false, false)
             .await
             .unwrap();
         assert!(matches!(outcome, InstallOutcome::Installed { .. }));
@@ -174,11 +158,9 @@ mod tests {
     #[tokio::test]
     async fn install_creates_parent_directories() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("deep/nested/dest.toml");
-        fs::write(&source, b"content").await.unwrap();
 
-        install_file(&source, &dest, false, false, false)
+        install_bytes(b"content", &dest, false, false, false)
             .await
             .unwrap();
         assert!(dest.exists());
@@ -188,12 +170,10 @@ mod tests {
     #[tokio::test]
     async fn install_backs_up_unmanaged_existing_file() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("dest.toml");
-        fs::write(&source, b"new content").await.unwrap();
         fs::write(&dest, b"user content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, false, false, false)
+        let outcome = install_bytes(b"new content", &dest, false, false, false)
             .await
             .unwrap();
         let backup = match outcome {
@@ -209,12 +189,10 @@ mod tests {
     #[tokio::test]
     async fn install_already_managed_same_content_returns_already_managed() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("dest.toml");
-        fs::write(&source, b"content").await.unwrap();
         fs::write(&dest, b"content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, true, false, false)
+        let outcome = install_bytes(b"content", &dest, true, false, false)
             .await
             .unwrap();
         assert!(matches!(outcome, InstallOutcome::AlreadyManaged));
@@ -224,12 +202,10 @@ mod tests {
     #[tokio::test]
     async fn install_already_managed_different_content_overwrites() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("dest.toml");
-        fs::write(&source, b"updated").await.unwrap();
         fs::write(&dest, b"old").await.unwrap();
 
-        let outcome = install_file(&source, &dest, true, false, false)
+        let outcome = install_bytes(b"updated", &dest, true, false, false)
             .await
             .unwrap();
         assert!(matches!(outcome, InstallOutcome::Installed { .. }));
@@ -240,11 +216,9 @@ mod tests {
     #[tokio::test]
     async fn install_dry_run_does_not_write() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("dest.toml");
-        fs::write(&source, b"content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, false, true, false)
+        let outcome = install_bytes(b"content", &dest, false, true, false)
             .await
             .unwrap();
         assert!(matches!(outcome, InstallOutcome::DryRun));
@@ -280,6 +254,7 @@ mod tests {
             destination: dest.clone(),
             backup: Some(backup.clone()),
             content_hash: hash_content(content),
+            install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
         };
         let outcome = uninstall_entry(&entry, false).await.unwrap();

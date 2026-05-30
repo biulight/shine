@@ -1,0 +1,11 @@
+description = "Docker Engine daemon configuration"
+
+[dest]
+windows = "~/.docker"
+unix = "/etc/docker"
+
+[[files]]
+source      = "daemon.jsonc"
+target      = "daemon.json"
+description = "Docker Engine daemon options (mirrors, runtime, proxies, etc.)"
+transforms  = ["template", "jsonc-to-json"]
