@@ -13,15 +13,18 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Added a Windows `install.ps1` one-line installer for release assets.
 - Added `shine upgrade --prune-stale` to remove managed app files whose preset source no longer exists.
 - Added platform-specific proxy presets so PowerShell users get native `setproxy` and `usetproxy` scripts.
+- Added a Windows PowerShell version of the `agent/ccenv` shell preset, so Claude Code provider setup now works in sourced PowerShell sessions as well as Unix shells.
 
 ### Bug Fixes
 
 - Changed `setproxy` to keep Git, npm, and pnpm proxy behavior scoped to the current terminal session where possible; Yarn remains explicitly reported as a persistent config exception.
 - Accepted Unix-style app destinations such as `/etc/docker` when inspecting embedded presets on Windows.
+- Updated PowerShell PATH installation to write both supported profile locations on Windows, keeping `powershell.exe` and `pwsh.exe` in sync.
 
 ### Docs
 
 - Documented the Windows installer, PowerShell proxy behavior, and session-scoped proxy defaults in the English and Chinese READMEs.
+- Documented the Windows `ccenv` preset behavior, platform-scoped shell metadata entries, and dual PowerShell profile updates in the English and Chinese READMEs.
 
 ---
 
