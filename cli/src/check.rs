@@ -279,7 +279,7 @@ async fn app_file_row_status(
     env: &BTreeMap<String, String>,
 ) -> (Option<std::path::PathBuf>, FileStatus) {
     match resolve_install_destination(cat, file, config) {
-        Err(_) => (None, FileStatus::Missing),
+        Err(_) => (None, FileStatus::NotInstalled),
         Ok(dest) => {
             let status = match manifest.find_by_dest(&dest) {
                 None => FileStatus::NotInstalled,
@@ -492,6 +492,24 @@ mod tests {
         assert_eq!(rows[0].label, "ghostty");
         assert_eq!(rows[0].dest.as_deref(), Some("~/.config/ghostty"));
         assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn unresolved_app_destinations_do_not_appear_installed() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let categories = crate::apps::load_embedded_categories(Some("docker")).unwrap();
+        let rows = build_app_rows(&config, &categories).await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "docker/daemon.jsonc");
+        assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
+        assert_eq!(rows[0].dest, None);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

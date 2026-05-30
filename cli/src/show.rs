@@ -135,14 +135,21 @@ async fn collect_app_files(config: &Config) -> Result<Vec<AppShowFile>> {
     let mut files = Vec::new();
     for category in categories {
         for file in &category.files {
+            let source_key = format!("app/{}/{}", category.name, file.source_rel.display());
             let destination = match resolve_install_destination(&category, file, config) {
                 Ok(dest) => dest,
                 Err(e) => {
-                    eprintln!(
-                        "warning: skipping {}/{}: {e:#}",
-                        category.name,
-                        file.source_rel.display()
-                    );
+                    if manifest
+                        .entries
+                        .iter()
+                        .any(|entry| entry.source == source_key)
+                    {
+                        eprintln!(
+                            "warning: skipping {}/{}: {e:#}",
+                            category.name,
+                            file.source_rel.display()
+                        );
+                    }
                     continue;
                 }
             };
@@ -836,5 +843,20 @@ mod tests {
         let err = resolve_target("missing", &candidates).unwrap_err();
         assert!(err.to_string().contains("installed item not found"));
         assert!(err.to_string().contains("shell/proxy/setproxy"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn unsupported_embedded_app_without_manifest_is_ignored() {
+        let dir = std::env::temp_dir().join(format!("shine-show-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let config = Config::new_for_test(&dir);
+        tokio::fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let files = collect_app_files(&config).await.unwrap();
+        assert!(files.iter().all(|file| file.category.name != "docker"));
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 }
