@@ -21,10 +21,10 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 - **App preset installer** — install managed config files like `~/.gitconfig`, `~/.config/starship/starship.toml`, or `~/.config/ghostty/config.ghostty`
 - **Installed content inspection** — `shine info <target>` prints metadata, colorized status, and expected-content diffs for installed app configs and shell presets; add `--verbose` for full content
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
-- **Multi-shell support** — bash, zsh, fish, PowerShell
+- **Multi-shell support** — bash, zsh, fish, PowerShell, with per-platform shell preset entries when a category needs different files on Unix and Windows
 - **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
 
-Current support scope: `shine shell` supports bash, zsh, fish, and PowerShell. Windows support currently covers `shine self` and `shine shell`; app and sys presets are still Unix-oriented.
+Current support scope: `shine shell` supports bash, zsh, fish, and PowerShell. Windows support currently covers `shine self` and `shine shell`, including sourced PowerShell helpers such as `ccenv`; app and sys presets are still Unix-oriented.
 
 ## Planning Workflow
 
@@ -65,7 +65,7 @@ Or install from source:
 cargo install --path cli
 ```
 
-Windows support currently covers `shine self` and `shine shell` in PowerShell; app and sys presets remain Unix-oriented.
+Windows support currently covers `shine self` and `shine shell` in PowerShell, including profile updates for both `powershell.exe` and `pwsh.exe`; app and sys presets remain Unix-oriented.
 
 Or build from source:
 
@@ -87,7 +87,7 @@ Shell Preset Categories
 
   agent  1 script
     ccenv         Configure Claude Code to use DeepSeek in the current shell session.
-                  ...
+                   ...
 
   proxy  2 scripts
     setproxy      Set HTTP/HTTPS proxy environment variables.
@@ -117,6 +117,13 @@ Bin Links      4 created
 
 Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` or `DEEPSEEK_API_KEY_GPG_SECRET` in the active env config before use.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `reinstall` when you want to overwrite managed preset files, links, and the shell config entry.
+
+Shell metadata can scope entries to `platforms = ["unix"]` or `platforms = ["windows"]`. The built-in `agent` category uses this to expose `ccenv` from `cc.sh` on Unix shells and from `cc.ps1` on Windows PowerShell.
+
+On Windows, PowerShell PATH setup updates both supported profile locations so `powershell.exe` and `pwsh.exe` see the same `~/.shine/bin` entry:
+
+- `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1`
+- `~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1`
 
 ### Uninstall shell presets
 

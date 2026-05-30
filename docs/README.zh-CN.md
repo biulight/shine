@@ -21,10 +21,10 @@ English README: [`../README.md`](../README.md)
 - **应用预设安装器** — 可安装 `~/.gitconfig`、`~/.config/starship/starship.toml`、`~/.config/ghostty/config.ghostty` 等受管配置
 - **已安装内容检查** — `shine info <target>` 会输出已安装应用配置和 shell 预设的元数据、彩色状态和值得关注的预期内容差异；加 `--verbose` 可查看完整内容
 - **版本更新检查** — 运行时检查 GitHub Releases，并使用 24 小时缓存
-- **多 shell 支持** — bash、zsh、fish、PowerShell
+- **多 shell 支持** — bash、zsh、fish、PowerShell；当同一类别在 Unix 和 Windows 需要不同文件时，可按平台声明 shell 预设条目
 - **系统初始化预设** — 通过 `shine sys init` 对当前操作系统执行一组整理过的初始化步骤
 
-当前支持范围：`shine shell` 支持 `bash`、`zsh`、`fish` 和 PowerShell。Windows 支持目前覆盖 `shine self` 和 `shine shell`；app 与 sys 预设仍以 Unix 环境为主。
+当前支持范围：`shine shell` 支持 `bash`、`zsh`、`fish` 和 PowerShell。Windows 支持目前覆盖 `shine self` 和 `shine shell`，也包括像 `ccenv` 这样的 PowerShell source 型辅助函数；app 与 sys 预设仍以 Unix 环境为主。
 
 ## 规划流程
 
@@ -65,7 +65,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 cargo install --path cli
 ```
 
-Windows 支持目前覆盖 PowerShell 下的 `shine self` 和 `shine shell`；app 与 sys 预设仍以 Unix 环境为主。
+Windows 支持目前覆盖 PowerShell 下的 `shine self` 和 `shine shell`，并会同时更新 `powershell.exe` 与 `pwsh.exe` 对应的 profile；app 与 sys 预设仍以 Unix 环境为主。
 
 也可以自己构建：
 
@@ -117,6 +117,13 @@ Bin Links      4 created
 
 安装全部 shell 预设时会包含 `agent`，该类别在使用前需要在当前 env 配置中提供 `DEEPSEEK_API_KEY` 或 `DEEPSEEK_API_KEY_GPG_SECRET`。
 重复运行 `install` 是安全的：已存在的文件、正确的符号链接以及已配置好的 PATH 条目都会被跳过。若你想覆盖受管预设文件、链接和 shell 配置中的 PATH 条目，请使用 `reinstall`。
+
+shell 元数据可以通过 `platforms = ["unix"]` 或 `platforms = ["windows"]` 只在特定平台暴露某些条目。内置的 `agent` 类别就使用了这个机制：Unix shell 下的 `ccenv` 来自 `cc.sh`，Windows PowerShell 下的 `ccenv` 来自 `cc.ps1`。
+
+在 Windows 上，PowerShell 的 PATH 注入会同时更新这两个 profile 文件，确保 `powershell.exe` 和 `pwsh.exe` 都能看到同一条 `~/.shine/bin` 配置：
+
+- `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1`
+- `~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1`
 
 ### 卸载 shell 预设
 

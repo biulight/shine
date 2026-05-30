@@ -103,7 +103,7 @@ shine/
 ├── utils/        # Library crate: TOML comment-preserving sync (utils::sync_table)
 └── presets/      # Embedded assets (compiled into binary via rust-embed)
     ├── shell/
-    │   ├── agent/   cc.sh, shine.toml  (needs_source=true; installed as `ccenv`)
+    │   ├── agent/   cc.sh, cc.ps1, shine.toml  (needs_source=true; installed as `ccenv`; platform-scoped per shell family)
     │   ├── proxy/   set_proxy.sh, uset_proxy.sh, shine.toml
     │   └── tools/   test_tools.sh
     ├── app/
@@ -202,11 +202,13 @@ fi
 ```
 `bin_dir` paths under `home_dir` are expressed as `$HOME/...` for portability. Fish uses `fish_add_path` instead. `remove_path_from_shell_config` deletes the block precisely, including the preceding blank line separator.
 
+On Windows, PowerShell profile updates target both `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1` and `~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1` so `pwsh.exe` and Windows PowerShell stay in sync.
+
 ### `shine shell list`
 
 Reads embedded assets, groups them by immediate subdirectory under `shell/`, and displays per-script descriptions. If a category has `shine.toml`, the metadata file drives file listing and command names. Without `shine.toml`, descriptions are parsed from the leading comment block of each `.sh` file (lines starting with `# ` after the shebang, until the first non-comment line).
 
-Shell categories can declare `needs_source = true` in `shine.toml` to mark a script as requiring `source` (not direct execution). These are exposed as shell functions rather than symlinked commands (e.g., `ccenv` from `presets/shell/agent/cc.sh`).
+Shell categories can declare `needs_source = true` in `shine.toml` to mark a script as requiring `source` (not direct execution). These are exposed as shell functions rather than symlinked commands. Entries can also declare `platforms = ["unix"]` or `platforms = ["windows"]` to ship different source files for the same command name on different platforms (e.g., `ccenv` from `presets/shell/agent/cc.sh` on Unix and `presets/shell/agent/cc.ps1` on Windows).
 
 ## Git Push Policy
 
