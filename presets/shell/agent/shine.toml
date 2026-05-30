@@ -4,3 +4,10 @@ description = "AI agent provider environment helpers."
 source = "cc.sh"
 target = "ccenv"
 needs_source = true
+platforms = ["unix"]
+
+[[files]]
+source = "cc.ps1"
+target = "ccenv"
+needs_source = true
+platforms = ["windows"]

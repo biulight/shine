@@ -1013,6 +1013,28 @@ mod tests {
         config
     }
 
+    fn agent_ccenv_link_path(config: &Config) -> PathBuf {
+        crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("ccenv"))
+    }
+
+    #[cfg(unix)]
+    async fn assert_agent_ccenv_link_points_to(config: &Config, rendered: &Path) {
+        let link = agent_ccenv_link_path(config);
+        assert_eq!(fs::read_link(&link).await.unwrap(), rendered);
+    }
+
+    #[cfg(not(unix))]
+    async fn assert_agent_ccenv_link_points_to(config: &Config, rendered: &Path) {
+        let link = agent_ccenv_link_path(config);
+        let shim = fs::read_to_string(&link).await.unwrap();
+        let shim = shim.replace('\\', "/");
+        let rendered = rendered.display().to_string().replace('\\', "/");
+        assert!(
+            shim.contains(&rendered),
+            "Windows shim should point to rendered ccenv script: {shim}"
+        );
+    }
+
     fn wrapper_marker(command: &str, shell: &ShellType) -> String {
         match shell {
             ShellType::PowerShell => format!("\nfunction {command} {{ . (Join-Path $shineBin"),
@@ -1695,7 +1717,6 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn embedded_agent_ccenv_renders_deepseek_key_from_env_config() {
         let dir = make_temp_dir().await;
@@ -1705,7 +1726,10 @@ mod tests {
 
         handle_install(&config, Some("agent"), false).await.unwrap();
 
-        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             rendered_content.contains("test-deepseek-key"),
@@ -1715,15 +1739,11 @@ mod tests {
             !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
             "rendered agent script should not contain the template placeholder"
         );
-        assert_eq!(
-            fs::read_link(config.bin_dir().join("ccenv")).await.unwrap(),
-            rendered
-        );
+        assert_agent_ccenv_link_points_to(&config, &rendered).await;
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn embedded_agent_ccenv_does_not_render_deepseek_gpg_secret() {
         let dir = make_temp_dir().await;
@@ -1737,7 +1757,10 @@ mod tests {
 
         handle_install(&config, Some("agent"), false).await.unwrap();
 
-        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             !rendered_content.contains("test-base64-gpg-secret"),
@@ -1747,15 +1770,11 @@ mod tests {
             !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
             "rendered agent script should not contain the key template placeholder"
         );
-        assert_eq!(
-            fs::read_link(config.bin_dir().join("ccenv")).await.unwrap(),
-            rendered
-        );
+        assert_agent_ccenv_link_points_to(&config, &rendered).await;
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn embedded_agent_install_succeeds_without_deepseek_secret() {
         let dir = make_temp_dir().await;
@@ -1765,7 +1784,10 @@ mod tests {
 
         handle_install(&config, Some("agent"), false).await.unwrap();
 
-        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
         let rendered_content = fs::read_to_string(&rendered).await.unwrap();
         assert!(
             rendered_content.contains(
@@ -1778,7 +1800,7 @@ mod tests {
             "rendered agent script should not contain the key template placeholder"
         );
         assert!(
-            config.bin_dir().join("ccenv").exists(),
+            agent_ccenv_link_path(&config).exists(),
             "agent install should link ccenv even when secrets are configured later"
         );
 
@@ -1787,13 +1809,15 @@ mod tests {
 
     #[test]
     fn embedded_agent_ccenv_uses_cli_decrypt_and_priority_path() {
-        let bytes = crate::presets::read_asset_bytes("shell/agent/cc.sh").unwrap();
-        let script = String::from_utf8(bytes).unwrap();
+        for path in ["shell/agent/cc.sh", "shell/agent/cc.ps1"] {
+            let bytes = crate::presets::read_asset_bytes(path).unwrap();
+            let script = String::from_utf8(bytes).unwrap();
 
-        assert!(script.contains("shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET"));
-        assert!(script.contains("shine env get DEEPSEEK_API_KEY_GPG_SECRET"));
-        assert!(script.contains("DEEPSEEK_API_KEY_GPG_SECRET"));
-        assert!(!script.contains("@@DEEPSEEK_API_KEY_GPG_SECRET@@"));
+            assert!(script.contains("shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET"));
+            assert!(script.contains("shine env get DEEPSEEK_API_KEY_GPG_SECRET"));
+            assert!(script.contains("DEEPSEEK_API_KEY_GPG_SECRET"));
+            assert!(!script.contains("@@DEEPSEEK_API_KEY_GPG_SECRET@@"));
+        }
     }
 
     #[cfg(unix)]
