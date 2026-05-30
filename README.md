@@ -24,7 +24,7 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 - **Multi-shell support** — bash, zsh, fish, PowerShell, with per-platform shell preset entries when a category needs different files on Unix and Windows
 - **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
 
-Current support scope: `shine shell` supports bash, zsh, fish, and PowerShell. Windows support currently covers `shine self` and `shine shell`, including sourced PowerShell helpers such as `ccenv`; app and sys presets are still Unix-oriented.
+Current support scope: `shine shell` supports bash, zsh, fish, and PowerShell. Windows support covers `shine self`, `shine shell`, and selected app presets such as `docker-engine` and `docker-desktop`; sys presets are still Unix-oriented.
 
 ## Planning Workflow
 
@@ -65,7 +65,7 @@ Or install from source:
 cargo install --path cli
 ```
 
-Windows support currently covers `shine self` and `shine shell` in PowerShell, including profile updates for both `powershell.exe` and `pwsh.exe`; app and sys presets remain Unix-oriented.
+Windows support covers `shine self`, `shine shell`, and selected app presets in PowerShell, including profile updates for both `powershell.exe` and `pwsh.exe`; sys presets remain Unix-oriented.
 
 Or build from source:
 
@@ -255,30 +255,56 @@ dest = "~/.vim"
 
 When `shine.toml` defines `files`, only those entries are installed. When it omits `files`, `shine` treats the whole category directory as managed and maps every file except `shine.toml` into `dest` with the same relative path.
 
-`dest` must expand to an absolute path for the current platform before `shine app install` writes files. Unix-style roots such as `/etc/docker` remain valid metadata for listing embedded Unix presets on Windows, but Windows installs reject them instead of treating them as drive-root paths.
+`dest` must expand to an absolute path for the current platform before `shine app install` writes files. Metadata can also use a platform map so one category resolves to different roots on Unix and Windows:
+
+```toml
+[dest]
+windows = "~/.docker"
+unix = "/etc/docker"
+```
 
 #### File transforms
 
 A `[[files]]` entry may declare a `transforms` pipeline to process the source file before it is written to the destination. Use `target` to rename the file at the destination if a transform changes the format:
 
 ```toml
-description = "Docker daemon configuration"
-dest = "/etc/docker"
+description = "Docker Engine daemon configuration"
+
+[dest]
+windows = "~/.docker"
+unix = "/etc/docker"
 
 [[files]]
 source      = "daemon.jsonc"
 target      = "daemon.json"
-description = "Docker daemon options"
+description = "Docker Engine daemon options"
 transforms  = ["jsonc-to-json"]
 ```
 
 `shine app install` output shows the transform step:
 
 ```
-  ✓  daemon.jsonc  [jsonc-to-json]  →  /etc/docker/daemon.json
+  ✓  daemon.jsonc  [jsonc-to-json]  →  ~/.docker/daemon.json
 ```
 
 `shine update` compares the **transformed** output against the installed file — a source change that produces identical JSON output is reported as **up-to-date**.
+
+For JSON settings files that should keep unrelated user values, a `[[files]]` entry can opt into managed-key merging instead of full-file replacement:
+
+```toml
+[[files]]
+source = "settings-store.jsonc"
+target = "settings-store.json"
+transforms = ["template", "jsonc-to-json"]
+install_mode = "json-merge"
+managed_keys = ["proxy", "containersProxy"]
+```
+
+`json-merge` treats the transformed source as a JSON object, updates only the listed top-level keys in the destination file, and removes only those same keys on uninstall.
+
+The bundled `docker-engine` app preset manages Docker Engine daemon config. On Windows it writes `daemon.json` to `~/.docker/daemon.json`; on Unix it writes `/etc/docker/daemon.json`. That path is the Docker Engine daemon config path, not the Docker Desktop proxy settings path.
+
+The bundled `docker-desktop` app preset is Windows-only in v1. It merges Docker Desktop proxy settings into `~/AppData/Roaming/Docker/settings-store.json` and only manages the `proxy` and `containersProxy` keys, leaving other Docker Desktop settings untouched.
 
 Shell scripts that opt into template substitution with `# shine-template: true` are checked the same way. `shine update` re-renders the source script with the current `[env]` values and reports `update available` when the rendered output differs from the installed script, including when the source lives in an external `presets_dir`.
 

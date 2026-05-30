@@ -1,10 +1,11 @@
 use crate::apps::{
-    AppCategory, AppListMode, AppManifest, apply_transforms, hash_content,
+    AppCategory, AppListMode, AppManifest, apply_transforms, installed_content_hash,
     resolve_install_destination, source_hash_for_file,
 };
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::path_display;
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -38,6 +39,7 @@ pub(crate) struct ShellRow {
 pub(crate) struct AppRow {
     pub(crate) sym: &'static str,
     pub(crate) label: String,
+    pub(crate) simple_label: String,
     pub(crate) dest: Option<String>,
     pub(crate) status_text: &'static str,
     pub(crate) file_status: FileStatus,
@@ -168,13 +170,13 @@ pub(crate) async fn build_app_rows(
                     .display_name
                     .clone()
                     .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
+                let simple_label = if cat.files.len() == 1 {
+                    cat.name.clone()
+                } else {
+                    label.clone()
+                };
 
-                let dest_str = dest_opt.map(|d| {
-                    d.to_string_lossy()
-                        .into_owned()
-                        .replace(config.home_dir.to_string_lossy().as_ref(), "~")
-                        .replace('\\', "/")
-                });
+                let dest_str = dest_opt.map(|d| path_display::format_home(&d, &config.home_dir));
 
                 let (sym, status_text) = match status {
                     FileStatus::Missing => ("!", "destination missing"),
@@ -187,6 +189,7 @@ pub(crate) async fn build_app_rows(
                 rows.push(AppRow {
                     sym,
                     label,
+                    simple_label,
                     dest: dest_str,
                     status_text,
                     file_status: status,
@@ -232,19 +235,11 @@ pub(crate) async fn build_app_rows(
             };
 
             let dest_display: Option<String> = if let Some(root) = &cat.destination_root {
-                Some(
-                    crate::config::tilde_expand(root)
-                        .replace(config.home_dir.to_string_lossy().as_ref(), "~")
-                        .replace('\\', "/"),
-                )
+                Some(path_display::format_tilde_path(root, &config.home_dir))
             } else if cat.files.len() == 1 {
                 resolve_install_destination(cat, &cat.files[0], config)
                     .ok()
-                    .map(|p| {
-                        let s = p.to_string_lossy().into_owned();
-                        s.replace(config.home_dir.to_string_lossy().as_ref(), "~")
-                            .replace('\\', "/")
-                    })
+                    .map(|p| path_display::format_home(&p, &config.home_dir))
             } else {
                 None
             };
@@ -261,6 +256,7 @@ pub(crate) async fn build_app_rows(
             rows.push(AppRow {
                 sym,
                 label: cat.name.clone(),
+                simple_label: cat.name.clone(),
                 dest: dest_display,
                 status_text,
                 file_status: cat_status,
@@ -279,7 +275,7 @@ async fn app_file_row_status(
     env: &BTreeMap<String, String>,
 ) -> (Option<std::path::PathBuf>, FileStatus) {
     match resolve_install_destination(cat, file, config) {
-        Err(_) => (None, FileStatus::Missing),
+        Err(_) => (None, FileStatus::NotInstalled),
         Ok(dest) => {
             let status = match manifest.find_by_dest(&dest) {
                 None => FileStatus::NotInstalled,
@@ -290,17 +286,18 @@ async fn app_file_row_status(
                         match tokio::fs::read(&dest).await {
                             Err(_) => FileStatus::Missing,
                             Ok(dest_bytes) => {
-                                let dest_hash = hash_content(&dest_bytes);
                                 let manifest_hash = entry.content_hash;
-                                if dest_hash != manifest_hash {
-                                    FileStatus::UserModified
-                                } else {
-                                    match source_hash_for_file(config, cat, file, env).await {
-                                        Some(src) if src != manifest_hash => {
-                                            FileStatus::UpdateAvail
+                                match installed_content_hash(file, &dest_bytes) {
+                                    Ok(Some(dest_hash)) if dest_hash == manifest_hash => {
+                                        match source_hash_for_file(config, cat, file, env).await {
+                                            Some(src) if src != manifest_hash => {
+                                                FileStatus::UpdateAvail
+                                            }
+                                            _ => FileStatus::UpToDate,
                                         }
-                                        _ => FileStatus::UpToDate,
                                     }
+                                    Ok(None) => FileStatus::Missing,
+                                    Ok(Some(_)) | Err(_) => FileStatus::UserModified,
                                 }
                             }
                         }
@@ -315,10 +312,20 @@ async fn app_file_row_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::AppFile;
+    use crate::apps::{AppFile, AppInstallStrategy};
     use crate::config::Config;
     use std::path::PathBuf;
+    #[cfg(windows)]
+    use std::sync::{Mutex, OnceLock};
     use tokio::fs;
+
+    #[cfg(windows)]
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock must not be poisoned")
+    }
 
     async fn make_temp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("shine-check-{}", uuid::Uuid::new_v4()));
@@ -471,6 +478,7 @@ mod tests {
                     display_name: None,
                     legacy_dest_annotation: None,
                     transforms: vec![],
+                    install_strategy: AppInstallStrategy::Copy,
                 },
                 AppFile {
                     source_rel: PathBuf::from("themes/shine-light"),
@@ -479,6 +487,7 @@ mod tests {
                     display_name: None,
                     legacy_dest_annotation: None,
                     transforms: vec!["template".to_string()],
+                    install_strategy: AppInstallStrategy::Copy,
                 },
             ],
             list_mode: AppListMode::Category,
@@ -490,9 +499,103 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].label, "ghostty");
+        assert_eq!(rows[0].simple_label, "ghostty");
         assert_eq!(rows[0].dest.as_deref(), Some("~/.config/ghostty"));
         assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
 
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn file_list_mode_keeps_file_labels_for_multi_file_app_simple_list() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let category = AppCategory {
+            name: "sample".to_string(),
+            description: None,
+            destination_root: Some(dir.join(".config/sample").display().to_string()),
+            files: vec![
+                AppFile {
+                    source_rel: PathBuf::from("config.toml"),
+                    target_rel: PathBuf::from("config.toml"),
+                    description: None,
+                    display_name: None,
+                    legacy_dest_annotation: None,
+                    transforms: vec![],
+                    install_strategy: AppInstallStrategy::Copy,
+                },
+                AppFile {
+                    source_rel: PathBuf::from("theme.toml"),
+                    target_rel: PathBuf::from("theme.toml"),
+                    description: None,
+                    display_name: None,
+                    legacy_dest_annotation: None,
+                    transforms: vec![],
+                    install_strategy: AppInstallStrategy::Copy,
+                },
+            ],
+            list_mode: AppListMode::Files,
+            uses_metadata: true,
+            has_explicit_files: true,
+        };
+
+        let rows = build_app_rows(&config, &[category]).await.unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].label, "sample/config.toml");
+        assert_eq!(rows[0].simple_label, "sample/config.toml");
+        assert_eq!(rows[1].label, "sample/theme.toml");
+        assert_eq!(rows[1].simple_label, "sample/theme.toml");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_docker_engine_row_uses_engine_destination() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let categories = crate::apps::load_embedded_categories(Some("docker-engine")).unwrap();
+        let rows = build_app_rows(&config, &categories).await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "docker-engine/daemon.jsonc");
+        assert_eq!(rows[0].simple_label, "docker-engine");
+        assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
+        assert_eq!(rows[0].dest.as_deref(), Some("~/.docker/daemon.json"));
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_docker_desktop_row_uses_forward_slash_destination() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let categories = crate::apps::load_embedded_categories(Some("docker-desktop")).unwrap();
+        let rows = build_app_rows(&config, &categories).await.unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].label, "docker-desktop/settings-store.jsonc");
+        assert_eq!(rows[0].simple_label, "docker-desktop");
+        assert_eq!(rows[0].file_status, FileStatus::NotInstalled);
+        assert_eq!(
+            rows[0].dest.as_deref(),
+            Some("~/AppData/Roaming/Docker/settings-store.json")
+        );
+
+        unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }

@@ -1,0 +1,12 @@
+description = "Docker Desktop proxy settings"
+
+[dest]
+windows = "~/AppData/Roaming/Docker"
+
+[[files]]
+source = "settings-store.jsonc"
+target = "settings-store.json"
+description = "Docker Desktop proxy and containers proxy settings"
+transforms = ["template", "jsonc-to-json"]
+install_mode = "json-merge"
+managed_keys = ["proxy", "containersProxy"]

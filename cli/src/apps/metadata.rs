@@ -1,3 +1,4 @@
+use super::manifest::AppInstallStrategy;
 use crate::config::Config;
 use crate::presets;
 use anyhow::{Context, Result, bail};
@@ -34,14 +35,28 @@ pub(crate) struct AppFile {
     pub display_name: Option<String>,
     pub legacy_dest_annotation: Option<String>,
     pub transforms: Vec<String>,
+    pub install_strategy: AppInstallStrategy,
 }
 
 #[derive(Debug, Deserialize)]
 struct CategoryToml {
     description: Option<String>,
-    dest: String,
+    dest: DestToml,
     list_mode: Option<ListModeToml>,
     files: Option<Vec<FileToml>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum DestToml {
+    Single(String),
+    Platforms(PlatformDestToml),
+}
+
+#[derive(Debug, Deserialize)]
+struct PlatformDestToml {
+    windows: Option<String>,
+    unix: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -49,6 +64,13 @@ struct CategoryToml {
 enum ListModeToml {
     Category,
     Files,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum InstallModeToml {
+    Copy,
+    JsonMerge,
 }
 
 impl From<ListModeToml> for AppListMode {
@@ -67,9 +89,15 @@ struct FileToml {
     description: Option<String>,
     display_name: Option<String>,
     #[serde(default)]
+    platforms: Option<Vec<String>>,
+    #[serde(default)]
     transform: Option<String>,
     #[serde(default)]
     transforms: Option<Vec<String>>,
+    #[serde(default)]
+    install_mode: Option<InstallModeToml>,
+    #[serde(default)]
+    managed_keys: Option<Vec<String>>,
 }
 
 fn resolve_transforms(file: &FileToml, context: &str) -> Result<Vec<String>> {
@@ -83,6 +111,35 @@ fn resolve_transforms(file: &FileToml, context: &str) -> Result<Vec<String>> {
     };
     super::transforms::validate(&specs).with_context(|| format!("{context}: invalid transform"))?;
     Ok(specs)
+}
+
+fn resolve_install_strategy(file: &FileToml, context: &str) -> Result<AppInstallStrategy> {
+    match file.install_mode.unwrap_or(InstallModeToml::Copy) {
+        InstallModeToml::Copy => {
+            if file.managed_keys.is_some() {
+                bail!("{context}: 'managed_keys' requires install_mode = \"json-merge\"");
+            }
+            Ok(AppInstallStrategy::Copy)
+        }
+        InstallModeToml::JsonMerge => {
+            let managed_keys = file
+                .managed_keys
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("{context}: json-merge requires 'managed_keys'"))?;
+            if managed_keys.is_empty() {
+                bail!("{context}: managed_keys must not be empty");
+            }
+            for key in &managed_keys {
+                if key.trim().is_empty() {
+                    bail!("{context}: managed_keys must not contain empty keys");
+                }
+                if key.contains('.') {
+                    bail!("{context}: managed_keys must be top-level JSON keys");
+                }
+            }
+            Ok(AppInstallStrategy::JsonMerge { managed_keys })
+        }
+    }
 }
 
 fn default_list_mode(has_explicit_files: bool) -> AppListMode {
@@ -99,7 +156,9 @@ pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<AppCa
     let mut categories = Vec::new();
 
     for name in names {
-        categories.push(load_embedded_category(&name)?);
+        if let Some(category) = load_embedded_category(&name)? {
+            categories.push(category);
+        }
     }
 
     Ok(categories)
@@ -114,38 +173,53 @@ pub(crate) async fn load_installed_categories(
     let mut categories = Vec::new();
 
     for name in category_names {
-        categories.push(load_installed_category(config, &name).await?);
+        if let Some(category) = load_installed_category(config, &name).await? {
+            categories.push(category);
+        }
     }
 
     Ok(categories)
 }
 
-fn load_embedded_category(name: &str) -> Result<AppCategory> {
+fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
     let metadata_path = format!("app/{name}/shine.toml");
     if let Some(bytes) = presets::read_asset_bytes(&metadata_path) {
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
+        let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
+            return Ok(None);
+        };
         let files = match parsed.files {
-            Some(files) => files
-                .into_iter()
-                .map(|file| {
-                    let context = format!("app/{name}/shine.toml");
-                    let source_rel = normalize_relative(&file.source)
-                        .with_context(|| format!("invalid source for {context}"))?;
-                    let target_rel =
-                        normalize_relative(file.target.as_deref().unwrap_or(&file.source))
-                            .with_context(|| format!("invalid target for {context}"))?;
-                    let transforms = resolve_transforms(&file, &context)?;
-                    Ok(AppFile {
-                        source_rel,
-                        target_rel,
-                        description: file.description,
-                        display_name: file.display_name,
-                        legacy_dest_annotation: None,
-                        transforms,
+            Some(files) => {
+                let mut filtered = Vec::new();
+                for file in files {
+                    if file_matches_current_platform(name, &file)? {
+                        filtered.push(file);
+                    }
+                }
+                filtered
+                    .into_iter()
+                    .map(|file| {
+                        let context = format!("app/{name}/shine.toml");
+                        let source_rel = normalize_relative(&file.source)
+                            .with_context(|| format!("invalid source for {context}"))?;
+                        let target_rel =
+                            normalize_relative(file.target.as_deref().unwrap_or(&file.source))
+                                .with_context(|| format!("invalid target for {context}"))?;
+                        let transforms = resolve_transforms(&file, &context)?;
+                        let install_strategy = resolve_install_strategy(&file, &context)?;
+                        Ok(AppFile {
+                            source_rel,
+                            target_rel,
+                            description: file.description,
+                            display_name: file.display_name,
+                            legacy_dest_annotation: None,
+                            transforms,
+                            install_strategy,
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>>>()?,
+                    .collect::<Result<Vec<_>>>()?
+            }
             None => collect_embedded_files(name)?
                 .into_iter()
                 .map(|rel| AppFile {
@@ -155,14 +229,18 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
                     display_name: None,
                     legacy_dest_annotation: None,
                     transforms: vec![],
+                    install_strategy: AppInstallStrategy::Copy,
                 })
                 .collect(),
         };
+        if files.is_empty() {
+            return Ok(None);
+        }
 
-        return Ok(AppCategory {
+        return Ok(Some(AppCategory {
             name: name.to_string(),
             description: parsed.description,
-            destination_root: Some(parsed.dest),
+            destination_root: Some(dest_root),
             files,
             list_mode: parsed
                 .list_mode
@@ -170,10 +248,10 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
                 .unwrap_or_else(|| default_list_mode(has_explicit_files)),
             uses_metadata: true,
             has_explicit_files,
-        });
+        }));
     }
 
-    Ok(AppCategory {
+    Ok(Some(AppCategory {
         name: name.to_string(),
         description: None,
         destination_root: None,
@@ -189,16 +267,17 @@ fn load_embedded_category(name: &str) -> Result<AppCategory> {
                     display_name: None,
                     legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
                     transforms: vec![],
+                    install_strategy: AppInstallStrategy::Copy,
                 }
             })
             .collect(),
         list_mode: AppListMode::Category,
         uses_metadata: false,
         has_explicit_files: false,
-    })
+    }))
 }
 
-async fn load_installed_category(config: &Config, name: &str) -> Result<AppCategory> {
+async fn load_installed_category(config: &Config, name: &str) -> Result<Option<AppCategory>> {
     let category_root = config.presets_dir().join("app").join(name);
     let metadata_path = category_root.join("shine.toml");
 
@@ -208,27 +287,40 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
             .with_context(|| format!("reading metadata: {}", metadata_path.display()))?;
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
+        let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
+            return Ok(None);
+        };
         let files = match parsed.files {
-            Some(files) => files
-                .into_iter()
-                .map(|file| {
-                    let context = metadata_path.display().to_string();
-                    let source_rel = normalize_relative(&file.source)
-                        .with_context(|| format!("invalid source for {context}"))?;
-                    let target_rel =
-                        normalize_relative(file.target.as_deref().unwrap_or(&file.source))
-                            .with_context(|| format!("invalid target for {context}"))?;
-                    let transforms = resolve_transforms(&file, &context)?;
-                    Ok(AppFile {
-                        source_rel,
-                        target_rel,
-                        description: file.description,
-                        display_name: file.display_name,
-                        legacy_dest_annotation: None,
-                        transforms,
+            Some(files) => {
+                let mut filtered = Vec::new();
+                for file in files {
+                    if file_matches_current_platform(name, &file)? {
+                        filtered.push(file);
+                    }
+                }
+                filtered
+                    .into_iter()
+                    .map(|file| {
+                        let context = metadata_path.display().to_string();
+                        let source_rel = normalize_relative(&file.source)
+                            .with_context(|| format!("invalid source for {context}"))?;
+                        let target_rel =
+                            normalize_relative(file.target.as_deref().unwrap_or(&file.source))
+                                .with_context(|| format!("invalid target for {context}"))?;
+                        let transforms = resolve_transforms(&file, &context)?;
+                        let install_strategy = resolve_install_strategy(&file, &context)?;
+                        Ok(AppFile {
+                            source_rel,
+                            target_rel,
+                            description: file.description,
+                            display_name: file.display_name,
+                            legacy_dest_annotation: None,
+                            transforms,
+                            install_strategy,
+                        })
                     })
-                })
-                .collect::<Result<Vec<_>>>()?,
+                    .collect::<Result<Vec<_>>>()?
+            }
             None => collect_fs_files(&category_root)
                 .await?
                 .into_iter()
@@ -239,9 +331,13 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
                     display_name: None,
                     legacy_dest_annotation: None,
                     transforms: vec![],
+                    install_strategy: AppInstallStrategy::Copy,
                 })
                 .collect(),
         };
+        if files.is_empty() {
+            return Ok(None);
+        }
 
         for file in &files {
             let source_path = category_root.join(&file.source_rel);
@@ -253,10 +349,10 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
             }
         }
 
-        return Ok(AppCategory {
+        return Ok(Some(AppCategory {
             name: name.to_string(),
             description: parsed.description,
-            destination_root: Some(parsed.dest),
+            destination_root: Some(dest_root),
             files,
             list_mode: parsed
                 .list_mode
@@ -264,7 +360,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
                 .unwrap_or_else(|| default_list_mode(has_explicit_files)),
             uses_metadata: true,
             has_explicit_files,
-        });
+        }));
     }
 
     let mut files = Vec::new();
@@ -280,10 +376,11 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
             display_name: None,
             legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
             transforms: vec![],
+            install_strategy: AppInstallStrategy::Copy,
         });
     }
 
-    Ok(AppCategory {
+    Ok(Some(AppCategory {
         name: name.to_string(),
         description: None,
         destination_root: None,
@@ -291,7 +388,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<AppCateg
         list_mode: AppListMode::Category,
         uses_metadata: false,
         has_explicit_files: false,
-    })
+    }))
 }
 
 fn collect_embedded_category_names(filter: Option<&str>) -> Vec<String> {
@@ -389,7 +486,22 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
     let parsed: CategoryToml = toml::from_slice(bytes)
         .with_context(|| format!("failed to parse app/{name}/shine.toml"))?;
 
-    let expanded = crate::config::full_expand(&parsed.dest)
+    if let Some(dest) = parsed.dest.select_for_current_platform(name)? {
+        validate_dest(name, &dest)?;
+    }
+    if let Some(files) = &parsed.files {
+        for file in files {
+            file_matches_current_platform(name, file)?;
+            let context = format!("app/{name}/shine.toml");
+            resolve_transforms(file, &context)?;
+            resolve_install_strategy(file, &context)?;
+        }
+    }
+    Ok(parsed)
+}
+
+fn validate_dest(name: &str, dest: &str) -> Result<()> {
+    let expanded = crate::config::full_expand(dest)
         .with_context(|| format!("failed to expand dest in app/{name}/shine.toml"))?;
     if !is_absolute_after_expansion(&expanded) {
         bail!("app/{name}/shine.toml dest must be absolute after expansion");
@@ -398,7 +510,56 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
     if path.components().any(|c| c == Component::ParentDir) {
         bail!("app/{name}/shine.toml dest must not contain '..'");
     }
-    Ok(parsed)
+    Ok(())
+}
+
+impl DestToml {
+    fn select_for_current_platform(&self, category: &str) -> Result<Option<String>> {
+        self.select_for_platform(category, current_platform())
+    }
+
+    fn select_for_platform(&self, category: &str, current: &str) -> Result<Option<String>> {
+        match self {
+            Self::Single(dest) => Ok(Some(dest.clone())),
+            Self::Platforms(dest) => dest.select_for_platform(category, current),
+        }
+    }
+}
+
+impl PlatformDestToml {
+    fn select_for_platform(&self, category: &str, current: &str) -> Result<Option<String>> {
+        match current {
+            "windows" => Ok(self.windows.clone()),
+            "unix" => Ok(self.unix.clone()),
+            _ => bail!("app/{category}/shine.toml has unsupported current platform `{current}`"),
+        }
+    }
+}
+
+fn file_matches_current_platform(category: &str, file: &FileToml) -> Result<bool> {
+    file_matches_platform(category, file, current_platform())
+}
+
+fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Result<bool> {
+    let Some(platforms) = &file.platforms else {
+        return Ok(true);
+    };
+
+    let mut matches = false;
+    for platform in platforms {
+        let normalized = platform.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "windows" | "unix" => matches |= normalized == current,
+            _ => bail!(
+                "app/{category}/shine.toml has unsupported platform `{platform}`; expected `windows` or `unix`"
+            ),
+        }
+    }
+    Ok(matches)
+}
+
+fn current_platform() -> &'static str {
+    if cfg!(windows) { "windows" } else { "unix" }
 }
 
 fn is_absolute_after_expansion(path: &str) -> bool {
@@ -454,10 +615,16 @@ mod tests {
     }
 
     #[test]
-    fn embedded_docker_has_jsonc_transform() {
-        let categories = load_embedded_categories(Some("docker")).unwrap();
-        let docker = categories.iter().find(|c| c.name == "docker").unwrap();
+    fn embedded_docker_engine_has_jsonc_transform() {
+        let categories = load_embedded_categories(Some("docker-engine")).unwrap();
+        let docker = categories
+            .iter()
+            .find(|c| c.name == "docker-engine")
+            .unwrap();
         assert!(docker.uses_metadata);
+        #[cfg(windows)]
+        assert_eq!(docker.destination_root.as_deref(), Some("~/.docker"));
+        #[cfg(not(windows))]
         assert_eq!(docker.destination_root.as_deref(), Some("/etc/docker"));
         assert_eq!(docker.files.len(), 1);
 
@@ -465,60 +632,204 @@ mod tests {
         assert_eq!(file.source_rel, std::path::Path::new("daemon.jsonc"));
         assert_eq!(file.target_rel, std::path::Path::new("daemon.json"));
         assert_eq!(file.transforms, vec!["template", "jsonc-to-json"]);
+        assert_eq!(file.install_strategy, AppInstallStrategy::Copy);
+    }
+
+    #[test]
+    fn embedded_docker_desktop_uses_json_merge_install_strategy() {
+        let categories = load_embedded_categories(Some("docker-desktop")).unwrap();
+        #[cfg(not(windows))]
+        {
+            assert!(categories.is_empty());
+        }
+
+        #[cfg(windows)]
+        let docker = categories
+            .iter()
+            .find(|c| c.name == "docker-desktop")
+            .unwrap();
+
+        #[cfg(windows)]
+        {
+            assert!(docker.uses_metadata);
+            assert_eq!(docker.files.len(), 1);
+            let file = &docker.files[0];
+            assert_eq!(file.target_rel, std::path::Path::new("settings-store.json"));
+            assert_eq!(file.transforms, vec!["template", "jsonc-to-json"]);
+            assert_eq!(
+                file.install_strategy,
+                AppInstallStrategy::JsonMerge {
+                    managed_keys: vec!["proxy".to_string(), "containersProxy".to_string()],
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_archey4_is_unix_only() {
+        let categories = load_embedded_categories(Some("archey4")).unwrap();
+
+        #[cfg(windows)]
+        {
+            assert!(categories.is_empty());
+            return;
+        }
+
+        #[cfg(not(windows))]
+        {
+            let archey4 = categories.iter().find(|c| c.name == "archey4").unwrap();
+            assert!(archey4.uses_metadata);
+            assert_eq!(
+                archey4.destination_root.as_deref(),
+                Some("~/.config/archey4")
+            );
+        }
     }
 
     #[test]
     fn unix_absolute_dest_is_valid_on_all_platforms() {
-        let parsed = parse_category_toml("docker", b"dest = \"/etc/docker\"\n").unwrap();
+        parse_category_toml("docker-engine", b"dest = \"/etc/docker\"\n").unwrap();
+    }
 
-        assert_eq!(parsed.dest, "/etc/docker");
+    #[test]
+    fn platform_dest_selects_current_platform() {
+        let parsed = parse_category_toml(
+            "docker-engine",
+            b"[dest]\nwindows = \"~/.docker\"\nunix = \"/etc/docker\"\n",
+        )
+        .unwrap();
+
+        #[cfg(windows)]
+        assert_eq!(
+            parsed
+                .dest
+                .select_for_current_platform("docker-engine")
+                .unwrap(),
+            Some("~/.docker".to_string())
+        );
+        #[cfg(not(windows))]
+        assert_eq!(
+            parsed
+                .dest
+                .select_for_current_platform("docker-engine")
+                .unwrap(),
+            Some("/etc/docker".to_string())
+        );
+    }
+
+    #[test]
+    fn unsupported_file_platform_is_rejected() {
+        let err = parse_category_toml(
+            "docker-engine",
+            br#"
+dest = "/etc/docker"
+
+[[files]]
+source = "daemon.jsonc"
+platforms = ["plan9"]
+"#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unsupported platform"));
+    }
+
+    #[test]
+    fn file_platform_filter_matches_expected_platforms() {
+        let windows_only: FileToml = toml::from_str(
+            r#"
+source = "daemon.jsonc"
+platforms = ["windows"]
+"#,
+        )
+        .unwrap();
+        let unix_only: FileToml = toml::from_str(
+            r#"
+source = "daemon.jsonc"
+platforms = ["unix"]
+"#,
+        )
+        .unwrap();
+
+        assert!(file_matches_platform("docker-engine", &windows_only, "windows").unwrap());
+        assert!(!file_matches_platform("docker-engine", &windows_only, "unix").unwrap());
+        assert!(file_matches_platform("docker-engine", &unix_only, "unix").unwrap());
+        assert!(!file_matches_platform("docker-engine", &unix_only, "windows").unwrap());
+    }
+
+    #[test]
+    fn json_merge_requires_managed_keys() {
+        let err = parse_category_toml(
+            "docker-desktop",
+            br#"
+dest = "~/.docker/desktop"
+
+[[files]]
+source = "settings-store.jsonc"
+target = "settings-store.json"
+install_mode = "json-merge"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("managed_keys"));
     }
 
     #[test]
     fn embedded_ghostty_has_theme_files_with_template_transform() {
         let categories = load_embedded_categories(Some("ghostty")).unwrap();
-        let ghostty = categories.iter().find(|c| c.name == "ghostty").unwrap();
-        assert!(ghostty.uses_metadata);
-        assert!(ghostty.has_explicit_files);
-        assert_eq!(
-            ghostty.destination_root.as_deref(),
-            Some("~/.config/ghostty")
-        );
-        assert_eq!(ghostty.list_mode, AppListMode::Category);
-        assert_eq!(ghostty.files.len(), 4);
 
-        let light = ghostty
-            .files
-            .iter()
-            .find(|f| f.source_rel == std::path::Path::new("themes/iTerm2 Solarized Light"))
-            .unwrap();
-        assert_eq!(
-            light.target_rel,
-            std::path::Path::new("themes/light_iTerm2 Solarized Light")
-        );
-        assert_eq!(light.transforms, vec!["template"]);
+        #[cfg(windows)]
+        {
+            assert!(categories.is_empty());
+            return;
+        }
 
-        let dark = ghostty
-            .files
-            .iter()
-            .find(|f| f.source_rel == std::path::Path::new("themes/Alien Blood"))
-            .unwrap();
-        assert_eq!(
-            dark.target_rel,
-            std::path::Path::new("themes/dark_Alien Blood")
-        );
-        assert_eq!(dark.transforms, vec!["template"]);
+        #[cfg(not(windows))]
+        {
+            let ghostty = categories.iter().find(|c| c.name == "ghostty").unwrap();
+            assert!(ghostty.uses_metadata);
+            assert!(ghostty.has_explicit_files);
+            assert_eq!(
+                ghostty.destination_root.as_deref(),
+                Some("~/.config/ghostty")
+            );
+            assert_eq!(ghostty.list_mode, AppListMode::Category);
+            assert_eq!(ghostty.files.len(), 4);
 
-        let atom = ghostty
-            .files
-            .iter()
-            .find(|f| f.source_rel == std::path::Path::new("themes/Atom One Light"))
-            .unwrap();
-        assert_eq!(
-            atom.target_rel,
-            std::path::Path::new("themes/light_Atom One Light")
-        );
-        assert_eq!(atom.transforms, vec!["template"]);
+            let light = ghostty
+                .files
+                .iter()
+                .find(|f| f.source_rel == std::path::Path::new("themes/iTerm2 Solarized Light"))
+                .unwrap();
+            assert_eq!(
+                light.target_rel,
+                std::path::Path::new("themes/light_iTerm2 Solarized Light")
+            );
+            assert_eq!(light.transforms, vec!["template"]);
+
+            let dark = ghostty
+                .files
+                .iter()
+                .find(|f| f.source_rel == std::path::Path::new("themes/Alien Blood"))
+                .unwrap();
+            assert_eq!(
+                dark.target_rel,
+                std::path::Path::new("themes/dark_Alien Blood")
+            );
+            assert_eq!(dark.transforms, vec!["template"]);
+
+            let atom = ghostty
+                .files
+                .iter()
+                .find(|f| f.source_rel == std::path::Path::new("themes/Atom One Light"))
+                .unwrap();
+            assert_eq!(
+                atom.target_rel,
+                std::path::Path::new("themes/light_Atom One Light")
+            );
+            assert_eq!(atom.transforms, vec!["template"]);
+        }
     }
 
     #[test]
@@ -534,8 +845,11 @@ mod tests {
                     target: None,
                     description: None,
                     display_name: None,
+                    platforms: None,
                     transform: Some("no-such-transform".to_string()),
                     transforms: None,
+                    install_mode: None,
+                    managed_keys: None,
                 };
                 resolve_transforms(&file, "test").is_err()
             }
@@ -549,8 +863,11 @@ mod tests {
             target: None,
             description: None,
             display_name: None,
+            platforms: None,
             transform: Some("jsonc-to-json".to_string()),
             transforms: Some(vec!["jsonc-to-json".to_string()]),
+            install_mode: None,
+            managed_keys: None,
         };
         assert!(resolve_transforms(&file, "test").is_err());
     }

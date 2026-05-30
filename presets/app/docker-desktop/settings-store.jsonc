@@ -1,0 +1,12 @@
+{
+  "proxy": {
+    "mode": "manual",
+    "http": "http://@@PROXY_HOST@@:@@HTTP_PROXY_PORT@@",
+    "https": "http://@@PROXY_HOST@@:@@HTTP_PROXY_PORT@@"
+  },
+  "containersProxy": {
+    "mode": "manual",
+    "http": "http://@@PROXY_HOST@@:@@HTTP_PROXY_PORT@@",
+    "https": "http://@@PROXY_HOST@@:@@HTTP_PROXY_PORT@@"
+  }
+}
