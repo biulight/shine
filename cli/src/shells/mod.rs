@@ -813,8 +813,27 @@ async fn append_path_to_shell_config(
     force: bool,
     source_commands: &[String],
 ) -> Result<PathUpdateStatus> {
-    let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
+    let config_paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
+    let mut updated_path = None;
 
+    for config_path in config_paths {
+        if append_path_to_single_shell_config(config, force, source_commands, &config_path).await? {
+            updated_path.get_or_insert(config_path);
+        }
+    }
+
+    match updated_path {
+        Some(path) => Ok(PathUpdateStatus::Updated(path)),
+        None => Ok(PathUpdateStatus::AlreadyConfigured),
+    }
+}
+
+async fn append_path_to_single_shell_config(
+    config: &Config,
+    force: bool,
+    source_commands: &[String],
+    config_path: &Path,
+) -> Result<bool> {
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -834,7 +853,7 @@ async fn append_path_to_shell_config(
     if let Some(existing_block) = sentinel_block(&existing) {
         let expected_block = snippet.trim_end_matches('\n');
         if !force && existing_block == expected_block {
-            return Ok(PathUpdateStatus::AlreadyConfigured);
+            return Ok(false);
         }
         // Force or stale managed block: remove old sentinel block and re-add
         // with the current PATH setup and source wrapper functions.
@@ -855,33 +874,35 @@ async fn append_path_to_shell_config(
         .await
         .with_context(|| format!("writing to shell config: {config_path:?}"))?;
 
-    Ok(PathUpdateStatus::Updated(config_path))
+    Ok(true)
 }
 
 async fn remove_path_from_shell_config(config: &Config) -> Result<()> {
-    let config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
+    let config_paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
 
-    if !config_path.exists() {
-        return Ok(());
+    for config_path in config_paths {
+        if !config_path.exists() {
+            continue;
+        }
+
+        let content = tokio::fs::read_to_string(&config_path)
+            .await
+            .with_context(|| format!("reading shell config: {config_path:?}"))?;
+
+        if !content.contains(SENTINEL_START) {
+            continue;
+        }
+
+        let cleaned = remove_sentinel_block(&content);
+        tokio::fs::write(&config_path, cleaned.as_bytes())
+            .await
+            .with_context(|| format!("writing shell config: {config_path:?}"))?;
+
+        println!(
+            "Shell config ({}): PATH entry removed",
+            config_path.display()
+        );
     }
-
-    let content = tokio::fs::read_to_string(&config_path)
-        .await
-        .with_context(|| format!("reading shell config: {config_path:?}"))?;
-
-    if !content.contains(SENTINEL_START) {
-        return Ok(());
-    }
-
-    let cleaned = remove_sentinel_block(&content);
-    tokio::fs::write(&config_path, cleaned.as_bytes())
-        .await
-        .with_context(|| format!("writing shell config: {config_path:?}"))?;
-
-    println!(
-        "Shell config ({}): PATH entry removed",
-        config_path.display()
-    );
     Ok(())
 }
 
@@ -894,18 +915,30 @@ pub(crate) fn get_shell() -> Result<ShellType> {
 }
 
 pub(crate) fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) -> Result<PathBuf> {
+    Ok(get_shell_config_paths(shell_type, home_path)?
+        .into_iter()
+        .next()
+        .expect("shell config paths should never be empty"))
+}
+
+fn get_shell_config_paths(shell_type: &ShellType, home_path: &Path) -> Result<Vec<PathBuf>> {
     match shell_type {
-        ShellType::Bash => Ok(home_path.join(".bashrc")),
-        ShellType::Fish => Ok(home_path.join(".config/fish/config.fish")),
-        ShellType::Zsh => Ok(home_path.join(".zshrc")),
+        ShellType::Bash => Ok(vec![home_path.join(".bashrc")]),
+        ShellType::Fish => Ok(vec![home_path.join(".config/fish/config.fish")]),
+        ShellType::Zsh => Ok(vec![home_path.join(".zshrc")]),
         ShellType::PowerShell => {
             if cfg!(windows) {
-                Ok(home_path.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"))
+                Ok(vec![
+                    home_path.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+                    home_path.join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+                ])
             } else {
-                Ok(home_path.join(".config/powershell/Microsoft.PowerShell_profile.ps1"))
+                Ok(vec![home_path.join(
+                    ".config/powershell/Microsoft.PowerShell_profile.ps1",
+                )])
             }
         }
-        ShellType::Elvish => Ok(home_path.join(".config/elvish/rc.elv")),
+        ShellType::Elvish => Ok(vec![home_path.join(".config/elvish/rc.elv")]),
     }
 }
 
@@ -1313,6 +1346,35 @@ mod tests {
             1,
             "usetproxy wrapper should not be duplicated: {content}"
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn append_writes_both_windows_powershell_profiles() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.shell_type = ShellType::PowerShell;
+        let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
+
+        append_path_to_shell_config(&config, false, &source_commands)
+            .await
+            .unwrap();
+
+        for config_path in get_shell_config_paths(&config.shell_type, &config.home_dir).unwrap() {
+            let content = fs::read_to_string(&config_path).await.unwrap();
+            assert!(
+                content.contains("function setproxy"),
+                "setproxy wrapper should be added to {}: {content}",
+                config_path.display()
+            );
+            assert!(
+                content.contains("function usetproxy"),
+                "usetproxy wrapper should be added to {}: {content}",
+                config_path.display()
+            );
+        }
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
