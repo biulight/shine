@@ -790,7 +790,7 @@ async fn cleanup_stale_entry(
         return Ok(StaleCleanupOutcome::Skipped);
     }
 
-    match file_ops::uninstall_entry(entry, false).await? {
+    match file_ops::uninstall_entry(entry, false, false).await? {
         UninstallOutcome::Removed => {
             println!(
                 "  {}  {}  {}",
@@ -810,6 +810,9 @@ async fn cleanup_stale_entry(
                     backup.display()
                 )),
             );
+            Ok(StaleCleanupOutcome::Removed)
+        }
+        UninstallOutcome::ForceRemoved | UninstallOutcome::ForceRestoredBackup { .. } => {
             Ok(StaleCleanupOutcome::Removed)
         }
         UninstallOutcome::NotFound => {
@@ -901,6 +904,7 @@ fn app_source_parts(source: &str) -> Option<(&str, &str)> {
 pub(crate) async fn handle_uninstall(
     config: &Config,
     category: Option<&str>,
+    force: bool,
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
@@ -936,7 +940,7 @@ pub(crate) async fn handle_uninstall(
     let mut skipped = 0usize;
 
     for entry in &entries {
-        match file_ops::uninstall_entry(entry, dry_run).await {
+        match file_ops::uninstall_entry(entry, dry_run, force).await {
             Ok(UninstallOutcome::Removed) => {
                 println!(
                     "  {}  {}",
@@ -952,6 +956,27 @@ pub(crate) async fn handle_uninstall(
                     colors::symbol("✓"),
                     colors::dim(&entry.destination.display().to_string()),
                     colors::dim(&format!("(restored {})", backup.display())),
+                );
+                manifest.remove_by_dest(&entry.destination);
+                removed += 1;
+                restored += 1;
+            }
+            Ok(UninstallOutcome::ForceRemoved) => {
+                println!(
+                    "  {}  {}  {}",
+                    colors::symbol("✓"),
+                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim("force removed"),
+                );
+                manifest.remove_by_dest(&entry.destination);
+                removed += 1;
+            }
+            Ok(UninstallOutcome::ForceRestoredBackup { backup }) => {
+                println!(
+                    "  {}  {}  {}",
+                    colors::symbol("✓"),
+                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim(&format!("force removed, restored {}", backup.display())),
                 );
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
@@ -1249,7 +1274,9 @@ mod tests {
             );
         }
 
-        handle_uninstall(&config, None, false, false).await.unwrap();
+        handle_uninstall(&config, None, false, false, false)
+            .await
+            .unwrap();
 
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert!(
@@ -1277,7 +1304,9 @@ mod tests {
         let manifest_before = AppManifest::load(config.shine_dir()).await.unwrap();
         let count_before = manifest_before.entries.len();
 
-        handle_uninstall(&config, None, false, true).await.unwrap();
+        handle_uninstall(&config, None, false, false, true)
+            .await
+            .unwrap();
 
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_eq!(
@@ -1291,6 +1320,42 @@ mod tests {
                 "dry-run must not remove installed files"
             );
         }
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn uninstall_force_removes_user_modified_file_and_manifest_entry() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"debug\": true\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        let dest = dir.join(".config/sample/daemon.json");
+        fs::write(&dest, b"{\"debug\": false}\n").await.unwrap();
+
+        handle_uninstall(&config, Some("sample"), true, false, false)
+            .await
+            .unwrap();
+
+        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert!(
+            manifest_after.entries.is_empty(),
+            "force uninstall should remove manifest entry"
+        );
+        assert!(
+            !dest.exists(),
+            "force uninstall should remove modified file"
+        );
 
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
@@ -1907,7 +1972,7 @@ mod tests {
             .count();
 
         // Uninstall only that category
-        handle_uninstall(&config, Some(&first_category), false, false)
+        handle_uninstall(&config, Some(&first_category), false, false, false)
             .await
             .unwrap();
 
@@ -1943,7 +2008,7 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         // Nothing installed — uninstalling a specific category should succeed silently
-        handle_uninstall(&config, Some("nonexistent"), false, false)
+        handle_uninstall(&config, Some("nonexistent"), false, false, false)
             .await
             .unwrap();
 

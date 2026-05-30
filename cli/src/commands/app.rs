@@ -39,6 +39,9 @@ pub enum AppCommands {
         /// Category to uninstall (e.g. vim, starship). Uninstalls all if omitted.
         #[arg(value_name = "CATEGORY")]
         category: Option<String>,
+        /// Remove app config files even if they were modified after install
+        #[arg(long)]
+        force: bool,
         /// Also remove the app presets directory and manifest after uninstalling
         #[arg(long)]
         purge: bool,

@@ -251,12 +251,14 @@ async fn main() -> Result<()> {
             }
             AppCommands::Uninstall {
                 category,
+                force,
                 purge,
                 dry_run,
             } => {
                 Box::pin(apps::handle_uninstall(
                     &config,
                     category.as_deref(),
+                    force,
                     purge,
                     dry_run,
                 ))

@@ -15,6 +15,8 @@ pub(crate) enum InstallOutcome {
 pub(crate) enum UninstallOutcome {
     Removed,
     RestoredBackup { backup: PathBuf },
+    ForceRemoved,
+    ForceRestoredBackup { backup: PathBuf },
     NotFound,
     UserModified,
     DryRun,
@@ -95,7 +97,11 @@ async fn install_bytes_impl(
     Ok(InstallOutcome::Installed { hash })
 }
 
-pub(crate) async fn uninstall_entry(entry: &AppEntry, dry_run: bool) -> Result<UninstallOutcome> {
+pub(crate) async fn uninstall_entry(
+    entry: &AppEntry,
+    dry_run: bool,
+    force: bool,
+) -> Result<UninstallOutcome> {
     if dry_run {
         return Ok(UninstallOutcome::DryRun);
     }
@@ -107,7 +113,8 @@ pub(crate) async fn uninstall_entry(entry: &AppEntry, dry_run: bool) -> Result<U
     let current = fs::read(&entry.destination)
         .await
         .with_context(|| format!("reading: {}", entry.destination.display()))?;
-    if hash_content(&current) != entry.content_hash {
+    let user_modified = hash_content(&current) != entry.content_hash;
+    if user_modified && !force {
         return Ok(UninstallOutcome::UserModified);
     }
 
@@ -121,12 +128,22 @@ pub(crate) async fn uninstall_entry(entry: &AppEntry, dry_run: bool) -> Result<U
         fs::rename(backup, &entry.destination)
             .await
             .with_context(|| format!("restoring backup: {}", backup.display()))?;
-        return Ok(UninstallOutcome::RestoredBackup {
-            backup: backup.clone(),
+        return Ok(if user_modified {
+            UninstallOutcome::ForceRestoredBackup {
+                backup: backup.clone(),
+            }
+        } else {
+            UninstallOutcome::RestoredBackup {
+                backup: backup.clone(),
+            }
         });
     }
 
-    Ok(UninstallOutcome::Removed)
+    Ok(if user_modified {
+        UninstallOutcome::ForceRemoved
+    } else {
+        UninstallOutcome::Removed
+    })
 }
 
 fn backup_path(dest: &Path) -> PathBuf {
@@ -260,7 +277,7 @@ mod tests {
         fs::write(&dest, content).await.unwrap();
         let entry = entry_for(&dest, hash_content(content));
 
-        let outcome = uninstall_entry(&entry, false).await.unwrap();
+        let outcome = uninstall_entry(&entry, false, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::Removed));
         assert!(!dest.exists());
         fs::remove_dir_all(&dir).await.unwrap();
@@ -282,7 +299,7 @@ mod tests {
             content_hash: hash_content(content),
             uses_env: false,
         };
-        let outcome = uninstall_entry(&entry, false).await.unwrap();
+        let outcome = uninstall_entry(&entry, false, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::RestoredBackup { .. }));
         assert!(!backup.exists());
         assert_eq!(fs::read(&dest).await.unwrap(), b"original");
@@ -295,7 +312,7 @@ mod tests {
         let dest = dir.join("missing.toml");
         let entry = entry_for(&dest, 0);
 
-        let outcome = uninstall_entry(&entry, false).await.unwrap();
+        let outcome = uninstall_entry(&entry, false, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::NotFound));
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -307,9 +324,48 @@ mod tests {
         fs::write(&dest, b"user modified").await.unwrap();
         let entry = entry_for(&dest, hash_content(b"original content"));
 
-        let outcome = uninstall_entry(&entry, false).await.unwrap();
+        let outcome = uninstall_entry(&entry, false, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::UserModified));
         assert!(dest.exists(), "user-modified file must not be removed");
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn uninstall_force_removes_user_modified_file() {
+        let dir = make_temp_dir().await;
+        let dest = dir.join("dest.toml");
+        fs::write(&dest, b"user modified").await.unwrap();
+        let entry = entry_for(&dest, hash_content(b"original content"));
+
+        let outcome = uninstall_entry(&entry, false, true).await.unwrap();
+        assert!(matches!(outcome, UninstallOutcome::ForceRemoved));
+        assert!(!dest.exists(), "force should remove user-modified file");
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn uninstall_force_restores_backup_after_user_modified_file() {
+        let dir = make_temp_dir().await;
+        let dest = dir.join("dest.toml");
+        let backup = dir.join("dest.toml.shine.bak");
+        fs::write(&dest, b"user modified").await.unwrap();
+        fs::write(&backup, b"original").await.unwrap();
+
+        let entry = AppEntry {
+            source: "app/test/dest.toml".to_string(),
+            destination: dest.clone(),
+            backup: Some(backup.clone()),
+            content_hash: hash_content(b"managed"),
+            uses_env: false,
+        };
+
+        let outcome = uninstall_entry(&entry, false, true).await.unwrap();
+        assert!(matches!(
+            outcome,
+            UninstallOutcome::ForceRestoredBackup { .. }
+        ));
+        assert!(!backup.exists());
+        assert_eq!(fs::read(&dest).await.unwrap(), b"original");
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -321,7 +377,7 @@ mod tests {
         fs::write(&dest, content).await.unwrap();
         let entry = entry_for(&dest, hash_content(content));
 
-        let outcome = uninstall_entry(&entry, true).await.unwrap();
+        let outcome = uninstall_entry(&entry, true, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::DryRun));
         assert!(dest.exists());
         fs::remove_dir_all(&dir).await.unwrap();
