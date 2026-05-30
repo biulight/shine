@@ -667,6 +667,27 @@ mod tests {
     }
 
     #[test]
+    fn embedded_archey4_is_unix_only() {
+        let categories = load_embedded_categories(Some("archey4")).unwrap();
+
+        #[cfg(windows)]
+        {
+            assert!(categories.is_empty());
+            return;
+        }
+
+        #[cfg(not(windows))]
+        {
+            let archey4 = categories.iter().find(|c| c.name == "archey4").unwrap();
+            assert!(archey4.uses_metadata);
+            assert_eq!(
+                archey4.destination_root.as_deref(),
+                Some("~/.config/archey4")
+            );
+        }
+    }
+
+    #[test]
     fn unix_absolute_dest_is_valid_on_all_platforms() {
         parse_category_toml("docker-engine", b"dest = \"/etc/docker\"\n").unwrap();
     }
@@ -758,48 +779,58 @@ install_mode = "json-merge"
     #[test]
     fn embedded_ghostty_has_theme_files_with_template_transform() {
         let categories = load_embedded_categories(Some("ghostty")).unwrap();
-        let ghostty = categories.iter().find(|c| c.name == "ghostty").unwrap();
-        assert!(ghostty.uses_metadata);
-        assert!(ghostty.has_explicit_files);
-        assert_eq!(
-            ghostty.destination_root.as_deref(),
-            Some("~/.config/ghostty")
-        );
-        assert_eq!(ghostty.list_mode, AppListMode::Category);
-        assert_eq!(ghostty.files.len(), 4);
 
-        let light = ghostty
-            .files
-            .iter()
-            .find(|f| f.source_rel == std::path::Path::new("themes/iTerm2 Solarized Light"))
-            .unwrap();
-        assert_eq!(
-            light.target_rel,
-            std::path::Path::new("themes/light_iTerm2 Solarized Light")
-        );
-        assert_eq!(light.transforms, vec!["template"]);
+        #[cfg(windows)]
+        {
+            assert!(categories.is_empty());
+            return;
+        }
 
-        let dark = ghostty
-            .files
-            .iter()
-            .find(|f| f.source_rel == std::path::Path::new("themes/Alien Blood"))
-            .unwrap();
-        assert_eq!(
-            dark.target_rel,
-            std::path::Path::new("themes/dark_Alien Blood")
-        );
-        assert_eq!(dark.transforms, vec!["template"]);
+        #[cfg(not(windows))]
+        {
+            let ghostty = categories.iter().find(|c| c.name == "ghostty").unwrap();
+            assert!(ghostty.uses_metadata);
+            assert!(ghostty.has_explicit_files);
+            assert_eq!(
+                ghostty.destination_root.as_deref(),
+                Some("~/.config/ghostty")
+            );
+            assert_eq!(ghostty.list_mode, AppListMode::Category);
+            assert_eq!(ghostty.files.len(), 4);
 
-        let atom = ghostty
-            .files
-            .iter()
-            .find(|f| f.source_rel == std::path::Path::new("themes/Atom One Light"))
-            .unwrap();
-        assert_eq!(
-            atom.target_rel,
-            std::path::Path::new("themes/light_Atom One Light")
-        );
-        assert_eq!(atom.transforms, vec!["template"]);
+            let light = ghostty
+                .files
+                .iter()
+                .find(|f| f.source_rel == std::path::Path::new("themes/iTerm2 Solarized Light"))
+                .unwrap();
+            assert_eq!(
+                light.target_rel,
+                std::path::Path::new("themes/light_iTerm2 Solarized Light")
+            );
+            assert_eq!(light.transforms, vec!["template"]);
+
+            let dark = ghostty
+                .files
+                .iter()
+                .find(|f| f.source_rel == std::path::Path::new("themes/Alien Blood"))
+                .unwrap();
+            assert_eq!(
+                dark.target_rel,
+                std::path::Path::new("themes/dark_Alien Blood")
+            );
+            assert_eq!(dark.transforms, vec!["template"]);
+
+            let atom = ghostty
+                .files
+                .iter()
+                .find(|f| f.source_rel == std::path::Path::new("themes/Atom One Light"))
+                .unwrap();
+            assert_eq!(
+                atom.target_rel,
+                std::path::Path::new("themes/light_Atom One Light")
+            );
+            assert_eq!(atom.transforms, vec!["template"]);
+        }
     }
 
     #[test]
