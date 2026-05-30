@@ -42,6 +42,12 @@ enum PathUpdateStatus {
     Updated(PathBuf),
 }
 
+#[derive(Debug)]
+struct ShellConfigUpdate {
+    profile_updated: bool,
+    config_status: PathUpdateStatus,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) enum ShellType {
     Bash,
@@ -157,15 +163,15 @@ pub(crate) async fn handle_install(
         link_parts.join(&sep)
     );
 
-    let source_commands: Vec<String> = categories
-        .iter()
-        .flat_map(|cat| cat.files.iter())
-        .filter(|f| f.needs_source)
-        .map(|f| f.command_name.clone())
-        .collect();
+    let source_commands = installed_source_commands(config).await?;
 
     let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
-    match append_path_to_shell_config(config, force, &source_commands).await? {
+    let shell_update = append_path_to_shell_config(config, force, &source_commands).await?;
+    let profile_path = managed_shell_profile_path(config);
+    if shell_update.profile_updated {
+        println!("Shell profile ({}): updated", profile_path.display());
+    }
+    match shell_update.config_status {
         PathUpdateStatus::AlreadyConfigured => {
             println!(
                 "Shell config ({}): already configured, skipped",
@@ -173,7 +179,7 @@ pub(crate) async fn handle_install(
             );
         }
         PathUpdateStatus::Updated(path) => {
-            println!("Shell config ({}): PATH updated", path.display());
+            println!("Shell config ({}): shine entry updated", path.display());
         }
     }
     print_source_command_activation_hint(config, &shell_config_path, &source_commands);
@@ -288,18 +294,13 @@ pub(crate) async fn handle_upgrade_installed(
         );
     }
 
-    let source_commands: Vec<String> = categories
-        .iter()
-        .flat_map(|cat| cat.files.iter())
-        .filter(|f| f.needs_source)
-        .map(|f| f.command_name.clone())
-        .collect();
+    let source_commands = installed_source_commands(config).await?;
 
-    let path_status = append_path_to_shell_config(config, false, &source_commands).await?;
-    let path_changed = match path_status {
+    let shell_update = append_path_to_shell_config(config, false, &source_commands).await?;
+    let path_changed = match shell_update.config_status {
         PathUpdateStatus::AlreadyConfigured => false,
         PathUpdateStatus::Updated(path) => {
-            println!("Shell config ({}): PATH updated", path.display());
+            println!("Shell config ({}): shine entry updated", path.display());
             true
         }
     };
@@ -436,6 +437,7 @@ pub(crate) async fn handle_uninstall(
     // Only remove the PATH sentinel when uninstalling all shell presets.
     if category.is_none() && !dry_run {
         remove_path_from_shell_config(config).await?;
+        remove_managed_shell_profile(config).await?;
     }
 
     Ok(())
@@ -570,6 +572,26 @@ fn build_link_specs(
         .collect()
 }
 
+async fn installed_source_commands(config: &Config) -> Result<Vec<String>> {
+    let categories = metadata::load_installed_categories(config, None).await?;
+    let mut commands = categories
+        .iter()
+        .flat_map(|cat| cat.files.iter())
+        .filter(|file| file.needs_source)
+        .filter(|file| {
+            let link = crate::bin_links::command_path_for_name(
+                config.bin_dir(),
+                std::ffi::OsStr::new(&file.command_name),
+            );
+            shell_link_exists(&link)
+        })
+        .map(|file| file.command_name.clone())
+        .collect::<Vec<_>>();
+    commands.sort();
+    commands.dedup();
+    Ok(commands)
+}
+
 /// `config.toml` `[env]`, and write the rendered result to `rendered_path`
 /// (rendered_dir — always shine-managed).  File permissions are copied from source.
 struct ScriptTemplate {
@@ -678,19 +700,33 @@ fn env_map_for_script<'a>(
     }
 }
 
-/// Build the PATH export snippet for the given shell, using `$HOME` when possible.
-/// For commands that need sourcing, wrapper functions are appended so that the user
-/// can type `setproxy` directly without prefixing `source`.
-fn path_export_snippet(
+fn managed_shell_profile_path(config: &Config) -> PathBuf {
+    config
+        .shine_dir()
+        .join("shell")
+        .join(match config.shell_type {
+            ShellType::Fish => "config.fish",
+            ShellType::PowerShell => "profile.ps1",
+            _ => "profile.sh",
+        })
+}
+
+fn home_relative_path(path: &Path, home_dir: &Path) -> String {
+    match path.strip_prefix(home_dir) {
+        Ok(rel) => format!("$HOME/{}", rel.display()),
+        Err(_) => path.display().to_string(),
+    }
+}
+
+/// Build the managed profile body under `~/.shine/shell/`.
+/// User shell config files source this file from a small sentinel block.
+fn managed_profile_snippet(
     shell: &ShellType,
     bin_dir: &Path,
     home_dir: &Path,
     source_commands: &[String],
 ) -> String {
-    let bin_str = match bin_dir.strip_prefix(home_dir) {
-        Ok(rel) => format!("$HOME/{}", rel.display()),
-        Err(_) => bin_dir.display().to_string(),
-    };
+    let bin_str = home_relative_path(bin_dir, home_dir);
     let mut body = match shell {
         ShellType::Fish => format!("fish_add_path \"{bin_str}\""),
         ShellType::PowerShell => powershell_path_snippet(&bin_str),
@@ -724,6 +760,15 @@ fn path_export_snippet(
             }
         }
     }
+    format!("{body}\n")
+}
+
+fn shell_config_snippet(shell: &ShellType, profile_path: &Path, home_dir: &Path) -> String {
+    let profile_str = home_relative_path(profile_path, home_dir);
+    let body = match shell {
+        ShellType::PowerShell => format!(". {}", powershell_path_expr(&profile_str)),
+        _ => format!("source {}", shell_quote_expand_home(&profile_str)),
+    };
     format!("{SENTINEL_START}\n{body}\n{SENTINEL_END}\n")
 }
 
@@ -755,11 +800,37 @@ fn shell_source_command(shell: &ShellType, config_path: &Path) -> String {
 }
 
 fn shell_quote(path: &Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+    shell_quote_str(&path.display().to_string())
 }
 
 fn powershell_quote(path: &Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "''"))
+    powershell_quote_str(&path.display().to_string())
+}
+
+fn shell_quote_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn powershell_quote_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn shell_quote_expand_home(value: &str) -> String {
+    if value == "$HOME" || value.starts_with("$HOME/") {
+        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    } else {
+        shell_quote_str(value)
+    }
+}
+
+fn powershell_path_expr(value: &str) -> String {
+    if let Some(rel) = value.strip_prefix("$HOME/") {
+        format!("(Join-Path $HOME '{}')", rel.replace('\'', "''"))
+    } else if value == "$HOME" {
+        "$HOME".to_string()
+    } else {
+        powershell_quote_str(value)
+    }
 }
 
 fn print_source_command_activation_hint(
@@ -813,26 +884,57 @@ async fn append_path_to_shell_config(
     config: &Config,
     force: bool,
     source_commands: &[String],
-) -> Result<PathUpdateStatus> {
+) -> Result<ShellConfigUpdate> {
+    let profile_updated = write_managed_shell_profile(config, source_commands).await?;
     let config_paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
     let mut updated_path = None;
 
     for config_path in config_paths {
-        if append_path_to_single_shell_config(config, force, source_commands, &config_path).await? {
+        if append_path_to_single_shell_config(config, force, &config_path).await? {
             updated_path.get_or_insert(config_path);
         }
     }
 
-    match updated_path {
-        Some(path) => Ok(PathUpdateStatus::Updated(path)),
-        None => Ok(PathUpdateStatus::AlreadyConfigured),
+    let config_status = match updated_path {
+        Some(path) => PathUpdateStatus::Updated(path),
+        None => PathUpdateStatus::AlreadyConfigured,
+    };
+    Ok(ShellConfigUpdate {
+        profile_updated,
+        config_status,
+    })
+}
+
+async fn write_managed_shell_profile(config: &Config, source_commands: &[String]) -> Result<bool> {
+    let profile_path = managed_shell_profile_path(config);
+    if let Some(parent) = profile_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("creating managed shell profile dir: {parent:?}"))?;
     }
+
+    let snippet = managed_profile_snippet(
+        &config.shell_type,
+        config.bin_dir(),
+        &config.home_dir,
+        source_commands,
+    );
+    let current = tokio::fs::read_to_string(&profile_path)
+        .await
+        .unwrap_or_default();
+    if current == snippet {
+        return Ok(false);
+    }
+
+    tokio::fs::write(&profile_path, snippet.as_bytes())
+        .await
+        .with_context(|| format!("writing managed shell profile: {}", profile_path.display()))?;
+    Ok(true)
 }
 
 async fn append_path_to_single_shell_config(
     config: &Config,
     force: bool,
-    source_commands: &[String],
     config_path: &Path,
 ) -> Result<bool> {
     if let Some(parent) = config_path.parent() {
@@ -844,12 +946,8 @@ async fn append_path_to_single_shell_config(
     let existing = tokio::fs::read_to_string(&config_path)
         .await
         .unwrap_or_default();
-    let snippet = path_export_snippet(
-        &config.shell_type,
-        config.bin_dir(),
-        &config.home_dir,
-        source_commands,
-    );
+    let profile_path = managed_shell_profile_path(config);
+    let snippet = shell_config_snippet(&config.shell_type, &profile_path, &config.home_dir);
 
     if let Some(existing_block) = sentinel_block(&existing) {
         let expected_block = snippet.trim_end_matches('\n');
@@ -857,7 +955,7 @@ async fn append_path_to_single_shell_config(
             return Ok(false);
         }
         // Force or stale managed block: remove old sentinel block and re-add
-        // with the current PATH setup and source wrapper functions.
+        // the small entry that sources the shine-managed shell profile.
         let cleaned = remove_sentinel_block(&existing);
         tokio::fs::write(&config_path, cleaned.as_bytes())
             .await
@@ -900,9 +998,29 @@ async fn remove_path_from_shell_config(config: &Config) -> Result<()> {
             .with_context(|| format!("writing shell config: {config_path:?}"))?;
 
         println!(
-            "Shell config ({}): PATH entry removed",
+            "Shell config ({}): shine entry removed",
             path_display::format_home(&config_path, &config.home_dir)
         );
+    }
+    Ok(())
+}
+
+async fn remove_managed_shell_profile(config: &Config) -> Result<()> {
+    let profile_path = managed_shell_profile_path(config);
+    if !profile_path.exists() {
+        return Ok(());
+    }
+
+    tokio::fs::remove_file(&profile_path)
+        .await
+        .with_context(|| format!("removing managed shell profile: {}", profile_path.display()))?;
+    println!(
+        "Shell profile ({}): removed",
+        path_display::format_home(&profile_path, &config.home_dir)
+    );
+
+    if let Some(parent) = profile_path.parent() {
+        let _ = tokio::fs::remove_dir(parent).await;
     }
     Ok(())
 }
@@ -1076,6 +1194,10 @@ mod tests {
             "bin link should use configured rename"
         );
         assert!(!config.bin_dir().join("set_proxy").exists());
+        assert!(
+            managed_shell_profile_path(&config).exists(),
+            "managed shell profile should exist after install"
+        );
 
         handle_uninstall(&config, None, false, false).await.unwrap();
         assert!(
@@ -1089,6 +1211,10 @@ mod tests {
         assert!(
             rd.next_entry().await.unwrap().is_none(),
             "bin dir should be empty after uninstall"
+        );
+        assert!(
+            !managed_shell_profile_path(&config).exists(),
+            "managed shell profile should be removed after full uninstall"
         );
 
         // Idempotency: second uninstall must not error
@@ -1144,23 +1270,23 @@ mod tests {
     // --- PATH / shell config tests ---
 
     #[test]
-    fn snippet_uses_home_relative_path() {
+    fn managed_profile_uses_home_relative_bin_path() {
         let home = PathBuf::from("/home/user");
         let bin = home.join(".shine/bin");
-        let snippet = path_export_snippet(&ShellType::Zsh, &bin, &home, &[]);
+        let snippet = managed_profile_snippet(&ShellType::Zsh, &bin, &home, &[]);
         assert!(
             snippet.contains("$HOME/.shine/bin"),
             "should use $HOME: {snippet}"
         );
-        assert!(snippet.contains(SENTINEL_START));
-        assert!(snippet.contains(SENTINEL_END));
+        assert!(!snippet.contains(SENTINEL_START));
+        assert!(!snippet.contains(SENTINEL_END));
     }
 
     #[test]
-    fn snippet_uses_absolute_path_when_outside_home() {
+    fn managed_profile_uses_absolute_bin_path_when_outside_home() {
         let home = PathBuf::from("/home/user");
         let bin = PathBuf::from("/opt/shine/bin");
-        let snippet = path_export_snippet(&ShellType::Zsh, &bin, &home, &[]);
+        let snippet = managed_profile_snippet(&ShellType::Zsh, &bin, &home, &[]);
         assert!(
             snippet.contains("/opt/shine/bin"),
             "should use absolute: {snippet}"
@@ -1172,7 +1298,7 @@ mod tests {
     fn snippet_fish_uses_fish_add_path() {
         let home = PathBuf::from("/home/user");
         let bin = home.join("bin");
-        let snippet = path_export_snippet(&ShellType::Fish, &bin, &home, &[]);
+        let snippet = managed_profile_snippet(&ShellType::Fish, &bin, &home, &[]);
         assert!(
             snippet.contains("fish_add_path"),
             "fish should use fish_add_path: {snippet}"
@@ -1184,7 +1310,7 @@ mod tests {
         let home = PathBuf::from("/home/user");
         let bin = home.join("bin");
         for shell in [ShellType::Bash, ShellType::Zsh] {
-            let snippet = path_export_snippet(&shell, &bin, &home, &[]);
+            let snippet = managed_profile_snippet(&shell, &bin, &home, &[]);
             assert!(
                 snippet.contains("if [["),
                 "{shell:?} should have if-guard: {snippet}"
@@ -1199,7 +1325,7 @@ mod tests {
         let bin = home.join(".shine/bin");
         let cmds = vec!["setproxy".to_string(), "usetproxy".to_string()];
         for shell in [ShellType::Bash, ShellType::Zsh] {
-            let snippet = path_export_snippet(&shell, &bin, &home, &cmds);
+            let snippet = managed_profile_snippet(&shell, &bin, &home, &cmds);
             assert!(
                 snippet.contains("setproxy() { source"),
                 "{shell:?} should have setproxy wrapper: {snippet}"
@@ -1209,12 +1335,13 @@ mod tests {
                 "{shell:?} should have usetproxy wrapper: {snippet}"
             );
         }
-        let fish_snippet = path_export_snippet(&ShellType::Fish, &bin, &home, &cmds);
+        let fish_snippet = managed_profile_snippet(&ShellType::Fish, &bin, &home, &cmds);
         assert!(
             fish_snippet.contains("function setproxy"),
             "fish should have setproxy function: {fish_snippet}"
         );
-        let powershell_snippet = path_export_snippet(&ShellType::PowerShell, &bin, &home, &cmds);
+        let powershell_snippet =
+            managed_profile_snippet(&ShellType::PowerShell, &bin, &home, &cmds);
         assert!(
             powershell_snippet.contains("$env:Path"),
             "PowerShell should update env Path: {powershell_snippet}"
@@ -1235,6 +1362,17 @@ mod tests {
             !powershell_snippet.contains("$shineBin = '$HOME"),
             "PowerShell should not keep $HOME as a literal path: {powershell_snippet}"
         );
+    }
+
+    #[test]
+    fn shell_config_snippet_sources_managed_profile_only() {
+        let home = PathBuf::from("/home/user");
+        let profile = home.join(".shine/shell/profile.sh");
+        let snippet = shell_config_snippet(&ShellType::Zsh, &profile, &home);
+        assert!(snippet.contains(SENTINEL_START));
+        assert!(snippet.contains("source \"$HOME/.shine/shell/profile.sh\""));
+        assert!(!snippet.contains("export PATH"));
+        assert!(!snippet.contains("function setproxy"));
     }
 
     #[test]
@@ -1357,17 +1495,64 @@ mod tests {
             1,
             "sentinel should appear exactly once"
         );
+        assert!(
+            !content.contains("setproxy()"),
+            "source wrappers should live in the managed profile: {content}"
+        );
+
+        let profile_path = managed_shell_profile_path(&config);
+        let profile = fs::read_to_string(&profile_path).await.unwrap();
         let setproxy_marker = wrapper_marker("setproxy", &config.shell_type);
         let usetproxy_marker = wrapper_marker("usetproxy", &config.shell_type);
         assert_eq!(
-            content.matches(&setproxy_marker).count(),
+            profile.matches(&setproxy_marker).count(),
             1,
             "setproxy wrapper should not be duplicated: {content}"
         );
         assert_eq!(
-            content.matches(&usetproxy_marker).count(),
+            profile.matches(&usetproxy_marker).count(),
             1,
             "usetproxy wrapper should not be duplicated: {content}"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn append_writes_source_entry_and_managed_profile() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let source_commands = vec!["setproxy".to_string()];
+
+        append_path_to_shell_config(&config, false, &source_commands)
+            .await
+            .unwrap();
+
+        let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
+        let content = fs::read_to_string(&config_path).await.unwrap();
+        assert!(
+            content.contains("source \"$HOME/shell/profile.sh\""),
+            "shell config should only source managed profile: {content}"
+        );
+        assert!(
+            !content.contains("export PATH"),
+            "shell config should not contain direct PATH setup: {content}"
+        );
+        assert!(
+            !content.contains("setproxy()"),
+            "shell config should not contain direct wrapper functions: {content}"
+        );
+
+        let profile = fs::read_to_string(managed_shell_profile_path(&config))
+            .await
+            .unwrap();
+        assert!(
+            profile.contains("export PATH"),
+            "managed profile should contain PATH setup: {profile}"
+        );
+        assert!(
+            profile.contains("setproxy() { source"),
+            "managed profile should contain source wrapper: {profile}"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -1385,25 +1570,31 @@ mod tests {
             .await
             .unwrap();
 
+        let profile = fs::read_to_string(managed_shell_profile_path(&config))
+            .await
+            .unwrap();
         for config_path in get_shell_config_paths(&config.shell_type, &config.home_dir).unwrap() {
             let content = fs::read_to_string(&config_path).await.unwrap();
             assert!(
-                content.contains("function setproxy"),
-                "setproxy wrapper should be added to {}: {content}",
-                config_path.display()
-            );
-            assert!(
-                content.contains("function usetproxy"),
-                "usetproxy wrapper should be added to {}: {content}",
+                content.contains(". (Join-Path $HOME 'shell/profile.ps1')"),
+                "PowerShell profile should source managed shine profile from {}: {content}",
                 config_path.display()
             );
         }
+        assert!(
+            profile.contains("function setproxy"),
+            "managed PowerShell profile should contain setproxy wrapper: {profile}"
+        );
+        assert!(
+            profile.contains("function usetproxy"),
+            "managed PowerShell profile should contain usetproxy wrapper: {profile}"
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
-    async fn append_refreshes_stale_sentinel_with_source_wrappers() {
+    async fn append_refreshes_stale_sentinel_with_managed_profile_source() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
@@ -1420,24 +1611,26 @@ mod tests {
         .unwrap();
 
         let source_commands = vec!["setproxy".to_string(), "usetproxy".to_string()];
-        let status = append_path_to_shell_config(&config, false, &source_commands)
+        let update = append_path_to_shell_config(&config, false, &source_commands)
             .await
             .unwrap();
 
         assert!(
-            matches!(status, PathUpdateStatus::Updated(_)),
+            matches!(update.config_status, PathUpdateStatus::Updated(_)),
             "stale sentinel should be refreshed"
         );
         let content = fs::read_to_string(&config_path).await.unwrap();
-        let setproxy_marker = wrapper_marker("setproxy", &config.shell_type);
-        let usetproxy_marker = wrapper_marker("usetproxy", &config.shell_type);
         assert!(
-            content.contains(&setproxy_marker),
-            "setproxy wrapper should be added: {content}"
+            content.contains("source \"$HOME/shell/profile.sh\""),
+            "shell config should source managed profile: {content}"
         );
         assert!(
-            content.contains(&usetproxy_marker),
-            "usetproxy wrapper should be added: {content}"
+            !content.contains("export PATH"),
+            "stale PATH setup should be removed from shell config: {content}"
+        );
+        assert!(
+            !content.contains("setproxy()"),
+            "source wrappers should not be added directly to shell config: {content}"
         );
         assert!(
             content.contains("before"),
@@ -1446,6 +1639,19 @@ mod tests {
         assert!(
             content.contains("after"),
             "non-managed content should be preserved"
+        );
+        let profile = fs::read_to_string(managed_shell_profile_path(&config))
+            .await
+            .unwrap();
+        let setproxy_marker = wrapper_marker("setproxy", &config.shell_type);
+        let usetproxy_marker = wrapper_marker("usetproxy", &config.shell_type);
+        assert!(
+            profile.contains(&setproxy_marker),
+            "setproxy wrapper should be added to managed profile: {profile}"
+        );
+        assert!(
+            profile.contains(&usetproxy_marker),
+            "usetproxy wrapper should be added to managed profile: {profile}"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -1488,11 +1694,18 @@ mod tests {
         handle_install(&config, None, false).await.unwrap();
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let before = fs::read_to_string(&config_path).await.unwrap();
+        let profile_path = managed_shell_profile_path(&config);
+        let profile_before = fs::read_to_string(&profile_path).await.unwrap();
 
         handle_uninstall(&config, None, false, true).await.unwrap();
 
         let after = fs::read_to_string(&config_path).await.unwrap();
         assert_eq!(before, after, "dry-run must not touch shell config");
+        let profile_after = fs::read_to_string(&profile_path).await.unwrap();
+        assert_eq!(
+            profile_before, profile_after,
+            "dry-run must not touch managed shell profile"
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
