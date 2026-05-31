@@ -198,7 +198,8 @@ async fn handle_init_for_os(
     print_selection_summary(&selection);
     println!();
 
-    let status = tokio::process::Command::new("bash")
+    let shell = sys_init_shell(os_id);
+    let status = tokio::process::Command::new(shell)
         .arg(&loaded.script_path)
         .args(&selection.item_ids)
         .status()
@@ -233,7 +234,11 @@ async fn print_dry_run(
     println!("  Script: {}", loaded.script_path.display());
     println!(
         "  Command: {}",
-        format_command_preview(&loaded.script_path, &selection.item_ids)
+        format_command_preview(
+            sys_init_shell(os_id),
+            &loaded.script_path,
+            &selection.item_ids
+        )
     );
     println!();
     let content = tokio::fs::read_to_string(&loaded.script_path)
@@ -244,8 +249,12 @@ async fn print_dry_run(
     Ok(())
 }
 
-fn format_command_preview(script_path: &Path, item_ids: &[String]) -> String {
-    let mut command = format!("bash {}", script_path.display());
+fn sys_init_shell(os_id: &str) -> &'static str {
+    if os_id == "macos" { "zsh" } else { "bash" }
+}
+
+fn format_command_preview(shell: &str, script_path: &Path, item_ids: &[String]) -> String {
+    let mut command = format!("{} {}", shell, script_path.display());
     for item in item_ids {
         command.push(' ');
         command.push_str(item);
@@ -399,7 +408,6 @@ fn select_items_interactively(manifest: &SysManifest) -> Result<ResolvedSelectio
         .items(&labels)
         .defaults(&defaults)
         .report(false)
-        .max_length(8)
         .interact()?;
 
     let item_ids = selection
@@ -726,12 +734,33 @@ description = "Placeholder"
     }
 
     #[test]
+    fn sys_init_shell_uses_zsh_for_macos() {
+        assert_eq!(sys_init_shell("macos"), "zsh");
+    }
+
+    #[test]
+    fn sys_init_shell_uses_bash_for_other_systems() {
+        assert_eq!(sys_init_shell("ubuntu"), "bash");
+        assert_eq!(sys_init_shell("fakeos"), "bash");
+    }
+
+    #[test]
     fn format_command_preview_includes_item_ids() {
         let script_path = Path::new("/tmp/init.sh");
         let items = vec!["neovim".to_string(), "atuin".to_string()];
         assert_eq!(
-            format_command_preview(script_path, &items),
+            format_command_preview("bash", script_path, &items),
             "bash /tmp/init.sh neovim atuin"
+        );
+    }
+
+    #[test]
+    fn format_command_preview_uses_selected_shell() {
+        let script_path = Path::new("/tmp/init.sh");
+        let items = vec!["homebrew".to_string()];
+        assert_eq!(
+            format_command_preview("zsh", script_path, &items),
+            "zsh /tmp/init.sh homebrew"
         );
     }
 
@@ -750,6 +779,18 @@ description = "Placeholder"
         let entries = list_embedded_sys_entries();
         for (id, desc) in &entries {
             assert!(!desc.is_empty(), "description for {id} should not be empty");
+        }
+    }
+
+    #[test]
+    fn embedded_sys_manifests_are_valid() {
+        for (id, _) in list_embedded_sys_entries() {
+            let toml_path = format!("sys/{id}/shine.toml");
+            let content = crate::presets::read_asset_bytes(&toml_path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .unwrap_or_else(|| panic!("missing embedded manifest: {toml_path}"));
+            parse_and_validate_manifest(&content)
+                .unwrap_or_else(|err| panic!("invalid embedded manifest {toml_path}: {err}"));
         }
     }
 
