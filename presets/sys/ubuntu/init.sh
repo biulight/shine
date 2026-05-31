@@ -6,6 +6,7 @@ ARCH=$(uname -m)
 SHELL_SENTINEL_START="# >>> shine ubuntu sys >>>"
 SHELL_SENTINEL_END="# <<< shine ubuntu sys <<<"
 PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}"
+ZSH_VI_MODE_PLUGIN="$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
 
 export PATH="$HOME/.local/bin:$PNPM_HOME:$PNPM_HOME/bin:$PATH"
 
@@ -143,6 +144,8 @@ if [[ "${shell_name}" == "zsh" ]]; then
     source "/home/linuxbrew/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
   elif [[ -f "\$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
     source "\$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
+  elif [[ -f "\$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
+    source "\$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
   fi
 fi
 EOF
@@ -336,11 +339,26 @@ install_zsh_vi_mode() {
         return
     fi
 
-    install_homebrew
-    echo "Installing zsh-vi-mode..."
-    brew install zsh-vi-mode
+    if command -v brew &>/dev/null; then
+        echo "Installing zsh-vi-mode with Homebrew..."
+        brew install zsh-vi-mode
+        append_shell_init_blocks
+        echo "zsh-vi-mode installed with Homebrew."
+        return
+    fi
+
+    if [[ -f "$ZSH_VI_MODE_PLUGIN" ]]; then
+        echo "zsh-vi-mode: already installed at $ZSH_VI_MODE_PLUGIN."
+        append_shell_init_blocks
+        return
+    fi
+
+    install_packages git
+    echo "Installing zsh-vi-mode to $ZSH_VI_MODE_PLUGIN..."
+    mkdir -p "$(dirname "$ZSH_VI_MODE_PLUGIN")"
+    git clone --depth 1 https://github.com/jeffreytse/zsh-vi-mode.git "$(dirname "$ZSH_VI_MODE_PLUGIN")"
     append_shell_init_blocks
-    echo "zsh-vi-mode installed."
+    echo "zsh-vi-mode installed at $ZSH_VI_MODE_PLUGIN."
 }
 
 # --- fzf ---
@@ -465,6 +483,11 @@ install_homebrew() {
         echo "Homebrew: already installed ($(brew --version | head -1))."
         append_shell_init_blocks
         return
+    fi
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        echo "Homebrew cannot be installed as root. Run this item as a non-root user or skip Homebrew-dependent items." >&2
+        return 1
     fi
 
     install_packages build-essential procps curl file git
