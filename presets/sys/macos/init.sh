@@ -151,7 +151,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "BUN_INSTALL" "$zshrc"; then
+    if ! grep -Fq "BUN_INSTALL" "$zshrc" && ! grep -Fq '.bun' "$zshrc"; then
         cat >> "$block_file" <<'EOF'
 # Bun
 export BUN_INSTALL="$HOME/.bun"
@@ -163,7 +163,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "PNPM_HOME" "$zshrc"; then
+    if ! grep -Fq "PNPM_HOME" "$zshrc" && ! grep -Fq "Library/pnpm" "$zshrc"; then
         cat >> "$block_file" <<'EOF'
 # pnpm
 export PNPM_HOME="$HOME/Library/pnpm"
