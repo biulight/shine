@@ -1,5 +1,5 @@
 #!/bin/bash
-# Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, pnpm, mise, Homebrew, and ZeroTier steps.
+# Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza, pnpm, mise, Homebrew, and ZeroTier steps.
 set -euo pipefail
 
 ARCH=$(uname -m)
@@ -95,6 +95,31 @@ if [[ -d "\$PNPM_HOME/bin" ]]; then
   esac
 fi
 
+# eza
+if command -v eza >/dev/null 2>&1; then
+  alias ls='eza --icons'
+  alias ll='eza -la --icons'
+  alias lt='eza --tree'
+fi
+
+# bat
+if command -v bat >/dev/null 2>&1; then
+  alias cat='bat'
+fi
+
+# fzf
+if command -v fzf >/dev/null 2>&1; then
+  if fzf --${shell_name} >/dev/null 2>&1; then
+    eval "\$(fzf --${shell_name})"
+  elif [[ "${shell_name}" == "bash" ]]; then
+    [[ -f /usr/share/doc/fzf/examples/key-bindings.bash ]] && source /usr/share/doc/fzf/examples/key-bindings.bash
+    [[ -f /usr/share/doc/fzf/examples/completion.bash ]] && source /usr/share/doc/fzf/examples/completion.bash
+  elif [[ "${shell_name}" == "zsh" ]]; then
+    [[ -f /usr/share/doc/fzf/examples/key-bindings.zsh ]] && source /usr/share/doc/fzf/examples/key-bindings.zsh
+    [[ -f /usr/share/doc/fzf/examples/completion.zsh ]] && source /usr/share/doc/fzf/examples/completion.zsh
+  fi
+fi
+
 # Starship prompt
 if command -v starship >/dev/null 2>&1; then
   eval "\$(starship init ${shell_name})"
@@ -110,6 +135,15 @@ if command -v mise >/dev/null 2>&1; then
   eval "\$(mise activate ${shell_name})"
 elif [[ -x "\$HOME/.local/bin/mise" ]]; then
   eval "\$(\$HOME/.local/bin/mise activate ${shell_name})"
+fi
+
+# zsh-vi-mode
+if [[ "${shell_name}" == "zsh" ]]; then
+  if [[ -f "/home/linuxbrew/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
+    source "/home/linuxbrew/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
+  elif [[ -f "\$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
+    source "\$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
+  fi
 fi
 EOF
 
@@ -146,6 +180,11 @@ install_packages() {
     echo "Installing packages: ${packages[*]}"
     sudo apt-get update
     sudo apt-get install -y "${packages[@]}"
+}
+
+apt_package_available() {
+    local package="$1"
+    apt-cache show "$package" &>/dev/null
 }
 
 # --- Neovim ---
@@ -287,6 +326,92 @@ install_zoxide() {
     echo "zoxide installed ($(zoxide --version | head -1))."
 }
 
+# --- zsh-vi-mode ---
+
+install_zsh_vi_mode() {
+    load_homebrew_env
+    if [[ -n "${HOMEBREW_PREFIX:-}" ]] && [[ -f "$HOMEBREW_PREFIX/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
+        echo "zsh-vi-mode: already installed with Homebrew."
+        append_shell_init_blocks
+        return
+    fi
+
+    install_homebrew
+    echo "Installing zsh-vi-mode..."
+    brew install zsh-vi-mode
+    append_shell_init_blocks
+    echo "zsh-vi-mode installed."
+}
+
+# --- fzf ---
+
+install_fzf() {
+    if command -v fzf &>/dev/null; then
+        echo "fzf: already installed ($(fzf --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    install_packages fzf
+    append_shell_init_blocks
+    echo "fzf installed ($(fzf --version | head -1))."
+}
+
+# --- bat ---
+
+ensure_bat_command() {
+    if command -v bat &>/dev/null; then
+        return
+    fi
+    if ! command -v batcat &>/dev/null; then
+        return
+    fi
+
+    echo "Creating bat -> batcat symlink..."
+    sudo ln -sf "$(command -v batcat)" /usr/local/bin/bat
+}
+
+install_bat() {
+    if command -v bat &>/dev/null; then
+        echo "bat: already installed ($(bat --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    install_packages bat
+    ensure_bat_command
+    append_shell_init_blocks
+
+    if command -v bat &>/dev/null; then
+        echo "bat installed ($(bat --version | head -1))."
+    else
+        echo "bat package installed, but no bat or batcat command was found." >&2
+        return 1
+    fi
+}
+
+# --- eza ---
+
+install_eza() {
+    load_homebrew_env
+    if command -v eza &>/dev/null; then
+        echo "eza: already installed ($(eza --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    if apt_package_available eza; then
+        install_packages eza
+    else
+        install_homebrew
+        echo "Installing eza with Homebrew..."
+        brew install eza
+    fi
+
+    append_shell_init_blocks
+    echo "eza installed ($(eza --version | head -1))."
+}
+
 # --- pnpm ---
 
 install_pnpm() {
@@ -391,6 +516,10 @@ run_item() {
         yazi) install_yazi ;;
         starship) install_starship ;;
         zoxide) install_zoxide ;;
+        zsh-vi-mode) install_zsh_vi_mode ;;
+        fzf) install_fzf ;;
+        bat) install_bat ;;
+        eza) install_eza ;;
         pnpm) install_pnpm ;;
         mise) install_mise ;;
         homebrew) install_homebrew ;;

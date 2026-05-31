@@ -811,6 +811,10 @@ description = "Placeholder"
 
         assert!(recommended.items.iter().any(|item| item == "starship"));
         assert!(recommended.items.iter().any(|item| item == "zoxide"));
+        assert!(recommended.items.iter().any(|item| item == "zsh-vi-mode"));
+        assert!(recommended.items.iter().any(|item| item == "fzf"));
+        assert!(recommended.items.iter().any(|item| item == "bat"));
+        assert!(recommended.items.iter().any(|item| item == "eza"));
         assert!(!recommended.items.iter().any(|item| item == "pnpm"));
         assert!(!recommended.items.iter().any(|item| item == "mise"));
         assert!(!recommended.items.iter().any(|item| item == "homebrew"));
