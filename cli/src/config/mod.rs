@@ -474,7 +474,7 @@ impl Config {
         let mut needs_save = !config_has_env;
 
         let legacy_path = self.shine_dir().join(LEGACY_ENV_FILE);
-        let legacy_env = read_legacy_env_file(&legacy_path).await?;
+        let legacy_env = read_env_file(&legacy_path).await?;
         let has_legacy = legacy_env.is_some();
 
         if let Some(vars) = legacy_env {
@@ -600,10 +600,6 @@ fn config_toml_has_env_table(contents: &str) -> bool {
     toml::from_str::<toml::Table>(contents)
         .map(|table| table.contains_key("env"))
         .unwrap_or(false)
-}
-
-async fn read_legacy_env_file(path: &Path) -> Result<Option<BTreeMap<String, String>>> {
-    read_env_file(path).await
 }
 
 async fn read_env_file(path: &Path) -> Result<Option<BTreeMap<String, String>>> {

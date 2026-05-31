@@ -632,98 +632,16 @@ pub(crate) async fn handle_upgrade_installed(
             continue;
         };
 
-        let content = match upgrade_file_content(config, cat, file, env_map).await {
-            Ok(content) => content,
-            Err(e) => {
-                eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
-                skipped += 1;
-                continue;
-            }
-        };
-
-        let new_hash = match desired_content_hash(file, &content) {
-            Ok(hash) => hash,
-            Err(e) => {
-                eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
-                skipped += 1;
-                continue;
-            }
-        };
-        match tokio::fs::read(&entry.destination).await {
-            Ok(current) => {
-                let current_hash = match installed_content_hash(file, &current) {
-                    Ok(Some(hash)) => hash,
-                    Ok(None) => {
-                        eprintln!(
-                            "  {} {}: managed keys missing, skipped",
-                            colors::symbol("!"),
-                            entry.source
-                        );
-                        user_modified += 1;
-                        skipped += 1;
-                        continue;
-                    }
-                    Err(e) => {
-                        eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
-                        skipped += 1;
-                        continue;
-                    }
-                };
-                if current_hash != entry.content_hash {
-                    eprintln!(
-                        "  {} {}: user-modified, skipped",
-                        colors::symbol("!"),
-                        entry.source
-                    );
-                    user_modified += 1;
-                    skipped += 1;
-                    continue;
-                }
-                if new_hash == entry.content_hash {
-                    skipped += 1;
-                    continue;
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
-                skipped += 1;
-                continue;
-            }
-        }
-
-        match install_prepared_content(file, &content, &entry.destination, true, false, true).await
-        {
-            Ok(InstallOutcome::Installed { hash })
-            | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
-                let display_name = file
-                    .display_name
-                    .as_deref()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-                println!(
-                    "  {}  {}  {}  {}",
-                    colors::symbol("✓"),
-                    display_name,
-                    colors::dim("→"),
-                    colors::dim(&path_display::format_home(
-                        &entry.destination,
-                        &config.home_dir
-                    )),
-                );
-                pending_upserts.push(AppEntry {
-                    content_hash: hash,
-                    install_strategy: file.install_strategy.clone(),
-                    uses_env: file.transforms.iter().any(|t| t == "template"),
-                    ..entry.clone()
-                });
+        match try_upgrade_entry(config, entry, cat, file, env_map).await {
+            EntryUpgradeResult::Updated(new_entry) => {
+                pending_upserts.push(new_entry);
                 updated += 1;
             }
-            Ok(InstallOutcome::AlreadyManaged) | Ok(InstallOutcome::DryRun) => {
+            EntryUpgradeResult::UserModified => {
+                user_modified += 1;
                 skipped += 1;
             }
-            Err(e) => {
-                eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            EntryUpgradeResult::Skipped | EntryUpgradeResult::Failed => {
                 skipped += 1;
             }
         }
@@ -749,6 +667,107 @@ pub(crate) async fn handle_upgrade_installed(
         skipped,
         user_modified,
     })
+}
+
+enum EntryUpgradeResult {
+    Updated(AppEntry),
+    UserModified,
+    Skipped,
+    Failed,
+}
+
+async fn try_upgrade_entry(
+    config: &Config,
+    entry: &AppEntry,
+    cat: &metadata::AppCategory,
+    file: &metadata::AppFile,
+    env_map: &BTreeMap<String, String>,
+) -> EntryUpgradeResult {
+    let content = match upgrade_file_content(config, cat, file, env_map).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            return EntryUpgradeResult::Failed;
+        }
+    };
+
+    let new_hash = match desired_content_hash(file, &content) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            return EntryUpgradeResult::Failed;
+        }
+    };
+
+    match tokio::fs::read(&entry.destination).await {
+        Ok(current) => {
+            let current_hash = match installed_content_hash(file, &current) {
+                Ok(Some(h)) => h,
+                Ok(None) => {
+                    eprintln!(
+                        "  {} {}: managed keys missing, skipped",
+                        colors::symbol("!"),
+                        entry.source
+                    );
+                    return EntryUpgradeResult::UserModified;
+                }
+                Err(e) => {
+                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+                    return EntryUpgradeResult::Failed;
+                }
+            };
+            if current_hash != entry.content_hash {
+                eprintln!(
+                    "  {} {}: user-modified, skipped",
+                    colors::symbol("!"),
+                    entry.source
+                );
+                return EntryUpgradeResult::UserModified;
+            }
+            if new_hash == entry.content_hash {
+                return EntryUpgradeResult::Skipped;
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            return EntryUpgradeResult::Failed;
+        }
+    }
+
+    match install_prepared_content(file, &content, &entry.destination, true, false, true).await {
+        Ok(InstallOutcome::Installed { hash })
+        | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
+            let display_name = file
+                .display_name
+                .as_deref()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
+            println!(
+                "  {}  {}  {}  {}",
+                colors::symbol("✓"),
+                display_name,
+                colors::dim("→"),
+                colors::dim(&path_display::format_home(
+                    &entry.destination,
+                    &config.home_dir
+                )),
+            );
+            EntryUpgradeResult::Updated(AppEntry {
+                content_hash: hash,
+                install_strategy: file.install_strategy.clone(),
+                uses_env: file.transforms.iter().any(|t| t == "template"),
+                ..entry.clone()
+            })
+        }
+        Ok(InstallOutcome::AlreadyManaged) | Ok(InstallOutcome::DryRun) => {
+            EntryUpgradeResult::Skipped
+        }
+        Err(e) => {
+            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            EntryUpgradeResult::Failed
+        }
+    }
 }
 
 enum StaleCleanupOutcome {

@@ -254,12 +254,11 @@ fn sys_init_shell(os_id: &str) -> &'static str {
 }
 
 fn format_command_preview(shell: &str, script_path: &Path, item_ids: &[String]) -> String {
-    let mut command = format!("{} {}", shell, script_path.display());
-    for item in item_ids {
-        command.push(' ');
-        command.push_str(item);
+    if item_ids.is_empty() {
+        format!("{shell} {}", script_path.display())
+    } else {
+        format!("{shell} {} {}", script_path.display(), item_ids.join(" "))
     }
-    command
 }
 
 async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset> {
@@ -348,7 +347,7 @@ fn resolve_selection(
 ) -> Result<ResolvedSelection> {
     if let Some(profile_name) = preset {
         return Ok(ResolvedSelection {
-            item_ids: profile_items(manifest, profile_name)?,
+            item_ids: profile_items(manifest, profile_name)?.to_vec(),
             source: SelectionSource::Profile(profile_name.to_string()),
         });
     }
@@ -369,17 +368,17 @@ fn resolve_selection(
     };
 
     Ok(ResolvedSelection {
-        item_ids: profile_items(manifest, default_profile)?,
+        item_ids: profile_items(manifest, default_profile)?.to_vec(),
         source: SelectionSource::DefaultProfile(default_profile.to_string()),
     })
 }
 
-fn profile_items(manifest: &SysManifest, profile_name: &str) -> Result<Vec<String>> {
+fn profile_items<'a>(manifest: &'a SysManifest, profile_name: &str) -> Result<&'a [String]> {
     let profile = manifest
         .profiles
         .get(profile_name)
         .with_context(|| format!("unknown sys init profile `{profile_name}`"))?;
-    Ok(profile.items.clone())
+    Ok(&profile.items)
 }
 
 fn default_flags(manifest: &SysManifest) -> Vec<bool> {

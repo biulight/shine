@@ -7,8 +7,8 @@ pub(crate) async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<St
         bail!("secret is empty");
     }
 
-    ensure_command("base64").await?;
-    ensure_command("gpg").await?;
+    ensure_command("base64")?;
+    ensure_command("gpg")?;
 
     let encrypted_file = TempFile::new("shine-gpg-secret").await?;
     decode_base64_to_file(encoded_secret, encrypted_file.path()).await?;
@@ -33,21 +33,30 @@ pub(crate) async fn encrypt_gpg_secret_to_base64(
         bail!("recipient is empty");
     }
 
-    ensure_command("base64").await?;
-    ensure_command("gpg").await?;
+    ensure_command("base64")?;
+    ensure_command("gpg")?;
 
     let encrypted = encrypt_gpg(plaintext, recipient).await?;
     encode_base64_single_line(&encrypted).await
 }
 
-async fn ensure_command(name: &str) -> Result<()> {
-    let status = Command::new("which")
-        .arg(name)
-        .status()
-        .await
-        .with_context(|| format!("checking for {name}"))?;
-    if !status.success() {
-        bail!("{name} is not installed");
+fn ensure_command(name: &str) -> Result<()> {
+    let found = std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                if dir.join(name).is_file() {
+                    return true;
+                }
+                #[cfg(windows)]
+                if dir.join(format!("{name}.exe")).is_file() {
+                    return true;
+                }
+                false
+            })
+        })
+        .unwrap_or(false);
+    if !found {
+        bail!("{name} is not installed or not on PATH");
     }
     Ok(())
 }
