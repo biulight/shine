@@ -198,7 +198,8 @@ async fn handle_init_for_os(
     print_selection_summary(&selection);
     println!();
 
-    let status = tokio::process::Command::new("bash")
+    let shell = sys_init_shell(os_id);
+    let status = tokio::process::Command::new(shell)
         .arg(&loaded.script_path)
         .args(&selection.item_ids)
         .status()
@@ -233,7 +234,11 @@ async fn print_dry_run(
     println!("  Script: {}", loaded.script_path.display());
     println!(
         "  Command: {}",
-        format_command_preview(&loaded.script_path, &selection.item_ids)
+        format_command_preview(
+            sys_init_shell(os_id),
+            &loaded.script_path,
+            &selection.item_ids
+        )
     );
     println!();
     let content = tokio::fs::read_to_string(&loaded.script_path)
@@ -244,13 +249,16 @@ async fn print_dry_run(
     Ok(())
 }
 
-fn format_command_preview(script_path: &Path, item_ids: &[String]) -> String {
-    let mut command = format!("bash {}", script_path.display());
-    for item in item_ids {
-        command.push(' ');
-        command.push_str(item);
+fn sys_init_shell(os_id: &str) -> &'static str {
+    if os_id == "macos" { "zsh" } else { "bash" }
+}
+
+fn format_command_preview(shell: &str, script_path: &Path, item_ids: &[String]) -> String {
+    if item_ids.is_empty() {
+        format!("{shell} {}", script_path.display())
+    } else {
+        format!("{shell} {} {}", script_path.display(), item_ids.join(" "))
     }
-    command
 }
 
 async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset> {
@@ -259,7 +267,7 @@ async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset
     }
     let prefix = format!("sys/{os_id}");
     if !config.is_external_presets {
-        crate::presets::extract_prefix(&prefix, config.presets_dir(), false).await?;
+        crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
     }
 
     let root = config.presets_dir().join("sys").join(os_id);
@@ -339,7 +347,7 @@ fn resolve_selection(
 ) -> Result<ResolvedSelection> {
     if let Some(profile_name) = preset {
         return Ok(ResolvedSelection {
-            item_ids: profile_items(manifest, profile_name)?,
+            item_ids: profile_items(manifest, profile_name)?.to_vec(),
             source: SelectionSource::Profile(profile_name.to_string()),
         });
     }
@@ -360,17 +368,17 @@ fn resolve_selection(
     };
 
     Ok(ResolvedSelection {
-        item_ids: profile_items(manifest, default_profile)?,
+        item_ids: profile_items(manifest, default_profile)?.to_vec(),
         source: SelectionSource::DefaultProfile(default_profile.to_string()),
     })
 }
 
-fn profile_items(manifest: &SysManifest, profile_name: &str) -> Result<Vec<String>> {
+fn profile_items<'a>(manifest: &'a SysManifest, profile_name: &str) -> Result<&'a [String]> {
     let profile = manifest
         .profiles
         .get(profile_name)
         .with_context(|| format!("unknown sys init profile `{profile_name}`"))?;
-    Ok(profile.items.clone())
+    Ok(&profile.items)
 }
 
 fn default_flags(manifest: &SysManifest) -> Vec<bool> {
@@ -399,7 +407,6 @@ fn select_items_interactively(manifest: &SysManifest) -> Result<ResolvedSelectio
         .items(&labels)
         .defaults(&defaults)
         .report(false)
-        .max_length(8)
         .interact()?;
 
     let item_ids = selection
@@ -726,12 +733,33 @@ description = "Placeholder"
     }
 
     #[test]
+    fn sys_init_shell_uses_zsh_for_macos() {
+        assert_eq!(sys_init_shell("macos"), "zsh");
+    }
+
+    #[test]
+    fn sys_init_shell_uses_bash_for_other_systems() {
+        assert_eq!(sys_init_shell("ubuntu"), "bash");
+        assert_eq!(sys_init_shell("fakeos"), "bash");
+    }
+
+    #[test]
     fn format_command_preview_includes_item_ids() {
         let script_path = Path::new("/tmp/init.sh");
         let items = vec!["neovim".to_string(), "atuin".to_string()];
         assert_eq!(
-            format_command_preview(script_path, &items),
+            format_command_preview("bash", script_path, &items),
             "bash /tmp/init.sh neovim atuin"
+        );
+    }
+
+    #[test]
+    fn format_command_preview_uses_selected_shell() {
+        let script_path = Path::new("/tmp/init.sh");
+        let items = vec!["homebrew".to_string()];
+        assert_eq!(
+            format_command_preview("zsh", script_path, &items),
+            "zsh /tmp/init.sh homebrew"
         );
     }
 
@@ -751,6 +779,51 @@ description = "Placeholder"
         for (id, desc) in &entries {
             assert!(!desc.is_empty(), "description for {id} should not be empty");
         }
+    }
+
+    #[test]
+    fn embedded_sys_manifests_are_valid() {
+        for (id, _) in list_embedded_sys_entries() {
+            let toml_path = format!("sys/{id}/shine.toml");
+            let content = crate::presets::read_asset_bytes(&toml_path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .unwrap_or_else(|| panic!("missing embedded manifest: {toml_path}"));
+            parse_and_validate_manifest(&content)
+                .unwrap_or_else(|err| panic!("invalid embedded manifest {toml_path}: {err}"));
+        }
+    }
+
+    #[test]
+    fn embedded_ubuntu_profiles_cover_recommended_and_all_items() {
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/shine.toml")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu manifest");
+        let manifest = parse_and_validate_manifest(&content).unwrap();
+        let recommended = manifest
+            .profiles
+            .get("recommended")
+            .expect("missing Ubuntu recommended profile");
+        let all = manifest
+            .profiles
+            .get("all")
+            .expect("missing Ubuntu all profile");
+
+        assert!(recommended.items.iter().any(|item| item == "starship"));
+        assert!(recommended.items.iter().any(|item| item == "zoxide"));
+        assert!(recommended.items.iter().any(|item| item == "zsh-vi-mode"));
+        assert!(recommended.items.iter().any(|item| item == "fzf"));
+        assert!(recommended.items.iter().any(|item| item == "bat"));
+        assert!(recommended.items.iter().any(|item| item == "eza"));
+        assert!(!recommended.items.iter().any(|item| item == "pnpm"));
+        assert!(!recommended.items.iter().any(|item| item == "mise"));
+        assert!(!recommended.items.iter().any(|item| item == "homebrew"));
+
+        let item_ids: BTreeSet<&str> = manifest.items.iter().map(|item| item.id.as_str()).collect();
+        let all_ids: BTreeSet<&str> = all.items.iter().map(String::as_str).collect();
+        assert_eq!(
+            all_ids, item_ids,
+            "Ubuntu all profile should include every item"
+        );
     }
 
     #[test]
@@ -799,6 +872,54 @@ description = "Placeholder"
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         handle_list(&config).await.unwrap();
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_sys_preset_refreshes_stale_embedded_runtime_files() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let os_dir = config.presets_dir().join("sys/ubuntu");
+        fs::create_dir_all(&os_dir).await.unwrap();
+        fs::write(
+            os_dir.join("shine.toml"),
+            r#"
+description = "Stale Ubuntu"
+default_profile = "recommended"
+
+[[items]]
+id = "neovim"
+label = "Neovim"
+
+[profiles.recommended]
+items = ["neovim"]
+"#,
+        )
+        .await
+        .unwrap();
+        fs::write(os_dir.join("init.sh"), b"#!/bin/bash\necho stale\n")
+            .await
+            .unwrap();
+
+        let loaded = load_sys_preset(&config, "ubuntu").await.unwrap();
+
+        assert!(
+            loaded
+                .manifest
+                .items
+                .iter()
+                .any(|item| item.id == "homebrew"),
+            "embedded Ubuntu manifest should refresh stale runtime files"
+        );
+        assert!(
+            loaded
+                .manifest
+                .profiles
+                .get("all")
+                .is_some_and(|profile| profile.items.iter().any(|item| item == "homebrew")),
+            "refreshed Ubuntu manifest should include all profile"
+        );
+
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

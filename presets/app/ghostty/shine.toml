@@ -1,6 +1,8 @@
 description = "Ghostty terminal configuration."
-dest = "~/.config/ghostty"
 list_mode = "category"
+
+[dest]
+unix = "~/.config/ghostty"
 
 [[files]]
 source = "config.ghostty"

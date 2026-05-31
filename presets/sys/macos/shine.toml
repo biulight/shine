@@ -1,1 +1,101 @@
-description = "System initialization for macOS (not yet implemented)."
+description = "Initialize macOS with selectable Homebrew, terminal tools, editor, network, and JavaScript runtime setup steps."
+default_profile = "recommended"
+
+[[items]]
+id = "homebrew"
+label = "Homebrew"
+description = "Install or verify the Homebrew package manager."
+
+[[items]]
+id = "yazi"
+label = "Yazi"
+description = "Install the Yazi terminal file manager."
+
+[[items]]
+id = "starship"
+label = "Starship"
+description = "Install the Starship shell prompt."
+
+[[items]]
+id = "neovim"
+label = "Neovim"
+description = "Install Neovim with Homebrew."
+
+[[items]]
+id = "astronvim"
+label = "AstroNvim"
+description = "Install the AstroNvim template into ~/.config/nvim when no config exists."
+
+[[items]]
+id = "zerotier"
+label = "ZeroTier"
+description = "Install the ZeroTier One macOS client."
+
+[[items]]
+id = "zsh-autosuggestions"
+label = "zsh-autosuggestions"
+description = "Install zsh command autosuggestions."
+
+[[items]]
+id = "zsh-syntax-highlighting"
+label = "zsh-syntax-highlighting"
+description = "Install zsh command syntax highlighting."
+
+[[items]]
+id = "zsh-vi-mode"
+label = "zsh-vi-mode"
+description = "Install vi-style zsh editing mode."
+
+[[items]]
+id = "zoxide"
+label = "zoxide"
+description = "Install smarter directory jumping."
+
+[[items]]
+id = "atuin"
+label = "Atuin"
+description = "Install the Atuin shell history sync client."
+
+[[items]]
+id = "fzf"
+label = "fzf"
+description = "Install the fzf command-line fuzzy finder."
+
+[[items]]
+id = "bat"
+label = "bat"
+description = "Install the bat command-line file viewer."
+
+[[items]]
+id = "eza"
+label = "eza"
+description = "Install the eza modern ls replacement."
+
+[[items]]
+id = "nvm"
+label = "nvm"
+description = "Install Node Version Manager with Homebrew."
+
+[[items]]
+id = "bun"
+label = "Bun"
+description = "Install the Bun JavaScript runtime."
+
+[[items]]
+id = "pnpm"
+label = "pnpm"
+description = "Install the pnpm package manager."
+
+[[items]]
+id = "fastfetch"
+label = "Fastfetch"
+description = "Install Fastfetch for manual system summaries."
+
+[profiles.required]
+items = ["homebrew", "yazi", "starship"]
+
+[profiles.recommended]
+items = ["homebrew", "yazi", "starship", "neovim", "astronvim", "zerotier", "zsh-autosuggestions", "zsh-syntax-highlighting", "zsh-vi-mode", "zoxide", "atuin", "fzf", "bat", "eza"]
+
+[profiles.all]
+items = ["homebrew", "yazi", "starship", "neovim", "astronvim", "zerotier", "zsh-autosuggestions", "zsh-syntax-highlighting", "zsh-vi-mode", "zoxide", "atuin", "fzf", "bat", "eza", "nvm", "bun", "pnpm", "fastfetch"]

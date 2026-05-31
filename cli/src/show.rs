@@ -1,5 +1,5 @@
 use crate::apps::{
-    AppCategory, AppFile, AppManifest, hash_content, load_embedded_categories,
+    AppCategory, AppFile, AppManifest, installed_content_hash, load_embedded_categories,
     load_installed_categories, resolve_install_destination, source_bytes_for_file,
     source_hash_for_file,
 };
@@ -7,6 +7,7 @@ use crate::check::FileStatus;
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::path_display;
 use crate::shells::metadata::load_installed_categories as load_installed_shells;
 use crate::shells::metadata::{ShellCategory, load_embedded_categories as load_embedded_shells};
 use anyhow::{Context, Result, bail};
@@ -135,14 +136,21 @@ async fn collect_app_files(config: &Config) -> Result<Vec<AppShowFile>> {
     let mut files = Vec::new();
     for category in categories {
         for file in &category.files {
+            let source_key = format!("app/{}/{}", category.name, file.source_rel.display());
             let destination = match resolve_install_destination(&category, file, config) {
                 Ok(dest) => dest,
                 Err(e) => {
-                    eprintln!(
-                        "warning: skipping {}/{}: {e:#}",
-                        category.name,
-                        file.source_rel.display()
-                    );
+                    if manifest
+                        .entries
+                        .iter()
+                        .any(|entry| entry.source == source_key)
+                    {
+                        eprintln!(
+                            "warning: skipping {}/{}: {e:#}",
+                            category.name,
+                            file.source_rel.display()
+                        );
+                    }
                     continue;
                 }
             };
@@ -321,14 +329,7 @@ fn resolve_target(target: &str, candidates: &[TargetCandidate]) -> Result<Vec<Sh
         return ambiguity(trimmed, alias);
     }
 
-    let available = candidates
-        .iter()
-        .map(|c| c.canonical.as_str())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>()
-        .join(", ");
-    bail!("installed item not found: {trimmed}. Available installed targets: {available}");
+    bail!("{}", missing_target_message(trimmed, candidates));
 }
 
 fn ambiguity(target: &str, matches: Vec<&TargetCandidate>) -> Result<Vec<ShowRef>> {
@@ -340,6 +341,126 @@ fn ambiguity(target: &str, matches: Vec<&TargetCandidate>) -> Result<Vec<ShowRef
         .collect::<Vec<_>>()
         .join(", ");
     bail!("ambiguous info target '{target}'. Use one of: {choices}");
+}
+
+fn missing_target_message(target: &str, candidates: &[TargetCandidate]) -> String {
+    let suggestions = suggested_targets(target, candidates);
+    let mut message = format!("installed item not found: {target}");
+
+    if suggestions.is_empty() {
+        let available = grouped_available_targets(candidates);
+
+        if !available.is_empty() {
+            message.push_str("\n\nAvailable installed targets:");
+            for (heading, targets) in available {
+                message.push_str(&format!("\n  {heading}"));
+                for target in targets {
+                    message.push_str(&format!("\n    {target}"));
+                }
+            }
+        }
+    } else {
+        message.push_str("\n\nDid you mean:");
+        for target in suggestions {
+            message.push_str(&format!("\n  {target}"));
+        }
+    }
+
+    message.push_str("\n\nRun `shine list` to see installed configs.");
+    message.push_str(
+        "\nUse full targets like `app/docker-desktop/settings-store.jsonc` for exact file info.",
+    );
+    message
+}
+
+fn suggested_targets(target: &str, candidates: &[TargetCandidate]) -> Vec<String> {
+    let needle = target.to_ascii_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+
+    let matches = candidates
+        .iter()
+        .filter(|candidate| is_suggested_target(&needle, candidate))
+        .collect::<Vec<_>>();
+    let matched_parents = matches
+        .iter()
+        .filter_map(|candidate| match &candidate.item {
+            ShowRef::AppCategory(category) => Some(("app", category.as_str())),
+            ShowRef::ShellCategory(category) => Some(("shell", category.as_str())),
+            ShowRef::AppFile { .. } | ShowRef::ShellFile { .. } => None,
+        })
+        .collect::<BTreeSet<_>>();
+
+    matches
+        .into_iter()
+        .filter(|candidate| !has_matched_parent(candidate, &matched_parents))
+        .map(display_target_name)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn grouped_available_targets(
+    candidates: &[TargetCandidate],
+) -> BTreeMap<&'static str, Vec<String>> {
+    let mut groups: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
+    for candidate in candidates {
+        match &candidate.item {
+            ShowRef::AppCategory(category) => {
+                groups
+                    .entry("App Configs")
+                    .or_default()
+                    .insert(category.clone());
+            }
+            ShowRef::ShellCategory(category) => {
+                groups
+                    .entry("Shell Presets")
+                    .or_default()
+                    .insert(category.clone());
+            }
+            ShowRef::AppFile { .. } | ShowRef::ShellFile { .. } => {}
+        }
+    }
+
+    groups
+        .into_iter()
+        .map(|(heading, targets)| (heading, targets.into_iter().collect()))
+        .collect()
+}
+
+fn has_matched_parent(
+    candidate: &TargetCandidate,
+    matched_parents: &BTreeSet<(&str, &str)>,
+) -> bool {
+    match &candidate.item {
+        ShowRef::AppFile { category, .. } => matched_parents.contains(&("app", category.as_str())),
+        ShowRef::ShellFile { category, .. } => {
+            matched_parents.contains(&("shell", category.as_str()))
+        }
+        ShowRef::AppCategory(_) | ShowRef::ShellCategory(_) => false,
+    }
+}
+
+fn display_target_name(candidate: &TargetCandidate) -> String {
+    match &candidate.item {
+        ShowRef::AppCategory(category) | ShowRef::ShellCategory(category) => category.clone(),
+        ShowRef::AppFile { category, source } => format!("{category}/{}", source.display()),
+        ShowRef::ShellFile { category, command } => format!("{category}/{command}"),
+    }
+}
+
+fn is_suggested_target(needle: &str, candidate: &TargetCandidate) -> bool {
+    std::iter::once(candidate.canonical.as_str())
+        .chain(candidate.aliases.iter().map(String::as_str))
+        .any(|value| {
+            let value = value.to_ascii_lowercase();
+            value.contains(needle)
+                || value
+                    .split(['/', '-', '_', '.'])
+                    .filter(|part| !part.is_empty())
+                    .any(|part| part == needle || part.starts_with(needle))
+        })
 }
 
 async fn print_app_file(
@@ -361,11 +482,15 @@ async fn print_app_file(
     } else if let Some(desc) = &item.category.description {
         println!("{}  {desc}", colors::dim("Description"));
     }
-    println!("{}       {}", colors::dim("Source"), source_path.display());
+    println!(
+        "{}       {}",
+        colors::dim("Source"),
+        path_display::format_home(&source_path, &config.home_dir)
+    );
     println!(
         "{}  {}",
         colors::dim("Destination"),
-        item.destination.display()
+        path_display::format_home(&item.destination, &config.home_dir)
     );
     println!(
         "{}       {}",
@@ -382,7 +507,11 @@ async fn print_app_file(
     if let Some(entry) = &item.manifest_entry {
         println!("{} {}", colors::dim("Manifest hash"), entry.content_hash);
         if let Some(backup) = &entry.backup {
-            println!("{}       {}", colors::dim("Backup"), backup.display());
+            println!(
+                "{}       {}",
+                colors::dim("Backup"),
+                path_display::format_home(backup, &config.home_dir)
+            );
         }
     }
     if diff {
@@ -409,15 +538,19 @@ async fn print_shell_file(
     println!(
         "{}       {}",
         colors::dim("Source"),
-        item.source_path.display()
+        path_display::format_home(&item.source_path, &config.home_dir)
     );
     println!(
         "{}     {}",
         colors::dim("Bin link"),
-        item.link_path.display()
+        path_display::format_home(&item.link_path, &config.home_dir)
     );
     if let Some(target) = &item.link_target {
-        println!("{} {}", colors::dim("Link target"), target.display());
+        println!(
+            "{} {}",
+            colors::dim("Link target"),
+            path_display::format_home(target, &config.home_dir)
+        );
     }
     println!(
         "{}       {}",
@@ -442,7 +575,7 @@ async fn print_shell_file(
         println!(
             "{}     {}",
             colors::dim("Rendered"),
-            item.rendered_path.display()
+            path_display::format_home(&item.rendered_path, &config.home_dir)
         );
     }
     if diff {
@@ -459,7 +592,10 @@ fn print_heading(heading: &str, path: &Path) {
     println!();
     println!(
         "{}",
-        colors::dim(&format!("--- {heading}: {} ---", path.display()))
+        colors::dim(&format!(
+            "--- {heading}: {} ---",
+            path_display::format(path)
+        ))
     );
 }
 
@@ -514,13 +650,18 @@ async fn app_file_status(
         return FileStatus::Missing;
     }
     match tokio::fs::read(&entry.destination).await {
-        Ok(bytes) if hash_content(&bytes) == entry.content_hash => {
-            match source_hash_for_file(config, category, file, env).await {
-                Some(source_hash) if source_hash != entry.content_hash => FileStatus::UpdateAvail,
-                _ => FileStatus::UpToDate,
+        Ok(bytes) => match installed_content_hash(file, &bytes) {
+            Ok(Some(installed_hash)) if installed_hash == entry.content_hash => {
+                match source_hash_for_file(config, category, file, env).await {
+                    Some(source_hash) if source_hash != entry.content_hash => {
+                        FileStatus::UpdateAvail
+                    }
+                    _ => FileStatus::UpToDate,
+                }
             }
-        }
-        Ok(_) => FileStatus::UserModified,
+            Ok(None) => FileStatus::Missing,
+            Ok(Some(_)) | Err(_) => FileStatus::UserModified,
+        },
         Err(_) => FileStatus::Missing,
     }
 }
@@ -730,6 +871,7 @@ mod tests {
                 display_name: None,
                 legacy_dest_annotation: None,
                 transforms: vec![],
+                install_strategy: crate::apps::AppInstallStrategy::Copy,
             },
             destination: PathBuf::from(dest),
             status: FileStatus::UpToDate,
@@ -820,6 +962,35 @@ mod tests {
     }
 
     #[test]
+    fn resolves_full_app_file_target() {
+        let files = vec![app_file(
+            "docker-desktop",
+            "settings-store.jsonc",
+            "/tmp/settings-store.json",
+        )];
+        let candidates = build_candidates(&files, &[]);
+        assert_eq!(
+            resolve_target("app/docker-desktop/settings-store.jsonc", &candidates).unwrap(),
+            vec![ShowRef::AppFile {
+                category: "docker-desktop".to_string(),
+                source: PathBuf::from("settings-store.jsonc")
+            }]
+        );
+    }
+
+    #[test]
+    fn resolves_full_shell_command_target() {
+        let candidates = build_candidates(&[], &[shell_file("proxy", "setproxy", "set_proxy.sh")]);
+        assert_eq!(
+            resolve_target("shell/proxy/setproxy", &candidates).unwrap(),
+            vec![ShowRef::ShellFile {
+                category: "proxy".to_string(),
+                command: "setproxy".to_string()
+            }]
+        );
+    }
+
+    #[test]
     fn reports_ambiguous_alias() {
         let app_files = vec![app_file("proxy", "config", "/tmp/proxy")];
         let shell_files = vec![shell_file("proxy", "setproxy", "set_proxy.sh")];
@@ -832,9 +1003,84 @@ mod tests {
 
     #[test]
     fn reports_missing_target() {
-        let candidates = build_candidates(&[], &[shell_file("proxy", "setproxy", "set_proxy.sh")]);
+        let app_files = vec![
+            app_file(
+                "docker-desktop",
+                "settings-store.jsonc",
+                "/tmp/settings-store.json",
+            ),
+            app_file("docker-engine", "daemon.jsonc", "/tmp/daemon.json"),
+        ];
+        let shell_files = vec![
+            shell_file("agent", "ccenv", "cc.sh"),
+            shell_file("proxy", "setproxy", "set_proxy.sh"),
+            shell_file("tools", "test-tools", "test_tools.sh"),
+        ];
+        let candidates = build_candidates(&app_files, &shell_files);
         let err = resolve_target("missing", &candidates).unwrap_err();
-        assert!(err.to_string().contains("installed item not found"));
-        assert!(err.to_string().contains("shell/proxy/setproxy"));
+        let message = err.to_string();
+        assert!(message.contains("installed item not found: missing"));
+        assert!(message.contains("Available installed targets:"));
+        assert!(message.contains("  App Configs"));
+        assert!(message.contains("    docker-desktop"));
+        assert!(message.contains("    docker-engine"));
+        assert!(message.contains("  Shell Presets"));
+        assert!(message.contains("    agent"));
+        assert!(message.contains("    proxy"));
+        assert!(message.contains("    tools"));
+        assert!(!message.contains("\n    app/docker-desktop"));
+        assert!(!message.contains("\n    shell/proxy"));
+        assert!(!message.contains("\n    docker-desktop/settings-store.jsonc"));
+        assert!(!message.contains("\n    proxy/setproxy"));
+        assert!(message.contains("Run `shine list` to see installed configs."));
+        assert!(message.contains(
+            "Use full targets like `app/docker-desktop/settings-store.jsonc` for exact file info."
+        ));
+    }
+
+    #[test]
+    fn reports_missing_target_with_suggestions() {
+        let app_files = vec![
+            app_file(
+                "docker-desktop",
+                "settings-store.jsonc",
+                "/tmp/settings-store.json",
+            ),
+            app_file("docker-engine", "daemon.jsonc", "/tmp/daemon.json"),
+        ];
+        let shell_files = vec![shell_file("proxy", "setproxy", "set_proxy.sh")];
+        let candidates = build_candidates(&app_files, &shell_files);
+
+        let err = resolve_target("docker", &candidates).unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("installed item not found: docker"));
+        assert!(message.contains("Did you mean:"));
+        assert!(message.contains("  docker-desktop"));
+        assert!(message.contains("  docker-engine"));
+        assert!(!message.contains("\n  app/docker-desktop"));
+        assert!(!message.contains("\n  app/docker-engine"));
+        assert!(!message.contains("\n  docker-desktop/settings-store.jsonc"));
+        assert!(!message.contains("\n  docker-engine/daemon.jsonc"));
+        assert!(!message.contains("\n  proxy"));
+        assert!(message.contains("Run `shine list` to see installed configs."));
+        assert!(message.contains(
+            "Use full targets like `app/docker-desktop/settings-store.jsonc` for exact file info."
+        ));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn renamed_docker_category_has_no_legacy_alias() {
+        let dir = std::env::temp_dir().join(format!("shine-show-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let config = Config::new_for_test(&dir);
+        tokio::fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let files = collect_app_files(&config).await.unwrap();
+        assert!(files.iter().all(|file| file.category.name != "docker"));
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 }

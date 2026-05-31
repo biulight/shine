@@ -5,6 +5,31 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.27.0] — 2026-06-01
+
+### Features
+
+- Added platform-scoped app preset metadata as a supported release feature, including platform-specific destination roots and file-level platform filtering.
+- Split the bundled Docker app presets into `docker-engine` for Docker Engine daemon config and `docker-desktop` for Docker Desktop proxy settings.
+- Added managed JSON key merging for app presets, with `docker-desktop` using it to update only the `proxy` and `containersProxy` keys in Docker Desktop `settings-store.json`.
+- Added an implemented macOS system init preset with selectable Homebrew, terminal tool, editor, network, and JavaScript runtime setup steps.
+- Expanded the Ubuntu system init preset with selectable Starship, zoxide, zsh-vi-mode, fzf, bat, eza, pnpm, mise, Homebrew, and ZeroTier setup steps.
+- Moved sourced shell wrappers into the managed profile flow so helper functions are installed consistently with other shell presets.
+- Refreshed the bundled Starship prompt preset with a more complete prompt layout and settings.
+
+### Bug Fixes
+
+- Avoided duplicate macOS zshrc setup during repeated system initialization.
+- Avoided implicitly installing Homebrew when applying the Ubuntu recommended system init profile.
+- Improved path display normalization and uninstall matching for app presets.
+
+### Docs
+
+- Documented the `docker-engine` / `docker-desktop` split, the Docker Engine vs Docker Desktop config-path distinction, and the new app-level `json-merge` install mode in the English and Chinese READMEs.
+- Updated system init documentation for the implemented macOS preset and expanded Ubuntu tool set.
+
+---
+
 ## [0.26.0] — 2026-05-30
 
 ### Features
@@ -18,7 +43,6 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 ### Bug Fixes
 
 - Changed `setproxy` to keep Git, npm, and pnpm proxy behavior scoped to the current terminal session where possible; Yarn remains explicitly reported as a persistent config exception.
-- Accepted Unix-style app destinations such as `/etc/docker` when inspecting embedded presets on Windows.
 - Updated PowerShell PATH installation to write both supported profile locations on Windows, keeping `powershell.exe` and `pwsh.exe` in sync.
 
 ### Docs

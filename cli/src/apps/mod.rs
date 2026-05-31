@@ -1,10 +1,11 @@
 mod annotation;
 mod file_ops;
+mod json_merge;
 mod manifest;
 mod metadata;
 mod transforms;
 
-pub(crate) use manifest::{AppEntry, AppManifest, hash_content};
+pub(crate) use manifest::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
 pub(crate) use metadata::{
     AppCategory, AppFile, AppListMode, load_embedded_categories, load_installed_categories,
 };
@@ -13,6 +14,7 @@ pub(crate) use transforms::apply as apply_transforms;
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::path_display;
 use crate::presets;
 use anyhow::{Context, Result};
 use dialoguer::Confirm;
@@ -91,7 +93,59 @@ pub(crate) async fn source_hash_for_file(
     env: &BTreeMap<String, String>,
 ) -> Option<u64> {
     let effective = source_bytes_for_file(config, cat, file, env).await?;
-    Some(hash_content(&effective))
+    desired_content_hash(file, &effective).ok()
+}
+
+pub(crate) fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u64> {
+    match &file.install_strategy {
+        AppInstallStrategy::Copy => Ok(hash_content(bytes)),
+        AppInstallStrategy::JsonMerge { managed_keys } => {
+            json_merge::managed_hash(bytes, managed_keys)
+        }
+    }
+}
+
+pub(crate) fn installed_content_hash(
+    file: &metadata::AppFile,
+    bytes: &[u8],
+) -> Result<Option<u64>> {
+    match &file.install_strategy {
+        AppInstallStrategy::Copy => Ok(Some(hash_content(bytes))),
+        AppInstallStrategy::JsonMerge { managed_keys } => {
+            json_merge::installed_hash(bytes, managed_keys)
+        }
+    }
+}
+
+async fn install_prepared_content(
+    file: &metadata::AppFile,
+    content: &[u8],
+    destination: &Path,
+    is_managed: bool,
+    dry_run: bool,
+    force: bool,
+) -> Result<InstallOutcome> {
+    match &file.install_strategy {
+        AppInstallStrategy::Copy => {
+            file_ops::install_bytes(content, destination, is_managed, dry_run, force).await
+        }
+        AppInstallStrategy::JsonMerge { managed_keys } => {
+            json_merge::install(content, destination, dry_run, managed_keys).await
+        }
+    }
+}
+
+async fn uninstall_app_entry(
+    entry: &AppEntry,
+    dry_run: bool,
+    force: bool,
+) -> Result<UninstallOutcome> {
+    match &entry.install_strategy {
+        AppInstallStrategy::Copy => file_ops::uninstall_entry(entry, dry_run, force).await,
+        AppInstallStrategy::JsonMerge { managed_keys } => {
+            json_merge::uninstall(entry, dry_run, force, managed_keys).await
+        }
+    }
 }
 
 pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
@@ -117,7 +171,11 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
     println!();
 
     if let Some(dest_root) = &cat.destination_root {
-        println!("  {}  {}", colors::dim("Destination"), dest_root);
+        println!(
+            "  {}  {}",
+            colors::dim("Destination"),
+            path_display::format_tilde_path(dest_root, &config.home_dir)
+        );
     }
     println!("  {}  {}", colors::dim("Files      "), cat.files.len());
     println!();
@@ -142,13 +200,20 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
                     Some(entry) => {
                         any_installed = true;
                         match tokio::fs::read(&dest).await {
-                            Ok(bytes) => {
-                                if hash_content(&bytes) == entry.content_hash {
+                            Ok(bytes) => match installed_content_hash(file, &bytes) {
+                                Ok(Some(hash)) if hash == entry.content_hash => {
                                     format!("  {}", colors::green("installed, up to date"))
-                                } else {
+                                }
+                                Ok(None) => {
+                                    format!(
+                                        "  {}",
+                                        colors::yellow("installed, missing managed keys")
+                                    )
+                                }
+                                Ok(Some(_)) | Err(_) => {
                                     format!("  {}", colors::yellow("installed, user-modified"))
                                 }
-                            }
+                            },
                             Err(_) => {
                                 format!("  {}", colors::yellow("installed, missing on disk"))
                             }
@@ -158,7 +223,7 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
                 format!(
                     "{}  {}{}",
                     colors::dim("→"),
-                    colors::dim(&dest.display().to_string()),
+                    colors::dim(&path_display::format_home(&dest, &config.home_dir)),
                     status
                 )
             }
@@ -277,10 +342,21 @@ pub(crate) async fn handle_install(
     // When the user has configured a custom presets directory, the app preset
     // files are already there — skip the embedded-asset extraction step.
     if !config.is_external_presets {
+        // Refresh the managed embedded preset cache on each install so metadata
+        // and transformed source updates from the current binary take effect.
         let _extract_report =
-            crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
+            crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
     }
-    let categories = metadata::load_installed_categories(config, category.as_deref()).await?;
+    let categories = if config.is_external_presets {
+        metadata::load_installed_categories(config, category.as_deref()).await?
+    } else {
+        metadata::load_embedded_categories(category.as_deref())?
+    };
+    if let Some(category) = category.as_deref()
+        && categories.is_empty()
+    {
+        anyhow::bail!("app preset category not found: {category}");
+    }
     let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
     println!(
         "{}  {}",
@@ -330,7 +406,8 @@ pub(crate) async fn handle_install(
                             continue;
                         }
                         Ok(transformed) => {
-                            file_ops::install_bytes(
+                            install_prepared_content(
+                                file,
                                 &transformed,
                                 &destination,
                                 is_managed,
@@ -342,7 +419,14 @@ pub(crate) async fn handle_install(
                     },
                 }
             } else {
-                file_ops::install_file(&source_path, &destination, is_managed, dry_run, force).await
+                let raw = match tokio::fs::read(&source_path).await {
+                    Ok(raw) => raw,
+                    Err(e) => {
+                        eprintln!("  {} {display_name}: {e:#}", colors::symbol("✗"));
+                        continue;
+                    }
+                };
+                install_prepared_content(file, &raw, &destination, is_managed, dry_run, force).await
             };
 
             let transform_label = if !file.transforms.is_empty() {
@@ -362,13 +446,14 @@ pub(crate) async fn handle_install(
                         file.source_rel.display(),
                         transform_label,
                         colors::dim("→"),
-                        colors::dim(&destination.display().to_string()),
+                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
                     );
                     manifest.upsert(AppEntry {
                         source: format!("app/{}/{}", cat.name, file.source_rel.display()),
                         destination,
                         backup: None,
                         content_hash: hash,
+                        install_strategy: file.install_strategy.clone(),
                         uses_env: file_uses_env,
                     });
                     installed += 1;
@@ -389,14 +474,18 @@ pub(crate) async fn handle_install(
                         file.source_rel.display(),
                         transform_label,
                         colors::dim("→"),
-                        colors::dim(&destination.display().to_string()),
-                        colors::dim(&format!("(backup: {})", backup.display())),
+                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
+                        colors::dim(&format!(
+                            "(backup: {})",
+                            path_display::format_home(&backup, &config.home_dir)
+                        )),
                     );
                     manifest.upsert(AppEntry {
                         source: format!("app/{}/{}", cat.name, file.source_rel.display()),
                         destination,
                         backup: Some(backup),
                         content_hash: hash,
+                        install_strategy: file.install_strategy.clone(),
                         uses_env: file_uses_env,
                     });
                     installed += 1;
@@ -409,7 +498,7 @@ pub(crate) async fn handle_install(
                         file.source_rel.display(),
                         transform_label,
                         colors::dim("→"),
-                        colors::dim(&destination.display().to_string()),
+                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
                     );
                     skipped += 1;
                 }
@@ -515,7 +604,7 @@ pub(crate) async fn handle_upgrade_installed(
         };
 
         let Some(cat) = categories_by_name.get(cat_name) else {
-            let outcome = cleanup_stale_entry(entry, prune_stale, interactive).await?;
+            let outcome = cleanup_stale_entry(config, entry, prune_stale, interactive).await?;
             apply_stale_outcome(
                 outcome,
                 entry.destination.clone(),
@@ -531,7 +620,7 @@ pub(crate) async fn handle_upgrade_installed(
             .iter()
             .find(|file| file.source_rel.to_string_lossy().as_ref() == file_rel)
         else {
-            let outcome = cleanup_stale_entry(entry, prune_stale, interactive).await?;
+            let outcome = cleanup_stale_entry(config, entry, prune_stale, interactive).await?;
             apply_stale_outcome(
                 outcome,
                 entry.destination.clone(),
@@ -543,69 +632,16 @@ pub(crate) async fn handle_upgrade_installed(
             continue;
         };
 
-        let content = match upgrade_file_content(config, cat, file, env_map).await {
-            Ok(content) => content,
-            Err(e) => {
-                eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
-                skipped += 1;
-                continue;
-            }
-        };
-
-        let new_hash = hash_content(&content);
-        match tokio::fs::read(&entry.destination).await {
-            Ok(current) => {
-                let current_hash = hash_content(&current);
-                if current_hash != entry.content_hash {
-                    eprintln!(
-                        "  {} {}: user-modified, skipped",
-                        colors::symbol("!"),
-                        entry.source
-                    );
-                    user_modified += 1;
-                    skipped += 1;
-                    continue;
-                }
-                if new_hash == entry.content_hash {
-                    skipped += 1;
-                    continue;
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => {
-                eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
-                skipped += 1;
-                continue;
-            }
-        }
-
-        match file_ops::install_bytes(&content, &entry.destination, true, false, true).await {
-            Ok(InstallOutcome::Installed { hash })
-            | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
-                let display_name = file
-                    .display_name
-                    .as_deref()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-                println!(
-                    "  {}  {}  {}  {}",
-                    colors::symbol("✓"),
-                    display_name,
-                    colors::dim("→"),
-                    colors::dim(&entry.destination.display().to_string()),
-                );
-                pending_upserts.push(AppEntry {
-                    content_hash: hash,
-                    uses_env: file.transforms.iter().any(|t| t == "template"),
-                    ..entry.clone()
-                });
+        match try_upgrade_entry(config, entry, cat, file, env_map).await {
+            EntryUpgradeResult::Updated(new_entry) => {
+                pending_upserts.push(new_entry);
                 updated += 1;
             }
-            Ok(InstallOutcome::AlreadyManaged) | Ok(InstallOutcome::DryRun) => {
+            EntryUpgradeResult::UserModified => {
+                user_modified += 1;
                 skipped += 1;
             }
-            Err(e) => {
-                eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            EntryUpgradeResult::Skipped | EntryUpgradeResult::Failed => {
                 skipped += 1;
             }
         }
@@ -631,6 +667,107 @@ pub(crate) async fn handle_upgrade_installed(
         skipped,
         user_modified,
     })
+}
+
+enum EntryUpgradeResult {
+    Updated(AppEntry),
+    UserModified,
+    Skipped,
+    Failed,
+}
+
+async fn try_upgrade_entry(
+    config: &Config,
+    entry: &AppEntry,
+    cat: &metadata::AppCategory,
+    file: &metadata::AppFile,
+    env_map: &BTreeMap<String, String>,
+) -> EntryUpgradeResult {
+    let content = match upgrade_file_content(config, cat, file, env_map).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            return EntryUpgradeResult::Failed;
+        }
+    };
+
+    let new_hash = match desired_content_hash(file, &content) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            return EntryUpgradeResult::Failed;
+        }
+    };
+
+    match tokio::fs::read(&entry.destination).await {
+        Ok(current) => {
+            let current_hash = match installed_content_hash(file, &current) {
+                Ok(Some(h)) => h,
+                Ok(None) => {
+                    eprintln!(
+                        "  {} {}: managed keys missing, skipped",
+                        colors::symbol("!"),
+                        entry.source
+                    );
+                    return EntryUpgradeResult::UserModified;
+                }
+                Err(e) => {
+                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+                    return EntryUpgradeResult::Failed;
+                }
+            };
+            if current_hash != entry.content_hash {
+                eprintln!(
+                    "  {} {}: user-modified, skipped",
+                    colors::symbol("!"),
+                    entry.source
+                );
+                return EntryUpgradeResult::UserModified;
+            }
+            if new_hash == entry.content_hash {
+                return EntryUpgradeResult::Skipped;
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            return EntryUpgradeResult::Failed;
+        }
+    }
+
+    match install_prepared_content(file, &content, &entry.destination, true, false, true).await {
+        Ok(InstallOutcome::Installed { hash })
+        | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
+            let display_name = file
+                .display_name
+                .as_deref()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
+            println!(
+                "  {}  {}  {}  {}",
+                colors::symbol("✓"),
+                display_name,
+                colors::dim("→"),
+                colors::dim(&path_display::format_home(
+                    &entry.destination,
+                    &config.home_dir
+                )),
+            );
+            EntryUpgradeResult::Updated(AppEntry {
+                content_hash: hash,
+                install_strategy: file.install_strategy.clone(),
+                uses_env: file.transforms.iter().any(|t| t == "template"),
+                ..entry.clone()
+            })
+        }
+        Ok(InstallOutcome::AlreadyManaged) | Ok(InstallOutcome::DryRun) => {
+            EntryUpgradeResult::Skipped
+        }
+        Err(e) => {
+            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            EntryUpgradeResult::Failed
+        }
+    }
 }
 
 enum StaleCleanupOutcome {
@@ -694,7 +831,7 @@ async fn install_new_category_files(
 
             let source = format!("app/{}/{}", cat.name, file.source_rel.display());
 
-            if destination.exists() {
+            if destination.exists() && file.install_strategy.is_copy() {
                 eprintln!(
                     "  {} {}: destination exists and is not managed, skipped",
                     colors::symbol("!"),
@@ -713,8 +850,19 @@ async fn install_new_category_files(
                 }
             };
 
-            match install_new_upgrade_file(&content, &destination).await {
-                Ok(Some(hash)) => {
+            let outcome = if file.install_strategy.is_copy() {
+                match install_new_upgrade_file(&content, &destination).await {
+                    Ok(Some(hash)) => Ok(InstallOutcome::Installed { hash }),
+                    Ok(None) => Ok(InstallOutcome::AlreadyManaged),
+                    Err(e) => Err(e),
+                }
+            } else {
+                install_prepared_content(file, &content, &destination, false, false, true).await
+            };
+
+            match outcome {
+                Ok(InstallOutcome::Installed { hash })
+                | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
                     let display_name = file
                         .display_name
                         .as_deref()
@@ -725,23 +873,27 @@ async fn install_new_category_files(
                         colors::symbol("✓"),
                         display_name,
                         colors::dim("→"),
-                        colors::dim(&destination.display().to_string()),
+                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
                     );
                     new_upserts.push(AppEntry {
                         source,
                         destination,
                         backup: None,
                         content_hash: hash,
+                        install_strategy: file.install_strategy.clone(),
                         uses_env: file.transforms.iter().any(|t| t == "template"),
                     });
                     updated += 1;
                 }
-                Ok(None) => {
+                Ok(InstallOutcome::AlreadyManaged) => {
                     eprintln!(
                         "  {} {}: destination exists and is not managed, skipped",
                         colors::symbol("!"),
                         source
                     );
+                    skipped += 1;
+                }
+                Ok(InstallOutcome::DryRun) => {
                     skipped += 1;
                 }
                 Err(e) => {
@@ -756,6 +908,7 @@ async fn install_new_category_files(
 }
 
 async fn cleanup_stale_entry(
+    config: &Config,
     entry: &AppEntry,
     prune_stale: bool,
     interactive: bool,
@@ -766,7 +919,7 @@ async fn cleanup_stale_entry(
         let prompt = format!(
             "Preset source '{}' no longer exists. Remove managed file {}?",
             entry.source,
-            entry.destination.display()
+            path_display::format_home(&entry.destination, &config.home_dir)
         );
         Confirm::new()
             .with_prompt(prompt)
@@ -790,12 +943,15 @@ async fn cleanup_stale_entry(
         return Ok(StaleCleanupOutcome::Skipped);
     }
 
-    match file_ops::uninstall_entry(entry, false).await? {
+    match uninstall_app_entry(entry, false, false).await? {
         UninstallOutcome::Removed => {
             println!(
                 "  {}  {}  {}",
                 colors::symbol("✓"),
-                colors::dim(&entry.destination.display().to_string()),
+                colors::dim(&path_display::format_home(
+                    &entry.destination,
+                    &config.home_dir
+                )),
                 colors::dim("(removed stale managed file)"),
             );
             Ok(StaleCleanupOutcome::Removed)
@@ -804,19 +960,28 @@ async fn cleanup_stale_entry(
             println!(
                 "  {}  {}  {}",
                 colors::symbol("✓"),
-                colors::dim(&entry.destination.display().to_string()),
+                colors::dim(&path_display::format_home(
+                    &entry.destination,
+                    &config.home_dir
+                )),
                 colors::dim(&format!(
                     "(removed stale file, restored {})",
-                    backup.display()
+                    path_display::format_home(&backup, &config.home_dir)
                 )),
             );
+            Ok(StaleCleanupOutcome::Removed)
+        }
+        UninstallOutcome::ForceRemoved | UninstallOutcome::ForceRestoredBackup { .. } => {
             Ok(StaleCleanupOutcome::Removed)
         }
         UninstallOutcome::NotFound => {
             println!(
                 "  {}  {}  {}",
                 colors::dim("-"),
-                colors::dim(&entry.destination.display().to_string()),
+                colors::dim(&path_display::format_home(
+                    &entry.destination,
+                    &config.home_dir
+                )),
                 colors::dim("stale destination missing, manifest cleaned"),
             );
             Ok(StaleCleanupOutcome::NotFound)
@@ -901,6 +1066,7 @@ fn app_source_parts(source: &str) -> Option<(&str, &str)> {
 pub(crate) async fn handle_uninstall(
     config: &Config,
     category: Option<&str>,
+    force: bool,
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
@@ -911,13 +1077,7 @@ pub(crate) async fn handle_uninstall(
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
 
     let entries: Vec<_> = if let Some(cat) = category {
-        let prefix = format!("app/{cat}/");
-        let filtered: Vec<_> = manifest
-            .entries
-            .iter()
-            .filter(|e| e.source.starts_with(&prefix))
-            .cloned()
-            .collect();
+        let filtered = uninstall_entries_for_category(config, &manifest, cat).await?;
         if filtered.is_empty() {
             println!(
                 "{}",
@@ -936,12 +1096,15 @@ pub(crate) async fn handle_uninstall(
     let mut skipped = 0usize;
 
     for entry in &entries {
-        match file_ops::uninstall_entry(entry, dry_run).await {
+        match uninstall_app_entry(entry, dry_run, force).await {
             Ok(UninstallOutcome::Removed) => {
                 println!(
                     "  {}  {}",
                     colors::symbol("✓"),
-                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim(&path_display::format_home(
+                        &entry.destination,
+                        &config.home_dir
+                    )),
                 );
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
@@ -950,8 +1113,35 @@ pub(crate) async fn handle_uninstall(
                 println!(
                     "  {}  {}  {}",
                     colors::symbol("✓"),
+                    colors::dim(&path_display::format_home(
+                        &entry.destination,
+                        &config.home_dir
+                    )),
+                    colors::dim(&format!(
+                        "(restored {})",
+                        path_display::format_home(&backup, &config.home_dir)
+                    )),
+                );
+                manifest.remove_by_dest(&entry.destination);
+                removed += 1;
+                restored += 1;
+            }
+            Ok(UninstallOutcome::ForceRemoved) => {
+                println!(
+                    "  {}  {}  {}",
+                    colors::symbol("✓"),
                     colors::dim(&entry.destination.display().to_string()),
-                    colors::dim(&format!("(restored {})", backup.display())),
+                    colors::dim("force removed"),
+                );
+                manifest.remove_by_dest(&entry.destination);
+                removed += 1;
+            }
+            Ok(UninstallOutcome::ForceRestoredBackup { backup }) => {
+                println!(
+                    "  {}  {}  {}",
+                    colors::symbol("✓"),
+                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim(&format!("force removed, restored {}", backup.display())),
                 );
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
@@ -961,7 +1151,10 @@ pub(crate) async fn handle_uninstall(
                 println!(
                     "  {}  {}  {}",
                     colors::dim("-"),
-                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim(&path_display::format_home(
+                        &entry.destination,
+                        &config.home_dir
+                    )),
                     colors::dim("not found, skipped"),
                 );
                 manifest.remove_by_dest(&entry.destination);
@@ -971,7 +1164,7 @@ pub(crate) async fn handle_uninstall(
                 println!(
                     "  {}  {}  {}",
                     colors::symbol("!"),
-                    entry.destination.display(),
+                    path_display::format_home(&entry.destination, &config.home_dir),
                     colors::yellow("modified after install, left in place"),
                 );
                 user_modified += 1;
@@ -980,7 +1173,10 @@ pub(crate) async fn handle_uninstall(
                 println!(
                     "  {}  {}",
                     colors::dim("[dry-run]"),
-                    colors::dim(&entry.destination.display().to_string()),
+                    colors::dim(&path_display::format_home(
+                        &entry.destination,
+                        &config.home_dir
+                    )),
                 );
                 skipped += 1;
             }
@@ -988,7 +1184,7 @@ pub(crate) async fn handle_uninstall(
                 eprintln!(
                     "  {} {}: {e}",
                     colors::symbol("✗"),
-                    entry.destination.display()
+                    path_display::format_home(&entry.destination, &config.home_dir)
                 );
             }
         }
@@ -1070,6 +1266,55 @@ pub(crate) async fn handle_uninstall(
     Ok(())
 }
 
+async fn uninstall_entries_for_category(
+    config: &Config,
+    manifest: &AppManifest,
+    category: &str,
+) -> Result<Vec<AppEntry>> {
+    let prefix = format!("app/{category}/");
+    let mut entries_by_dest: BTreeMap<PathBuf, AppEntry> = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.source.starts_with(&prefix))
+        .map(|entry| (entry.destination.clone(), entry.clone()))
+        .collect();
+
+    let categories = if config.is_external_presets {
+        metadata::load_installed_categories(config, Some(category)).await?
+    } else {
+        metadata::load_embedded_categories(Some(category))?
+    };
+
+    for cat in categories.iter().filter(|cat| cat.name == category) {
+        append_manifest_entries_for_category_destinations(
+            config,
+            manifest,
+            cat,
+            &mut entries_by_dest,
+        );
+    }
+
+    Ok(entries_by_dest.into_values().collect())
+}
+
+fn append_manifest_entries_for_category_destinations(
+    config: &Config,
+    manifest: &AppManifest,
+    category: &metadata::AppCategory,
+    entries_by_dest: &mut BTreeMap<PathBuf, AppEntry>,
+) {
+    for file in &category.files {
+        let Ok(destination) = resolve_install_destination(category, file, config) else {
+            continue;
+        };
+        if let Some(entry) = manifest.find_by_dest(&destination) {
+            entries_by_dest
+                .entry(entry.destination.clone())
+                .or_insert_with(|| entry.clone());
+        }
+    }
+}
+
 pub(crate) fn resolve_install_destination(
     category: &metadata::AppCategory,
     file: &metadata::AppFile,
@@ -1114,10 +1359,13 @@ mod tests {
     #![allow(clippy::await_holding_lock)]
     use super::*;
     use crate::config::Config;
+    #[cfg(unix)]
     use crate::presets;
+    #[cfg(unix)]
     use std::sync::{Mutex, OnceLock};
     use tokio::fs;
 
+    #[cfg(unix)]
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
@@ -1131,10 +1379,12 @@ mod tests {
         dir
     }
 
+    #[cfg(unix)]
     async fn write_external_sample_app(dir: &std::path::Path, body: &[u8]) {
         write_external_sample_app_with_extra(dir, body, None).await;
     }
 
+    #[cfg(unix)]
     async fn write_external_sample_app_with_extra(
         dir: &std::path::Path,
         body: &[u8],
@@ -1249,7 +1499,9 @@ mod tests {
             );
         }
 
-        handle_uninstall(&config, None, false, false).await.unwrap();
+        handle_uninstall(&config, None, false, false, false)
+            .await
+            .unwrap();
 
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert!(
@@ -1277,7 +1529,9 @@ mod tests {
         let manifest_before = AppManifest::load(config.shine_dir()).await.unwrap();
         let count_before = manifest_before.entries.len();
 
-        handle_uninstall(&config, None, false, true).await.unwrap();
+        handle_uninstall(&config, None, false, false, true)
+            .await
+            .unwrap();
 
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_eq!(
@@ -1291,6 +1545,92 @@ mod tests {
                 "dry-run must not remove installed files"
             );
         }
+
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn uninstall_category_selection_matches_current_destination() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let destination_root = dir.join(".docker");
+        let destination = destination_root.join("daemon.json");
+        let category = AppCategory {
+            name: "docker-engine".to_string(),
+            description: None,
+            destination_root: Some(destination_root.display().to_string()),
+            files: vec![AppFile {
+                source_rel: PathBuf::from("daemon.jsonc"),
+                target_rel: PathBuf::from("daemon.json"),
+                description: None,
+                display_name: None,
+                legacy_dest_annotation: None,
+                transforms: vec![],
+                install_strategy: AppInstallStrategy::Copy,
+            }],
+            list_mode: AppListMode::Files,
+            uses_metadata: true,
+            has_explicit_files: true,
+        };
+        let manifest = AppManifest {
+            entries: vec![AppEntry {
+                source: "app/docker/daemon.jsonc".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: 42,
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+            }],
+        };
+        let mut entries_by_dest = BTreeMap::new();
+
+        append_manifest_entries_for_category_destinations(
+            &config,
+            &manifest,
+            &category,
+            &mut entries_by_dest,
+        );
+
+        assert!(
+            entries_by_dest.contains_key(&destination),
+            "category uninstall should find legacy manifest entries by current destination"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn uninstall_force_removes_user_modified_file_and_manifest_entry() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"debug\": true\n}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample".to_string()), false, false)
+            .await
+            .unwrap();
+        let dest = dir.join(".config/sample/daemon.json");
+        fs::write(&dest, b"{\"debug\": false}\n").await.unwrap();
+
+        handle_uninstall(&config, Some("sample"), true, false, false)
+            .await
+            .unwrap();
+
+        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert!(
+            manifest_after.entries.is_empty(),
+            "force uninstall should remove manifest entry"
+        );
+        assert!(
+            !dest.exists(),
+            "force uninstall should remove modified file"
+        );
 
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
@@ -1715,18 +2055,21 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn install_rejects_unix_only_metadata_destination_on_windows() {
+    fn install_resolves_windows_docker_engine_destination_on_windows() {
         let dir = std::env::temp_dir().join("shine-apps-win-dest");
         let config = Config::new_for_test(&dir);
-        let categories = metadata::load_embedded_categories(Some("docker")).unwrap();
-        let docker = categories.iter().find(|c| c.name == "docker").unwrap();
+        let categories = metadata::load_embedded_categories(Some("docker-engine")).unwrap();
+        let docker = categories
+            .iter()
+            .find(|c| c.name == "docker-engine")
+            .unwrap();
         let file = docker.files.first().unwrap();
 
-        let err = resolve_install_destination(docker, file, &config).unwrap_err();
+        let destination = resolve_install_destination(docker, file, &config).unwrap();
 
-        assert!(
-            err.to_string().contains("absolute"),
-            "unexpected error: {err:#}"
+        assert_eq!(
+            destination,
+            PathBuf::from(crate::config::full_expand("~/.docker").unwrap()).join("daemon.json")
         );
     }
 
@@ -1735,8 +2078,11 @@ mod tests {
     fn install_accepts_unix_metadata_destination_on_unix() {
         let dir = std::env::temp_dir().join("shine-apps-unix-dest");
         let config = Config::new_for_test(&dir);
-        let categories = metadata::load_embedded_categories(Some("docker")).unwrap();
-        let docker = categories.iter().find(|c| c.name == "docker").unwrap();
+        let categories = metadata::load_embedded_categories(Some("docker-engine")).unwrap();
+        let docker = categories
+            .iter()
+            .find(|c| c.name == "docker-engine")
+            .unwrap();
         let file = docker.files.first().unwrap();
 
         let destination = resolve_install_destination(docker, file, &config).unwrap();
@@ -1745,6 +2091,137 @@ mod tests {
             destination,
             PathBuf::from("/etc/docker").join("daemon.json")
         );
+    }
+
+    #[test]
+    fn install_missing_category_errors() {
+        let dir = std::env::temp_dir().join("shine-apps-missing-category");
+        let config = Config::new_for_test(&dir);
+
+        let err = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(handle_install(
+                &config,
+                Some("docker".to_string()),
+                true,
+                false,
+            ))
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("app preset category not found: docker")
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn docker_desktop_install_and_uninstall_only_manage_proxy_keys() {
+        let dir = make_temp_dir().await;
+        let dest_root = dir
+            .join("desktop-settings")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let category_dir = dir.join("presets/app/docker-desktop-test");
+        fs::create_dir_all(&category_dir).await.unwrap();
+        fs::write(
+            category_dir.join("shine.toml"),
+            format!(
+                "description = \"Docker Desktop proxy settings\"\n\
+dest = \"{dest_root}\"\n\n\
+[[files]]\n\
+source = \"settings-store.jsonc\"\n\
+target = \"settings-store.json\"\n\
+transforms = [\"template\", \"jsonc-to-json\"]\n\
+install_mode = \"json-merge\"\n\
+managed_keys = [\"proxy\", \"containersProxy\"]\n"
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(
+            category_dir.join("settings-store.jsonc"),
+            br#"{
+  "proxy": {
+    "mode": "manual",
+    "http": "http://@@PROXY_HOST@@:@@HTTP_PROXY_PORT@@",
+    "https": "http://@@PROXY_HOST@@:@@HTTP_PROXY_PORT@@"
+  },
+  "containersProxy": {
+    "mode": "manual",
+    "http": "http://@@PROXY_HOST@@:@@HTTP_PROXY_PORT@@",
+    "https": "http://@@PROXY_HOST@@:@@HTTP_PROXY_PORT@@"
+  }
+}"#,
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let destination = dir.join("desktop-settings").join("settings-store.json");
+        fs::create_dir_all(destination.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(
+            &destination,
+            br#"{
+  "theme": "dark",
+  "analyticsEnabled": true
+}"#,
+        )
+        .await
+        .unwrap();
+
+        handle_install(
+            &config,
+            Some("docker-desktop-test".to_string()),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let mut installed: serde_json::Value =
+            serde_json::from_slice(&fs::read(&destination).await.unwrap()).unwrap();
+        assert_eq!(installed["theme"], serde_json::json!("dark"));
+        assert_eq!(installed["analyticsEnabled"], serde_json::json!(true));
+        assert_eq!(installed["proxy"]["mode"], serde_json::json!("manual"));
+        assert_eq!(
+            installed["containersProxy"]["mode"],
+            serde_json::json!("manual")
+        );
+
+        installed["theme"] = serde_json::json!("light");
+        fs::write(&destination, serde_json::to_vec_pretty(&installed).unwrap())
+            .await
+            .unwrap();
+
+        handle_uninstall(&config, Some("docker-desktop-test"), false, false, false)
+            .await
+            .unwrap();
+
+        let removed: serde_json::Value =
+            serde_json::from_slice(&fs::read(&destination).await.unwrap()).unwrap();
+        assert_eq!(
+            removed,
+            serde_json::json!({
+                "analyticsEnabled": true,
+                "theme": "light"
+            })
+        );
+
+        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        assert!(
+            manifest.entries.is_empty(),
+            "docker-desktop uninstall should clear manifest entries"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[cfg(unix)]
@@ -1907,7 +2384,7 @@ mod tests {
             .count();
 
         // Uninstall only that category
-        handle_uninstall(&config, Some(&first_category), false, false)
+        handle_uninstall(&config, Some(&first_category), false, false, false)
             .await
             .unwrap();
 
@@ -1943,7 +2420,7 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         // Nothing installed — uninstalling a specific category should succeed silently
-        handle_uninstall(&config, Some("nonexistent"), false, false)
+        handle_uninstall(&config, Some("nonexistent"), false, false, false)
             .await
             .unwrap();
 

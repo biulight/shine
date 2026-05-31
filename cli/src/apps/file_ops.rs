@@ -15,25 +15,11 @@ pub(crate) enum InstallOutcome {
 pub(crate) enum UninstallOutcome {
     Removed,
     RestoredBackup { backup: PathBuf },
+    ForceRemoved,
+    ForceRestoredBackup { backup: PathBuf },
     NotFound,
     UserModified,
     DryRun,
-}
-
-pub(crate) async fn install_file(
-    source: &Path,
-    destination: &Path,
-    is_managed: bool,
-    dry_run: bool,
-    force: bool,
-) -> Result<InstallOutcome> {
-    if dry_run {
-        return Ok(InstallOutcome::DryRun);
-    }
-    let content = fs::read(source)
-        .await
-        .with_context(|| format!("reading source file: {}", source.display()))?;
-    install_bytes_impl(&content, destination, is_managed, force).await
 }
 
 pub(crate) async fn install_bytes(
@@ -95,7 +81,11 @@ async fn install_bytes_impl(
     Ok(InstallOutcome::Installed { hash })
 }
 
-pub(crate) async fn uninstall_entry(entry: &AppEntry, dry_run: bool) -> Result<UninstallOutcome> {
+pub(crate) async fn uninstall_entry(
+    entry: &AppEntry,
+    dry_run: bool,
+    force: bool,
+) -> Result<UninstallOutcome> {
     if dry_run {
         return Ok(UninstallOutcome::DryRun);
     }
@@ -107,7 +97,8 @@ pub(crate) async fn uninstall_entry(entry: &AppEntry, dry_run: bool) -> Result<U
     let current = fs::read(&entry.destination)
         .await
         .with_context(|| format!("reading: {}", entry.destination.display()))?;
-    if hash_content(&current) != entry.content_hash {
+    let user_modified = hash_content(&current) != entry.content_hash;
+    if user_modified && !force {
         return Ok(UninstallOutcome::UserModified);
     }
 
@@ -121,12 +112,22 @@ pub(crate) async fn uninstall_entry(entry: &AppEntry, dry_run: bool) -> Result<U
         fs::rename(backup, &entry.destination)
             .await
             .with_context(|| format!("restoring backup: {}", backup.display()))?;
-        return Ok(UninstallOutcome::RestoredBackup {
-            backup: backup.clone(),
+        return Ok(if user_modified {
+            UninstallOutcome::ForceRestoredBackup {
+                backup: backup.clone(),
+            }
+        } else {
+            UninstallOutcome::RestoredBackup {
+                backup: backup.clone(),
+            }
         });
     }
 
-    Ok(UninstallOutcome::Removed)
+    Ok(if user_modified {
+        UninstallOutcome::ForceRemoved
+    } else {
+        UninstallOutcome::Removed
+    })
 }
 
 fn backup_path(dest: &Path) -> PathBuf {
@@ -137,6 +138,7 @@ fn backup_path(dest: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apps::AppInstallStrategy;
     use crate::apps::manifest::AppEntry;
 
     async fn make_temp_dir() -> PathBuf {
@@ -151,6 +153,7 @@ mod tests {
             destination: dest.to_path_buf(),
             backup: None,
             content_hash: hash,
+            install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
         }
     }
@@ -158,11 +161,9 @@ mod tests {
     #[tokio::test]
     async fn install_to_empty_destination() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("dest.toml");
-        fs::write(&source, b"content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, false, false, false)
+        let outcome = install_bytes(b"content", &dest, false, false, false)
             .await
             .unwrap();
         assert!(matches!(outcome, InstallOutcome::Installed { .. }));
@@ -174,11 +175,9 @@ mod tests {
     #[tokio::test]
     async fn install_creates_parent_directories() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("deep/nested/dest.toml");
-        fs::write(&source, b"content").await.unwrap();
 
-        install_file(&source, &dest, false, false, false)
+        install_bytes(b"content", &dest, false, false, false)
             .await
             .unwrap();
         assert!(dest.exists());
@@ -188,12 +187,10 @@ mod tests {
     #[tokio::test]
     async fn install_backs_up_unmanaged_existing_file() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("dest.toml");
-        fs::write(&source, b"new content").await.unwrap();
         fs::write(&dest, b"user content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, false, false, false)
+        let outcome = install_bytes(b"new content", &dest, false, false, false)
             .await
             .unwrap();
         let backup = match outcome {
@@ -209,12 +206,10 @@ mod tests {
     #[tokio::test]
     async fn install_already_managed_same_content_returns_already_managed() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("dest.toml");
-        fs::write(&source, b"content").await.unwrap();
         fs::write(&dest, b"content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, true, false, false)
+        let outcome = install_bytes(b"content", &dest, true, false, false)
             .await
             .unwrap();
         assert!(matches!(outcome, InstallOutcome::AlreadyManaged));
@@ -224,12 +219,10 @@ mod tests {
     #[tokio::test]
     async fn install_already_managed_different_content_overwrites() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("dest.toml");
-        fs::write(&source, b"updated").await.unwrap();
         fs::write(&dest, b"old").await.unwrap();
 
-        let outcome = install_file(&source, &dest, true, false, false)
+        let outcome = install_bytes(b"updated", &dest, true, false, false)
             .await
             .unwrap();
         assert!(matches!(outcome, InstallOutcome::Installed { .. }));
@@ -240,11 +233,9 @@ mod tests {
     #[tokio::test]
     async fn install_dry_run_does_not_write() {
         let dir = make_temp_dir().await;
-        let source = dir.join("source.toml");
         let dest = dir.join("dest.toml");
-        fs::write(&source, b"content").await.unwrap();
 
-        let outcome = install_file(&source, &dest, false, true, false)
+        let outcome = install_bytes(b"content", &dest, false, true, false)
             .await
             .unwrap();
         assert!(matches!(outcome, InstallOutcome::DryRun));
@@ -260,7 +251,7 @@ mod tests {
         fs::write(&dest, content).await.unwrap();
         let entry = entry_for(&dest, hash_content(content));
 
-        let outcome = uninstall_entry(&entry, false).await.unwrap();
+        let outcome = uninstall_entry(&entry, false, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::Removed));
         assert!(!dest.exists());
         fs::remove_dir_all(&dir).await.unwrap();
@@ -280,9 +271,10 @@ mod tests {
             destination: dest.clone(),
             backup: Some(backup.clone()),
             content_hash: hash_content(content),
+            install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
         };
-        let outcome = uninstall_entry(&entry, false).await.unwrap();
+        let outcome = uninstall_entry(&entry, false, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::RestoredBackup { .. }));
         assert!(!backup.exists());
         assert_eq!(fs::read(&dest).await.unwrap(), b"original");
@@ -295,7 +287,7 @@ mod tests {
         let dest = dir.join("missing.toml");
         let entry = entry_for(&dest, 0);
 
-        let outcome = uninstall_entry(&entry, false).await.unwrap();
+        let outcome = uninstall_entry(&entry, false, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::NotFound));
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -307,9 +299,49 @@ mod tests {
         fs::write(&dest, b"user modified").await.unwrap();
         let entry = entry_for(&dest, hash_content(b"original content"));
 
-        let outcome = uninstall_entry(&entry, false).await.unwrap();
+        let outcome = uninstall_entry(&entry, false, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::UserModified));
         assert!(dest.exists(), "user-modified file must not be removed");
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn uninstall_force_removes_user_modified_file() {
+        let dir = make_temp_dir().await;
+        let dest = dir.join("dest.toml");
+        fs::write(&dest, b"user modified").await.unwrap();
+        let entry = entry_for(&dest, hash_content(b"original content"));
+
+        let outcome = uninstall_entry(&entry, false, true).await.unwrap();
+        assert!(matches!(outcome, UninstallOutcome::ForceRemoved));
+        assert!(!dest.exists(), "force should remove user-modified file");
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn uninstall_force_restores_backup_after_user_modified_file() {
+        let dir = make_temp_dir().await;
+        let dest = dir.join("dest.toml");
+        let backup = dir.join("dest.toml.shine.bak");
+        fs::write(&dest, b"user modified").await.unwrap();
+        fs::write(&backup, b"original").await.unwrap();
+
+        let entry = AppEntry {
+            source: "app/test/dest.toml".to_string(),
+            destination: dest.clone(),
+            backup: Some(backup.clone()),
+            content_hash: hash_content(b"managed"),
+            install_strategy: AppInstallStrategy::Copy,
+            uses_env: false,
+        };
+
+        let outcome = uninstall_entry(&entry, false, true).await.unwrap();
+        assert!(matches!(
+            outcome,
+            UninstallOutcome::ForceRestoredBackup { .. }
+        ));
+        assert!(!backup.exists());
+        assert_eq!(fs::read(&dest).await.unwrap(), b"original");
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -321,7 +353,7 @@ mod tests {
         fs::write(&dest, content).await.unwrap();
         let entry = entry_for(&dest, hash_content(content));
 
-        let outcome = uninstall_entry(&entry, true).await.unwrap();
+        let outcome = uninstall_entry(&entry, true, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::DryRun));
         assert!(dest.exists());
         fs::remove_dir_all(&dir).await.unwrap();

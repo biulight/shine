@@ -24,7 +24,7 @@ English README: [`../README.md`](../README.md)
 - **多 shell 支持** — bash、zsh、fish、PowerShell；当同一类别在 Unix 和 Windows 需要不同文件时，可按平台声明 shell 预设条目
 - **系统初始化预设** — 通过 `shine sys init` 对当前操作系统执行一组整理过的初始化步骤
 
-当前支持范围：`shine shell` 支持 `bash`、`zsh`、`fish` 和 PowerShell。Windows 支持目前覆盖 `shine self` 和 `shine shell`，也包括像 `ccenv` 这样的 PowerShell source 型辅助函数；app 与 sys 预设仍以 Unix 环境为主。
+当前支持范围：`shine shell` 支持 `bash`、`zsh`、`fish` 和 PowerShell。Windows 支持目前覆盖 `shine self`、`shine shell`，以及 `docker-engine`、`docker-desktop` 这类已适配的 app 预设；sys 预设仍以 Unix 环境为主。
 
 ## 规划流程
 
@@ -65,7 +65,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 cargo install --path cli
 ```
 
-Windows 支持目前覆盖 PowerShell 下的 `shine self` 和 `shine shell`，并会同时更新 `powershell.exe` 与 `pwsh.exe` 对应的 profile；app 与 sys 预设仍以 Unix 环境为主。
+Windows 支持目前覆盖 PowerShell 下的 `shine self`、`shine shell`，以及部分已适配的 app 预设，并会同时更新 `powershell.exe` 与 `pwsh.exe` 对应的 profile；sys 预设仍以 Unix 环境为主。
 
 也可以自己构建：
 
@@ -211,8 +211,8 @@ items = ["neovim"]
 
 当前内置预设：
 
-- `ubuntu` — 提供 Neovim、AstroNvim、Atuin 和 Yazi 的可选步骤。`recommended` profile 包含这四项。Yazi 步骤会在 Debian/Ubuntu 系统上安装最新官方 `.deb`、常见预览/运行时依赖，以及一个 `fd` 兼容符号链接。
-- `macos` — 占位预设，尚未实现。
+- `ubuntu` — 提供 Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza、pnpm、mise、Homebrew 和 ZeroTier 的可选步骤。`recommended` profile 包含核心编辑器、历史记录、文件管理器、提示符、目录跳转和 shell 工具步骤；pnpm、mise、Homebrew 和 ZeroTier 通过 `all` profile 或显式选择启用。
+- `macos` — 提供 Homebrew、Yazi、Starship、Neovim、AstroNvim、ZeroTier、zsh 插件、zoxide、Atuin、fzf、bat、eza、nvm、Bun、pnpm 和 Fastfetch 的可选步骤。`recommended` profile 包含 Homebrew 和核心终端/编辑器工具；`all` profile 额外包含 JavaScript 运行时和 Fastfetch。
 
 ### 查看应用预设详情
 
@@ -255,30 +255,56 @@ dest = "~/.vim"
 
 当 `shine.toml` 定义了 `files` 时，只安装列出的条目。若省略 `files`，`shine` 会把整个类别目录视为受管内容，并把除 `shine.toml` 之外的所有文件按相同相对路径映射到 `dest`。
 
-`shine app install` 写入文件前，`dest` 必须展开为当前平台的绝对路径。`/etc/docker` 这类 Unix 根路径在 Windows 上仍可作为内置 Unix 预设的展示元数据被读取，但 Windows 安装会拒绝它们，而不会把它们当作当前盘符根目录下的路径。
+`shine app install` 写入文件前，`dest` 必须展开为当前平台的绝对路径。元数据也可以使用平台映射，让同一类别在 Unix 和 Windows 上解析到不同目标根目录：
+
+```toml
+[dest]
+windows = "~/.docker"
+unix = "/etc/docker"
+```
 
 #### 文件变换
 
 `[[files]]` 条目可以声明一个 `transforms` 管道，在写入目标前处理源文件。如果变换会改变输出格式，可用 `target` 修改目标文件名：
 
 ```toml
-description = "Docker daemon configuration"
-dest = "/etc/docker"
+description = "Docker Engine daemon configuration"
+
+[dest]
+windows = "~/.docker"
+unix = "/etc/docker"
 
 [[files]]
 source      = "daemon.jsonc"
 target      = "daemon.json"
-description = "Docker daemon options"
+description = "Docker Engine daemon options"
 transforms  = ["jsonc-to-json"]
 ```
 
 `shine app install` 的输出会显示变换步骤：
 
 ```
-  ✓  daemon.jsonc  [jsonc-to-json]  →  /etc/docker/daemon.json
+  ✓  daemon.jsonc  [jsonc-to-json]  →  ~/.docker/daemon.json
 ```
 
 `shine update` 比较的是**变换后的最终输出**和已安装文件，因此即使源文件变了，只要生成出的 JSON 完全一致，也会被报告为 **up-to-date**。
+
+对于需要保留其它用户设置的 JSON 配置文件，`[[files]]` 条目也可以改用“受管键合并”，而不是整文件覆盖：
+
+```toml
+[[files]]
+source = "settings-store.jsonc"
+target = "settings-store.json"
+transforms = ["template", "jsonc-to-json"]
+install_mode = "json-merge"
+managed_keys = ["proxy", "containersProxy"]
+```
+
+`json-merge` 会把变换后的源文件当作 JSON 对象，只更新目标文件里列出的顶层键；卸载时也只删除这些同名键。
+
+内置的 `docker-engine` app 预设只管理 Docker Engine daemon 配置。它在 Windows 上写入 `~/.docker/daemon.json`，在 Unix 上写入 `/etc/docker/daemon.json`。这个路径表示的是 Docker Engine daemon 配置，不等同于 Docker Desktop 的代理设置文件。
+
+内置的 `docker-desktop` app 预设第一版只在 Windows 上提供。它会把 Docker Desktop 代理设置合并进 `~/AppData/Roaming/Docker/settings-store.json`，并且只管理 `proxy` 与 `containersProxy` 两个键，其它 Docker Desktop 设置保持不变。
 
 通过 `# shine-template: true` 启用模板替换的 shell 脚本也按同样方式检查。`shine update` 会使用当前 `[env]` 值重新渲染源脚本；如果渲染结果与已安装脚本不同，就会报告 `update available`，包括源脚本来自外部 `presets_dir` 的情况。
 
@@ -452,7 +478,7 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.26.0+preview.abc1234`；稳定版则继续显示 `0.26.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.27.0+preview.abc1234`；稳定版则继续显示 `0.27.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -462,7 +488,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.26.0 sh install.sh
+SHINE_VERSION=0.27.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -470,7 +496,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.26.0"; .\install.ps1
+$env:SHINE_VERSION = "0.27.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 

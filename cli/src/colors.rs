@@ -1,5 +1,7 @@
 use owo_colors::{OwoColorize, Stream};
 
+use crate::path_display;
+
 pub(crate) fn symbol(s: &str) -> String {
     match s {
         "✓" => s
@@ -70,7 +72,7 @@ pub(crate) fn external_presets_note(dir: &std::path::Path) -> String {
     let label = "◈ External Presets"
         .if_supports_color(Stream::Stdout, |t| t.style(Style::new().bold().cyan()))
         .to_string();
-    format!("{}  {}", label, dir.display())
+    format!("{}  {}", label, path_display::format(dir))
 }
 
 #[cfg(test)]

@@ -269,11 +269,11 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
             match row.dest.as_deref() {
                 Some(dest) => println!(
                     "  {}  {}  {}",
-                    row.label,
+                    row.simple_label,
                     colors::dim("→"),
                     colors::dim(dest)
                 ),
-                None => println!("  {}", row.label),
+                None => println!("  {}", row.simple_label),
             }
         }
     }
