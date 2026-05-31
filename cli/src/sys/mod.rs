@@ -795,6 +795,35 @@ description = "Placeholder"
     }
 
     #[test]
+    fn embedded_ubuntu_profiles_cover_recommended_and_all_items() {
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/shine.toml")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu manifest");
+        let manifest = parse_and_validate_manifest(&content).unwrap();
+        let recommended = manifest
+            .profiles
+            .get("recommended")
+            .expect("missing Ubuntu recommended profile");
+        let all = manifest
+            .profiles
+            .get("all")
+            .expect("missing Ubuntu all profile");
+
+        assert!(recommended.items.iter().any(|item| item == "starship"));
+        assert!(recommended.items.iter().any(|item| item == "zoxide"));
+        assert!(!recommended.items.iter().any(|item| item == "pnpm"));
+        assert!(!recommended.items.iter().any(|item| item == "mise"));
+        assert!(!recommended.items.iter().any(|item| item == "homebrew"));
+
+        let item_ids: BTreeSet<&str> = manifest.items.iter().map(|item| item.id.as_str()).collect();
+        let all_ids: BTreeSet<&str> = all.items.iter().map(String::as_str).collect();
+        assert_eq!(
+            all_ids, item_ids,
+            "Ubuntu all profile should include every item"
+        );
+    }
+
+    #[test]
     fn embedded_entries_sorted_alphabetically() {
         let entries = list_embedded_sys_entries();
         let ids: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
