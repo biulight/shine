@@ -1,22 +1,27 @@
-# shine-dest: ~/.config/starship/starship.toml
+# shine-dest: ~/.config/starship.toml
 # Starship prompt: minimal left-prompt with git branch and status.
 # Requires nerd-font: https://www.nerdfonts.com
 
-format = "$username$directory$git_branch$git_status$character"
+add_newline = true
+command_timeout = 500
+scan_timeout = 30
+
+format="$time$all"
+#format = """
+#$directory$git_branch$git_status$nodejs$rust$python$cmd_duration
+#$character
+#"""
 
 [character]
 success_symbol = "[❯](bold green)"
 error_symbol = "[❯](bold red)"
 
-[directory]
-truncation_length = 3
-truncate_to_repo = true
+#[directory]
+#truncation_length = 3
+#truncate_to_repo = false
 
-[git_branch]
-symbol = " "
-format = "[$symbol$branch]($style) "
-style = "bold purple"
-
-[git_status]
-format = '([$all_status$ahead_behind]($style) )'
-style = "bold red"
+[time]
+disabled = false
+format = '[\[ $time \]]($style) in '
+time_format = '%T'
+utc_time_offset = 'local'
