@@ -268,7 +268,7 @@ async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset
     }
     let prefix = format!("sys/{os_id}");
     if !config.is_external_presets {
-        crate::presets::extract_prefix(&prefix, config.presets_dir(), false).await?;
+        crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
     }
 
     let root = config.presets_dir().join("sys").join(os_id);
@@ -869,6 +869,54 @@ description = "Placeholder"
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         handle_list(&config).await.unwrap();
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_sys_preset_refreshes_stale_embedded_runtime_files() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let os_dir = config.presets_dir().join("sys/ubuntu");
+        fs::create_dir_all(&os_dir).await.unwrap();
+        fs::write(
+            os_dir.join("shine.toml"),
+            r#"
+description = "Stale Ubuntu"
+default_profile = "recommended"
+
+[[items]]
+id = "neovim"
+label = "Neovim"
+
+[profiles.recommended]
+items = ["neovim"]
+"#,
+        )
+        .await
+        .unwrap();
+        fs::write(os_dir.join("init.sh"), b"#!/bin/bash\necho stale\n")
+            .await
+            .unwrap();
+
+        let loaded = load_sys_preset(&config, "ubuntu").await.unwrap();
+
+        assert!(
+            loaded
+                .manifest
+                .items
+                .iter()
+                .any(|item| item.id == "homebrew"),
+            "embedded Ubuntu manifest should refresh stale runtime files"
+        );
+        assert!(
+            loaded
+                .manifest
+                .profiles
+                .get("all")
+                .is_some_and(|profile| profile.items.iter().any(|item| item == "homebrew")),
+            "refreshed Ubuntu manifest should include all profile"
+        );
+
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
