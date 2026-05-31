@@ -211,8 +211,8 @@ items = ["neovim"]
 
 当前内置预设：
 
-- `ubuntu` — 提供 Neovim、AstroNvim、Atuin 和 Yazi 的可选步骤。`recommended` profile 包含这四项。Yazi 步骤会在 Debian/Ubuntu 系统上安装最新官方 `.deb`、常见预览/运行时依赖，以及一个 `fd` 兼容符号链接。
-- `macos` — 占位预设，尚未实现。
+- `ubuntu` — 提供 Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza、pnpm、mise、Homebrew 和 ZeroTier 的可选步骤。`recommended` profile 包含核心编辑器、历史记录、文件管理器、提示符、目录跳转和 shell 工具步骤；pnpm、mise、Homebrew 和 ZeroTier 通过 `all` profile 或显式选择启用。
+- `macos` — 提供 Homebrew、Yazi、Starship、Neovim、AstroNvim、ZeroTier、zsh 插件、zoxide、Atuin、fzf、bat、eza、nvm、Bun、pnpm 和 Fastfetch 的可选步骤。`recommended` profile 包含 Homebrew 和核心终端/编辑器工具；`all` profile 额外包含 JavaScript 运行时和 Fastfetch。
 
 ### 查看应用预设详情
 
@@ -478,7 +478,7 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.26.0+preview.abc1234`；稳定版则继续显示 `0.26.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.27.0+preview.abc1234`；稳定版则继续显示 `0.27.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -488,7 +488,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.26.0 sh install.sh
+SHINE_VERSION=0.27.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -496,7 +496,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.26.0"; .\install.ps1
+$env:SHINE_VERSION = "0.27.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
