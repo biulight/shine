@@ -259,20 +259,8 @@ install_starship() {
         return
     fi
 
-    local target
-    case "$ARCH" in
-        x86_64)  target="x86_64-unknown-linux-gnu" ;;
-        aarch64) target="aarch64-unknown-linux-gnu" ;;
-        *) echo "Unsupported arch for Starship: $ARCH" >&2; return 1 ;;
-    esac
-
     echo "Installing Starship..."
-    local tmp
-    tmp="/tmp/starship-${target}.tar.gz"
-    curl -fsSL "https://github.com/starship/starship/releases/latest/download/starship-${target}.tar.gz" -o "$tmp"
-    sudo tar xzf "$tmp" -C /usr/local/bin starship
-    sudo chmod 755 /usr/local/bin/starship
-    rm -f "$tmp"
+    curl -sS https://starship.rs/install.sh | sudo sh -s -- -y -b /usr/local/bin
     append_shell_init_blocks
     echo "Starship installed ($(starship --version | head -1))."
 }
