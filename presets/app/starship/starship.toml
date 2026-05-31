@@ -22,6 +22,6 @@ error_symbol = "[❯](bold red)"
 
 [time]
 disabled = false
-format = '[\[ $time \]]($style) in '
+format = '[\[ $time \]]($style) '
 time_format = '%T'
 utc_time_offset = 'local'
