@@ -90,15 +90,15 @@ remove_zshrc_block() {
 
 append_zshrc_block() {
     local zshrc="$HOME/.zshrc"
+    local block_file
+    local added=0
 
     touch "$zshrc"
     remove_zshrc_block "$zshrc"
+    block_file="$(mktemp)"
 
-    cat >> "$zshrc" <<'EOF'
-
-# >>> shine macos sys >>>
-# Managed by `shine sys init` for macOS.
-
+    if ! grep -Fq "HOMEBREW_PREFIX" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # Homebrew prefix cache
 if [[ -d "/opt/homebrew" ]]; then
   export HOMEBREW_PREFIX="/opt/homebrew"
@@ -108,6 +108,12 @@ else
   export HOMEBREW_PREFIX=""
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "typeset -U path PATH" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # Basic PATH
 typeset -U path PATH
 path=(
@@ -121,6 +127,12 @@ path=(
 )
 export PATH
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "NVM_DIR" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # nvm lazy load
 export NVM_DIR="$HOME/.nvm"
 nvm() {
@@ -135,12 +147,24 @@ nvm() {
   nvm "$@"
 }
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "BUN_INSTALL" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # Bun
 export BUN_INSTALL="$HOME/.bun"
 if [[ -d "$BUN_INSTALL/bin" ]]; then
   path=("$BUN_INSTALL/bin" $path)
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "PNPM_HOME" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # pnpm
 export PNPM_HOME="$HOME/Library/pnpm"
 if [[ -d "$PNPM_HOME" ]]; then
@@ -156,6 +180,12 @@ if [[ -d "$PNPM_HOME/bin" ]]; then
   esac
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "alias ls='eza" "$zshrc" && ! grep -Fq 'alias ls="eza' "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # eza
 if command -v eza >/dev/null 2>&1; then
   alias ls='eza --icons'
@@ -163,55 +193,127 @@ if command -v eza >/dev/null 2>&1; then
   alias lt='eza --tree'
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "alias cat='bat" "$zshrc" && ! grep -Fq 'alias cat="bat' "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # bat
 if command -v bat >/dev/null 2>&1; then
   alias cat='bat'
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "fzf --zsh" "$zshrc" && ! grep -Fq ".fzf.zsh" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # fzf
 if command -v fzf >/dev/null 2>&1; then
   eval "$(fzf --zsh)"
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "atuin init zsh" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # atuin
 if command -v atuin >/dev/null 2>&1; then
   eval "$(atuin init zsh)"
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "zoxide init zsh" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # zoxide
 if command -v zoxide >/dev/null 2>&1; then
   eval "$(zoxide init zsh)"
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "zsh-vi-mode.plugin.zsh" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # zsh-vi-mode
 if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
   source "$HOMEBREW_PREFIX/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "fastfetch" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # fastfetch
 # fastfetch can noticeably slow terminal startup, so run it manually when needed.
 # if [[ -z "$ZELLIJ" ]] && command -v fastfetch >/dev/null 2>&1; then
 #   fastfetch
 # fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "starship init zsh" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # Starship prompt
 if command -v starship >/dev/null 2>&1; then
   eval "$(starship init zsh)"
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "zsh-autosuggestions.zsh" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # zsh-autosuggestions
 if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh" ]]; then
   source "$HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
 fi
 
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "zsh-syntax-highlighting.zsh" "$zshrc"; then
+        cat >> "$block_file" <<'EOF'
 # zsh-syntax-highlighting must be near the end of .zshrc.
 if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ]]; then
   source "$HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
 fi
-# <<< shine macos sys <<<
-EOF
 
-    echo "Updated ~/.zshrc managed block for macOS shell tools."
+EOF
+        added=1
+    fi
+
+    if [[ "$added" -eq 0 ]]; then
+        rm -f "$block_file"
+        echo "~/.zshrc already contains macOS shell tool initialization; no managed block needed."
+        return
+    fi
+
+    {
+        echo
+        echo "$ZSHRC_SENTINEL_START"
+        echo '# Managed by `shine sys init` for macOS. Existing user config is left untouched.'
+        echo
+        cat "$block_file"
+        echo "$ZSHRC_SENTINEL_END"
+    } >> "$zshrc"
+    rm -f "$block_file"
+
+    echo "Updated ~/.zshrc managed block for missing macOS shell tool initialization."
 }
 
 install_shell_formula() {
