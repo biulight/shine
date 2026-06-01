@@ -1,8 +1,194 @@
 #!/bin/bash
-# Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, Yazi, and ZeroTier steps.
+# Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza, pnpm, mise, Homebrew, and ZeroTier steps.
 set -euo pipefail
 
 ARCH=$(uname -m)
+SHELL_SENTINEL_START="# >>> shine ubuntu sys >>>"
+SHELL_SENTINEL_END="# <<< shine ubuntu sys <<<"
+PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}"
+ZSH_VI_MODE_PLUGIN="$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
+
+export PATH="$HOME/.local/bin:$PNPM_HOME:$PNPM_HOME/bin:$PATH"
+
+brew_executable() {
+    if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+        echo "/home/linuxbrew/.linuxbrew/bin/brew"
+        return
+    fi
+    if [[ -x "$HOME/.linuxbrew/bin/brew" ]]; then
+        echo "$HOME/.linuxbrew/bin/brew"
+        return
+    fi
+    return 1
+}
+
+load_homebrew_env() {
+    local brew_path
+    if brew_path=$(brew_executable); then
+        eval "$("$brew_path" shellenv)"
+    fi
+}
+
+remove_shell_block() {
+    local file="$1"
+    local tmp_file
+
+    [[ -f "$file" ]] || return
+    tmp_file="$(mktemp)"
+    awk -v start="$SHELL_SENTINEL_START" -v end="$SHELL_SENTINEL_END" '
+        $0 == start { skip = 1; next }
+        $0 == end { skip = 0; next }
+        !skip { print }
+    ' "$file" > "$tmp_file"
+    mv "$tmp_file" "$file"
+}
+
+remove_pnpm_block() {
+    local file="$1"
+    local tmp_file
+
+    [[ -f "$file" ]] || return
+    tmp_file="$(mktemp)"
+    awk '
+        $0 == "# pnpm" { skip = 1; next }
+        $0 == "# pnpm end" { skip = 0; next }
+        !skip { print }
+    ' "$file" > "$tmp_file"
+    mv "$tmp_file" "$file"
+}
+
+append_shell_block() {
+    local file="$1"
+    local shell_name="$2"
+    local init_file
+
+    touch "$file"
+    remove_shell_block "$file"
+    remove_pnpm_block "$file"
+    init_file="$(mktemp)"
+
+    cat > "$init_file" <<EOF
+# Managed by \`shine sys init\` for Ubuntu. Existing user config is left untouched.
+
+# User-local binaries
+case ":\$PATH:" in
+  *":\$HOME/.local/bin:"*) ;;
+  *) export PATH="\$HOME/.local/bin:\$PATH" ;;
+esac
+
+# Homebrew
+if [[ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]]; then
+  eval "\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+elif [[ -x "\$HOME/.linuxbrew/bin/brew" ]]; then
+  eval "\$(\$HOME/.linuxbrew/bin/brew shellenv)"
+fi
+
+# pnpm
+export PNPM_HOME="\$HOME/.local/share/pnpm"
+case ":\$PATH:" in
+  *":\$PNPM_HOME:"*) ;;
+  *) export PATH="\$PNPM_HOME:\$PATH" ;;
+esac
+if [[ -d "\$PNPM_HOME/bin" ]]; then
+  case ":\$PATH:" in
+    *":\$PNPM_HOME/bin:"*) ;;
+    *) export PATH="\$PNPM_HOME/bin:\$PATH" ;;
+  esac
+fi
+
+# eza
+if command -v eza >/dev/null 2>&1; then
+  alias ls='eza --icons'
+  alias ll='eza -la --icons'
+  alias lt='eza --tree'
+fi
+
+# bat
+if command -v bat >/dev/null 2>&1; then
+  alias cat='bat'
+fi
+
+# fzf
+if command -v fzf >/dev/null 2>&1; then
+  if fzf --${shell_name} >/dev/null 2>&1; then
+    eval "\$(fzf --${shell_name})"
+  elif [[ "${shell_name}" == "bash" ]]; then
+    [[ -f /usr/share/doc/fzf/examples/key-bindings.bash ]] && source /usr/share/doc/fzf/examples/key-bindings.bash
+    [[ -f /usr/share/doc/fzf/examples/completion.bash ]] && source /usr/share/doc/fzf/examples/completion.bash
+  elif [[ "${shell_name}" == "zsh" ]]; then
+    [[ -f /usr/share/doc/fzf/examples/key-bindings.zsh ]] && source /usr/share/doc/fzf/examples/key-bindings.zsh
+    [[ -f /usr/share/doc/fzf/examples/completion.zsh ]] && source /usr/share/doc/fzf/examples/completion.zsh
+  fi
+fi
+
+# Starship prompt
+if command -v starship >/dev/null 2>&1; then
+  eval "\$(starship init ${shell_name})"
+fi
+
+# zoxide
+if command -v zoxide >/dev/null 2>&1; then
+  eval "\$(zoxide init ${shell_name})"
+fi
+
+# mise
+if command -v mise >/dev/null 2>&1; then
+  eval "\$(mise activate ${shell_name})"
+elif [[ -x "\$HOME/.local/bin/mise" ]]; then
+  eval "\$(\$HOME/.local/bin/mise activate ${shell_name})"
+fi
+
+# zsh-vi-mode
+if [[ "${shell_name}" == "zsh" ]]; then
+  if [[ -f "/home/linuxbrew/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
+    source "/home/linuxbrew/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
+  elif [[ -f "\$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
+    source "\$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
+  elif [[ -f "\$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
+    source "\$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
+  fi
+fi
+EOF
+
+    {
+        echo
+        echo "$SHELL_SENTINEL_START"
+        cat "$init_file"
+        echo "$SHELL_SENTINEL_END"
+    } >> "$file"
+    rm -f "$init_file"
+}
+
+append_shell_init_blocks() {
+    append_shell_block "$HOME/.bashrc" bash
+    append_shell_block "$HOME/.zshrc" zsh
+    echo "Updated ~/.bashrc and ~/.zshrc managed blocks for Ubuntu shell tool initialization."
+}
+
+install_packages() {
+    local packages=()
+    local package
+
+    for package in "$@"; do
+        if ! dpkg -s "$package" &>/dev/null; then
+            packages+=("$package")
+        fi
+    done
+
+    if [[ ${#packages[@]} -eq 0 ]]; then
+        echo "Packages already installed: $*"
+        return
+    fi
+
+    echo "Installing packages: ${packages[*]}"
+    sudo apt-get update
+    sudo apt-get install -y "${packages[@]}"
+}
+
+apt_package_available() {
+    local package="$1"
+    apt-cache show "$package" &>/dev/null
+}
 
 # --- Neovim ---
 
@@ -62,23 +248,7 @@ install_atuin() {
 # --- Yazi ---
 
 install_yazi_dependencies() {
-    local packages=()
-    local package
-
-    for package in file ffmpeg 7zip jq poppler-utils fd-find ripgrep fzf zoxide imagemagick xclip; do
-        if ! dpkg -s "$package" &>/dev/null; then
-            packages+=("$package")
-        fi
-    done
-
-    if [[ ${#packages[@]} -eq 0 ]]; then
-        echo "Yazi dependencies: already installed."
-        return
-    fi
-
-    echo "Installing Yazi dependencies: ${packages[*]}"
-    sudo apt-get update
-    sudo apt-get install -y "${packages[@]}"
+    install_packages file ffmpeg 7zip jq poppler-utils fd-find ripgrep fzf imagemagick xclip
 }
 
 ensure_fd_alias() {
@@ -122,6 +292,220 @@ install_yazi() {
     echo "Yazi installed ($(yazi --version | head -1))."
 }
 
+# --- Starship ---
+
+install_starship() {
+    if command -v starship &>/dev/null; then
+        echo "Starship: already installed ($(starship --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    echo "Installing Starship..."
+    curl -sS https://starship.rs/install.sh | sudo sh -s -- -y -b /usr/local/bin
+    append_shell_init_blocks
+    echo "Starship installed ($(starship --version | head -1))."
+}
+
+# --- zoxide ---
+
+install_zoxide() {
+    if command -v zoxide &>/dev/null; then
+        echo "zoxide: already installed ($(zoxide --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    if [[ -x "$HOME/.local/bin/zoxide" ]]; then
+        echo "zoxide: already installed ($("$HOME/.local/bin/zoxide" --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    echo "Installing zoxide..."
+    mkdir -p "$HOME/.local/bin"
+    curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh
+    append_shell_init_blocks
+    echo "zoxide installed ($(zoxide --version | head -1))."
+}
+
+# --- zsh-vi-mode ---
+
+install_zsh_vi_mode() {
+    load_homebrew_env
+    if [[ -n "${HOMEBREW_PREFIX:-}" ]] && [[ -f "$HOMEBREW_PREFIX/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
+        echo "zsh-vi-mode: already installed with Homebrew."
+        append_shell_init_blocks
+        return
+    fi
+
+    if command -v brew &>/dev/null; then
+        echo "Installing zsh-vi-mode with Homebrew..."
+        brew install zsh-vi-mode
+        append_shell_init_blocks
+        echo "zsh-vi-mode installed with Homebrew."
+        return
+    fi
+
+    if [[ -f "$ZSH_VI_MODE_PLUGIN" ]]; then
+        echo "zsh-vi-mode: already installed at $ZSH_VI_MODE_PLUGIN."
+        append_shell_init_blocks
+        return
+    fi
+
+    install_packages git
+    echo "Installing zsh-vi-mode to $ZSH_VI_MODE_PLUGIN..."
+    mkdir -p "$(dirname "$ZSH_VI_MODE_PLUGIN")"
+    git clone --depth 1 https://github.com/jeffreytse/zsh-vi-mode.git "$(dirname "$ZSH_VI_MODE_PLUGIN")"
+    append_shell_init_blocks
+    echo "zsh-vi-mode installed at $ZSH_VI_MODE_PLUGIN."
+}
+
+# --- fzf ---
+
+install_fzf() {
+    if command -v fzf &>/dev/null; then
+        echo "fzf: already installed ($(fzf --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    install_packages fzf
+    append_shell_init_blocks
+    echo "fzf installed ($(fzf --version | head -1))."
+}
+
+# --- bat ---
+
+ensure_bat_command() {
+    if command -v bat &>/dev/null; then
+        return
+    fi
+    if ! command -v batcat &>/dev/null; then
+        return
+    fi
+
+    echo "Creating bat -> batcat symlink..."
+    sudo ln -sf "$(command -v batcat)" /usr/local/bin/bat
+}
+
+install_bat() {
+    if command -v bat &>/dev/null; then
+        echo "bat: already installed ($(bat --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    install_packages bat
+    ensure_bat_command
+    append_shell_init_blocks
+
+    if command -v bat &>/dev/null; then
+        echo "bat installed ($(bat --version | head -1))."
+    else
+        echo "bat package installed, but no bat or batcat command was found." >&2
+        return 1
+    fi
+}
+
+# --- eza ---
+
+install_eza() {
+    load_homebrew_env
+    if command -v eza &>/dev/null; then
+        echo "eza: already installed ($(eza --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    if apt_package_available eza; then
+        install_packages eza
+    else
+        install_homebrew
+        echo "Installing eza with Homebrew..."
+        brew install eza
+    fi
+
+    append_shell_init_blocks
+    echo "eza installed ($(eza --version | head -1))."
+}
+
+# --- pnpm ---
+
+install_pnpm() {
+    install_packages libatomic1
+
+    if command -v pnpm &>/dev/null; then
+        echo "pnpm: already installed ($(pnpm --version))."
+        append_shell_init_blocks
+        return
+    fi
+
+    if [[ -x "$HOME/.local/share/pnpm/pnpm" ]]; then
+        echo "pnpm: already installed ($("$HOME/.local/share/pnpm/pnpm" --version))."
+        append_shell_init_blocks
+        return
+    fi
+
+    echo "Installing pnpm..."
+    curl -fsSL https://get.pnpm.io/install.sh | SHELL="$(command -v bash)" sh -
+    append_shell_init_blocks
+    echo "pnpm installed ($(pnpm --version))."
+}
+
+# --- mise ---
+
+install_mise() {
+    if command -v mise &>/dev/null; then
+        echo "mise: already installed ($(mise --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    if [[ -x "$HOME/.local/bin/mise" ]]; then
+        echo "mise: already installed ($("$HOME/.local/bin/mise" --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    echo "Installing mise..."
+    mkdir -p "$HOME/.local/bin"
+    curl -fsSL https://mise.run | sh
+    append_shell_init_blocks
+    echo "mise installed ($("$HOME/.local/bin/mise" --version | head -1))."
+}
+
+# --- Homebrew ---
+
+install_homebrew() {
+    load_homebrew_env
+    if command -v brew &>/dev/null; then
+        echo "Homebrew: already installed ($(brew --version | head -1))."
+        append_shell_init_blocks
+        return
+    fi
+
+    if [[ "$(id -u)" -eq 0 ]]; then
+        echo "Homebrew cannot be installed as root. Run this item as a non-root user or skip Homebrew-dependent items." >&2
+        return 1
+    fi
+
+    install_packages build-essential procps curl file git
+
+    echo "Installing Homebrew..."
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    load_homebrew_env
+    append_shell_init_blocks
+
+    if ! command -v brew &>/dev/null; then
+        echo "Homebrew installed, but brew is not available in this shell." >&2
+        echo "Open a new shell or source ~/.bashrc / ~/.zshrc, then rerun this command." >&2
+        return 1
+    fi
+
+    echo "Homebrew installed ($(brew --version | head -1))."
+}
+
 # --- ZeroTier ---
 
 install_zerotier() {
@@ -153,6 +537,15 @@ run_item() {
         astronvim) install_astronvim ;;
         atuin) install_atuin ;;
         yazi) install_yazi ;;
+        starship) install_starship ;;
+        zoxide) install_zoxide ;;
+        zsh-vi-mode) install_zsh_vi_mode ;;
+        fzf) install_fzf ;;
+        bat) install_bat ;;
+        eza) install_eza ;;
+        pnpm) install_pnpm ;;
+        mise) install_mise ;;
+        homebrew) install_homebrew ;;
         zerotier) install_zerotier ;;
         "") return 0 ;;
         *)

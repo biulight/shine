@@ -3,12 +3,7 @@ font-size = 13
 font-thicken = true
 
 # Set GHOSTTY_BG_LIGHT / GHOSTTY_BG_DARK in `shine env` to populate them.
-theme = light:light_Atom One Light,dark:dark_Alien Blood
-
-background-image-fit = cover
-background-image-opacity = 0.3
-background-opacity = 0.95
-background-blur-radius = 20
+theme = light:light_Github Light Default,dark:dark_Alien Blood
 
 window-save-state = always
 

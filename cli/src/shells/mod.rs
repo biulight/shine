@@ -216,11 +216,9 @@ pub(crate) async fn handle_upgrade_installed(
         return Ok(ShellUpgradeReport::default());
     }
 
-    let installed_categories: Vec<String> = installed_commands
+    let installed_categories: std::collections::BTreeSet<String> = installed_commands
         .iter()
         .map(|(cat_name, _)| cat_name.clone())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
         .collect();
 
     println!(
@@ -610,7 +608,7 @@ async fn apply_template_to_scripts(
     script_pairs: &[ScriptTemplate],
 ) -> Result<TemplateRenderReport> {
     let env = EnvConfig::load_or_init(config).await?;
-    let env_map = env.as_map().clone();
+    let env_map = env.as_map();
     let mut report = TemplateRenderReport::default();
 
     for script in script_pairs {
@@ -623,7 +621,7 @@ async fn apply_template_to_scripts(
             continue;
         }
 
-        let script_env_map = env_map_for_script(script, &env_map);
+        let script_env_map = env_map_for_script(script, env_map);
         let rendered = match crate::apps::apply_transforms(
             &["template".to_string()],
             &content,

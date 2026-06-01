@@ -247,14 +247,20 @@ async fn store_cache(cache_path: &Path, latest: &Version, checked_at_unix_secs: 
 }
 
 async fn store_cache_if_possible(cache_path: &Path, latest: &Version, checked_at_unix_secs: u64) {
-    let _ = store_cache(cache_path, latest, checked_at_unix_secs).await;
+    if let Err(e) = store_cache(cache_path, latest, checked_at_unix_secs).await {
+        eprintln!("warning: failed to write update cache: {e:#}");
+    }
 }
 
 /// Removes the on-disk update cache so the next command performs a fresh fetch
 /// rather than reading a stale "update required" entry left behind by a failed upgrade.
 pub(crate) async fn invalidate_update_cache(config: &Config) {
     let cache_path = config.shine_dir().join(UPDATE_CACHE_FILE);
-    let _ = fs::remove_file(&cache_path).await;
+    if let Err(e) = fs::remove_file(&cache_path).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!("warning: failed to remove update cache: {e:#}");
+    }
 }
 
 async fn fetch_latest_release() -> Result<GithubRelease> {
@@ -398,16 +404,30 @@ async fn install_downloaded_archive(
             let _ = fs::remove_file(&backup_path).await;
             Ok(())
         }
-        Err(err) => {
-            let _ = fs::rename(&backup_path, current_exe).await;
-            let _ = fs::remove_file(&staged_path).await;
-            Err(err).with_context(|| {
-                format!(
-                    "failed to install upgraded binary at {}",
-                    current_exe.display()
-                )
-            })
-        }
+        Err(err) => match fs::rename(&backup_path, current_exe).await {
+            Ok(()) => {
+                let _ = fs::remove_file(&staged_path).await;
+                Err(err).with_context(|| {
+                    format!(
+                        "failed to install upgraded binary at {}; \
+                             original binary has been restored",
+                        current_exe.display()
+                    )
+                })
+            }
+            Err(rollback_err) => {
+                let _ = fs::remove_file(&staged_path).await;
+                Err(err).with_context(|| {
+                    format!(
+                        "failed to install upgraded binary at {} \
+                             and rollback also failed ({rollback_err:#}); \
+                             {} may be missing — reinstall from install.sh",
+                        current_exe.display(),
+                        current_exe.display()
+                    )
+                })
+            }
+        },
     }
 }
 

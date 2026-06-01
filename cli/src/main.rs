@@ -168,8 +168,7 @@ struct ClearCommand {
     dry_run: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     if let Commands::Completions { shell } = &cli.command {
@@ -181,11 +180,19 @@ async fn main() -> Result<()> {
         if config_dir.trim().is_empty() {
             bail!("--config-dir is required when using --config-dir")
         }
-        // SAFETY: called at program startup before the Tokio runtime spawns worker
-        // threads, so no concurrent env reads can race this write.
+        // SAFETY: called before the Tokio runtime starts; no other threads exist at
+        // this point, so the write cannot race concurrent env reads.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", config_dir) }
     }
 
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to build async runtime")?
+        .block_on(run(cli))
+}
+
+async fn run(cli: Cli) -> Result<()> {
     if let Commands::Init(cmd) = &cli.command {
         return handle_init(cmd.yes).await;
     }
