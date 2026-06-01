@@ -24,5 +24,11 @@ transforms = ["template"]
 [[files]]
 source = "themes/Atom One Light"
 target = "themes/light_Atom One Light"
-description = "Light-mode test Ghostty theme with optional background image."
+description = "Light-mode Ghostty theme with optional background image."
+transforms = ["template"]
+
+[[files]]
+source = "themes/Github Light Default"
+target = "themes/light_Github Light Default"
+description = "Light-mode Ghostty theme with optional background image."
 transforms = ["template"]

@@ -24,3 +24,7 @@ cursor-text = #eee8d5
 selection-background = #eee8d5
 selection-foreground = #586e75
 background-image = @@GHOSTTY_BG_LIGHT@@
+background-image-fit = cover
+background-image-opacity = 0.5
+background-opacity = 0.95
+background-blur-radius = 20
