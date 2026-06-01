@@ -43,6 +43,12 @@ struct LoadedSysPreset {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct SysInitCommand {
+    program: &'static str,
+    fixed_args: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SelectionSource {
     Profile(String),
     DefaultProfile(String),
@@ -96,6 +102,7 @@ pub(crate) fn detect_os_id() -> Result<String> {
 fn detect_os_id_from(os: &str, os_release: Option<&str>) -> Result<String> {
     match os {
         "macos" => Ok("macos".to_string()),
+        "windows" => Ok("windows".to_string()),
         "linux" => {
             if let Some(content) = os_release {
                 for line in content.lines() {
@@ -110,7 +117,7 @@ fn detect_os_id_from(os: &str, os_release: Option<&str>) -> Result<String> {
             )
         }
         other => bail!(
-            "Unsupported platform '{}'. Supported targets: ubuntu (Linux), macos",
+            "Unsupported platform '{}'. Supported targets: ubuntu (Linux), macos, windows",
             other
         ),
     }
@@ -198,8 +205,9 @@ async fn handle_init_for_os(
     print_selection_summary(&selection);
     println!();
 
-    let shell = sys_init_shell(os_id);
-    let status = tokio::process::Command::new(shell)
+    let command = sys_init_command(os_id);
+    let status = tokio::process::Command::new(command.program)
+        .args(&command.fixed_args)
         .arg(&loaded.script_path)
         .args(&selection.item_ids)
         .status()
@@ -235,7 +243,7 @@ async fn print_dry_run(
     println!(
         "  Command: {}",
         format_command_preview(
-            sys_init_shell(os_id),
+            &sys_init_command(os_id),
             &loaded.script_path,
             &selection.item_ids
         )
@@ -249,16 +257,36 @@ async fn print_dry_run(
     Ok(())
 }
 
-fn sys_init_shell(os_id: &str) -> &'static str {
-    if os_id == "macos" { "zsh" } else { "bash" }
+fn sys_init_command(os_id: &str) -> SysInitCommand {
+    if os_id == "windows" {
+        SysInitCommand {
+            program: "powershell.exe",
+            fixed_args: vec!["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"],
+        }
+    } else if os_id == "macos" {
+        SysInitCommand {
+            program: "zsh",
+            fixed_args: Vec::new(),
+        }
+    } else {
+        SysInitCommand {
+            program: "bash",
+            fixed_args: Vec::new(),
+        }
+    }
 }
 
-fn format_command_preview(shell: &str, script_path: &Path, item_ids: &[String]) -> String {
-    if item_ids.is_empty() {
-        format!("{shell} {}", script_path.display())
-    } else {
-        format!("{shell} {} {}", script_path.display(), item_ids.join(" "))
-    }
+fn format_command_preview(
+    command: &SysInitCommand,
+    script_path: &Path,
+    item_ids: &[String],
+) -> String {
+    let mut parts = Vec::with_capacity(command.fixed_args.len() + item_ids.len() + 2);
+    parts.push(command.program.to_string());
+    parts.extend(command.fixed_args.iter().map(|arg| (*arg).to_string()));
+    parts.push(script_path.display().to_string());
+    parts.extend(item_ids.iter().cloned());
+    parts.join(" ")
 }
 
 async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset> {
@@ -271,7 +299,7 @@ async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset
     }
 
     let root = config.presets_dir().join("sys").join(os_id);
-    let script_path = root.join("init.sh");
+    let script_path = root.join(sys_init_script_name(os_id));
     if !script_path.exists() {
         bail!(
             "No init script found for '{}'. Expected: {}",
@@ -291,6 +319,14 @@ async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset
         manifest,
         script_path,
     })
+}
+
+fn sys_init_script_name(os_id: &str) -> &'static str {
+    if os_id == "windows" {
+        "init.ps1"
+    } else {
+        "init.sh"
+    }
 }
 
 fn parse_and_validate_manifest(content: &str) -> Result<SysManifest> {
@@ -576,6 +612,12 @@ items = ["neovim", "atuin"]
     }
 
     #[test]
+    fn detects_windows() {
+        let result = detect_os_id_from("windows", None).unwrap();
+        assert_eq!(result, "windows");
+    }
+
+    #[test]
     fn detects_ubuntu_from_os_release() {
         let os_release = "PRETTY_NAME=\"Ubuntu 22.04\"\nID=ubuntu\nVERSION_ID=\"22.04\"\n";
         let result = detect_os_id_from("linux", Some(os_release)).unwrap();
@@ -604,8 +646,8 @@ items = ["neovim", "atuin"]
 
     #[test]
     fn errors_on_unsupported_platform() {
-        let err = detect_os_id_from("windows", None).unwrap_err();
-        assert!(err.to_string().contains("windows"));
+        let err = detect_os_id_from("freebsd", None).unwrap_err();
+        assert!(err.to_string().contains("freebsd"));
     }
 
     // --- manifest validation ---
@@ -733,14 +775,41 @@ description = "Placeholder"
     }
 
     #[test]
-    fn sys_init_shell_uses_zsh_for_macos() {
-        assert_eq!(sys_init_shell("macos"), "zsh");
+    fn sys_init_command_uses_zsh_for_macos() {
+        let command = sys_init_command("macos");
+        assert_eq!(command.program, "zsh");
+        assert!(command.fixed_args.is_empty());
     }
 
     #[test]
-    fn sys_init_shell_uses_bash_for_other_systems() {
-        assert_eq!(sys_init_shell("ubuntu"), "bash");
-        assert_eq!(sys_init_shell("fakeos"), "bash");
+    fn sys_init_command_uses_powershell_for_windows() {
+        let command = sys_init_command("windows");
+        assert_eq!(command.program, "powershell.exe");
+        assert_eq!(
+            command.fixed_args,
+            vec!["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+        );
+    }
+
+    #[test]
+    fn sys_init_command_uses_bash_for_other_systems() {
+        let ubuntu = sys_init_command("ubuntu");
+        let fakeos = sys_init_command("fakeos");
+        assert_eq!(ubuntu.program, "bash");
+        assert!(ubuntu.fixed_args.is_empty());
+        assert_eq!(fakeos.program, "bash");
+        assert!(fakeos.fixed_args.is_empty());
+    }
+
+    #[test]
+    fn sys_init_script_name_uses_ps1_for_windows() {
+        assert_eq!(sys_init_script_name("windows"), "init.ps1");
+    }
+
+    #[test]
+    fn sys_init_script_name_uses_sh_for_other_systems() {
+        assert_eq!(sys_init_script_name("macos"), "init.sh");
+        assert_eq!(sys_init_script_name("ubuntu"), "init.sh");
     }
 
     #[test]
@@ -748,29 +817,30 @@ description = "Placeholder"
         let script_path = Path::new("/tmp/init.sh");
         let items = vec!["neovim".to_string(), "atuin".to_string()];
         assert_eq!(
-            format_command_preview("bash", script_path, &items),
+            format_command_preview(&sys_init_command("ubuntu"), script_path, &items),
             "bash /tmp/init.sh neovim atuin"
         );
     }
 
     #[test]
-    fn format_command_preview_uses_selected_shell() {
-        let script_path = Path::new("/tmp/init.sh");
-        let items = vec!["homebrew".to_string()];
+    fn format_command_preview_includes_windows_fixed_args() {
+        let script_path = Path::new("C:/tmp/init.ps1");
+        let items = vec!["rust".to_string(), "yazi".to_string()];
         assert_eq!(
-            format_command_preview("zsh", script_path, &items),
-            "zsh /tmp/init.sh homebrew"
+            format_command_preview(&sys_init_command("windows"), script_path, &items),
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/tmp/init.ps1 rust yazi"
         );
     }
 
     // --- list_embedded_sys_entries ---
 
     #[test]
-    fn embedded_entries_include_ubuntu_and_macos() {
+    fn embedded_entries_include_supported_systems() {
         let entries = list_embedded_sys_entries();
         let ids: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
         assert!(ids.contains(&"ubuntu"), "ubuntu missing: {ids:?}");
         assert!(ids.contains(&"macos"), "macos missing: {ids:?}");
+        assert!(ids.contains(&"windows"), "windows missing: {ids:?}");
     }
 
     #[test]
@@ -823,6 +893,44 @@ description = "Placeholder"
         assert_eq!(
             all_ids, item_ids,
             "Ubuntu all profile should include every item"
+        );
+    }
+
+    #[test]
+    fn embedded_windows_profiles_cover_required_recommended_and_all_items() {
+        let content = crate::presets::read_asset_bytes("sys/windows/shine.toml")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Windows manifest");
+        let manifest = parse_and_validate_manifest(&content).unwrap();
+        let required = manifest
+            .profiles
+            .get("required")
+            .expect("missing Windows required profile");
+        let recommended = manifest
+            .profiles
+            .get("recommended")
+            .expect("missing Windows recommended profile");
+        let all = manifest
+            .profiles
+            .get("all")
+            .expect("missing Windows all profile");
+
+        assert_eq!(required.items, vec!["rust", "yazi", "starship"]);
+        assert!(recommended.items.iter().any(|item| item == "zoxide"));
+        assert!(recommended.items.iter().any(|item| item == "atuin"));
+        assert!(recommended.items.iter().any(|item| item == "fzf"));
+        assert!(recommended.items.iter().any(|item| item == "bat"));
+        assert!(recommended.items.iter().any(|item| item == "eza"));
+        assert!(recommended.items.iter().any(|item| item == "zerotier"));
+        assert!(!recommended.items.iter().any(|item| item == "bun"));
+        assert!(!recommended.items.iter().any(|item| item == "pnpm"));
+        assert!(!recommended.items.iter().any(|item| item == "mise"));
+
+        let item_ids: BTreeSet<&str> = manifest.items.iter().map(|item| item.id.as_str()).collect();
+        let all_ids: BTreeSet<&str> = all.items.iter().map(String::as_str).collect();
+        assert_eq!(
+            all_ids, item_ids,
+            "Windows all profile should include every item"
         );
     }
 
