@@ -945,6 +945,28 @@ description = "Placeholder"
     }
 
     #[test]
+    fn embedded_sys_init_scripts_include_yazi_shell_wrapper() {
+        for (path, marker) in [
+            ("sys/ubuntu/init.sh", "y() {"),
+            ("sys/macos/init.sh", "y() {"),
+            ("sys/windows/init.ps1", "function y {"),
+        ] {
+            let content = crate::presets::read_asset_bytes(path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .unwrap_or_else(|| panic!("missing embedded sys init script: {path}"));
+
+            assert!(
+                content.contains(marker),
+                "{path} should define Yazi wrapper"
+            );
+            assert!(
+                content.contains("--cwd-file"),
+                "{path} should pass --cwd-file to yazi"
+            );
+        }
+    }
+
+    #[test]
     fn embedded_entries_sorted_alphabetically() {
         let entries = list_embedded_sys_entries();
         let ids: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();

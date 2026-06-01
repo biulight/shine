@@ -108,6 +108,18 @@ if command -v bat >/dev/null 2>&1; then
   alias cat='bat'
 fi
 
+# Yazi
+if command -v yazi >/dev/null 2>&1; then
+  y() {
+    local tmp cwd
+    tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
+    command yazi "$@" --cwd-file="$tmp"
+    IFS= read -r -d '' cwd < "$tmp"
+    [[ "$cwd" != "$PWD" && -d "$cwd" ]] && builtin cd -- "$cwd"
+    command rm -f -- "$tmp"
+  }
+fi
+
 # fzf
 if command -v fzf >/dev/null 2>&1; then
   if fzf --${shell_name} >/dev/null 2>&1; then
