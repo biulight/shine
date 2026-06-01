@@ -95,22 +95,22 @@ foreach ($shinePath in $shineUserPaths) {
 
 # Starship prompt
 if (Get-Command starship -ErrorAction SilentlyContinue) {
-    Invoke-Expression (&starship init powershell)
+    Invoke-Expression (&starship init powershell | Out-String)
 }
 
 # zoxide
 if (Get-Command zoxide -ErrorAction SilentlyContinue) {
-    Invoke-Expression (&zoxide init powershell)
+    Invoke-Expression (&zoxide init powershell | Out-String)
 }
 
 # Atuin
 if (Get-Command atuin -ErrorAction SilentlyContinue) {
-    Invoke-Expression (&atuin init powershell)
+    Invoke-Expression (&atuin init powershell | Out-String)
 }
 
 # mise
 if (Get-Command mise -ErrorAction SilentlyContinue) {
-    Invoke-Expression (&mise activate pwsh)
+    Invoke-Expression (&mise activate pwsh | Out-String)
 }
 
 # eza
@@ -166,7 +166,7 @@ function Install-zoxide {
 }
 
 function Install-Atuin {
-    Install-WinGetPackage "atuinsh.atuin" "atuin"
+    Install-WinGetPackage "Atuinsh.Atuin" "atuin"
 }
 
 function Install-fzf {

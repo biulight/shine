@@ -935,6 +935,16 @@ description = "Placeholder"
     }
 
     #[test]
+    fn embedded_windows_init_uses_current_atuin_winget_id() {
+        let content = crate::presets::read_asset_bytes("sys/windows/init.ps1")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Windows init script");
+
+        assert!(content.contains("\"Atuinsh.Atuin\""));
+        assert!(!content.contains("\"atuinsh.atuin\""));
+    }
+
+    #[test]
     fn embedded_entries_sorted_alphabetically() {
         let entries = list_embedded_sys_entries();
         let ids: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
