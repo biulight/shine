@@ -1,4 +1,4 @@
-description = "Ghostty terminal configuration."
+description = "Ghostty terminal configuration with light/dark themes and optional background images."
 list_mode = "category"
 
 [dest]
@@ -7,28 +7,28 @@ unix = "~/.config/ghostty"
 [[files]]
 source = "config.ghostty"
 target = "config.ghostty"
-description = "Main Ghostty configuration."
+description = "Main Ghostty config with font, theme selection, clipboard, scrollback, and quick terminal settings."
 
 [[files]]
 source = "themes/iTerm2 Solarized Light"
 target = "themes/light_iTerm2 Solarized Light"
-description = "Light-mode Ghostty theme with optional background image."
+description = "iTerm2 Solarized Light theme with optional light background image."
 transforms = ["template"]
 
 [[files]]
 source = "themes/Alien Blood"
 target = "themes/dark_Alien Blood"
-description = "Dark-mode Ghostty theme with optional background image."
+description = "Alien Blood dark theme with optional dark background image."
 transforms = ["template"]
 
 [[files]]
 source = "themes/Atom One Light"
 target = "themes/light_Atom One Light"
-description = "Light-mode Ghostty theme with optional background image."
+description = "Atom One Light theme with optional light background image."
 transforms = ["template"]
 
 [[files]]
 source = "themes/Github Light Default"
 target = "themes/light_Github Light Default"
-description = "Light-mode Ghostty theme with optional background image."
+description = "GitHub Light Default theme with optional light background image."
 transforms = ["template"]
