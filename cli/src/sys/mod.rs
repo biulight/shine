@@ -10,41 +10,23 @@ use crate::colors;
 use crate::config::Config;
 
 #[derive(Clone, Debug, Default, Deserialize)]
-struct SysIndexManifest {
+struct SysManifest {
     #[serde(default)]
     description: String,
     default_profile: Option<String>,
     #[serde(default)]
-    items: Vec<String>,
+    items: Vec<SysItem>,
     #[serde(default)]
     profiles: BTreeMap<String, SysProfile>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct SysItemFile {
-    label: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    default: bool,
-}
-
-#[derive(Clone, Debug, Default)]
-struct SysManifest {
-    // Not used in production display paths (descriptions are shown via SysIndexManifest);
-    // retained so tests can verify parse correctness.
-    #[allow(dead_code)]
-    description: String,
-    default_profile: Option<String>,
-    items: Vec<SysItem>,
-    profiles: BTreeMap<String, SysProfile>,
-}
-
-#[derive(Clone, Debug)]
 struct SysItem {
     id: String,
     label: String,
+    #[serde(default)]
     description: String,
+    #[serde(default)]
     default: bool,
 }
 
@@ -332,7 +314,11 @@ async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset
     }
 
     let manifest_path = root.join("shine.toml");
-    let manifest = load_fs_manifest(&root, &manifest_path).await?;
+    let content = tokio::fs::read_to_string(&manifest_path)
+        .await
+        .with_context(|| format!("reading {}", manifest_path.display()))?;
+    let manifest = parse_and_validate_manifest(&content)
+        .with_context(|| format!("parsing {}", manifest_path.display()))?;
 
     Ok(LoadedSysPreset {
         manifest,
@@ -348,54 +334,8 @@ fn sys_init_script_name(os_id: &str) -> &'static str {
     }
 }
 
-async fn load_fs_manifest(root: &Path, manifest_path: &Path) -> Result<SysManifest> {
-    let content = tokio::fs::read_to_string(manifest_path)
-        .await
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let index = parse_index_manifest(&content)
-        .with_context(|| format!("parsing {}", manifest_path.display()))?;
-    let mut items = Vec::with_capacity(index.items.len());
-    for item_id in &index.items {
-        validate_item_id(item_id)?;
-        let item_path = root.join("items").join(format!("{item_id}.toml"));
-        let item_content = tokio::fs::read_to_string(&item_path)
-            .await
-            .with_context(|| format!("reading {}", item_path.display()))?;
-        let item = parse_item_file(&item_content)
-            .with_context(|| format!("parsing {}", item_path.display()))?;
-        items.push((item_id.clone(), item));
-    }
-    build_manifest(index, items)
-}
-
-fn parse_index_manifest(content: &str) -> Result<SysIndexManifest> {
-    let index: SysIndexManifest = toml::from_str(content)?;
-    Ok(index)
-}
-
-fn parse_item_file(content: &str) -> Result<SysItemFile> {
-    let item: SysItemFile = toml::from_str(content)?;
-    Ok(item)
-}
-
-fn build_manifest(
-    index: SysIndexManifest,
-    item_files: Vec<(String, SysItemFile)>,
-) -> Result<SysManifest> {
-    let manifest = SysManifest {
-        description: index.description,
-        default_profile: index.default_profile,
-        profiles: index.profiles,
-        items: item_files
-            .into_iter()
-            .map(|(id, item)| SysItem {
-                id,
-                label: item.label,
-                description: item.description,
-                default: item.default,
-            })
-            .collect(),
-    };
+fn parse_and_validate_manifest(content: &str) -> Result<SysManifest> {
+    let manifest: SysManifest = toml::from_str(content)?;
     validate_manifest(&manifest)?;
     Ok(manifest)
 }
@@ -589,7 +529,7 @@ fn list_embedded_sys_entries() -> Vec<(String, String)> {
             let toml_path = format!("sys/{os_id}/shine.toml");
             let description = crate::presets::read_asset_bytes(&toml_path)
                 .and_then(|b| String::from_utf8(b).ok())
-                .and_then(|s| toml::from_str::<SysIndexManifest>(&s).ok())
+                .and_then(|s| toml::from_str::<SysManifest>(&s).ok())
                 .map(|m| m.description)
                 .unwrap_or_default();
             (os_id, description)
@@ -619,7 +559,7 @@ async fn list_fs_sys_entries(presets_dir: &Path) -> Vec<(String, String)> {
         let os_id = entry.file_name().to_string_lossy().to_string();
         let toml_path = sys_root.join(&os_id).join("shine.toml");
         let description = if let Ok(content) = tokio::fs::read_to_string(&toml_path).await {
-            toml::from_str::<SysIndexManifest>(&content)
+            toml::from_str::<SysManifest>(&content)
                 .map(|m| m.description)
                 .unwrap_or_default()
         } else {
@@ -638,48 +578,28 @@ mod tests {
     use std::path::PathBuf;
     use tokio::fs;
 
-    fn load_embedded_manifest(os_id: &str) -> Result<SysManifest> {
-        let manifest_path = format!("sys/{os_id}/shine.toml");
-        let content = crate::presets::read_asset_bytes(&manifest_path)
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .with_context(|| format!("missing embedded manifest: {manifest_path}"))?;
-        let index =
-            parse_index_manifest(&content).with_context(|| format!("parsing {manifest_path}"))?;
-        let mut items = Vec::with_capacity(index.items.len());
-        for item_id in &index.items {
-            validate_item_id(item_id)?;
-            let item_path = format!("sys/{os_id}/items/{item_id}.toml");
-            let item_content = crate::presets::read_asset_bytes(&item_path)
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-                .with_context(|| format!("missing embedded sys item: {item_path}"))?;
-            let item =
-                parse_item_file(&item_content).with_context(|| format!("parsing {item_path}"))?;
-            items.push((item_id.clone(), item));
-        }
-        build_manifest(index, items)
-    }
-
     async fn make_temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("shine-sys-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).await.unwrap();
         dir
     }
 
-    fn test_manifest(index_toml: &str, item_files: &[(&str, &str)]) -> Result<SysManifest> {
-        let index = parse_index_manifest(index_toml)?;
-        let items = item_files
-            .iter()
-            .map(|(id, content)| Ok(((*id).to_string(), parse_item_file(content)?)))
-            .collect::<Result<Vec<_>>>()?;
-        build_manifest(index, items)
-    }
-
     fn sample_manifest() -> SysManifest {
-        test_manifest(
+        parse_and_validate_manifest(
             r#"
 description = "Test distro"
 default_profile = "recommended"
-items = ["neovim", "atuin"]
+
+[[items]]
+id = "neovim"
+label = "Neovim"
+description = "Install Neovim"
+
+[[items]]
+id = "atuin"
+label = "Atuin"
+description = "Install Atuin"
+default = true
 
 [profiles.recommended]
 items = ["neovim"]
@@ -687,23 +607,6 @@ items = ["neovim"]
 [profiles.full]
 items = ["neovim", "atuin"]
 "#,
-            &[
-                (
-                    "neovim",
-                    r#"
-label = "Neovim"
-description = "Install Neovim"
-"#,
-                ),
-                (
-                    "atuin",
-                    r#"
-label = "Atuin"
-description = "Install Atuin"
-default = true
-"#,
-                ),
-            ],
         )
         .unwrap()
     }
@@ -767,11 +670,16 @@ default = true
 
     #[test]
     fn rejects_duplicate_item_ids() {
-        let err = test_manifest(
+        let err = parse_and_validate_manifest(
             r#"
-items = ["dup", "dup"]
+[[items]]
+id = "dup"
+label = "One"
+
+[[items]]
+id = "dup"
+label = "Two"
 "#,
-            &[("dup", r#"label = "One""#), ("dup", r#"label = "Two""#)],
         )
         .unwrap_err();
         assert!(err.to_string().contains("duplicate sys init item id"));
@@ -779,14 +687,15 @@ items = ["dup", "dup"]
 
     #[test]
     fn rejects_unknown_profile_items() {
-        let err = test_manifest(
+        let err = parse_and_validate_manifest(
             r#"
-items = ["neovim"]
+[[items]]
+id = "neovim"
+label = "Neovim"
 
 [profiles.recommended]
 items = ["atuin"]
 "#,
-            &[("neovim", r#"label = "Neovim""#)],
         )
         .unwrap_err();
         assert!(err.to_string().contains("unknown item `atuin`"));
@@ -794,31 +703,17 @@ items = ["atuin"]
 
     #[test]
     fn rejects_missing_default_profile() {
-        let err = test_manifest(
+        let err = parse_and_validate_manifest(
             r#"
 default_profile = "recommended"
-items = ["neovim"]
+
+[[items]]
+id = "neovim"
+label = "Neovim"
 "#,
-            &[("neovim", r#"label = "Neovim""#)],
         )
         .unwrap_err();
         assert!(err.to_string().contains("default profile `recommended`"));
-    }
-
-    #[test]
-    fn preserves_index_item_order() {
-        let manifest = test_manifest(
-            r#"
-items = ["atuin", "neovim"]
-"#,
-            &[
-                ("atuin", r#"label = "Atuin""#),
-                ("neovim", r#"label = "Neovim""#),
-            ],
-        )
-        .unwrap();
-        let ids: Vec<&str> = manifest.items.iter().map(|item| item.id.as_str()).collect();
-        assert_eq!(ids, vec!["atuin", "neovim"]);
     }
 
     // --- selection resolution ---
@@ -845,11 +740,10 @@ items = ["atuin", "neovim"]
 
     #[test]
     fn resolve_selection_returns_empty_when_no_items_exist() {
-        let manifest = test_manifest(
+        let manifest = parse_and_validate_manifest(
             r#"
 description = "Placeholder"
 "#,
-            &[],
         )
         .unwrap();
         let selection = resolve_selection(&manifest, None, false).unwrap();
@@ -968,14 +862,21 @@ description = "Placeholder"
     #[test]
     fn embedded_sys_manifests_are_valid() {
         for (id, _) in list_embedded_sys_entries() {
-            load_embedded_manifest(&id)
-                .unwrap_or_else(|err| panic!("invalid embedded sys preset {id}: {err}"));
+            let toml_path = format!("sys/{id}/shine.toml");
+            let content = crate::presets::read_asset_bytes(&toml_path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .unwrap_or_else(|| panic!("missing embedded manifest: {toml_path}"));
+            parse_and_validate_manifest(&content)
+                .unwrap_or_else(|err| panic!("invalid embedded manifest {toml_path}: {err}"));
         }
     }
 
     #[test]
     fn embedded_ubuntu_profiles_cover_recommended_and_all_items() {
-        let manifest = load_embedded_manifest("ubuntu").unwrap();
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/shine.toml")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu manifest");
+        let manifest = parse_and_validate_manifest(&content).unwrap();
         let recommended = manifest
             .profiles
             .get("recommended")
@@ -1005,7 +906,10 @@ description = "Placeholder"
 
     #[test]
     fn embedded_windows_profiles_cover_required_recommended_and_all_items() {
-        let manifest = load_embedded_manifest("windows").unwrap();
+        let content = crate::presets::read_asset_bytes("sys/windows/shine.toml")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Windows manifest");
+        let manifest = parse_and_validate_manifest(&content).unwrap();
         let required = manifest
             .profiles
             .get("required")
@@ -1057,7 +961,7 @@ description = "Placeholder"
         ] {
             let content = crate::presets::read_asset_bytes(path)
                 .and_then(|bytes| String::from_utf8(bytes).ok())
-                .unwrap_or_else(|| panic!("missing embedded sys profile content: {path}"));
+                .unwrap_or_else(|| panic!("missing embedded sys init script: {path}"));
 
             assert!(
                 content.contains(marker),
@@ -1155,7 +1059,10 @@ description = "Placeholder"
             r#"
 description = "Stale Ubuntu"
 default_profile = "recommended"
-items = ["neovim"]
+
+[[items]]
+id = "neovim"
+label = "Neovim"
 
 [profiles.recommended]
 items = ["neovim"]
@@ -1196,24 +1103,21 @@ items = ["neovim"]
     async fn handle_init_dry_run_does_not_execute_script() {
         let dir = make_temp_dir().await;
         let os_dir = dir.join("presets/sys/fakeos");
-        fs::create_dir_all(os_dir.join("items")).await.unwrap();
+        fs::create_dir_all(&os_dir).await.unwrap();
 
         fs::write(
             os_dir.join("shine.toml"),
             r#"
 description = "Fake OS"
 default_profile = "recommended"
-items = ["touch-file"]
+
+[[items]]
+id = "touch-file"
+label = "Touch file"
 
 [profiles.recommended]
 items = ["touch-file"]
 "#,
-        )
-        .await
-        .unwrap();
-        fs::write(
-            os_dir.join("items/touch-file.toml"),
-            b"label = \"Touch file\"\n",
         )
         .await
         .unwrap();
@@ -1231,25 +1135,6 @@ items = ["touch-file"]
             .await
             .unwrap();
         assert!(!sentinel.exists(), "script must not have been executed");
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn load_fs_manifest_errors_when_item_file_is_missing() {
-        let dir = make_temp_dir().await;
-        let os_dir = dir.join("sys/fakeos");
-        fs::create_dir_all(&os_dir).await.unwrap();
-        let manifest_path = os_dir.join("shine.toml");
-        fs::write(&manifest_path, b"items = [\"missing\"]\n")
-            .await
-            .unwrap();
-
-        let err = load_fs_manifest(&os_dir, &manifest_path).await.unwrap_err();
-        assert!(
-            err.to_string().contains("items\\missing.toml")
-                || err.to_string().contains("items/missing.toml")
-        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
