@@ -1033,10 +1033,10 @@ pub(crate) fn get_shell() -> Result<ShellType> {
 }
 
 pub(crate) fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) -> Result<PathBuf> {
-    Ok(get_shell_config_paths(shell_type, home_path)?
+    get_shell_config_paths(shell_type, home_path)?
         .into_iter()
         .next()
-        .expect("shell config paths should never be empty"))
+        .ok_or_else(|| anyhow::anyhow!("shell config paths should never be empty"))
 }
 
 fn get_shell_config_paths(shell_type: &ShellType, home_path: &Path) -> Result<Vec<PathBuf>> {
@@ -1165,7 +1165,9 @@ mod tests {
         match shell {
             ShellType::PowerShell => ". (Join-Path $HOME 'shell/profile.ps1')",
             ShellType::Fish => "source \"$HOME/shell/config.fish\"",
-            _ => "source \"$HOME/shell/profile.sh\"",
+            ShellType::Bash | ShellType::Zsh | ShellType::Elvish => {
+                "source \"$HOME/shell/profile.sh\""
+            }
         }
     }
 
@@ -1173,7 +1175,7 @@ mod tests {
         match shell {
             ShellType::PowerShell => "$shinePathEntries",
             ShellType::Fish => "fish_add_path",
-            _ => "export PATH",
+            ShellType::Bash | ShellType::Zsh | ShellType::Elvish => "export PATH",
         }
     }
 

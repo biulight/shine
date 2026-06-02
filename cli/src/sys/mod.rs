@@ -31,6 +31,8 @@ struct SysItemFile {
 
 #[derive(Clone, Debug, Default)]
 struct SysManifest {
+    // Not used in production display paths (descriptions are shown via SysIndexManifest);
+    // retained so tests can verify parse correctness.
     #[allow(dead_code)]
     description: String,
     default_profile: Option<String>,
@@ -110,8 +112,8 @@ fn sys_init_theme() -> ColorfulTheme {
 
 /// Detect the current OS identifier using `std::env::consts::OS` and, on Linux,
 /// the `ID=` field from `/etc/os-release`.
-pub(crate) fn detect_os_id() -> Result<String> {
-    let os_release = std::fs::read_to_string("/etc/os-release").ok();
+pub(crate) async fn detect_os_id() -> Result<String> {
+    let os_release = tokio::fs::read_to_string("/etc/os-release").await.ok();
     detect_os_id_from(std::env::consts::OS, os_release.as_deref())
 }
 
@@ -142,7 +144,7 @@ fn detect_os_id_from(os: &str, os_release: Option<&str>) -> Result<String> {
 pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
 
-    let current_os = detect_os_id().ok();
+    let current_os = detect_os_id().await.ok();
 
     let entries = if config.is_external_presets {
         list_fs_sys_entries(config.presets_dir()).await
@@ -184,7 +186,7 @@ pub(crate) async fn handle_init(
     preset: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
-    let os_id = detect_os_id()?;
+    let os_id = detect_os_id().await?;
     handle_init_for_os(config, &os_id, preset, dry_run).await
 }
 
@@ -280,21 +282,19 @@ async fn print_dry_run(
 }
 
 fn sys_init_command(os_id: &str) -> SysInitCommand {
-    if os_id == "windows" {
-        SysInitCommand {
+    match os_id {
+        "windows" => SysInitCommand {
             program: "powershell.exe",
             fixed_args: vec!["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"],
-        }
-    } else if os_id == "macos" {
-        SysInitCommand {
+        },
+        "macos" => SysInitCommand {
             program: "zsh",
             fixed_args: Vec::new(),
-        }
-    } else {
-        SysInitCommand {
+        },
+        _ => SysInitCommand {
             program: "bash",
             fixed_args: Vec::new(),
-        }
+        },
     }
 }
 
@@ -303,12 +303,13 @@ fn format_command_preview(
     script_path: &Path,
     item_ids: &[String],
 ) -> String {
-    let mut parts = Vec::with_capacity(command.fixed_args.len() + item_ids.len() + 2);
-    parts.push(command.program.to_string());
-    parts.extend(command.fixed_args.iter().map(|arg| (*arg).to_string()));
-    parts.push(script_path.display().to_string());
-    parts.extend(item_ids.iter().cloned());
-    parts.join(" ")
+    let script = script_path.display().to_string();
+    std::iter::once(command.program)
+        .chain(command.fixed_args.iter().copied())
+        .chain(std::iter::once(script.as_str()))
+        .chain(item_ids.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset> {
@@ -362,28 +363,6 @@ async fn load_fs_manifest(root: &Path, manifest_path: &Path) -> Result<SysManife
             .with_context(|| format!("reading {}", item_path.display()))?;
         let item = parse_item_file(&item_content)
             .with_context(|| format!("parsing {}", item_path.display()))?;
-        items.push((item_id.clone(), item));
-    }
-    build_manifest(index, items)
-}
-
-#[cfg(test)]
-fn load_embedded_manifest(os_id: &str) -> Result<SysManifest> {
-    let manifest_path = format!("sys/{os_id}/shine.toml");
-    let content = crate::presets::read_asset_bytes(&manifest_path)
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .with_context(|| format!("missing embedded manifest: {manifest_path}"))?;
-    let index =
-        parse_index_manifest(&content).with_context(|| format!("parsing {manifest_path}"))?;
-    let mut items = Vec::with_capacity(index.items.len());
-    for item_id in &index.items {
-        validate_item_id(item_id)?;
-        let item_path = format!("sys/{os_id}/items/{item_id}.toml");
-        let item_content = crate::presets::read_asset_bytes(&item_path)
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .with_context(|| format!("missing embedded sys item: {item_path}"))?;
-        let item =
-            parse_item_file(&item_content).with_context(|| format!("parsing {item_path}"))?;
         items.push((item_id.clone(), item));
     }
     build_manifest(index, items)
@@ -658,6 +637,27 @@ mod tests {
     use crate::config::Config;
     use std::path::PathBuf;
     use tokio::fs;
+
+    fn load_embedded_manifest(os_id: &str) -> Result<SysManifest> {
+        let manifest_path = format!("sys/{os_id}/shine.toml");
+        let content = crate::presets::read_asset_bytes(&manifest_path)
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .with_context(|| format!("missing embedded manifest: {manifest_path}"))?;
+        let index =
+            parse_index_manifest(&content).with_context(|| format!("parsing {manifest_path}"))?;
+        let mut items = Vec::with_capacity(index.items.len());
+        for item_id in &index.items {
+            validate_item_id(item_id)?;
+            let item_path = format!("sys/{os_id}/items/{item_id}.toml");
+            let item_content = crate::presets::read_asset_bytes(&item_path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .with_context(|| format!("missing embedded sys item: {item_path}"))?;
+            let item =
+                parse_item_file(&item_content).with_context(|| format!("parsing {item_path}"))?;
+            items.push((item_id.clone(), item));
+        }
+        build_manifest(index, items)
+    }
 
     async fn make_temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("shine-sys-{}", uuid::Uuid::new_v4()));
