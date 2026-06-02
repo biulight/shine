@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::platform::current_platform;
 use crate::presets;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -251,10 +252,6 @@ fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Resu
         }
     }
     Ok(matches)
-}
-
-fn current_platform() -> &'static str {
-    if cfg!(windows) { "windows" } else { "unix" }
 }
 
 fn collect_embedded_category_names(filter: Option<&str>) -> Vec<String> {

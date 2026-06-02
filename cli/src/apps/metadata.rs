@@ -1,5 +1,6 @@
 use super::manifest::AppInstallStrategy;
 use crate::config::Config;
+use crate::platform::current_platform;
 use crate::presets;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -558,12 +559,8 @@ fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Resu
     Ok(matches)
 }
 
-fn current_platform() -> &'static str {
-    if cfg!(windows) { "windows" } else { "unix" }
-}
-
 fn is_absolute_after_expansion(path: &str) -> bool {
-    Path::new(path).is_absolute() || path.starts_with('/')
+    Path::new(path).is_absolute()
 }
 
 fn normalize_relative(path: &str) -> Result<PathBuf> {

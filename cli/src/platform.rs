@@ -13,6 +13,10 @@ pub(crate) fn current_executable_name() -> &'static str {
     executable_name_for_os(std::env::consts::OS)
 }
 
+pub(crate) fn current_platform() -> &'static str {
+    if cfg!(windows) { "windows" } else { "unix" }
+}
+
 pub(crate) fn release_target(os: &str, arch: &str) -> Result<String> {
     let normalized_os = match os {
         "macos" => "darwin",
