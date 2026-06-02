@@ -1,0 +1,2 @@
+label = "AstroNvim"
+description = "Install the AstroNvim template into ~/.config/nvim when no config exists."
