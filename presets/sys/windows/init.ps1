@@ -4,6 +4,29 @@ $ErrorActionPreference = "Stop"
 $ProfileSentinelStart = "# >>> shine windows sys >>>"
 $ProfileSentinelEnd = "# <<< shine windows sys <<<"
 
+$ScriptPathCandidates = @(
+    $env:SHINE_SYS_PRESET_ROOT,
+    $PSScriptRoot,
+    $(if ($MyInvocation.PSCommandPath) { Split-Path -Parent $MyInvocation.PSCommandPath }),
+    $(if ($PSCommandPath) { Split-Path -Parent $PSCommandPath }),
+    $(if ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }),
+    $(if ($MyInvocation.MyCommand.Definition -and (Test-Path -LiteralPath $MyInvocation.MyCommand.Definition)) {
+            Split-Path -Parent $MyInvocation.MyCommand.Definition
+        }),
+    (Get-Location).Path
+) | Where-Object { $_ }
+
+$SysPresetRoot = $ScriptPathCandidates |
+    ForEach-Object {
+        $path = [string] $_
+        if ($path.StartsWith("\\?\")) {
+            $path.Substring(4)
+        } else {
+            $path
+        }
+    } |
+    Select-Object -First 1
+
 function Assert-Windows {
     if (-not $IsWindows -and $env:OS -ne "Windows_NT") {
         throw "This sys init preset only supports Windows."
@@ -74,68 +97,36 @@ function Remove-ManagedProfileBlock {
     Set-Content -LiteralPath $Path -Value $output -Encoding UTF8
 }
 
+function Get-ScriptDirectory {
+    if ($SysPresetRoot) {
+        return $SysPresetRoot
+    }
+
+    throw "Could not determine Windows sys preset directory."
+}
+
+function Get-ManagedProfilePath {
+    Join-Path $HOME ".shine\profile\windows-sys.ps1"
+}
+
+function Install-ManagedProfileScript {
+    $profileTemplatePath = Join-Path (Get-ScriptDirectory) "profile.ps1"
+    if (-not (Test-Path -LiteralPath $profileTemplatePath)) {
+        throw "Missing Windows profile template: $profileTemplatePath"
+    }
+
+    $managedProfilePath = Get-ManagedProfilePath
+    $managedProfileParent = Split-Path -Parent $managedProfilePath
+    New-Item -ItemType Directory -Force -Path $managedProfileParent | Out-Null
+    Copy-Item -LiteralPath $profileTemplatePath -Destination $managedProfilePath -Force
+    Write-Host "Updated $managedProfilePath"
+}
+
 function Get-ManagedProfileBlock {
     @'
-# Managed by `shine sys init` for Windows. Existing user config is left untouched.
-
-# User-local binaries
-$shineUserPaths = @(
-    "$HOME\.cargo\bin",
-    "$HOME\.local\bin",
-    "$HOME\.bun\bin",
-    "$env:LOCALAPPDATA\pnpm",
-    "$env:LOCALAPPDATA\Microsoft\WinGet\Packages"
-) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
-
-foreach ($shinePath in $shineUserPaths) {
-    if (($env:Path -split ';') -notcontains $shinePath) {
-        $env:Path = "$shinePath;$env:Path"
-    }
-}
-
-# Starship prompt
-if (Get-Command starship -ErrorAction SilentlyContinue) {
-    Invoke-Expression (&starship init powershell | Out-String)
-}
-
-# zoxide
-if (Get-Command zoxide -ErrorAction SilentlyContinue) {
-    Invoke-Expression (&zoxide init powershell | Out-String)
-}
-
-# Atuin
-if (Get-Command atuin -ErrorAction SilentlyContinue) {
-    Invoke-Expression (&atuin init powershell | Out-String)
-}
-
-# mise
-if (Get-Command mise -ErrorAction SilentlyContinue) {
-    Invoke-Expression (&mise activate pwsh | Out-String)
-}
-
-# eza
-if (Get-Command eza -ErrorAction SilentlyContinue) {
-    Set-Alias -Name ls -Value eza -Option AllScope -Force
-}
-
-# bat
-if (Get-Command bat -ErrorAction SilentlyContinue) {
-    Set-Alias -Name cat -Value bat -Option AllScope -Force
-}
-
-# Yazi
-if (Get-Command yazi -ErrorAction SilentlyContinue) {
-    function y {
-        $tmp = (New-TemporaryFile).FullName
-        yazi.exe @args --cwd-file="$tmp"
-
-        $cwd = Get-Content -Path $tmp -Encoding UTF8
-        if ($cwd -and $cwd -ne $PWD.Path -and (Test-Path -LiteralPath $cwd -PathType Container)) {
-            Set-Location -LiteralPath (Resolve-Path -LiteralPath $cwd).Path
-        }
-
-        Remove-Item -Path $tmp
-    }
+$shineWindowsSysProfile = Join-Path $HOME ".shine\profile\windows-sys.ps1"
+if (Test-Path -LiteralPath $shineWindowsSysProfile) {
+    . $shineWindowsSysProfile
 }
 '@
 }
@@ -248,5 +239,6 @@ foreach ($item in $args) {
     Install-Item $item
 }
 
+Install-ManagedProfileScript
 Update-PowerShellProfiles
 Write-Host "Windows system initialization complete."

@@ -222,7 +222,13 @@ async fn handle_init_for_os(
     println!();
 
     let command = sys_init_command(os_id);
+    let script_dir = loaded
+        .script_path
+        .parent()
+        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
     let status = tokio::process::Command::new(command.program)
+        .current_dir(script_dir)
+        .env("SHINE_SYS_PRESET_ROOT", script_dir)
         .args(&command.fixed_args)
         .arg(&loaded.script_path)
         .args(&selection.item_ids)
@@ -1047,11 +1053,11 @@ description = "Placeholder"
         for (path, marker) in [
             ("sys/ubuntu/init.sh", "y() {"),
             ("sys/macos/init.sh", "y() {"),
-            ("sys/windows/init.ps1", "function y {"),
+            ("sys/windows/profile.ps1", "function y {"),
         ] {
             let content = crate::presets::read_asset_bytes(path)
                 .and_then(|bytes| String::from_utf8(bytes).ok())
-                .unwrap_or_else(|| panic!("missing embedded sys init script: {path}"));
+                .unwrap_or_else(|| panic!("missing embedded sys profile content: {path}"));
 
             assert!(
                 content.contains(marker),
@@ -1062,6 +1068,19 @@ description = "Placeholder"
                 "{path} should pass --cwd-file to yazi"
             );
         }
+    }
+
+    #[test]
+    fn embedded_windows_init_installs_managed_profile_loader() {
+        let content = crate::presets::read_asset_bytes("sys/windows/init.ps1")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Windows init script");
+
+        assert!(content.contains("profile.ps1"));
+        assert!(content.contains("SHINE_SYS_PRESET_ROOT"));
+        assert!(content.contains(".shine\\profile\\windows-sys.ps1"));
+        assert!(content.contains("Copy-Item -LiteralPath $profileTemplatePath"));
+        assert!(content.contains("$shineWindowsSysProfile"));
     }
 
     #[test]
