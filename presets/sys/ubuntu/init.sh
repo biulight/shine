@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ARCH=$(uname -m)
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SHELL_SENTINEL_START="# >>> shine ubuntu sys >>>"
 SHELL_SENTINEL_END="# <<< shine ubuntu sys <<<"
 PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}"
@@ -60,118 +61,46 @@ remove_pnpm_block() {
 append_shell_block() {
     local file="$1"
     local shell_name="$2"
-    local init_file
 
     touch "$file"
     remove_shell_block "$file"
     remove_pnpm_block "$file"
-    init_file="$(mktemp)"
-
-    cat > "$init_file" <<EOF
-# Managed by \`shine sys init\` for Ubuntu. Existing user config is left untouched.
-
-# User-local binaries
-case ":\$PATH:" in
-  *":\$HOME/.local/bin:"*) ;;
-  *) export PATH="\$HOME/.local/bin:\$PATH" ;;
-esac
-
-# Homebrew
-if [[ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]]; then
-  eval "\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-elif [[ -x "\$HOME/.linuxbrew/bin/brew" ]]; then
-  eval "\$(\$HOME/.linuxbrew/bin/brew shellenv)"
-fi
-
-# pnpm
-export PNPM_HOME="\$HOME/.local/share/pnpm"
-case ":\$PATH:" in
-  *":\$PNPM_HOME:"*) ;;
-  *) export PATH="\$PNPM_HOME:\$PATH" ;;
-esac
-if [[ -d "\$PNPM_HOME/bin" ]]; then
-  case ":\$PATH:" in
-    *":\$PNPM_HOME/bin:"*) ;;
-    *) export PATH="\$PNPM_HOME/bin:\$PATH" ;;
-  esac
-fi
-
-# eza
-if command -v eza >/dev/null 2>&1; then
-  alias ls='eza --icons'
-  alias ll='eza -la --icons'
-  alias lt='eza --tree'
-fi
-
-# bat
-if command -v bat >/dev/null 2>&1; then
-  alias cat='bat'
-fi
-
-# Yazi
-if command -v yazi >/dev/null 2>&1; then
-  y() {
-    local tmp cwd
-    tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
-    command yazi "$@" --cwd-file="$tmp"
-    IFS= read -r -d '' cwd < "$tmp"
-    [[ "$cwd" != "$PWD" && -d "$cwd" ]] && builtin cd -- "$cwd"
-    command rm -f -- "$tmp"
-  }
-fi
-
-# fzf
-if command -v fzf >/dev/null 2>&1; then
-  if fzf --${shell_name} >/dev/null 2>&1; then
-    eval "\$(fzf --${shell_name})"
-  elif [[ "${shell_name}" == "bash" ]]; then
-    [[ -f /usr/share/doc/fzf/examples/key-bindings.bash ]] && source /usr/share/doc/fzf/examples/key-bindings.bash
-    [[ -f /usr/share/doc/fzf/examples/completion.bash ]] && source /usr/share/doc/fzf/examples/completion.bash
-  elif [[ "${shell_name}" == "zsh" ]]; then
-    [[ -f /usr/share/doc/fzf/examples/key-bindings.zsh ]] && source /usr/share/doc/fzf/examples/key-bindings.zsh
-    [[ -f /usr/share/doc/fzf/examples/completion.zsh ]] && source /usr/share/doc/fzf/examples/completion.zsh
-  fi
-fi
-
-# Starship prompt
-if command -v starship >/dev/null 2>&1; then
-  eval "\$(starship init ${shell_name})"
-fi
-
-# zoxide
-if command -v zoxide >/dev/null 2>&1; then
-  eval "\$(zoxide init ${shell_name})"
-fi
-
-# mise
-if command -v mise >/dev/null 2>&1; then
-  eval "\$(mise activate ${shell_name})"
-elif [[ -x "\$HOME/.local/bin/mise" ]]; then
-  eval "\$(\$HOME/.local/bin/mise activate ${shell_name})"
-fi
-
-# zsh-vi-mode
-if [[ "${shell_name}" == "zsh" ]]; then
-  if [[ -f "/home/linuxbrew/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
-    source "/home/linuxbrew/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
-  elif [[ -f "\$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
-    source "\$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
-  elif [[ -f "\$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
-    source "\$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
-  fi
-fi
-EOF
 
     {
         echo
         echo "$SHELL_SENTINEL_START"
-        cat "$init_file"
+        echo "shine_ubuntu_sys_profile=\"\$HOME/.shine/profile/ubuntu-sys.sh\""
+        echo "if [[ -f \"\$shine_ubuntu_sys_profile\" ]]; then"
+        echo "  SHINE_UBUNTU_SYS_SHELL=\"$shell_name\""
+        echo "  source \"\$shine_ubuntu_sys_profile\""
+        echo "fi"
         echo "$SHELL_SENTINEL_END"
     } >> "$file"
-    rm -f "$init_file"
+}
+
+managed_profile_path() {
+    echo "$HOME/.shine/profile/ubuntu-sys.sh"
+}
+
+install_managed_profile_script() {
+    local template_path="$SCRIPT_DIR/profile.sh"
+    local managed_path
+    local managed_parent
+
+    if [[ ! -f "$template_path" ]]; then
+        echo "Missing Ubuntu profile template: $template_path" >&2
+        return 1
+    fi
+
+    managed_path="$(managed_profile_path)"
+    managed_parent="$(dirname "$managed_path")"
+    mkdir -p "$managed_parent"
+    cp "$template_path" "$managed_path"
+    echo "Updated $managed_path"
 }
 
 append_shell_init_blocks() {
+    install_managed_profile_script
     append_shell_block "$HOME/.bashrc" bash
     append_shell_block "$HOME/.zshrc" zsh
     echo "Updated ~/.bashrc and ~/.zshrc managed blocks for Ubuntu shell tool initialization."

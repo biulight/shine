@@ -1051,7 +1051,7 @@ description = "Placeholder"
     #[test]
     fn embedded_sys_init_scripts_include_yazi_shell_wrapper() {
         for (path, marker) in [
-            ("sys/ubuntu/init.sh", "y() {"),
+            ("sys/ubuntu/profile.sh", "y() {"),
             ("sys/macos/init.sh", "y() {"),
             ("sys/windows/profile.ps1", "function y {"),
         ] {
@@ -1068,6 +1068,18 @@ description = "Placeholder"
                 "{path} should pass --cwd-file to yazi"
             );
         }
+    }
+
+    #[test]
+    fn embedded_ubuntu_init_installs_managed_profile_loader() {
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/init.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu init script");
+
+        assert!(content.contains("profile.sh"));
+        assert!(content.contains(".shine/profile/ubuntu-sys.sh"));
+        assert!(content.contains("cp \"$template_path\" \"$managed_path\""));
+        assert!(content.contains("SHINE_UBUNTU_SYS_SHELL"));
     }
 
     #[test]
