@@ -504,7 +504,7 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
 fn validate_dest(name: &str, dest: &str) -> Result<()> {
     let expanded = crate::config::full_expand(dest)
         .with_context(|| format!("failed to expand dest in app/{name}/shine.toml"))?;
-    if !is_absolute_after_expansion(&expanded) {
+    if !Path::new(&expanded).is_absolute() {
         bail!("app/{name}/shine.toml dest must be absolute after expansion");
     }
     let path = PathBuf::from(&expanded);
@@ -557,10 +557,6 @@ fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Resu
         }
     }
     Ok(matches)
-}
-
-fn is_absolute_after_expansion(path: &str) -> bool {
-    Path::new(path).is_absolute()
 }
 
 fn normalize_relative(path: &str) -> Result<PathBuf> {

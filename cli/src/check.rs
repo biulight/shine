@@ -557,8 +557,8 @@ mod tests {
     async fn windows_docker_engine_row_uses_engine_destination() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
-        // SAFETY: env_lock() serialises all Windows env-mutation tests, preventing
-        // concurrent writes to the process environment from other test threads.
+        // SAFETY: env_lock() serialises all env-mutation tests in this module,
+        // preventing concurrent writes to the process environment from other test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.shine_dir()).await.unwrap();
@@ -582,8 +582,8 @@ mod tests {
     async fn windows_docker_desktop_row_uses_forward_slash_destination() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
-        // SAFETY: env_lock() serialises all Windows env-mutation tests, preventing
-        // concurrent writes to the process environment from other test threads.
+        // SAFETY: env_lock() serialises all env-mutation tests in this module,
+        // preventing concurrent writes to the process environment from other test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.shine_dir()).await.unwrap();

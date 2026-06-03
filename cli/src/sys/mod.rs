@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use crate::colors;
 use crate::config::Config;
-use crate::shells::ShellType;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct SysManifest {
@@ -184,7 +183,7 @@ async fn handle_init_for_os(
     let loaded = load_sys_preset(config, os_id).await?;
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let selection = resolve_selection(&loaded.manifest, preset, interactive)?;
-    let sys_shell = sys_shell_env_value(&config.shell_type);
+    let sys_shell: &'static str = config.shell_type.into();
 
     if dry_run {
         print_dry_run(os_id, &loaded, &selection, sys_shell).await?;
@@ -283,10 +282,6 @@ fn sys_init_command(os_id: &str) -> SysInitCommand {
             fixed_args: Vec::new(),
         },
     }
-}
-
-fn sys_shell_env_value(shell_type: &ShellType) -> &'static str {
-    (*shell_type).into()
 }
 
 fn format_command_preview(
@@ -584,6 +579,7 @@ async fn list_fs_sys_entries(presets_dir: &Path) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::shells::ShellType;
     use std::path::PathBuf;
     use tokio::fs;
 
@@ -761,12 +757,12 @@ description = "Placeholder"
     }
 
     #[test]
-    fn sys_shell_env_value_matches_shell_type_names() {
-        assert_eq!(sys_shell_env_value(&ShellType::Bash), "bash");
-        assert_eq!(sys_shell_env_value(&ShellType::Zsh), "zsh");
-        assert_eq!(sys_shell_env_value(&ShellType::Fish), "fish");
-        assert_eq!(sys_shell_env_value(&ShellType::PowerShell), "powershell");
-        assert_eq!(sys_shell_env_value(&ShellType::Elvish), "elvish");
+    fn shell_type_into_static_str() {
+        assert_eq!(<&'static str>::from(ShellType::Bash), "bash");
+        assert_eq!(<&'static str>::from(ShellType::Zsh), "zsh");
+        assert_eq!(<&'static str>::from(ShellType::Fish), "fish");
+        assert_eq!(<&'static str>::from(ShellType::PowerShell), "powershell");
+        assert_eq!(<&'static str>::from(ShellType::Elvish), "elvish");
     }
 
     #[test]
