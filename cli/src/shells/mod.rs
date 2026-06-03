@@ -778,6 +778,7 @@ fn powershell_path_snippet(bin_str: &str) -> String {
 }
 
 fn powershell_bin_assignment(bin_str: &str) -> String {
+    let bin_str = crate::path_display::strip_windows_verbatim_prefix(bin_str);
     let normalized = bin_str.replace('\\', "/");
     if let Some(rel) = normalized.strip_prefix("$HOME/") {
         let escaped = rel.replace('\'', "''");
@@ -802,7 +803,9 @@ fn shell_quote(path: &Path) -> String {
 }
 
 fn powershell_quote(path: &Path) -> String {
-    powershell_quote_str(&path.display().to_string())
+    powershell_quote_str(&crate::path_display::strip_windows_verbatim_prefix(
+        &path.display().to_string(),
+    ))
 }
 
 fn shell_quote_str(value: &str) -> String {
@@ -822,13 +825,14 @@ fn shell_quote_expand_home(value: &str) -> String {
 }
 
 fn powershell_path_expr(value: &str) -> String {
+    let value = crate::path_display::strip_windows_verbatim_prefix(value);
     let normalized = value.replace('\\', "/");
     if let Some(rel) = normalized.strip_prefix("$HOME/") {
         format!("(Join-Path $HOME '{}')", rel.replace('\'', "''"))
     } else if normalized == "$HOME" {
         "$HOME".to_string()
     } else {
-        powershell_quote_str(value)
+        powershell_quote_str(&value)
     }
 }
 
@@ -1417,6 +1421,16 @@ mod tests {
             "powershell".parse().unwrap(),
             ShellType::PowerShell
         ));
+    }
+
+    #[test]
+    fn powershell_paths_strip_windows_verbatim_prefix() {
+        let assignment = powershell_bin_assignment(r"\\?\D:\Github\Biulight\shine\.shine\bin");
+        assert!(assignment.contains(r"D:\Github\Biulight\shine\.shine\bin"));
+        assert!(!assignment.contains(r"\\?\"));
+
+        let quoted = powershell_quote(Path::new(r"\\?\D:\Github\Biulight\shine\profile.ps1"));
+        assert_eq!(quoted, r"'D:\Github\Biulight\shine\profile.ps1'");
     }
 
     #[cfg(unix)]

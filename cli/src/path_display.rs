@@ -17,13 +17,16 @@ pub(crate) fn format_tilde_path(path: &str, home_dir: &Path) -> String {
     format_home(Path::new(&expanded), home_dir)
 }
 
+pub(crate) fn strip_windows_verbatim_prefix(value: &str) -> String {
+    value
+        .strip_prefix(r"\\?\UNC\")
+        .map(|path| format!(r"\\{path}"))
+        .or_else(|| value.strip_prefix(r"\\?\").map(str::to_string))
+        .unwrap_or_else(|| value.to_string())
+}
+
 fn normalize(value: &str) -> String {
-    let normalized = value.replace('\\', "/");
-    normalized
-        .strip_prefix("//?/UNC/")
-        .map(|path| format!("//{path}"))
-        .or_else(|| normalized.strip_prefix("//?/").map(str::to_string))
-        .unwrap_or(normalized)
+    strip_windows_verbatim_prefix(value).replace('\\', "/")
 }
 
 #[cfg(test)]
@@ -52,6 +55,18 @@ mod tests {
         assert_eq!(
             format(Path::new(r"\\?\UNC\server\share\file.txt")),
             "//server/share/file.txt"
+        );
+    }
+
+    #[test]
+    fn strips_windows_verbatim_prefix_without_changing_separators() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\D:\Github\Biulight\shine\preset.ps1"),
+            r"D:\Github\Biulight\shine\preset.ps1"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\preset.ps1"),
+            r"\\server\share\preset.ps1"
         );
     }
 
