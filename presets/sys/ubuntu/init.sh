@@ -144,7 +144,6 @@ install_packages() {
     done
 
     if [[ ${#packages[@]} -eq 0 ]]; then
-        echo "Packages already installed: $*"
         return
     fi
 

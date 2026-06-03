@@ -727,7 +727,6 @@ fn format_interactive_item(item: &SysItem) -> String {
 }
 
 fn print_interactive_header(manifest: &SysManifest) {
-    println!("{}", colors::bold("System Init"));
     if let Some(default_profile) = manifest.default_profile.as_deref() {
         println!(
             "{}",
