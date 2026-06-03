@@ -1004,6 +1004,22 @@ description = "Placeholder"
         assert!(content.contains("remove_shell_block \"$HOME/.zshrc\""));
         assert!(content.contains("append_shell_block \"$HOME/.zshrc\" zsh"));
         assert!(content.contains("remove_shell_block \"$HOME/.bashrc\""));
+        assert!(content.contains(
+            "Atuin: already installed ($(atuin --version)).\"\n        append_shell_init_blocks"
+        ));
+        assert!(content.contains(
+            "curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh\n    append_shell_init_blocks"
+        ));
+    }
+
+    #[test]
+    fn embedded_ubuntu_profile_initializes_atuin() {
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/profile.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu profile script");
+
+        assert!(content.contains("atuin init"));
+        assert!(content.contains("shine_ubuntu_sys_shell"));
     }
 
     #[test]

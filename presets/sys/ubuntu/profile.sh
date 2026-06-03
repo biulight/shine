@@ -65,6 +65,11 @@ if command -v fzf >/dev/null 2>&1; then
   fi
 fi
 
+# Atuin
+if command -v atuin >/dev/null 2>&1; then
+  eval "$(atuin init "${shine_ubuntu_sys_shell}")"
+fi
+
 # Starship prompt
 if command -v starship >/dev/null 2>&1; then
   eval "$(starship init "${shine_ubuntu_sys_shell}")"

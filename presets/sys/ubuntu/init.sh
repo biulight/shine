@@ -194,10 +194,12 @@ install_astronvim() {
 install_atuin() {
     if command -v atuin &>/dev/null; then
         echo "Atuin: already installed ($(atuin --version))."
+        append_shell_init_blocks
         return
     fi
     echo "Installing Atuin..."
     curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
+    append_shell_init_blocks
 }
 
 # --- Yazi ---
