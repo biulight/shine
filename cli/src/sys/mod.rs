@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::colors;
 use crate::config::Config;
+use crate::shells::ShellType;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct SysManifest {
@@ -183,9 +184,10 @@ async fn handle_init_for_os(
     let loaded = load_sys_preset(config, os_id).await?;
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let selection = resolve_selection(&loaded.manifest, preset, interactive)?;
+    let sys_shell = sys_shell_env_value(&config.shell_type);
 
     if dry_run {
-        print_dry_run(os_id, &loaded, &selection).await?;
+        print_dry_run(os_id, &loaded, &selection, sys_shell).await?;
         return Ok(());
     }
 
@@ -213,6 +215,7 @@ async fn handle_init_for_os(
     let status = tokio::process::Command::new(command.program)
         .current_dir(script_dir)
         .env("SHINE_SYS_PRESET_ROOT", script_dir)
+        .env("SHINE_SYS_SHELL", sys_shell)
         .args(&command.fixed_args)
         .arg(&loaded.script_path)
         .args(&selection.item_ids)
@@ -233,9 +236,11 @@ async fn print_dry_run(
     os_id: &str,
     loaded: &LoadedSysPreset,
     selection: &ResolvedSelection,
+    sys_shell: &str,
 ) -> Result<()> {
     println!("{}", colors::dim("[dry-run] System init preview"));
     println!("  OS: {os_id}");
+    println!("  Shell: {sys_shell}");
     println!("  Selection: {}", selection.source.describe());
     println!(
         "  Items: {}",
@@ -278,6 +283,10 @@ fn sys_init_command(os_id: &str) -> SysInitCommand {
             fixed_args: Vec::new(),
         },
     }
+}
+
+fn sys_shell_env_value(shell_type: &ShellType) -> &'static str {
+    (*shell_type).into()
 }
 
 fn format_command_preview(
@@ -752,6 +761,15 @@ description = "Placeholder"
     }
 
     #[test]
+    fn sys_shell_env_value_matches_shell_type_names() {
+        assert_eq!(sys_shell_env_value(&ShellType::Bash), "bash");
+        assert_eq!(sys_shell_env_value(&ShellType::Zsh), "zsh");
+        assert_eq!(sys_shell_env_value(&ShellType::Fish), "fish");
+        assert_eq!(sys_shell_env_value(&ShellType::PowerShell), "powershell");
+        assert_eq!(sys_shell_env_value(&ShellType::Elvish), "elvish");
+    }
+
+    #[test]
     fn format_interactive_item_includes_separator_and_description() {
         let item = SysItem {
             id: "neovim".to_string(),
@@ -984,6 +1002,11 @@ description = "Placeholder"
         assert!(content.contains(".shine/profile/ubuntu-sys.sh"));
         assert!(content.contains("cp \"$template_path\" \"$managed_path\""));
         assert!(content.contains("SHINE_UBUNTU_SYS_SHELL"));
+        assert!(content.contains("SHINE_SYS_SHELL"));
+        assert!(content.contains("append_shell_block \"$HOME/.bashrc\" bash"));
+        assert!(content.contains("remove_shell_block \"$HOME/.zshrc\""));
+        assert!(content.contains("append_shell_block \"$HOME/.zshrc\" zsh"));
+        assert!(content.contains("remove_shell_block \"$HOME/.bashrc\""));
     }
 
     #[test]

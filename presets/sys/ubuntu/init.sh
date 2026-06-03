@@ -100,10 +100,24 @@ install_managed_profile_script() {
 }
 
 append_shell_init_blocks() {
+    local sys_shell="${SHINE_SYS_SHELL:-bash}"
+
     install_managed_profile_script
-    append_shell_block "$HOME/.bashrc" bash
-    append_shell_block "$HOME/.zshrc" zsh
-    echo "Updated ~/.bashrc and ~/.zshrc managed blocks for Ubuntu shell tool initialization."
+    case "$sys_shell" in
+        bash)
+            append_shell_block "$HOME/.bashrc" bash
+            remove_shell_block "$HOME/.zshrc"
+            echo "Updated ~/.bashrc managed block for Ubuntu shell tool initialization."
+            ;;
+        zsh)
+            append_shell_block "$HOME/.zshrc" zsh
+            remove_shell_block "$HOME/.bashrc"
+            echo "Updated ~/.zshrc managed block for Ubuntu shell tool initialization."
+            ;;
+        *)
+            echo "Skipping Ubuntu shell profile injection for unsupported shell: $sys_shell" >&2
+            ;;
+    esac
 }
 
 install_packages() {
