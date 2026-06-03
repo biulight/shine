@@ -5,6 +5,25 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.29.0] — 2026-06-04
+
+### Features
+
+- Rendered `shine sys init` progress in Rust with compact per-item status rows, indented logs, summaries, and a lightweight status event protocol for sys preset scripts.
+
+### Bug Fixes
+
+- Fixed Ubuntu sys init Atuin profile initialization by loading the Atuin environment before running `atuin init`.
+- Made sys init profile finalization report unchanged shell profiles as skipped instead of updated.
+- Normalized Windows PowerShell shim paths so sourced commands such as `usetproxy` do not use `\\?\` verbatim paths.
+- Improved sys init status alignment for long item names and trimmed empty version suffixes from status details.
+
+### Docs
+
+- Updated English and Chinese documentation for the new sys init execution model, status event protocol, and pinned `0.29.0` installer examples.
+
+---
+
 ## [0.28.0] — 2026-06-03
 
 ### Features
