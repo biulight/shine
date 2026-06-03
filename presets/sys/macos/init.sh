@@ -98,13 +98,30 @@ remove_zshrc_block() {
 append_zshrc_block() {
     local zshrc="$HOME/.zshrc"
     local block_file
+    local current_block
+    local desired_block
+    local working_file
     local added=0
 
     touch "$zshrc"
-    remove_zshrc_block "$zshrc"
+    current_block="$(mktemp)"
+    desired_block="$(mktemp)"
+    working_file="$(mktemp)"
     block_file="$(mktemp)"
 
-    if ! grep -Fq "HOMEBREW_PREFIX" "$zshrc"; then
+    awk -v start="$ZSHRC_SENTINEL_START" -v end="$ZSHRC_SENTINEL_END" '
+        $0 == start { capture = 1 }
+        capture { print }
+        $0 == end { capture = 0 }
+    ' "$zshrc" > "$current_block"
+
+    awk -v start="$ZSHRC_SENTINEL_START" -v end="$ZSHRC_SENTINEL_END" '
+        $0 == start { skip = 1; next }
+        $0 == end { skip = 0; next }
+        !skip { print }
+    ' "$zshrc" > "$working_file"
+
+    if ! grep -Fq "HOMEBREW_PREFIX" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # Homebrew prefix cache
 if [[ -d "/opt/homebrew" ]]; then
@@ -119,7 +136,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "typeset -U path PATH" "$zshrc"; then
+    if ! grep -Fq "typeset -U path PATH" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # Basic PATH
 typeset -U path PATH
@@ -138,7 +155,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "NVM_DIR" "$zshrc"; then
+    if ! grep -Fq "NVM_DIR" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # nvm lazy load
 export NVM_DIR="$HOME/.nvm"
@@ -158,7 +175,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "BUN_INSTALL" "$zshrc" && ! grep -Fq '.bun' "$zshrc"; then
+    if ! grep -Fq "BUN_INSTALL" "$working_file" && ! grep -Fq '.bun' "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # Bun
 export BUN_INSTALL="$HOME/.bun"
@@ -170,7 +187,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "PNPM_HOME" "$zshrc" && ! grep -Fq "Library/pnpm" "$zshrc"; then
+    if ! grep -Fq "PNPM_HOME" "$working_file" && ! grep -Fq "Library/pnpm" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # pnpm
 export PNPM_HOME="$HOME/Library/pnpm"
@@ -191,7 +208,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "alias ls='eza" "$zshrc" && ! grep -Fq 'alias ls="eza' "$zshrc"; then
+    if ! grep -Fq "alias ls='eza" "$working_file" && ! grep -Fq 'alias ls="eza' "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # eza
 if command -v eza >/dev/null 2>&1; then
@@ -204,7 +221,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "alias cat='bat" "$zshrc" && ! grep -Fq 'alias cat="bat' "$zshrc"; then
+    if ! grep -Fq "alias cat='bat" "$working_file" && ! grep -Fq 'alias cat="bat' "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # bat
 if command -v bat >/dev/null 2>&1; then
@@ -215,7 +232,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "yazi --cwd-file" "$zshrc"; then
+    if ! grep -Fq "yazi --cwd-file" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # Yazi
 if command -v yazi >/dev/null 2>&1; then
@@ -233,7 +250,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "fzf --zsh" "$zshrc" && ! grep -Fq ".fzf.zsh" "$zshrc"; then
+    if ! grep -Fq "fzf --zsh" "$working_file" && ! grep -Fq ".fzf.zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # fzf
 if command -v fzf >/dev/null 2>&1; then
@@ -244,7 +261,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "atuin init zsh" "$zshrc"; then
+    if ! grep -Fq "atuin init zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # atuin
 if command -v atuin >/dev/null 2>&1; then
@@ -255,7 +272,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "zoxide init zsh" "$zshrc"; then
+    if ! grep -Fq "zoxide init zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # zoxide
 if command -v zoxide >/dev/null 2>&1; then
@@ -266,7 +283,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "zsh-vi-mode.plugin.zsh" "$zshrc"; then
+    if ! grep -Fq "zsh-vi-mode.plugin.zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # zsh-vi-mode
 if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
@@ -277,7 +294,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "fastfetch" "$zshrc"; then
+    if ! grep -Fq "fastfetch" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # fastfetch
 # fastfetch can noticeably slow terminal startup, so run it manually when needed.
@@ -289,7 +306,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "starship init zsh" "$zshrc"; then
+    if ! grep -Fq "starship init zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # Starship prompt
 if command -v starship >/dev/null 2>&1; then
@@ -300,7 +317,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "zsh-autosuggestions.zsh" "$zshrc"; then
+    if ! grep -Fq "zsh-autosuggestions.zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # zsh-autosuggestions
 if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh" ]]; then
@@ -311,7 +328,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "zsh-syntax-highlighting.zsh" "$zshrc"; then
+    if ! grep -Fq "zsh-syntax-highlighting.zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # zsh-syntax-highlighting must be near the end of .zshrc.
 if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ]]; then
@@ -323,20 +340,36 @@ EOF
     fi
 
     if [[ "$added" -eq 0 ]]; then
-        rm -f "$block_file"
-        status "skipped" "~/.zshrc already configured"
+        if [[ -s "$current_block" ]]; then
+            mv "$working_file" "$zshrc"
+            status "updated" "~/.zshrc"
+        else
+            status "skipped" "~/.zshrc already configured"
+        fi
+        rm -f "$block_file" "$current_block" "$desired_block" "$working_file"
         return
     fi
 
     {
-        echo
         echo "$ZSHRC_SENTINEL_START"
         echo '# Managed by `shine sys init` for macOS. Existing user config is left untouched.'
         echo
         cat "$block_file"
         echo "$ZSHRC_SENTINEL_END"
-    } >> "$zshrc"
-    rm -f "$block_file"
+    } > "$desired_block"
+
+    if cmp -s "$desired_block" "$current_block"; then
+        rm -f "$block_file" "$current_block" "$desired_block" "$working_file"
+        status "skipped" "~/.zshrc already configured"
+        return
+    fi
+
+    {
+        cat "$working_file"
+        echo
+        cat "$desired_block"
+    } > "$zshrc"
+    rm -f "$block_file" "$current_block" "$desired_block" "$working_file"
 
     status "updated" "~/.zshrc"
 }

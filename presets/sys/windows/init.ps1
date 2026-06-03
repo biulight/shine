@@ -130,7 +130,14 @@ function Install-ManagedProfileScript {
     $managedProfilePath = Get-ManagedProfilePath
     $managedProfileParent = Split-Path -Parent $managedProfilePath
     New-Item -ItemType Directory -Force -Path $managedProfileParent | Out-Null
+
+    $templateContent = Get-Content -LiteralPath $profileTemplatePath -Raw
+    if ((Test-Path -LiteralPath $managedProfilePath) -and (Get-Content -LiteralPath $managedProfilePath -Raw) -eq $templateContent) {
+        return $false
+    }
+
     Copy-Item -LiteralPath $profileTemplatePath -Destination $managedProfilePath -Force
+    return $true
 }
 
 function Get-ManagedProfileBlock {
@@ -149,6 +156,7 @@ function Update-PowerShellProfiles {
     )
 
     $block = Get-ManagedProfileBlock
+    $updated = $false
 
     foreach ($profilePath in $profilePaths) {
         $parent = Split-Path -Parent $profilePath
@@ -157,18 +165,33 @@ function Update-PowerShellProfiles {
             New-Item -ItemType File -Force -Path $profilePath | Out-Null
         }
 
+        $content = Get-Content -LiteralPath $profilePath -Raw
+        if ($content.Contains($ProfileSentinelStart) -and $content.Contains($block) -and $content.Contains($ProfileSentinelEnd)) {
+            continue
+        }
+
         Remove-ManagedProfileBlock $profilePath
         Add-Content -LiteralPath $profilePath -Value ""
         Add-Content -LiteralPath $profilePath -Value $ProfileSentinelStart
         Add-Content -LiteralPath $profilePath -Value $block
         Add-Content -LiteralPath $profilePath -Value $ProfileSentinelEnd
+        $updated = $true
     }
+
+    return $updated
 }
 
 function Update-ManagedProfiles {
-    Install-ManagedProfileScript
-    Update-PowerShellProfiles
-    Write-Status "updated" "PowerShell profiles"
+    $updated = Install-ManagedProfileScript
+    if (Update-PowerShellProfiles) {
+        $updated = $true
+    }
+
+    if ($updated) {
+        Write-Status "updated" "PowerShell profiles"
+    } else {
+        Write-Status "skipped" "PowerShell profiles already configured"
+    }
 }
 
 function Install-Rust {
