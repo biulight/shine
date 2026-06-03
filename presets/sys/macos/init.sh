@@ -7,6 +7,12 @@ set -o pipefail
 ZSHRC_SENTINEL_START="# >>> shine macos sys >>>"
 ZSHRC_SENTINEL_END="# <<< shine macos sys <<<"
 
+status() {
+    local state="$1"
+    local detail="${2:-}"
+    printf 'SHINE_SYS_STATUS\t%s\t%s\n' "$state" "$detail"
+}
+
 ensure_macos() {
     if [[ "$(uname -s)" != "Darwin" ]]; then
         echo "This sys init preset only supports macOS." >&2
@@ -36,7 +42,7 @@ load_homebrew_env() {
 install_homebrew() {
     load_homebrew_env
     if command -v brew &>/dev/null; then
-        echo "Homebrew: already installed ($(brew --version | head -1))."
+        status "already-installed" "$(brew --version | head -1)"
         return
     fi
 
@@ -50,7 +56,7 @@ install_homebrew() {
         return 1
     fi
 
-    echo "Homebrew installed ($(brew --version | head -1))."
+    status "installed" "$(brew --version | head -1)"
 }
 
 ensure_homebrew() {
@@ -63,16 +69,17 @@ brew_install_formula() {
 
     ensure_homebrew
     if command -v "$command_name" &>/dev/null; then
-        echo "$formula: already installed ($($command_name --version 2>/dev/null | head -1 || true))."
+        status "already-installed" "$($command_name --version 2>/dev/null | head -1 || true)"
         return
     fi
     if brew list --formula "$formula" &>/dev/null; then
-        echo "$formula: already installed with Homebrew."
+        status "already-installed" "Homebrew formula"
         return
     fi
 
     echo "Installing $formula..."
     brew install "$formula"
+    status "installed" "$formula"
 }
 
 remove_zshrc_block() {
@@ -317,7 +324,7 @@ EOF
 
     if [[ "$added" -eq 0 ]]; then
         rm -f "$block_file"
-        echo "~/.zshrc already contains macOS shell tool initialization; no managed block needed."
+        status "skipped" "~/.zshrc already configured"
         return
     fi
 
@@ -331,12 +338,11 @@ EOF
     } >> "$zshrc"
     rm -f "$block_file"
 
-    echo "Updated ~/.zshrc managed block for missing macOS shell tool initialization."
+    status "updated" "~/.zshrc"
 }
 
 install_shell_formula() {
     brew_install_formula "$1" "${2:-$1}"
-    append_zshrc_block
 }
 
 install_yazi() {
@@ -356,7 +362,7 @@ install_astronvim() {
     brew_install_formula git git
 
     if [[ -d "$HOME/.config/nvim" ]]; then
-        echo "AstroNvim: ~/.config/nvim already exists, skipping."
+        status "skipped" "~/.config/nvim already exists"
         return
     fi
 
@@ -364,31 +370,23 @@ install_astronvim() {
     mkdir -p "$HOME/.config"
     git clone --depth 1 https://github.com/AstroNvim/template "$HOME/.config/nvim"
     rm -rf "$HOME/.config/nvim/.git"
-    echo "AstroNvim installed. Run 'nvim' to finish plugin setup."
+    status "installed" "~/.config/nvim"
 }
 
 install_zerotier() {
     ensure_homebrew
     if command -v zerotier-cli &>/dev/null || [[ -d /Applications/ZeroTier.app ]]; then
-        echo "ZeroTier: already installed."
+        status "already-installed"
     else
         echo "Installing ZeroTier One..."
         brew install --cask zerotier-one
+        status "needs-action" "open ZeroTier and join a network"
     fi
-
-    echo "ZeroTier next steps:"
-    echo "  1. Open ZeroTier from Applications if the service is not running."
-    echo "  2. Join your network: sudo zerotier-cli join <NETWORK_ID>"
-    echo "  3. Approve the member in ZeroTier Central."
 }
 
 install_nvm() {
     install_shell_formula nvm nvm
     mkdir -p "$HOME/.nvm"
-
-    echo "nvm shell setup, if not already configured:"
-    echo "  export NVM_DIR=\"$HOME/.nvm\""
-    echo "  [ -s \"$(brew --prefix nvm)/nvm.sh\" ] && . \"$(brew --prefix nvm)/nvm.sh\""
 }
 
 install_bun() {
@@ -455,6 +453,7 @@ run_item() {
         bun) install_bun ;;
         pnpm) install_pnpm ;;
         fastfetch) install_fastfetch ;;
+        __shine_finalize) append_zshrc_block ;;
         "") return 0 ;;
         *)
             echo "Unknown sys init item: $1" >&2
@@ -465,10 +464,4 @@ run_item() {
 
 ensure_macos
 
-for item in "$@"; do
-    run_item "$item"
-done
-
-if [[ $# -gt 0 ]]; then
-    echo "Done."
-fi
+run_item "${1:-}"

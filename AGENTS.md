@@ -173,7 +173,7 @@ Transforms compose in declaration order: `transforms = ["jsonc-to-json", "templa
 2. `presets::extract_prefix("sys/<os_id>", presets_dir)` — unpacks `init.sh` + `shine.toml` for the detected OS.
 3. `sys::load_sys_preset` — parses `shine.toml` for `description`, `[[items]]`, `[profiles.*]`, and `default_profile`.
 4. In interactive mode: `dialoguer::MultiSelect` lets the user pick init items. Non-interactive mode requires `default_profile`.
-5. Calls `bash <presets_dir>/sys/<os>/init.sh <item_id...>` with selected item IDs as arguments.
+5. Calls `bash <presets_dir>/sys/<os>/init.sh <item_id>` once per selected item, then calls `bash <presets_dir>/sys/<os>/init.sh __shine_finalize` so shared shell/profile integration runs once.
 
 `shine sys init --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing.
 
@@ -278,7 +278,7 @@ Prefer `shine.toml` metadata over legacy `shine-dest:` annotations for new categ
 
 ### Sys preset (OS init)
 
-1. Create `presets/sys/<os_id>/init.sh` — a bash script that accepts item IDs as positional arguments.
+1. Create `presets/sys/<os_id>/init.sh` — a bash script that accepts one item ID as `$1`; support `__shine_finalize` if the preset needs shared profile or shell integration.
 2. Create `presets/sys/<os_id>/shine.toml`:
    ```toml
    description = "One-line description of this OS init preset."
@@ -292,4 +292,5 @@ Prefer `shine.toml` metadata over legacy `shine-dest:` annotations for new categ
    [profiles.recommended]
    items = ["neovim"]
    ```
-3. `cargo build` re-embeds. Verify with `shine sys list` and `shine sys init --dry-run`.
+3. Emit compact status events from scripts with `printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "detail"`. Supported states are `installed`, `already-installed`, `skipped`, `updated`, `needs-action`, `completed`, and `failed`; other output is rendered as indented logs.
+4. `cargo build` re-embeds. Verify with `shine sys list` and `shine sys init --dry-run`.

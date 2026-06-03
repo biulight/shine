@@ -187,12 +187,12 @@ shine sys init --preset recommended
 shine sys init --dry-run
 ```
 
-`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script with those item IDs.
+`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After all items finish, it calls the same script with `__shine_finalize` so the preset can apply shared profile or shell integration once.
 
 - In a TTY, `shine sys init` opens an interactive multi-select with defaults taken from the preset's `default_profile`.
 - `shine sys init --preset <PROFILE>` skips the prompt and applies that named profile directly.
 - Without a TTY, `shine sys init` falls back to `default_profile`.
-- `shine sys init --dry-run` prints the resolved items, exact script invocation, and script content without executing anything.
+- `shine sys init --dry-run` prints the resolved items, per-item script invocations, finalize invocation, and script content without executing anything.
 
 System init presets use this metadata shape:
 
@@ -208,6 +208,14 @@ description = "Install the latest stable Neovim release."
 [profiles.recommended]
 items = ["neovim"]
 ```
+
+Init scripts can emit a machine-readable status line so `shine` can render a compact summary:
+
+```bash
+printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "nvim found"
+```
+
+Supported states are `installed`, `already-installed`, `skipped`, `updated`, `needs-action`, `completed`, and `failed`. Other script output is preserved as indented logs for the current item. Older scripts that do not emit status lines still run; successful items are shown as `completed`.
 
 Current built-in presets:
 

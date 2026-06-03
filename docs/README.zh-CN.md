@@ -187,12 +187,12 @@ shine sys init --preset recommended
 shine sys init --dry-run
 ```
 
-`shine sys init` 会检测当前操作系统，读取 `presets/sys/<os>/shine.toml`，解析出待执行的安装项，然后把这些 item ID 传给当前平台的初始化脚本。
+`shine sys init` 会检测当前操作系统，读取 `presets/sys/<os>/shine.toml`，解析出待执行的安装项，然后对每个选中的 item 分别调用一次当前平台的初始化脚本。所有 item 完成后，会再用 `__shine_finalize` 调用一次同一个脚本，让预设统一处理 profile 或 shell 集成。
 
 - 在 TTY 中，`shine sys init` 会打开一个交互式多选界面，默认值来自预设的 `default_profile`
 - `shine sys init --preset <PROFILE>` 会跳过交互，直接应用指定 profile
 - 非 TTY 环境下，`shine sys init` 会回退到 `default_profile`
-- `shine sys init --dry-run` 会输出解析后的项目、实际脚本调用命令，以及脚本内容，但不会执行
+- `shine sys init --dry-run` 会输出解析后的项目、逐项脚本调用命令、finalize 调用命令，以及脚本内容，但不会执行
 
 系统初始化预设使用如下元数据结构：
 
@@ -208,6 +208,14 @@ description = "Install the latest stable Neovim release."
 [profiles.recommended]
 items = ["neovim"]
 ```
+
+初始化脚本可以输出一行机器可读状态，让 `shine` 渲染紧凑摘要：
+
+```bash
+printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "nvim found"
+```
+
+支持的状态包括 `installed`、`already-installed`、`skipped`、`updated`、`needs-action`、`completed` 和 `failed`。其他脚本输出会作为当前 item 的缩进日志保留。没有输出状态行的旧脚本仍可运行；成功时会显示为 `completed`。
 
 当前内置预设：
 

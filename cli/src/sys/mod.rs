@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use crate::colors;
 use crate::config::Config;
@@ -61,6 +62,29 @@ struct ResolvedSelection {
     item_ids: Vec<String>,
     source: SelectionSource,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SysItemStatus {
+    Installed,
+    AlreadyInstalled,
+    Skipped,
+    Updated,
+    NeedsAction,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SysItemOutcome {
+    item_id: String,
+    label: String,
+    status: SysItemStatus,
+    detail: String,
+    logs: Vec<String>,
+}
+
+const SYS_STATUS_PREFIX: &str = "SHINE_SYS_STATUS\t";
+const SYS_FINALIZE_ITEM: &str = "__shine_finalize";
 
 impl SelectionSource {
     fn describe(&self) -> String {
@@ -202,32 +226,67 @@ async fn handle_init_for_os(
         return Ok(());
     }
 
-    println!("Running system init for {}...", colors::bold(os_id));
-    print_selection_summary(&selection);
-    println!();
-
     let command = sys_init_command(os_id);
     let script_dir = loaded
         .script_path
         .parent()
         .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
-    let status = tokio::process::Command::new(command.program)
-        .current_dir(script_dir)
-        .env("SHINE_SYS_PRESET_ROOT", script_dir)
-        .env("SHINE_SYS_SHELL", sys_shell)
-        .args(&command.fixed_args)
-        .arg(&loaded.script_path)
-        .args(&selection.item_ids)
-        .status()
-        .await
-        .with_context(|| format!("failed to execute {}", loaded.script_path.display()))?;
 
-    if !status.success() {
-        bail!("sys init script exited with {status}");
+    print_run_header(os_id, sys_shell, &selection);
+
+    let item_labels = manifest_item_labels(&loaded.manifest);
+    let mut outcomes = Vec::new();
+    for item_id in &selection.item_ids {
+        let label = item_labels
+            .get(item_id.as_str())
+            .cloned()
+            .unwrap_or_else(|| item_id.clone());
+        let outcome = run_sys_item(
+            &command,
+            script_dir,
+            &loaded.script_path,
+            sys_shell,
+            item_id,
+            &label,
+        )
+        .await?;
+        print_item_outcome(&outcome);
+        let failed = outcome.status == SysItemStatus::Failed;
+        outcomes.push(outcome);
+        if failed {
+            break;
+        }
+    }
+
+    if outcomes
+        .iter()
+        .any(|outcome| outcome.status != SysItemStatus::Failed)
+    {
+        let finalize = run_sys_item(
+            &command,
+            script_dir,
+            &loaded.script_path,
+            sys_shell,
+            SYS_FINALIZE_ITEM,
+            "profile",
+        )
+        .await?;
+        if finalize.status != SysItemStatus::Completed || !finalize.logs.is_empty() {
+            print_item_outcome(&finalize);
+        }
+        outcomes.push(finalize);
     }
 
     println!();
-    println!("{}", colors::green("System initialization complete."));
+    print_sys_summary(&outcomes);
+
+    if outcomes
+        .iter()
+        .any(|outcome| outcome.status == SysItemStatus::Failed)
+    {
+        bail!("sys init failed");
+    }
+
     Ok(())
 }
 
@@ -250,14 +309,24 @@ async fn print_dry_run(
         }
     );
     println!("  Script: {}", loaded.script_path.display());
-    println!(
-        "  Command: {}",
-        format_command_preview(
-            &sys_init_command(os_id),
-            &loaded.script_path,
-            &selection.item_ids
-        )
-    );
+    let command = sys_init_command(os_id);
+    println!("  Commands:");
+    for item_id in &selection.item_ids {
+        println!(
+            "    {}",
+            format_command_preview(&command, &loaded.script_path, std::slice::from_ref(item_id))
+        );
+    }
+    if !selection.item_ids.is_empty() {
+        println!(
+            "    {}",
+            format_command_preview(
+                &command,
+                &loaded.script_path,
+                &[SYS_FINALIZE_ITEM.to_string()]
+            )
+        );
+    }
     println!();
     let content = tokio::fs::read_to_string(&loaded.script_path)
         .await
@@ -296,6 +365,182 @@ fn format_command_preview(
         .chain(item_ids.iter().map(String::as_str))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn manifest_item_labels(manifest: &SysManifest) -> BTreeMap<&str, String> {
+    manifest
+        .items
+        .iter()
+        .map(|item| (item.id.as_str(), item.label.clone()))
+        .collect()
+}
+
+fn print_run_header(os_id: &str, sys_shell: &str, selection: &ResolvedSelection) {
+    println!("{}", colors::bold("System Init"));
+    println!("  OS: {os_id}");
+    println!("  Shell: {sys_shell}");
+    println!("  Selection: {}", selection.source.describe());
+    println!("  Items: {} selected", selection.item_ids.len());
+    println!("  {}", colors::dim(&format_item_ids(&selection.item_ids)));
+    println!();
+}
+
+async fn run_sys_item(
+    command: &SysInitCommand,
+    script_dir: &Path,
+    script_path: &Path,
+    sys_shell: &str,
+    item_id: &str,
+    label: &str,
+) -> Result<SysItemOutcome> {
+    let output = tokio::process::Command::new(command.program)
+        .current_dir(script_dir)
+        .env("SHINE_SYS_PRESET_ROOT", script_dir)
+        .env("SHINE_SYS_SHELL", sys_shell)
+        .args(&command.fixed_args)
+        .arg(script_path)
+        .arg(item_id)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .with_context(|| format!("failed to execute {}", script_path.display()))?;
+
+    Ok(parse_sys_item_output(
+        item_id,
+        label,
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    ))
+}
+
+fn parse_sys_item_output(
+    item_id: &str,
+    label: &str,
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+) -> SysItemOutcome {
+    let mut status = None;
+    let mut logs = Vec::new();
+
+    for line in stdout.lines().chain(stderr.lines()) {
+        if let Some(parsed) = parse_status_event(line) {
+            status = Some(parsed);
+        } else if !line.trim().is_empty() {
+            logs.push(line.to_string());
+        }
+    }
+
+    let (status, detail) = if !success {
+        let detail = status
+            .map(|(_, detail)| detail)
+            .filter(|detail| !detail.is_empty())
+            .unwrap_or_else(|| "script exited with a non-zero status".to_string());
+        (SysItemStatus::Failed, detail)
+    } else if let Some((status, detail)) = status {
+        (status, detail)
+    } else {
+        (SysItemStatus::Completed, String::new())
+    };
+
+    SysItemOutcome {
+        item_id: item_id.to_string(),
+        label: label.to_string(),
+        status,
+        detail,
+        logs,
+    }
+}
+
+fn parse_status_event(line: &str) -> Option<(SysItemStatus, String)> {
+    let rest = line.strip_prefix(SYS_STATUS_PREFIX)?;
+    let mut parts = rest.splitn(2, '\t');
+    let status = match parts.next()? {
+        "installed" => SysItemStatus::Installed,
+        "already-installed" => SysItemStatus::AlreadyInstalled,
+        "skipped" => SysItemStatus::Skipped,
+        "updated" => SysItemStatus::Updated,
+        "needs-action" => SysItemStatus::NeedsAction,
+        "completed" => SysItemStatus::Completed,
+        "failed" => SysItemStatus::Failed,
+        _ => return None,
+    };
+    let detail = parts.next().unwrap_or_default().trim().to_string();
+    Some((status, detail))
+}
+
+fn print_item_outcome(outcome: &SysItemOutcome) {
+    let symbol = status_symbol(outcome.status);
+    let label = format!("{:<14}", outcome.label);
+    let status = format!("{:<17}", status_text(outcome.status));
+    let detail = if outcome.detail.is_empty() {
+        String::new()
+    } else {
+        colors::dim(&outcome.detail)
+    };
+
+    println!(
+        "{} {} {} {}",
+        colors::symbol(symbol),
+        colors::bold(&label),
+        colors::status_label(&status, symbol),
+        detail
+    );
+
+    for line in &outcome.logs {
+        println!("  {}", colors::dim(line));
+    }
+}
+
+fn status_symbol(status: SysItemStatus) -> &'static str {
+    match status {
+        SysItemStatus::Skipped | SysItemStatus::NeedsAction => "~",
+        SysItemStatus::Failed => "✗",
+        _ => "✓",
+    }
+}
+
+fn status_text(status: SysItemStatus) -> &'static str {
+    match status {
+        SysItemStatus::Installed => "installed",
+        SysItemStatus::AlreadyInstalled => "already installed",
+        SysItemStatus::Skipped => "skipped",
+        SysItemStatus::Updated => "updated",
+        SysItemStatus::NeedsAction => "needs action",
+        SysItemStatus::Completed => "completed",
+        SysItemStatus::Failed => "failed",
+    }
+}
+
+fn print_sys_summary(outcomes: &[SysItemOutcome]) {
+    let mut counts = BTreeMap::<SysItemStatus, usize>::new();
+    for outcome in outcomes {
+        *counts.entry(outcome.status).or_default() += 1;
+    }
+
+    let parts = [
+        SysItemStatus::Installed,
+        SysItemStatus::AlreadyInstalled,
+        SysItemStatus::Skipped,
+        SysItemStatus::Updated,
+        SysItemStatus::NeedsAction,
+        SysItemStatus::Completed,
+        SysItemStatus::Failed,
+    ]
+    .into_iter()
+    .filter_map(|status| {
+        counts
+            .get(&status)
+            .copied()
+            .filter(|count| *count > 0)
+            .map(|count| format!("{count} {}", status_text(status)))
+    })
+    .collect::<Vec<_>>();
+
+    println!("Summary: {}", parts.join(", "));
 }
 
 async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset> {
@@ -491,17 +736,6 @@ fn print_interactive_header(manifest: &SysManifest) {
     }
     println!("{}", colors::dim("Use Space to toggle, Enter to confirm."));
     println!();
-}
-
-fn print_selection_summary(selection: &ResolvedSelection) {
-    println!(
-        "{}",
-        colors::dim(&format!("Selection: {}", selection.source.describe()))
-    );
-    println!(
-        "{}",
-        colors::dim(&format!("Items: {}", format_item_ids(&selection.item_ids)))
-    );
 }
 
 fn format_item_ids(item_ids: &[String]) -> String {
@@ -797,6 +1031,56 @@ description = "Placeholder"
     }
 
     #[test]
+    fn parse_status_event_reads_machine_status() {
+        let parsed = parse_status_event("SHINE_SYS_STATUS\talready-installed\tatuin 18.16.0")
+            .expect("status event should parse");
+
+        assert_eq!(
+            parsed,
+            (SysItemStatus::AlreadyInstalled, "atuin 18.16.0".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_status_event_ignores_regular_logs() {
+        assert!(parse_status_event("Installing Atuin...").is_none());
+    }
+
+    #[test]
+    fn parse_sys_item_output_uses_status_event_and_keeps_logs() {
+        let outcome = parse_sys_item_output(
+            "atuin",
+            "Atuin",
+            true,
+            "Installing Atuin...\nSHINE_SYS_STATUS\tinstalled\tatuin 18.16.0\n",
+            "",
+        );
+
+        assert_eq!(outcome.status, SysItemStatus::Installed);
+        assert_eq!(outcome.detail, "atuin 18.16.0");
+        assert_eq!(outcome.logs, vec!["Installing Atuin..."]);
+    }
+
+    #[test]
+    fn parse_sys_item_output_falls_back_for_legacy_success() {
+        let outcome =
+            parse_sys_item_output("legacy", "Legacy", true, "legacy script completed\n", "");
+
+        assert_eq!(outcome.status, SysItemStatus::Completed);
+        assert_eq!(outcome.logs, vec!["legacy script completed"]);
+    }
+
+    #[test]
+    fn parse_sys_item_output_marks_failed_exit() {
+        let outcome =
+            parse_sys_item_output("legacy", "Legacy", false, "", "legacy script failed\n");
+
+        assert_eq!(outcome.status, SysItemStatus::Failed);
+        assert_eq!(outcome.detail, "script exited with a non-zero status");
+        assert_eq!(outcome.logs, vec!["legacy script failed"]);
+    }
+
+    #[test]
     fn sys_init_command_uses_zsh_for_macos() {
         let command = sys_init_command("macos");
         assert_eq!(command.program, "zsh");
@@ -1004,14 +1288,14 @@ description = "Placeholder"
         assert!(content.contains("remove_shell_block \"$HOME/.zshrc\""));
         assert!(content.contains("append_shell_block \"$HOME/.zshrc\" zsh"));
         assert!(content.contains("remove_shell_block \"$HOME/.bashrc\""));
+        assert!(content.contains("SHINE_SYS_STATUS\\t%s\\t%s\\n"));
+        assert!(content.contains("status \"already-installed\" \"$(atuin --version)\""));
         assert!(content.contains(
-            "Atuin: already installed ($(atuin --version)).\"\n        append_shell_init_blocks"
-        ));
-        assert!(content.contains(
-            "curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh\n    load_atuin_env\n    append_shell_init_blocks"
+            "curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh\n    load_atuin_env\n    status \"installed\" \"$(atuin --version)\""
         ));
         assert!(content.contains("load_atuin_env"));
         assert!(content.contains(". \"$HOME/.atuin/bin/env\""));
+        assert!(content.contains("__shine_finalize) append_shell_init_blocks"));
     }
 
     #[test]
@@ -1036,6 +1320,8 @@ description = "Placeholder"
         assert!(content.contains(".shine\\profile\\windows-sys.ps1"));
         assert!(content.contains("Copy-Item -LiteralPath $profileTemplatePath"));
         assert!(content.contains("$shineWindowsSysProfile"));
+        assert!(content.contains("SHINE_SYS_STATUS`t$State`t$Detail"));
+        assert!(content.contains("\"__shine_finalize\" { Update-ManagedProfiles }"));
     }
 
     #[test]
@@ -1174,6 +1460,134 @@ items = ["touch-file"]
             .await
             .unwrap();
         assert!(!sentinel.exists(), "script must not have been executed");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handle_init_executes_items_then_finalize() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/fakeos");
+        fs::create_dir_all(&os_dir).await.unwrap();
+
+        fs::write(
+            os_dir.join("shine.toml"),
+            r#"
+description = "Fake OS"
+default_profile = "recommended"
+
+[[items]]
+id = "first"
+label = "First"
+
+[[items]]
+id = "second"
+label = "Second"
+
+[profiles.recommended]
+items = ["first", "second"]
+"#,
+        )
+        .await
+        .unwrap();
+
+        let calls = dir.join("calls");
+        let script = format!(
+            r#"#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$1" >> {calls:?}
+case "$1" in
+  first) printf 'SHINE_SYS_STATUS\tinstalled\tfirst ok\n' ;;
+  second) printf 'legacy log\n' ;;
+  __shine_finalize) printf 'SHINE_SYS_STATUS\tupdated\tprofile ok\n' ;;
+  *) exit 1 ;;
+esac
+"#
+        );
+        fs::write(os_dir.join("init.sh"), script.as_bytes())
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        handle_init_for_os(&config, "fakeos", None, false)
+            .await
+            .unwrap();
+
+        let calls = fs::read_to_string(&calls).await.unwrap();
+        assert_eq!(
+            calls.lines().collect::<Vec<_>>(),
+            ["first", "second", SYS_FINALIZE_ITEM]
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handle_init_stops_items_after_failure_but_finalizes_successes() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/fakeos");
+        fs::create_dir_all(&os_dir).await.unwrap();
+
+        fs::write(
+            os_dir.join("shine.toml"),
+            r#"
+description = "Fake OS"
+default_profile = "recommended"
+
+[[items]]
+id = "first"
+label = "First"
+
+[[items]]
+id = "fails"
+label = "Fails"
+
+[[items]]
+id = "after"
+label = "After"
+
+[profiles.recommended]
+items = ["first", "fails", "after"]
+"#,
+        )
+        .await
+        .unwrap();
+
+        let calls = dir.join("calls");
+        let script = format!(
+            r#"#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$1" >> {calls:?}
+case "$1" in
+  first) printf 'SHINE_SYS_STATUS\tinstalled\tfirst ok\n' ;;
+  fails) printf 'SHINE_SYS_STATUS\tfailed\tbad item\n'; exit 1 ;;
+  after) printf 'SHINE_SYS_STATUS\tinstalled\tafter ok\n' ;;
+  __shine_finalize) printf 'SHINE_SYS_STATUS\tupdated\tprofile ok\n' ;;
+  *) exit 1 ;;
+esac
+"#
+        );
+        fs::write(os_dir.join("init.sh"), script.as_bytes())
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let err = handle_init_for_os(&config, "fakeos", None, false)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("sys init failed"));
+        let calls = fs::read_to_string(&calls).await.unwrap();
+        assert_eq!(
+            calls.lines().collect::<Vec<_>>(),
+            ["first", "fails", SYS_FINALIZE_ITEM]
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

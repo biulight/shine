@@ -11,6 +11,12 @@ ZSH_VI_MODE_PLUGIN="$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
 
 export PATH="$HOME/.local/bin:$PNPM_HOME:$PNPM_HOME/bin:$PATH"
 
+status() {
+    local state="$1"
+    local detail="${2:-}"
+    printf 'SHINE_SYS_STATUS\t%s\t%s\n' "$state" "$detail"
+}
+
 brew_executable() {
     if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
         echo "/home/linuxbrew/.linuxbrew/bin/brew"
@@ -102,26 +108,27 @@ install_managed_profile_script() {
     managed_parent="$(dirname "$managed_path")"
     mkdir -p "$managed_parent"
     cp "$template_path" "$managed_path"
-    echo "Updated $managed_path"
 }
 
 append_shell_init_blocks() {
     local sys_shell="${SHINE_SYS_SHELL:-bash}"
+    local managed_path
 
     install_managed_profile_script
+    managed_path="$(managed_profile_path)"
     case "$sys_shell" in
         bash)
             append_shell_block "$HOME/.bashrc" bash
             remove_shell_block "$HOME/.zshrc"
-            echo "Updated ~/.bashrc managed block for Ubuntu shell tool initialization."
+            status "updated" "~/.bashrc -> $managed_path"
             ;;
         zsh)
             append_shell_block "$HOME/.zshrc" zsh
             remove_shell_block "$HOME/.bashrc"
-            echo "Updated ~/.zshrc managed block for Ubuntu shell tool initialization."
+            status "updated" "~/.zshrc -> $managed_path"
             ;;
         *)
-            echo "Skipping Ubuntu shell profile injection for unsupported shell: $sys_shell" >&2
+            status "skipped" "unsupported shell: $sys_shell"
             ;;
     esac
 }
@@ -162,7 +169,7 @@ neovim_version_ok() {
 
 install_neovim() {
     if neovim_version_ok; then
-        echo "Neovim: already installed ($(nvim --version | head -1))."
+        status "already-installed" "$(nvim --version | head -1)"
         return
     fi
     echo "Installing Neovim (latest stable)..."
@@ -178,21 +185,21 @@ install_neovim() {
     sudo tar xzf /tmp/nvim.tar.gz -C /opt
     sudo ln -sf "/opt/${stem}/bin/nvim" /usr/local/bin/nvim
     rm /tmp/nvim.tar.gz
-    echo "Neovim installed to /usr/local/bin/nvim."
+    status "installed" "/usr/local/bin/nvim"
 }
 
 # --- AstroNvim ---
 
 install_astronvim() {
     if [[ -d "$HOME/.config/nvim" ]]; then
-        echo "AstroNvim: ~/.config/nvim already exists, skipping."
+        status "skipped" "~/.config/nvim already exists"
         return
     fi
     echo "Installing AstroNvim..."
     sudo apt-get install -y git
     git clone --depth 1 https://github.com/AstroNvim/template "$HOME/.config/nvim"
     rm -rf "$HOME/.config/nvim/.git"
-    echo "AstroNvim installed. Run 'nvim' to finish plugin setup."
+    status "installed" "~/.config/nvim"
 }
 
 # --- Atuin ---
@@ -200,14 +207,13 @@ install_astronvim() {
 install_atuin() {
     load_atuin_env
     if command -v atuin &>/dev/null; then
-        echo "Atuin: already installed ($(atuin --version))."
-        append_shell_init_blocks
+        status "already-installed" "$(atuin --version)"
         return
     fi
     echo "Installing Atuin..."
     curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
     load_atuin_env
-    append_shell_init_blocks
+    status "installed" "$(atuin --version)"
 }
 
 # --- Yazi ---
@@ -232,8 +238,8 @@ install_yazi() {
     install_yazi_dependencies
 
     if command -v yazi &>/dev/null; then
-        echo "Yazi: already installed ($(yazi --version | head -1))."
         ensure_fd_alias
+        status "already-installed" "$(yazi --version | head -1)"
         return
     fi
 
@@ -254,44 +260,39 @@ install_yazi() {
     rm -f "$tmp"
 
     ensure_fd_alias
-    echo "Yazi installed ($(yazi --version | head -1))."
+    status "installed" "$(yazi --version | head -1)"
 }
 
 # --- Starship ---
 
 install_starship() {
     if command -v starship &>/dev/null; then
-        echo "Starship: already installed ($(starship --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(starship --version | head -1)"
         return
     fi
 
     echo "Installing Starship..."
     curl -sS https://starship.rs/install.sh | sudo sh -s -- -y -b /usr/local/bin
-    append_shell_init_blocks
-    echo "Starship installed ($(starship --version | head -1))."
+    status "installed" "$(starship --version | head -1)"
 }
 
 # --- zoxide ---
 
 install_zoxide() {
     if command -v zoxide &>/dev/null; then
-        echo "zoxide: already installed ($(zoxide --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(zoxide --version | head -1)"
         return
     fi
 
     if [[ -x "$HOME/.local/bin/zoxide" ]]; then
-        echo "zoxide: already installed ($("$HOME/.local/bin/zoxide" --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$("$HOME/.local/bin/zoxide" --version | head -1)"
         return
     fi
 
     echo "Installing zoxide..."
     mkdir -p "$HOME/.local/bin"
     curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh
-    append_shell_init_blocks
-    echo "zoxide installed ($(zoxide --version | head -1))."
+    status "installed" "$(zoxide --version | head -1)"
 }
 
 # --- zsh-vi-mode ---
@@ -299,22 +300,19 @@ install_zoxide() {
 install_zsh_vi_mode() {
     load_homebrew_env
     if [[ -n "${HOMEBREW_PREFIX:-}" ]] && [[ -f "$HOMEBREW_PREFIX/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
-        echo "zsh-vi-mode: already installed with Homebrew."
-        append_shell_init_blocks
+        status "already-installed" "Homebrew"
         return
     fi
 
     if command -v brew &>/dev/null; then
         echo "Installing zsh-vi-mode with Homebrew..."
         brew install zsh-vi-mode
-        append_shell_init_blocks
-        echo "zsh-vi-mode installed with Homebrew."
+        status "installed" "Homebrew"
         return
     fi
 
     if [[ -f "$ZSH_VI_MODE_PLUGIN" ]]; then
-        echo "zsh-vi-mode: already installed at $ZSH_VI_MODE_PLUGIN."
-        append_shell_init_blocks
+        status "already-installed" "$ZSH_VI_MODE_PLUGIN"
         return
     fi
 
@@ -322,22 +320,19 @@ install_zsh_vi_mode() {
     echo "Installing zsh-vi-mode to $ZSH_VI_MODE_PLUGIN..."
     mkdir -p "$(dirname "$ZSH_VI_MODE_PLUGIN")"
     git clone --depth 1 https://github.com/jeffreytse/zsh-vi-mode.git "$(dirname "$ZSH_VI_MODE_PLUGIN")"
-    append_shell_init_blocks
-    echo "zsh-vi-mode installed at $ZSH_VI_MODE_PLUGIN."
+    status "installed" "$ZSH_VI_MODE_PLUGIN"
 }
 
 # --- fzf ---
 
 install_fzf() {
     if command -v fzf &>/dev/null; then
-        echo "fzf: already installed ($(fzf --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(fzf --version | head -1)"
         return
     fi
 
     install_packages fzf
-    append_shell_init_blocks
-    echo "fzf installed ($(fzf --version | head -1))."
+    status "installed" "$(fzf --version | head -1)"
 }
 
 # --- bat ---
@@ -356,17 +351,15 @@ ensure_bat_command() {
 
 install_bat() {
     if command -v bat &>/dev/null; then
-        echo "bat: already installed ($(bat --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(bat --version | head -1)"
         return
     fi
 
     install_packages bat
     ensure_bat_command
-    append_shell_init_blocks
 
     if command -v bat &>/dev/null; then
-        echo "bat installed ($(bat --version | head -1))."
+        status "installed" "$(bat --version | head -1)"
     else
         echo "bat package installed, but no bat or batcat command was found." >&2
         return 1
@@ -378,8 +371,7 @@ install_bat() {
 install_eza() {
     load_homebrew_env
     if command -v eza &>/dev/null; then
-        echo "eza: already installed ($(eza --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(eza --version | head -1)"
         return
     fi
 
@@ -391,8 +383,7 @@ install_eza() {
         brew install eza
     fi
 
-    append_shell_init_blocks
-    echo "eza installed ($(eza --version | head -1))."
+    status "installed" "$(eza --version | head -1)"
 }
 
 # --- pnpm ---
@@ -401,43 +392,37 @@ install_pnpm() {
     install_packages libatomic1
 
     if command -v pnpm &>/dev/null; then
-        echo "pnpm: already installed ($(pnpm --version))."
-        append_shell_init_blocks
+        status "already-installed" "$(pnpm --version)"
         return
     fi
 
     if [[ -x "$HOME/.local/share/pnpm/pnpm" ]]; then
-        echo "pnpm: already installed ($("$HOME/.local/share/pnpm/pnpm" --version))."
-        append_shell_init_blocks
+        status "already-installed" "$("$HOME/.local/share/pnpm/pnpm" --version)"
         return
     fi
 
     echo "Installing pnpm..."
     curl -fsSL https://get.pnpm.io/install.sh | SHELL="$(command -v bash)" sh -
-    append_shell_init_blocks
-    echo "pnpm installed ($(pnpm --version))."
+    status "installed" "$(pnpm --version)"
 }
 
 # --- mise ---
 
 install_mise() {
     if command -v mise &>/dev/null; then
-        echo "mise: already installed ($(mise --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(mise --version | head -1)"
         return
     fi
 
     if [[ -x "$HOME/.local/bin/mise" ]]; then
-        echo "mise: already installed ($("$HOME/.local/bin/mise" --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$("$HOME/.local/bin/mise" --version | head -1)"
         return
     fi
 
     echo "Installing mise..."
     mkdir -p "$HOME/.local/bin"
     curl -fsSL https://mise.run | sh
-    append_shell_init_blocks
-    echo "mise installed ($("$HOME/.local/bin/mise" --version | head -1))."
+    status "installed" "$("$HOME/.local/bin/mise" --version | head -1)"
 }
 
 # --- Homebrew ---
@@ -445,8 +430,7 @@ install_mise() {
 install_homebrew() {
     load_homebrew_env
     if command -v brew &>/dev/null; then
-        echo "Homebrew: already installed ($(brew --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(brew --version | head -1)"
         return
     fi
 
@@ -460,7 +444,6 @@ install_homebrew() {
     echo "Installing Homebrew..."
     NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     load_homebrew_env
-    append_shell_init_blocks
 
     if ! command -v brew &>/dev/null; then
         echo "Homebrew installed, but brew is not available in this shell." >&2
@@ -468,7 +451,7 @@ install_homebrew() {
         return 1
     fi
 
-    echo "Homebrew installed ($(brew --version | head -1))."
+    status "installed" "$(brew --version | head -1)"
 }
 
 # --- ZeroTier ---
@@ -476,9 +459,9 @@ install_homebrew() {
 install_zerotier() {
     if command -v zerotier-cli &>/dev/null || command -v zerotier-one &>/dev/null; then
         if command -v zerotier-cli &>/dev/null; then
-            echo "ZeroTier: already installed ($(zerotier-cli -v))."
+            status "already-installed" "$(zerotier-cli -v)"
         else
-            echo "ZeroTier: already installed."
+            status "already-installed"
         fi
         return
     fi
@@ -486,14 +469,7 @@ install_zerotier() {
     echo "Installing ZeroTier..."
     curl -s https://install.zerotier.com | sudo bash
 
-    echo "ZeroTier installed."
-    echo "Next steps for custom planet/network setup:"
-    echo "  1. Replace the planet file under /var/lib/zerotier-one."
-    echo "  2. Restart the service: sudo service zerotier-one restart"
-    echo "  3. Join your network: sudo zerotier-cli join <NETWORK_ID>"
-    echo "  4. Approve the member in ZeroTier Central."
-    echo "  5. Verify peers: sudo zerotier-cli peers"
-    echo "     Look for a peer with role planet."
+    status "needs-action" "join a network with: sudo zerotier-cli join <NETWORK_ID>"
 }
 
 run_item() {
@@ -512,6 +488,7 @@ run_item() {
         mise) install_mise ;;
         homebrew) install_homebrew ;;
         zerotier) install_zerotier ;;
+        __shine_finalize) append_shell_init_blocks ;;
         "") return 0 ;;
         *)
             echo "Unknown sys init item: $1" >&2
@@ -520,10 +497,4 @@ run_item() {
     esac
 }
 
-for item in "$@"; do
-    run_item "$item"
-done
-
-if [[ $# -gt 0 ]]; then
-    echo "Done."
-fi
+run_item "${1:-}"

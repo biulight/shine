@@ -4,6 +4,17 @@ $ErrorActionPreference = "Stop"
 $ProfileSentinelStart = "# >>> shine windows sys >>>"
 $ProfileSentinelEnd = "# <<< shine windows sys <<<"
 
+function Write-Status {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $State,
+
+        [string] $Detail = ""
+    )
+
+    Write-Output "SHINE_SYS_STATUS`t$State`t$Detail"
+}
+
 $ScriptPathCandidates = @(
     $env:SHINE_SYS_PRESET_ROOT,
     $PSScriptRoot,
@@ -58,12 +69,13 @@ function Install-WinGetPackage {
     )
 
     if (Test-CommandExists $CommandName) {
-        Write-Host "${PackageId}: already installed ($CommandName found)."
+        Write-Status "already-installed" "$CommandName found"
         return
     }
 
     Write-Host "Installing $PackageId..."
     winget install --exact --id $PackageId --accept-package-agreements --accept-source-agreements
+    Write-Status "installed" $PackageId
 }
 
 function Remove-ManagedProfileBlock {
@@ -119,7 +131,6 @@ function Install-ManagedProfileScript {
     $managedProfileParent = Split-Path -Parent $managedProfilePath
     New-Item -ItemType Directory -Force -Path $managedProfileParent | Out-Null
     Copy-Item -LiteralPath $profileTemplatePath -Destination $managedProfilePath -Force
-    Write-Host "Updated $managedProfilePath"
 }
 
 function Get-ManagedProfileBlock {
@@ -151,8 +162,13 @@ function Update-PowerShellProfiles {
         Add-Content -LiteralPath $profilePath -Value $ProfileSentinelStart
         Add-Content -LiteralPath $profilePath -Value $block
         Add-Content -LiteralPath $profilePath -Value $ProfileSentinelEnd
-        Write-Host "Updated $profilePath"
     }
+}
+
+function Update-ManagedProfiles {
+    Install-ManagedProfileScript
+    Update-PowerShellProfiles
+    Write-Status "updated" "PowerShell profiles"
 }
 
 function Install-Rust {
@@ -222,6 +238,7 @@ function Install-Item {
         "bun" { Install-Bun }
         "pnpm" { Install-pnpm }
         "mise" { Install-mise }
+        "__shine_finalize" { Update-ManagedProfiles }
         default { throw "Unknown Windows sys init item: $Item" }
     }
 }
@@ -229,16 +246,13 @@ function Install-Item {
 Assert-Windows
 
 if ($args.Count -eq 0) {
-    Write-Host "No Windows sys init items selected."
+    Write-Status "completed" "no item selected"
     exit 0
 }
 
-Assert-WinGet
-
-foreach ($item in $args) {
-    Install-Item $item
+$item = $args[0]
+if ($item -ne "__shine_finalize") {
+    Assert-WinGet
 }
 
-Install-ManagedProfileScript
-Update-PowerShellProfiles
-Write-Host "Windows system initialization complete."
+Install-Item $item
