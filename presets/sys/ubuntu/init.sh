@@ -30,6 +30,12 @@ load_homebrew_env() {
     fi
 }
 
+load_atuin_env() {
+    if [[ -f "$HOME/.atuin/bin/env" ]]; then
+        . "$HOME/.atuin/bin/env"
+    fi
+}
+
 remove_shell_block() {
     local file="$1"
     local tmp_file
@@ -192,6 +198,7 @@ install_astronvim() {
 # --- Atuin ---
 
 install_atuin() {
+    load_atuin_env
     if command -v atuin &>/dev/null; then
         echo "Atuin: already installed ($(atuin --version))."
         append_shell_init_blocks
@@ -199,6 +206,7 @@ install_atuin() {
     fi
     echo "Installing Atuin..."
     curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
+    load_atuin_env
     append_shell_init_blocks
 }
 

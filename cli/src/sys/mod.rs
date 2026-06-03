@@ -1008,8 +1008,10 @@ description = "Placeholder"
             "Atuin: already installed ($(atuin --version)).\"\n        append_shell_init_blocks"
         ));
         assert!(content.contains(
-            "curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh\n    append_shell_init_blocks"
+            "curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh\n    load_atuin_env\n    append_shell_init_blocks"
         ));
+        assert!(content.contains("load_atuin_env"));
+        assert!(content.contains(". \"$HOME/.atuin/bin/env\""));
     }
 
     #[test]
@@ -1020,6 +1022,7 @@ description = "Placeholder"
 
         assert!(content.contains("atuin init"));
         assert!(content.contains("shine_ubuntu_sys_shell"));
+        assert!(content.contains(". \"$HOME/.atuin/bin/env\""));
     }
 
     #[test]
