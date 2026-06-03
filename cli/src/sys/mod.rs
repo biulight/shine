@@ -235,6 +235,15 @@ async fn handle_init_for_os(
     print_run_header(os_id, sys_shell, &selection);
 
     let item_labels = manifest_item_labels(&loaded.manifest);
+    let label_width = selection
+        .item_ids
+        .iter()
+        .filter_map(|item_id| item_labels.get(item_id.as_str()))
+        .map(String::len)
+        .chain(std::iter::once("profile".len()))
+        .max()
+        .unwrap_or(14)
+        .max(14);
     let mut outcomes = Vec::new();
     for item_id in &selection.item_ids {
         let label = item_labels
@@ -250,7 +259,7 @@ async fn handle_init_for_os(
             &label,
         )
         .await?;
-        print_item_outcome(&outcome);
+        print_item_outcome(&outcome, label_width);
         let failed = outcome.status == SysItemStatus::Failed;
         outcomes.push(outcome);
         if failed {
@@ -272,7 +281,7 @@ async fn handle_init_for_os(
         )
         .await?;
         if finalize.status != SysItemStatus::Completed || !finalize.logs.is_empty() {
-            print_item_outcome(&finalize);
+            print_item_outcome(&finalize, label_width);
         }
         outcomes.push(finalize);
     }
@@ -468,13 +477,21 @@ fn parse_status_event(line: &str) -> Option<(SysItemStatus, String)> {
         "failed" => SysItemStatus::Failed,
         _ => return None,
     };
-    let detail = parts.next().unwrap_or_default().trim().to_string();
+    let detail = normalize_status_detail(parts.next().unwrap_or_default().trim());
     Some((status, detail))
 }
 
-fn print_item_outcome(outcome: &SysItemOutcome) {
+fn normalize_status_detail(detail: &str) -> String {
+    detail
+        .strip_suffix(" ()")
+        .unwrap_or(detail)
+        .trim()
+        .to_string()
+}
+
+fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
     let symbol = status_symbol(outcome.status);
-    let label = format!("{:<14}", outcome.label);
+    let label = format!("{:<label_width$}", outcome.label);
     let status = format!("{:<17}", status_text(outcome.status));
     let detail = if outcome.detail.is_empty() {
         String::new()
@@ -1037,6 +1054,17 @@ description = "Placeholder"
         assert_eq!(
             parsed,
             (SysItemStatus::AlreadyInstalled, "atuin 18.16.0".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_status_event_trims_empty_version_suffix() {
+        let parsed = parse_status_event("SHINE_SYS_STATUS\talready-installed\tatuin 18.13.6 ()")
+            .expect("status event should parse");
+
+        assert_eq!(
+            parsed,
+            (SysItemStatus::AlreadyInstalled, "atuin 18.13.6".to_string())
         );
     }
 
