@@ -999,6 +999,7 @@ description = "Placeholder"
         assert!(content.contains("cp \"$template_path\" \"$managed_path\""));
         assert!(content.contains("SHINE_UBUNTU_SYS_SHELL"));
         assert!(content.contains("SHINE_SYS_SHELL"));
+        assert!(content.contains("[[ -f \"$file\" ]] || return 0"));
         assert!(content.contains("append_shell_block \"$HOME/.bashrc\" bash"));
         assert!(content.contains("remove_shell_block \"$HOME/.zshrc\""));
         assert!(content.contains("append_shell_block \"$HOME/.zshrc\" zsh"));

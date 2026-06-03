@@ -34,7 +34,7 @@ remove_shell_block() {
     local file="$1"
     local tmp_file
 
-    [[ -f "$file" ]] || return
+    [[ -f "$file" ]] || return 0
     tmp_file="$(mktemp)"
     awk -v start="$SHELL_SENTINEL_START" -v end="$SHELL_SENTINEL_END" '
         $0 == start { skip = 1; next }
@@ -48,7 +48,7 @@ remove_pnpm_block() {
     local file="$1"
     local tmp_file
 
-    [[ -f "$file" ]] || return
+    [[ -f "$file" ]] || return 0
     tmp_file="$(mktemp)"
     awk '
         $0 == "# pnpm" { skip = 1; next }
