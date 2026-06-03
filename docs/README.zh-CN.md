@@ -24,7 +24,7 @@ English README: [`../README.md`](../README.md)
 - **多 shell 支持** — bash、zsh、fish、PowerShell；当同一类别在 Unix 和 Windows 需要不同文件时，可按平台声明 shell 预设条目
 - **系统初始化预设** — 通过 `shine sys init` 对当前操作系统执行一组整理过的初始化步骤
 
-当前支持范围：`shine shell` 支持 `bash`、`zsh`、`fish` 和 PowerShell。Windows 支持目前覆盖 `shine self`、`shine shell`，以及 `docker-engine`、`docker-desktop` 这类已适配的 app 预设；sys 预设仍以 Unix 环境为主。
+当前支持范围：`shine shell` 支持 `bash`、`zsh`、`fish` 和 PowerShell。Windows 支持目前覆盖 `shine self`、`shine shell`，`docker-engine`、`docker-desktop` 这类已适配的 app 预设，以及用 PowerShell 实现的 Windows `shine sys init` 预设。
 
 ## 规划流程
 
@@ -65,7 +65,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 cargo install --path cli
 ```
 
-Windows 支持目前覆盖 PowerShell 下的 `shine self`、`shine shell`，以及部分已适配的 app 预设，并会同时更新 `powershell.exe` 与 `pwsh.exe` 对应的 profile；sys 预设仍以 Unix 环境为主。
+Windows 支持目前覆盖 PowerShell 下的 `shine self`、`shine shell`、部分已适配的 app 预设，以及用 PowerShell 实现的 `shine sys init` 预设，并会同时更新 `powershell.exe` 与 `pwsh.exe` 对应的 profile。
 
 也可以自己构建：
 
@@ -187,12 +187,12 @@ shine sys init --preset recommended
 shine sys init --dry-run
 ```
 
-`shine sys init` 会检测当前操作系统，读取 `presets/sys/<os>/shine.toml`，解析出待执行的安装项，然后运行 `presets/sys/<os>/init.sh <item>...`。
+`shine sys init` 会检测当前操作系统，读取 `presets/sys/<os>/shine.toml`，解析出待执行的安装项，然后把这些 item ID 传给当前平台的初始化脚本。
 
 - 在 TTY 中，`shine sys init` 会打开一个交互式多选界面，默认值来自预设的 `default_profile`
 - `shine sys init --preset <PROFILE>` 会跳过交互，直接应用指定 profile
 - 非 TTY 环境下，`shine sys init` 会回退到 `default_profile`
-- `shine sys init --dry-run` 会输出解析后的项目、实际 bash 调用命令，以及脚本内容，但不会执行
+- `shine sys init --dry-run` 会输出解析后的项目、实际脚本调用命令，以及脚本内容，但不会执行
 
 系统初始化预设使用如下元数据结构：
 
@@ -213,6 +213,9 @@ items = ["neovim"]
 
 - `ubuntu` — 提供 Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza、pnpm、mise、Homebrew 和 ZeroTier 的可选步骤。`recommended` profile 包含核心编辑器、历史记录、文件管理器、提示符、目录跳转和 shell 工具步骤；pnpm、mise、Homebrew 和 ZeroTier 通过 `all` profile 或显式选择启用。
 - `macos` — 提供 Homebrew、Yazi、Starship、Neovim、AstroNvim、ZeroTier、zsh 插件、zoxide、Atuin、fzf、bat、eza、nvm、Bun、pnpm 和 Fastfetch 的可选步骤。`recommended` profile 包含 Homebrew 和核心终端/编辑器工具；`all` profile 额外包含 JavaScript 运行时和 Fastfetch。
+- `windows` — 提供 Rust、Yazi、Starship、zoxide、Atuin、fzf、bat、eza、ZeroTier、Bun、pnpm 和 mise 的可选步骤。`recommended` profile 包含 Rust 和核心终端工具；`all` profile 额外包含 JavaScript 运行时和环境管理器步骤。
+
+当所选工具需要 shell 集成时，sys init 会安装受管 profile 区块。Ubuntu 会为 Yazi、Starship、zoxide、Atuin、fzf 和 mise 等工具安装受管 shell profile loader。Windows 会为 Yazi、Starship、zoxide、Atuin、fzf 和 mise 安装受管 PowerShell profile loader。
 
 ### 查看应用预设详情
 
@@ -478,7 +481,7 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.27.0+preview.abc1234`；稳定版则继续显示 `0.27.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.28.0+preview.abc1234`；稳定版则继续显示 `0.28.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -488,7 +491,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.27.0 sh install.sh
+SHINE_VERSION=0.28.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -496,7 +499,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.27.0"; .\install.ps1
+$env:SHINE_VERSION = "0.28.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -504,13 +507,13 @@ $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 
 ### app/ghostty
 
-内置的 Ghostty 预设会安装主配置 `config.ghostty`，以及位于 `~/.config/ghostty/themes/` 下成对的 `shine-light` 和 `shine-dark` 主题。默认配置使用自动明暗切换：
+内置的 Ghostty 预设会安装主配置 `config.ghostty`，以及位于 `~/.config/ghostty/themes/` 下成对的亮色和暗色主题。默认配置使用自动明暗切换：
 
 ```text
-theme = light:shine-light,dark:shine-dark
+theme = light:light_Github Light Default,dark:dark_Alien Blood
 ```
 
-如果你希望内置主题在安装或 `shine upgrade` 时渲染出背景图片路径，可通过 `shine env set` 设置 `GHOSTTY_BG_LIGHT` 和 `GHOSTTY_BG_DARK`。
+如果你希望内置亮色和暗色主题在安装或 `shine upgrade` 时渲染出背景图片路径，可通过 `shine env set` 设置 `GHOSTTY_BG_LIGHT` 和 `GHOSTTY_BG_DARK`。
 
 ### shell/proxy — `setproxy` / `usetproxy`
 
@@ -672,8 +675,8 @@ PROXY_HOST = "127.0.0.1"
     │   ├── ghostty/
     │   │   ├── config.ghostty
     │   │   ├── themes/
-    │   │   │   ├── shine-dark
-    │   │   │   └── shine-light
+    │   │   │   ├── Alien Blood
+    │   │   │   └── Github Light Default
     │   │   └── shine.toml
     │   ├── git/
     │   │   └── gitconfig
