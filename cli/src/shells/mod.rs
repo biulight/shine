@@ -436,10 +436,15 @@ pub(crate) async fn handle_uninstall(
             })?;
     }
 
-    // Only remove the PATH sentinel when uninstalling all shell presets.
-    if category.is_none() && !dry_run {
-        remove_path_from_shell_config(config).await?;
-        remove_managed_shell_profile(config).await?;
+    if !dry_run {
+        if category.is_none() {
+            // Only remove the PATH sentinel when uninstalling all shell presets.
+            remove_path_from_shell_config(config).await?;
+            remove_managed_shell_profile(config).await?;
+        } else {
+            let remaining_source_commands = installed_source_commands(config).await?;
+            write_managed_shell_profile(config, &remaining_source_commands).await?;
+        }
     }
 
     Ok(())
@@ -1773,6 +1778,39 @@ mod tests {
         assert_eq!(
             profile_before, profile_after,
             "dry-run must not touch managed shell profile"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn uninstall_category_refreshes_managed_profile_source_wrappers() {
+        let dir = make_temp_dir().await;
+        let config = config_with_deepseek_key(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("agent"), false).await.unwrap();
+        handle_install(&config, Some("proxy"), false).await.unwrap();
+
+        handle_uninstall(&config, Some("proxy"), false, false)
+            .await
+            .unwrap();
+
+        let profile = fs::read_to_string(managed_shell_profile_path(&config))
+            .await
+            .unwrap();
+        assert!(
+            profile.contains(&wrapper_marker("ccenv", &config.shell_type)),
+            "remaining source wrapper should be kept: {profile}"
+        );
+        assert!(
+            !profile.contains(&wrapper_marker("setproxy", &config.shell_type)),
+            "removed category wrapper should be pruned: {profile}"
+        );
+        assert!(
+            !profile.contains(&wrapper_marker("usetproxy", &config.shell_type)),
+            "removed category wrapper should be pruned: {profile}"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
