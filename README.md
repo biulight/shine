@@ -24,7 +24,7 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 - **Multi-shell support** — bash, zsh, fish, PowerShell, with per-platform shell preset entries when a category needs different files on Unix and Windows
 - **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
 
-Current support scope: `shine shell` supports bash, zsh, fish, and PowerShell. Windows support covers `shine self`, `shine shell`, and selected app presets such as `docker-engine` and `docker-desktop`; sys presets are still Unix-oriented.
+Current support scope: `shine shell` supports bash, zsh, fish, and PowerShell. Windows support covers `shine self`, `shine shell`, selected app presets such as `docker-engine` and `docker-desktop`, and a Windows `shine sys init` preset implemented with PowerShell.
 
 ## Planning Workflow
 
@@ -65,7 +65,7 @@ Or install from source:
 cargo install --path cli
 ```
 
-Windows support covers `shine self`, `shine shell`, and selected app presets in PowerShell, including profile updates for both `powershell.exe` and `pwsh.exe`; sys presets remain Unix-oriented.
+Windows support covers `shine self`, `shine shell`, selected app presets in PowerShell, and a PowerShell-backed `shine sys init` preset, including profile updates for both `powershell.exe` and `pwsh.exe`.
 
 Or build from source:
 
@@ -187,12 +187,12 @@ shine sys init --preset recommended
 shine sys init --dry-run
 ```
 
-`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs `presets/sys/<os>/init.sh <item>...`.
+`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After all items finish, it calls the same script with `__shine_finalize` so the preset can apply shared profile or shell integration once.
 
 - In a TTY, `shine sys init` opens an interactive multi-select with defaults taken from the preset's `default_profile`.
 - `shine sys init --preset <PROFILE>` skips the prompt and applies that named profile directly.
 - Without a TTY, `shine sys init` falls back to `default_profile`.
-- `shine sys init --dry-run` prints the resolved items, exact bash invocation, and script content without executing anything.
+- `shine sys init --dry-run` prints the resolved items, per-item script invocations, finalize invocation, and script content without executing anything.
 
 System init presets use this metadata shape:
 
@@ -209,10 +209,21 @@ description = "Install the latest stable Neovim release."
 items = ["neovim"]
 ```
 
+Init scripts can emit a machine-readable status line so `shine` can render a compact summary:
+
+```bash
+printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "nvim found"
+```
+
+Supported states are `installed`, `already-installed`, `skipped`, `updated`, `needs-action`, `completed`, and `failed`. Other script output is preserved as indented logs for the current item. Older scripts that do not emit status lines still run; successful items are shown as `completed`.
+
 Current built-in presets:
 
 - `ubuntu` — offers selectable Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza, pnpm, mise, Homebrew, and ZeroTier steps. The `recommended` profile includes the core editor, history, file manager, prompt, navigation, and shell utility steps while leaving pnpm, mise, Homebrew, and ZeroTier opt-in through the `all` profile or explicit selection.
 - `macos` — offers selectable Homebrew, Yazi, Starship, Neovim, AstroNvim, ZeroTier, zsh plugin, zoxide, Atuin, fzf, bat, eza, nvm, Bun, pnpm, and Fastfetch steps. The `recommended` profile includes Homebrew and the core terminal/editor tools; the `all` profile adds JavaScript runtimes and Fastfetch.
+- `windows` — offers selectable Rust, Yazi, Starship, zoxide, Atuin, fzf, bat, eza, ZeroTier, Bun, pnpm, and mise steps. The `recommended` profile includes Rust and core terminal tools; the `all` profile adds JavaScript runtime and environment manager steps.
+
+When selected tools need shell integration, sys init installs managed profile blocks. Ubuntu uses a managed shell profile loader for tools such as Yazi, Starship, zoxide, Atuin, fzf, and mise. Windows uses a managed PowerShell profile loader for Yazi, Starship, zoxide, Atuin, fzf, and mise.
 
 ### Show app preset details
 
@@ -482,7 +493,7 @@ shine upgrade --verbose  # include env-template check details
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.27.0+preview.abc1234`, while stable binaries continue to report `0.27.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.28.0+preview.abc1234`, while stable binaries continue to report `0.28.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -492,7 +503,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.27.0 sh install.sh
+SHINE_VERSION=0.28.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -500,7 +511,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.27.0"; .\install.ps1
+$env:SHINE_VERSION = "0.28.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -508,13 +519,13 @@ $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 
 ### app/ghostty
 
-The bundled Ghostty preset installs a main `config.ghostty` plus paired `shine-light` and `shine-dark` themes under `~/.config/ghostty/themes/`. The default config uses automatic light/dark theme switching:
+The bundled Ghostty preset installs a main `config.ghostty` plus paired light and dark themes under `~/.config/ghostty/themes/`. The default config uses automatic light/dark theme switching:
 
 ```text
-theme = light:shine-light,dark:shine-dark
+theme = light:light_Github Light Default,dark:dark_Alien Blood
 ```
 
-Set `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK` with `shine env set` if you want the bundled themes to render a background image path during install or `shine upgrade`.
+Set `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK` with `shine env set` if you want the bundled light and dark themes to render a background image path during install or `shine upgrade`.
 
 ### shell/proxy — `setproxy` / `usetproxy`
 
@@ -692,8 +703,8 @@ PROXY_HOST = "127.0.0.1"
     │   ├── ghostty/
     │   │   ├── config.ghostty
     │   │   ├── themes/
-    │   │   │   ├── shine-dark
-    │   │   │   └── shine-light
+    │   │   │   ├── Alien Blood
+    │   │   │   └── Github Light Default
     │   │   └── shine.toml
     │   ├── git/
     │   │   └── gitconfig

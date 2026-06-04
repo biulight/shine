@@ -3,12 +3,19 @@
 set -euo pipefail
 
 ARCH=$(uname -m)
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SHELL_SENTINEL_START="# >>> shine ubuntu sys >>>"
 SHELL_SENTINEL_END="# <<< shine ubuntu sys <<<"
 PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}"
 ZSH_VI_MODE_PLUGIN="$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
 
 export PATH="$HOME/.local/bin:$PNPM_HOME:$PNPM_HOME/bin:$PATH"
+
+status() {
+    local state="$1"
+    local detail="${2:-}"
+    printf 'SHINE_SYS_STATUS\t%s\t%s\n' "$state" "$detail"
+}
 
 brew_executable() {
     if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
@@ -29,11 +36,17 @@ load_homebrew_env() {
     fi
 }
 
+load_atuin_env() {
+    if [[ -f "$HOME/.atuin/bin/env" ]]; then
+        . "$HOME/.atuin/bin/env"
+    fi
+}
+
 remove_shell_block() {
     local file="$1"
     local tmp_file
 
-    [[ -f "$file" ]] || return
+    [[ -f "$file" ]] || return 0
     tmp_file="$(mktemp)"
     awk -v start="$SHELL_SENTINEL_START" -v end="$SHELL_SENTINEL_END" '
         $0 == start { skip = 1; next }
@@ -47,7 +60,7 @@ remove_pnpm_block() {
     local file="$1"
     local tmp_file
 
-    [[ -f "$file" ]] || return
+    [[ -f "$file" ]] || return 0
     tmp_file="$(mktemp)"
     awk '
         $0 == "# pnpm" { skip = 1; next }
@@ -60,109 +73,113 @@ remove_pnpm_block() {
 append_shell_block() {
     local file="$1"
     local shell_name="$2"
-    local init_file
+    local new_block
+    local current_block
 
     touch "$file"
+    new_block="$(mktemp)"
+    current_block="$(mktemp)"
+    {
+        echo "$SHELL_SENTINEL_START"
+        echo "shine_ubuntu_sys_profile=\"\$HOME/.shine/profile/ubuntu-sys.sh\""
+        echo "if [[ -f \"\$shine_ubuntu_sys_profile\" ]]; then"
+        echo "  SHINE_UBUNTU_SYS_SHELL=\"$shell_name\""
+        echo "  source \"\$shine_ubuntu_sys_profile\""
+        echo "fi"
+        echo "$SHELL_SENTINEL_END"
+    } > "$new_block"
+
+    awk -v start="$SHELL_SENTINEL_START" -v end="$SHELL_SENTINEL_END" '
+        $0 == start { capture = 1 }
+        capture { print }
+        $0 == end { capture = 0 }
+    ' "$file" > "$current_block"
+
+    if cmp -s "$new_block" "$current_block"; then
+        rm -f "$new_block" "$current_block"
+        remove_pnpm_block "$file"
+        return 1
+    fi
+
     remove_shell_block "$file"
     remove_pnpm_block "$file"
-    init_file="$(mktemp)"
-
-    cat > "$init_file" <<EOF
-# Managed by \`shine sys init\` for Ubuntu. Existing user config is left untouched.
-
-# User-local binaries
-case ":\$PATH:" in
-  *":\$HOME/.local/bin:"*) ;;
-  *) export PATH="\$HOME/.local/bin:\$PATH" ;;
-esac
-
-# Homebrew
-if [[ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]]; then
-  eval "\$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-elif [[ -x "\$HOME/.linuxbrew/bin/brew" ]]; then
-  eval "\$(\$HOME/.linuxbrew/bin/brew shellenv)"
-fi
-
-# pnpm
-export PNPM_HOME="\$HOME/.local/share/pnpm"
-case ":\$PATH:" in
-  *":\$PNPM_HOME:"*) ;;
-  *) export PATH="\$PNPM_HOME:\$PATH" ;;
-esac
-if [[ -d "\$PNPM_HOME/bin" ]]; then
-  case ":\$PATH:" in
-    *":\$PNPM_HOME/bin:"*) ;;
-    *) export PATH="\$PNPM_HOME/bin:\$PATH" ;;
-  esac
-fi
-
-# eza
-if command -v eza >/dev/null 2>&1; then
-  alias ls='eza --icons'
-  alias ll='eza -la --icons'
-  alias lt='eza --tree'
-fi
-
-# bat
-if command -v bat >/dev/null 2>&1; then
-  alias cat='bat'
-fi
-
-# fzf
-if command -v fzf >/dev/null 2>&1; then
-  if fzf --${shell_name} >/dev/null 2>&1; then
-    eval "\$(fzf --${shell_name})"
-  elif [[ "${shell_name}" == "bash" ]]; then
-    [[ -f /usr/share/doc/fzf/examples/key-bindings.bash ]] && source /usr/share/doc/fzf/examples/key-bindings.bash
-    [[ -f /usr/share/doc/fzf/examples/completion.bash ]] && source /usr/share/doc/fzf/examples/completion.bash
-  elif [[ "${shell_name}" == "zsh" ]]; then
-    [[ -f /usr/share/doc/fzf/examples/key-bindings.zsh ]] && source /usr/share/doc/fzf/examples/key-bindings.zsh
-    [[ -f /usr/share/doc/fzf/examples/completion.zsh ]] && source /usr/share/doc/fzf/examples/completion.zsh
-  fi
-fi
-
-# Starship prompt
-if command -v starship >/dev/null 2>&1; then
-  eval "\$(starship init ${shell_name})"
-fi
-
-# zoxide
-if command -v zoxide >/dev/null 2>&1; then
-  eval "\$(zoxide init ${shell_name})"
-fi
-
-# mise
-if command -v mise >/dev/null 2>&1; then
-  eval "\$(mise activate ${shell_name})"
-elif [[ -x "\$HOME/.local/bin/mise" ]]; then
-  eval "\$(\$HOME/.local/bin/mise activate ${shell_name})"
-fi
-
-# zsh-vi-mode
-if [[ "${shell_name}" == "zsh" ]]; then
-  if [[ -f "/home/linuxbrew/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
-    source "/home/linuxbrew/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
-  elif [[ -f "\$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
-    source "\$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
-  elif [[ -f "\$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
-    source "\$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
-  fi
-fi
-EOF
 
     {
         echo
-        echo "$SHELL_SENTINEL_START"
-        cat "$init_file"
-        echo "$SHELL_SENTINEL_END"
+        cat "$new_block"
     } >> "$file"
-    rm -f "$init_file"
+
+    rm -f "$new_block" "$current_block"
+    return 0
+}
+
+managed_profile_path() {
+    echo "$HOME/.shine/profile/ubuntu-sys.sh"
+}
+
+install_managed_profile_script() {
+    local template_path="$SCRIPT_DIR/profile.sh"
+    local managed_path
+    local managed_parent
+    local updated=0
+
+    if [[ ! -f "$template_path" ]]; then
+        echo "Missing Ubuntu profile template: $template_path" >&2
+        return 2
+    fi
+
+    managed_path="$(managed_profile_path)"
+    managed_parent="$(dirname "$managed_path")"
+    mkdir -p "$managed_parent"
+    if [[ ! -f "$managed_path" ]] || ! cmp -s "$template_path" "$managed_path"; then
+        cp "$template_path" "$managed_path"
+        updated=1
+    fi
+    return "$updated"
 }
 
 append_shell_init_blocks() {
-    append_shell_block "$HOME/.bashrc" bash
-    append_shell_block "$HOME/.zshrc" zsh
-    echo "Updated ~/.bashrc and ~/.zshrc managed blocks for Ubuntu shell tool initialization."
+    local sys_shell="${SHINE_SYS_SHELL:-bash}"
+    local managed_path
+    local profile_updated=0
+    local block_updated=0
+
+    if install_managed_profile_script; then
+        profile_updated=0
+    else
+        case "$?" in
+            1) profile_updated=1 ;;
+            *) return 1 ;;
+        esac
+    fi
+    managed_path="$(managed_profile_path)"
+    case "$sys_shell" in
+        bash)
+            if append_shell_block "$HOME/.bashrc" bash; then
+                block_updated=1
+            fi
+            remove_shell_block "$HOME/.zshrc"
+            if [[ "$profile_updated" -eq 1 || "$block_updated" -eq 1 ]]; then
+                status "updated" "~/.bashrc -> $managed_path"
+            else
+                status "skipped" "~/.bashrc already configured"
+            fi
+            ;;
+        zsh)
+            if append_shell_block "$HOME/.zshrc" zsh; then
+                block_updated=1
+            fi
+            remove_shell_block "$HOME/.bashrc"
+            if [[ "$profile_updated" -eq 1 || "$block_updated" -eq 1 ]]; then
+                status "updated" "~/.zshrc -> $managed_path"
+            else
+                status "skipped" "~/.zshrc already configured"
+            fi
+            ;;
+        *)
+            status "skipped" "unsupported shell: $sys_shell"
+            ;;
+    esac
 }
 
 install_packages() {
@@ -176,7 +193,6 @@ install_packages() {
     done
 
     if [[ ${#packages[@]} -eq 0 ]]; then
-        echo "Packages already installed: $*"
         return
     fi
 
@@ -201,7 +217,7 @@ neovim_version_ok() {
 
 install_neovim() {
     if neovim_version_ok; then
-        echo "Neovim: already installed ($(nvim --version | head -1))."
+        status "already-installed" "$(nvim --version | head -1)"
         return
     fi
     echo "Installing Neovim (latest stable)..."
@@ -217,32 +233,35 @@ install_neovim() {
     sudo tar xzf /tmp/nvim.tar.gz -C /opt
     sudo ln -sf "/opt/${stem}/bin/nvim" /usr/local/bin/nvim
     rm /tmp/nvim.tar.gz
-    echo "Neovim installed to /usr/local/bin/nvim."
+    status "installed" "/usr/local/bin/nvim"
 }
 
 # --- AstroNvim ---
 
 install_astronvim() {
     if [[ -d "$HOME/.config/nvim" ]]; then
-        echo "AstroNvim: ~/.config/nvim already exists, skipping."
+        status "skipped" "~/.config/nvim already exists"
         return
     fi
     echo "Installing AstroNvim..."
     sudo apt-get install -y git
     git clone --depth 1 https://github.com/AstroNvim/template "$HOME/.config/nvim"
     rm -rf "$HOME/.config/nvim/.git"
-    echo "AstroNvim installed. Run 'nvim' to finish plugin setup."
+    status "installed" "~/.config/nvim"
 }
 
 # --- Atuin ---
 
 install_atuin() {
+    load_atuin_env
     if command -v atuin &>/dev/null; then
-        echo "Atuin: already installed ($(atuin --version))."
+        status "already-installed" "$(atuin --version)"
         return
     fi
     echo "Installing Atuin..."
     curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
+    load_atuin_env
+    status "installed" "$(atuin --version)"
 }
 
 # --- Yazi ---
@@ -267,8 +286,8 @@ install_yazi() {
     install_yazi_dependencies
 
     if command -v yazi &>/dev/null; then
-        echo "Yazi: already installed ($(yazi --version | head -1))."
         ensure_fd_alias
+        status "already-installed" "$(yazi --version | head -1)"
         return
     fi
 
@@ -289,44 +308,39 @@ install_yazi() {
     rm -f "$tmp"
 
     ensure_fd_alias
-    echo "Yazi installed ($(yazi --version | head -1))."
+    status "installed" "$(yazi --version | head -1)"
 }
 
 # --- Starship ---
 
 install_starship() {
     if command -v starship &>/dev/null; then
-        echo "Starship: already installed ($(starship --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(starship --version | head -1)"
         return
     fi
 
     echo "Installing Starship..."
     curl -sS https://starship.rs/install.sh | sudo sh -s -- -y -b /usr/local/bin
-    append_shell_init_blocks
-    echo "Starship installed ($(starship --version | head -1))."
+    status "installed" "$(starship --version | head -1)"
 }
 
 # --- zoxide ---
 
 install_zoxide() {
     if command -v zoxide &>/dev/null; then
-        echo "zoxide: already installed ($(zoxide --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(zoxide --version | head -1)"
         return
     fi
 
     if [[ -x "$HOME/.local/bin/zoxide" ]]; then
-        echo "zoxide: already installed ($("$HOME/.local/bin/zoxide" --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$("$HOME/.local/bin/zoxide" --version | head -1)"
         return
     fi
 
     echo "Installing zoxide..."
     mkdir -p "$HOME/.local/bin"
     curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh
-    append_shell_init_blocks
-    echo "zoxide installed ($(zoxide --version | head -1))."
+    status "installed" "$(zoxide --version | head -1)"
 }
 
 # --- zsh-vi-mode ---
@@ -334,22 +348,19 @@ install_zoxide() {
 install_zsh_vi_mode() {
     load_homebrew_env
     if [[ -n "${HOMEBREW_PREFIX:-}" ]] && [[ -f "$HOMEBREW_PREFIX/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
-        echo "zsh-vi-mode: already installed with Homebrew."
-        append_shell_init_blocks
+        status "already-installed" "Homebrew"
         return
     fi
 
     if command -v brew &>/dev/null; then
         echo "Installing zsh-vi-mode with Homebrew..."
         brew install zsh-vi-mode
-        append_shell_init_blocks
-        echo "zsh-vi-mode installed with Homebrew."
+        status "installed" "Homebrew"
         return
     fi
 
     if [[ -f "$ZSH_VI_MODE_PLUGIN" ]]; then
-        echo "zsh-vi-mode: already installed at $ZSH_VI_MODE_PLUGIN."
-        append_shell_init_blocks
+        status "already-installed" "$ZSH_VI_MODE_PLUGIN"
         return
     fi
 
@@ -357,22 +368,19 @@ install_zsh_vi_mode() {
     echo "Installing zsh-vi-mode to $ZSH_VI_MODE_PLUGIN..."
     mkdir -p "$(dirname "$ZSH_VI_MODE_PLUGIN")"
     git clone --depth 1 https://github.com/jeffreytse/zsh-vi-mode.git "$(dirname "$ZSH_VI_MODE_PLUGIN")"
-    append_shell_init_blocks
-    echo "zsh-vi-mode installed at $ZSH_VI_MODE_PLUGIN."
+    status "installed" "$ZSH_VI_MODE_PLUGIN"
 }
 
 # --- fzf ---
 
 install_fzf() {
     if command -v fzf &>/dev/null; then
-        echo "fzf: already installed ($(fzf --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(fzf --version | head -1)"
         return
     fi
 
     install_packages fzf
-    append_shell_init_blocks
-    echo "fzf installed ($(fzf --version | head -1))."
+    status "installed" "$(fzf --version | head -1)"
 }
 
 # --- bat ---
@@ -391,17 +399,15 @@ ensure_bat_command() {
 
 install_bat() {
     if command -v bat &>/dev/null; then
-        echo "bat: already installed ($(bat --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(bat --version | head -1)"
         return
     fi
 
     install_packages bat
     ensure_bat_command
-    append_shell_init_blocks
 
     if command -v bat &>/dev/null; then
-        echo "bat installed ($(bat --version | head -1))."
+        status "installed" "$(bat --version | head -1)"
     else
         echo "bat package installed, but no bat or batcat command was found." >&2
         return 1
@@ -413,8 +419,7 @@ install_bat() {
 install_eza() {
     load_homebrew_env
     if command -v eza &>/dev/null; then
-        echo "eza: already installed ($(eza --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(eza --version | head -1)"
         return
     fi
 
@@ -426,8 +431,7 @@ install_eza() {
         brew install eza
     fi
 
-    append_shell_init_blocks
-    echo "eza installed ($(eza --version | head -1))."
+    status "installed" "$(eza --version | head -1)"
 }
 
 # --- pnpm ---
@@ -436,43 +440,37 @@ install_pnpm() {
     install_packages libatomic1
 
     if command -v pnpm &>/dev/null; then
-        echo "pnpm: already installed ($(pnpm --version))."
-        append_shell_init_blocks
+        status "already-installed" "$(pnpm --version)"
         return
     fi
 
     if [[ -x "$HOME/.local/share/pnpm/pnpm" ]]; then
-        echo "pnpm: already installed ($("$HOME/.local/share/pnpm/pnpm" --version))."
-        append_shell_init_blocks
+        status "already-installed" "$("$HOME/.local/share/pnpm/pnpm" --version)"
         return
     fi
 
     echo "Installing pnpm..."
     curl -fsSL https://get.pnpm.io/install.sh | SHELL="$(command -v bash)" sh -
-    append_shell_init_blocks
-    echo "pnpm installed ($(pnpm --version))."
+    status "installed" "$(pnpm --version)"
 }
 
 # --- mise ---
 
 install_mise() {
     if command -v mise &>/dev/null; then
-        echo "mise: already installed ($(mise --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(mise --version | head -1)"
         return
     fi
 
     if [[ -x "$HOME/.local/bin/mise" ]]; then
-        echo "mise: already installed ($("$HOME/.local/bin/mise" --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$("$HOME/.local/bin/mise" --version | head -1)"
         return
     fi
 
     echo "Installing mise..."
     mkdir -p "$HOME/.local/bin"
     curl -fsSL https://mise.run | sh
-    append_shell_init_blocks
-    echo "mise installed ($("$HOME/.local/bin/mise" --version | head -1))."
+    status "installed" "$("$HOME/.local/bin/mise" --version | head -1)"
 }
 
 # --- Homebrew ---
@@ -480,8 +478,7 @@ install_mise() {
 install_homebrew() {
     load_homebrew_env
     if command -v brew &>/dev/null; then
-        echo "Homebrew: already installed ($(brew --version | head -1))."
-        append_shell_init_blocks
+        status "already-installed" "$(brew --version | head -1)"
         return
     fi
 
@@ -495,7 +492,6 @@ install_homebrew() {
     echo "Installing Homebrew..."
     NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     load_homebrew_env
-    append_shell_init_blocks
 
     if ! command -v brew &>/dev/null; then
         echo "Homebrew installed, but brew is not available in this shell." >&2
@@ -503,7 +499,7 @@ install_homebrew() {
         return 1
     fi
 
-    echo "Homebrew installed ($(brew --version | head -1))."
+    status "installed" "$(brew --version | head -1)"
 }
 
 # --- ZeroTier ---
@@ -511,9 +507,9 @@ install_homebrew() {
 install_zerotier() {
     if command -v zerotier-cli &>/dev/null || command -v zerotier-one &>/dev/null; then
         if command -v zerotier-cli &>/dev/null; then
-            echo "ZeroTier: already installed ($(zerotier-cli -v))."
+            status "already-installed" "$(zerotier-cli -v)"
         else
-            echo "ZeroTier: already installed."
+            status "already-installed"
         fi
         return
     fi
@@ -521,14 +517,7 @@ install_zerotier() {
     echo "Installing ZeroTier..."
     curl -s https://install.zerotier.com | sudo bash
 
-    echo "ZeroTier installed."
-    echo "Next steps for custom planet/network setup:"
-    echo "  1. Replace the planet file under /var/lib/zerotier-one."
-    echo "  2. Restart the service: sudo service zerotier-one restart"
-    echo "  3. Join your network: sudo zerotier-cli join <NETWORK_ID>"
-    echo "  4. Approve the member in ZeroTier Central."
-    echo "  5. Verify peers: sudo zerotier-cli peers"
-    echo "     Look for a peer with role planet."
+    status "needs-action" "join a network with: sudo zerotier-cli join <NETWORK_ID>"
 }
 
 run_item() {
@@ -547,6 +536,7 @@ run_item() {
         mise) install_mise ;;
         homebrew) install_homebrew ;;
         zerotier) install_zerotier ;;
+        __shine_finalize) append_shell_init_blocks ;;
         "") return 0 ;;
         *)
             echo "Unknown sys init item: $1" >&2
@@ -555,10 +545,4 @@ run_item() {
     esac
 }
 
-for item in "$@"; do
-    run_item "$item"
-done
-
-if [[ $# -gt 0 ]]; then
-    echo "Done."
-fi
+run_item "${1:-}"

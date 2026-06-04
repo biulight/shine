@@ -7,6 +7,12 @@ set -o pipefail
 ZSHRC_SENTINEL_START="# >>> shine macos sys >>>"
 ZSHRC_SENTINEL_END="# <<< shine macos sys <<<"
 
+status() {
+    local state="$1"
+    local detail="${2:-}"
+    printf 'SHINE_SYS_STATUS\t%s\t%s\n' "$state" "$detail"
+}
+
 ensure_macos() {
     if [[ "$(uname -s)" != "Darwin" ]]; then
         echo "This sys init preset only supports macOS." >&2
@@ -36,7 +42,7 @@ load_homebrew_env() {
 install_homebrew() {
     load_homebrew_env
     if command -v brew &>/dev/null; then
-        echo "Homebrew: already installed ($(brew --version | head -1))."
+        status "already-installed" "$(brew --version | head -1)"
         return
     fi
 
@@ -50,7 +56,7 @@ install_homebrew() {
         return 1
     fi
 
-    echo "Homebrew installed ($(brew --version | head -1))."
+    status "installed" "$(brew --version | head -1)"
 }
 
 ensure_homebrew() {
@@ -63,16 +69,17 @@ brew_install_formula() {
 
     ensure_homebrew
     if command -v "$command_name" &>/dev/null; then
-        echo "$formula: already installed ($($command_name --version 2>/dev/null | head -1 || true))."
+        status "already-installed" "$($command_name --version 2>/dev/null | head -1 || true)"
         return
     fi
     if brew list --formula "$formula" &>/dev/null; then
-        echo "$formula: already installed with Homebrew."
+        status "already-installed" "Homebrew formula"
         return
     fi
 
     echo "Installing $formula..."
     brew install "$formula"
+    status "installed" "$formula"
 }
 
 remove_zshrc_block() {
@@ -91,13 +98,30 @@ remove_zshrc_block() {
 append_zshrc_block() {
     local zshrc="$HOME/.zshrc"
     local block_file
+    local current_block
+    local desired_block
+    local working_file
     local added=0
 
     touch "$zshrc"
-    remove_zshrc_block "$zshrc"
+    current_block="$(mktemp)"
+    desired_block="$(mktemp)"
+    working_file="$(mktemp)"
     block_file="$(mktemp)"
 
-    if ! grep -Fq "HOMEBREW_PREFIX" "$zshrc"; then
+    awk -v start="$ZSHRC_SENTINEL_START" -v end="$ZSHRC_SENTINEL_END" '
+        $0 == start { capture = 1 }
+        capture { print }
+        $0 == end { capture = 0 }
+    ' "$zshrc" > "$current_block"
+
+    awk -v start="$ZSHRC_SENTINEL_START" -v end="$ZSHRC_SENTINEL_END" '
+        $0 == start { skip = 1; next }
+        $0 == end { skip = 0; next }
+        !skip { print }
+    ' "$zshrc" > "$working_file"
+
+    if ! grep -Fq "HOMEBREW_PREFIX" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # Homebrew prefix cache
 if [[ -d "/opt/homebrew" ]]; then
@@ -112,7 +136,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "typeset -U path PATH" "$zshrc"; then
+    if ! grep -Fq "typeset -U path PATH" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # Basic PATH
 typeset -U path PATH
@@ -131,7 +155,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "NVM_DIR" "$zshrc"; then
+    if ! grep -Fq "NVM_DIR" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # nvm lazy load
 export NVM_DIR="$HOME/.nvm"
@@ -151,7 +175,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "BUN_INSTALL" "$zshrc"; then
+    if ! grep -Fq "BUN_INSTALL" "$working_file" && ! grep -Fq '.bun' "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # Bun
 export BUN_INSTALL="$HOME/.bun"
@@ -163,7 +187,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "PNPM_HOME" "$zshrc"; then
+    if ! grep -Fq "PNPM_HOME" "$working_file" && ! grep -Fq "Library/pnpm" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # pnpm
 export PNPM_HOME="$HOME/Library/pnpm"
@@ -184,7 +208,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "alias ls='eza" "$zshrc" && ! grep -Fq 'alias ls="eza' "$zshrc"; then
+    if ! grep -Fq "alias ls='eza" "$working_file" && ! grep -Fq 'alias ls="eza' "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # eza
 if command -v eza >/dev/null 2>&1; then
@@ -197,7 +221,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "alias cat='bat" "$zshrc" && ! grep -Fq 'alias cat="bat' "$zshrc"; then
+    if ! grep -Fq "alias cat='bat" "$working_file" && ! grep -Fq 'alias cat="bat' "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # bat
 if command -v bat >/dev/null 2>&1; then
@@ -208,7 +232,25 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "fzf --zsh" "$zshrc" && ! grep -Fq ".fzf.zsh" "$zshrc"; then
+    if ! grep -Fq "yazi --cwd-file" "$working_file"; then
+        cat >> "$block_file" <<'EOF'
+# Yazi
+if command -v yazi >/dev/null 2>&1; then
+  y() {
+    local tmp cwd
+    tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
+    command yazi "$@" --cwd-file="$tmp"
+    IFS= read -r -d '' cwd < "$tmp"
+    [[ "$cwd" != "$PWD" && -d "$cwd" ]] && builtin cd -- "$cwd"
+    command rm -f -- "$tmp"
+  }
+fi
+
+EOF
+        added=1
+    fi
+
+    if ! grep -Fq "fzf --zsh" "$working_file" && ! grep -Fq ".fzf.zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # fzf
 if command -v fzf >/dev/null 2>&1; then
@@ -219,7 +261,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "atuin init zsh" "$zshrc"; then
+    if ! grep -Fq "atuin init zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # atuin
 if command -v atuin >/dev/null 2>&1; then
@@ -230,7 +272,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "zoxide init zsh" "$zshrc"; then
+    if ! grep -Fq "zoxide init zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # zoxide
 if command -v zoxide >/dev/null 2>&1; then
@@ -241,7 +283,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "zsh-vi-mode.plugin.zsh" "$zshrc"; then
+    if ! grep -Fq "zsh-vi-mode.plugin.zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # zsh-vi-mode
 if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
@@ -252,7 +294,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "fastfetch" "$zshrc"; then
+    if ! grep -Fq "fastfetch" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # fastfetch
 # fastfetch can noticeably slow terminal startup, so run it manually when needed.
@@ -264,7 +306,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "starship init zsh" "$zshrc"; then
+    if ! grep -Fq "starship init zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # Starship prompt
 if command -v starship >/dev/null 2>&1; then
@@ -275,7 +317,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "zsh-autosuggestions.zsh" "$zshrc"; then
+    if ! grep -Fq "zsh-autosuggestions.zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # zsh-autosuggestions
 if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh" ]]; then
@@ -286,7 +328,7 @@ EOF
         added=1
     fi
 
-    if ! grep -Fq "zsh-syntax-highlighting.zsh" "$zshrc"; then
+    if ! grep -Fq "zsh-syntax-highlighting.zsh" "$working_file"; then
         cat >> "$block_file" <<'EOF'
 # zsh-syntax-highlighting must be near the end of .zshrc.
 if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ]]; then
@@ -298,27 +340,42 @@ EOF
     fi
 
     if [[ "$added" -eq 0 ]]; then
-        rm -f "$block_file"
-        echo "~/.zshrc already contains macOS shell tool initialization; no managed block needed."
+        if [[ -s "$current_block" ]]; then
+            mv "$working_file" "$zshrc"
+            status "updated" "~/.zshrc"
+        else
+            status "skipped" "~/.zshrc already configured"
+        fi
+        rm -f "$block_file" "$current_block" "$desired_block" "$working_file"
         return
     fi
 
     {
-        echo
         echo "$ZSHRC_SENTINEL_START"
         echo '# Managed by `shine sys init` for macOS. Existing user config is left untouched.'
         echo
         cat "$block_file"
         echo "$ZSHRC_SENTINEL_END"
-    } >> "$zshrc"
-    rm -f "$block_file"
+    } > "$desired_block"
 
-    echo "Updated ~/.zshrc managed block for missing macOS shell tool initialization."
+    if cmp -s "$desired_block" "$current_block"; then
+        rm -f "$block_file" "$current_block" "$desired_block" "$working_file"
+        status "skipped" "~/.zshrc already configured"
+        return
+    fi
+
+    {
+        cat "$working_file"
+        echo
+        cat "$desired_block"
+    } > "$zshrc"
+    rm -f "$block_file" "$current_block" "$desired_block" "$working_file"
+
+    status "updated" "~/.zshrc"
 }
 
 install_shell_formula() {
     brew_install_formula "$1" "${2:-$1}"
-    append_zshrc_block
 }
 
 install_yazi() {
@@ -338,7 +395,7 @@ install_astronvim() {
     brew_install_formula git git
 
     if [[ -d "$HOME/.config/nvim" ]]; then
-        echo "AstroNvim: ~/.config/nvim already exists, skipping."
+        status "skipped" "~/.config/nvim already exists"
         return
     fi
 
@@ -346,31 +403,23 @@ install_astronvim() {
     mkdir -p "$HOME/.config"
     git clone --depth 1 https://github.com/AstroNvim/template "$HOME/.config/nvim"
     rm -rf "$HOME/.config/nvim/.git"
-    echo "AstroNvim installed. Run 'nvim' to finish plugin setup."
+    status "installed" "~/.config/nvim"
 }
 
 install_zerotier() {
     ensure_homebrew
     if command -v zerotier-cli &>/dev/null || [[ -d /Applications/ZeroTier.app ]]; then
-        echo "ZeroTier: already installed."
+        status "already-installed"
     else
         echo "Installing ZeroTier One..."
         brew install --cask zerotier-one
+        status "needs-action" "open ZeroTier and join a network"
     fi
-
-    echo "ZeroTier next steps:"
-    echo "  1. Open ZeroTier from Applications if the service is not running."
-    echo "  2. Join your network: sudo zerotier-cli join <NETWORK_ID>"
-    echo "  3. Approve the member in ZeroTier Central."
 }
 
 install_nvm() {
     install_shell_formula nvm nvm
     mkdir -p "$HOME/.nvm"
-
-    echo "nvm shell setup, if not already configured:"
-    echo "  export NVM_DIR=\"$HOME/.nvm\""
-    echo "  [ -s \"$(brew --prefix nvm)/nvm.sh\" ] && . \"$(brew --prefix nvm)/nvm.sh\""
 }
 
 install_bun() {
@@ -437,6 +486,7 @@ run_item() {
         bun) install_bun ;;
         pnpm) install_pnpm ;;
         fastfetch) install_fastfetch ;;
+        __shine_finalize) append_zshrc_block ;;
         "") return 0 ;;
         *)
             echo "Unknown sys init item: $1" >&2
@@ -447,10 +497,4 @@ run_item() {
 
 ensure_macos
 
-for item in "$@"; do
-    run_item "$item"
-done
-
-if [[ $# -gt 0 ]]; then
-    echo "Done."
-fi
+run_item "${1:-}"

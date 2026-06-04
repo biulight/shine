@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use crate::colors;
 use crate::config::Config;
@@ -43,6 +44,12 @@ struct LoadedSysPreset {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct SysInitCommand {
+    program: &'static str,
+    fixed_args: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SelectionSource {
     Profile(String),
     DefaultProfile(String),
@@ -55,6 +62,29 @@ struct ResolvedSelection {
     item_ids: Vec<String>,
     source: SelectionSource,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SysItemStatus {
+    Installed,
+    AlreadyInstalled,
+    Skipped,
+    Updated,
+    NeedsAction,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SysItemOutcome {
+    item_id: String,
+    label: String,
+    status: SysItemStatus,
+    detail: String,
+    logs: Vec<String>,
+}
+
+const SYS_STATUS_PREFIX: &str = "SHINE_SYS_STATUS\t";
+const SYS_FINALIZE_ITEM: &str = "__shine_finalize";
 
 impl SelectionSource {
     fn describe(&self) -> String {
@@ -88,14 +118,15 @@ fn sys_init_theme() -> ColorfulTheme {
 
 /// Detect the current OS identifier using `std::env::consts::OS` and, on Linux,
 /// the `ID=` field from `/etc/os-release`.
-pub(crate) fn detect_os_id() -> Result<String> {
-    let os_release = std::fs::read_to_string("/etc/os-release").ok();
+pub(crate) async fn detect_os_id() -> Result<String> {
+    let os_release = tokio::fs::read_to_string("/etc/os-release").await.ok();
     detect_os_id_from(std::env::consts::OS, os_release.as_deref())
 }
 
 fn detect_os_id_from(os: &str, os_release: Option<&str>) -> Result<String> {
     match os {
         "macos" => Ok("macos".to_string()),
+        "windows" => Ok("windows".to_string()),
         "linux" => {
             if let Some(content) = os_release {
                 for line in content.lines() {
@@ -110,7 +141,7 @@ fn detect_os_id_from(os: &str, os_release: Option<&str>) -> Result<String> {
             )
         }
         other => bail!(
-            "Unsupported platform '{}'. Supported targets: ubuntu (Linux), macos",
+            "Unsupported platform '{}'. Supported targets: ubuntu (Linux), macos, windows",
             other
         ),
     }
@@ -119,7 +150,7 @@ fn detect_os_id_from(os: &str, os_release: Option<&str>) -> Result<String> {
 pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
 
-    let current_os = detect_os_id().ok();
+    let current_os = detect_os_id().await.ok();
 
     let entries = if config.is_external_presets {
         list_fs_sys_entries(config.presets_dir()).await
@@ -161,7 +192,7 @@ pub(crate) async fn handle_init(
     preset: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
-    let os_id = detect_os_id()?;
+    let os_id = detect_os_id().await?;
     handle_init_for_os(config, &os_id, preset, dry_run).await
 }
 
@@ -176,9 +207,10 @@ async fn handle_init_for_os(
     let loaded = load_sys_preset(config, os_id).await?;
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let selection = resolve_selection(&loaded.manifest, preset, interactive)?;
+    let sys_shell: &'static str = config.shell_type.into();
 
     if dry_run {
-        print_dry_run(os_id, &loaded, &selection).await?;
+        print_dry_run(os_id, &loaded, &selection, sys_shell).await?;
         return Ok(());
     }
 
@@ -194,24 +226,76 @@ async fn handle_init_for_os(
         return Ok(());
     }
 
-    println!("Running system init for {}...", colors::bold(os_id));
-    print_selection_summary(&selection);
-    println!();
+    let command = sys_init_command(os_id);
+    let script_dir = loaded
+        .script_path
+        .parent()
+        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
 
-    let shell = sys_init_shell(os_id);
-    let status = tokio::process::Command::new(shell)
-        .arg(&loaded.script_path)
-        .args(&selection.item_ids)
-        .status()
-        .await
-        .with_context(|| format!("failed to execute {}", loaded.script_path.display()))?;
+    print_run_header(os_id, sys_shell, &selection);
 
-    if !status.success() {
-        bail!("sys init script exited with {status}");
+    let item_labels = manifest_item_labels(&loaded.manifest);
+    let label_width = selection
+        .item_ids
+        .iter()
+        .filter_map(|item_id| item_labels.get(item_id.as_str()))
+        .map(String::len)
+        .chain(std::iter::once("profile".len()))
+        .max()
+        .unwrap_or(14)
+        .max(14);
+    let mut outcomes = Vec::new();
+    for item_id in &selection.item_ids {
+        let label = item_labels
+            .get(item_id.as_str())
+            .cloned()
+            .unwrap_or_else(|| item_id.clone());
+        let outcome = run_sys_item(
+            &command,
+            script_dir,
+            &loaded.script_path,
+            sys_shell,
+            item_id,
+            &label,
+        )
+        .await?;
+        print_item_outcome(&outcome, label_width);
+        let failed = outcome.status == SysItemStatus::Failed;
+        outcomes.push(outcome);
+        if failed {
+            break;
+        }
+    }
+
+    if outcomes
+        .iter()
+        .any(|outcome| outcome.status != SysItemStatus::Failed)
+    {
+        let finalize = run_sys_item(
+            &command,
+            script_dir,
+            &loaded.script_path,
+            sys_shell,
+            SYS_FINALIZE_ITEM,
+            "profile",
+        )
+        .await?;
+        if finalize.status != SysItemStatus::Completed || !finalize.logs.is_empty() {
+            print_item_outcome(&finalize, label_width);
+        }
+        outcomes.push(finalize);
     }
 
     println!();
-    println!("{}", colors::green("System initialization complete."));
+    print_sys_summary(&outcomes);
+
+    if outcomes
+        .iter()
+        .any(|outcome| outcome.status == SysItemStatus::Failed)
+    {
+        bail!("sys init failed");
+    }
+
     Ok(())
 }
 
@@ -219,9 +303,11 @@ async fn print_dry_run(
     os_id: &str,
     loaded: &LoadedSysPreset,
     selection: &ResolvedSelection,
+    sys_shell: &str,
 ) -> Result<()> {
     println!("{}", colors::dim("[dry-run] System init preview"));
     println!("  OS: {os_id}");
+    println!("  Shell: {sys_shell}");
     println!("  Selection: {}", selection.source.describe());
     println!(
         "  Items: {}",
@@ -232,14 +318,24 @@ async fn print_dry_run(
         }
     );
     println!("  Script: {}", loaded.script_path.display());
-    println!(
-        "  Command: {}",
-        format_command_preview(
-            sys_init_shell(os_id),
-            &loaded.script_path,
-            &selection.item_ids
-        )
-    );
+    let command = sys_init_command(os_id);
+    println!("  Commands:");
+    for item_id in &selection.item_ids {
+        println!(
+            "    {}",
+            format_command_preview(&command, &loaded.script_path, std::slice::from_ref(item_id))
+        );
+    }
+    if !selection.item_ids.is_empty() {
+        println!(
+            "    {}",
+            format_command_preview(
+                &command,
+                &loaded.script_path,
+                &[SYS_FINALIZE_ITEM.to_string()]
+            )
+        );
+    }
     println!();
     let content = tokio::fs::read_to_string(&loaded.script_path)
         .await
@@ -249,16 +345,219 @@ async fn print_dry_run(
     Ok(())
 }
 
-fn sys_init_shell(os_id: &str) -> &'static str {
-    if os_id == "macos" { "zsh" } else { "bash" }
+fn sys_init_command(os_id: &str) -> SysInitCommand {
+    match os_id {
+        "windows" => SysInitCommand {
+            program: "powershell.exe",
+            fixed_args: vec!["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"],
+        },
+        "macos" => SysInitCommand {
+            program: "zsh",
+            fixed_args: Vec::new(),
+        },
+        _ => SysInitCommand {
+            program: "bash",
+            fixed_args: Vec::new(),
+        },
+    }
 }
 
-fn format_command_preview(shell: &str, script_path: &Path, item_ids: &[String]) -> String {
-    if item_ids.is_empty() {
-        format!("{shell} {}", script_path.display())
-    } else {
-        format!("{shell} {} {}", script_path.display(), item_ids.join(" "))
+fn format_command_preview(
+    command: &SysInitCommand,
+    script_path: &Path,
+    item_ids: &[String],
+) -> String {
+    let script = script_path.display().to_string();
+    std::iter::once(command.program)
+        .chain(command.fixed_args.iter().copied())
+        .chain(std::iter::once(script.as_str()))
+        .chain(item_ids.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn manifest_item_labels(manifest: &SysManifest) -> BTreeMap<&str, String> {
+    manifest
+        .items
+        .iter()
+        .map(|item| (item.id.as_str(), item.label.clone()))
+        .collect()
+}
+
+fn print_run_header(os_id: &str, sys_shell: &str, selection: &ResolvedSelection) {
+    println!("{}", colors::bold("System Init"));
+    println!("  OS: {os_id}");
+    println!("  Shell: {sys_shell}");
+    println!("  Selection: {}", selection.source.describe());
+    println!("  Items: {} selected", selection.item_ids.len());
+    println!("  {}", colors::dim(&format_item_ids(&selection.item_ids)));
+    println!();
+}
+
+async fn run_sys_item(
+    command: &SysInitCommand,
+    script_dir: &Path,
+    script_path: &Path,
+    sys_shell: &str,
+    item_id: &str,
+    label: &str,
+) -> Result<SysItemOutcome> {
+    let output = tokio::process::Command::new(command.program)
+        .current_dir(script_dir)
+        .env("SHINE_SYS_PRESET_ROOT", script_dir)
+        .env("SHINE_SYS_SHELL", sys_shell)
+        .args(&command.fixed_args)
+        .arg(script_path)
+        .arg(item_id)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .with_context(|| format!("failed to execute {}", script_path.display()))?;
+
+    Ok(parse_sys_item_output(
+        item_id,
+        label,
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    ))
+}
+
+fn parse_sys_item_output(
+    item_id: &str,
+    label: &str,
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+) -> SysItemOutcome {
+    let mut status = None;
+    let mut logs = Vec::new();
+
+    for line in stdout.lines().chain(stderr.lines()) {
+        if let Some(parsed) = parse_status_event(line) {
+            status = Some(parsed);
+        } else if !line.trim().is_empty() {
+            logs.push(line.to_string());
+        }
     }
+
+    let (status, detail) = if !success {
+        let detail = status
+            .map(|(_, detail)| detail)
+            .filter(|detail| !detail.is_empty())
+            .unwrap_or_else(|| "script exited with a non-zero status".to_string());
+        (SysItemStatus::Failed, detail)
+    } else if let Some((status, detail)) = status {
+        (status, detail)
+    } else {
+        (SysItemStatus::Completed, String::new())
+    };
+
+    SysItemOutcome {
+        item_id: item_id.to_string(),
+        label: label.to_string(),
+        status,
+        detail,
+        logs,
+    }
+}
+
+fn parse_status_event(line: &str) -> Option<(SysItemStatus, String)> {
+    let rest = line.strip_prefix(SYS_STATUS_PREFIX)?;
+    let mut parts = rest.splitn(2, '\t');
+    let status = match parts.next()? {
+        "installed" => SysItemStatus::Installed,
+        "already-installed" => SysItemStatus::AlreadyInstalled,
+        "skipped" => SysItemStatus::Skipped,
+        "updated" => SysItemStatus::Updated,
+        "needs-action" => SysItemStatus::NeedsAction,
+        "completed" => SysItemStatus::Completed,
+        "failed" => SysItemStatus::Failed,
+        _ => return None,
+    };
+    let detail = normalize_status_detail(parts.next().unwrap_or_default().trim());
+    Some((status, detail))
+}
+
+fn normalize_status_detail(detail: &str) -> String {
+    detail
+        .strip_suffix(" ()")
+        .unwrap_or(detail)
+        .trim()
+        .to_string()
+}
+
+fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
+    let symbol = status_symbol(outcome.status);
+    let label = format!("{:<label_width$}", outcome.label);
+    let status = format!("{:<17}", status_text(outcome.status));
+    let detail = if outcome.detail.is_empty() {
+        String::new()
+    } else {
+        colors::dim(&outcome.detail)
+    };
+
+    println!(
+        "{} {} {} {}",
+        colors::symbol(symbol),
+        colors::bold(&label),
+        colors::status_label(&status, symbol),
+        detail
+    );
+
+    for line in &outcome.logs {
+        println!("  {}", colors::dim(line));
+    }
+}
+
+fn status_symbol(status: SysItemStatus) -> &'static str {
+    match status {
+        SysItemStatus::Skipped | SysItemStatus::NeedsAction => "~",
+        SysItemStatus::Failed => "✗",
+        _ => "✓",
+    }
+}
+
+fn status_text(status: SysItemStatus) -> &'static str {
+    match status {
+        SysItemStatus::Installed => "installed",
+        SysItemStatus::AlreadyInstalled => "already installed",
+        SysItemStatus::Skipped => "skipped",
+        SysItemStatus::Updated => "updated",
+        SysItemStatus::NeedsAction => "needs action",
+        SysItemStatus::Completed => "completed",
+        SysItemStatus::Failed => "failed",
+    }
+}
+
+fn print_sys_summary(outcomes: &[SysItemOutcome]) {
+    let mut counts = BTreeMap::<SysItemStatus, usize>::new();
+    for outcome in outcomes {
+        *counts.entry(outcome.status).or_default() += 1;
+    }
+
+    let parts = [
+        SysItemStatus::Installed,
+        SysItemStatus::AlreadyInstalled,
+        SysItemStatus::Skipped,
+        SysItemStatus::Updated,
+        SysItemStatus::NeedsAction,
+        SysItemStatus::Completed,
+        SysItemStatus::Failed,
+    ]
+    .into_iter()
+    .filter_map(|status| {
+        counts
+            .get(&status)
+            .copied()
+            .filter(|count| *count > 0)
+            .map(|count| format!("{count} {}", status_text(status)))
+    })
+    .collect::<Vec<_>>();
+
+    println!("Summary: {}", parts.join(", "));
 }
 
 async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset> {
@@ -271,7 +570,7 @@ async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset
     }
 
     let root = config.presets_dir().join("sys").join(os_id);
-    let script_path = root.join("init.sh");
+    let script_path = root.join(sys_init_script_name(os_id));
     if !script_path.exists() {
         bail!(
             "No init script found for '{}'. Expected: {}",
@@ -293,6 +592,14 @@ async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset
     })
 }
 
+fn sys_init_script_name(os_id: &str) -> &'static str {
+    if os_id == "windows" {
+        "init.ps1"
+    } else {
+        "init.sh"
+    }
+}
+
 fn parse_and_validate_manifest(content: &str) -> Result<SysManifest> {
     let manifest: SysManifest = toml::from_str(content)?;
     validate_manifest(&manifest)?;
@@ -302,19 +609,7 @@ fn parse_and_validate_manifest(content: &str) -> Result<SysManifest> {
 fn validate_manifest(manifest: &SysManifest) -> Result<()> {
     let mut ids = BTreeSet::new();
     for item in &manifest.items {
-        if item.id.trim().is_empty() {
-            bail!("sys init item ids must not be empty");
-        }
-        if !item
-            .id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            bail!(
-                "sys init item id `{}` contains invalid characters (allowed: a-z A-Z 0-9 - _)",
-                item.id
-            );
-        }
+        validate_item_id(&item.id)?;
         if item.label.trim().is_empty() {
             bail!("sys init item `{}` must have a label", item.id);
         }
@@ -337,6 +632,21 @@ fn validate_manifest(manifest: &SysManifest) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn validate_item_id(item_id: &str) -> Result<()> {
+    if item_id.trim().is_empty() {
+        bail!("sys init item ids must not be empty");
+    }
+    if !item_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!(
+            "sys init item id `{item_id}` contains invalid characters (allowed: a-z A-Z 0-9 - _)"
+        );
+    }
     Ok(())
 }
 
@@ -434,7 +744,6 @@ fn format_interactive_item(item: &SysItem) -> String {
 }
 
 fn print_interactive_header(manifest: &SysManifest) {
-    println!("{}", colors::bold("System Init"));
     if let Some(default_profile) = manifest.default_profile.as_deref() {
         println!(
             "{}",
@@ -443,17 +752,6 @@ fn print_interactive_header(manifest: &SysManifest) {
     }
     println!("{}", colors::dim("Use Space to toggle, Enter to confirm."));
     println!();
-}
-
-fn print_selection_summary(selection: &ResolvedSelection) {
-    println!(
-        "{}",
-        colors::dim(&format!("Selection: {}", selection.source.describe()))
-    );
-    println!(
-        "{}",
-        colors::dim(&format!("Items: {}", format_item_ids(&selection.item_ids)))
-    );
 }
 
 fn format_item_ids(item_ids: &[String]) -> String {
@@ -531,6 +829,7 @@ async fn list_fs_sys_entries(presets_dir: &Path) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::shells::ShellType;
     use std::path::PathBuf;
     use tokio::fs;
 
@@ -576,6 +875,12 @@ items = ["neovim", "atuin"]
     }
 
     #[test]
+    fn detects_windows() {
+        let result = detect_os_id_from("windows", None).unwrap();
+        assert_eq!(result, "windows");
+    }
+
+    #[test]
     fn detects_ubuntu_from_os_release() {
         let os_release = "PRETTY_NAME=\"Ubuntu 22.04\"\nID=ubuntu\nVERSION_ID=\"22.04\"\n";
         let result = detect_os_id_from("linux", Some(os_release)).unwrap();
@@ -604,8 +909,8 @@ items = ["neovim", "atuin"]
 
     #[test]
     fn errors_on_unsupported_platform() {
-        let err = detect_os_id_from("windows", None).unwrap_err();
-        assert!(err.to_string().contains("windows"));
+        let err = detect_os_id_from("freebsd", None).unwrap_err();
+        assert!(err.to_string().contains("freebsd"));
     }
 
     // --- manifest validation ---
@@ -702,6 +1007,15 @@ description = "Placeholder"
     }
 
     #[test]
+    fn shell_type_into_static_str() {
+        assert_eq!(<&'static str>::from(ShellType::Bash), "bash");
+        assert_eq!(<&'static str>::from(ShellType::Zsh), "zsh");
+        assert_eq!(<&'static str>::from(ShellType::Fish), "fish");
+        assert_eq!(<&'static str>::from(ShellType::PowerShell), "powershell");
+        assert_eq!(<&'static str>::from(ShellType::Elvish), "elvish");
+    }
+
+    #[test]
     fn format_interactive_item_includes_separator_and_description() {
         let item = SysItem {
             id: "neovim".to_string(),
@@ -733,14 +1047,102 @@ description = "Placeholder"
     }
 
     #[test]
-    fn sys_init_shell_uses_zsh_for_macos() {
-        assert_eq!(sys_init_shell("macos"), "zsh");
+    fn parse_status_event_reads_machine_status() {
+        let parsed = parse_status_event("SHINE_SYS_STATUS\talready-installed\tatuin 18.16.0")
+            .expect("status event should parse");
+
+        assert_eq!(
+            parsed,
+            (SysItemStatus::AlreadyInstalled, "atuin 18.16.0".to_string())
+        );
     }
 
     #[test]
-    fn sys_init_shell_uses_bash_for_other_systems() {
-        assert_eq!(sys_init_shell("ubuntu"), "bash");
-        assert_eq!(sys_init_shell("fakeos"), "bash");
+    fn parse_status_event_trims_empty_version_suffix() {
+        let parsed = parse_status_event("SHINE_SYS_STATUS\talready-installed\tatuin 18.13.6 ()")
+            .expect("status event should parse");
+
+        assert_eq!(
+            parsed,
+            (SysItemStatus::AlreadyInstalled, "atuin 18.13.6".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_status_event_ignores_regular_logs() {
+        assert!(parse_status_event("Installing Atuin...").is_none());
+    }
+
+    #[test]
+    fn parse_sys_item_output_uses_status_event_and_keeps_logs() {
+        let outcome = parse_sys_item_output(
+            "atuin",
+            "Atuin",
+            true,
+            "Installing Atuin...\nSHINE_SYS_STATUS\tinstalled\tatuin 18.16.0\n",
+            "",
+        );
+
+        assert_eq!(outcome.status, SysItemStatus::Installed);
+        assert_eq!(outcome.detail, "atuin 18.16.0");
+        assert_eq!(outcome.logs, vec!["Installing Atuin..."]);
+    }
+
+    #[test]
+    fn parse_sys_item_output_falls_back_for_legacy_success() {
+        let outcome =
+            parse_sys_item_output("legacy", "Legacy", true, "legacy script completed\n", "");
+
+        assert_eq!(outcome.status, SysItemStatus::Completed);
+        assert_eq!(outcome.logs, vec!["legacy script completed"]);
+    }
+
+    #[test]
+    fn parse_sys_item_output_marks_failed_exit() {
+        let outcome =
+            parse_sys_item_output("legacy", "Legacy", false, "", "legacy script failed\n");
+
+        assert_eq!(outcome.status, SysItemStatus::Failed);
+        assert_eq!(outcome.detail, "script exited with a non-zero status");
+        assert_eq!(outcome.logs, vec!["legacy script failed"]);
+    }
+
+    #[test]
+    fn sys_init_command_uses_zsh_for_macos() {
+        let command = sys_init_command("macos");
+        assert_eq!(command.program, "zsh");
+        assert!(command.fixed_args.is_empty());
+    }
+
+    #[test]
+    fn sys_init_command_uses_powershell_for_windows() {
+        let command = sys_init_command("windows");
+        assert_eq!(command.program, "powershell.exe");
+        assert_eq!(
+            command.fixed_args,
+            vec!["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
+        );
+    }
+
+    #[test]
+    fn sys_init_command_uses_bash_for_other_systems() {
+        let ubuntu = sys_init_command("ubuntu");
+        let fakeos = sys_init_command("fakeos");
+        assert_eq!(ubuntu.program, "bash");
+        assert!(ubuntu.fixed_args.is_empty());
+        assert_eq!(fakeos.program, "bash");
+        assert!(fakeos.fixed_args.is_empty());
+    }
+
+    #[test]
+    fn sys_init_script_name_uses_ps1_for_windows() {
+        assert_eq!(sys_init_script_name("windows"), "init.ps1");
+    }
+
+    #[test]
+    fn sys_init_script_name_uses_sh_for_other_systems() {
+        assert_eq!(sys_init_script_name("macos"), "init.sh");
+        assert_eq!(sys_init_script_name("ubuntu"), "init.sh");
     }
 
     #[test]
@@ -748,29 +1150,30 @@ description = "Placeholder"
         let script_path = Path::new("/tmp/init.sh");
         let items = vec!["neovim".to_string(), "atuin".to_string()];
         assert_eq!(
-            format_command_preview("bash", script_path, &items),
+            format_command_preview(&sys_init_command("ubuntu"), script_path, &items),
             "bash /tmp/init.sh neovim atuin"
         );
     }
 
     #[test]
-    fn format_command_preview_uses_selected_shell() {
-        let script_path = Path::new("/tmp/init.sh");
-        let items = vec!["homebrew".to_string()];
+    fn format_command_preview_includes_windows_fixed_args() {
+        let script_path = Path::new("C:/tmp/init.ps1");
+        let items = vec!["rust".to_string(), "yazi".to_string()];
         assert_eq!(
-            format_command_preview("zsh", script_path, &items),
-            "zsh /tmp/init.sh homebrew"
+            format_command_preview(&sys_init_command("windows"), script_path, &items),
+            "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/tmp/init.ps1 rust yazi"
         );
     }
 
     // --- list_embedded_sys_entries ---
 
     #[test]
-    fn embedded_entries_include_ubuntu_and_macos() {
+    fn embedded_entries_include_supported_systems() {
         let entries = list_embedded_sys_entries();
         let ids: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
         assert!(ids.contains(&"ubuntu"), "ubuntu missing: {ids:?}");
         assert!(ids.contains(&"macos"), "macos missing: {ids:?}");
+        assert!(ids.contains(&"windows"), "windows missing: {ids:?}");
     }
 
     #[test]
@@ -824,6 +1227,128 @@ description = "Placeholder"
             all_ids, item_ids,
             "Ubuntu all profile should include every item"
         );
+    }
+
+    #[test]
+    fn embedded_windows_profiles_cover_required_recommended_and_all_items() {
+        let content = crate::presets::read_asset_bytes("sys/windows/shine.toml")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Windows manifest");
+        let manifest = parse_and_validate_manifest(&content).unwrap();
+        let required = manifest
+            .profiles
+            .get("required")
+            .expect("missing Windows required profile");
+        let recommended = manifest
+            .profiles
+            .get("recommended")
+            .expect("missing Windows recommended profile");
+        let all = manifest
+            .profiles
+            .get("all")
+            .expect("missing Windows all profile");
+
+        assert_eq!(required.items, vec!["rust", "yazi", "starship"]);
+        assert!(recommended.items.iter().any(|item| item == "zoxide"));
+        assert!(recommended.items.iter().any(|item| item == "atuin"));
+        assert!(recommended.items.iter().any(|item| item == "fzf"));
+        assert!(recommended.items.iter().any(|item| item == "bat"));
+        assert!(recommended.items.iter().any(|item| item == "eza"));
+        assert!(recommended.items.iter().any(|item| item == "zerotier"));
+        assert!(!recommended.items.iter().any(|item| item == "bun"));
+        assert!(!recommended.items.iter().any(|item| item == "pnpm"));
+        assert!(!recommended.items.iter().any(|item| item == "mise"));
+
+        let item_ids: BTreeSet<&str> = manifest.items.iter().map(|item| item.id.as_str()).collect();
+        let all_ids: BTreeSet<&str> = all.items.iter().map(String::as_str).collect();
+        assert_eq!(
+            all_ids, item_ids,
+            "Windows all profile should include every item"
+        );
+    }
+
+    #[test]
+    fn embedded_windows_init_uses_current_atuin_winget_id() {
+        let content = crate::presets::read_asset_bytes("sys/windows/init.ps1")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Windows init script");
+
+        assert!(content.contains("\"Atuinsh.Atuin\""));
+        assert!(!content.contains("\"atuinsh.atuin\""));
+    }
+
+    #[test]
+    fn embedded_sys_init_scripts_include_yazi_shell_wrapper() {
+        for (path, marker) in [
+            ("sys/ubuntu/profile.sh", "y() {"),
+            ("sys/macos/init.sh", "y() {"),
+            ("sys/windows/profile.ps1", "function y {"),
+        ] {
+            let content = crate::presets::read_asset_bytes(path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .unwrap_or_else(|| panic!("missing embedded sys init script: {path}"));
+
+            assert!(
+                content.contains(marker),
+                "{path} should define Yazi wrapper"
+            );
+            assert!(
+                content.contains("--cwd-file"),
+                "{path} should pass --cwd-file to yazi"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_ubuntu_init_installs_managed_profile_loader() {
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/init.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu init script");
+
+        assert!(content.contains("profile.sh"));
+        assert!(content.contains(".shine/profile/ubuntu-sys.sh"));
+        assert!(content.contains("cp \"$template_path\" \"$managed_path\""));
+        assert!(content.contains("SHINE_UBUNTU_SYS_SHELL"));
+        assert!(content.contains("SHINE_SYS_SHELL"));
+        assert!(content.contains("[[ -f \"$file\" ]] || return 0"));
+        assert!(content.contains("append_shell_block \"$HOME/.bashrc\" bash"));
+        assert!(content.contains("remove_shell_block \"$HOME/.zshrc\""));
+        assert!(content.contains("append_shell_block \"$HOME/.zshrc\" zsh"));
+        assert!(content.contains("remove_shell_block \"$HOME/.bashrc\""));
+        assert!(content.contains("SHINE_SYS_STATUS\\t%s\\t%s\\n"));
+        assert!(content.contains("status \"already-installed\" \"$(atuin --version)\""));
+        assert!(content.contains(
+            "curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh\n    load_atuin_env\n    status \"installed\" \"$(atuin --version)\""
+        ));
+        assert!(content.contains("load_atuin_env"));
+        assert!(content.contains(". \"$HOME/.atuin/bin/env\""));
+        assert!(content.contains("__shine_finalize) append_shell_init_blocks"));
+    }
+
+    #[test]
+    fn embedded_ubuntu_profile_initializes_atuin() {
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/profile.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu profile script");
+
+        assert!(content.contains("atuin init"));
+        assert!(content.contains("shine_ubuntu_sys_shell"));
+        assert!(content.contains(". \"$HOME/.atuin/bin/env\""));
+    }
+
+    #[test]
+    fn embedded_windows_init_installs_managed_profile_loader() {
+        let content = crate::presets::read_asset_bytes("sys/windows/init.ps1")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Windows init script");
+
+        assert!(content.contains("profile.ps1"));
+        assert!(content.contains("SHINE_SYS_PRESET_ROOT"));
+        assert!(content.contains(".shine\\profile\\windows-sys.ps1"));
+        assert!(content.contains("Copy-Item -LiteralPath $profileTemplatePath"));
+        assert!(content.contains("$shineWindowsSysProfile"));
+        assert!(content.contains("SHINE_SYS_STATUS`t$State`t$Detail"));
+        assert!(content.contains("\"__shine_finalize\" { Update-ManagedProfiles }"));
     }
 
     #[test]
@@ -962,6 +1487,134 @@ items = ["touch-file"]
             .await
             .unwrap();
         assert!(!sentinel.exists(), "script must not have been executed");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handle_init_executes_items_then_finalize() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/fakeos");
+        fs::create_dir_all(&os_dir).await.unwrap();
+
+        fs::write(
+            os_dir.join("shine.toml"),
+            r#"
+description = "Fake OS"
+default_profile = "recommended"
+
+[[items]]
+id = "first"
+label = "First"
+
+[[items]]
+id = "second"
+label = "Second"
+
+[profiles.recommended]
+items = ["first", "second"]
+"#,
+        )
+        .await
+        .unwrap();
+
+        let calls = dir.join("calls");
+        let script = format!(
+            r#"#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$1" >> {calls:?}
+case "$1" in
+  first) printf 'SHINE_SYS_STATUS\tinstalled\tfirst ok\n' ;;
+  second) printf 'legacy log\n' ;;
+  __shine_finalize) printf 'SHINE_SYS_STATUS\tupdated\tprofile ok\n' ;;
+  *) exit 1 ;;
+esac
+"#
+        );
+        fs::write(os_dir.join("init.sh"), script.as_bytes())
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        handle_init_for_os(&config, "fakeos", None, false)
+            .await
+            .unwrap();
+
+        let calls = fs::read_to_string(&calls).await.unwrap();
+        assert_eq!(
+            calls.lines().collect::<Vec<_>>(),
+            ["first", "second", SYS_FINALIZE_ITEM]
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handle_init_stops_items_after_failure_but_finalizes_successes() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/fakeos");
+        fs::create_dir_all(&os_dir).await.unwrap();
+
+        fs::write(
+            os_dir.join("shine.toml"),
+            r#"
+description = "Fake OS"
+default_profile = "recommended"
+
+[[items]]
+id = "first"
+label = "First"
+
+[[items]]
+id = "fails"
+label = "Fails"
+
+[[items]]
+id = "after"
+label = "After"
+
+[profiles.recommended]
+items = ["first", "fails", "after"]
+"#,
+        )
+        .await
+        .unwrap();
+
+        let calls = dir.join("calls");
+        let script = format!(
+            r#"#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$1" >> {calls:?}
+case "$1" in
+  first) printf 'SHINE_SYS_STATUS\tinstalled\tfirst ok\n' ;;
+  fails) printf 'SHINE_SYS_STATUS\tfailed\tbad item\n'; exit 1 ;;
+  after) printf 'SHINE_SYS_STATUS\tinstalled\tafter ok\n' ;;
+  __shine_finalize) printf 'SHINE_SYS_STATUS\tupdated\tprofile ok\n' ;;
+  *) exit 1 ;;
+esac
+"#
+        );
+        fs::write(os_dir.join("init.sh"), script.as_bytes())
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let err = handle_init_for_os(&config, "fakeos", None, false)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("sys init failed"));
+        let calls = fs::read_to_string(&calls).await.unwrap();
+        assert_eq!(
+            calls.lines().collect::<Vec<_>>(),
+            ["first", "fails", SYS_FINALIZE_ITEM]
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

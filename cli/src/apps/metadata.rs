@@ -1,5 +1,6 @@
 use super::manifest::AppInstallStrategy;
 use crate::config::Config;
+use crate::platform::current_platform;
 use crate::presets;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -503,7 +504,7 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
 fn validate_dest(name: &str, dest: &str) -> Result<()> {
     let expanded = crate::config::full_expand(dest)
         .with_context(|| format!("failed to expand dest in app/{name}/shine.toml"))?;
-    if !is_absolute_after_expansion(&expanded) {
+    if !Path::new(&expanded).is_absolute() {
         bail!("app/{name}/shine.toml dest must be absolute after expansion");
     }
     let path = PathBuf::from(&expanded);
@@ -556,14 +557,6 @@ fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Resu
         }
     }
     Ok(matches)
-}
-
-fn current_platform() -> &'static str {
-    if cfg!(windows) { "windows" } else { "unix" }
-}
-
-fn is_absolute_after_expansion(path: &str) -> bool {
-    Path::new(path).is_absolute() || path.starts_with('/')
 }
 
 fn normalize_relative(path: &str) -> Result<PathBuf> {
@@ -795,7 +788,7 @@ install_mode = "json-merge"
                 Some("~/.config/ghostty")
             );
             assert_eq!(ghostty.list_mode, AppListMode::Category);
-            assert_eq!(ghostty.files.len(), 4);
+            assert_eq!(ghostty.files.len(), 5);
 
             let light = ghostty
                 .files
@@ -829,6 +822,17 @@ install_mode = "json-merge"
                 std::path::Path::new("themes/light_Atom One Light")
             );
             assert_eq!(atom.transforms, vec!["template"]);
+
+            let github = ghostty
+                .files
+                .iter()
+                .find(|f| f.source_rel == std::path::Path::new("themes/Github Light Default"))
+                .unwrap();
+            assert_eq!(
+                github.target_rel,
+                std::path::Path::new("themes/light_Github Light Default")
+            );
+            assert_eq!(github.transforms, vec!["template"]);
         }
     }
 

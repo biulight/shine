@@ -5,6 +5,26 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.28.0] — 2026-06-03
+
+### Features
+
+- Added a Windows system init preset with selectable Rust, terminal tool, network, and JavaScript runtime setup steps.
+- Added managed shell profile loaders for Windows and Ubuntu system init, including Yazi shell integration.
+- Added a GitHub Light Default Ghostty theme and refreshed bundled Ghostty theme background customization.
+
+### Bug Fixes
+
+- Fixed Windows Atuin installation and PowerShell profile source path normalization.
+- Fixed Ubuntu shell profile initialization targeting.
+- Added SOCKS proxy support to GitHub release update checks.
+
+### Docs
+
+- Updated English and Chinese documentation for Windows system init support, managed profile setup, Ghostty themes, and the pinned `0.28.0` installer examples.
+
+---
+
 ## [0.27.0] — 2026-06-01
 
 ### Features

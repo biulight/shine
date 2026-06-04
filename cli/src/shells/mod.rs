@@ -778,6 +778,7 @@ fn powershell_path_snippet(bin_str: &str) -> String {
 }
 
 fn powershell_bin_assignment(bin_str: &str) -> String {
+    let bin_str = crate::path_display::strip_windows_verbatim_prefix(bin_str);
     let normalized = bin_str.replace('\\', "/");
     if let Some(rel) = normalized.strip_prefix("$HOME/") {
         let escaped = rel.replace('\'', "''");
@@ -802,7 +803,9 @@ fn shell_quote(path: &Path) -> String {
 }
 
 fn powershell_quote(path: &Path) -> String {
-    powershell_quote_str(&path.display().to_string())
+    powershell_quote_str(&crate::path_display::strip_windows_verbatim_prefix(
+        &path.display().to_string(),
+    ))
 }
 
 fn shell_quote_str(value: &str) -> String {
@@ -822,12 +825,14 @@ fn shell_quote_expand_home(value: &str) -> String {
 }
 
 fn powershell_path_expr(value: &str) -> String {
-    if let Some(rel) = value.strip_prefix("$HOME/") {
+    let value = crate::path_display::strip_windows_verbatim_prefix(value);
+    let normalized = value.replace('\\', "/");
+    if let Some(rel) = normalized.strip_prefix("$HOME/") {
         format!("(Join-Path $HOME '{}')", rel.replace('\'', "''"))
-    } else if value == "$HOME" {
+    } else if normalized == "$HOME" {
         "$HOME".to_string()
     } else {
-        powershell_quote_str(value)
+        powershell_quote_str(&value)
     }
 }
 
@@ -1032,10 +1037,10 @@ pub(crate) fn get_shell() -> Result<ShellType> {
 }
 
 pub(crate) fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) -> Result<PathBuf> {
-    Ok(get_shell_config_paths(shell_type, home_path)?
+    get_shell_config_paths(shell_type, home_path)?
         .into_iter()
         .next()
-        .expect("shell config paths should never be empty"))
+        .ok_or_else(|| anyhow::anyhow!("shell config paths should never be empty"))
 }
 
 fn get_shell_config_paths(shell_type: &ShellType, home_path: &Path) -> Result<Vec<PathBuf>> {
@@ -1157,6 +1162,24 @@ mod tests {
             ShellType::PowerShell => format!("\nfunction {command} {{ . (Join-Path $shineBin"),
             ShellType::Fish => format!("\nfunction {command}"),
             _ => format!("\n{command}() {{ source"),
+        }
+    }
+
+    fn managed_profile_source_marker(shell: &ShellType) -> &'static str {
+        match shell {
+            ShellType::PowerShell => ". (Join-Path $HOME 'shell/profile.ps1')",
+            ShellType::Fish => "source \"$HOME/shell/config.fish\"",
+            ShellType::Bash | ShellType::Zsh | ShellType::Elvish => {
+                "source \"$HOME/shell/profile.sh\""
+            }
+        }
+    }
+
+    fn managed_profile_path_marker(shell: &ShellType) -> &'static str {
+        match shell {
+            ShellType::PowerShell => "$shinePathEntries",
+            ShellType::Fish => "fish_add_path",
+            ShellType::Bash | ShellType::Zsh | ShellType::Elvish => "export PATH",
         }
     }
 
@@ -1400,6 +1423,16 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn powershell_paths_strip_windows_verbatim_prefix() {
+        let assignment = powershell_bin_assignment(r"\\?\D:\Github\Biulight\shine\.shine\bin");
+        assert!(assignment.contains(r"D:\Github\Biulight\shine\.shine\bin"));
+        assert!(!assignment.contains(r"\\?\"));
+
+        let quoted = powershell_quote(Path::new(r"\\?\D:\Github\Biulight\shine\profile.ps1"));
+        assert_eq!(quoted, r"'D:\Github\Biulight\shine\profile.ps1'");
+    }
+
     #[cfg(unix)]
     #[test]
     fn proxy_scripts_fail_fast_when_not_sourced() {
@@ -1529,7 +1562,7 @@ mod tests {
         let config_path = get_shell_config_path(&config.shell_type, &config.home_dir).unwrap();
         let content = fs::read_to_string(&config_path).await.unwrap();
         assert!(
-            content.contains("source \"$HOME/shell/profile.sh\""),
+            content.contains(managed_profile_source_marker(&config.shell_type)),
             "shell config should only source managed profile: {content}"
         );
         assert!(
@@ -1545,11 +1578,11 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            profile.contains("export PATH"),
+            profile.contains(managed_profile_path_marker(&config.shell_type)),
             "managed profile should contain PATH setup: {profile}"
         );
         assert!(
-            profile.contains("setproxy() { source"),
+            profile.contains(&wrapper_marker("setproxy", &config.shell_type)),
             "managed profile should contain source wrapper: {profile}"
         );
 
@@ -1619,7 +1652,7 @@ mod tests {
         );
         let content = fs::read_to_string(&config_path).await.unwrap();
         assert!(
-            content.contains("source \"$HOME/shell/profile.sh\""),
+            content.contains(managed_profile_source_marker(&config.shell_type)),
             "shell config should source managed profile: {content}"
         );
         assert!(

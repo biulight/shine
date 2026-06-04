@@ -10,6 +10,14 @@ const SHIM_MANAGED_MARKER: &str = "# shine-managed";
 #[cfg(not(unix))]
 const SHIM_TARGET_PREFIX: &str = "# shine-target: ";
 
+#[cfg(not(unix))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WindowsShimStatus {
+    Current,
+    Stale,
+    NotManaged,
+}
+
 pub(crate) struct LinkReport {
     pub created: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
@@ -186,9 +194,18 @@ pub(crate) async fn link_executables_with_names(
             }
             Ok(_) => {
                 #[cfg(not(unix))]
-                if windows_shim_points_to(&link_path, &spec.source).await? {
-                    report.skipped.push(link_path);
-                    continue;
+                match windows_shim_status(&link_path, &spec.source).await? {
+                    WindowsShimStatus::Current => {
+                        report.skipped.push(link_path);
+                        continue;
+                    }
+                    WindowsShimStatus::Stale => {
+                        remove_link(&link_path).await?;
+                        create_link(&spec.source, &link_path).await?;
+                        report.overwritten.push(link_path);
+                        continue;
+                    }
+                    WindowsShimStatus::NotManaged => {}
                 }
 
                 if overwrite {
@@ -296,7 +313,7 @@ async fn create_windows_shims(source: &Path, ps1_path: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn powershell_shim_content(source: &Path) -> String {
-    let target = source.display().to_string();
+    let target = windows_native_path(source);
     let escaped = target.replace('\'', "''");
     let bash_target = bash_compatible_path(source);
     let bash_escaped = bash_target.replace('\'', "''");
@@ -312,7 +329,7 @@ fn powershell_shim_content(source: &Path) -> String {
 
 #[cfg(not(unix))]
 fn cmd_shim_content(source: &Path) -> String {
-    let target = source.display().to_string();
+    let target = windows_native_path(source);
     let escaped = target.replace('\'', "''");
     let bash_target = bash_compatible_path(source);
     match source.extension().and_then(|e| e.to_str()) {
@@ -327,14 +344,50 @@ fn cmd_shim_content(source: &Path) -> String {
 
 #[cfg(not(unix))]
 fn bash_compatible_path(path: &Path) -> String {
-    path.display().to_string().replace('\\', "/")
+    windows_native_path(path).replace('\\', "/")
 }
 
 #[cfg(not(unix))]
-async fn windows_shim_points_to(link_path: &Path, source: &Path) -> Result<bool> {
-    Ok(shim_target(link_path)
-        .await?
-        .is_some_and(|target| target == source))
+fn windows_native_path(path: &Path) -> String {
+    crate::path_display::strip_windows_verbatim_prefix(&path.display().to_string())
+}
+
+#[cfg(not(unix))]
+async fn windows_shim_status(link_path: &Path, source: &Path) -> Result<WindowsShimStatus> {
+    let content = match tokio::fs::read_to_string(link_path).await {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(WindowsShimStatus::NotManaged);
+        }
+        Err(err) => return Err(err).with_context(|| format!("reading shim: {link_path:?}")),
+    };
+    if !content.contains(SHIM_MANAGED_MARKER) {
+        return Ok(WindowsShimStatus::NotManaged);
+    }
+
+    let Some(target) = shim_target_from_content(&content) else {
+        return Ok(WindowsShimStatus::Stale);
+    };
+    if windows_path_key(&target) != windows_path_key(source) {
+        return Ok(WindowsShimStatus::NotManaged);
+    }
+
+    let expected_ps1 = powershell_shim_content(source);
+    let expected_cmd = cmd_shim_content(source);
+    let cmd_path = link_path.with_extension("cmd");
+    let cmd_content = tokio::fs::read_to_string(&cmd_path).await.ok();
+    if content == expected_ps1 && cmd_content.as_deref() == Some(expected_cmd.as_str()) {
+        Ok(WindowsShimStatus::Current)
+    } else {
+        Ok(WindowsShimStatus::Stale)
+    }
+}
+
+#[cfg(not(unix))]
+fn windows_path_key(path: &Path) -> String {
+    windows_native_path(path)
+        .replace('\\', "/")
+        .to_ascii_lowercase()
 }
 
 #[cfg(not(unix))]
@@ -347,11 +400,16 @@ async fn shim_target(path: &Path) -> Result<Option<PathBuf>> {
     if !content.contains(SHIM_MANAGED_MARKER) {
         return Ok(None);
     }
-    Ok(content.lines().find_map(|line| {
+    Ok(shim_target_from_content(&content))
+}
+
+#[cfg(not(unix))]
+fn shim_target_from_content(content: &str) -> Option<PathBuf> {
+    content.lines().find_map(|line| {
         line.strip_prefix(SHIM_TARGET_PREFIX)
             .or_else(|| line.strip_prefix("REM shine-target: "))
             .map(PathBuf::from)
-    }))
+    })
 }
 
 #[cfg(not(unix))]
