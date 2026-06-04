@@ -5,6 +5,19 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.29.1] — 2026-06-04
+
+### Bug Fixes
+
+- Fixed shell installs from external presets so source-based commands are installed with the managed wrapper flow instead of being skipped or linked incorrectly.
+- Fixed shell category uninstall so managed source wrappers are pruned along with the rest of the category.
+
+### Docs
+
+- Updated the pinned `0.29.1` installer examples and version output examples in the README.
+
+---
+
 ## [0.29.0] — 2026-06-04
 
 ### Features
