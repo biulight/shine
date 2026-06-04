@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
+const LINKABLE_SCRIPT_EXTENSIONS: &[&str] = &["sh", "bash", "zsh", "fish", "ps1"];
+
 #[cfg(not(unix))]
 const EXECUTABLE_EXTENSIONS: &[&str] = &["sh", "ps1"];
 #[cfg(not(unix))]
@@ -155,7 +157,7 @@ pub(crate) async fn link_executables_with_names(
     let mut seen: HashSet<OsString> = HashSet::new();
 
     for spec in specs {
-        if !is_executable(&spec.source) {
+        if !is_linkable_source(&spec.source) {
             continue;
         }
 
@@ -266,6 +268,17 @@ fn is_executable(path: &Path) -> bool {
             .map(|ext| EXECUTABLE_EXTENSIONS.contains(&ext))
             .unwrap_or(false)
     }
+}
+
+fn is_linkable_source(path: &Path) -> bool {
+    is_executable(path) || has_linkable_script_extension(path)
+}
+
+fn has_linkable_script_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| LINKABLE_SCRIPT_EXTENSIONS.contains(&ext))
+        .unwrap_or(false)
 }
 
 async fn create_link(source: &Path, link_path: &Path) -> Result<()> {
@@ -610,6 +623,50 @@ mod tests {
         assert!(bin.join("setproxy").exists());
         assert!(!bin.join("set_proxy").exists());
         assert_eq!(fs::read_link(bin.join("setproxy")).await.unwrap(), exe);
+
+        fs::remove_dir_all(&src).await.unwrap();
+        fs::remove_dir_all(&bin).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn links_non_executable_shell_script_source() {
+        let (src, bin) = make_dirs().await;
+        let script = src.join("set_proxy.sh");
+        fs::write(&script, b"#!/bin/sh\n").await.unwrap();
+        let specs = [LinkSpec {
+            source: script.clone(),
+            link_name: OsString::from("setproxy"),
+        }];
+
+        let report = link_executables_with_names(&bin, &specs, false)
+            .await
+            .unwrap();
+
+        assert_eq!(report.created.len(), 1);
+        assert!(bin.join("setproxy").exists());
+        assert_eq!(fs::read_link(bin.join("setproxy")).await.unwrap(), script);
+
+        fs::remove_dir_all(&src).await.unwrap();
+        fs::remove_dir_all(&bin).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn skips_non_executable_non_script_source_with_custom_name() {
+        let (src, bin) = make_dirs().await;
+        let plain = make_plain(&src, "proxy.txt").await;
+        let specs = [LinkSpec {
+            source: plain,
+            link_name: OsString::from("setproxy"),
+        }];
+
+        let report = link_executables_with_names(&bin, &specs, false)
+            .await
+            .unwrap();
+
+        assert!(report.created.is_empty());
+        assert!(!bin.join("setproxy").exists());
 
         fs::remove_dir_all(&src).await.unwrap();
         fs::remove_dir_all(&bin).await.unwrap();
