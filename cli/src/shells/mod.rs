@@ -3,6 +3,7 @@ pub(crate) mod metadata;
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::output;
 use crate::path_display;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -108,12 +109,7 @@ pub(crate) async fn handle_install(
         if !report.skipped.is_empty() {
             shell_parts.push(colors::dim(&format!("{} skipped", report.skipped.len())));
         }
-        let sep = colors::dim(" · ");
-        println!(
-            "{}  {}",
-            colors::bold("Shell Presets"),
-            shell_parts.join(&sep)
-        );
+        output::summary_line("Shell Presets", &shell_parts);
     }
 
     let categories = metadata::load_installed_categories(config, category).await?;
@@ -131,7 +127,6 @@ pub(crate) async fn handle_install(
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, force).await?;
 
-    let sep = colors::dim(" · ");
     let mut link_parts: Vec<String> = Vec::new();
     if !link_report.created.is_empty() {
         link_parts.push(colors::green(&format!(
@@ -160,11 +155,7 @@ pub(crate) async fn handle_install(
     if link_parts.is_empty() {
         link_parts.push(colors::dim("0 linked"));
     }
-    println!(
-        "{}     {}",
-        colors::bold("Bin Links    "),
-        link_parts.join(&sep)
-    );
+    output::summary_line("Bin Links", &link_parts);
 
     let source_commands = installed_source_commands(config).await?;
     let installed_commands = installed_source_commands_for_categories(config, &categories).await?;
@@ -173,17 +164,26 @@ pub(crate) async fn handle_install(
     let shell_update = append_path_to_shell_config(config, force, &source_commands).await?;
     let profile_path = managed_shell_profile_path(config);
     if shell_update.profile_updated {
-        println!("Shell profile ({}): updated", profile_path.display());
+        output::detail_line(
+            "Shell Profile",
+            colors::green("updated"),
+            Some(profile_path.display().to_string()),
+        );
     }
     match shell_update.config_status {
         PathUpdateStatus::AlreadyConfigured => {
-            println!(
-                "Shell config ({}): already configured, skipped",
-                shell_config_path.display()
+            output::detail_line(
+                "Shell Config",
+                colors::dim("up to date"),
+                Some(shell_config_path.display().to_string()),
             );
         }
         PathUpdateStatus::Updated(path) => {
-            println!("Shell config ({}): shine entry updated", path.display());
+            output::detail_line(
+                "Shell Config",
+                colors::green("updated"),
+                Some(path.display().to_string()),
+            );
         }
     }
     print_source_command_activation_hint(config, &shell_config_path, &installed_commands);
@@ -225,13 +225,12 @@ pub(crate) async fn handle_upgrade_installed(
         .map(|(cat_name, _)| cat_name.clone())
         .collect();
 
-    println!(
-        "{}  {}",
-        colors::bold("Shell Presets"),
-        colors::dim(&format!(
+    output::summary_line(
+        "Shell Presets",
+        &[colors::dim(&format!(
             "{} installed categories",
             installed_categories.len()
-        ))
+        ))],
     );
 
     if !config.is_external_presets {
@@ -288,12 +287,7 @@ pub(crate) async fn handle_upgrade_installed(
         )));
     }
     if !link_parts.is_empty() {
-        let sep = colors::dim(" · ");
-        println!(
-            "{}     {}",
-            colors::bold("Bin Links    "),
-            link_parts.join(&sep)
-        );
+        output::summary_line("Bin Links", &link_parts);
     }
 
     let source_commands = installed_source_commands(config).await?;
@@ -302,7 +296,11 @@ pub(crate) async fn handle_upgrade_installed(
     let path_changed = match shell_update.config_status {
         PathUpdateStatus::AlreadyConfigured => false,
         PathUpdateStatus::Updated(path) => {
-            println!("Shell config ({}): shine entry updated", path.display());
+            output::detail_line(
+                "Shell Config",
+                colors::green("updated"),
+                Some(path.display().to_string()),
+            );
             true
         }
     };
@@ -333,8 +331,6 @@ pub(crate) async fn handle_uninstall(
     if dry_run {
         println!("{}", colors::dim("[dry-run] No files will be modified."));
     }
-
-    let sep = colors::dim(" · ");
 
     // When a category is given, scope removal to that category's subdirectory.
     let managed_presets_root = match category {
@@ -372,11 +368,7 @@ pub(crate) async fn handle_uninstall(
             unlink_report.skipped.len()
         )));
     }
-    println!(
-        "{}     {}",
-        colors::bold("Bin Links    "),
-        link_parts.join(&sep)
-    );
+    output::summary_line("Bin Links", &link_parts);
 
     // When the user has a custom presets directory, the source files are theirs —
     // only remove the embedded-managed files when using the default directory.
@@ -396,11 +388,7 @@ pub(crate) async fn handle_uninstall(
                 remove_report.skipped.len()
             )));
         }
-        println!(
-            "{}  {}",
-            colors::bold("Shell Presets"),
-            shell_parts.join(&sep)
-        );
+        output::summary_line("Shell Presets", &shell_parts);
     }
 
     // Only purge managed directories when using the default presets directory.
@@ -861,10 +849,16 @@ fn print_source_command_activation_hint(
         return;
     }
 
-    println!(
-        "Current shell: run `{}` once, or open a new shell, before using {}.",
-        shell_source_command(&config.shell_type, shell_config_path),
-        source_commands.join(", ")
+    output::hint_line(
+        "Next Step",
+        format!(
+            "run `{}` once, or open a new shell",
+            shell_source_command(&config.shell_type, shell_config_path)
+        ),
+    );
+    output::hint_line(
+        "Commands",
+        format!("available after reload: {}", source_commands.join(", ")),
     );
 }
 

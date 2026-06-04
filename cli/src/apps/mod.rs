@@ -14,6 +14,7 @@ pub(crate) use transforms::apply as apply_transforms;
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::output;
 use crate::path_display;
 use crate::presets;
 use anyhow::{Context, Result};
@@ -358,10 +359,9 @@ pub(crate) async fn handle_install(
         anyhow::bail!("app preset category not found: {category}");
     }
     let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
-    println!(
-        "{}  {}",
-        colors::bold("Installing"),
-        colors::dim(&format!("{total_available} files available"))
+    output::summary_line(
+        "App Configs",
+        &[colors::dim(&format!("{total_available} files available"))],
     );
 
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
@@ -527,8 +527,7 @@ pub(crate) async fn handle_install(
     if skipped > 0 {
         summary_parts.push(colors::dim(&format!("{skipped} skipped")));
     }
-    let sep = colors::dim(" · ");
-    println!("\n{}  {}", colors::bold("Done"), summary_parts.join(&sep));
+    output::footer("Done", &summary_parts);
 
     Ok(())
 }
@@ -580,10 +579,12 @@ pub(crate) async fn handle_upgrade_installed(
         }
     }
 
-    println!(
-        "{}  {}",
-        colors::bold("App Configs"),
-        colors::dim(&format!("{} installed file(s)", manifest.entries.len()))
+    output::summary_line(
+        "App Configs",
+        &[colors::dim(&format!(
+            "{} installed file(s)",
+            manifest.entries.len()
+        ))],
     );
 
     let mut updated = 0usize;
@@ -1260,8 +1261,7 @@ pub(crate) async fn handle_uninstall(
     if skipped > 0 {
         summary_parts.push(colors::dim(&format!("{skipped} skipped")));
     }
-    let sep = colors::dim(" · ");
-    println!("\n{}  {}", colors::bold("Done"), summary_parts.join(&sep));
+    output::footer("Done", &summary_parts);
 
     Ok(())
 }

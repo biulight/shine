@@ -12,6 +12,7 @@ mod commands;
 mod config;
 mod env;
 mod list;
+mod output;
 mod path_display;
 mod platform;
 mod presets;
@@ -663,8 +664,7 @@ async fn handle_config_upgrade(config: &Config, verbose: bool, prune_stale: bool
     if summary.is_empty() {
         summary.push(colors::dim("nothing changed"));
     }
-    let sep = colors::dim(" · ");
-    println!("\n{}  {}", colors::bold("Done"), summary.join(&sep));
+    output::footer("Done", &summary);
 
     Ok(())
 }
