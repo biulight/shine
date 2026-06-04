@@ -166,7 +166,7 @@ pub(crate) async fn handle_install(
     if shell_update.profile_updated {
         output::detail_line(
             "Shell Profile",
-            colors::green("updated"),
+            &colors::green("updated"),
             Some(profile_path.display().to_string()),
         );
     }
@@ -174,14 +174,14 @@ pub(crate) async fn handle_install(
         PathUpdateStatus::AlreadyConfigured => {
             output::detail_line(
                 "Shell Config",
-                colors::dim("up to date"),
+                &colors::dim("up to date"),
                 Some(shell_config_path.display().to_string()),
             );
         }
         PathUpdateStatus::Updated(path) => {
             output::detail_line(
                 "Shell Config",
-                colors::green("updated"),
+                &colors::green("updated"),
                 Some(path.display().to_string()),
             );
         }
@@ -298,7 +298,7 @@ pub(crate) async fn handle_upgrade_installed(
         PathUpdateStatus::Updated(path) => {
             output::detail_line(
                 "Shell Config",
-                colors::green("updated"),
+                &colors::green("updated"),
                 Some(path.display().to_string()),
             );
             true
@@ -851,14 +851,14 @@ fn print_source_command_activation_hint(
 
     output::hint_line(
         "Next Step",
-        format!(
+        &format!(
             "run `{}` once, or open a new shell",
             shell_source_command(&config.shell_type, shell_config_path)
         ),
     );
     output::hint_line(
         "Commands",
-        format!("available after reload: {}", source_commands.join(", ")),
+        &format!("available after reload: {}", source_commands.join(", ")),
     );
 }
 

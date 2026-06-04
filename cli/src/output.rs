@@ -4,7 +4,7 @@ const SUMMARY_LABEL_WIDTH: usize = 15;
 const DETAIL_LABEL_WIDTH: usize = 15;
 const DETAIL_STATUS_WIDTH: usize = 13;
 
-pub(crate) fn join_summary(parts: &[String]) -> String {
+fn join_summary(parts: &[String]) -> String {
     if parts.is_empty() {
         colors::dim("nothing changed")
     } else {
@@ -26,7 +26,7 @@ pub(crate) fn footer(label: &str, parts: &[String]) {
     summary_line(label, parts);
 }
 
-pub(crate) fn detail_line(label: &str, status: String, detail: Option<String>) {
+pub(crate) fn detail_line(label: &str, status: &str, detail: Option<String>) {
     let detail = detail
         .filter(|value| !value.is_empty())
         .map(|value| format!("  {}", colors::dim(&value)))
@@ -37,17 +37,17 @@ pub(crate) fn detail_line(label: &str, status: String, detail: Option<String>) {
         colors::bold(label),
         pad(label, DETAIL_LABEL_WIDTH),
         status,
-        pad_plain(visible_len_without_ansi(&status), DETAIL_STATUS_WIDTH),
+        pad_plain(visible_len_without_ansi(status), DETAIL_STATUS_WIDTH),
         detail
     );
 }
 
-pub(crate) fn hint_line(label: &str, detail: String) {
+pub(crate) fn hint_line(label: &str, detail: &str) {
     println!(
         "{}{}{}",
         colors::bold(label),
         pad(label, DETAIL_LABEL_WIDTH),
-        colors::dim(&detail)
+        colors::dim(detail)
     );
 }
 
@@ -59,6 +59,7 @@ fn pad_plain(visible_len: usize, width: usize) -> String {
     " ".repeat(width.saturating_sub(visible_len) + 1)
 }
 
+// Only handles CSI sequences (\x1b[...alpha). OSC and other escape types are not stripped.
 fn visible_len_without_ansi(value: &str) -> usize {
     let mut len = 0usize;
     let mut chars = value.chars().peekable();

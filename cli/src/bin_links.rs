@@ -245,11 +245,10 @@ pub(crate) fn command_path_for_name(bin_dir: &Path, stem: &OsStr) -> PathBuf {
 }
 
 pub(crate) fn link_stem(path: &Path) -> std::ffi::OsString {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("sh" | "bash" | "zsh" | "fish" | "ps1") => {
-            path.file_stem().map(|s| s.to_owned()).unwrap_or_default()
-        }
-        _ => path.file_name().map(|n| n.to_owned()).unwrap_or_default(),
+    if has_linkable_script_extension(path) {
+        path.file_stem().map(|s| s.to_owned()).unwrap_or_default()
+    } else {
+        path.file_name().map(|n| n.to_owned()).unwrap_or_default()
     }
 }
 
