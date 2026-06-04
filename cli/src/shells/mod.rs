@@ -157,6 +157,9 @@ pub(crate) async fn handle_install(
             link_report.conflicts.len()
         )));
     }
+    if link_parts.is_empty() {
+        link_parts.push(colors::dim("0 linked"));
+    }
     println!(
         "{}     {}",
         colors::bold("Bin Links    "),
@@ -164,6 +167,7 @@ pub(crate) async fn handle_install(
     );
 
     let source_commands = installed_source_commands(config).await?;
+    let installed_commands = installed_source_commands_for_categories(config, &categories).await?;
 
     let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
     let shell_update = append_path_to_shell_config(config, force, &source_commands).await?;
@@ -182,7 +186,7 @@ pub(crate) async fn handle_install(
             println!("Shell config ({}): shine entry updated", path.display());
         }
     }
-    print_source_command_activation_hint(config, &shell_config_path, &source_commands);
+    print_source_command_activation_hint(config, &shell_config_path, &installed_commands);
     Ok(())
 }
 
@@ -572,6 +576,13 @@ fn build_link_specs(
 
 async fn installed_source_commands(config: &Config) -> Result<Vec<String>> {
     let categories = metadata::load_installed_categories(config, None).await?;
+    installed_source_commands_for_categories(config, &categories).await
+}
+
+async fn installed_source_commands_for_categories(
+    config: &Config,
+    categories: &[metadata::ShellCategory],
+) -> Result<Vec<String>> {
     let mut commands = categories
         .iter()
         .flat_map(|cat| cat.files.iter())
@@ -1409,6 +1420,32 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn installed_source_commands_for_categories_are_scoped() {
+        let dir = make_temp_dir().await;
+        let config = config_with_deepseek_key(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("agent"), false).await.unwrap();
+        handle_install(&config, Some("proxy"), false).await.unwrap();
+
+        let proxy_only = metadata::load_installed_categories(&config, Some("proxy"))
+            .await
+            .unwrap();
+        let commands = installed_source_commands_for_categories(&config, &proxy_only)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            commands,
+            vec!["setproxy".to_string(), "usetproxy".to_string()]
+        );
+        assert!(!commands.contains(&"ccenv".to_string()));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[test]
     fn powershell_shell_detection_accepts_pwsh_names() {
         assert!(matches!("pwsh".parse().unwrap(), ShellType::PowerShell));
@@ -1857,6 +1894,43 @@ mod tests {
 
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(!config.bin_dir().join("set_proxy").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_presets_install_links_non_executable_source_scripts() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/proxy");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n[[files]]\nsource = \"uset_proxy.sh\"\ntarget = \"usetproxy\"\nneeds_source = true\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            &cat_dir.join("set_proxy.sh"),
+            b"#!/bin/bash\n# Set proxy.\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            &cat_dir.join("uset_proxy.sh"),
+            b"#!/bin/bash\n# Unset proxy.\n",
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("proxy"), false).await.unwrap();
+
+        assert!(config.bin_dir().join("setproxy").exists());
+        assert!(config.bin_dir().join("usetproxy").exists());
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
