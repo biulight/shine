@@ -3,10 +3,11 @@ pub(crate) mod metadata;
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::output;
 use crate::path_display;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -108,12 +109,7 @@ pub(crate) async fn handle_install(
         if !report.skipped.is_empty() {
             shell_parts.push(colors::dim(&format!("{} skipped", report.skipped.len())));
         }
-        let sep = colors::dim(" · ");
-        println!(
-            "{}  {}",
-            colors::bold("Shell Presets"),
-            shell_parts.join(&sep)
-        );
+        output::summary_line("Shell Presets", &shell_parts);
     }
 
     let categories = metadata::load_installed_categories(config, category).await?;
@@ -131,7 +127,6 @@ pub(crate) async fn handle_install(
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, force).await?;
 
-    let sep = colors::dim(" · ");
     let mut link_parts: Vec<String> = Vec::new();
     if !link_report.created.is_empty() {
         link_parts.push(colors::green(&format!(
@@ -160,11 +155,8 @@ pub(crate) async fn handle_install(
     if link_parts.is_empty() {
         link_parts.push(colors::dim("0 linked"));
     }
-    println!(
-        "{}     {}",
-        colors::bold("Bin Links    "),
-        link_parts.join(&sep)
-    );
+    output::summary_line("Bin Links", &link_parts);
+    print_link_conflicts(config, &link_report.conflicts, category);
 
     let source_commands = installed_source_commands(config).await?;
     let installed_commands = installed_source_commands_for_categories(config, &categories).await?;
@@ -173,17 +165,26 @@ pub(crate) async fn handle_install(
     let shell_update = append_path_to_shell_config(config, force, &source_commands).await?;
     let profile_path = managed_shell_profile_path(config);
     if shell_update.profile_updated {
-        println!("Shell profile ({}): updated", profile_path.display());
+        output::detail_line(
+            "Shell Profile",
+            &colors::green("updated"),
+            Some(profile_path.display().to_string()),
+        );
     }
     match shell_update.config_status {
         PathUpdateStatus::AlreadyConfigured => {
-            println!(
-                "Shell config ({}): already configured, skipped",
-                shell_config_path.display()
+            output::detail_line(
+                "Shell Config",
+                &colors::dim("up to date"),
+                Some(shell_config_path.display().to_string()),
             );
         }
         PathUpdateStatus::Updated(path) => {
-            println!("Shell config ({}): shine entry updated", path.display());
+            output::detail_line(
+                "Shell Config",
+                &colors::green("updated"),
+                Some(path.display().to_string()),
+            );
         }
     }
     print_source_command_activation_hint(config, &shell_config_path, &installed_commands);
@@ -225,13 +226,12 @@ pub(crate) async fn handle_upgrade_installed(
         .map(|(cat_name, _)| cat_name.clone())
         .collect();
 
-    println!(
-        "{}  {}",
-        colors::bold("Shell Presets"),
-        colors::dim(&format!(
+    output::summary_line(
+        "Shell Presets",
+        &[colors::dim(&format!(
             "{} installed categories",
             installed_categories.len()
-        ))
+        ))],
     );
 
     if !config.is_external_presets {
@@ -288,13 +288,9 @@ pub(crate) async fn handle_upgrade_installed(
         )));
     }
     if !link_parts.is_empty() {
-        let sep = colors::dim(" · ");
-        println!(
-            "{}     {}",
-            colors::bold("Bin Links    "),
-            link_parts.join(&sep)
-        );
+        output::summary_line("Bin Links", &link_parts);
     }
+    print_link_conflicts(config, &link_report.conflicts, None);
 
     let source_commands = installed_source_commands(config).await?;
 
@@ -302,7 +298,11 @@ pub(crate) async fn handle_upgrade_installed(
     let path_changed = match shell_update.config_status {
         PathUpdateStatus::AlreadyConfigured => false,
         PathUpdateStatus::Updated(path) => {
-            println!("Shell config ({}): shine entry updated", path.display());
+            output::detail_line(
+                "Shell Config",
+                &colors::green("updated"),
+                Some(path.display().to_string()),
+            );
             true
         }
     };
@@ -323,6 +323,95 @@ fn shell_link_exists(link: &Path) -> bool {
             .unwrap_or(false)
 }
 
+fn print_link_conflicts(
+    config: &Config,
+    conflicts: &[crate::bin_links::LinkConflict],
+    category_hint: Option<&str>,
+) {
+    for conflict in conflicts {
+        let lines = link_conflict_detail_lines(config, conflict, category_hint);
+        if let Some((first, rest)) = lines.split_first() {
+            let command = conflict
+                .link_path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .unwrap_or("unknown");
+            output::detail_line(
+                "Link Conflict",
+                &colors::yellow(command),
+                Some(first.clone()),
+            );
+            for line in rest {
+                println!("{}{}", " ".repeat(16), colors::dim(line));
+            }
+        }
+    }
+}
+
+fn link_conflict_detail_lines(
+    config: &Config,
+    conflict: &crate::bin_links::LinkConflict,
+    category_hint: Option<&str>,
+) -> Vec<String> {
+    let link = path_display::format_home(&conflict.link_path, &config.home_dir);
+    let wanted = path_display::format_home(&conflict.source, &config.home_dir);
+    let mut lines = Vec::new();
+
+    match conflict.kind {
+        crate::bin_links::LinkConflictKind::DuplicateName => {
+            lines.push("duplicate requested command".to_string());
+        }
+        crate::bin_links::LinkConflictKind::ExistingEntry => {
+            lines.push(format!(
+                "existing: {}",
+                describe_existing_link(&conflict.link_path, &link)
+            ));
+        }
+    }
+
+    lines.push(format!("wanted:   {wanted}"));
+    lines.push(format!(
+        "fix:      remove {link} or run `{}`",
+        reinstall_command(config, category_hint, &conflict.source)
+    ));
+    lines
+}
+
+fn describe_existing_link(path: &Path, display_path: &str) -> String {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => match std::fs::read_link(path) {
+            Ok(target) => format!("{display_path} -> {}", path_display::format(&target)),
+            Err(_) => format!("{display_path} -> unreadable target"),
+        },
+        Ok(meta) if meta.is_dir() => format!("directory {display_path}"),
+        Ok(_) => format!("file {display_path}"),
+        Err(_) => format!("{display_path} no longer exists"),
+    }
+}
+
+fn reinstall_command(config: &Config, category_hint: Option<&str>, source: &Path) -> String {
+    if let Some(category) = category_hint {
+        return format!("shine shell reinstall {category}");
+    }
+    if let Some(category) = infer_shell_category(config, source) {
+        return format!("shine shell reinstall {category}");
+    }
+    "shine shell reinstall".to_string()
+}
+
+fn infer_shell_category(config: &Config, source: &Path) -> Option<String> {
+    shell_category_after_root(source.strip_prefix(config.presets_dir()).ok()?)
+        .or_else(|| shell_category_after_root(source.strip_prefix(config.rendered_dir()).ok()?))
+}
+
+fn shell_category_after_root(path: &Path) -> Option<String> {
+    let mut components = path.components();
+    if components.next()?.as_os_str() != OsStr::new("shell") {
+        return None;
+    }
+    components.next()?.as_os_str().to_str().map(str::to_string)
+}
+
 pub(crate) async fn handle_uninstall(
     config: &Config,
     category: Option<&str>,
@@ -333,8 +422,6 @@ pub(crate) async fn handle_uninstall(
     if dry_run {
         println!("{}", colors::dim("[dry-run] No files will be modified."));
     }
-
-    let sep = colors::dim(" · ");
 
     // When a category is given, scope removal to that category's subdirectory.
     let managed_presets_root = match category {
@@ -372,11 +459,7 @@ pub(crate) async fn handle_uninstall(
             unlink_report.skipped.len()
         )));
     }
-    println!(
-        "{}     {}",
-        colors::bold("Bin Links    "),
-        link_parts.join(&sep)
-    );
+    output::summary_line("Bin Links", &link_parts);
 
     // When the user has a custom presets directory, the source files are theirs —
     // only remove the embedded-managed files when using the default directory.
@@ -396,11 +479,7 @@ pub(crate) async fn handle_uninstall(
                 remove_report.skipped.len()
             )));
         }
-        println!(
-            "{}  {}",
-            colors::bold("Shell Presets"),
-            shell_parts.join(&sep)
-        );
+        output::summary_line("Shell Presets", &shell_parts);
     }
 
     // Only purge managed directories when using the default presets directory.
@@ -861,10 +940,16 @@ fn print_source_command_activation_hint(
         return;
     }
 
-    println!(
-        "Current shell: run `{}` once, or open a new shell, before using {}.",
-        shell_source_command(&config.shell_type, shell_config_path),
-        source_commands.join(", ")
+    output::hint_line(
+        "Next Step",
+        &format!(
+            "run `{}` once, or open a new shell",
+            shell_source_command(&config.shell_type, shell_config_path)
+        ),
+    );
+    output::hint_line(
+        "Commands",
+        &format!("available after reload: {}", source_commands.join(", ")),
     );
 }
 
@@ -1256,6 +1341,66 @@ mod tests {
 
         // Idempotency: second uninstall must not error
         handle_uninstall(&config, None, false, false).await.unwrap();
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn link_conflict_detail_describes_existing_file() {
+        let dir = make_temp_dir().await;
+        let config = config_with_deepseek_key(&dir);
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        let link_path = config.bin_dir().join("setproxy");
+        let source = config.presets_dir().join("shell/proxy/set_proxy.sh");
+        fs::write(&link_path, b"custom command").await.unwrap();
+
+        let conflict = crate::bin_links::LinkConflict {
+            link_path: link_path.clone(),
+            source: source.clone(),
+            kind: crate::bin_links::LinkConflictKind::ExistingEntry,
+        };
+        let lines = link_conflict_detail_lines(&config, &conflict, Some("proxy"));
+
+        assert_eq!(lines[0], "existing: file ~/bin/setproxy");
+        assert_eq!(lines[1], "wanted:   ~/presets/shell/proxy/set_proxy.sh");
+        assert_eq!(
+            lines[2],
+            "fix:      remove ~/bin/setproxy or run `shine shell reinstall proxy`"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn link_conflict_detail_describes_stale_symlink() {
+        let dir = make_temp_dir().await;
+        let config = config_with_deepseek_key(&dir);
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        fs::create_dir_all(config.presets_dir().join("shell/proxy"))
+            .await
+            .unwrap();
+        let link_path = config.bin_dir().join("setproxy");
+        let source = config.presets_dir().join("shell/proxy/set_proxy.sh");
+        let other = dir.join("other-setproxy");
+        fs::write(&other, b"#!/bin/sh\n").await.unwrap();
+        tokio::fs::symlink(&other, &link_path).await.unwrap();
+
+        let conflict = crate::bin_links::LinkConflict {
+            link_path,
+            source,
+            kind: crate::bin_links::LinkConflictKind::ExistingEntry,
+        };
+        let lines = link_conflict_detail_lines(&config, &conflict, None);
+
+        assert!(lines[0].starts_with("existing: ~/bin/setproxy -> "));
+        assert!(lines[0].contains("other-setproxy"));
+        assert_eq!(lines[1], "wanted:   ~/presets/shell/proxy/set_proxy.sh");
+        assert_eq!(
+            lines[2],
+            "fix:      remove ~/bin/setproxy or run `shine shell reinstall proxy`"
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

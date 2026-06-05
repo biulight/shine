@@ -21,10 +21,10 @@ English README: [`../README.md`](../README.md)
 - **应用预设安装器** — 可安装 `~/.gitconfig`、`~/.config/starship/starship.toml`、`~/.config/ghostty/config.ghostty` 等受管配置
 - **已安装内容检查** — `shine info <target>` 会输出已安装应用配置和 shell 预设的元数据、彩色状态和值得关注的预期内容差异；加 `--verbose` 可查看完整内容
 - **版本更新检查** — 运行时检查 GitHub Releases，并使用 24 小时缓存
-- **多 shell 支持** — bash、zsh、fish、PowerShell；当同一类别在 Unix 和 Windows 需要不同文件时，可按平台声明 shell 预设条目
+- **多 shell 支持** — bash、zsh 和 PowerShell；当同一类别在 Unix 和 Windows 需要不同文件时，可按平台声明 shell 预设条目
 - **系统初始化预设** — 通过 `shine sys init` 对当前操作系统执行一组整理过的初始化步骤
 
-当前支持范围：`shine shell` 支持 `bash`、`zsh`、`fish` 和 PowerShell。Windows 支持目前覆盖 `shine self`、`shine shell`，`docker-engine`、`docker-desktop` 这类已适配的 app 预设，以及用 PowerShell 实现的 Windows `shine sys init` 预设。
+当前支持范围：`shine shell` 支持 `bash`、`zsh` 和 PowerShell。Windows 支持目前覆盖 `shine self`、`shine shell`，`docker-engine`、`docker-desktop` 这类已适配的 app 预设，以及用 PowerShell 实现的 Windows `shine sys init` 预设。
 
 ## 规划流程
 
@@ -108,7 +108,7 @@ shine shell install proxy      # 仅安装 proxy 类别
 shine shell reinstall proxy    # 覆盖 proxy 的受管文件和链接
 ```
 
-它会把内置 shell 脚本解包到 `~/.shine/presets/shell/`，在 `~/.shine/bin/` 中创建符号链接或 Windows shim，并把 PATH 条目追加到你的 shell 配置文件（`~/.zshrc`、`~/.bashrc`、`~/.config/fish/config.fish`、PowerShell profile 等）：
+它会把内置 shell 脚本解包到 `~/.shine/presets/shell/`，在 `~/.shine/bin/` 中创建符号链接或 Windows shim，并把 PATH 条目追加到你的 shell 配置文件（`~/.zshrc`、`~/.bashrc`、PowerShell profile 等）：
 
 ```
 Shell Presets  4 created
@@ -146,11 +146,10 @@ shine shell uninstall proxy --purge  # 卸载 proxy 并删除其预设目录
 ```bash
 shine completions bash > ~/.local/share/bash-completion/completions/shine
 shine completions zsh > ~/.zfunc/_shine
-shine completions fish > ~/.config/fish/completions/shine.fish
 shine completions powershell > shine-completions.ps1
 ```
 
-`shine completions <shell>` 会把补全脚本输出到 `stdout`，需要你手动安装。支持 `bash`、`zsh`、`fish` 和 `powershell`，不会自动修改 shell 配置。
+`shine completions <shell>` 会把补全脚本输出到 `stdout`，需要你手动安装。支持 `bash`、`zsh` 和 `powershell`，不会自动修改 shell 配置。
 
 ### 查看可用的应用预设
 
@@ -489,7 +488,7 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.29.0+preview.abc1234`；稳定版则继续显示 `0.29.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.30.0+preview.abc1234`；稳定版则继续显示 `0.30.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -499,7 +498,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.29.0 sh install.sh
+SHINE_VERSION=0.30.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -507,7 +506,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.29.0"; .\install.ps1
+$env:SHINE_VERSION = "0.30.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 

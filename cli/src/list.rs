@@ -2,6 +2,7 @@ use crate::apps::{load_embedded_categories, load_installed_categories};
 use crate::check::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_rows};
 use crate::colors;
 use crate::config::Config;
+use crate::output;
 use anyhow::Result;
 
 const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
@@ -213,8 +214,7 @@ pub(crate) async fn handle_status_list(config: &Config) -> Result<()> {
         }
 
         if !parts.is_empty() {
-            let sep = colors::dim(" · ");
-            println!("\n{}  {}", colors::bold("Summary"), parts.join(&sep));
+            output::footer("Summary", &parts);
         }
     }
 

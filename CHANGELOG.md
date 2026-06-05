@@ -5,6 +5,20 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.30.0] — 2026-06-05
+
+### Features
+
+- Standardized summary and detail output across shell, app, list, and upgrade commands for more consistent CLI status rendering.
+- Improved shell install and upgrade conflict reporting so blocked bin links show the existing entry, requested source, and a targeted reinstall command.
+
+### Docs
+
+- Removed stale fish shell support claims from the English and Chinese READMEs.
+- Updated the pinned `0.30.0` installer examples and version output examples in the README files.
+
+---
+
 ## [0.29.1] — 2026-06-04
 
 ### Bug Fixes

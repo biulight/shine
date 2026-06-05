@@ -21,10 +21,10 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 - **App preset installer** — install managed config files like `~/.gitconfig`, `~/.config/starship/starship.toml`, or `~/.config/ghostty/config.ghostty`
 - **Installed content inspection** — `shine info <target>` prints metadata, colorized status, and expected-content diffs for installed app configs and shell presets; add `--verbose` for full content
 - **Release update check** — checks GitHub Releases at runtime with a 24h cache
-- **Multi-shell support** — bash, zsh, fish, PowerShell, with per-platform shell preset entries when a category needs different files on Unix and Windows
+- **Multi-shell support** — bash, zsh, and PowerShell, with per-platform shell preset entries when a category needs different files on Unix and Windows
 - **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
 
-Current support scope: `shine shell` supports bash, zsh, fish, and PowerShell. Windows support covers `shine self`, `shine shell`, selected app presets such as `docker-engine` and `docker-desktop`, and a Windows `shine sys init` preset implemented with PowerShell.
+Current support scope: `shine shell` supports bash, zsh, and PowerShell. Windows support covers `shine self`, `shine shell`, selected app presets such as `docker-engine` and `docker-desktop`, and a Windows `shine sys init` preset implemented with PowerShell.
 
 ## Planning Workflow
 
@@ -108,7 +108,7 @@ shine shell install proxy      # install only the proxy category
 shine shell reinstall proxy    # overwrite managed files and links for proxy
 ```
 
-Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks or Windows shims in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, `~/.config/fish/config.fish`, PowerShell profile, etc.):
+Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks or Windows shims in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, PowerShell profile, etc.):
 
 ```
 Shell Presets  4 created
@@ -146,11 +146,10 @@ When a category is specified only that category's files and symlinks are removed
 ```bash
 shine completions bash > ~/.local/share/bash-completion/completions/shine
 shine completions zsh > ~/.zfunc/_shine
-shine completions fish > ~/.config/fish/completions/shine.fish
 shine completions powershell > shine-completions.ps1
 ```
 
-`shine completions <shell>` prints a completion script to `stdout` for manual installation. It supports `bash`, `zsh`, `fish`, and `powershell`, and it does not modify your shell config automatically.
+`shine completions <shell>` prints a completion script to `stdout` for manual installation. It supports `bash`, `zsh`, and `powershell`, and it does not modify your shell config automatically.
 
 ### List available app presets
 
@@ -493,7 +492,7 @@ shine upgrade --verbose  # include env-template check details
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.29.1+preview.abc1234`, while stable binaries continue to report `0.29.1`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.30.0+preview.abc1234`, while stable binaries continue to report `0.30.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -503,7 +502,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.29.1 sh install.sh
+SHINE_VERSION=0.30.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -511,7 +510,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.29.1"; .\install.ps1
+$env:SHINE_VERSION = "0.30.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 

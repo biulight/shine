@@ -201,7 +201,7 @@ if [[ ":$PATH:" != *":$HOME/.shine/bin:"* ]]; then
 fi
 # <<< shine <<<
 ```
-`bin_dir` paths under `home_dir` are expressed as `$HOME/...` for portability. Fish uses `fish_add_path` instead. `remove_path_from_shell_config` deletes the block precisely, including the preceding blank line separator.
+`bin_dir` paths under `home_dir` are expressed as `$HOME/...` for portability. `remove_path_from_shell_config` deletes the block precisely, including the preceding blank line separator.
 
 On Windows, PowerShell profile updates target both `~/Documents/PowerShell/Microsoft.PowerShell_profile.ps1` and `~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1` so `pwsh.exe` and Windows PowerShell stay in sync.
 
