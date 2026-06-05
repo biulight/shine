@@ -23,8 +23,21 @@ enum WindowsShimStatus {
 pub(crate) struct LinkReport {
     pub created: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
-    pub conflicts: Vec<(PathBuf, PathBuf)>,
+    pub conflicts: Vec<LinkConflict>,
     pub overwritten: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LinkConflictKind {
+    ExistingEntry,
+    DuplicateName,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LinkConflict {
+    pub link_path: PathBuf,
+    pub source: PathBuf,
+    pub kind: LinkConflictKind,
 }
 
 pub(crate) struct UnlinkReport {
@@ -167,9 +180,11 @@ pub(crate) async fn link_executables_with_names(
         let stem = spec.link_name.clone();
 
         if !seen.insert(stem.clone()) {
-            report
-                .conflicts
-                .push((command_path_for_name(bin_dir, &stem), spec.source.clone()));
+            report.conflicts.push(LinkConflict {
+                link_path: command_path_for_name(bin_dir, &stem),
+                source: spec.source.clone(),
+                kind: LinkConflictKind::DuplicateName,
+            });
             continue;
         }
 
@@ -189,7 +204,11 @@ pub(crate) async fn link_executables_with_names(
                             create_link(&spec.source, &link_path).await?;
                             report.overwritten.push(link_path);
                         } else {
-                            report.conflicts.push((link_path, spec.source.clone()));
+                            report.conflicts.push(LinkConflict {
+                                link_path,
+                                source: spec.source.clone(),
+                                kind: LinkConflictKind::ExistingEntry,
+                            });
                         }
                     }
                 }
@@ -215,7 +234,11 @@ pub(crate) async fn link_executables_with_names(
                     create_link(&spec.source, &link_path).await?;
                     report.overwritten.push(link_path);
                 } else {
-                    report.conflicts.push((link_path, spec.source.clone()));
+                    report.conflicts.push(LinkConflict {
+                        link_path,
+                        source: spec.source.clone(),
+                        kind: LinkConflictKind::ExistingEntry,
+                    });
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -515,7 +538,9 @@ mod tests {
         let exe = make_executable(&src, "run.sh").await;
         tokio::fs::symlink(&exe, bin.join("run")).await.unwrap();
 
-        let report = link_executables(&bin, &[exe], false).await.unwrap();
+        let report = link_executables(&bin, std::slice::from_ref(&exe), false)
+            .await
+            .unwrap();
 
         assert!(report.created.is_empty());
         assert_eq!(report.skipped.len(), 1);
@@ -531,10 +556,15 @@ mod tests {
         let exe = make_executable(&src, "run.sh").await;
         make_plain(&bin, "run").await;
 
-        let report = link_executables(&bin, &[exe], false).await.unwrap();
+        let report = link_executables(&bin, std::slice::from_ref(&exe), false)
+            .await
+            .unwrap();
 
         assert!(report.created.is_empty());
         assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(report.conflicts[0].link_path, bin.join("run"));
+        assert_eq!(report.conflicts[0].source, exe);
+        assert_eq!(report.conflicts[0].kind, LinkConflictKind::ExistingEntry);
 
         fs::remove_dir_all(&src).await.unwrap();
         fs::remove_dir_all(&bin).await.unwrap();
@@ -595,10 +625,15 @@ mod tests {
         let exe1 = make_executable(&sub1, "run.sh").await;
         let exe2 = make_executable(&sub2, "run.sh").await;
 
-        let report = link_executables(&bin, &[exe1, exe2], false).await.unwrap();
+        let report = link_executables(&bin, &[exe1, exe2.clone()], false)
+            .await
+            .unwrap();
 
         assert_eq!(report.created.len(), 1);
         assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(report.conflicts[0].link_path, bin.join("run"));
+        assert_eq!(report.conflicts[0].source, exe2);
+        assert_eq!(report.conflicts[0].kind, LinkConflictKind::DuplicateName);
 
         fs::remove_dir_all(&src).await.unwrap();
         fs::remove_dir_all(&bin).await.unwrap();
