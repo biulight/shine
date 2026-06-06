@@ -98,16 +98,22 @@ pub(crate) async fn handle_install(
 
         let mut shell_parts: Vec<String> = Vec::new();
         if !report.created.is_empty() {
-            shell_parts.push(colors::green(&format!("{} created", report.created.len())));
+            shell_parts.push(colors::green(&format_file_action(
+                report.created.len(),
+                "created",
+            )));
         }
         if !report.overwritten.is_empty() {
-            shell_parts.push(colors::green(&format!(
-                "{} updated",
-                report.overwritten.len()
+            shell_parts.push(colors::green(&format_file_action(
+                report.overwritten.len(),
+                "updated",
             )));
         }
         if !report.skipped.is_empty() {
-            shell_parts.push(colors::dim(&format!("{} skipped", report.skipped.len())));
+            shell_parts.push(colors::dim(&format_file_action(
+                report.skipped.len(),
+                "skipped",
+            )));
         }
         output::summary_line("Shell Presets", &shell_parts);
     }
@@ -468,15 +474,15 @@ pub(crate) async fn handle_uninstall(
             crate::presets::remove_prefix(&prefix, config.presets_dir(), dry_run).await?;
         let mut shell_parts: Vec<String> = Vec::new();
         if !remove_report.removed.is_empty() {
-            shell_parts.push(colors::green(&format!(
-                "{} removed",
-                remove_report.removed.len()
+            shell_parts.push(colors::green(&format_file_action(
+                remove_report.removed.len(),
+                "removed",
             )));
         }
         if !remove_report.skipped.is_empty() {
-            shell_parts.push(colors::dim(&format!(
-                "{} skipped",
-                remove_report.skipped.len()
+            shell_parts.push(colors::dim(&format_file_action(
+                remove_report.skipped.len(),
+                "skipped",
             )));
         }
         output::summary_line("Shell Presets", &shell_parts);
@@ -791,6 +797,11 @@ fn env_map_for_script<'a>(
     } else {
         std::borrow::Cow::Borrowed(env_map)
     }
+}
+
+fn format_file_action(count: usize, action: &str) -> String {
+    let noun = if count == 1 { "file" } else { "files" };
+    format!("{count} {noun} {action}")
 }
 
 fn managed_shell_profile_path(config: &Config) -> PathBuf {
