@@ -2338,9 +2338,9 @@ mod tests {
     async fn external_presets_upgrade_does_not_install_preset_only_scripts() {
         let dir = make_temp_dir().await;
         let proxy_dir = dir.join("presets/shell/proxy");
-        let tools_dir = dir.join("presets/shell/tools");
+        let extra_dir = dir.join("presets/shell/extra");
         fs::create_dir_all(&proxy_dir).await.unwrap();
-        fs::create_dir_all(&tools_dir).await.unwrap();
+        fs::create_dir_all(&extra_dir).await.unwrap();
 
         fs::write(
             proxy_dir.join("shine.toml"),
@@ -2357,11 +2357,11 @@ mod tests {
         .unwrap();
         make_executable(&setproxy).await;
 
-        let test_tools = tools_dir.join("test_tools.sh");
-        fs::write(&test_tools, b"#!/bin/bash\n# Test tools.\necho tools\n")
+        let extra_tool = extra_dir.join("extra_tool.sh");
+        fs::write(&extra_tool, b"#!/bin/bash\n# Extra tool.\necho extra\n")
             .await
             .unwrap();
-        make_executable(&test_tools).await;
+        make_executable(&extra_tool).await;
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
@@ -2370,8 +2370,8 @@ mod tests {
         handle_install(&config, Some("proxy"), false).await.unwrap();
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(
-            !config.bin_dir().join("test_tools").exists(),
-            "tools preset should start as present but not installed"
+            !config.bin_dir().join("extra_tool").exists(),
+            "extra preset should start as present but not installed"
         );
 
         fs::write(
@@ -2390,7 +2390,7 @@ mod tests {
         );
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(
-            !config.bin_dir().join("test_tools").exists(),
+            !config.bin_dir().join("extra_tool").exists(),
             "upgrade must not install preset-only scripts"
         );
 

@@ -478,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn list_categories_returns_proxy_and_tools() {
+    fn list_categories_returns_proxy_and_utils() {
         let cats = list_categories("shell");
         let names: Vec<&str> = cats.iter().map(|c| c.name.as_str()).collect();
         assert!(
@@ -486,8 +486,8 @@ mod tests {
             "proxy category missing: {names:?}"
         );
         assert!(
-            names.contains(&"tools"),
-            "tools category missing: {names:?}"
+            names.contains(&"utils"),
+            "utils category missing: {names:?}"
         );
     }
 

@@ -1,0 +1,6 @@
+description = "Small shell utility commands."
+
+[[files]]
+source = "copyfile.sh"
+target = "copyfile"
+platforms = ["unix"]
