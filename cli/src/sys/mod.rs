@@ -1340,6 +1340,17 @@ description = "Placeholder"
     }
 
     #[test]
+    fn embedded_macos_profile_initializes_homebrew_zsh_completions() {
+        let content = crate::presets::read_asset_bytes("sys/macos/profile.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded macOS profile script");
+
+        assert!(content.contains("share/zsh/site-functions"));
+        assert!(content.contains("ZSH_VERSION"));
+        assert!(content.contains("typeset -U fpath"));
+    }
+
+    #[test]
     fn embedded_ubuntu_profile_initializes_atuin() {
         let content = crate::presets::read_asset_bytes("sys/ubuntu/profile.sh")
             .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -1348,6 +1359,18 @@ description = "Placeholder"
         assert!(content.contains("atuin init"));
         assert!(content.contains("shine_ubuntu_sys_shell"));
         assert!(content.contains(". \"$HOME/.atuin/bin/env\""));
+    }
+
+    #[test]
+    fn embedded_ubuntu_profile_initializes_homebrew_zsh_completions() {
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/profile.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu profile script");
+
+        assert!(content.contains("share/zsh/site-functions"));
+        assert!(content.contains("shine_ubuntu_sys_shell"));
+        assert!(content.contains("ZSH_VERSION"));
+        assert!(content.contains("typeset -U fpath"));
     }
 
     #[test]

@@ -9,6 +9,12 @@ else
   export HOMEBREW_PREFIX=""
 fi
 
+# Homebrew zsh completions
+if [[ -n "${ZSH_VERSION:-}" && -n "$HOMEBREW_PREFIX" && -d "$HOMEBREW_PREFIX/share/zsh/site-functions" ]]; then
+  typeset -U fpath
+  fpath=("$HOMEBREW_PREFIX/share/zsh/site-functions" $fpath)
+fi
+
 # Basic PATH
 typeset -U path PATH
 path=(
