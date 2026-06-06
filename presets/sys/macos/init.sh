@@ -4,6 +4,7 @@ emulate -L zsh
 set -eu
 set -o pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 ZSHRC_SENTINEL_START="# >>> shine macos sys >>>"
 ZSHRC_SENTINEL_END="# <<< shine macos sys <<<"
 
@@ -86,6 +87,7 @@ remove_zshrc_block() {
     local file="$1"
     local tmp_file
 
+    [[ -f "$file" ]] || return 0
     tmp_file="$(mktemp)"
     awk -v start="$ZSHRC_SENTINEL_START" -v end="$ZSHRC_SENTINEL_END" '
         $0 == start { skip = 1; next }
@@ -95,19 +97,39 @@ remove_zshrc_block() {
     mv "$tmp_file" "$file"
 }
 
+managed_profile_path() {
+    echo "$HOME/.shine/profile/macos-sys.sh"
+}
+
+install_managed_profile_script() {
+    local template_path="$SCRIPT_DIR/profile.sh"
+    local managed_path
+    local managed_parent
+    local updated=0
+
+    if [[ ! -f "$template_path" ]]; then
+        echo "Missing macOS profile template: $template_path" >&2
+        return 2
+    fi
+
+    managed_path="$(managed_profile_path)"
+    managed_parent="$(dirname "$managed_path")"
+    mkdir -p "$managed_parent"
+    if [[ ! -f "$managed_path" ]] || ! cmp -s "$template_path" "$managed_path"; then
+        cp "$template_path" "$managed_path"
+        updated=1
+    fi
+    return "$updated"
+}
+
 append_zshrc_block() {
     local zshrc="$HOME/.zshrc"
-    local block_file
     local current_block
     local desired_block
-    local working_file
-    local added=0
 
     touch "$zshrc"
     current_block="$(mktemp)"
     desired_block="$(mktemp)"
-    working_file="$(mktemp)"
-    block_file="$(mktemp)"
 
     awk -v start="$ZSHRC_SENTINEL_START" -v end="$ZSHRC_SENTINEL_END" '
         $0 == start { capture = 1 }
@@ -115,263 +137,54 @@ append_zshrc_block() {
         $0 == end { capture = 0 }
     ' "$zshrc" > "$current_block"
 
-    awk -v start="$ZSHRC_SENTINEL_START" -v end="$ZSHRC_SENTINEL_END" '
-        $0 == start { skip = 1; next }
-        $0 == end { skip = 0; next }
-        !skip { print }
-    ' "$zshrc" > "$working_file"
-
-    if ! grep -Fq "HOMEBREW_PREFIX" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# Homebrew prefix cache
-if [[ -d "/opt/homebrew" ]]; then
-  export HOMEBREW_PREFIX="/opt/homebrew"
-elif [[ -x "/usr/local/bin/brew" ]]; then
-  export HOMEBREW_PREFIX="/usr/local"
-else
-  export HOMEBREW_PREFIX=""
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "typeset -U path PATH" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# Basic PATH
-typeset -U path PATH
-path=(
-  "$HOME/bin"
-  "$HOME/.local/bin"
-  "/usr/local/bin"
-  "/usr/local/sbin"
-  "/opt/homebrew/bin"
-  "/opt/homebrew/sbin"
-  $path
-)
-export PATH
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "NVM_DIR" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# nvm lazy load
-export NVM_DIR="$HOME/.nvm"
-nvm() {
-  unfunction nvm 2>/dev/null
-
-  if [[ -n "$HOMEBREW_PREFIX" && -s "$HOMEBREW_PREFIX/opt/nvm/nvm.sh" ]]; then
-    source "$HOMEBREW_PREFIX/opt/nvm/nvm.sh"
-  elif [[ -s "$NVM_DIR/nvm.sh" ]]; then
-    source "$NVM_DIR/nvm.sh"
-  fi
-
-  nvm "$@"
-}
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "BUN_INSTALL" "$working_file" && ! grep -Fq '.bun' "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# Bun
-export BUN_INSTALL="$HOME/.bun"
-if [[ -d "$BUN_INSTALL/bin" ]]; then
-  path=("$BUN_INSTALL/bin" $path)
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "PNPM_HOME" "$working_file" && ! grep -Fq "Library/pnpm" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# pnpm
-export PNPM_HOME="$HOME/Library/pnpm"
-if [[ -d "$PNPM_HOME" ]]; then
-  case ":$PATH:" in
-    *":$PNPM_HOME:"*) ;;
-    *) path=("$PNPM_HOME" $path) ;;
-  esac
-fi
-if [[ -d "$PNPM_HOME/bin" ]]; then
-  case ":$PATH:" in
-    *":$PNPM_HOME/bin:"*) ;;
-    *) path=("$PNPM_HOME/bin" $path) ;;
-  esac
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "alias ls='eza" "$working_file" && ! grep -Fq 'alias ls="eza' "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# eza
-if command -v eza >/dev/null 2>&1; then
-  alias ls='eza --icons'
-  alias ll='eza -la --icons'
-  alias lt='eza --tree'
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "alias cat='bat" "$working_file" && ! grep -Fq 'alias cat="bat' "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# bat
-if command -v bat >/dev/null 2>&1; then
-  alias cat='bat'
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "yazi --cwd-file" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# Yazi
-if command -v yazi >/dev/null 2>&1; then
-  y() {
-    local tmp cwd
-    tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
-    command yazi "$@" --cwd-file="$tmp"
-    IFS= read -r -d '' cwd < "$tmp"
-    [[ "$cwd" != "$PWD" && -d "$cwd" ]] && builtin cd -- "$cwd"
-    command rm -f -- "$tmp"
-  }
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "fzf --zsh" "$working_file" && ! grep -Fq ".fzf.zsh" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# fzf
-if command -v fzf >/dev/null 2>&1; then
-  eval "$(fzf --zsh)"
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "atuin init zsh" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# atuin
-if command -v atuin >/dev/null 2>&1; then
-  eval "$(atuin init zsh)"
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "zoxide init zsh" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# zoxide
-if command -v zoxide >/dev/null 2>&1; then
-  eval "$(zoxide init zsh)"
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "zsh-vi-mode.plugin.zsh" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# zsh-vi-mode
-if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" ]]; then
-  source "$HOMEBREW_PREFIX/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "fastfetch" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# fastfetch
-# fastfetch can noticeably slow terminal startup, so run it manually when needed.
-# if [[ -z "$ZELLIJ" ]] && command -v fastfetch >/dev/null 2>&1; then
-#   fastfetch
-# fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "starship init zsh" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# Starship prompt
-if command -v starship >/dev/null 2>&1; then
-  eval "$(starship init zsh)"
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "zsh-autosuggestions.zsh" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# zsh-autosuggestions
-if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh" ]]; then
-  source "$HOMEBREW_PREFIX/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
-fi
-
-EOF
-        added=1
-    fi
-
-    if ! grep -Fq "zsh-syntax-highlighting.zsh" "$working_file"; then
-        cat >> "$block_file" <<'EOF'
-# zsh-syntax-highlighting must be near the end of .zshrc.
-if [[ -n "$HOMEBREW_PREFIX" && -f "$HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" ]]; then
-  source "$HOMEBREW_PREFIX/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh"
-fi
-
-EOF
-        added=1
-    fi
-
-    if [[ "$added" -eq 0 ]]; then
-        if [[ -s "$current_block" ]]; then
-            mv "$working_file" "$zshrc"
-            status "updated" "~/.zshrc"
-        else
-            status "skipped" "~/.zshrc already configured"
-        fi
-        rm -f "$block_file" "$current_block" "$desired_block" "$working_file"
-        return
-    fi
-
     {
         echo "$ZSHRC_SENTINEL_START"
-        echo '# Managed by `shine sys init` for macOS. Existing user config is left untouched.'
-        echo
-        cat "$block_file"
+        echo 'shine_macos_sys_profile="$HOME/.shine/profile/macos-sys.sh"'
+        echo 'if [[ -f "$shine_macos_sys_profile" ]]; then'
+        echo '  source "$shine_macos_sys_profile"'
+        echo 'fi'
         echo "$ZSHRC_SENTINEL_END"
     } > "$desired_block"
 
     if cmp -s "$desired_block" "$current_block"; then
-        rm -f "$block_file" "$current_block" "$desired_block" "$working_file"
-        status "skipped" "~/.zshrc already configured"
-        return
+        rm -f "$current_block" "$desired_block"
+        return 1
     fi
 
+    remove_zshrc_block "$zshrc"
     {
-        cat "$working_file"
         echo
         cat "$desired_block"
-    } > "$zshrc"
-    rm -f "$block_file" "$current_block" "$desired_block" "$working_file"
+    } >> "$zshrc"
 
-    status "updated" "~/.zshrc"
+    rm -f "$current_block" "$desired_block"
+    return 0
+}
+
+append_zshrc_init_block() {
+    local managed_path
+    local profile_updated=0
+    local block_updated=0
+
+    if install_managed_profile_script; then
+        profile_updated=0
+    else
+        case "$?" in
+            1) profile_updated=1 ;;
+            *) return 1 ;;
+        esac
+    fi
+
+    if append_zshrc_block; then
+        block_updated=1
+    fi
+
+    managed_path="$(managed_profile_path)"
+    if [[ "$profile_updated" -eq 1 || "$block_updated" -eq 1 ]]; then
+        status "updated" "~/.zshrc -> $managed_path"
+    else
+        status "skipped" "~/.zshrc already configured"
+    fi
 }
 
 install_shell_formula() {
@@ -486,7 +299,7 @@ run_item() {
         bun) install_bun ;;
         pnpm) install_pnpm ;;
         fastfetch) install_fastfetch ;;
-        __shine_finalize) append_zshrc_block ;;
+        __shine_finalize) append_zshrc_init_block ;;
         "") return 0 ;;
         *)
             echo "Unknown sys init item: $1" >&2

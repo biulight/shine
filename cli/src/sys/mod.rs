@@ -1281,7 +1281,7 @@ description = "Placeholder"
     fn embedded_sys_init_scripts_include_yazi_shell_wrapper() {
         for (path, marker) in [
             ("sys/ubuntu/profile.sh", "y() {"),
-            ("sys/macos/init.sh", "y() {"),
+            ("sys/macos/profile.sh", "y() {"),
             ("sys/windows/profile.ps1", "function y {"),
         ] {
             let content = crate::presets::read_asset_bytes(path)
@@ -1323,6 +1323,20 @@ description = "Placeholder"
         assert!(content.contains("load_atuin_env"));
         assert!(content.contains(". \"$HOME/.atuin/bin/env\""));
         assert!(content.contains("__shine_finalize) append_shell_init_blocks"));
+    }
+
+    #[test]
+    fn embedded_macos_init_installs_managed_profile_loader() {
+        let content = crate::presets::read_asset_bytes("sys/macos/init.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded macOS init script");
+
+        assert!(content.contains("profile.sh"));
+        assert!(content.contains(".shine/profile/macos-sys.sh"));
+        assert!(content.contains("cp \"$template_path\" \"$managed_path\""));
+        assert!(content.contains("shine_macos_sys_profile"));
+        assert!(content.contains("[[ -f \"$file\" ]] || return 0"));
+        assert!(content.contains("__shine_finalize) append_zshrc_init_block"));
     }
 
     #[test]
