@@ -558,6 +558,18 @@ async fn install_sys_profile_files(
                     detail: format!("{} initialized", base_path.display()),
                 });
             }
+            if is_initial_user_profile_edit(&template, &active) {
+                tokio::fs::write(&base_path, &template)
+                    .await
+                    .with_context(|| format!("writing {}", base_path.display()))?;
+                remove_if_exists(&new_path).await?;
+                remove_if_exists(&merge_path).await?;
+                return Ok(SysProfileFileUpdate {
+                    updated: true,
+                    needs_action: false,
+                    detail: format!("{} initialized with user edits", base_path.display()),
+                });
+            }
 
             tokio::fs::write(&new_path, &template)
                 .await
@@ -791,6 +803,44 @@ fn profile_changes(base_lines: &[String], new_lines: &[String]) -> Vec<ProfileCh
             })
         })
         .collect()
+}
+
+fn is_initial_user_profile_edit(template: &[u8], active: &[u8]) -> bool {
+    let Ok(template) = std::str::from_utf8(template) else {
+        return false;
+    };
+    let Ok(active) = std::str::from_utf8(active) else {
+        return false;
+    };
+
+    let template_lines = split_profile_lines(template);
+    let active_lines = split_profile_lines(active);
+    profile_changes(&template_lines, &active_lines)
+        .into_iter()
+        .all(|change| is_initial_user_profile_change(&template_lines, &change))
+}
+
+fn is_initial_user_profile_change(template_lines: &[String], change: &ProfileChange) -> bool {
+    if change.old_start == change.old_end {
+        return true;
+    }
+
+    let old_lines = &template_lines[change.old_start..change.old_end];
+    if old_lines.len() != change.new_lines.len() {
+        return false;
+    }
+
+    old_lines
+        .iter()
+        .zip(&change.new_lines)
+        .all(|(old, new)| uncomment_profile_line(old).as_deref() == Some(new.as_str()))
+}
+
+fn uncomment_profile_line(line: &str) -> Option<String> {
+    let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+    let (indent, rest) = line.split_at(indent_len);
+    let uncommented = rest.strip_prefix("# ")?;
+    Some(format!("{indent}{uncommented}"))
 }
 
 fn has_profile_change_conflicts(left: &[ProfileChange], right: &[ProfileChange]) -> bool {
@@ -1890,6 +1940,46 @@ description = "Placeholder"
                 .unwrap()
                 .contains("echo new template")
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_sys_profile_files_without_base_accepts_uncommented_template_lines() {
+        let dir = make_temp_dir().await;
+        let script_dir = dir.join("presets/sys/macos");
+        let profile_dir = dir.join(".shine/profile");
+        fs::create_dir_all(&script_dir).await.unwrap();
+        fs::create_dir_all(&profile_dir).await.unwrap();
+        let template = "# fastfetch\n# if [[ -z \"$ZELLIJ\" ]] && command -v fastfetch >/dev/null 2>&1; then\n#   fastfetch\n# fi\n";
+        let active = "# fastfetch\nif [[ -z \"$ZELLIJ\" ]] && command -v fastfetch >/dev/null 2>&1; then\n  fastfetch\nfi\n";
+        fs::write(script_dir.join("profile.sh"), template)
+            .await
+            .unwrap();
+        fs::write(profile_dir.join("macos-sys.sh"), active)
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let update = install_sys_profile_files(&config, "macos", &script_dir, false)
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        assert!(!update.needs_action);
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("macos-sys.sh"))
+                .await
+                .unwrap(),
+            active
+        );
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("macos-sys.base.sh"))
+                .await
+                .unwrap(),
+            template
+        );
+        assert!(!profile_dir.join("macos-sys.new.sh").exists());
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
