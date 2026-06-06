@@ -62,6 +62,12 @@ enum Commands {
         #[arg(value_name = "CATEGORY")]
         category: String,
     },
+    /// Reinstall a shell or app preset category
+    Reinstall {
+        /// Preset category to reinstall (e.g. proxy, starship)
+        #[arg(value_name = "CATEGORY")]
+        category: String,
+    },
     /// Uninstall a shell or app preset category
     Uninstall {
         /// Preset category to uninstall (e.g. proxy, starship)
@@ -262,6 +268,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Completions { .. } => unreachable!(),
         Commands::Clear(_) => unreachable!(),
         Commands::Install { category } => handle_install_shim(&config, &category).await,
+        Commands::Reinstall { category } => handle_reinstall_shim(&config, &category).await,
         Commands::Uninstall { category } => handle_uninstall_shim(&config, &category).await,
         Commands::App { command } => match command {
             AppCommands::Init { force } => apps::handle_init_template(force).await,
@@ -413,6 +420,38 @@ async fn handle_install_shim(config: &Config, category: &str) -> Result<()> {
                     Some(category.to_string()),
                     false,
                     false,
+                ))
+                .await
+            }
+        },
+        ShimResolution::Missing => bail_shim_missing(category),
+    }
+}
+
+async fn handle_reinstall_shim(config: &Config, category: &str) -> Result<()> {
+    match resolve_shim_category(config, category).await? {
+        ShimResolution::Found(PresetKind::Shell) => {
+            Box::pin(shells::handle_install(config, Some(category), true)).await
+        }
+        ShimResolution::Found(PresetKind::App) => {
+            Box::pin(apps::handle_install(
+                config,
+                Some(category.to_string()),
+                false,
+                true,
+            ))
+            .await
+        }
+        ShimResolution::Conflict => match select_shim_kind("Reinstall", category)? {
+            PresetKind::Shell => {
+                Box::pin(shells::handle_install(config, Some(category), true)).await
+            }
+            PresetKind::App => {
+                Box::pin(apps::handle_install(
+                    config,
+                    Some(category.to_string()),
+                    false,
+                    true,
                 ))
                 .await
             }
@@ -1400,11 +1439,17 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_top_level_install_and_uninstall_commands() {
+    fn cli_accepts_top_level_install_reinstall_and_uninstall_commands() {
         let cli = Cli::try_parse_from(["shine", "install", "proxy"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Install { category } if category == "proxy"
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "reinstall", "proxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Reinstall { category } if category == "proxy"
         ));
 
         let cli = Cli::try_parse_from(["shine", "uninstall", "starship"]).unwrap();
@@ -1415,8 +1460,9 @@ mod tests {
     }
 
     #[test]
-    fn cli_rejects_top_level_install_without_category() {
+    fn cli_rejects_top_level_shims_without_category() {
         assert!(Cli::try_parse_from(["shine", "install"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "reinstall"]).is_err());
         assert!(Cli::try_parse_from(["shine", "uninstall"]).is_err());
     }
 
