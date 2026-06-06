@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Generator, generate};
+use dialoguer::Select;
 use std::path::PathBuf;
 
 mod apps;
@@ -54,6 +55,18 @@ enum Commands {
     App {
         #[command(subcommand)]
         command: AppCommands,
+    },
+    /// Install a shell or app preset category
+    Install {
+        /// Preset category to install (e.g. proxy, starship)
+        #[arg(value_name = "CATEGORY")]
+        category: String,
+    },
+    /// Uninstall a shell or app preset category
+    Uninstall {
+        /// Preset category to uninstall (e.g. proxy, starship)
+        #[arg(value_name = "CATEGORY")]
+        category: String,
     },
     #[command(about = "Generate shell completion scripts for manual installation")]
     Completions {
@@ -248,6 +261,8 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Init(_) => unreachable!(),
         Commands::Completions { .. } => unreachable!(),
         Commands::Clear(_) => unreachable!(),
+        Commands::Install { category } => handle_install_shim(&config, &category).await,
+        Commands::Uninstall { category } => handle_uninstall_shim(&config, &category).await,
         Commands::App { command } => match command {
             AppCommands::Init { force } => apps::handle_init_template(force).await,
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
@@ -358,6 +373,154 @@ fn should_warn_runtime_schema(command: &Commands) -> bool {
     !matches!(
         command,
         Commands::Init(_) | Commands::Completions { .. } | Commands::Clear(_)
+    )
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum PresetKind {
+    Shell,
+    App,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ShimResolution {
+    Found(PresetKind),
+    Conflict,
+    Missing,
+}
+
+async fn handle_install_shim(config: &Config, category: &str) -> Result<()> {
+    match resolve_shim_category(config, category).await? {
+        ShimResolution::Found(PresetKind::Shell) => {
+            Box::pin(shells::handle_install(config, Some(category), false)).await
+        }
+        ShimResolution::Found(PresetKind::App) => {
+            Box::pin(apps::handle_install(
+                config,
+                Some(category.to_string()),
+                false,
+                false,
+            ))
+            .await
+        }
+        ShimResolution::Conflict => match select_shim_kind("Install", category)? {
+            PresetKind::Shell => {
+                Box::pin(shells::handle_install(config, Some(category), false)).await
+            }
+            PresetKind::App => {
+                Box::pin(apps::handle_install(
+                    config,
+                    Some(category.to_string()),
+                    false,
+                    false,
+                ))
+                .await
+            }
+        },
+        ShimResolution::Missing => bail_shim_missing(category),
+    }
+}
+
+async fn handle_uninstall_shim(config: &Config, category: &str) -> Result<()> {
+    match resolve_shim_category(config, category).await? {
+        ShimResolution::Found(PresetKind::Shell) => {
+            Box::pin(shells::handle_uninstall(
+                config,
+                Some(category),
+                false,
+                false,
+            ))
+            .await
+        }
+        ShimResolution::Found(PresetKind::App) => {
+            Box::pin(apps::handle_uninstall(
+                config,
+                Some(category),
+                false,
+                false,
+                false,
+            ))
+            .await
+        }
+        ShimResolution::Conflict => match select_shim_kind("Uninstall", category)? {
+            PresetKind::Shell => {
+                Box::pin(shells::handle_uninstall(
+                    config,
+                    Some(category),
+                    false,
+                    false,
+                ))
+                .await
+            }
+            PresetKind::App => {
+                Box::pin(apps::handle_uninstall(
+                    config,
+                    Some(category),
+                    false,
+                    false,
+                    false,
+                ))
+                .await
+            }
+        },
+        ShimResolution::Missing => bail_shim_missing(category),
+    }
+}
+
+async fn resolve_shim_category(config: &Config, category: &str) -> Result<ShimResolution> {
+    let shell_matches = if config.is_external_presets {
+        let shell_path = config.presets_dir().join("shell").join(category);
+        if shell_path.exists() {
+            shells::metadata::load_installed_categories(config, Some(category))
+                .await?
+                .len()
+        } else {
+            0
+        }
+    } else {
+        shells::metadata::load_embedded_categories(Some(category))?.len()
+    };
+    let app_matches = if config.is_external_presets {
+        let app_path = config.presets_dir().join("app").join(category);
+        if app_path.exists() {
+            apps::load_installed_categories(config, Some(category))
+                .await?
+                .len()
+        } else {
+            0
+        }
+    } else {
+        apps::load_embedded_categories(Some(category))?.len()
+    };
+
+    Ok(classify_shim_resolution(shell_matches > 0, app_matches > 0))
+}
+
+fn classify_shim_resolution(shell_matches: bool, app_matches: bool) -> ShimResolution {
+    match (shell_matches, app_matches) {
+        (true, false) => ShimResolution::Found(PresetKind::Shell),
+        (false, true) => ShimResolution::Found(PresetKind::App),
+        (true, true) => ShimResolution::Conflict,
+        (false, false) => ShimResolution::Missing,
+    }
+}
+
+fn select_shim_kind(action: &str, category: &str) -> Result<PresetKind> {
+    let choices = [format!("shell/{category}"), format!("app/{category}")];
+    let selected = Select::new()
+        .with_prompt(format!("{action} which preset?"))
+        .items(&choices)
+        .default(0)
+        .interact()?;
+    Ok(match selected {
+        0 => PresetKind::Shell,
+        _ => PresetKind::App,
+    })
+}
+
+fn bail_shim_missing(category: &str) -> Result<()> {
+    bail!(
+        "preset category not found in shell or app presets: {category}\nRun `shine shell list` or `shine app list` to see available categories."
     )
 }
 
@@ -1234,6 +1397,82 @@ mod tests {
             cli.command,
             Commands::Init(InitCommand { yes: true })
         ));
+    }
+
+    #[test]
+    fn cli_accepts_top_level_install_and_uninstall_commands() {
+        let cli = Cli::try_parse_from(["shine", "install", "proxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Install { category } if category == "proxy"
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "uninstall", "starship"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Uninstall { category } if category == "starship"
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_top_level_install_without_category() {
+        assert!(Cli::try_parse_from(["shine", "install"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "uninstall"]).is_err());
+    }
+
+    #[test]
+    fn classify_shim_resolution_handles_all_match_shapes() {
+        assert_eq!(
+            classify_shim_resolution(true, false),
+            ShimResolution::Found(PresetKind::Shell)
+        );
+        assert_eq!(
+            classify_shim_resolution(false, true),
+            ShimResolution::Found(PresetKind::App)
+        );
+        assert_eq!(
+            classify_shim_resolution(true, true),
+            ShimResolution::Conflict
+        );
+        assert_eq!(
+            classify_shim_resolution(false, false),
+            ShimResolution::Missing
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_shim_category_matches_embedded_shell_category() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+
+        let resolution = resolve_shim_category(&config, "proxy").await.unwrap();
+
+        assert_eq!(resolution, ShimResolution::Found(PresetKind::Shell));
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolve_shim_category_matches_embedded_app_category() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+
+        let resolution = resolve_shim_category(&config, "starship").await.unwrap();
+
+        assert_eq!(resolution, ShimResolution::Found(PresetKind::App));
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolve_shim_category_reports_missing_category() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+
+        let resolution = resolve_shim_category(&config, "does-not-exist")
+            .await
+            .unwrap();
+
+        assert_eq!(resolution, ShimResolution::Missing);
+        fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]
