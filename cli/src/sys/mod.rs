@@ -6,9 +6,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::colors;
 use crate::config::Config;
+use crate::shells::ShellType;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct SysManifest {
@@ -84,8 +86,6 @@ struct SysItemOutcome {
 }
 
 const SYS_STATUS_PREFIX: &str = "SHINE_SYS_STATUS\t";
-const SYS_FINALIZE_ITEM: &str = "__shine_finalize";
-
 impl SelectionSource {
     fn describe(&self) -> String {
         match self {
@@ -271,19 +271,9 @@ async fn handle_init_for_os(
         .iter()
         .any(|outcome| outcome.status != SysItemStatus::Failed)
     {
-        let finalize = run_sys_item(
-            &command,
-            script_dir,
-            &loaded.script_path,
-            sys_shell,
-            SYS_FINALIZE_ITEM,
-            "profile",
-        )
-        .await?;
-        if finalize.status != SysItemStatus::Completed || !finalize.logs.is_empty() {
-            print_item_outcome(&finalize, label_width);
-        }
-        outcomes.push(finalize);
+        let profile = install_sys_profile_loader(config, os_id, script_dir, sys_shell).await?;
+        print_item_outcome(&profile, label_width);
+        outcomes.push(profile);
     }
 
     println!();
@@ -327,14 +317,7 @@ async fn print_dry_run(
         );
     }
     if !selection.item_ids.is_empty() {
-        println!(
-            "    {}",
-            format_command_preview(
-                &command,
-                &loaded.script_path,
-                &[SYS_FINALIZE_ITEM.to_string()]
-            )
-        );
+        println!("    shine internal sys profile update");
     }
     println!();
     let content = tokio::fs::read_to_string(&loaded.script_path)
@@ -423,6 +406,405 @@ async fn run_sys_item(
         &String::from_utf8_lossy(&output.stdout),
         &String::from_utf8_lossy(&output.stderr),
     ))
+}
+
+async fn install_sys_profile_loader(
+    config: &Config,
+    os_id: &str,
+    script_dir: &Path,
+    sys_shell: &str,
+) -> Result<SysItemOutcome> {
+    let update = install_sys_profile_files(config, os_id, script_dir).await?;
+    let shell_update = update_sys_shell_profiles(config, os_id, sys_shell).await?;
+    let status = if update.needs_action {
+        SysItemStatus::NeedsAction
+    } else if update.updated || shell_update.updated {
+        SysItemStatus::Updated
+    } else {
+        SysItemStatus::Skipped
+    };
+    let detail = if update.needs_action {
+        format!(
+            "legacy sys profile was backed up; merge any needed content into {}",
+            update.local_path.display()
+        )
+    } else if shell_update.unsupported_shell {
+        format!("unsupported shell for sys profile: {sys_shell}")
+    } else {
+        shell_update.detail
+    };
+
+    Ok(SysItemOutcome {
+        item_id: "profile".to_string(),
+        label: "profile".to_string(),
+        status,
+        detail,
+        logs: Vec::new(),
+    })
+}
+
+#[derive(Debug)]
+struct SysProfileFileUpdate {
+    updated: bool,
+    needs_action: bool,
+    local_path: PathBuf,
+}
+
+#[derive(Debug)]
+struct SysShellProfileUpdate {
+    updated: bool,
+    unsupported_shell: bool,
+    detail: String,
+}
+
+async fn install_sys_profile_files(
+    config: &Config,
+    os_id: &str,
+    script_dir: &Path,
+) -> Result<SysProfileFileUpdate> {
+    let ext = if os_id == "windows" { "ps1" } else { "sh" };
+    let stem = format!("{os_id}-sys");
+    let template_path = script_dir.join(format!("profile.{ext}"));
+    let template = tokio::fs::read(&template_path)
+        .await
+        .with_context(|| format!("reading {}", template_path.display()))?;
+
+    let profile_dir = config.home_dir.join(".shine/profile");
+    let loader_path = profile_dir.join(format!("{stem}.{ext}"));
+    let managed_path = profile_dir.join(format!("{stem}.managed.{ext}"));
+    let local_path = profile_dir.join(format!("{stem}.local.{ext}"));
+    tokio::fs::create_dir_all(&profile_dir)
+        .await
+        .with_context(|| format!("creating {}", profile_dir.display()))?;
+
+    let loader = sys_profile_loader(os_id).into_bytes();
+    let mut updated = false;
+    let mut needs_action = false;
+
+    if let Ok(current_loader) = tokio::fs::read(&loader_path).await
+        && current_loader != loader
+        && current_loader != template
+    {
+        if !local_path.exists() {
+            tokio::fs::rename(&loader_path, &local_path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "moving legacy sys profile {} to {}",
+                        loader_path.display(),
+                        local_path.display()
+                    )
+                })?;
+            updated = true;
+        } else {
+            let backup_path = loader_path.with_extension(format!("{ext}.bak.{}", unix_timestamp()));
+            tokio::fs::copy(&loader_path, &backup_path)
+                .await
+                .with_context(|| {
+                    format!(
+                        "backing up legacy sys profile {} to {}",
+                        loader_path.display(),
+                        backup_path.display()
+                    )
+                })?;
+            needs_action = true;
+            updated = true;
+        }
+    }
+
+    if tokio::fs::read(&managed_path).await.ok().as_deref() != Some(template.as_slice()) {
+        tokio::fs::write(&managed_path, &template)
+            .await
+            .with_context(|| format!("writing {}", managed_path.display()))?;
+        updated = true;
+    }
+
+    if !local_path.exists() {
+        tokio::fs::write(&local_path, sys_local_profile_template(os_id))
+            .await
+            .with_context(|| format!("writing {}", local_path.display()))?;
+        updated = true;
+    }
+
+    if tokio::fs::read(&loader_path).await.ok().as_deref() != Some(loader.as_slice()) {
+        tokio::fs::write(&loader_path, &loader)
+            .await
+            .with_context(|| format!("writing {}", loader_path.display()))?;
+        updated = true;
+    }
+
+    Ok(SysProfileFileUpdate {
+        updated,
+        needs_action,
+        local_path,
+    })
+}
+
+fn sys_profile_loader(os_id: &str) -> String {
+    match os_id {
+        "windows" => {
+            format!(
+                r#"# Managed by `shine sys init` for Windows. User edits belong in {os_id}-sys.local.ps1.
+
+$shineWindowsSysManaged = Join-Path $HOME ".shine\profile\{os_id}-sys.managed.ps1"
+if (Test-Path -LiteralPath $shineWindowsSysManaged) {{
+    . $shineWindowsSysManaged
+}}
+
+$shineWindowsSysLocal = Join-Path $HOME ".shine\profile\{os_id}-sys.local.ps1"
+if (Test-Path -LiteralPath $shineWindowsSysLocal) {{
+    . $shineWindowsSysLocal
+}}
+"#
+            )
+        }
+        _ => {
+            let profile_var = os_id.replace('-', "_");
+            let display_os = if os_id == "macos" { "macOS" } else { os_id };
+            format!(
+                r#"# Managed by `shine sys init` for {display_os}. User edits belong in {os_id}-sys.local.sh.
+
+shine_{profile_var}_sys_managed="$HOME/.shine/profile/{os_id}-sys.managed.sh"
+if [[ -f "$shine_{profile_var}_sys_managed" ]]; then
+  source "$shine_{profile_var}_sys_managed"
+fi
+
+shine_{profile_var}_sys_local="$HOME/.shine/profile/{os_id}-sys.local.sh"
+if [[ -f "$shine_{profile_var}_sys_local" ]]; then
+  source "$shine_{profile_var}_sys_local"
+fi
+"#
+            )
+        }
+    }
+}
+
+fn sys_local_profile_template(os_id: &str) -> String {
+    match os_id {
+        "windows" => "# User customizations for `shine sys init` on Windows.\n# This file is dot-sourced after windows-sys.managed.ps1 and is never overwritten by shine.\n".to_string(),
+        "macos" => "# User customizations for `shine sys init` on macOS.\n# This file is sourced after macos-sys.managed.sh and is never overwritten by shine.\n".to_string(),
+        _ => format!("# User customizations for `shine sys init` on {os_id}.\n# This file is sourced after {os_id}-sys.managed.sh and is never overwritten by shine.\n"),
+    }
+}
+
+async fn update_sys_shell_profiles(
+    config: &Config,
+    os_id: &str,
+    sys_shell: &str,
+) -> Result<SysShellProfileUpdate> {
+    match os_id {
+        "macos" => {
+            let path = config.home_dir.join(".zshrc");
+            let block = sys_shell_profile_block(os_id, None);
+            let updated = update_shell_profile_block(&path, sys_sentinel(os_id), &block).await?;
+            Ok(SysShellProfileUpdate {
+                updated,
+                unsupported_shell: false,
+                detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
+            })
+        }
+        "ubuntu" => match config.shell_type {
+            ShellType::Bash => {
+                let block = sys_shell_profile_block(os_id, Some("bash"));
+                let updated = update_shell_profile_block(
+                    &config.home_dir.join(".bashrc"),
+                    sys_sentinel(os_id),
+                    &block,
+                )
+                .await?;
+                remove_shell_profile_block(&config.home_dir.join(".zshrc"), sys_sentinel(os_id))
+                    .await?;
+                Ok(SysShellProfileUpdate {
+                    updated,
+                    unsupported_shell: false,
+                    detail: format!("~/.bashrc -> {}", sys_loader_display(os_id)),
+                })
+            }
+            ShellType::Zsh => {
+                let block = sys_shell_profile_block(os_id, Some("zsh"));
+                let updated = update_shell_profile_block(
+                    &config.home_dir.join(".zshrc"),
+                    sys_sentinel(os_id),
+                    &block,
+                )
+                .await?;
+                remove_shell_profile_block(&config.home_dir.join(".bashrc"), sys_sentinel(os_id))
+                    .await?;
+                Ok(SysShellProfileUpdate {
+                    updated,
+                    unsupported_shell: false,
+                    detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
+                })
+            }
+            _ => Ok(SysShellProfileUpdate {
+                updated: false,
+                unsupported_shell: true,
+                detail: format!("unsupported shell for sys profile: {sys_shell}"),
+            }),
+        },
+        "windows" => {
+            let block = sys_shell_profile_block(os_id, None);
+            let mut updated = false;
+            for path in [
+                config
+                    .home_dir
+                    .join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+                config
+                    .home_dir
+                    .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+            ] {
+                updated |= update_shell_profile_block(&path, sys_sentinel(os_id), &block).await?;
+            }
+            Ok(SysShellProfileUpdate {
+                updated,
+                unsupported_shell: false,
+                detail: "PowerShell profiles".to_string(),
+            })
+        }
+        _ => Ok(SysShellProfileUpdate {
+            updated: false,
+            unsupported_shell: true,
+            detail: format!("unsupported OS for sys profile: {os_id}"),
+        }),
+    }
+}
+
+fn sys_sentinel(os_id: &str) -> (&'static str, &'static str) {
+    match os_id {
+        "macos" => ("# >>> shine macos sys >>>", "# <<< shine macos sys <<<"),
+        "windows" => ("# >>> shine windows sys >>>", "# <<< shine windows sys <<<"),
+        _ => ("# >>> shine ubuntu sys >>>", "# <<< shine ubuntu sys <<<"),
+    }
+}
+
+fn sys_shell_profile_block(os_id: &str, shell_name: Option<&str>) -> String {
+    let (start, end) = sys_sentinel(os_id);
+    match os_id {
+        "windows" => format!(
+            r#"{start}
+$shineWindowsSysProfile = Join-Path $HOME ".shine\profile\windows-sys.ps1"
+if (Test-Path -LiteralPath $shineWindowsSysProfile) {{
+    . $shineWindowsSysProfile
+}}
+{end}
+"#
+        ),
+        "macos" => format!(
+            r#"{start}
+shine_macos_sys_profile="$HOME/.shine/profile/macos-sys.sh"
+if [[ -f "$shine_macos_sys_profile" ]]; then
+  source "$shine_macos_sys_profile"
+fi
+{end}
+"#
+        ),
+        _ => {
+            let shell_name = shell_name.unwrap_or("bash");
+            format!(
+                r#"{start}
+shine_ubuntu_sys_profile="$HOME/.shine/profile/ubuntu-sys.sh"
+if [[ -f "$shine_ubuntu_sys_profile" ]]; then
+  SHINE_UBUNTU_SYS_SHELL="{shell_name}"
+  source "$shine_ubuntu_sys_profile"
+fi
+{end}
+"#
+            )
+        }
+    }
+}
+
+async fn update_shell_profile_block(
+    path: &Path,
+    sentinel: (&str, &str),
+    desired_block: &str,
+) -> Result<bool> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    if extract_sentinel_block(&content, sentinel) == Some(desired_block) {
+        return Ok(false);
+    }
+
+    let mut updated = remove_sentinel_block(&content, sentinel);
+    if !updated.ends_with('\n') && !updated.is_empty() {
+        updated.push('\n');
+    }
+    if !updated.is_empty() {
+        updated.push('\n');
+    }
+    updated.push_str(desired_block);
+
+    tokio::fs::write(path, updated)
+        .await
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
+async fn remove_shell_profile_block(path: &Path, sentinel: (&str, &str)) -> Result<bool> {
+    let Ok(content) = tokio::fs::read_to_string(path).await else {
+        return Ok(false);
+    };
+    let updated = remove_sentinel_block(&content, sentinel);
+    if updated == content {
+        return Ok(false);
+    }
+    tokio::fs::write(path, updated)
+        .await
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
+fn extract_sentinel_block<'a>(content: &'a str, sentinel: (&str, &str)) -> Option<&'a str> {
+    let start = content.find(sentinel.0)?;
+    let after_start = &content[start..];
+    let end = after_start.find(sentinel.1)? + sentinel.1.len();
+    let end = if after_start[end..].starts_with('\n') {
+        end + 1
+    } else {
+        end
+    };
+    Some(&after_start[..end])
+}
+
+fn remove_sentinel_block(content: &str, sentinel: (&str, &str)) -> String {
+    let mut output = Vec::new();
+    let mut skip = false;
+    for line in content.lines() {
+        if line == sentinel.0 {
+            skip = true;
+            continue;
+        }
+        if line == sentinel.1 {
+            skip = false;
+            continue;
+        }
+        if !skip {
+            output.push(line);
+        }
+    }
+    let mut result = output.join("\n");
+    if content.ends_with('\n') && !result.is_empty() {
+        result.push('\n');
+    }
+    result
+}
+
+fn sys_loader_display(os_id: &str) -> String {
+    format!(
+        "~/.shine/profile/{os_id}-sys.{}",
+        if os_id == "windows" { "ps1" } else { "sh" }
+    )
+}
+
+fn unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn parse_sys_item_output(
@@ -1165,6 +1547,151 @@ description = "Placeholder"
         );
     }
 
+    #[tokio::test]
+    async fn install_sys_profile_files_creates_loader_managed_and_local() {
+        let dir = make_temp_dir().await;
+        let script_dir = dir.join("presets/sys/ubuntu");
+        fs::create_dir_all(&script_dir).await.unwrap();
+        fs::write(script_dir.join("profile.sh"), "echo managed\n")
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let update = install_sys_profile_files(&config, "ubuntu", &script_dir)
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        assert!(!update.needs_action);
+        let profile_dir = dir.join(".shine/profile");
+        let loader = fs::read_to_string(profile_dir.join("ubuntu-sys.sh"))
+            .await
+            .unwrap();
+        assert!(loader.contains("ubuntu-sys.managed.sh"));
+        assert!(loader.contains("ubuntu-sys.local.sh"));
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.managed.sh"))
+                .await
+                .unwrap(),
+            "echo managed\n"
+        );
+        assert!(profile_dir.join("ubuntu-sys.local.sh").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_sys_profile_files_migrates_user_modified_legacy_profile_to_local() {
+        let dir = make_temp_dir().await;
+        let script_dir = dir.join("presets/sys/ubuntu");
+        let profile_dir = dir.join(".shine/profile");
+        fs::create_dir_all(&script_dir).await.unwrap();
+        fs::create_dir_all(&profile_dir).await.unwrap();
+        fs::write(script_dir.join("profile.sh"), "echo managed\n")
+            .await
+            .unwrap();
+        fs::write(profile_dir.join("ubuntu-sys.sh"), "echo user edit\n")
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let update = install_sys_profile_files(&config, "ubuntu", &script_dir)
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        assert!(!update.needs_action);
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.local.sh"))
+                .await
+                .unwrap(),
+            "echo user edit\n"
+        );
+        assert!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.sh"))
+                .await
+                .unwrap()
+                .contains("ubuntu-sys.managed.sh")
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_sys_profile_files_backs_up_legacy_profile_when_local_exists() {
+        let dir = make_temp_dir().await;
+        let script_dir = dir.join("presets/sys/ubuntu");
+        let profile_dir = dir.join(".shine/profile");
+        fs::create_dir_all(&script_dir).await.unwrap();
+        fs::create_dir_all(&profile_dir).await.unwrap();
+        fs::write(script_dir.join("profile.sh"), "echo managed\n")
+            .await
+            .unwrap();
+        fs::write(profile_dir.join("ubuntu-sys.sh"), "echo user edit\n")
+            .await
+            .unwrap();
+        fs::write(
+            profile_dir.join("ubuntu-sys.local.sh"),
+            "echo existing local\n",
+        )
+        .await
+        .unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let update = install_sys_profile_files(&config, "ubuntu", &script_dir)
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        assert!(update.needs_action);
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.local.sh"))
+                .await
+                .unwrap(),
+            "echo existing local\n"
+        );
+        let mut entries = fs::read_dir(&profile_dir).await.unwrap();
+        let mut backup_found = false;
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("ubuntu-sys.sh.bak.") {
+                backup_found = true;
+            }
+        }
+        assert!(backup_found, "legacy profile backup should be created");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profiles_writes_active_ubuntu_shell_and_removes_other_shell_block() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.shell_type = ShellType::Bash;
+        fs::write(
+            dir.join(".zshrc"),
+            "# before\n# >>> shine ubuntu sys >>>\nold\n# <<< shine ubuntu sys <<<\n# after\n",
+        )
+        .await
+        .unwrap();
+
+        let update = update_sys_shell_profiles(&config, "ubuntu", "bash")
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        let bashrc = fs::read_to_string(dir.join(".bashrc")).await.unwrap();
+        assert!(bashrc.contains("SHINE_UBUNTU_SYS_SHELL=\"bash\""));
+        assert!(bashrc.contains("source \"$shine_ubuntu_sys_profile\""));
+        let zshrc = fs::read_to_string(dir.join(".zshrc")).await.unwrap();
+        assert!(!zshrc.contains("# >>> shine ubuntu sys >>>"));
+        assert!(zshrc.contains("# before"));
+        assert!(zshrc.contains("# after"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     // --- list_embedded_sys_entries ---
 
     #[test]
@@ -1305,16 +1832,6 @@ description = "Placeholder"
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .expect("missing embedded Ubuntu init script");
 
-        assert!(content.contains("profile.sh"));
-        assert!(content.contains(".shine/profile/ubuntu-sys.sh"));
-        assert!(content.contains("cp \"$template_path\" \"$managed_path\""));
-        assert!(content.contains("SHINE_UBUNTU_SYS_SHELL"));
-        assert!(content.contains("SHINE_SYS_SHELL"));
-        assert!(content.contains("[[ -f \"$file\" ]] || return 0"));
-        assert!(content.contains("append_shell_block \"$HOME/.bashrc\" bash"));
-        assert!(content.contains("remove_shell_block \"$HOME/.zshrc\""));
-        assert!(content.contains("append_shell_block \"$HOME/.zshrc\" zsh"));
-        assert!(content.contains("remove_shell_block \"$HOME/.bashrc\""));
         assert!(content.contains("SHINE_SYS_STATUS\\t%s\\t%s\\n"));
         assert!(content.contains("status \"already-installed\" \"$(atuin --version)\""));
         assert!(content.contains(
@@ -1322,7 +1839,11 @@ description = "Placeholder"
         ));
         assert!(content.contains("load_atuin_env"));
         assert!(content.contains(". \"$HOME/.atuin/bin/env\""));
-        assert!(content.contains("__shine_finalize) append_shell_init_blocks"));
+        assert!(content.contains(
+            "__shine_finalize) status \"completed\" \"profile is managed by shine CLI\""
+        ));
+        assert!(!content.contains("append_shell_block"));
+        assert!(!content.contains("cp \"$template_path\" \"$managed_path\""));
     }
 
     #[test]
@@ -1331,12 +1852,11 @@ description = "Placeholder"
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .expect("missing embedded macOS init script");
 
-        assert!(content.contains("profile.sh"));
-        assert!(content.contains(".shine/profile/macos-sys.sh"));
-        assert!(content.contains("cp \"$template_path\" \"$managed_path\""));
-        assert!(content.contains("shine_macos_sys_profile"));
-        assert!(content.contains("[[ -f \"$file\" ]] || return 0"));
-        assert!(content.contains("__shine_finalize) append_zshrc_init_block"));
+        assert!(content.contains(
+            "__shine_finalize) status \"completed\" \"profile is managed by shine CLI\""
+        ));
+        assert!(!content.contains("append_zshrc_block"));
+        assert!(!content.contains("cp \"$template_path\" \"$managed_path\""));
     }
 
     #[test]
@@ -1379,13 +1899,11 @@ description = "Placeholder"
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .expect("missing embedded Windows init script");
 
-        assert!(content.contains("profile.ps1"));
         assert!(content.contains("SHINE_SYS_PRESET_ROOT"));
-        assert!(content.contains(".shine\\profile\\windows-sys.ps1"));
-        assert!(content.contains("Copy-Item -LiteralPath $profileTemplatePath"));
-        assert!(content.contains("$shineWindowsSysProfile"));
         assert!(content.contains("SHINE_SYS_STATUS`t$State`t$Detail"));
-        assert!(content.contains("\"__shine_finalize\" { Update-ManagedProfiles }"));
+        assert!(content.contains("\"__shine_finalize\" { Write-Status \"completed\" \"profile is managed by shine CLI\" }"));
+        assert!(!content.contains("Update-ManagedProfiles"));
+        assert!(!content.contains("Copy-Item -LiteralPath $profileTemplatePath"));
     }
 
     #[test]
@@ -1530,7 +2048,7 @@ items = ["touch-file"]
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn handle_init_executes_items_then_finalize() {
+    async fn handle_init_executes_items_then_updates_profile_in_rust() {
         let dir = make_temp_dir().await;
         let os_dir = dir.join("presets/sys/fakeos");
         fs::create_dir_all(&os_dir).await.unwrap();
@@ -1557,6 +2075,10 @@ items = ["first", "second"]
         .unwrap();
 
         let calls = dir.join("calls");
+        fs::write(os_dir.join("profile.sh"), "echo fake profile\n")
+            .await
+            .unwrap();
+
         let script = format!(
             r#"#!/bin/bash
 set -euo pipefail
@@ -1564,7 +2086,6 @@ printf '%s\n' "$1" >> {calls:?}
 case "$1" in
   first) printf 'SHINE_SYS_STATUS\tinstalled\tfirst ok\n' ;;
   second) printf 'legacy log\n' ;;
-  __shine_finalize) printf 'SHINE_SYS_STATUS\tupdated\tprofile ok\n' ;;
   *) exit 1 ;;
 esac
 "#
@@ -1581,9 +2102,12 @@ esac
             .unwrap();
 
         let calls = fs::read_to_string(&calls).await.unwrap();
+        assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "second"]);
         assert_eq!(
-            calls.lines().collect::<Vec<_>>(),
-            ["first", "second", SYS_FINALIZE_ITEM]
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.managed.sh"))
+                .await
+                .unwrap(),
+            "echo fake profile\n"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -1591,7 +2115,7 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn handle_init_stops_items_after_failure_but_finalizes_successes() {
+    async fn handle_init_stops_items_after_failure_but_updates_profile_for_successes() {
         let dir = make_temp_dir().await;
         let os_dir = dir.join("presets/sys/fakeos");
         fs::create_dir_all(&os_dir).await.unwrap();
@@ -1622,6 +2146,10 @@ items = ["first", "fails", "after"]
         .unwrap();
 
         let calls = dir.join("calls");
+        fs::write(os_dir.join("profile.sh"), "echo fake profile\n")
+            .await
+            .unwrap();
+
         let script = format!(
             r#"#!/bin/bash
 set -euo pipefail
@@ -1630,7 +2158,6 @@ case "$1" in
   first) printf 'SHINE_SYS_STATUS\tinstalled\tfirst ok\n' ;;
   fails) printf 'SHINE_SYS_STATUS\tfailed\tbad item\n'; exit 1 ;;
   after) printf 'SHINE_SYS_STATUS\tinstalled\tafter ok\n' ;;
-  __shine_finalize) printf 'SHINE_SYS_STATUS\tupdated\tprofile ok\n' ;;
   *) exit 1 ;;
 esac
 "#
@@ -1648,9 +2175,12 @@ esac
 
         assert!(err.to_string().contains("sys init failed"));
         let calls = fs::read_to_string(&calls).await.unwrap();
+        assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "fails"]);
         assert_eq!(
-            calls.lines().collect::<Vec<_>>(),
-            ["first", "fails", SYS_FINALIZE_ITEM]
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.managed.sh"))
+                .await
+                .unwrap(),
+            "echo fake profile\n"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();

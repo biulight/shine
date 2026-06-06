@@ -4,8 +4,6 @@ set -euo pipefail
 
 ARCH=$(uname -m)
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SHELL_SENTINEL_START="# >>> shine ubuntu sys >>>"
-SHELL_SENTINEL_END="# <<< shine ubuntu sys <<<"
 PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}"
 ZSH_VI_MODE_PLUGIN="$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh"
 
@@ -40,146 +38,6 @@ load_atuin_env() {
     if [[ -f "$HOME/.atuin/bin/env" ]]; then
         . "$HOME/.atuin/bin/env"
     fi
-}
-
-remove_shell_block() {
-    local file="$1"
-    local tmp_file
-
-    [[ -f "$file" ]] || return 0
-    tmp_file="$(mktemp)"
-    awk -v start="$SHELL_SENTINEL_START" -v end="$SHELL_SENTINEL_END" '
-        $0 == start { skip = 1; next }
-        $0 == end { skip = 0; next }
-        !skip { print }
-    ' "$file" > "$tmp_file"
-    mv "$tmp_file" "$file"
-}
-
-remove_pnpm_block() {
-    local file="$1"
-    local tmp_file
-
-    [[ -f "$file" ]] || return 0
-    tmp_file="$(mktemp)"
-    awk '
-        $0 == "# pnpm" { skip = 1; next }
-        $0 == "# pnpm end" { skip = 0; next }
-        !skip { print }
-    ' "$file" > "$tmp_file"
-    mv "$tmp_file" "$file"
-}
-
-append_shell_block() {
-    local file="$1"
-    local shell_name="$2"
-    local new_block
-    local current_block
-
-    touch "$file"
-    new_block="$(mktemp)"
-    current_block="$(mktemp)"
-    {
-        echo "$SHELL_SENTINEL_START"
-        echo "shine_ubuntu_sys_profile=\"\$HOME/.shine/profile/ubuntu-sys.sh\""
-        echo "if [[ -f \"\$shine_ubuntu_sys_profile\" ]]; then"
-        echo "  SHINE_UBUNTU_SYS_SHELL=\"$shell_name\""
-        echo "  source \"\$shine_ubuntu_sys_profile\""
-        echo "fi"
-        echo "$SHELL_SENTINEL_END"
-    } > "$new_block"
-
-    awk -v start="$SHELL_SENTINEL_START" -v end="$SHELL_SENTINEL_END" '
-        $0 == start { capture = 1 }
-        capture { print }
-        $0 == end { capture = 0 }
-    ' "$file" > "$current_block"
-
-    if cmp -s "$new_block" "$current_block"; then
-        rm -f "$new_block" "$current_block"
-        remove_pnpm_block "$file"
-        return 1
-    fi
-
-    remove_shell_block "$file"
-    remove_pnpm_block "$file"
-
-    {
-        echo
-        cat "$new_block"
-    } >> "$file"
-
-    rm -f "$new_block" "$current_block"
-    return 0
-}
-
-managed_profile_path() {
-    echo "$HOME/.shine/profile/ubuntu-sys.sh"
-}
-
-install_managed_profile_script() {
-    local template_path="$SCRIPT_DIR/profile.sh"
-    local managed_path
-    local managed_parent
-    local updated=0
-
-    if [[ ! -f "$template_path" ]]; then
-        echo "Missing Ubuntu profile template: $template_path" >&2
-        return 2
-    fi
-
-    managed_path="$(managed_profile_path)"
-    managed_parent="$(dirname "$managed_path")"
-    mkdir -p "$managed_parent"
-    if [[ ! -f "$managed_path" ]] || ! cmp -s "$template_path" "$managed_path"; then
-        cp "$template_path" "$managed_path"
-        updated=1
-    fi
-    return "$updated"
-}
-
-append_shell_init_blocks() {
-    local sys_shell="${SHINE_SYS_SHELL:-bash}"
-    local managed_path
-    local profile_updated=0
-    local block_updated=0
-
-    if install_managed_profile_script; then
-        profile_updated=0
-    else
-        case "$?" in
-            1) profile_updated=1 ;;
-            *) return 1 ;;
-        esac
-    fi
-    managed_path="$(managed_profile_path)"
-    case "$sys_shell" in
-        bash)
-            if append_shell_block "$HOME/.bashrc" bash; then
-                block_updated=1
-            fi
-            remove_shell_block "$HOME/.zshrc"
-            if [[ "$profile_updated" -eq 1 || "$block_updated" -eq 1 ]]; then
-                status "updated" "~/.bashrc -> $managed_path"
-            else
-                status "skipped" "~/.bashrc already configured"
-            fi
-            ;;
-        zsh)
-            if append_shell_block "$HOME/.zshrc" zsh; then
-                block_updated=1
-            fi
-            remove_shell_block "$HOME/.bashrc"
-            if [[ "$profile_updated" -eq 1 || "$block_updated" -eq 1 ]]; then
-                status "updated" "~/.zshrc -> $managed_path"
-            else
-                status "skipped" "~/.zshrc already configured"
-            fi
-            ;;
-        *)
-            status "skipped" "unsupported shell: $sys_shell"
-            ;;
-    esac
 }
 
 install_packages() {
@@ -536,7 +394,7 @@ run_item() {
         mise) install_mise ;;
         homebrew) install_homebrew ;;
         zerotier) install_zerotier ;;
-        __shine_finalize) append_shell_init_blocks ;;
+        __shine_finalize) status "completed" "profile is managed by shine CLI" ;;
         "") return 0 ;;
         *)
             echo "Unknown sys init item: $1" >&2

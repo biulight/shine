@@ -5,8 +5,6 @@ set -eu
 set -o pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
-ZSHRC_SENTINEL_START="# >>> shine macos sys >>>"
-ZSHRC_SENTINEL_END="# <<< shine macos sys <<<"
 
 status() {
     local state="$1"
@@ -81,110 +79,6 @@ brew_install_formula() {
     echo "Installing $formula..."
     brew install "$formula"
     status "installed" "$formula"
-}
-
-remove_zshrc_block() {
-    local file="$1"
-    local tmp_file
-
-    [[ -f "$file" ]] || return 0
-    tmp_file="$(mktemp)"
-    awk -v start="$ZSHRC_SENTINEL_START" -v end="$ZSHRC_SENTINEL_END" '
-        $0 == start { skip = 1; next }
-        $0 == end { skip = 0; next }
-        !skip { print }
-    ' "$file" > "$tmp_file"
-    mv "$tmp_file" "$file"
-}
-
-managed_profile_path() {
-    echo "$HOME/.shine/profile/macos-sys.sh"
-}
-
-install_managed_profile_script() {
-    local template_path="$SCRIPT_DIR/profile.sh"
-    local managed_path
-    local managed_parent
-    local updated=0
-
-    if [[ ! -f "$template_path" ]]; then
-        echo "Missing macOS profile template: $template_path" >&2
-        return 2
-    fi
-
-    managed_path="$(managed_profile_path)"
-    managed_parent="$(dirname "$managed_path")"
-    mkdir -p "$managed_parent"
-    if [[ ! -f "$managed_path" ]] || ! cmp -s "$template_path" "$managed_path"; then
-        cp "$template_path" "$managed_path"
-        updated=1
-    fi
-    return "$updated"
-}
-
-append_zshrc_block() {
-    local zshrc="$HOME/.zshrc"
-    local current_block
-    local desired_block
-
-    touch "$zshrc"
-    current_block="$(mktemp)"
-    desired_block="$(mktemp)"
-
-    awk -v start="$ZSHRC_SENTINEL_START" -v end="$ZSHRC_SENTINEL_END" '
-        $0 == start { capture = 1 }
-        capture { print }
-        $0 == end { capture = 0 }
-    ' "$zshrc" > "$current_block"
-
-    {
-        echo "$ZSHRC_SENTINEL_START"
-        echo 'shine_macos_sys_profile="$HOME/.shine/profile/macos-sys.sh"'
-        echo 'if [[ -f "$shine_macos_sys_profile" ]]; then'
-        echo '  source "$shine_macos_sys_profile"'
-        echo 'fi'
-        echo "$ZSHRC_SENTINEL_END"
-    } > "$desired_block"
-
-    if cmp -s "$desired_block" "$current_block"; then
-        rm -f "$current_block" "$desired_block"
-        return 1
-    fi
-
-    remove_zshrc_block "$zshrc"
-    {
-        echo
-        cat "$desired_block"
-    } >> "$zshrc"
-
-    rm -f "$current_block" "$desired_block"
-    return 0
-}
-
-append_zshrc_init_block() {
-    local managed_path
-    local profile_updated=0
-    local block_updated=0
-
-    if install_managed_profile_script; then
-        profile_updated=0
-    else
-        case "$?" in
-            1) profile_updated=1 ;;
-            *) return 1 ;;
-        esac
-    fi
-
-    if append_zshrc_block; then
-        block_updated=1
-    fi
-
-    managed_path="$(managed_profile_path)"
-    if [[ "$profile_updated" -eq 1 || "$block_updated" -eq 1 ]]; then
-        status "updated" "~/.zshrc -> $managed_path"
-    else
-        status "skipped" "~/.zshrc already configured"
-    fi
 }
 
 install_shell_formula() {
@@ -299,7 +193,7 @@ run_item() {
         bun) install_bun ;;
         pnpm) install_pnpm ;;
         fastfetch) install_fastfetch ;;
-        __shine_finalize) append_zshrc_init_block ;;
+        __shine_finalize) status "completed" "profile is managed by shine CLI" ;;
         "") return 0 ;;
         *)
             echo "Unknown sys init item: $1" >&2
