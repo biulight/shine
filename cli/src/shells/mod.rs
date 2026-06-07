@@ -98,16 +98,22 @@ pub(crate) async fn handle_install(
 
         let mut shell_parts: Vec<String> = Vec::new();
         if !report.created.is_empty() {
-            shell_parts.push(colors::green(&format!("{} created", report.created.len())));
+            shell_parts.push(colors::green(&format_file_action(
+                report.created.len(),
+                "created",
+            )));
         }
         if !report.overwritten.is_empty() {
-            shell_parts.push(colors::green(&format!(
-                "{} updated",
-                report.overwritten.len()
+            shell_parts.push(colors::green(&format_file_action(
+                report.overwritten.len(),
+                "updated",
             )));
         }
         if !report.skipped.is_empty() {
-            shell_parts.push(colors::dim(&format!("{} skipped", report.skipped.len())));
+            shell_parts.push(colors::dim(&format_file_action(
+                report.skipped.len(),
+                "skipped",
+            )));
         }
         output::summary_line("Shell Presets", &shell_parts);
     }
@@ -468,15 +474,15 @@ pub(crate) async fn handle_uninstall(
             crate::presets::remove_prefix(&prefix, config.presets_dir(), dry_run).await?;
         let mut shell_parts: Vec<String> = Vec::new();
         if !remove_report.removed.is_empty() {
-            shell_parts.push(colors::green(&format!(
-                "{} removed",
-                remove_report.removed.len()
+            shell_parts.push(colors::green(&format_file_action(
+                remove_report.removed.len(),
+                "removed",
             )));
         }
         if !remove_report.skipped.is_empty() {
-            shell_parts.push(colors::dim(&format!(
-                "{} skipped",
-                remove_report.skipped.len()
+            shell_parts.push(colors::dim(&format_file_action(
+                remove_report.skipped.len(),
+                "skipped",
             )));
         }
         output::summary_line("Shell Presets", &shell_parts);
@@ -791,6 +797,11 @@ fn env_map_for_script<'a>(
     } else {
         std::borrow::Cow::Borrowed(env_map)
     }
+}
+
+fn format_file_action(count: usize, action: &str) -> String {
+    let noun = if count == 1 { "file" } else { "files" };
+    format!("{count} {noun} {action}")
 }
 
 fn managed_shell_profile_path(config: &Config) -> PathBuf {
@@ -2327,9 +2338,9 @@ mod tests {
     async fn external_presets_upgrade_does_not_install_preset_only_scripts() {
         let dir = make_temp_dir().await;
         let proxy_dir = dir.join("presets/shell/proxy");
-        let tools_dir = dir.join("presets/shell/tools");
+        let extra_dir = dir.join("presets/shell/extra");
         fs::create_dir_all(&proxy_dir).await.unwrap();
-        fs::create_dir_all(&tools_dir).await.unwrap();
+        fs::create_dir_all(&extra_dir).await.unwrap();
 
         fs::write(
             proxy_dir.join("shine.toml"),
@@ -2346,11 +2357,11 @@ mod tests {
         .unwrap();
         make_executable(&setproxy).await;
 
-        let test_tools = tools_dir.join("test_tools.sh");
-        fs::write(&test_tools, b"#!/bin/bash\n# Test tools.\necho tools\n")
+        let extra_tool = extra_dir.join("extra_tool.sh");
+        fs::write(&extra_tool, b"#!/bin/bash\n# Extra tool.\necho extra\n")
             .await
             .unwrap();
-        make_executable(&test_tools).await;
+        make_executable(&extra_tool).await;
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
@@ -2359,8 +2370,8 @@ mod tests {
         handle_install(&config, Some("proxy"), false).await.unwrap();
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(
-            !config.bin_dir().join("test_tools").exists(),
-            "tools preset should start as present but not installed"
+            !config.bin_dir().join("extra_tool").exists(),
+            "extra preset should start as present but not installed"
         );
 
         fs::write(
@@ -2379,7 +2390,7 @@ mod tests {
         );
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(
-            !config.bin_dir().join("test_tools").exists(),
+            !config.bin_dir().join("extra_tool").exists(),
             "upgrade must not install preset-only scripts"
         );
 

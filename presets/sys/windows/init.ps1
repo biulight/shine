@@ -1,9 +1,6 @@
 # Initialize Windows with selectable Rust, terminal tools, network, and JavaScript runtime setup steps.
 $ErrorActionPreference = "Stop"
 
-$ProfileSentinelStart = "# >>> shine windows sys >>>"
-$ProfileSentinelEnd = "# <<< shine windows sys <<<"
-
 function Write-Status {
     param(
         [Parameter(Mandatory = $true)]
@@ -78,122 +75,6 @@ function Install-WinGetPackage {
     Write-Status "installed" $PackageId
 }
 
-function Remove-ManagedProfileBlock {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $Path
-    )
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        return
-    }
-
-    $lines = Get-Content -LiteralPath $Path
-    $output = New-Object System.Collections.Generic.List[string]
-    $skip = $false
-
-    foreach ($line in $lines) {
-        if ($line -eq $ProfileSentinelStart) {
-            $skip = $true
-            continue
-        }
-        if ($line -eq $ProfileSentinelEnd) {
-            $skip = $false
-            continue
-        }
-        if (-not $skip) {
-            $output.Add($line)
-        }
-    }
-
-    Set-Content -LiteralPath $Path -Value $output -Encoding UTF8
-}
-
-function Get-ScriptDirectory {
-    if ($SysPresetRoot) {
-        return $SysPresetRoot
-    }
-
-    throw "Could not determine Windows sys preset directory."
-}
-
-function Get-ManagedProfilePath {
-    Join-Path $HOME ".shine\profile\windows-sys.ps1"
-}
-
-function Install-ManagedProfileScript {
-    $profileTemplatePath = Join-Path (Get-ScriptDirectory) "profile.ps1"
-    if (-not (Test-Path -LiteralPath $profileTemplatePath)) {
-        throw "Missing Windows profile template: $profileTemplatePath"
-    }
-
-    $managedProfilePath = Get-ManagedProfilePath
-    $managedProfileParent = Split-Path -Parent $managedProfilePath
-    New-Item -ItemType Directory -Force -Path $managedProfileParent | Out-Null
-
-    $templateContent = Get-Content -LiteralPath $profileTemplatePath -Raw
-    if ((Test-Path -LiteralPath $managedProfilePath) -and (Get-Content -LiteralPath $managedProfilePath -Raw) -eq $templateContent) {
-        return $false
-    }
-
-    Copy-Item -LiteralPath $profileTemplatePath -Destination $managedProfilePath -Force
-    return $true
-}
-
-function Get-ManagedProfileBlock {
-    @'
-$shineWindowsSysProfile = Join-Path $HOME ".shine\profile\windows-sys.ps1"
-if (Test-Path -LiteralPath $shineWindowsSysProfile) {
-    . $shineWindowsSysProfile
-}
-'@
-}
-
-function Update-PowerShellProfiles {
-    $profilePaths = @(
-        (Join-Path $HOME "Documents\PowerShell\Microsoft.PowerShell_profile.ps1"),
-        (Join-Path $HOME "Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1")
-    )
-
-    $block = Get-ManagedProfileBlock
-    $updated = $false
-
-    foreach ($profilePath in $profilePaths) {
-        $parent = Split-Path -Parent $profilePath
-        New-Item -ItemType Directory -Force -Path $parent | Out-Null
-        if (-not (Test-Path -LiteralPath $profilePath)) {
-            New-Item -ItemType File -Force -Path $profilePath | Out-Null
-        }
-
-        $content = Get-Content -LiteralPath $profilePath -Raw
-        if ($content.Contains($ProfileSentinelStart) -and $content.Contains($block) -and $content.Contains($ProfileSentinelEnd)) {
-            continue
-        }
-
-        Remove-ManagedProfileBlock $profilePath
-        Add-Content -LiteralPath $profilePath -Value ""
-        Add-Content -LiteralPath $profilePath -Value $ProfileSentinelStart
-        Add-Content -LiteralPath $profilePath -Value $block
-        Add-Content -LiteralPath $profilePath -Value $ProfileSentinelEnd
-        $updated = $true
-    }
-
-    return $updated
-}
-
-function Update-ManagedProfiles {
-    $updated = Install-ManagedProfileScript
-    if (Update-PowerShellProfiles) {
-        $updated = $true
-    }
-
-    if ($updated) {
-        Write-Status "updated" "PowerShell profiles"
-    } else {
-        Write-Status "skipped" "PowerShell profiles already configured"
-    }
-}
-
 function Install-Rust {
     Install-WinGetPackage "Rustlang.Rustup" "rustup"
 }
@@ -261,7 +142,7 @@ function Install-Item {
         "bun" { Install-Bun }
         "pnpm" { Install-pnpm }
         "mise" { Install-mise }
-        "__shine_finalize" { Update-ManagedProfiles }
+        "__shine_finalize" { Write-Status "completed" "profile is managed by shine CLI" }
         default { throw "Unknown Windows sys init item: $Item" }
     }
 }

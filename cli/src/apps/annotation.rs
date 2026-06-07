@@ -16,7 +16,7 @@ pub(crate) fn resolve_destination(
         }
     };
 
-    let expanded = crate::config::full_expand(&raw)
+    let expanded = crate::config::full_expand_with_home(&raw, &config.home_dir)
         .with_context(|| format!("failed to expand destination path: {raw}"))?;
 
     let path = PathBuf::from(&expanded);

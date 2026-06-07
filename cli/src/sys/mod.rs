@@ -2,6 +2,7 @@ use anyhow::{Context, Result, bail};
 use console::{Style, style};
 use dialoguer::{MultiSelect, theme::ColorfulTheme};
 use serde::Deserialize;
+use similar::{DiffTag, TextDiff};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use std::process::Stdio;
 
 use crate::colors;
 use crate::config::Config;
+use crate::shells::ShellType;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct SysManifest {
@@ -84,8 +86,6 @@ struct SysItemOutcome {
 }
 
 const SYS_STATUS_PREFIX: &str = "SHINE_SYS_STATUS\t";
-const SYS_FINALIZE_ITEM: &str = "__shine_finalize";
-
 impl SelectionSource {
     fn describe(&self) -> String {
         match self {
@@ -191,9 +191,10 @@ pub(crate) async fn handle_init(
     config: &Config,
     preset: Option<&str>,
     dry_run: bool,
+    force_profile: bool,
 ) -> Result<()> {
     let os_id = detect_os_id().await?;
-    handle_init_for_os(config, &os_id, preset, dry_run).await
+    handle_init_for_os(config, &os_id, preset, dry_run, force_profile).await
 }
 
 async fn handle_init_for_os(
@@ -201,6 +202,7 @@ async fn handle_init_for_os(
     os_id: &str,
     preset: Option<&str>,
     dry_run: bool,
+    force_profile: bool,
 ) -> Result<()> {
     crate::config::print_presets_note(config);
 
@@ -271,19 +273,10 @@ async fn handle_init_for_os(
         .iter()
         .any(|outcome| outcome.status != SysItemStatus::Failed)
     {
-        let finalize = run_sys_item(
-            &command,
-            script_dir,
-            &loaded.script_path,
-            sys_shell,
-            SYS_FINALIZE_ITEM,
-            "profile",
-        )
-        .await?;
-        if finalize.status != SysItemStatus::Completed || !finalize.logs.is_empty() {
-            print_item_outcome(&finalize, label_width);
-        }
-        outcomes.push(finalize);
+        let profile =
+            install_sys_profile_loader(config, os_id, script_dir, sys_shell, force_profile).await?;
+        print_item_outcome(&profile, label_width);
+        outcomes.push(profile);
     }
 
     println!();
@@ -327,14 +320,7 @@ async fn print_dry_run(
         );
     }
     if !selection.item_ids.is_empty() {
-        println!(
-            "    {}",
-            format_command_preview(
-                &command,
-                &loaded.script_path,
-                &[SYS_FINALIZE_ITEM.to_string()]
-            )
-        );
+        println!("    shine internal sys profile update");
     }
     println!();
     let content = tokio::fs::read_to_string(&loaded.script_path)
@@ -423,6 +409,809 @@ async fn run_sys_item(
         &String::from_utf8_lossy(&output.stdout),
         &String::from_utf8_lossy(&output.stderr),
     ))
+}
+
+async fn install_sys_profile_loader(
+    config: &Config,
+    os_id: &str,
+    script_dir: &Path,
+    sys_shell: &str,
+    force_profile: bool,
+) -> Result<SysItemOutcome> {
+    let update = install_sys_profile_files(config, os_id, script_dir, force_profile).await?;
+    let shell_update = update_sys_shell_profiles(config, os_id, sys_shell).await?;
+    let status = if update.needs_action {
+        SysItemStatus::NeedsAction
+    } else if update.updated || shell_update.updated {
+        SysItemStatus::Updated
+    } else {
+        SysItemStatus::Skipped
+    };
+    let detail = if update.needs_action {
+        update.detail
+    } else if shell_update.unsupported_shell {
+        format!("unsupported shell for sys profile: {sys_shell}")
+    } else {
+        shell_update.detail
+    };
+
+    Ok(SysItemOutcome {
+        item_id: "profile".to_string(),
+        label: "profile".to_string(),
+        status,
+        detail,
+        logs: Vec::new(),
+    })
+}
+
+#[derive(Debug)]
+struct SysProfileFileUpdate {
+    updated: bool,
+    needs_action: bool,
+    detail: String,
+}
+
+#[derive(Debug)]
+struct SysShellProfileUpdate {
+    updated: bool,
+    unsupported_shell: bool,
+    detail: String,
+}
+
+async fn install_sys_profile_files(
+    config: &Config,
+    os_id: &str,
+    script_dir: &Path,
+    force_profile: bool,
+) -> Result<SysProfileFileUpdate> {
+    let ext = if os_id == "windows" { "ps1" } else { "sh" };
+    let stem = format!("{os_id}-sys");
+    let template_path = script_dir.join(format!("profile.{ext}"));
+    let template = tokio::fs::read(&template_path)
+        .await
+        .with_context(|| format!("reading {}", template_path.display()))?;
+
+    let profile_dir = config.home_dir.join(".shine/profile");
+    let active_path = profile_dir.join(format!("{stem}.{ext}"));
+    let base_path = profile_dir.join(format!("{stem}.base.{ext}"));
+    let new_path = profile_dir.join(format!("{stem}.new.{ext}"));
+    let merge_path = profile_dir.join(format!("{stem}.merge.{ext}"));
+    tokio::fs::create_dir_all(&profile_dir)
+        .await
+        .with_context(|| format!("creating {}", profile_dir.display()))?;
+
+    if force_profile {
+        return apply_force_profile(
+            &active_path,
+            &base_path,
+            &new_path,
+            &merge_path,
+            ext,
+            &template,
+        )
+        .await;
+    }
+
+    let active = match tokio::fs::read(&active_path).await {
+        Ok(active) => active,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return handle_fresh_install(
+                &active_path,
+                &base_path,
+                &new_path,
+                &merge_path,
+                &template,
+            )
+            .await;
+        }
+        Err(err) => return Err(err).with_context(|| format!("reading {}", active_path.display())),
+    };
+
+    let base = match tokio::fs::read(&base_path).await {
+        Ok(base) => base,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return handle_missing_base(
+                &active_path,
+                &base_path,
+                &new_path,
+                &merge_path,
+                &template,
+                &active,
+            )
+            .await;
+        }
+        Err(err) => return Err(err).with_context(|| format!("reading {}", base_path.display())),
+    };
+
+    apply_merge_result(
+        &active_path,
+        &base_path,
+        &template_path,
+        &new_path,
+        &merge_path,
+        &base,
+        &active,
+        &template,
+    )
+    .await
+}
+
+async fn apply_force_profile(
+    active_path: &Path,
+    base_path: &Path,
+    new_path: &Path,
+    merge_path: &Path,
+    ext: &str,
+    template: &[u8],
+) -> Result<SysProfileFileUpdate> {
+    let backup = if let Ok(active) = tokio::fs::read(active_path).await
+        && active != template
+    {
+        let backup_path = profile_backup_path(active_path, ext);
+        tokio::fs::copy(active_path, &backup_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "backing up sys profile {} to {}",
+                    active_path.display(),
+                    backup_path.display()
+                )
+            })?;
+        Some(backup_path)
+    } else {
+        None
+    };
+    write_if_changed(active_path, template).await?;
+    write_if_changed(base_path, template).await?;
+    remove_if_exists(new_path).await?;
+    remove_if_exists(merge_path).await?;
+    let detail = backup
+        .map(|path| {
+            format!(
+                "{} replaced; previous profile backed up to {}",
+                active_path.display(),
+                path.display()
+            )
+        })
+        .unwrap_or_else(|| format!("{} refreshed", active_path.display()));
+    Ok(SysProfileFileUpdate {
+        updated: true,
+        needs_action: false,
+        detail,
+    })
+}
+
+async fn handle_fresh_install(
+    active_path: &Path,
+    base_path: &Path,
+    new_path: &Path,
+    merge_path: &Path,
+    template: &[u8],
+) -> Result<SysProfileFileUpdate> {
+    tokio::fs::write(active_path, template)
+        .await
+        .with_context(|| format!("writing {}", active_path.display()))?;
+    tokio::fs::write(base_path, template)
+        .await
+        .with_context(|| format!("writing {}", base_path.display()))?;
+    remove_if_exists(new_path).await?;
+    remove_if_exists(merge_path).await?;
+    Ok(SysProfileFileUpdate {
+        updated: true,
+        needs_action: false,
+        detail: format!("{} created", active_path.display()),
+    })
+}
+
+async fn handle_missing_base(
+    active_path: &Path,
+    base_path: &Path,
+    new_path: &Path,
+    merge_path: &Path,
+    template: &[u8],
+    active: &[u8],
+) -> Result<SysProfileFileUpdate> {
+    if active == template {
+        tokio::fs::write(base_path, template)
+            .await
+            .with_context(|| format!("writing {}", base_path.display()))?;
+        remove_if_exists(new_path).await?;
+        remove_if_exists(merge_path).await?;
+        return Ok(SysProfileFileUpdate {
+            updated: true,
+            needs_action: false,
+            detail: format!("{} initialized", base_path.display()),
+        });
+    }
+    if is_initial_user_profile_edit(template, active) {
+        tokio::fs::write(base_path, template)
+            .await
+            .with_context(|| format!("writing {}", base_path.display()))?;
+        remove_if_exists(new_path).await?;
+        remove_if_exists(merge_path).await?;
+        return Ok(SysProfileFileUpdate {
+            updated: true,
+            needs_action: false,
+            detail: format!("{} initialized with user edits", base_path.display()),
+        });
+    }
+    tokio::fs::write(new_path, template)
+        .await
+        .with_context(|| format!("writing {}", new_path.display()))?;
+    remove_if_exists(merge_path).await?;
+    Ok(SysProfileFileUpdate {
+        updated: true,
+        needs_action: true,
+        detail: format!(
+            "no merge base for {}; review new template at {} or rerun with --force-profile",
+            active_path.display(),
+            new_path.display()
+        ),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn apply_merge_result(
+    active_path: &Path,
+    base_path: &Path,
+    template_path: &Path,
+    new_path: &Path,
+    merge_path: &Path,
+    base: &[u8],
+    active: &[u8],
+    template: &[u8],
+) -> Result<SysProfileFileUpdate> {
+    if active == template {
+        let updated = write_if_changed(base_path, template).await?;
+        remove_if_exists(new_path).await?;
+        remove_if_exists(merge_path).await?;
+        return Ok(SysProfileFileUpdate {
+            updated,
+            needs_action: false,
+            detail: format!("{} already current", active_path.display()),
+        });
+    }
+    if base == template {
+        remove_if_exists(new_path).await?;
+        remove_if_exists(merge_path).await?;
+        return Ok(SysProfileFileUpdate {
+            updated: false,
+            needs_action: false,
+            detail: format!("{} already configured", active_path.display()),
+        });
+    }
+    if active == base {
+        tokio::fs::write(active_path, template)
+            .await
+            .with_context(|| format!("writing {}", active_path.display()))?;
+        tokio::fs::write(base_path, template)
+            .await
+            .with_context(|| format!("writing {}", base_path.display()))?;
+        remove_if_exists(new_path).await?;
+        remove_if_exists(merge_path).await?;
+        return Ok(SysProfileFileUpdate {
+            updated: true,
+            needs_action: false,
+            detail: format!("{} updated", active_path.display()),
+        });
+    }
+    match merge_sys_profile(
+        active_path,
+        base_path,
+        template_path,
+        base,
+        active,
+        template,
+    )
+    .await?
+    {
+        ProfileMerge::Clean(merged) => {
+            tokio::fs::write(active_path, merged)
+                .await
+                .with_context(|| format!("writing {}", active_path.display()))?;
+            tokio::fs::write(base_path, template)
+                .await
+                .with_context(|| format!("writing {}", base_path.display()))?;
+            remove_if_exists(new_path).await?;
+            remove_if_exists(merge_path).await?;
+            Ok(SysProfileFileUpdate {
+                updated: true,
+                needs_action: false,
+                detail: format!("{} merged", active_path.display()),
+            })
+        }
+        ProfileMerge::Conflict(merged) => {
+            tokio::fs::write(new_path, template)
+                .await
+                .with_context(|| format!("writing {}", new_path.display()))?;
+            tokio::fs::write(merge_path, merged)
+                .await
+                .with_context(|| format!("writing {}", merge_path.display()))?;
+            Ok(SysProfileFileUpdate {
+                updated: true,
+                needs_action: true,
+                detail: format!(
+                    "merge conflict for {}; review {} and {}",
+                    active_path.display(),
+                    new_path.display(),
+                    merge_path.display()
+                ),
+            })
+        }
+    }
+}
+
+enum ProfileMerge {
+    Clean(Vec<u8>),
+    Conflict(Vec<u8>),
+}
+
+async fn merge_sys_profile(
+    active_path: &Path,
+    base_path: &Path,
+    template_path: &Path,
+    base: &[u8],
+    active: &[u8],
+    template: &[u8],
+) -> Result<ProfileMerge> {
+    if let Some(result) = try_git_merge_file(active_path, base_path, template_path).await? {
+        return Ok(result);
+    }
+
+    Ok(match fallback_three_way_merge(base, active, template) {
+        Some(merged) => ProfileMerge::Clean(merged),
+        None => ProfileMerge::Conflict(conflict_marker_merge(base, active, template)),
+    })
+}
+
+async fn try_git_merge_file(
+    active_path: &Path,
+    base_path: &Path,
+    template_path: &Path,
+) -> Result<Option<ProfileMerge>> {
+    let output = match tokio::process::Command::new("git")
+        .arg("merge-file")
+        .arg("-p")
+        .arg(active_path)
+        .arg(base_path)
+        .arg(template_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).context("running git merge-file"),
+    };
+
+    match output.status.code() {
+        Some(0) => Ok(Some(ProfileMerge::Clean(output.stdout))),
+        Some(1) => Ok(Some(ProfileMerge::Conflict(output.stdout))),
+        _ => Ok(None),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProfileChange {
+    old_start: usize,
+    old_end: usize,
+    new_lines: Vec<String>,
+}
+
+fn fallback_three_way_merge(base: &[u8], active: &[u8], template: &[u8]) -> Option<Vec<u8>> {
+    let base = std::str::from_utf8(base).ok()?;
+    let active = std::str::from_utf8(active).ok()?;
+    let template = std::str::from_utf8(template).ok()?;
+
+    if active == base {
+        return Some(template.as_bytes().to_vec());
+    }
+    if template == base || active == template {
+        return Some(active.as_bytes().to_vec());
+    }
+
+    let base_lines = split_profile_lines(base);
+    let active_lines = split_profile_lines(active);
+    let template_lines = split_profile_lines(template);
+    let user_changes = profile_changes(&base_lines, &active_lines);
+    let template_changes = profile_changes(&base_lines, &template_lines);
+
+    if has_profile_change_conflicts(&user_changes, &template_changes) {
+        return None;
+    }
+
+    let mut changes = Vec::new();
+    for change in user_changes.into_iter().chain(template_changes) {
+        if !changes.iter().any(|existing| existing == &change) {
+            changes.push(change);
+        }
+    }
+    changes.sort_by_key(|change| (change.old_start, change.old_end));
+
+    let mut merged = Vec::new();
+    let mut cursor = 0;
+    for change in changes {
+        if change.old_start < cursor {
+            return None;
+        }
+        merged.extend_from_slice(&base_lines[cursor..change.old_start]);
+        merged.extend(change.new_lines);
+        cursor = change.old_end;
+    }
+    merged.extend_from_slice(&base_lines[cursor..]);
+    Some(merged.concat().into_bytes())
+}
+
+fn split_profile_lines(content: &str) -> Vec<String> {
+    if content.is_empty() {
+        Vec::new()
+    } else {
+        content.split_inclusive('\n').map(str::to_string).collect()
+    }
+}
+
+fn profile_changes(base_lines: &[String], new_lines: &[String]) -> Vec<ProfileChange> {
+    let base_refs = base_lines.iter().map(String::as_str).collect::<Vec<_>>();
+    let new_refs = new_lines.iter().map(String::as_str).collect::<Vec<_>>();
+    TextDiff::from_slices(&base_refs, &new_refs)
+        .ops()
+        .iter()
+        .filter_map(|op| {
+            if matches!(op.tag(), DiffTag::Equal) {
+                return None;
+            }
+            let old_range = op.old_range();
+            let new_range = op.new_range();
+            Some(ProfileChange {
+                old_start: old_range.start,
+                old_end: old_range.end,
+                new_lines: new_lines[new_range].to_vec(),
+            })
+        })
+        .collect()
+}
+
+fn is_initial_user_profile_edit(template: &[u8], active: &[u8]) -> bool {
+    let Ok(template) = std::str::from_utf8(template) else {
+        return false;
+    };
+    let Ok(active) = std::str::from_utf8(active) else {
+        return false;
+    };
+
+    let template_lines = split_profile_lines(template);
+    let active_lines = split_profile_lines(active);
+    profile_changes(&template_lines, &active_lines)
+        .into_iter()
+        .all(|change| is_initial_user_profile_change(&template_lines, &change))
+}
+
+fn is_initial_user_profile_change(template_lines: &[String], change: &ProfileChange) -> bool {
+    if change.old_start == change.old_end {
+        return true;
+    }
+
+    let old_lines = &template_lines[change.old_start..change.old_end];
+    if old_lines.len() != change.new_lines.len() {
+        return false;
+    }
+
+    old_lines
+        .iter()
+        .zip(&change.new_lines)
+        .all(|(old, new)| uncomment_profile_line(old).as_deref() == Some(new.as_str()))
+}
+
+fn uncomment_profile_line(line: &str) -> Option<String> {
+    let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+    let (indent, rest) = line.split_at(indent_len);
+    let uncommented = rest.strip_prefix("# ")?;
+    Some(format!("{indent}{uncommented}"))
+}
+
+fn has_profile_change_conflicts(left: &[ProfileChange], right: &[ProfileChange]) -> bool {
+    left.iter().any(|left| {
+        right.iter().any(|right| {
+            if left == right {
+                return false;
+            }
+            profile_changes_overlap(left, right)
+        })
+    })
+}
+
+fn profile_changes_overlap(left: &ProfileChange, right: &ProfileChange) -> bool {
+    let left_insert = left.old_start == left.old_end;
+    let right_insert = right.old_start == right.old_end;
+
+    if left_insert && right_insert {
+        return left.old_start == right.old_start;
+    }
+    if left_insert {
+        return left.old_start >= right.old_start && left.old_start <= right.old_end;
+    }
+    if right_insert {
+        return right.old_start >= left.old_start && right.old_start <= left.old_end;
+    }
+
+    left.old_start < right.old_end && right.old_start < left.old_end
+}
+
+fn conflict_marker_merge(base: &[u8], active: &[u8], template: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"<<<<<<< current\n");
+    out.extend_from_slice(active);
+    if !active.ends_with(b"\n") {
+        out.extend_from_slice(b"\n");
+    }
+    out.extend_from_slice(b"||||||| base\n");
+    out.extend_from_slice(base);
+    if !base.ends_with(b"\n") {
+        out.extend_from_slice(b"\n");
+    }
+    out.extend_from_slice(b"=======\n");
+    out.extend_from_slice(template);
+    if !template.ends_with(b"\n") {
+        out.extend_from_slice(b"\n");
+    }
+    out.extend_from_slice(b">>>>>>> shine\n");
+    out
+}
+
+async fn write_if_changed(path: &Path, content: &[u8]) -> Result<bool> {
+    if tokio::fs::read(path).await.ok().as_deref() == Some(content) {
+        return Ok(false);
+    }
+    tokio::fs::write(path, content)
+        .await
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
+async fn remove_if_exists(path: &Path) -> Result<bool> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("removing {}", path.display())),
+    }
+}
+
+fn profile_backup_path(active_path: &Path, ext: &str) -> PathBuf {
+    active_path.with_extension(format!("{ext}.bak.{}", uuid::Uuid::new_v4().simple()))
+}
+
+async fn update_sys_shell_profiles(
+    config: &Config,
+    os_id: &str,
+    sys_shell: &str,
+) -> Result<SysShellProfileUpdate> {
+    match os_id {
+        "macos" => update_macos_shell_profile(config, os_id).await,
+        "ubuntu" => update_ubuntu_shell_profile(config, os_id, sys_shell).await,
+        "windows" => update_windows_shell_profile(config, os_id).await,
+        _ => Ok(SysShellProfileUpdate {
+            updated: false,
+            unsupported_shell: true,
+            detail: format!("unsupported OS for sys profile: {os_id}"),
+        }),
+    }
+}
+
+async fn update_macos_shell_profile(config: &Config, os_id: &str) -> Result<SysShellProfileUpdate> {
+    let path = config.home_dir.join(".zshrc");
+    let block = sys_shell_profile_block(os_id, None);
+    let updated = update_shell_profile_block(&path, sys_sentinel(os_id), &block).await?;
+    Ok(SysShellProfileUpdate {
+        updated,
+        unsupported_shell: false,
+        detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
+    })
+}
+
+async fn update_ubuntu_shell_profile(
+    config: &Config,
+    os_id: &str,
+    sys_shell: &str,
+) -> Result<SysShellProfileUpdate> {
+    match config.shell_type {
+        ShellType::Bash => {
+            let block = sys_shell_profile_block(os_id, Some("bash"));
+            let updated = update_shell_profile_block(
+                &config.home_dir.join(".bashrc"),
+                sys_sentinel(os_id),
+                &block,
+            )
+            .await?;
+            remove_shell_profile_block(&config.home_dir.join(".zshrc"), sys_sentinel(os_id))
+                .await?;
+            Ok(SysShellProfileUpdate {
+                updated,
+                unsupported_shell: false,
+                detail: format!("~/.bashrc -> {}", sys_loader_display(os_id)),
+            })
+        }
+        ShellType::Zsh => {
+            let block = sys_shell_profile_block(os_id, Some("zsh"));
+            let updated = update_shell_profile_block(
+                &config.home_dir.join(".zshrc"),
+                sys_sentinel(os_id),
+                &block,
+            )
+            .await?;
+            remove_shell_profile_block(&config.home_dir.join(".bashrc"), sys_sentinel(os_id))
+                .await?;
+            Ok(SysShellProfileUpdate {
+                updated,
+                unsupported_shell: false,
+                detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
+            })
+        }
+        _ => Ok(SysShellProfileUpdate {
+            updated: false,
+            unsupported_shell: true,
+            detail: format!("unsupported shell for sys profile: {sys_shell}"),
+        }),
+    }
+}
+
+async fn update_windows_shell_profile(
+    config: &Config,
+    os_id: &str,
+) -> Result<SysShellProfileUpdate> {
+    let block = sys_shell_profile_block(os_id, None);
+    let mut updated = false;
+    for path in [
+        config
+            .home_dir
+            .join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+        config
+            .home_dir
+            .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+    ] {
+        updated |= update_shell_profile_block(&path, sys_sentinel(os_id), &block).await?;
+    }
+    Ok(SysShellProfileUpdate {
+        updated,
+        unsupported_shell: false,
+        detail: "PowerShell profiles".to_string(),
+    })
+}
+
+fn sys_sentinel(os_id: &str) -> (&'static str, &'static str) {
+    match os_id {
+        "macos" => ("# >>> shine macos sys >>>", "# <<< shine macos sys <<<"),
+        "windows" => ("# >>> shine windows sys >>>", "# <<< shine windows sys <<<"),
+        _ => ("# >>> shine ubuntu sys >>>", "# <<< shine ubuntu sys <<<"),
+    }
+}
+
+fn sys_shell_profile_block(os_id: &str, shell_name: Option<&str>) -> String {
+    let (start, end) = sys_sentinel(os_id);
+    match os_id {
+        "windows" => format!(
+            r#"{start}
+$shineWindowsSysProfile = Join-Path $HOME ".shine\profile\windows-sys.ps1"
+if (Test-Path -LiteralPath $shineWindowsSysProfile) {{
+    . $shineWindowsSysProfile
+}}
+{end}
+"#
+        ),
+        "macos" => format!(
+            r#"{start}
+shine_macos_sys_profile="$HOME/.shine/profile/macos-sys.sh"
+if [[ -f "$shine_macos_sys_profile" ]]; then
+  source "$shine_macos_sys_profile"
+fi
+{end}
+"#
+        ),
+        _ => {
+            let shell_name = shell_name.unwrap_or("bash");
+            format!(
+                r#"{start}
+shine_ubuntu_sys_profile="$HOME/.shine/profile/ubuntu-sys.sh"
+if [[ -f "$shine_ubuntu_sys_profile" ]]; then
+  SHINE_UBUNTU_SYS_SHELL="{shell_name}"
+  source "$shine_ubuntu_sys_profile"
+fi
+{end}
+"#
+            )
+        }
+    }
+}
+
+async fn update_shell_profile_block(
+    path: &Path,
+    sentinel: (&str, &str),
+    desired_block: &str,
+) -> Result<bool> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    if extract_sentinel_block(&content, sentinel) == Some(desired_block) {
+        return Ok(false);
+    }
+
+    let mut updated = remove_sentinel_block(&content, sentinel);
+    if !updated.ends_with('\n') && !updated.is_empty() {
+        updated.push('\n');
+    }
+    if !updated.is_empty() {
+        updated.push('\n');
+    }
+    updated.push_str(desired_block);
+
+    tokio::fs::write(path, updated)
+        .await
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
+async fn remove_shell_profile_block(path: &Path, sentinel: (&str, &str)) -> Result<bool> {
+    let Ok(content) = tokio::fs::read_to_string(path).await else {
+        return Ok(false);
+    };
+    let updated = remove_sentinel_block(&content, sentinel);
+    if updated == content {
+        return Ok(false);
+    }
+    tokio::fs::write(path, updated)
+        .await
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
+fn extract_sentinel_block<'a>(content: &'a str, sentinel: (&str, &str)) -> Option<&'a str> {
+    let start = content.find(sentinel.0)?;
+    let after_start = &content[start..];
+    let end = after_start.find(sentinel.1)? + sentinel.1.len();
+    let end = if after_start[end..].starts_with('\n') {
+        end + 1
+    } else {
+        end
+    };
+    Some(&after_start[..end])
+}
+
+fn remove_sentinel_block(content: &str, sentinel: (&str, &str)) -> String {
+    let mut output = Vec::new();
+    let mut skip = false;
+    for line in content.lines() {
+        if line == sentinel.0 {
+            skip = true;
+            continue;
+        }
+        if line == sentinel.1 {
+            skip = false;
+            continue;
+        }
+        if !skip {
+            output.push(line);
+        }
+    }
+    let mut result = output.join("\n");
+    if content.ends_with('\n') && !result.is_empty() {
+        result.push('\n');
+    }
+    result
+}
+
+fn sys_loader_display(os_id: &str) -> String {
+    format!(
+        "~/.shine/profile/{os_id}-sys.{}",
+        if os_id == "windows" { "ps1" } else { "sh" }
+    )
 }
 
 fn parse_sys_item_output(
@@ -1165,6 +1954,214 @@ description = "Placeholder"
         );
     }
 
+    #[tokio::test]
+    async fn install_sys_profile_files_creates_active_profile_and_base() {
+        let dir = make_temp_dir().await;
+        let script_dir = dir.join("presets/sys/ubuntu");
+        fs::create_dir_all(&script_dir).await.unwrap();
+        fs::write(script_dir.join("profile.sh"), "echo template\n")
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let update = install_sys_profile_files(&config, "ubuntu", &script_dir, false)
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        assert!(!update.needs_action);
+        let profile_dir = dir.join(".shine/profile");
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.sh"))
+                .await
+                .unwrap(),
+            "echo template\n"
+        );
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.base.sh"))
+                .await
+                .unwrap(),
+            "echo template\n"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_sys_profile_files_without_base_reports_needs_action_for_legacy_edits() {
+        let dir = make_temp_dir().await;
+        let script_dir = dir.join("presets/sys/ubuntu");
+        let profile_dir = dir.join(".shine/profile");
+        fs::create_dir_all(&script_dir).await.unwrap();
+        fs::create_dir_all(&profile_dir).await.unwrap();
+        fs::write(script_dir.join("profile.sh"), "echo new template\n")
+            .await
+            .unwrap();
+        fs::write(profile_dir.join("ubuntu-sys.sh"), "echo user edit\n")
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let update = install_sys_profile_files(&config, "ubuntu", &script_dir, false)
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        assert!(update.needs_action);
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.sh"))
+                .await
+                .unwrap(),
+            "echo user edit\n"
+        );
+        assert!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.new.sh"))
+                .await
+                .unwrap()
+                .contains("echo new template")
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_sys_profile_files_without_base_accepts_uncommented_template_lines() {
+        let dir = make_temp_dir().await;
+        let script_dir = dir.join("presets/sys/macos");
+        let profile_dir = dir.join(".shine/profile");
+        fs::create_dir_all(&script_dir).await.unwrap();
+        fs::create_dir_all(&profile_dir).await.unwrap();
+        let template = "# fastfetch\n# if [[ -z \"$ZELLIJ\" ]] && command -v fastfetch >/dev/null 2>&1; then\n#   fastfetch\n# fi\n";
+        let active = "# fastfetch\nif [[ -z \"$ZELLIJ\" ]] && command -v fastfetch >/dev/null 2>&1; then\n  fastfetch\nfi\n";
+        fs::write(script_dir.join("profile.sh"), template)
+            .await
+            .unwrap();
+        fs::write(profile_dir.join("macos-sys.sh"), active)
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let update = install_sys_profile_files(&config, "macos", &script_dir, false)
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        assert!(!update.needs_action);
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("macos-sys.sh"))
+                .await
+                .unwrap(),
+            active
+        );
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("macos-sys.base.sh"))
+                .await
+                .unwrap(),
+            template
+        );
+        assert!(!profile_dir.join("macos-sys.new.sh").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_sys_profile_files_force_profile_backs_up_and_replaces_active() {
+        let dir = make_temp_dir().await;
+        let script_dir = dir.join("presets/sys/ubuntu");
+        let profile_dir = dir.join(".shine/profile");
+        fs::create_dir_all(&script_dir).await.unwrap();
+        fs::create_dir_all(&profile_dir).await.unwrap();
+        fs::write(script_dir.join("profile.sh"), "echo template\n")
+            .await
+            .unwrap();
+        fs::write(profile_dir.join("ubuntu-sys.sh"), "echo user edit\n")
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let update = install_sys_profile_files(&config, "ubuntu", &script_dir, true)
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        assert!(!update.needs_action);
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.sh"))
+                .await
+                .unwrap(),
+            "echo template\n"
+        );
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.base.sh"))
+                .await
+                .unwrap(),
+            "echo template\n"
+        );
+        let mut entries = fs::read_dir(&profile_dir).await.unwrap();
+        let mut backup_found = false;
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("ubuntu-sys.sh.bak.") {
+                backup_found = true;
+            }
+        }
+        assert!(backup_found, "legacy profile backup should be created");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn fallback_three_way_merge_preserves_uncommented_line_position() {
+        let base = b"before\n# eval \"$(starship init zsh)\"\nafter\n";
+        let active = b"before\neval \"$(starship init zsh)\"\nafter\n";
+        let template = b"before\n# eval \"$(starship init zsh)\"\nafter\nnew-template-line\n";
+
+        let merged = fallback_three_way_merge(base, active, template).unwrap();
+
+        assert_eq!(
+            String::from_utf8(merged).unwrap(),
+            "before\neval \"$(starship init zsh)\"\nafter\nnew-template-line\n"
+        );
+    }
+
+    #[test]
+    fn fallback_three_way_merge_reports_conflict_for_same_line_edits() {
+        let base = b"before\nvalue=old\nafter\n";
+        let active = b"before\nvalue=user\nafter\n";
+        let template = b"before\nvalue=shine\nafter\n";
+
+        assert!(fallback_three_way_merge(base, active, template).is_none());
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profiles_writes_active_ubuntu_shell_and_removes_other_shell_block() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.shell_type = ShellType::Bash;
+        fs::write(
+            dir.join(".zshrc"),
+            "# before\n# >>> shine ubuntu sys >>>\nold\n# <<< shine ubuntu sys <<<\n# after\n",
+        )
+        .await
+        .unwrap();
+
+        let update = update_sys_shell_profiles(&config, "ubuntu", "bash")
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        let bashrc = fs::read_to_string(dir.join(".bashrc")).await.unwrap();
+        assert!(bashrc.contains("SHINE_UBUNTU_SYS_SHELL=\"bash\""));
+        assert!(bashrc.contains("source \"$shine_ubuntu_sys_profile\""));
+        let zshrc = fs::read_to_string(dir.join(".zshrc")).await.unwrap();
+        assert!(!zshrc.contains("# >>> shine ubuntu sys >>>"));
+        assert!(zshrc.contains("# before"));
+        assert!(zshrc.contains("# after"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     // --- list_embedded_sys_entries ---
 
     #[test]
@@ -1281,7 +2278,7 @@ description = "Placeholder"
     fn embedded_sys_init_scripts_include_yazi_shell_wrapper() {
         for (path, marker) in [
             ("sys/ubuntu/profile.sh", "y() {"),
-            ("sys/macos/init.sh", "y() {"),
+            ("sys/macos/profile.sh", "y() {"),
             ("sys/windows/profile.ps1", "function y {"),
         ] {
             let content = crate::presets::read_asset_bytes(path)
@@ -1305,16 +2302,6 @@ description = "Placeholder"
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .expect("missing embedded Ubuntu init script");
 
-        assert!(content.contains("profile.sh"));
-        assert!(content.contains(".shine/profile/ubuntu-sys.sh"));
-        assert!(content.contains("cp \"$template_path\" \"$managed_path\""));
-        assert!(content.contains("SHINE_UBUNTU_SYS_SHELL"));
-        assert!(content.contains("SHINE_SYS_SHELL"));
-        assert!(content.contains("[[ -f \"$file\" ]] || return 0"));
-        assert!(content.contains("append_shell_block \"$HOME/.bashrc\" bash"));
-        assert!(content.contains("remove_shell_block \"$HOME/.zshrc\""));
-        assert!(content.contains("append_shell_block \"$HOME/.zshrc\" zsh"));
-        assert!(content.contains("remove_shell_block \"$HOME/.bashrc\""));
         assert!(content.contains("SHINE_SYS_STATUS\\t%s\\t%s\\n"));
         assert!(content.contains("status \"already-installed\" \"$(atuin --version)\""));
         assert!(content.contains(
@@ -1322,7 +2309,35 @@ description = "Placeholder"
         ));
         assert!(content.contains("load_atuin_env"));
         assert!(content.contains(". \"$HOME/.atuin/bin/env\""));
-        assert!(content.contains("__shine_finalize) append_shell_init_blocks"));
+        assert!(content.contains(
+            "__shine_finalize) status \"completed\" \"profile is managed by shine CLI\""
+        ));
+        assert!(!content.contains("append_shell_block"));
+        assert!(!content.contains("cp \"$template_path\" \"$managed_path\""));
+    }
+
+    #[test]
+    fn embedded_macos_init_installs_managed_profile_loader() {
+        let content = crate::presets::read_asset_bytes("sys/macos/init.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded macOS init script");
+
+        assert!(content.contains(
+            "__shine_finalize) status \"completed\" \"profile is managed by shine CLI\""
+        ));
+        assert!(!content.contains("append_zshrc_block"));
+        assert!(!content.contains("cp \"$template_path\" \"$managed_path\""));
+    }
+
+    #[test]
+    fn embedded_macos_profile_initializes_homebrew_zsh_completions() {
+        let content = crate::presets::read_asset_bytes("sys/macos/profile.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded macOS profile script");
+
+        assert!(content.contains("share/zsh/site-functions"));
+        assert!(content.contains("ZSH_VERSION"));
+        assert!(content.contains("typeset -U fpath"));
     }
 
     #[test]
@@ -1337,18 +2352,28 @@ description = "Placeholder"
     }
 
     #[test]
+    fn embedded_ubuntu_profile_initializes_homebrew_zsh_completions() {
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/profile.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu profile script");
+
+        assert!(content.contains("share/zsh/site-functions"));
+        assert!(content.contains("shine_ubuntu_sys_shell"));
+        assert!(content.contains("ZSH_VERSION"));
+        assert!(content.contains("typeset -U fpath"));
+    }
+
+    #[test]
     fn embedded_windows_init_installs_managed_profile_loader() {
         let content = crate::presets::read_asset_bytes("sys/windows/init.ps1")
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .expect("missing embedded Windows init script");
 
-        assert!(content.contains("profile.ps1"));
         assert!(content.contains("SHINE_SYS_PRESET_ROOT"));
-        assert!(content.contains(".shine\\profile\\windows-sys.ps1"));
-        assert!(content.contains("Copy-Item -LiteralPath $profileTemplatePath"));
-        assert!(content.contains("$shineWindowsSysProfile"));
         assert!(content.contains("SHINE_SYS_STATUS`t$State`t$Detail"));
-        assert!(content.contains("\"__shine_finalize\" { Update-ManagedProfiles }"));
+        assert!(content.contains("\"__shine_finalize\" { Write-Status \"completed\" \"profile is managed by shine CLI\" }"));
+        assert!(!content.contains("Update-ManagedProfiles"));
+        assert!(!content.contains("Copy-Item -LiteralPath $profileTemplatePath"));
     }
 
     #[test]
@@ -1483,7 +2508,7 @@ items = ["touch-file"]
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        handle_init_for_os(&config, "fakeos", None, true)
+        handle_init_for_os(&config, "fakeos", None, true, false)
             .await
             .unwrap();
         assert!(!sentinel.exists(), "script must not have been executed");
@@ -1493,7 +2518,7 @@ items = ["touch-file"]
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn handle_init_executes_items_then_finalize() {
+    async fn handle_init_executes_items_then_updates_profile_in_rust() {
         let dir = make_temp_dir().await;
         let os_dir = dir.join("presets/sys/fakeos");
         fs::create_dir_all(&os_dir).await.unwrap();
@@ -1520,6 +2545,10 @@ items = ["first", "second"]
         .unwrap();
 
         let calls = dir.join("calls");
+        fs::write(os_dir.join("profile.sh"), "echo fake profile\n")
+            .await
+            .unwrap();
+
         let script = format!(
             r#"#!/bin/bash
 set -euo pipefail
@@ -1527,7 +2556,6 @@ printf '%s\n' "$1" >> {calls:?}
 case "$1" in
   first) printf 'SHINE_SYS_STATUS\tinstalled\tfirst ok\n' ;;
   second) printf 'legacy log\n' ;;
-  __shine_finalize) printf 'SHINE_SYS_STATUS\tupdated\tprofile ok\n' ;;
   *) exit 1 ;;
 esac
 "#
@@ -1539,14 +2567,23 @@ esac
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        handle_init_for_os(&config, "fakeos", None, false)
+        handle_init_for_os(&config, "fakeos", None, false, false)
             .await
             .unwrap();
 
         let calls = fs::read_to_string(&calls).await.unwrap();
+        assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "second"]);
         assert_eq!(
-            calls.lines().collect::<Vec<_>>(),
-            ["first", "second", SYS_FINALIZE_ITEM]
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.sh"))
+                .await
+                .unwrap(),
+            "echo fake profile\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.base.sh"))
+                .await
+                .unwrap(),
+            "echo fake profile\n"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -1554,7 +2591,7 @@ esac
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn handle_init_stops_items_after_failure_but_finalizes_successes() {
+    async fn handle_init_stops_items_after_failure_but_updates_profile_for_successes() {
         let dir = make_temp_dir().await;
         let os_dir = dir.join("presets/sys/fakeos");
         fs::create_dir_all(&os_dir).await.unwrap();
@@ -1585,6 +2622,10 @@ items = ["first", "fails", "after"]
         .unwrap();
 
         let calls = dir.join("calls");
+        fs::write(os_dir.join("profile.sh"), "echo fake profile\n")
+            .await
+            .unwrap();
+
         let script = format!(
             r#"#!/bin/bash
 set -euo pipefail
@@ -1593,7 +2634,6 @@ case "$1" in
   first) printf 'SHINE_SYS_STATUS\tinstalled\tfirst ok\n' ;;
   fails) printf 'SHINE_SYS_STATUS\tfailed\tbad item\n'; exit 1 ;;
   after) printf 'SHINE_SYS_STATUS\tinstalled\tafter ok\n' ;;
-  __shine_finalize) printf 'SHINE_SYS_STATUS\tupdated\tprofile ok\n' ;;
   *) exit 1 ;;
 esac
 "#
@@ -1605,15 +2645,24 @@ esac
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        let err = handle_init_for_os(&config, "fakeos", None, false)
+        let err = handle_init_for_os(&config, "fakeos", None, false, false)
             .await
             .unwrap_err();
 
         assert!(err.to_string().contains("sys init failed"));
         let calls = fs::read_to_string(&calls).await.unwrap();
+        assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "fails"]);
         assert_eq!(
-            calls.lines().collect::<Vec<_>>(),
-            ["first", "fails", SYS_FINALIZE_ITEM]
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.sh"))
+                .await
+                .unwrap(),
+            "echo fake profile\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.base.sh"))
+                .await
+                .unwrap(),
+            "echo fake profile\n"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();

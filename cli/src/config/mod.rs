@@ -100,7 +100,10 @@ pub(crate) struct Config {
 impl Config {
     pub(crate) async fn init_current_dir_config() -> Result<PathBuf> {
         let current_dir = std::env::current_dir().context("resolving current directory")?;
-        if let Some(project_config) = find_project_config(&current_dir) {
+        let (default_shine_dir, _) = default_config_and_presets_dir()?;
+        let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
+        let global_config_path = preliminary_shine_dir.join(GLOBAL_CONFIG_FILE);
+        if let Some(project_config) = find_project_config(&current_dir, &global_config_path) {
             bail!(
                 "{} already exists; current directory is already under a shine project at {}",
                 project_config.path.display(),
@@ -113,8 +116,7 @@ impl Config {
         let presets_dir = tokio::fs::canonicalize(&current_dir)
             .await
             .unwrap_or_else(|_| current_dir.clone());
-        let (default_shine_dir, _) = default_config_and_presets_dir()?;
-        let shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
+        let shine_dir = preliminary_shine_dir;
 
         let config = Config {
             config_path: config_path.clone(),
@@ -136,7 +138,9 @@ impl Config {
         let home_dir = effective_home_dir();
         let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
         let current_dir = std::env::current_dir().context("resolving current directory")?;
-        let project_config = find_project_config(&current_dir);
+        let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
+        let global_config_path = preliminary_shine_dir.join(GLOBAL_CONFIG_FILE);
+        let project_config = find_project_config(&current_dir, &global_config_path);
         if let Some(project_config) = &project_config
             && project_config.is_legacy
         {
@@ -150,7 +154,6 @@ impl Config {
 
         // Pre-read the active config to extract an optional
         // presets_dir override before the full resolution pass.
-        let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
         let config_path = project_config
             .as_ref()
             .map(|project| project.path.clone())
@@ -675,7 +678,16 @@ pub(crate) fn tilde_expand(s: &str) -> String {
 
 /// Like `shellexpand::full` but uses the effective home for both `~` and `$HOME`.
 pub(crate) fn full_expand(s: &str) -> Result<String, shellexpand::LookupError<std::env::VarError>> {
-    let home = effective_home_dir().to_string_lossy().into_owned();
+    full_expand_with_home(s, &effective_home_dir())
+}
+
+/// Like `full_expand` but takes an explicit home directory instead of reading the environment.
+/// Use this when a `Config` is available — pass `&config.home_dir` to avoid a data race in tests.
+pub(crate) fn full_expand_with_home(
+    s: &str,
+    home: &std::path::Path,
+) -> Result<String, shellexpand::LookupError<std::env::VarError>> {
+    let home = home.to_string_lossy().into_owned();
     let home2 = home.clone();
     shellexpand::full_with_context(
         s,
@@ -710,7 +722,7 @@ struct ProjectConfig {
     is_legacy: bool,
 }
 
-fn find_project_config(start: &Path) -> Option<ProjectConfig> {
+fn find_project_config(start: &Path, global_config_path: &Path) -> Option<ProjectConfig> {
     find_ancestor_file(start, PROJECT_CONFIG_FILE)
         .and_then(|path| {
             let root = path.parent()?.to_path_buf();
@@ -722,6 +734,7 @@ fn find_project_config(start: &Path) -> Option<ProjectConfig> {
         })
         .or_else(|| {
             find_ancestor_file(start, LEGACY_PROJECT_CONFIG_FILE)
+                .filter(|path| !paths_match(path, global_config_path))
                 .filter(|path| config_file_has_presets_dir(path))
                 .and_then(|path| {
                     let root = path.parent()?.to_path_buf();
@@ -732,6 +745,22 @@ fn find_project_config(start: &Path) -> Option<ProjectConfig> {
                     })
                 })
         })
+}
+
+fn paths_match(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+
+    // If canonicalization fails for either side (most commonly because the global
+    // config doesn't exist yet), treat the paths as not matching.  A non-NotFound
+    // I/O error (e.g. permission denied on an ancestor) would also return false
+    // here, which is intentionally conservative: the project config is then used
+    // without attempting to merge in the global one.
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 fn find_ancestor_file(start: &Path, file_name: &str) -> Option<PathBuf> {
@@ -1383,6 +1412,7 @@ mod tests {
     async fn project_config_discovery_prefers_new_name_over_legacy_config() {
         let project_dir = make_temp_dir().await;
         let child_dir = project_dir.join("subdir");
+        let global_config = make_temp_dir().await.join("config.toml");
         fs::create_dir_all(&child_dir).await.unwrap();
         fs::write(
             project_dir.join("shine.config.toml"),
@@ -1397,24 +1427,101 @@ mod tests {
         .await
         .unwrap();
 
-        let config = find_project_config(&child_dir).expect("project config should be found");
+        let config = find_project_config(&child_dir, &global_config)
+            .expect("project config should be found");
 
         assert_eq!(config.path, project_dir.join("shine.config.toml"));
         assert!(!config.is_legacy);
 
         fs::remove_dir_all(&project_dir).await.unwrap();
+        fs::remove_dir_all(global_config.parent().unwrap())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
     async fn legacy_config_without_presets_dir_is_not_project_config() {
         let project_dir = make_temp_dir().await;
+        let global_config = make_temp_dir().await.join("config.toml");
         fs::write(project_dir.join("config.toml"), "name = \"other-app\"\n")
             .await
             .unwrap();
 
-        assert!(find_project_config(&project_dir).is_none());
+        assert!(find_project_config(&project_dir, &global_config).is_none());
 
         fs::remove_dir_all(&project_dir).await.unwrap();
+        fs::remove_dir_all(global_config.parent().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn global_config_with_presets_dir_is_not_legacy_project_config() {
+        let _guard = env_lock();
+        let original_dir = std::env::current_dir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        let home_dir = make_temp_dir().await;
+        let shine_dir = home_dir.join(".shine");
+        let child_dir = shine_dir.join("presets/shell/proxy");
+        let external_presets = make_temp_dir().await.join("presets");
+        fs::create_dir_all(&child_dir).await.unwrap();
+        fs::create_dir_all(&external_presets).await.unwrap();
+        fs::write(
+            shine_dir.join("config.toml"),
+            format!(
+                "schema_version = 1\npresets_dir = \"{}\"\n",
+                external_presets.display()
+            ),
+        )
+        .await
+        .unwrap();
+
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
+        unsafe { std::env::set_var("HOME", home_dir.to_str().unwrap()) };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        std::env::set_current_dir(&child_dir).unwrap();
+
+        let config = Config::load_or_init().await.unwrap();
+
+        assert_eq!(
+            fs::canonicalize(config.config_path()).await.unwrap(),
+            fs::canonicalize(shine_dir.join("config.toml"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !config.is_project_config,
+            "global config.toml must not be treated as a legacy project config"
+        );
+        assert_eq!(
+            fs::canonicalize(config.presets_dir()).await.unwrap(),
+            fs::canonicalize(&external_presets).await.unwrap()
+        );
+
+        restore_current_dir(&original_dir);
+        match original_home {
+            Some(home) => {
+                // SAFETY: env_lock() is held for the duration of this block, preventing
+                //          concurrent env mutation from other threads in this test binary.
+                unsafe { std::env::set_var("HOME", home) };
+            }
+            None => {
+                // SAFETY: env_lock() is held for the duration of this block, preventing
+                //          concurrent env mutation from other threads in this test binary.
+                unsafe { std::env::remove_var("HOME") };
+            }
+        }
+        fs::remove_dir_all(&home_dir).await.unwrap();
+        fs::remove_dir_all(external_presets.parent().unwrap())
+            .await
+            .unwrap();
     }
 
     #[allow(clippy::await_holding_lock)]
