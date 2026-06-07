@@ -7,7 +7,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::colors;
 use crate::config::Config;
@@ -481,179 +480,254 @@ async fn install_sys_profile_files(
         .await
         .with_context(|| format!("creating {}", profile_dir.display()))?;
 
-    let mut updated = false;
-
     if force_profile {
-        let backup = if let Ok(active) = tokio::fs::read(&active_path).await
-            && active != template
-        {
-            let backup_path = profile_backup_path(&active_path, ext);
-            tokio::fs::copy(&active_path, &backup_path)
-                .await
-                .with_context(|| {
-                    format!(
-                        "backing up sys profile {} to {}",
-                        active_path.display(),
-                        backup_path.display()
-                    )
-                })?;
-            Some(backup_path)
-        } else {
-            None
-        };
-        write_if_changed(&active_path, &template).await?;
-        write_if_changed(&base_path, &template).await?;
-        remove_if_exists(&new_path).await?;
-        remove_if_exists(&merge_path).await?;
-        let detail = backup
-            .map(|path| {
-                format!(
-                    "{} replaced; previous profile backed up to {}",
-                    active_path.display(),
-                    path.display()
-                )
-            })
-            .unwrap_or_else(|| format!("{} refreshed", active_path.display()));
-        return Ok(SysProfileFileUpdate {
-            updated: true,
-            needs_action: false,
-            detail,
-        });
+        return apply_force_profile(
+            &active_path,
+            &base_path,
+            &new_path,
+            &merge_path,
+            ext,
+            &template,
+        )
+        .await;
     }
 
     let active = match tokio::fs::read(&active_path).await {
         Ok(active) => active,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            tokio::fs::write(&active_path, &template)
-                .await
-                .with_context(|| format!("writing {}", active_path.display()))?;
-            tokio::fs::write(&base_path, &template)
-                .await
-                .with_context(|| format!("writing {}", base_path.display()))?;
-            remove_if_exists(&new_path).await?;
-            remove_if_exists(&merge_path).await?;
-            return Ok(SysProfileFileUpdate {
-                updated: true,
-                needs_action: false,
-                detail: format!("{} created", active_path.display()),
-            });
+            return handle_fresh_install(
+                &active_path,
+                &base_path,
+                &new_path,
+                &merge_path,
+                &template,
+            )
+            .await;
         }
-        Err(err) => {
-            return Err(err).with_context(|| format!("reading {}", active_path.display()));
-        }
+        Err(err) => return Err(err).with_context(|| format!("reading {}", active_path.display())),
     };
 
     let base = match tokio::fs::read(&base_path).await {
         Ok(base) => base,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            if active == template {
-                tokio::fs::write(&base_path, &template)
-                    .await
-                    .with_context(|| format!("writing {}", base_path.display()))?;
-                remove_if_exists(&new_path).await?;
-                remove_if_exists(&merge_path).await?;
-                return Ok(SysProfileFileUpdate {
-                    updated: true,
-                    needs_action: false,
-                    detail: format!("{} initialized", base_path.display()),
-                });
-            }
-            if is_initial_user_profile_edit(&template, &active) {
-                tokio::fs::write(&base_path, &template)
-                    .await
-                    .with_context(|| format!("writing {}", base_path.display()))?;
-                remove_if_exists(&new_path).await?;
-                remove_if_exists(&merge_path).await?;
-                return Ok(SysProfileFileUpdate {
-                    updated: true,
-                    needs_action: false,
-                    detail: format!("{} initialized with user edits", base_path.display()),
-                });
-            }
-
-            tokio::fs::write(&new_path, &template)
-                .await
-                .with_context(|| format!("writing {}", new_path.display()))?;
-            remove_if_exists(&merge_path).await?;
-            return Ok(SysProfileFileUpdate {
-                updated: true,
-                needs_action: true,
-                detail: format!(
-                    "no merge base for {}; review new template at {} or rerun with --force-profile",
-                    active_path.display(),
-                    new_path.display()
-                ),
-            });
+            return handle_missing_base(
+                &active_path,
+                &base_path,
+                &new_path,
+                &merge_path,
+                &template,
+                &active,
+            )
+            .await;
         }
         Err(err) => return Err(err).with_context(|| format!("reading {}", base_path.display())),
     };
 
+    apply_merge_result(
+        &active_path,
+        &base_path,
+        &template_path,
+        &new_path,
+        &merge_path,
+        &base,
+        &active,
+        &template,
+    )
+    .await
+}
+
+async fn apply_force_profile(
+    active_path: &Path,
+    base_path: &Path,
+    new_path: &Path,
+    merge_path: &Path,
+    ext: &str,
+    template: &[u8],
+) -> Result<SysProfileFileUpdate> {
+    let backup = if let Ok(active) = tokio::fs::read(active_path).await
+        && active != template
+    {
+        let backup_path = profile_backup_path(active_path, ext);
+        tokio::fs::copy(active_path, &backup_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "backing up sys profile {} to {}",
+                    active_path.display(),
+                    backup_path.display()
+                )
+            })?;
+        Some(backup_path)
+    } else {
+        None
+    };
+    write_if_changed(active_path, template).await?;
+    write_if_changed(base_path, template).await?;
+    remove_if_exists(new_path).await?;
+    remove_if_exists(merge_path).await?;
+    let detail = backup
+        .map(|path| {
+            format!(
+                "{} replaced; previous profile backed up to {}",
+                active_path.display(),
+                path.display()
+            )
+        })
+        .unwrap_or_else(|| format!("{} refreshed", active_path.display()));
+    Ok(SysProfileFileUpdate {
+        updated: true,
+        needs_action: false,
+        detail,
+    })
+}
+
+async fn handle_fresh_install(
+    active_path: &Path,
+    base_path: &Path,
+    new_path: &Path,
+    merge_path: &Path,
+    template: &[u8],
+) -> Result<SysProfileFileUpdate> {
+    tokio::fs::write(active_path, template)
+        .await
+        .with_context(|| format!("writing {}", active_path.display()))?;
+    tokio::fs::write(base_path, template)
+        .await
+        .with_context(|| format!("writing {}", base_path.display()))?;
+    remove_if_exists(new_path).await?;
+    remove_if_exists(merge_path).await?;
+    Ok(SysProfileFileUpdate {
+        updated: true,
+        needs_action: false,
+        detail: format!("{} created", active_path.display()),
+    })
+}
+
+async fn handle_missing_base(
+    active_path: &Path,
+    base_path: &Path,
+    new_path: &Path,
+    merge_path: &Path,
+    template: &[u8],
+    active: &[u8],
+) -> Result<SysProfileFileUpdate> {
     if active == template {
-        updated |= write_if_changed(&base_path, &template).await?;
-        remove_if_exists(&new_path).await?;
-        remove_if_exists(&merge_path).await?;
+        tokio::fs::write(base_path, template)
+            .await
+            .with_context(|| format!("writing {}", base_path.display()))?;
+        remove_if_exists(new_path).await?;
+        remove_if_exists(merge_path).await?;
+        return Ok(SysProfileFileUpdate {
+            updated: true,
+            needs_action: false,
+            detail: format!("{} initialized", base_path.display()),
+        });
+    }
+    if is_initial_user_profile_edit(template, active) {
+        tokio::fs::write(base_path, template)
+            .await
+            .with_context(|| format!("writing {}", base_path.display()))?;
+        remove_if_exists(new_path).await?;
+        remove_if_exists(merge_path).await?;
+        return Ok(SysProfileFileUpdate {
+            updated: true,
+            needs_action: false,
+            detail: format!("{} initialized with user edits", base_path.display()),
+        });
+    }
+    tokio::fs::write(new_path, template)
+        .await
+        .with_context(|| format!("writing {}", new_path.display()))?;
+    remove_if_exists(merge_path).await?;
+    Ok(SysProfileFileUpdate {
+        updated: true,
+        needs_action: true,
+        detail: format!(
+            "no merge base for {}; review new template at {} or rerun with --force-profile",
+            active_path.display(),
+            new_path.display()
+        ),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn apply_merge_result(
+    active_path: &Path,
+    base_path: &Path,
+    template_path: &Path,
+    new_path: &Path,
+    merge_path: &Path,
+    base: &[u8],
+    active: &[u8],
+    template: &[u8],
+) -> Result<SysProfileFileUpdate> {
+    if active == template {
+        let updated = write_if_changed(base_path, template).await?;
+        remove_if_exists(new_path).await?;
+        remove_if_exists(merge_path).await?;
         return Ok(SysProfileFileUpdate {
             updated,
             needs_action: false,
             detail: format!("{} already current", active_path.display()),
         });
     }
-
     if base == template {
-        remove_if_exists(&new_path).await?;
-        remove_if_exists(&merge_path).await?;
+        remove_if_exists(new_path).await?;
+        remove_if_exists(merge_path).await?;
         return Ok(SysProfileFileUpdate {
             updated: false,
             needs_action: false,
             detail: format!("{} already configured", active_path.display()),
         });
     }
-
     if active == base {
-        tokio::fs::write(&active_path, &template)
+        tokio::fs::write(active_path, template)
             .await
             .with_context(|| format!("writing {}", active_path.display()))?;
-        tokio::fs::write(&base_path, &template)
+        tokio::fs::write(base_path, template)
             .await
             .with_context(|| format!("writing {}", base_path.display()))?;
-        remove_if_exists(&new_path).await?;
-        remove_if_exists(&merge_path).await?;
+        remove_if_exists(new_path).await?;
+        remove_if_exists(merge_path).await?;
         return Ok(SysProfileFileUpdate {
             updated: true,
             needs_action: false,
             detail: format!("{} updated", active_path.display()),
         });
     }
-
     match merge_sys_profile(
-        &active_path,
-        &base_path,
-        &template_path,
-        &base,
-        &active,
-        &template,
+        active_path,
+        base_path,
+        template_path,
+        base,
+        active,
+        template,
     )
     .await?
     {
         ProfileMerge::Clean(merged) => {
-            tokio::fs::write(&active_path, merged)
+            tokio::fs::write(active_path, merged)
                 .await
                 .with_context(|| format!("writing {}", active_path.display()))?;
-            tokio::fs::write(&base_path, &template)
+            tokio::fs::write(base_path, template)
                 .await
                 .with_context(|| format!("writing {}", base_path.display()))?;
-            remove_if_exists(&new_path).await?;
-            remove_if_exists(&merge_path).await?;
-            updated = true;
+            remove_if_exists(new_path).await?;
+            remove_if_exists(merge_path).await?;
+            Ok(SysProfileFileUpdate {
+                updated: true,
+                needs_action: false,
+                detail: format!("{} merged", active_path.display()),
+            })
         }
         ProfileMerge::Conflict(merged) => {
-            tokio::fs::write(&new_path, &template)
+            tokio::fs::write(new_path, template)
                 .await
                 .with_context(|| format!("writing {}", new_path.display()))?;
-            tokio::fs::write(&merge_path, merged)
+            tokio::fs::write(merge_path, merged)
                 .await
                 .with_context(|| format!("writing {}", merge_path.display()))?;
-            return Ok(SysProfileFileUpdate {
+            Ok(SysProfileFileUpdate {
                 updated: true,
                 needs_action: true,
                 detail: format!(
@@ -662,15 +736,9 @@ async fn install_sys_profile_files(
                     new_path.display(),
                     merge_path.display()
                 ),
-            });
+            })
         }
     }
-
-    Ok(SysProfileFileUpdate {
-        updated,
-        needs_action: false,
-        detail: format!("{} merged", active_path.display()),
-    })
 }
 
 enum ProfileMerge {
@@ -911,7 +979,7 @@ async fn remove_if_exists(path: &Path) -> Result<bool> {
 }
 
 fn profile_backup_path(active_path: &Path, ext: &str) -> PathBuf {
-    active_path.with_extension(format!("{ext}.bak.{}", unix_timestamp()))
+    active_path.with_extension(format!("{ext}.bak.{}", uuid::Uuid::new_v4().simple()))
 }
 
 async fn update_sys_shell_profiles(
@@ -920,80 +988,95 @@ async fn update_sys_shell_profiles(
     sys_shell: &str,
 ) -> Result<SysShellProfileUpdate> {
     match os_id {
-        "macos" => {
-            let path = config.home_dir.join(".zshrc");
-            let block = sys_shell_profile_block(os_id, None);
-            let updated = update_shell_profile_block(&path, sys_sentinel(os_id), &block).await?;
-            Ok(SysShellProfileUpdate {
-                updated,
-                unsupported_shell: false,
-                detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
-            })
-        }
-        "ubuntu" => match config.shell_type {
-            ShellType::Bash => {
-                let block = sys_shell_profile_block(os_id, Some("bash"));
-                let updated = update_shell_profile_block(
-                    &config.home_dir.join(".bashrc"),
-                    sys_sentinel(os_id),
-                    &block,
-                )
-                .await?;
-                remove_shell_profile_block(&config.home_dir.join(".zshrc"), sys_sentinel(os_id))
-                    .await?;
-                Ok(SysShellProfileUpdate {
-                    updated,
-                    unsupported_shell: false,
-                    detail: format!("~/.bashrc -> {}", sys_loader_display(os_id)),
-                })
-            }
-            ShellType::Zsh => {
-                let block = sys_shell_profile_block(os_id, Some("zsh"));
-                let updated = update_shell_profile_block(
-                    &config.home_dir.join(".zshrc"),
-                    sys_sentinel(os_id),
-                    &block,
-                )
-                .await?;
-                remove_shell_profile_block(&config.home_dir.join(".bashrc"), sys_sentinel(os_id))
-                    .await?;
-                Ok(SysShellProfileUpdate {
-                    updated,
-                    unsupported_shell: false,
-                    detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
-                })
-            }
-            _ => Ok(SysShellProfileUpdate {
-                updated: false,
-                unsupported_shell: true,
-                detail: format!("unsupported shell for sys profile: {sys_shell}"),
-            }),
-        },
-        "windows" => {
-            let block = sys_shell_profile_block(os_id, None);
-            let mut updated = false;
-            for path in [
-                config
-                    .home_dir
-                    .join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
-                config
-                    .home_dir
-                    .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
-            ] {
-                updated |= update_shell_profile_block(&path, sys_sentinel(os_id), &block).await?;
-            }
-            Ok(SysShellProfileUpdate {
-                updated,
-                unsupported_shell: false,
-                detail: "PowerShell profiles".to_string(),
-            })
-        }
+        "macos" => update_macos_shell_profile(config, os_id).await,
+        "ubuntu" => update_ubuntu_shell_profile(config, os_id, sys_shell).await,
+        "windows" => update_windows_shell_profile(config, os_id).await,
         _ => Ok(SysShellProfileUpdate {
             updated: false,
             unsupported_shell: true,
             detail: format!("unsupported OS for sys profile: {os_id}"),
         }),
     }
+}
+
+async fn update_macos_shell_profile(config: &Config, os_id: &str) -> Result<SysShellProfileUpdate> {
+    let path = config.home_dir.join(".zshrc");
+    let block = sys_shell_profile_block(os_id, None);
+    let updated = update_shell_profile_block(&path, sys_sentinel(os_id), &block).await?;
+    Ok(SysShellProfileUpdate {
+        updated,
+        unsupported_shell: false,
+        detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
+    })
+}
+
+async fn update_ubuntu_shell_profile(
+    config: &Config,
+    os_id: &str,
+    sys_shell: &str,
+) -> Result<SysShellProfileUpdate> {
+    match config.shell_type {
+        ShellType::Bash => {
+            let block = sys_shell_profile_block(os_id, Some("bash"));
+            let updated = update_shell_profile_block(
+                &config.home_dir.join(".bashrc"),
+                sys_sentinel(os_id),
+                &block,
+            )
+            .await?;
+            remove_shell_profile_block(&config.home_dir.join(".zshrc"), sys_sentinel(os_id))
+                .await?;
+            Ok(SysShellProfileUpdate {
+                updated,
+                unsupported_shell: false,
+                detail: format!("~/.bashrc -> {}", sys_loader_display(os_id)),
+            })
+        }
+        ShellType::Zsh => {
+            let block = sys_shell_profile_block(os_id, Some("zsh"));
+            let updated = update_shell_profile_block(
+                &config.home_dir.join(".zshrc"),
+                sys_sentinel(os_id),
+                &block,
+            )
+            .await?;
+            remove_shell_profile_block(&config.home_dir.join(".bashrc"), sys_sentinel(os_id))
+                .await?;
+            Ok(SysShellProfileUpdate {
+                updated,
+                unsupported_shell: false,
+                detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
+            })
+        }
+        _ => Ok(SysShellProfileUpdate {
+            updated: false,
+            unsupported_shell: true,
+            detail: format!("unsupported shell for sys profile: {sys_shell}"),
+        }),
+    }
+}
+
+async fn update_windows_shell_profile(
+    config: &Config,
+    os_id: &str,
+) -> Result<SysShellProfileUpdate> {
+    let block = sys_shell_profile_block(os_id, None);
+    let mut updated = false;
+    for path in [
+        config
+            .home_dir
+            .join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+        config
+            .home_dir
+            .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+    ] {
+        updated |= update_shell_profile_block(&path, sys_sentinel(os_id), &block).await?;
+    }
+    Ok(SysShellProfileUpdate {
+        updated,
+        unsupported_shell: false,
+        detail: "PowerShell profiles".to_string(),
+    })
 }
 
 fn sys_sentinel(os_id: &str) -> (&'static str, &'static str) {
@@ -1051,7 +1134,11 @@ async fn update_shell_profile_block(
             .await
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    let content = tokio::fs::read_to_string(path).await.unwrap_or_default();
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
     if extract_sentinel_block(&content, sentinel) == Some(desired_block) {
         return Ok(false);
     }
@@ -1125,13 +1212,6 @@ fn sys_loader_display(os_id: &str) -> String {
         "~/.shine/profile/{os_id}-sys.{}",
         if os_id == "windows" { "ps1" } else { "sh" }
     )
-}
-
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
 }
 
 fn parse_sys_item_output(

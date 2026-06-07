@@ -275,10 +275,22 @@ async fn run(cli: Cli) -> Result<()> {
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
             AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
             AppCommands::Install { category, dry_run } => {
-                Box::pin(apps::handle_install(&config, category, dry_run, false)).await
+                Box::pin(apps::handle_install(
+                    &config,
+                    category.as_deref(),
+                    dry_run,
+                    false,
+                ))
+                .await
             }
             AppCommands::Reinstall { category, dry_run } => {
-                Box::pin(apps::handle_install(&config, category, dry_run, true)).await
+                Box::pin(apps::handle_install(
+                    &config,
+                    category.as_deref(),
+                    dry_run,
+                    true,
+                ))
+                .await
             }
             AppCommands::Uninstall {
                 category,
@@ -412,26 +424,14 @@ async fn handle_install_shim(config: &Config, category: &str) -> Result<()> {
             Box::pin(shells::handle_install(config, Some(category), false)).await
         }
         ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_install(
-                config,
-                Some(category.to_string()),
-                false,
-                false,
-            ))
-            .await
+            Box::pin(apps::handle_install(config, Some(category), false, false)).await
         }
         ShimResolution::Conflict => match select_shim_kind("Install", category)? {
             PresetKind::Shell => {
                 Box::pin(shells::handle_install(config, Some(category), false)).await
             }
             PresetKind::App => {
-                Box::pin(apps::handle_install(
-                    config,
-                    Some(category.to_string()),
-                    false,
-                    false,
-                ))
-                .await
+                Box::pin(apps::handle_install(config, Some(category), false, false)).await
             }
         },
         ShimResolution::Missing => bail_shim_missing(category),
@@ -444,26 +444,14 @@ async fn handle_reinstall_shim(config: &Config, category: &str) -> Result<()> {
             Box::pin(shells::handle_install(config, Some(category), true)).await
         }
         ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_install(
-                config,
-                Some(category.to_string()),
-                false,
-                true,
-            ))
-            .await
+            Box::pin(apps::handle_install(config, Some(category), false, true)).await
         }
         ShimResolution::Conflict => match select_shim_kind("Reinstall", category)? {
             PresetKind::Shell => {
                 Box::pin(shells::handle_install(config, Some(category), true)).await
             }
             PresetKind::App => {
-                Box::pin(apps::handle_install(
-                    config,
-                    Some(category.to_string()),
-                    false,
-                    true,
-                ))
-                .await
+                Box::pin(apps::handle_install(config, Some(category), false, true)).await
             }
         },
         ShimResolution::Missing => bail_shim_missing(category),
@@ -563,7 +551,8 @@ fn select_shim_kind(action: &str, category: &str) -> Result<PresetKind> {
         .interact()?;
     Ok(match selected {
         0 => PresetKind::Shell,
-        _ => PresetKind::App,
+        1 => PresetKind::App,
+        _ => unreachable!("dialoguer Select returned out-of-range index {selected}"),
     })
 }
 

@@ -322,7 +322,7 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
 
 pub(crate) async fn handle_install(
     config: &Config,
-    category: Option<String>,
+    category: Option<&str>,
     dry_run: bool,
     force: bool,
 ) -> Result<()> {
@@ -331,7 +331,7 @@ pub(crate) async fn handle_install(
         println!("{}", colors::dim("[dry-run] No files will be modified."));
     }
 
-    let prefix = match &category {
+    let prefix = match category {
         Some(cat) => format!("app/{cat}"),
         None => "app".to_string(),
     };
@@ -349,11 +349,11 @@ pub(crate) async fn handle_install(
             crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
     }
     let categories = if config.is_external_presets {
-        metadata::load_installed_categories(config, category.as_deref()).await?
+        metadata::load_installed_categories(config, category).await?
     } else {
-        metadata::load_embedded_categories(category.as_deref())?
+        metadata::load_embedded_categories(category)?
     };
-    if let Some(category) = category.as_deref()
+    if let Some(category) = category
         && categories.is_empty()
     {
         anyhow::bail!("app preset category not found: {category}");
@@ -1321,7 +1321,7 @@ pub(crate) fn resolve_install_destination(
     config: &Config,
 ) -> Result<PathBuf> {
     if let Some(dest_root) = &category.destination_root {
-        let expanded = crate::config::full_expand(dest_root)
+        let expanded = crate::config::full_expand_with_home(dest_root, &config.home_dir)
             .with_context(|| format!("failed to expand destination root: {dest_root}"))?;
         let root = PathBuf::from(&expanded);
         if !is_install_destination_root_absolute(&expanded, &root) {
@@ -1612,7 +1612,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1680,7 +1680,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1708,7 +1708,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1745,7 +1745,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         write_external_sample_app_with_extra(
@@ -1790,7 +1790,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         write_external_sample_app_with_extra(
@@ -1835,7 +1835,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1870,7 +1870,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1905,7 +1905,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1940,7 +1940,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -1977,7 +1977,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         let cat_dir = dir.join("presets/app/sample");
@@ -2026,7 +2026,7 @@ mod tests {
         config.is_external_presets = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("sample".to_string()), false, false)
+        handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
@@ -2102,12 +2102,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(handle_install(
-                &config,
-                Some("docker".to_string()),
-                true,
-                false,
-            ))
+            .block_on(handle_install(&config, Some("docker"), true, false))
             .unwrap_err();
 
         assert!(
@@ -2177,14 +2172,9 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         .await
         .unwrap();
 
-        handle_install(
-            &config,
-            Some("docker-desktop-test".to_string()),
-            false,
-            false,
-        )
-        .await
-        .unwrap();
+        handle_install(&config, Some("docker-desktop-test"), false, false)
+            .await
+            .unwrap();
 
         let mut installed: serde_json::Value =
             serde_json::from_slice(&fs::read(&destination).await.unwrap()).unwrap();
@@ -2318,7 +2308,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, Some("ghostty".to_string()), false, false)
+        handle_install(&config, Some("ghostty"), false, false)
             .await
             .unwrap();
 

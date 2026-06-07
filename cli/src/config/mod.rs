@@ -678,7 +678,16 @@ pub(crate) fn tilde_expand(s: &str) -> String {
 
 /// Like `shellexpand::full` but uses the effective home for both `~` and `$HOME`.
 pub(crate) fn full_expand(s: &str) -> Result<String, shellexpand::LookupError<std::env::VarError>> {
-    let home = effective_home_dir().to_string_lossy().into_owned();
+    full_expand_with_home(s, &effective_home_dir())
+}
+
+/// Like `full_expand` but takes an explicit home directory instead of reading the environment.
+/// Use this when a `Config` is available — pass `&config.home_dir` to avoid a data race in tests.
+pub(crate) fn full_expand_with_home(
+    s: &str,
+    home: &std::path::Path,
+) -> Result<String, shellexpand::LookupError<std::env::VarError>> {
+    let home = home.to_string_lossy().into_owned();
     let home2 = home.clone();
     shellexpand::full_with_context(
         s,
@@ -743,6 +752,11 @@ fn paths_match(left: &Path, right: &Path) -> bool {
         return true;
     }
 
+    // If canonicalization fails for either side (most commonly because the global
+    // config doesn't exist yet), treat the paths as not matching.  A non-NotFound
+    // I/O error (e.g. permission denied on an ancestor) would also return false
+    // here, which is intentionally conservative: the project config is then used
+    // without attempting to merge in the global one.
     match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
