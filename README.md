@@ -103,8 +103,10 @@ Shell Preset Categories
 ### Install shell presets
 
 ```bash
+shine install proxy            # shorthand for a matching shell/app category
 shine shell install            # install all categories
 shine shell install proxy      # install only the proxy category
+shine reinstall proxy          # shorthand reinstall for a matching category
 shine shell reinstall proxy    # overwrite managed files and links for proxy
 ```
 
@@ -118,6 +120,8 @@ Bin Links      4 created
 Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` or `DEEPSEEK_API_KEY_GPG_SECRET` in the active env config before use.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `reinstall` when you want to overwrite managed preset files, links, and the shell config entry.
 
+Top-level `install`, `reinstall`, and `uninstall` commands accept a required category and automatically route to either `shell/<category>` or `app/<category>`. If both preset types define the same category name, `shine` prompts you to choose one.
+
 Shell metadata can scope entries to `platforms = ["unix"]` or `platforms = ["windows"]`. The built-in `agent` category uses this to expose `ccenv` from `cc.sh` on Unix shells and from `cc.ps1` on Windows PowerShell.
 
 On Windows, PowerShell PATH setup updates both supported profile locations so `powershell.exe` and `pwsh.exe` see the same `~/.shine/bin` entry:
@@ -128,6 +132,7 @@ On Windows, PowerShell PATH setup updates both supported profile locations so `p
 ### Uninstall shell presets
 
 ```bash
+shine uninstall proxy              # shorthand for a matching shell/app category
 shine shell uninstall                # uninstall all categories
 shine shell uninstall proxy          # uninstall only the proxy category
 shine shell uninstall --dry-run      # preview without changes
@@ -222,7 +227,7 @@ Current built-in presets:
 - `macos` — offers selectable Homebrew, Yazi, Starship, Neovim, AstroNvim, ZeroTier, zsh plugin, zoxide, Atuin, fzf, bat, eza, nvm, Bun, pnpm, and Fastfetch steps. The `recommended` profile includes Homebrew and the core terminal/editor tools; the `all` profile adds JavaScript runtimes and Fastfetch.
 - `windows` — offers selectable Rust, Yazi, Starship, zoxide, Atuin, fzf, bat, eza, ZeroTier, Bun, pnpm, and mise steps. The `recommended` profile includes Rust and core terminal tools; the `all` profile adds JavaScript runtime and environment manager steps.
 
-When selected tools need shell integration, sys init installs managed profile blocks. Ubuntu uses a managed shell profile loader for tools such as Yazi, Starship, zoxide, Atuin, fzf, and mise. Windows uses a managed PowerShell profile loader for Yazi, Starship, zoxide, Atuin, fzf, and mise.
+When selected tools need shell integration, sys init installs managed profile blocks. Ubuntu uses a managed shell profile loader for tools such as Yazi, Starship, zoxide, Atuin, fzf, and mise. Windows uses a managed PowerShell profile loader for Yazi, Starship, zoxide, Atuin, fzf, and mise. Managed profile updates are merged into the existing profile file so user edits outside the managed block are preserved.
 
 ### Show app preset details
 
@@ -237,10 +242,12 @@ Prints the description, destination, and file list for a single category, with p
 ### Install app presets
 
 ```bash
+shine install starship        # shorthand for a matching shell/app category
 shine app install             # install all app categories
 shine app install ghostty     # install only one category
 shine app install starship    # install only one category
 shine app install --dry-run   # preview destination writes
+shine reinstall ghostty       # shorthand reinstall for a matching category
 shine app reinstall ghostty   # overwrite managed files for one category
 ```
 
@@ -492,7 +499,7 @@ shine upgrade --verbose  # include env-template check details
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.30.0+preview.abc1234`, while stable binaries continue to report `0.30.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.31.0+preview.abc1234`, while stable binaries continue to report `0.31.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -502,7 +509,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.30.0 sh install.sh
+SHINE_VERSION=0.31.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -510,7 +517,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.30.0"; .\install.ps1
+$env:SHINE_VERSION = "0.31.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -557,6 +564,10 @@ usetproxy
 ```
 
 Clears the session proxy environment variables. If Yarn is installed, it also removes the Yarn proxy config entries that `setproxy` may have written.
+
+### shell/utils — `copyfile`
+
+Small utility commands for terminal workflows. The built-in Unix `copyfile <file>` command copies a file's contents to the local clipboard via OSC52, which is useful over SSH or inside terminal multiplexers that support OSC52 clipboard integration.
 
 ### shell/agent — `ccenv`
 

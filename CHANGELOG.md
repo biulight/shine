@@ -5,6 +5,25 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.31.0] — 2026-06-07
+
+### Features
+
+- Added top-level `shine install <CATEGORY>`, `shine reinstall <CATEGORY>`, and `shine uninstall <CATEGORY>` shims that resolve matching shell or app preset categories automatically.
+- Added a `utils/copyfile` shell preset for copying a file's contents to the local clipboard via OSC52.
+- Reworked system init profile handling so managed shell profile updates are merged from Rust while preserving user edits.
+
+### Bug Fixes
+
+- Fixed project-local config discovery so global `~/.shine/config.toml` settings do not override nearby `shine.config.toml` files.
+- Fixed system init profile handling to preserve user customizations, accept uncommented default lines, and include Homebrew's zsh completions path.
+- Clarified shell preset file counts in list output.
+
+### Docs
+
+- Documented the top-level install/reinstall/uninstall shims, the `copyfile` shell preset, and system init profile merge behavior.
+- Updated the pinned `0.31.0` installer examples and version output examples in the README files.
+
 ## [0.30.0] — 2026-06-05
 
 ### Features
