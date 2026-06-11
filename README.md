@@ -604,13 +604,14 @@ store it as `<KEY>_SECRET` for encrypted storage or `<KEY>` for plaintext
 fallback, then evaluate the generated shell code:
 
 ```bash
-shine env encrypt -r <key-id> --from MY_TOKEN --set MY_TOKEN_SECRET
+shine env encrypt -r <key-id> --from MY_TOKEN
 eval "$(shine env export MY_TOKEN)"
 ```
 
 `shine env export MY_TOKEN` prefers `MY_TOKEN_SECRET`, decrypts it when present,
 and otherwise falls back to `MY_TOKEN`. It prints shell-specific assignment code;
-the `eval` step is what applies it to the current terminal session.
+the `eval` step is what applies it to the current terminal session. Use `--set`
+when you need a custom encrypted target key.
 
 Then install and use the helper:
 

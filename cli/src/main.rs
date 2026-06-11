@@ -751,6 +751,26 @@ fn powershell_string_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum EnvEncryptOutput {
+    Print,
+    Set(String),
+}
+
+fn resolve_env_encrypt_output(
+    set_key: Option<&str>,
+    from_key: Option<&str>,
+) -> Result<EnvEncryptOutput> {
+    if let Some(key) = set_key {
+        return Ok(EnvEncryptOutput::Set(key.to_string()));
+    }
+    if let Some(key) = from_key {
+        validate_env_export_key(key)?;
+        return Ok(EnvEncryptOutput::Set(env_export_secret_key(key)));
+    }
+    Ok(EnvEncryptOutput::Print)
+}
+
 async fn handle_env_encrypt(
     config: &Config,
     recipient: &str,
@@ -775,13 +795,14 @@ async fn handle_env_encrypt(
     let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, recipient)
         .await
         .with_context(|| format!("encrypting secret for {recipient}"))?;
-    if let Some(key) = set_key {
-        let mut env = env::EnvConfig::load_or_init(config).await?;
-        env.set(key, &encoded);
-        env.save(config).await?;
-        println!("{}", colors::green(&format!("set {key} = \"{encoded}\"")));
-    } else {
-        println!("{encoded}");
+    match resolve_env_encrypt_output(set_key, from_key)? {
+        EnvEncryptOutput::Set(key) => {
+            let mut env = env::EnvConfig::load_or_init(config).await?;
+            env.set(&key, &encoded);
+            env.save(config).await?;
+            println!("{}", colors::green(&format!("set {key} = \"{encoded}\"")));
+        }
+        EnvEncryptOutput::Print => println!("{encoded}"),
     }
     Ok(())
 }
@@ -1692,6 +1713,41 @@ mod tests {
         assert_eq!(
             format_env_export(&shells::ShellType::PowerShell, "TOKEN", value),
             "$env:TOKEN = 'abc def''ghi$HOME\nnext; Remove-Item /'"
+        );
+    }
+
+    #[test]
+    fn env_encrypt_output_defaults_from_key_to_secret_key() {
+        assert_eq!(
+            resolve_env_encrypt_output(None, Some("GH_TOKEN")).unwrap(),
+            EnvEncryptOutput::Set("GH_TOKEN_SECRET".to_string())
+        );
+    }
+
+    #[test]
+    fn env_encrypt_output_explicit_set_wins_over_default() {
+        assert_eq!(
+            resolve_env_encrypt_output(Some("CUSTOM_SECRET"), Some("GH_TOKEN")).unwrap(),
+            EnvEncryptOutput::Set("CUSTOM_SECRET".to_string())
+        );
+    }
+
+    #[test]
+    fn env_encrypt_output_prints_stdin_without_set() {
+        assert_eq!(
+            resolve_env_encrypt_output(None, None).unwrap(),
+            EnvEncryptOutput::Print
+        );
+    }
+
+    #[test]
+    fn env_encrypt_output_rejects_invalid_inferred_from_key() {
+        let err = resolve_env_encrypt_output(None, Some("GH-TOKEN")).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("env export key must contain only letters, digits, and underscores"),
+            "error should explain invalid inferred key: {err:#}"
         );
     }
 
