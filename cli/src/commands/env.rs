@@ -21,6 +21,11 @@ pub(crate) enum EnvCommands {
         /// Variable name containing base64-encoded GPG ciphertext
         key: String,
     },
+    /// Decrypt KEY_SECRET and print shell code that exports KEY
+    Export {
+        /// Variable name to export from KEY_SECRET
+        key: String,
+    },
     /// Encrypt stdin with GPG and print base64 ciphertext
     Encrypt(EnvEncryptCommand),
 }

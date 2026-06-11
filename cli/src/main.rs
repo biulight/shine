@@ -357,6 +357,7 @@ async fn run(cli: Cli) -> Result<()> {
             EnvCommands::Set { key, value } => handle_env_set(&config, &key, &value).await,
             EnvCommands::Get { key } => handle_env_get(&config, &key).await,
             EnvCommands::Decrypt { key } => handle_env_decrypt(&config, &key).await,
+            EnvCommands::Export { key } => handle_env_export(&config, &key).await,
             EnvCommands::Encrypt(cmd) => {
                 handle_env_encrypt(
                     &config,
@@ -657,6 +658,60 @@ async fn handle_env_decrypt(config: &Config, key: &str) -> Result<()> {
         .with_context(|| format!("decrypting {key}"))?;
     print!("{plaintext}");
     Ok(())
+}
+
+async fn handle_env_export(config: &Config, key: &str) -> Result<()> {
+    validate_env_export_key(key)?;
+    let secret_key = env_export_secret_key(key);
+    let env = env::EnvConfig::load_or_init(config).await?;
+    let Some(value) = env.get(&secret_key) else {
+        bail!("{secret_key} is not set in the active config [env]");
+    };
+    let plaintext = secret::decrypt_base64_gpg_secret(value)
+        .await
+        .with_context(|| format!("decrypting {secret_key}"))?;
+    println!("{}", format_env_export(&config.shell_type, key, &plaintext));
+    Ok(())
+}
+
+fn env_export_secret_key(key: &str) -> String {
+    format!("{key}_SECRET")
+}
+
+fn validate_env_export_key(key: &str) -> Result<()> {
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        bail!("env export key must not be empty");
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        bail!("env export key must start with a letter or underscore: {key}");
+    }
+    if !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
+        bail!("env export key must contain only letters, digits, and underscores: {key}");
+    }
+    Ok(())
+}
+
+fn format_env_export(shell: &shells::ShellType, key: &str, value: &str) -> String {
+    match shell {
+        shells::ShellType::Fish => format!("set -gx {key} {}", fish_quote(value)),
+        shells::ShellType::PowerShell => {
+            format!("$env:{key} = {}", powershell_string_quote(value))
+        }
+        _ => format!("export {key}={}", posix_shell_quote(value)),
+    }
+}
+
+fn posix_shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn fish_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+fn powershell_string_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 async fn handle_env_encrypt(
@@ -1435,6 +1490,70 @@ mod tests {
             cli.command,
             Commands::Init(InitCommand { yes: true })
         ));
+    }
+
+    #[test]
+    fn cli_accepts_env_export_command() {
+        let cli = Cli::try_parse_from(["shine", "env", "export", "DEEPSEEK_API_KEY"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Export { key }
+            } if key == "DEEPSEEK_API_KEY"
+        ));
+    }
+
+    #[test]
+    fn env_export_secret_key_appends_secret_suffix() {
+        assert_eq!(
+            env_export_secret_key("DEEPSEEK_API_KEY"),
+            "DEEPSEEK_API_KEY_SECRET"
+        );
+        assert_eq!(env_export_secret_key("xxx"), "xxx_SECRET");
+    }
+
+    #[test]
+    fn env_export_key_validation_accepts_shell_variable_names() {
+        for key in ["FOO", "_FOO", "foo_123", "A1"] {
+            validate_env_export_key(key).unwrap();
+        }
+    }
+
+    #[test]
+    fn env_export_key_validation_rejects_unsafe_names() {
+        for key in ["", "1FOO", "FOO-BAR", "FOO;BAR", "FOO BAR", "FOO.SECRET"] {
+            assert!(
+                validate_env_export_key(key).is_err(),
+                "key should be rejected: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn env_export_formats_posix_shell_code_safely() {
+        let value = "abc def'ghi$HOME\nnext; rm -rf /";
+        assert_eq!(
+            format_env_export(&shells::ShellType::Zsh, "TOKEN", value),
+            "export TOKEN='abc def'\\''ghi$HOME\nnext; rm -rf /'"
+        );
+    }
+
+    #[test]
+    fn env_export_formats_fish_shell_code_safely() {
+        let value = "abc def'ghi\\path\nnext; rm -rf /";
+        assert_eq!(
+            format_env_export(&shells::ShellType::Fish, "TOKEN", value),
+            "set -gx TOKEN 'abc def\\'ghi\\\\path\nnext; rm -rf /'"
+        );
+    }
+
+    #[test]
+    fn env_export_formats_powershell_code_safely() {
+        let value = "abc def'ghi$HOME\nnext; Remove-Item /";
+        assert_eq!(
+            format_env_export(&shells::ShellType::PowerShell, "TOKEN", value),
+            "$env:TOKEN = 'abc def''ghi$HOME\nnext; Remove-Item /'"
+        );
     }
 
     #[test]

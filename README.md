@@ -599,6 +599,18 @@ You can also decrypt any base64 GPG secret from the active env config directly:
 shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
 ```
 
+For a generic secret that should become an environment variable in the current
+shell, store it as `<KEY>_SECRET` and evaluate the generated shell code:
+
+```bash
+shine env encrypt -r <key-id> --from MY_TOKEN --set MY_TOKEN_SECRET
+eval "$(shine env export MY_TOKEN)"
+```
+
+`shine env export MY_TOKEN` decrypts `MY_TOKEN_SECRET` and prints shell-specific
+assignment code for `MY_TOKEN`; the `eval` step is what applies it to the current
+terminal session.
+
 Then install and use the helper:
 
 ```bash
