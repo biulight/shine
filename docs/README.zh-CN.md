@@ -95,8 +95,8 @@ Shell Preset Categories
     usetproxy     Unset all proxy environment variables.
                   ...
 
-  tools  1 script
-    test_tools    Verify shine-installed shell tools are callable.
+  utils  1 script
+    copyfile      Copy a file's contents to the local clipboard via OSC52.
                   ...
 ```
 
@@ -601,10 +601,6 @@ ccenv
 
 如果同时设置了 `DEEPSEEK_API_KEY_GPG_SECRET` 和 `DEEPSEEK_API_KEY`，会优先使用加密 secret。若 GPG 解码或解密失败，`ccenv` 会直接停止，而不会回退到明文 key。
 
-### shell/tools — `test_tools`
-
-验证通过 `shine` 安装的 shell 工具是否能在当前环境中正常调用。
-
 ### Shell 预设元数据
 
 Shell 预设类别可以可选定义 `presets/shell/<category>/shine.toml`，用于控制安装后的命令名：
@@ -685,7 +681,7 @@ PROXY_HOST = "127.0.0.1"
 ├── bin/
 │   ├── setproxy         # symlink/shim → 平台对应 proxy 脚本
 │   ├── usetproxy        # symlink/shim → 平台对应 proxy 脚本
-│   └── test_tools       # symlink → presets/shell/tools/test_tools.sh
+│   └── copyfile         # symlink → presets/shell/utils/copyfile.sh
 └── presets/
     ├── app/
     │   ├── JetBrains/
@@ -707,8 +703,9 @@ PROXY_HOST = "127.0.0.1"
         │   ├── set_proxy.sh
         │   ├── uset_proxy.ps1
         │   └── uset_proxy.sh
-        └── tools/
-            └── test_tools.sh
+        └── utils/
+            ├── shine.toml
+            └── copyfile.sh
 ```
 
 实际安装后的应用文件位于它们各自的目标路径，例如：
