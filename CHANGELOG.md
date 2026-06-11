@@ -5,6 +5,17 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.31.1] — 2026-06-11
+
+### Bug Fixes
+
+- Fixed update checks and self-upgrade requests to use the configured GitHub token and show GitHub API errors when release lookup fails.
+
+### Docs
+
+- Removed stale `shell/tools/test_tools` references from the English and Chinese README files and updated examples to the current `shell/utils/copyfile` preset.
+- Updated the pinned `0.31.1` installer examples and version output examples in the README files.
+
 ## [0.31.0] — 2026-06-07
 
 ### Features

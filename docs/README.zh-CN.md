@@ -495,7 +495,7 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.31.0+preview.abc1234`；稳定版则继续显示 `0.31.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.31.1+preview.abc1234`；稳定版则继续显示 `0.31.1`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -505,7 +505,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.31.0 sh install.sh
+SHINE_VERSION=0.31.1 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -513,7 +513,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.31.0"; .\install.ps1
+$env:SHINE_VERSION = "0.31.1"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
