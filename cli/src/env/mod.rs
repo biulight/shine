@@ -32,6 +32,10 @@ impl EnvConfig {
         self.vars.insert(key.into(), value.into());
     }
 
+    pub(crate) fn remove(&mut self, key: &str) -> Option<String> {
+        self.vars.remove(key)
+    }
+
     pub(crate) fn as_map(&self) -> &BTreeMap<String, String> {
         &self.vars
     }
@@ -83,6 +87,22 @@ mod tests {
         env.set("MY_VAR", "hello");
         assert_eq!(env.get("MY_VAR"), Some("hello"));
         assert_eq!(env.get("OTHER"), None);
+    }
+
+    #[test]
+    fn remove_deletes_existing_key() {
+        let mut env = EnvConfig::default();
+        env.set("MY_VAR", "hello");
+
+        assert_eq!(env.remove("MY_VAR"), Some("hello".to_string()));
+        assert_eq!(env.get("MY_VAR"), None);
+    }
+
+    #[test]
+    fn remove_missing_key_returns_none() {
+        let mut env = EnvConfig::default();
+
+        assert_eq!(env.remove("OTHER"), None);
     }
 
     #[test]

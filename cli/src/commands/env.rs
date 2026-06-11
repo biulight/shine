@@ -11,6 +11,11 @@ pub(crate) enum EnvCommands {
         /// Variable value
         value: String,
     },
+    /// Delete a variable from config.toml [env]
+    Delete {
+        /// Variable name
+        key: String,
+    },
     /// Get a single variable value
     Get {
         /// Variable name

@@ -355,6 +355,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Env { command } => match command {
             EnvCommands::Show => handle_env_show(&config).await,
             EnvCommands::Set { key, value } => handle_env_set(&config, &key, &value).await,
+            EnvCommands::Delete { key } => handle_env_delete(&config, &key).await,
             EnvCommands::Get { key } => handle_env_get(&config, &key).await,
             EnvCommands::Decrypt { key } => handle_env_decrypt(&config, &key).await,
             EnvCommands::Export { key } => handle_env_export(&config, &key).await,
@@ -626,6 +627,20 @@ async fn handle_env_set(config: &Config, key: &str, value: &str) -> Result<()> {
     env.set(key, value);
     env.save(config).await?;
     println!("{}", colors::green(&format!("set {key} = \"{value}\"")));
+    println!(
+        "{}",
+        colors::dim("Run `shine upgrade` to apply to already-installed presets.")
+    );
+    Ok(())
+}
+
+async fn handle_env_delete(config: &Config, key: &str) -> Result<()> {
+    let mut env = env::EnvConfig::load_or_init(config).await?;
+    if env.remove(key).is_none() {
+        bail!("{key} is not set in the active config [env]");
+    }
+    env.save(config).await?;
+    println!("{}", colors::green(&format!("deleted {key}")));
     println!(
         "{}",
         colors::dim("Run `shine upgrade` to apply to already-installed presets.")
@@ -1501,6 +1516,55 @@ mod tests {
                 command: EnvCommands::Export { key }
             } if key == "DEEPSEEK_API_KEY"
         ));
+    }
+
+    #[test]
+    fn cli_accepts_env_delete_command() {
+        let cli = Cli::try_parse_from(["shine", "env", "delete", "MY_TOKEN"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Delete { key }
+            } if key == "MY_TOKEN"
+        ));
+    }
+
+    #[tokio::test]
+    async fn env_delete_removes_key_from_saved_config() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.env.insert("MY_TOKEN".into(), "secret".into());
+        config.save().await.unwrap();
+
+        handle_env_delete(&config, "MY_TOKEN").await.unwrap();
+
+        let contents = fs::read_to_string(config.config_path()).await.unwrap();
+        let parsed: toml::Table = toml::from_str(&contents).unwrap();
+        let env = parsed
+            .get("env")
+            .and_then(|value| value.as_table())
+            .unwrap();
+        assert!(
+            !env.contains_key("MY_TOKEN"),
+            "deleted key should not remain in saved config: {contents}"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn env_delete_fails_when_key_is_missing() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+
+        let err = handle_env_delete(&config, "MY_TOKEN").await.unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("MY_TOKEN is not set in the active config [env]"),
+            "error should explain missing key: {err:#}"
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[test]
