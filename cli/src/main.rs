@@ -677,16 +677,38 @@ async fn handle_env_decrypt(config: &Config, key: &str) -> Result<()> {
 
 async fn handle_env_export(config: &Config, key: &str) -> Result<()> {
     validate_env_export_key(key)?;
-    let secret_key = env_export_secret_key(key);
     let env = env::EnvConfig::load_or_init(config).await?;
-    let Some(value) = env.get(&secret_key) else {
-        bail!("{secret_key} is not set in the active config [env]");
+    let value = match resolve_env_export_value(&env, key)? {
+        EnvExportValue::Secret {
+            key: secret_key,
+            value,
+        } => secret::decrypt_base64_gpg_secret(value)
+            .await
+            .with_context(|| format!("decrypting {secret_key}"))?,
+        EnvExportValue::Plaintext(value) => value.to_string(),
     };
-    let plaintext = secret::decrypt_base64_gpg_secret(value)
-        .await
-        .with_context(|| format!("decrypting {secret_key}"))?;
-    println!("{}", format_env_export(&config.shell_type, key, &plaintext));
+    println!("{}", format_env_export(&config.shell_type, key, &value));
     Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EnvExportValue<'a> {
+    Secret { key: String, value: &'a str },
+    Plaintext(&'a str),
+}
+
+fn resolve_env_export_value<'a>(env: &'a env::EnvConfig, key: &str) -> Result<EnvExportValue<'a>> {
+    let secret_key = env_export_secret_key(key);
+    if let Some(value) = env.get(&secret_key) {
+        return Ok(EnvExportValue::Secret {
+            key: secret_key,
+            value,
+        });
+    }
+    if let Some(value) = env.get(key) {
+        return Ok(EnvExportValue::Plaintext(value));
+    }
+    bail!("{secret_key} or {key} is not set in the active config [env]");
 }
 
 fn env_export_secret_key(key: &str) -> String {
@@ -1574,6 +1596,59 @@ mod tests {
             "DEEPSEEK_API_KEY_SECRET"
         );
         assert_eq!(env_export_secret_key("xxx"), "xxx_SECRET");
+    }
+
+    #[test]
+    fn env_export_resolves_secret_when_present() {
+        let mut env = env::EnvConfig::default();
+        env.set("MY_TOKEN_SECRET", "encrypted");
+
+        assert_eq!(
+            resolve_env_export_value(&env, "MY_TOKEN").unwrap(),
+            EnvExportValue::Secret {
+                key: "MY_TOKEN_SECRET".to_string(),
+                value: "encrypted"
+            }
+        );
+    }
+
+    #[test]
+    fn env_export_falls_back_to_plaintext_value() {
+        let mut env = env::EnvConfig::default();
+        env.set("MY_TOKEN", "plain");
+
+        assert_eq!(
+            resolve_env_export_value(&env, "MY_TOKEN").unwrap(),
+            EnvExportValue::Plaintext("plain")
+        );
+    }
+
+    #[test]
+    fn env_export_secret_wins_over_plaintext_value() {
+        let mut env = env::EnvConfig::default();
+        env.set("MY_TOKEN", "plain");
+        env.set("MY_TOKEN_SECRET", "encrypted");
+
+        assert_eq!(
+            resolve_env_export_value(&env, "MY_TOKEN").unwrap(),
+            EnvExportValue::Secret {
+                key: "MY_TOKEN_SECRET".to_string(),
+                value: "encrypted"
+            }
+        );
+    }
+
+    #[test]
+    fn env_export_reports_both_missing_keys() {
+        let env = env::EnvConfig::default();
+
+        let err = resolve_env_export_value(&env, "MY_TOKEN").unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("MY_TOKEN_SECRET or MY_TOKEN is not set in the active config [env]"),
+            "error should explain both checked keys: {err:#}"
+        );
     }
 
     #[test]
