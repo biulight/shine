@@ -95,8 +95,8 @@ Shell Preset Categories
     usetproxy     Unset all proxy environment variables.
                   ...
 
-  tools  1 script
-    test_tools    Verify shine-installed shell tools are callable.
+  utils  1 script
+    copyfile      Copy a file's contents to the local clipboard via OSC52.
                   ...
 ```
 
@@ -610,10 +610,6 @@ When both `DEEPSEEK_API_KEY_GPG_SECRET` and `DEEPSEEK_API_KEY` are set, the
 encrypted secret wins. A GPG decode/decrypt failure stops `ccenv` instead of
 falling back to plaintext.
 
-### shell/tools — `test_tools`
-
-Verifies that shine-installed shell tools are callable from the current environment.
-
 ### Shell preset metadata
 
 Shell preset categories may optionally define `presets/shell/<category>/shine.toml` to control installed command names:
@@ -705,7 +701,7 @@ PROXY_HOST = "127.0.0.1"
 ├── bin/
 │   ├── setproxy         # symlink/shim → platform proxy script
 │   ├── usetproxy        # symlink/shim → platform proxy script
-│   └── test_tools       # symlink → presets/shell/tools/test_tools.sh
+│   └── copyfile         # symlink → presets/shell/utils/copyfile.sh
 └── presets/
     ├── app/
     │   ├── JetBrains/
@@ -727,8 +723,9 @@ PROXY_HOST = "127.0.0.1"
         │   ├── set_proxy.sh
         │   ├── uset_proxy.ps1
         │   └── uset_proxy.sh
-        └── tools/
-            └── test_tools.sh
+        └── utils/
+            ├── shine.toml
+            └── copyfile.sh
 ```
 
 Installed app files live at their annotated destinations, for example:

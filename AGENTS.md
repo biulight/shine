@@ -105,7 +105,7 @@ shine/
     ├── shell/
     │   ├── agent/   cc.sh, cc.ps1, shine.toml  (needs_source=true; installed as `ccenv`; platform-scoped per shell family)
     │   ├── proxy/   set_proxy.sh, uset_proxy.sh, shine.toml
-    │   └── tools/   test_tools.sh
+    │   └── utils/   copyfile.sh, shine.toml
     ├── app/
     │   ├── archey4/    config.json, shine.toml
     │   ├── docker-desktop/ settings-store.jsonc, shine.toml
