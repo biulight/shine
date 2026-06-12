@@ -12,5 +12,8 @@ pub enum SysCommands {
         /// Print what would run without executing
         #[arg(long)]
         dry_run: bool,
+        /// Back up and replace the sys profile instead of merging user edits
+        #[arg(long)]
+        force_profile: bool,
     },
 }

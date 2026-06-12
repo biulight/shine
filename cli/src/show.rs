@@ -1014,7 +1014,7 @@ mod tests {
         let shell_files = vec![
             shell_file("agent", "ccenv", "cc.sh"),
             shell_file("proxy", "setproxy", "set_proxy.sh"),
-            shell_file("tools", "test-tools", "test_tools.sh"),
+            shell_file("utils", "copyfile", "copyfile.sh"),
         ];
         let candidates = build_candidates(&app_files, &shell_files);
         let err = resolve_target("missing", &candidates).unwrap_err();
@@ -1027,7 +1027,7 @@ mod tests {
         assert!(message.contains("  Shell Presets"));
         assert!(message.contains("    agent"));
         assert!(message.contains("    proxy"));
-        assert!(message.contains("    tools"));
+        assert!(message.contains("    utils"));
         assert!(!message.contains("\n    app/docker-desktop"));
         assert!(!message.contains("\n    shell/proxy"));
         assert!(!message.contains("\n    docker-desktop/settings-store.jsonc"));

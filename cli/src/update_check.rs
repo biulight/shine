@@ -2,7 +2,7 @@ use crate::{config::Config, platform, version};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueEnum;
 use flate2::read::GzDecoder;
-use reqwest::header::{ACCEPT, HeaderMap, HeaderValue, USER_AGENT};
+use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
@@ -273,32 +273,48 @@ async fn fetch_release(channel: ReleaseChannel) -> Result<GithubRelease> {
         ReleaseChannel::Stable => GITHUB_LATEST_RELEASE_URL,
         ReleaseChannel::Preview => GITHUB_PREVIEW_RELEASE_URL,
     };
-    client
+    let response = client
         .get(url)
         .send()
         .await
-        .with_context(|| format!("failed to query GitHub {} release", channel.as_str()))?
-        .error_for_status()
-        .with_context(|| format!("GitHub {} release request failed", channel.as_str()))?
-        .json::<GithubRelease>()
-        .await
-        .with_context(|| {
-            format!(
-                "failed to decode GitHub {} release response",
-                channel.as_str()
-            )
-        })
+        .with_context(|| format!("failed to query GitHub {} release", channel.as_str()))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.text().await.unwrap_or_default();
+        bail!(
+            "{}",
+            format_github_api_error(channel, status, &headers, &body)
+        );
+    }
+
+    response.json::<GithubRelease>().await.with_context(|| {
+        format!(
+            "failed to decode GitHub {} release response",
+            channel.as_str()
+        )
+    })
 }
 
 async fn download_asset_bytes(download_url: &str) -> Result<Vec<u8>> {
     let client = github_client()?;
-    client
+    let response = client
         .get(download_url)
         .send()
         .await
-        .with_context(|| format!("failed to download release asset from {download_url}"))?
-        .error_for_status()
-        .with_context(|| format!("release asset request failed for {download_url}"))?
+        .with_context(|| format!("failed to download release asset from {download_url}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        bail!(
+            "release asset request failed for {download_url}: HTTP {status}{}",
+            format_error_body_suffix(&body)
+        );
+    }
+
+    response
         .bytes()
         .await
         .context("failed to read release asset bytes")
@@ -349,6 +365,98 @@ fn github_client() -> Result<reqwest::Client> {
         .timeout(Duration::from_secs(30))
         .build()
         .context("failed to build GitHub client")
+}
+
+fn github_auth_token() -> Option<String> {
+    github_auth_token_from_vars(|name| std::env::var(name).ok())
+}
+
+fn github_auth_token_from_vars(mut var: impl FnMut(&str) -> Option<String>) -> Option<String> {
+    for name in ["GITHUB_TOKEN", "GH_TOKEN"] {
+        let Some(token) = var(name) else {
+            continue;
+        };
+        let token = token.trim();
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+    }
+    None
+}
+
+fn auth_header_value(token: &str) -> Result<HeaderValue> {
+    HeaderValue::from_str(&format!("Bearer {token}")).context("invalid GitHub token header")
+}
+
+fn github_api_message(body: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct ErrorBody {
+        message: String,
+    }
+
+    serde_json::from_str::<ErrorBody>(body)
+        .ok()
+        .map(|err| err.message)
+        .filter(|message| !message.trim().is_empty())
+}
+
+fn header_to_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name)?.to_str().ok()
+}
+
+fn format_github_api_error(
+    channel: ReleaseChannel,
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+    body: &str,
+) -> String {
+    let mut message = format!(
+        "GitHub {} release request failed: HTTP {status}",
+        channel.as_str()
+    );
+
+    if let Some(github_message) = github_api_message(body) {
+        message.push_str(&format!(": {github_message}"));
+    } else {
+        message.push_str(&format_error_body_suffix(body));
+    }
+
+    let mut rate_limit_parts = Vec::new();
+    if let Some(remaining) = header_to_str(headers, "x-ratelimit-remaining") {
+        rate_limit_parts.push(format!("remaining={remaining}"));
+    }
+    if let Some(reset) = header_to_str(headers, "x-ratelimit-reset") {
+        rate_limit_parts.push(format!("reset={reset}"));
+    }
+    if let Some(resource) = header_to_str(headers, "x-ratelimit-resource") {
+        rate_limit_parts.push(format!("resource={resource}"));
+    }
+    if let Some(retry_after) = header_to_str(headers, "retry-after") {
+        rate_limit_parts.push(format!("retry-after={retry_after}s"));
+    }
+
+    if !rate_limit_parts.is_empty() {
+        message.push_str(&format!(" (rate limit: {})", rate_limit_parts.join(", ")));
+    }
+
+    message
+}
+
+fn format_error_body_suffix(body: &str) -> String {
+    let body = body.trim();
+    if body.is_empty() {
+        return String::new();
+    }
+
+    format!(": {}", truncate_for_error(body, 300))
+}
+
+fn truncate_for_error(value: &str, max_chars: usize) -> String {
+    let mut truncated: String = value.chars().take(max_chars).collect();
+    if value.chars().count() > max_chars {
+        truncated.push_str("...");
+    }
+    truncated
 }
 
 async fn install_downloaded_archive(
@@ -527,6 +635,9 @@ fn default_headers() -> Result<HeaderMap> {
         HeaderValue::from_str(&format!("shine/{}", version::package()))
             .context("invalid user-agent header")?,
     );
+    if let Some(token) = github_auth_token() {
+        headers.insert(AUTHORIZATION, auth_header_value(&token)?);
+    }
     Ok(headers)
 }
 
@@ -621,6 +732,87 @@ mod tests {
     #[test]
     fn parse_binary_version_output_rejects_unexpected_output() {
         assert_eq!(parse_binary_version_output("0.21.3"), None);
+    }
+
+    #[test]
+    fn github_auth_token_uses_github_token_first() {
+        let token = github_auth_token_from_vars(|name| match name {
+            "GITHUB_TOKEN" => Some(" github-value ".to_string()),
+            "GH_TOKEN" => Some("gh-value".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(token.as_deref(), Some("github-value"));
+    }
+
+    #[test]
+    fn github_auth_token_uses_gh_token_when_github_token_is_absent() {
+        let token = github_auth_token_from_vars(|name| match name {
+            "GH_TOKEN" => Some("gh-value".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(token.as_deref(), Some("gh-value"));
+    }
+
+    #[test]
+    fn github_auth_token_ignores_empty_values() {
+        let token = github_auth_token_from_vars(|name| match name {
+            "GITHUB_TOKEN" => Some("  ".to_string()),
+            "GH_TOKEN" => Some("gh-value".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(token.as_deref(), Some("gh-value"));
+    }
+
+    #[test]
+    fn github_auth_token_returns_none_without_token() {
+        assert_eq!(github_auth_token_from_vars(|_| None), None);
+    }
+
+    #[test]
+    fn auth_header_value_formats_bearer_token() {
+        assert_eq!(
+            auth_header_value("secret-token").unwrap(),
+            HeaderValue::from_static("Bearer secret-token")
+        );
+    }
+
+    #[test]
+    fn github_api_error_includes_json_message_and_rate_limit_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        headers.insert("x-ratelimit-reset", HeaderValue::from_static("1780937643"));
+        headers.insert("x-ratelimit-resource", HeaderValue::from_static("core"));
+
+        let message = format_github_api_error(
+            ReleaseChannel::Stable,
+            reqwest::StatusCode::FORBIDDEN,
+            &headers,
+            r#"{"message":"API rate limit exceeded for 156.0.200.135."}"#,
+        );
+
+        assert!(message.contains("GitHub stable release request failed: HTTP 403 Forbidden"));
+        assert!(message.contains("API rate limit exceeded for 156.0.200.135."));
+        assert!(message.contains("remaining=0"));
+        assert!(message.contains("reset=1780937643"));
+        assert!(message.contains("resource=core"));
+    }
+
+    #[test]
+    fn github_api_error_includes_truncated_non_json_body() {
+        let body = "x".repeat(350);
+        let message = format_github_api_error(
+            ReleaseChannel::Preview,
+            reqwest::StatusCode::BAD_GATEWAY,
+            &HeaderMap::new(),
+            &body,
+        );
+
+        assert!(message.contains("GitHub preview release request failed: HTTP 502 Bad Gateway"));
+        assert!(message.contains(&"x".repeat(300)));
+        assert!(message.ends_with("..."));
     }
 
     fn archive_with_file(name: &str, content: &[u8]) -> Vec<u8> {

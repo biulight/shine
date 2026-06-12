@@ -520,6 +520,26 @@ mod tests {
         assert!(presets::parse_template_annotation(&bytes));
     }
 
+    #[test]
+    fn embedded_utils_category_exposes_copyfile_command() {
+        let categories = load_embedded_categories(Some("utils")).unwrap();
+        let utils = categories.iter().find(|cat| cat.name == "utils").unwrap();
+
+        if cfg!(windows) {
+            assert!(utils.files.is_empty());
+        } else {
+            assert_eq!(utils.files.len(), 1);
+            assert_eq!(utils.files[0].command_name, "copyfile");
+            assert_eq!(utils.files[0].source_rel, PathBuf::from("copyfile.sh"));
+            assert!(!utils.files[0].needs_source);
+            assert!(
+                utils.files[0].description.contains(
+                    &"Copy a file's contents to the local clipboard via OSC52.".to_string()
+                )
+            );
+        }
+    }
+
     #[tokio::test]
     async fn installed_metadata_applies_target_names() {
         let dir = make_temp_dir().await;

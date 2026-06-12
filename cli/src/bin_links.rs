@@ -804,13 +804,13 @@ mod tests {
     #[cfg(not(unix))]
     #[test]
     fn shell_shims_pass_bash_compatible_paths_on_windows() {
-        let source = PathBuf::from(r"C:\Users\me\.shine\rendered\shell\tools\test_tools.sh");
+        let source = PathBuf::from(r"C:\Users\me\.shine\rendered\shell\utils\copyfile.sh");
 
         let ps1 = powershell_shim_content(&source);
         let cmd = cmd_shim_content(&source);
 
-        assert!(ps1.contains("C:/Users/me/.shine/rendered/shell/tools/test_tools.sh"));
-        assert!(cmd.contains("C:/Users/me/.shine/rendered/shell/tools/test_tools.sh"));
+        assert!(ps1.contains("C:/Users/me/.shine/rendered/shell/utils/copyfile.sh"));
+        assert!(cmd.contains("C:/Users/me/.shine/rendered/shell/utils/copyfile.sh"));
         assert!(!ps1.contains(r"& bash 'C:\Users\me"));
     }
 }

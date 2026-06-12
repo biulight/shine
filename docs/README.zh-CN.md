@@ -95,16 +95,18 @@ Shell Preset Categories
     usetproxy     Unset all proxy environment variables.
                   ...
 
-  tools  1 script
-    test_tools    Verify shine-installed shell tools are callable.
+  utils  1 script
+    copyfile      Copy a file's contents to the local clipboard via OSC52.
                   ...
 ```
 
 ### 安装 shell 预设
 
 ```bash
+shine install proxy            # 自动匹配 shell/app 类别的简写
 shine shell install            # 安装全部类别
 shine shell install proxy      # 仅安装 proxy 类别
+shine reinstall proxy          # 自动匹配类别的重装简写
 shine shell reinstall proxy    # 覆盖 proxy 的受管文件和链接
 ```
 
@@ -118,6 +120,8 @@ Bin Links      4 created
 安装全部 shell 预设时会包含 `agent`，该类别在使用前需要在当前 env 配置中提供 `DEEPSEEK_API_KEY` 或 `DEEPSEEK_API_KEY_GPG_SECRET`。
 重复运行 `install` 是安全的：已存在的文件、正确的符号链接以及已配置好的 PATH 条目都会被跳过。若你想覆盖受管预设文件、链接和 shell 配置中的 PATH 条目，请使用 `reinstall`。
 
+顶层的 `install`、`reinstall` 和 `uninstall` 命令需要一个类别名，并会自动路由到 `shell/<category>` 或 `app/<category>`。如果 shell 和 app 预设中存在同名类别，`shine` 会提示你选择其中一个。
+
 shell 元数据可以通过 `platforms = ["unix"]` 或 `platforms = ["windows"]` 只在特定平台暴露某些条目。内置的 `agent` 类别就使用了这个机制：Unix shell 下的 `ccenv` 来自 `cc.sh`，Windows PowerShell 下的 `ccenv` 来自 `cc.ps1`。
 
 在 Windows 上，PowerShell 的 PATH 注入会同时更新这两个 profile 文件，确保 `powershell.exe` 和 `pwsh.exe` 都能看到同一条 `~/.shine/bin` 配置：
@@ -128,6 +132,7 @@ shell 元数据可以通过 `platforms = ["unix"]` 或 `platforms = ["windows"]`
 ### 卸载 shell 预设
 
 ```bash
+shine uninstall proxy              # 自动匹配 shell/app 类别的简写
 shine shell uninstall                # 卸载全部类别
 shine shell uninstall proxy          # 仅卸载 proxy 类别
 shine shell uninstall --dry-run      # 预览，不执行变更
@@ -222,7 +227,7 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "nvim found"
 - `macos` — 提供 Homebrew、Yazi、Starship、Neovim、AstroNvim、ZeroTier、zsh 插件、zoxide、Atuin、fzf、bat、eza、nvm、Bun、pnpm 和 Fastfetch 的可选步骤。`recommended` profile 包含 Homebrew 和核心终端/编辑器工具；`all` profile 额外包含 JavaScript 运行时和 Fastfetch。
 - `windows` — 提供 Rust、Yazi、Starship、zoxide、Atuin、fzf、bat、eza、ZeroTier、Bun、pnpm 和 mise 的可选步骤。`recommended` profile 包含 Rust 和核心终端工具；`all` profile 额外包含 JavaScript 运行时和环境管理器步骤。
 
-当所选工具需要 shell 集成时，sys init 会安装受管 profile 区块。Ubuntu 会为 Yazi、Starship、zoxide、Atuin、fzf 和 mise 等工具安装受管 shell profile loader。Windows 会为 Yazi、Starship、zoxide、Atuin、fzf 和 mise 安装受管 PowerShell profile loader。
+当所选工具需要 shell 集成时，sys init 会安装受管 profile 区块。Ubuntu 会为 Yazi、Starship、zoxide、Atuin、fzf 和 mise 等工具安装受管 shell profile loader。Windows 会为 Yazi、Starship、zoxide、Atuin、fzf 和 mise 安装受管 PowerShell profile loader。受管 profile 更新会合并到现有 profile 文件中，保留受管区块之外的用户自定义内容。
 
 ### 查看应用预设详情
 
@@ -237,10 +242,12 @@ shine app info vim
 ### 安装应用预设
 
 ```bash
+shine install starship        # 自动匹配 shell/app 类别的简写
 shine app install             # 安装全部应用类别
 shine app install ghostty     # 仅安装一个类别
 shine app install starship    # 仅安装一个类别
 shine app install --dry-run   # 预览目标写入
+shine reinstall ghostty       # 自动匹配类别的重装简写
 shine app reinstall ghostty   # 覆盖一个类别的受管文件
 ```
 
@@ -488,7 +495,7 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.30.0+preview.abc1234`；稳定版则继续显示 `0.30.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.31.1+preview.abc1234`；稳定版则继续显示 `0.31.1`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -498,7 +505,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.30.0 sh install.sh
+SHINE_VERSION=0.31.1 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -506,7 +513,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.30.0"; .\install.ps1
+$env:SHINE_VERSION = "0.31.1"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -553,6 +560,10 @@ usetproxy
 
 会清除当前会话中的代理环境变量。如果已安装 Yarn，也会删除 `setproxy` 可能写入的 Yarn 代理配置项。
 
+### shell/utils — `copyfile`
+
+面向终端工作流的小工具命令。内置的 Unix `copyfile <file>` 命令会通过 OSC52 把文件内容复制到本地剪贴板，适合在 SSH 或支持 OSC52 剪贴板集成的终端复用器中使用。
+
 ### shell/agent — `ccenv`
 
 为 Claude Code + DeepSeek provider 配置当前 shell 环境。
@@ -589,10 +600,6 @@ ccenv
 ```
 
 如果同时设置了 `DEEPSEEK_API_KEY_GPG_SECRET` 和 `DEEPSEEK_API_KEY`，会优先使用加密 secret。若 GPG 解码或解密失败，`ccenv` 会直接停止，而不会回退到明文 key。
-
-### shell/tools — `test_tools`
-
-验证通过 `shine` 安装的 shell 工具是否能在当前环境中正常调用。
 
 ### Shell 预设元数据
 
@@ -674,7 +681,7 @@ PROXY_HOST = "127.0.0.1"
 ├── bin/
 │   ├── setproxy         # symlink/shim → 平台对应 proxy 脚本
 │   ├── usetproxy        # symlink/shim → 平台对应 proxy 脚本
-│   └── test_tools       # symlink → presets/shell/tools/test_tools.sh
+│   └── copyfile         # symlink → presets/shell/utils/copyfile.sh
 └── presets/
     ├── app/
     │   ├── JetBrains/
@@ -696,8 +703,9 @@ PROXY_HOST = "127.0.0.1"
         │   ├── set_proxy.sh
         │   ├── uset_proxy.ps1
         │   └── uset_proxy.sh
-        └── tools/
-            └── test_tools.sh
+        └── utils/
+            ├── shine.toml
+            └── copyfile.sh
 ```
 
 实际安装后的应用文件位于它们各自的目标路径，例如：
