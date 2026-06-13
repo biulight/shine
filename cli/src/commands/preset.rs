@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::Args;
+use clap::{Args, Subcommand};
 
 #[derive(Args, Debug)]
 pub struct ExportCommand {
@@ -20,4 +20,14 @@ pub struct LinkCommand {
     /// Create the directory if it does not already exist.
     #[arg(long)]
     pub create: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum OverlayCommands {
+    /// Set the presets overlay directory in the active config.
+    Link(LinkCommand),
+    /// Remove the presets overlay directory from the active config.
+    Unlink,
+    /// Show the active presets overlay directory.
+    Show,
 }

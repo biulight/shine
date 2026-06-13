@@ -1,12 +1,33 @@
 use anyhow::{Context, Result, bail};
 #[cfg(test)]
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tokio::fs;
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "$CARGO_MANIFEST_DIR/../presets"]
 struct PresetAssets;
+
+fn overlay_dir_cell() -> &'static Mutex<Option<PathBuf>> {
+    static OVERLAY_DIR: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+    OVERLAY_DIR.get_or_init(|| Mutex::new(None))
+}
+
+pub(crate) fn set_overlay_dir(dir: Option<&Path>) {
+    let mut guard = overlay_dir_cell()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = dir.map(Path::to_path_buf);
+}
+
+fn overlay_dir() -> Option<PathBuf> {
+    overlay_dir_cell()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
 
 pub(crate) struct ExtractReport {
     pub created: Vec<PathBuf>,
@@ -33,21 +54,78 @@ pub(crate) struct CategoryInfo {
 
 pub(crate) fn asset_paths(prefix: &str) -> Vec<String> {
     let normalized = prefix.trim_end_matches('/');
-    let filter = format!("{normalized}/");
-    PresetAssets::iter()
-        .filter_map(|asset_path| {
-            let relative: &str = asset_path.as_ref();
-            if relative.starts_with(filter.as_str()) {
-                Some(relative.to_string())
-            } else {
-                None
-            }
-        })
-        .collect()
+    let filter = if normalized.is_empty() {
+        String::new()
+    } else {
+        format!("{normalized}/")
+    };
+    let mut paths = BTreeSet::new();
+    for asset_path in PresetAssets::iter() {
+        let relative: &str = asset_path.as_ref();
+        if filter.is_empty() || relative.starts_with(filter.as_str()) {
+            paths.insert(relative.to_string());
+        }
+    }
+    if let Some(dir) = overlay_dir() {
+        collect_overlay_paths(&dir, normalized, &mut paths);
+    }
+    paths.into_iter().collect()
 }
 
 pub(crate) fn read_asset_bytes(path: &str) -> Option<Vec<u8>> {
+    if !is_safe_asset_path(path) {
+        return None;
+    }
+    if let Some(dir) = overlay_dir() {
+        let overlay_path = dir.join(path);
+        if overlay_path.is_file()
+            && let Ok(bytes) = std::fs::read(&overlay_path)
+        {
+            return Some(bytes);
+        }
+    }
     PresetAssets::get(path).map(|file| file.data.as_ref().to_vec())
+}
+
+fn collect_overlay_paths(root: &Path, prefix: &str, out: &mut BTreeSet<String>) {
+    let prefix_path = root.join(prefix);
+    if !prefix_path.is_dir() {
+        return;
+    }
+
+    let mut stack = vec![prefix_path];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(root) else {
+                continue;
+            };
+            let Some(rel) = rel.to_str() else {
+                continue;
+            };
+            let rel = rel.replace('\\', "/");
+            if is_safe_asset_path(&rel) {
+                out.insert(rel);
+            }
+        }
+    }
+}
+
+fn is_safe_asset_path(path: &str) -> bool {
+    !path.contains("..") && !Path::new(path).is_absolute()
 }
 
 /// Extract a `shine-dest:` annotation from a single comment line.
@@ -299,7 +377,6 @@ pub(crate) async fn remove_prefix(
     dry_run: bool,
 ) -> Result<RemoveReport> {
     let normalized = prefix.trim_end_matches('/');
-    let filter = format!("{normalized}/");
 
     let mut report = RemoveReport {
         removed: Vec::new(),
@@ -308,11 +385,7 @@ pub(crate) async fn remove_prefix(
 
     let mut dirs_to_check: std::collections::BTreeSet<PathBuf> = Default::default();
 
-    for asset_path in PresetAssets::iter() {
-        let relative: &str = asset_path.as_ref();
-        if !relative.starts_with(filter.as_str()) {
-            continue;
-        }
+    for relative in asset_paths(normalized) {
         let dest = target_dir.join(relative);
         if dest.exists() {
             if let Some(parent) = dest.parent() {
@@ -371,10 +444,10 @@ async fn extract_matching(
         overwritten: Vec::new(),
     };
 
-    for asset_path in PresetAssets::iter() {
-        let relative: &str = asset_path.as_ref();
+    for relative in asset_paths("") {
+        let relative = relative.as_str();
 
-        if relative.contains("..") || Path::new(relative).is_absolute() {
+        if !is_safe_asset_path(relative) {
             bail!("Unsafe asset path rejected: {relative}");
         }
 
@@ -395,12 +468,12 @@ async fn extract_matching(
             continue;
         }
 
-        let file = PresetAssets::get(relative)
-            .with_context(|| format!("embedded asset missing: {relative}"))?;
+        let file = read_asset_bytes(relative)
+            .with_context(|| format!("preset asset missing: {relative}"))?;
 
         let existed = dest.exists();
 
-        fs::write(&dest, file.data.as_ref())
+        fs::write(&dest, &file)
             .await
             .with_context(|| format!("writing preset: {dest:?}"))?;
 
@@ -430,7 +503,23 @@ async fn extract_matching(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
     use tokio::fs;
+
+    fn overlay_lock_mutex() -> &'static tokio::sync::Mutex<()> {
+        static OVERLAY_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        OVERLAY_LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+    }
+
+    /// Async-test variant: holds the lock across `.await` points safely.
+    async fn overlay_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        overlay_lock_mutex().lock().await
+    }
+
+    /// Sync-test variant: used by plain `#[test]` functions with no Tokio runtime.
+    fn overlay_lock_sync() -> tokio::sync::MutexGuard<'static, ()> {
+        overlay_lock_mutex().blocking_lock()
+    }
 
     async fn make_temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("shine-presets-{}", uuid::Uuid::new_v4()));
@@ -441,6 +530,44 @@ mod tests {
     #[test]
     fn embedded_assets_not_empty() {
         assert!(PresetAssets::iter().count() > 0, "no assets embedded");
+    }
+
+    #[tokio::test]
+    async fn overlay_asset_paths_include_new_files() {
+        let dir = make_temp_dir().await;
+        fs::create_dir_all(dir.join("shell/personal"))
+            .await
+            .unwrap();
+        fs::write(dir.join("shell/personal/hello.sh"), b"#!/bin/bash\n")
+            .await
+            .unwrap();
+
+        let guard = overlay_lock().await;
+        set_overlay_dir(Some(&dir));
+        let paths = asset_paths("shell");
+        set_overlay_dir(None);
+        drop(guard);
+
+        assert!(paths.contains(&"shell/personal/hello.sh".to_string()));
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn overlay_read_asset_bytes_overrides_embedded_file() {
+        let dir = make_temp_dir().await;
+        fs::create_dir_all(dir.join("shell/proxy")).await.unwrap();
+        fs::write(dir.join("shell/proxy/set_proxy.sh"), b"overlay\n")
+            .await
+            .unwrap();
+
+        let guard = overlay_lock().await;
+        set_overlay_dir(Some(&dir));
+        let bytes = read_asset_bytes("shell/proxy/set_proxy.sh").unwrap();
+        set_overlay_dir(None);
+        drop(guard);
+
+        assert_eq!(bytes, b"overlay\n");
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[test]
@@ -479,6 +606,7 @@ mod tests {
 
     #[test]
     fn list_categories_returns_proxy_and_utils() {
+        let _guard = overlay_lock_sync();
         let cats = list_categories("shell");
         let names: Vec<&str> = cats.iter().map(|c| c.name.as_str()).collect();
         assert!(
@@ -493,6 +621,7 @@ mod tests {
 
     #[test]
     fn list_categories_proxy_scripts_have_descriptions() {
+        let _guard = overlay_lock_sync();
         let cats = list_categories("shell");
         let proxy = cats.iter().find(|c| c.name == "proxy").unwrap();
         for script in &proxy.scripts {
@@ -506,12 +635,14 @@ mod tests {
 
     #[test]
     fn list_categories_empty_prefix_returns_empty() {
+        let _guard = overlay_lock_sync();
         let cats = list_categories("nonexistent");
         assert!(cats.is_empty());
     }
 
     #[tokio::test]
     async fn extract_prefix_only_extracts_matching_files() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         let report = extract_prefix("shell/proxy", &dir, false).await.unwrap();
 
@@ -528,6 +659,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_prefix_shell_only_gets_shell_files() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         let report = extract_prefix("shell", &dir, false).await.unwrap();
 
@@ -544,6 +676,7 @@ mod tests {
 
     #[tokio::test]
     async fn extracts_all_files_into_empty_dir() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         let report = extract_all(&dir, false).await.unwrap();
 
@@ -562,6 +695,7 @@ mod tests {
 
     #[tokio::test]
     async fn skips_existing_files_when_overwrite_false() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         let marker = b"original content";
 
@@ -584,6 +718,7 @@ mod tests {
 
     #[tokio::test]
     async fn overwrites_when_overwrite_true() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         let marker = b"marker";
 
@@ -606,6 +741,7 @@ mod tests {
 
     #[tokio::test]
     async fn creates_nested_directories() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         extract_prefix("shell", &dir, false).await.unwrap();
 
@@ -621,6 +757,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn sets_executable_bit_on_sh_files() {
+        let _guard = overlay_lock().await;
         use std::os::unix::fs::PermissionsExt;
 
         let dir = make_temp_dir().await;
@@ -640,6 +777,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_prefix_removes_extracted_files() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         let extract = extract_prefix("shell", &dir, false).await.unwrap();
         assert!(!extract.created.is_empty());
@@ -656,6 +794,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_prefix_leaves_user_added_files() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         extract_prefix("shell", &dir, false).await.unwrap();
 
@@ -671,6 +810,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_prefix_is_idempotent() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         extract_prefix("shell", &dir, false).await.unwrap();
 
@@ -684,6 +824,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_prefix_dry_run_mutates_nothing() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         let extract = extract_prefix("shell", &dir, false).await.unwrap();
 
@@ -699,6 +840,7 @@ mod tests {
 
     #[tokio::test]
     async fn remove_prefix_returns_empty_when_target_dir_missing() {
+        let _guard = overlay_lock().await;
         let missing =
             std::env::temp_dir().join(format!("shine-presets-miss-{}", uuid::Uuid::new_v4()));
 
@@ -823,6 +965,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_all_creates_files_in_target_dir() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
         let report = extract_all(&dir, false).await.unwrap();
 
@@ -842,6 +985,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_all_skips_existing_by_default() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
 
         // First export — populates the dir
@@ -871,6 +1015,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_all_force_overwrites_existing() {
+        let _guard = overlay_lock().await;
         let dir = make_temp_dir().await;
 
         // First export

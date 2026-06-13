@@ -21,12 +21,15 @@ mod secret;
 mod shells;
 mod show;
 mod sys;
+#[cfg(test)]
+mod test_support;
 mod update_check;
 mod version;
 
 use crate::config::Config;
 use commands::{
-    AppCommands, EnvCommands, ExportCommand, LinkCommand, SelfCommands, ShellCommands, SysCommands,
+    AppCommands, EnvCommands, ExportCommand, LinkCommand, OverlayCommands, SelfCommands,
+    ShellCommands, SysCommands,
 };
 use update_check::{ReleaseChannel, UpdateStatus};
 
@@ -99,6 +102,11 @@ enum Commands {
     Link(LinkCommand),
     /// Remove the external presets directory from the active config
     Unlink,
+    /// Manage the personal presets overlay directory
+    Overlay {
+        #[command(subcommand)]
+        command: OverlayCommands,
+    },
     /// Show installed config status and check for a newer version of shine
     Update(UpdateCommand),
     /// Force-update installed shell and app configs
@@ -264,6 +272,7 @@ async fn run(cli: Cli) -> Result<()> {
             | Commands::Export(..)
             | Commands::Link(..)
             | Commands::Unlink
+            | Commands::Overlay { .. }
             | Commands::Clear(..)
             | Commands::Self_ { .. }
             | Commands::Env { .. }
@@ -347,6 +356,13 @@ async fn run(cli: Cli) -> Result<()> {
             Box::pin(handle_presets_link(&config, path, create)).await
         }
         Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
+        Commands::Overlay { command } => match command {
+            OverlayCommands::Link(LinkCommand { path, create }) => {
+                Box::pin(handle_overlay_link(&config, path, create)).await
+            }
+            OverlayCommands::Unlink => Box::pin(handle_overlay_unlink(&config)).await,
+            OverlayCommands::Show => handle_overlay_show(&config),
+        },
         Commands::List => Box::pin(list::handle_list(&config)).await,
         Commands::Info {
             target,
@@ -1225,6 +1241,118 @@ async fn handle_presets_unlink(config: &Config) -> Result<()> {
     Ok(())
 }
 
+async fn handle_overlay_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
+    use anyhow::Context as _;
+
+    let raw = path.to_string_lossy();
+    let expanded =
+        crate::config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
+    let expanded = PathBuf::from(expanded);
+
+    if create {
+        tokio::fs::create_dir_all(&expanded)
+            .await
+            .with_context(|| format!("creating directory: {}", expanded.display()))?;
+    }
+
+    let meta = tokio::fs::metadata(&expanded).await.with_context(|| {
+        if create {
+            format!("accessing directory: {}", expanded.display())
+        } else {
+            format!(
+                "path does not exist: {} (use --create to create it)",
+                expanded.display()
+            )
+        }
+    })?;
+
+    if !meta.is_dir() {
+        bail!("path is not a directory: {}", expanded.display());
+    }
+
+    let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
+
+    if config
+        .presets_overlay_dir_override
+        .as_deref()
+        .is_some_and(|p| p == absolute)
+    {
+        println!(
+            "{}",
+            colors::dim(&format!("overlay already linked: {}", absolute.display()))
+        );
+        return Ok(());
+    }
+
+    let updated = config
+        .clone()
+        .with_presets_overlay_dir_override(Some(absolute.clone()));
+    updated.save().await?;
+
+    println!("{}", colors::presets_overlay_note(&absolute));
+    if config.is_external_presets {
+        println!(
+            "{}",
+            colors::yellow(
+                "Warning: a full external presets source is active, so this overlay is configured but not used."
+            )
+        );
+    } else {
+        println!(
+            "{}",
+            colors::dim("Overlay files override built-in presets by matching path.")
+        );
+    }
+
+    Ok(())
+}
+
+async fn handle_overlay_unlink(config: &Config) -> Result<()> {
+    if config.presets_overlay_dir_override.is_none() {
+        println!(
+            "{}",
+            colors::dim("No presets overlay directory is configured.")
+        );
+        return Ok(());
+    }
+
+    let updated = config.clone().with_presets_overlay_dir_override(None);
+    updated.save().await?;
+
+    println!(
+        "{}",
+        colors::green("Presets overlay directory removed from the active config.")
+    );
+    println!(
+        "{}",
+        colors::dim("Built-in embedded presets will be used without overlay on the next run.")
+    );
+
+    Ok(())
+}
+
+fn handle_overlay_show(config: &Config) -> Result<()> {
+    if let Some(dir) = &config.presets_overlay_dir_override {
+        println!("{}", colors::presets_overlay_note(dir));
+        if config.is_external_presets {
+            println!(
+                "{}",
+                colors::yellow(
+                    "Inactive: a full external presets source is active and takes priority."
+                )
+            );
+        } else {
+            println!("{}", colors::green("Active"));
+        }
+    } else {
+        println!(
+            "{}",
+            colors::dim("No presets overlay directory is configured.")
+        );
+    }
+    Ok(())
+}
+
 async fn handle_self_install(mut config: Config, dest: Option<std::path::PathBuf>) -> Result<()> {
     use anyhow::{Context as _, bail};
 
@@ -1343,16 +1471,8 @@ fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use crate::test_support::env_lock;
     use tokio::fs;
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("env lock must not be poisoned")
-    }
 
     async fn make_temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("shine-main-test-{}", uuid::Uuid::new_v4()));
@@ -1572,6 +1692,35 @@ mod tests {
 
         let cli = Cli::try_parse_from(["shine", "unlink"]).unwrap();
         assert!(matches!(cli.command, Commands::Unlink));
+    }
+
+    #[test]
+    fn cli_accepts_overlay_commands() {
+        let cli = Cli::try_parse_from(["shine", "overlay", "link", "/tmp/presets"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Overlay {
+                command: OverlayCommands::Link(LinkCommand {
+                    ref path,
+                    create: false
+                })
+            } if path.as_path() == std::path::Path::new("/tmp/presets")
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "overlay", "link", "/tmp/presets", "--create"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Overlay {
+                command: OverlayCommands::Link(LinkCommand {
+                    ref path,
+                    create: true
+                })
+            } if path.as_path() == std::path::Path::new("/tmp/presets")
+        ));
+
+        assert!(Cli::try_parse_from(["shine", "overlay", "unlink"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "overlay", "show"]).is_ok());
     }
 
     #[test]

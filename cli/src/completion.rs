@@ -93,7 +93,29 @@ fn category_names(kind: &str) -> BTreeSet<String> {
     }
 
     names.extend(embedded_category_names(kind));
+    if let Some(overlay_dir) = runtime_presets_overlay_dir()
+        && let Some(fs_names) = fs_category_names(&overlay_dir.join(kind))
+    {
+        names.extend(fs_names);
+    }
     names
+}
+
+fn runtime_presets_overlay_dir() -> Option<PathBuf> {
+    if runtime_presets_dir()?.1 {
+        return None;
+    }
+
+    let default_shine_dir = default_shine_dir();
+    let global_config = shine_dir_from_env_or_default(&default_shine_dir).join("config.toml");
+    let current_dir = std::env::current_dir().ok();
+    let config_path = current_dir
+        .as_deref()
+        .and_then(|dir| find_project_config(dir, &global_config))
+        .unwrap_or(global_config);
+    let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+    read_presets_overlay_override_from_toml(&config_path)
+        .map(|path| resolve_config_presets_path(&path, config_dir))
 }
 
 fn runtime_presets_dir() -> Option<(PathBuf, bool)> {
@@ -166,6 +188,18 @@ fn read_presets_override_from_toml(path: &Path) -> Option<PathBuf> {
     toml::from_str::<MinimalConfig>(&content).ok()?.presets_dir
 }
 
+fn read_presets_overlay_override_from_toml(path: &Path) -> Option<PathBuf> {
+    let content = std::fs::read_to_string(path).ok()?;
+    #[derive(serde::Deserialize)]
+    struct MinimalConfig {
+        #[serde(default)]
+        presets_overlay_dir: Option<PathBuf>,
+    }
+    toml::from_str::<MinimalConfig>(&content)
+        .ok()?
+        .presets_overlay_dir
+}
+
 fn resolve_config_presets_path(path: &Path, config_dir: &Path) -> PathBuf {
     if let Some(s) = path.to_str()
         && s.starts_with('~')
@@ -234,12 +268,7 @@ fn embedded_category_names(kind: &str) -> BTreeSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
+    use crate::test_support::env_lock;
 
     fn temp_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("shine-completion-{name}-{}", uuid::Uuid::new_v4()))
@@ -247,7 +276,7 @@ mod tests {
 
     #[test]
     fn embedded_candidates_include_known_categories() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         unsafe {
             std::env::remove_var("SHINE_CONFIG_DIR");
             std::env::remove_var("SHINE_PRESETS");
@@ -262,7 +291,7 @@ mod tests {
 
     #[test]
     fn config_dir_candidates_read_external_presets_without_creating_config() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         let dir = temp_dir("config-dir");
         std::fs::create_dir_all(dir.join("presets/shell/custom-shell")).unwrap();
         std::fs::create_dir_all(dir.join("presets/app/custom-app")).unwrap();
@@ -286,8 +315,46 @@ mod tests {
     }
 
     #[test]
+    fn overlay_candidates_extend_embedded_presets() {
+        let _guard = env_lock();
+        let home = temp_dir("overlay-home");
+        let overlay = temp_dir("overlay");
+        let old_home = std::env::var_os("HOME");
+        std::fs::create_dir_all(home.join(".shine")).unwrap();
+        std::fs::create_dir_all(overlay.join("shell/personal")).unwrap();
+        std::fs::write(
+            home.join(".shine/config.toml"),
+            format!(
+                "presets_overlay_dir = \"{}\"\n",
+                overlay.to_string_lossy().replace('\\', "\\\\")
+            ),
+        )
+        .unwrap();
+
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::remove_var("SHINE_CONFIG_DIR");
+            std::env::remove_var("SHINE_PRESETS");
+        }
+
+        let shell = category_names("shell");
+
+        unsafe {
+            match old_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        std::fs::remove_dir_all(home).unwrap();
+        std::fs::remove_dir_all(overlay).unwrap();
+
+        assert!(shell.contains("proxy"), "shell candidates: {shell:?}");
+        assert!(shell.contains("personal"), "shell candidates: {shell:?}");
+    }
+
+    #[test]
     fn completion_command_accepts_dynamic_registration_shells() {
-        let _guard = env_lock().lock().unwrap();
+        let _guard = env_lock();
         for shell in ["bash", "powershell", "zsh"] {
             unsafe { std::env::set_var("COMPLETE", shell) };
             let completed = clap_complete::CompleteEnv::with_factory(command)
