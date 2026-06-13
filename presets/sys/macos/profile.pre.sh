@@ -20,6 +20,7 @@ typeset -U path PATH
 path=(
   "$HOME/bin"
   "$HOME/.local/bin"
+  "$HOME/.cargo/bin"
   "/usr/local/bin"
   "/usr/local/sbin"
   "/opt/homebrew/bin"

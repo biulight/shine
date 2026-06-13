@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Initialize macOS with selectable Homebrew, terminal tools, editor, network, and JavaScript runtime setup steps.
+# Initialize macOS with selectable Homebrew, Rust, terminal tools, editor, network, and JavaScript runtime setup steps.
 emulate -L zsh
 set -eu
 set -o pipefail
@@ -85,6 +85,23 @@ install_shell_formula() {
     brew_install_formula "$1" "${2:-$1}"
 }
 
+install_rust() {
+    if command -v rustup &>/dev/null; then
+        status "already-installed" "$(rustup --version | head -1)"
+        return
+    fi
+
+    if [[ -x "$HOME/.cargo/bin/rustup" ]]; then
+        status "already-installed" "$("$HOME/.cargo/bin/rustup" --version | head -1)"
+        return
+    fi
+
+    echo "Installing Rust..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+    export PATH="$HOME/.cargo/bin:$PATH"
+    status "installed" "$(rustc --version)"
+}
+
 install_yazi() {
     brew_install_formula yazi yazi
 }
@@ -137,6 +154,10 @@ install_pnpm() {
     install_shell_formula pnpm pnpm
 }
 
+install_mise() {
+    brew_install_formula mise mise
+}
+
 install_zsh_autosuggestions() {
     install_shell_formula zsh-autosuggestions zsh-autosuggestions
 }
@@ -176,6 +197,7 @@ install_fastfetch() {
 run_item() {
     case "${1:-}" in
         homebrew) install_homebrew ;;
+        rust) install_rust ;;
         yazi) install_yazi ;;
         starship) install_starship ;;
         neovim) install_neovim ;;
@@ -192,6 +214,7 @@ run_item() {
         nvm) install_nvm ;;
         bun) install_bun ;;
         pnpm) install_pnpm ;;
+        mise) install_mise ;;
         fastfetch) install_fastfetch ;;
         __shine_finalize) status "completed" "profile is managed by shine CLI" ;;
         "") return 0 ;;

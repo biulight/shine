@@ -2525,6 +2525,34 @@ description = "Placeholder"
     }
 
     #[test]
+    fn embedded_macos_profiles_cover_recommended_and_all_items() {
+        let content = crate::presets::read_asset_bytes("sys/macos/shine.toml")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded macOS manifest");
+        let manifest = parse_and_validate_manifest(&content).unwrap();
+        let recommended = manifest
+            .profiles
+            .get("recommended")
+            .expect("missing macOS recommended profile");
+        let all = manifest
+            .profiles
+            .get("all")
+            .expect("missing macOS all profile");
+
+        assert!(manifest.items.iter().any(|item| item.id == "rust"));
+        assert!(manifest.items.iter().any(|item| item.id == "mise"));
+        assert!(recommended.items.iter().any(|item| item == "rust"));
+        assert!(!recommended.items.iter().any(|item| item == "mise"));
+
+        let item_ids: BTreeSet<&str> = manifest.items.iter().map(|item| item.id.as_str()).collect();
+        let all_ids: BTreeSet<&str> = all.items.iter().map(String::as_str).collect();
+        assert_eq!(
+            all_ids, item_ids,
+            "macOS all profile should include every item"
+        );
+    }
+
+    #[test]
     fn embedded_windows_init_uses_current_atuin_winget_id() {
         let content = crate::presets::read_asset_bytes("sys/windows/init.ps1")
             .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -2585,6 +2613,9 @@ description = "Placeholder"
         assert!(content.contains(
             "__shine_finalize) status \"completed\" \"profile is managed by shine CLI\""
         ));
+        assert!(content.contains("https://sh.rustup.rs | sh -s -- -y --no-modify-path"));
+        assert!(content.contains("rust) install_rust ;;"));
+        assert!(content.contains("mise) install_mise ;;"));
         assert!(!content.contains("append_zshrc_block"));
         assert!(!content.contains("cp \"$template_path\" \"$managed_path\""));
     }
@@ -2598,6 +2629,16 @@ description = "Placeholder"
         assert!(content.contains("share/zsh/site-functions"));
         assert!(content.contains("ZSH_VERSION"));
         assert!(content.contains("typeset -U fpath"));
+        assert!(content.contains("\"$HOME/.cargo/bin\""));
+    }
+
+    #[test]
+    fn embedded_macos_profile_initializes_mise() {
+        let content = crate::presets::read_asset_bytes("sys/macos/profile.post.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded macOS post profile script");
+
+        assert!(content.contains("mise activate zsh"));
     }
 
     #[test]
