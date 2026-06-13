@@ -1784,8 +1784,9 @@ mod tests {
         let profile = fs::read_to_string(managed_shell_profile_path(&config))
             .await
             .unwrap();
+        let shell_name: &'static str = config.shell_type.into();
         assert!(
-            profile.contains("COMPLETE=zsh shine"),
+            profile.contains(&format!("COMPLETE={shell_name} shine")),
             "profile should register shine completion: {profile}"
         );
         assert!(
