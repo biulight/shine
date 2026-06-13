@@ -415,6 +415,7 @@ async fn run(cli: Cli) -> Result<()> {
         },
         Commands::Sys { command } => match command {
             SysCommands::List => Box::pin(sys::handle_list(&config)).await,
+            SysCommands::Status => Box::pin(sys::handle_status(&config)).await,
             SysCommands::Init {
                 preset,
                 dry_run,
@@ -2315,6 +2316,17 @@ mod tests {
                     force_profile: false
                 }
             } if preset == "recommended"
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_sys_status() {
+        let cli = Cli::try_parse_from(["shine", "sys", "status"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Status
+            }
         ));
     }
 

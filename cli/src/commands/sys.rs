@@ -4,6 +4,8 @@ use clap::Subcommand;
 pub enum SysCommands {
     /// List available system init presets
     List,
+    /// Show system init items previously initialized by shine
+    Status,
     /// Run the system init script for the current OS
     Init {
         /// Apply a named profile without showing interactive selection

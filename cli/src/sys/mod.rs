@@ -1,12 +1,14 @@
 use anyhow::{Context, Result, bail};
 use console::{Style, style};
 use dialoguer::{MultiSelect, theme::ColorfulTheme};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use similar::{DiffTag, TextDiff};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io::AsyncWriteExt;
 
 use crate::colors;
 use crate::config::Config;
@@ -65,7 +67,8 @@ struct ResolvedSelection {
     source: SelectionSource,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 enum SysItemStatus {
     Installed,
     AlreadyInstalled,
@@ -86,6 +89,24 @@ struct SysItemOutcome {
 }
 
 const SYS_STATUS_PREFIX: &str = "SHINE_SYS_STATUS\t";
+const SYS_MANIFEST_FILE: &str = "sys-manifest.toml";
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct SysRunManifest {
+    #[serde(default)]
+    entries: Vec<SysRunEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct SysRunEntry {
+    os_id: String,
+    item_id: String,
+    label: String,
+    status: SysItemStatus,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    detail: String,
+    updated_at: String,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SysProfilePhase {
@@ -117,6 +138,57 @@ impl SelectionSource {
             Self::DefaultProfile(name) => format!("default profile `{name}`"),
             Self::Interactive => "interactive selection".to_string(),
             Self::NoItems => "no selectable items".to_string(),
+        }
+    }
+}
+
+impl SysRunManifest {
+    async fn load(shine_dir: &Path) -> Result<Self> {
+        let path = shine_dir.join(SYS_MANIFEST_FILE);
+        match tokio::fs::read_to_string(&path).await {
+            Ok(content) => toml::from_str(&content).context("failed to parse sys manifest"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e).context("failed to read sys manifest"),
+        }
+    }
+
+    async fn save(&self, shine_dir: &Path) -> Result<()> {
+        tokio::fs::create_dir_all(shine_dir)
+            .await
+            .with_context(|| format!("creating {}", shine_dir.display()))?;
+
+        let path = shine_dir.join(SYS_MANIFEST_FILE);
+        let content = toml::to_string_pretty(self).context("failed to serialize sys manifest")?;
+        let temp = shine_dir.join(format!(".sys-manifest-{}.tmp", uuid::Uuid::new_v4()));
+        let mut file = tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp)
+            .await
+            .context("failed to create temp sys manifest file")?;
+        file.write_all(content.as_bytes())
+            .await
+            .context("failed to write sys manifest")?;
+        file.sync_all()
+            .await
+            .context("failed to sync sys manifest")?;
+        drop(file);
+
+        tokio::fs::rename(&temp, &path)
+            .await
+            .context("failed to finalize sys manifest")?;
+        Ok(())
+    }
+
+    fn upsert(&mut self, entry: SysRunEntry) {
+        if let Some(existing) = self
+            .entries
+            .iter_mut()
+            .find(|existing| existing.os_id == entry.os_id && existing.item_id == entry.item_id)
+        {
+            *existing = entry;
+        } else {
+            self.entries.push(entry);
         }
     }
 }
@@ -208,6 +280,50 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
         "{}",
         colors::dim("Run `shine sys init` to initialize the current system.")
     );
+    Ok(())
+}
+
+pub(crate) async fn handle_status(config: &Config) -> Result<()> {
+    let os_id = detect_os_id().await?;
+    let manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let entries: Vec<&SysRunEntry> = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.os_id == os_id)
+        .collect();
+
+    if entries.is_empty() {
+        println!(
+            "{}",
+            colors::dim(&format!(
+                "No system init items recorded for {os_id}. Run `shine sys init` to initialize the current system."
+            ))
+        );
+        return Ok(());
+    }
+
+    println!("{}\n", colors::bold("Initialized System Items"));
+
+    let label_width = entries
+        .iter()
+        .map(|entry| entry.label.len())
+        .max()
+        .unwrap_or(14)
+        .max(14);
+
+    for entry in entries {
+        print_item_outcome(
+            &SysItemOutcome {
+                item_id: entry.item_id.clone(),
+                label: entry.label.clone(),
+                status: entry.status,
+                detail: entry.detail.clone(),
+                logs: Vec::new(),
+            },
+            label_width,
+        );
+    }
+
     Ok(())
 }
 
@@ -305,6 +421,7 @@ async fn handle_init_for_os(
 
     println!();
     print_sys_summary(&outcomes);
+    record_sys_item_outcomes(config, os_id, &outcomes).await?;
 
     if outcomes
         .iter()
@@ -314,6 +431,42 @@ async fn handle_init_for_os(
     }
 
     Ok(())
+}
+
+async fn record_sys_item_outcomes(
+    config: &Config,
+    os_id: &str,
+    outcomes: &[SysItemOutcome],
+) -> Result<()> {
+    let entries = outcomes
+        .iter()
+        .filter(|outcome| outcome.item_id != "profile" && outcome.status != SysItemStatus::Failed)
+        .map(|outcome| SysRunEntry {
+            os_id: os_id.to_string(),
+            item_id: outcome.item_id.clone(),
+            label: outcome.label.clone(),
+            status: outcome.status,
+            detail: outcome.detail.clone(),
+            updated_at: current_unix_timestamp().to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let mut manifest = SysRunManifest::load(config.shine_dir()).await?;
+    for entry in entries {
+        manifest.upsert(entry);
+    }
+    manifest.save(config.shine_dir()).await
+}
+
+fn current_unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 async fn print_dry_run(
@@ -1938,6 +2091,62 @@ label = "Neovim"
         assert!(err.to_string().contains("default profile `recommended`"));
     }
 
+    // --- sys run manifest ---
+
+    fn sample_sys_run_entry(os_id: &str, item_id: &str, label: &str) -> SysRunEntry {
+        SysRunEntry {
+            os_id: os_id.to_string(),
+            item_id: item_id.to_string(),
+            label: label.to_string(),
+            status: SysItemStatus::Installed,
+            detail: "ok".to_string(),
+            updated_at: "123".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn sys_run_manifest_load_returns_empty_when_missing() {
+        let dir = make_temp_dir().await;
+        let manifest = SysRunManifest::load(&dir).await.unwrap();
+        assert!(manifest.entries.is_empty());
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sys_run_manifest_save_and_load_roundtrip() {
+        let dir = make_temp_dir().await;
+        let mut manifest = SysRunManifest::default();
+        manifest.upsert(sample_sys_run_entry("macos", "rust", "Rust"));
+        manifest.save(&dir).await.unwrap();
+
+        let loaded = SysRunManifest::load(&dir).await.unwrap();
+        assert_eq!(loaded, manifest);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn sys_run_manifest_upsert_replaces_by_os_and_item() {
+        let mut manifest = SysRunManifest::default();
+        manifest.upsert(sample_sys_run_entry("macos", "rust", "Rust"));
+        manifest.upsert(sample_sys_run_entry("ubuntu", "rust", "Rust"));
+
+        let mut replacement = sample_sys_run_entry("macos", "rust", "Rust");
+        replacement.status = SysItemStatus::AlreadyInstalled;
+        replacement.detail = "rustup 1.28.2".to_string();
+        replacement.updated_at = "456".to_string();
+        manifest.upsert(replacement);
+
+        assert_eq!(manifest.entries.len(), 2);
+        let macos = manifest
+            .entries
+            .iter()
+            .find(|entry| entry.os_id == "macos" && entry.item_id == "rust")
+            .unwrap();
+        assert_eq!(macos.status, SysItemStatus::AlreadyInstalled);
+        assert_eq!(macos.detail, "rustup 1.28.2");
+        assert_eq!(macos.updated_at, "456");
+    }
+
     // --- selection resolution ---
 
     #[test]
@@ -2816,6 +3025,10 @@ items = ["touch-file"]
             .await
             .unwrap();
         assert!(!sentinel.exists(), "script must not have been executed");
+        assert!(
+            !dir.join(SYS_MANIFEST_FILE).exists(),
+            "dry-run must not write sys manifest"
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2880,6 +3093,28 @@ esac
 
         let calls = fs::read_to_string(&calls).await.unwrap();
         assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "second"]);
+        let sys_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        assert_eq!(sys_manifest.entries.len(), 2);
+        assert!(sys_manifest.entries.iter().any(|entry| {
+            entry.os_id == "fakeos"
+                && entry.item_id == "first"
+                && entry.label == "First"
+                && entry.status == SysItemStatus::Installed
+                && entry.detail == "first ok"
+        }));
+        assert!(sys_manifest.entries.iter().any(|entry| {
+            entry.os_id == "fakeos"
+                && entry.item_id == "second"
+                && entry.label == "Second"
+                && entry.status == SysItemStatus::Completed
+                && entry.detail.is_empty()
+        }));
+        assert!(
+            !sys_manifest
+                .entries
+                .iter()
+                .any(|entry| entry.item_id == "profile")
+        );
         assert_eq!(
             fs::read_to_string(dir.join(".shine/profile/fakeos-sys.pre.sh"))
                 .await
@@ -2974,6 +3209,16 @@ esac
         assert!(err.to_string().contains("sys init failed"));
         let calls = fs::read_to_string(&calls).await.unwrap();
         assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "fails"]);
+        let sys_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        assert_eq!(sys_manifest.entries.len(), 1);
+        assert_eq!(sys_manifest.entries[0].item_id, "first");
+        assert_eq!(sys_manifest.entries[0].status, SysItemStatus::Installed);
+        assert!(
+            !sys_manifest
+                .entries
+                .iter()
+                .any(|entry| entry.item_id == "fails" || entry.item_id == "after")
+        );
         assert_eq!(
             fs::read_to_string(dir.join(".shine/profile/fakeos-sys.pre.sh"))
                 .await
@@ -2998,6 +3243,16 @@ esac
                 .unwrap(),
             "echo fake post profile\n"
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn handle_status_succeeds_without_sys_manifest() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+
+        handle_status(&config).await.unwrap();
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
