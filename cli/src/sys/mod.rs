@@ -438,6 +438,9 @@ async fn record_sys_item_outcomes(
     os_id: &str,
     outcomes: &[SysItemOutcome],
 ) -> Result<()> {
+    // "profile" is a synthetic item for shell-profile wiring, not a recorded sys item.
+    // Failed items are dropped so a transient failure doesn't mask a future success;
+    // Skipped/NeedsAction are kept so `shine sys status` reflects what the user chose.
     let entries = outcomes
         .iter()
         .filter(|outcome| outcome.item_id != "profile" && outcome.status != SysItemStatus::Failed)
@@ -463,6 +466,8 @@ async fn record_sys_item_outcomes(
 }
 
 fn current_unix_timestamp() -> u64 {
+    // `duration_since` only errs if the system clock is set before the Unix epoch,
+    // which is not a realistic scenario; fall back to 0 rather than failing the run.
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
