@@ -11,6 +11,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Added `shine completions install` for automatic `shine` command completion setup without installing presets, including dynamic preset category candidates.
 
+### Bug Fixes
+
+- Fixed zsh completion setup so it initializes `compinit` when needed before registering `shine` completions.
+
 ### Docs
 
 - Documented automatic shell completion setup, specific shell preset install refresh behavior, and the manual `shine completions <shell>` fallback.

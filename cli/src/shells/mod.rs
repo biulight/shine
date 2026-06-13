@@ -922,9 +922,9 @@ fn completion_registration_snippet(shell: &ShellType) -> Option<&'static str> {
         ShellType::Bash => {
             Some("\nif command -v shine >/dev/null 2>&1; then\n  source <(COMPLETE=bash shine)\nfi")
         }
-        ShellType::Zsh => {
-            Some("\nif command -v shine >/dev/null 2>&1; then\n  source <(COMPLETE=zsh shine)\nfi")
-        }
+        ShellType::Zsh => Some(
+            "\nif command -v shine >/dev/null 2>&1; then\n  if ! whence -w compdef >/dev/null 2>&1; then\n    autoload -Uz compinit\n    compinit\n  fi\n  source <(COMPLETE=zsh shine)\nfi",
+        ),
         ShellType::PowerShell => Some(
             "\nif (Get-Command shine -ErrorAction SilentlyContinue) { $env:COMPLETE = 'powershell'; shine | Out-String | Invoke-Expression; Remove-Item Env:\\COMPLETE -ErrorAction SilentlyContinue }",
         ),
@@ -1579,6 +1579,12 @@ mod tests {
                 snippet.contains(&format!("COMPLETE={shell_name} shine")),
                 "{shell:?} should register shine completion: {snippet}"
             );
+            if matches!(shell, ShellType::Zsh) {
+                assert!(
+                    snippet.contains("autoload -Uz compinit"),
+                    "zsh completion registration should initialize compinit: {snippet}"
+                );
+            }
         }
     }
 
