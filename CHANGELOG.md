@@ -5,6 +5,19 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ---
 
+## [0.32.0] — 2026-06-13
+
+### Features
+
+- Added `shine env export <KEY>` for shell-safe export code that decrypts `<KEY>_SECRET` when present and otherwise falls back to plaintext `<KEY>`.
+- Added `shine env delete <KEY>` for removing stored env values from the active config.
+- Improved `shine env encrypt --from <KEY>` so it stores encrypted output as `<KEY>_SECRET` by default, with `--set` still available for explicit targets.
+- Added `gpg_key_id` as a default GPG recipient for `shine env encrypt`, with `-r/--recipient` available for per-command overrides.
+
+### Docs
+
+- Documented the new env secret export, delete, inferred encrypt target, and default GPG recipient workflows.
+
 ## [0.31.1] — 2026-06-11
 
 ### Bug Fixes

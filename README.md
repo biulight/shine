@@ -499,7 +499,7 @@ shine upgrade --verbose  # include env-template check details
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.31.1+preview.abc1234`, while stable binaries continue to report `0.31.1`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.32.0+preview.abc1234`, while stable binaries continue to report `0.32.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -509,7 +509,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.31.1 sh install.sh
+SHINE_VERSION=0.32.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -517,7 +517,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.31.1"; .\install.ps1
+$env:SHINE_VERSION = "0.32.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -590,14 +590,31 @@ Create the encrypted value with your existing GPG key. If the private key is
 backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
 
 ```bash
-shine env encrypt -r <key-id> --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
+shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 ```
+
+`shine env encrypt` uses `gpg_key_id` from `config.toml` by default. Pass
+`-r/--recipient <key-id>` to override it for a single command.
 
 You can also decrypt any base64 GPG secret from the active env config directly:
 
 ```bash
 shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
 ```
+
+For a value that should become an environment variable in the current shell,
+store it as `<KEY>_SECRET` for encrypted storage or `<KEY>` for plaintext
+fallback, then evaluate the generated shell code:
+
+```bash
+shine env encrypt --from MY_TOKEN
+eval "$(shine env export MY_TOKEN)"
+```
+
+`shine env export MY_TOKEN` prefers `MY_TOKEN_SECRET`, decrypts it when present,
+and otherwise falls back to `MY_TOKEN`. It prints shell-specific assignment code;
+the `eval` step is what applies it to the current terminal session. Use `--set`
+when you need a custom encrypted target key.
 
 Then install and use the helper:
 
@@ -660,6 +677,12 @@ You can also change the fallback install root for app presets that do not carry 
 
 ```toml
 app_default_dest_root = "~/.config"
+```
+
+Set a default GPG recipient for `shine env encrypt`:
+
+```toml
+gpg_key_id = "<key-id>"
 ```
 
 Template variables live in the `[env]` table:
