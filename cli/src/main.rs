@@ -74,11 +74,10 @@ enum Commands {
         #[arg(value_name = "CATEGORY")]
         category: String,
     },
-    #[command(about = "Generate shell completion scripts for manual installation")]
+    /// Generate or install shell completion scripts
     Completions {
-        /// Target shell
-        #[arg(value_enum)]
-        shell: CompletionShell,
+        #[command(subcommand)]
+        command: CompletionCommands,
     },
     /// List installed shell presets and app configs
     List,
@@ -141,9 +140,40 @@ enum CompletionShell {
     Zsh,
 }
 
-impl CompletionShell {
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Subcommand)]
+enum CompletionCommands {
+    /// Install completions into the managed shell profile without installing presets
+    Install,
+    /// Generate bash completion registration script
+    Bash,
+    /// Generate PowerShell completion registration script
+    #[command(name = "powershell")]
+    PowerShell,
+    /// Generate zsh completion registration script
+    Zsh,
+}
+
+impl CompletionCommands {
     fn generate(self) {
-        completion::generate_registration(self);
+        match self {
+            CompletionCommands::Bash => completion::generate_registration(CompletionShell::Bash),
+            CompletionCommands::PowerShell => {
+                completion::generate_registration(CompletionShell::PowerShell)
+            }
+            CompletionCommands::Zsh => completion::generate_registration(CompletionShell::Zsh),
+            CompletionCommands::Install => unreachable!("install is handled by the async runtime"),
+        }
+    }
+}
+
+impl CompletionShell {
+    fn from_command(command: &CompletionCommands) -> Option<Self> {
+        match command {
+            CompletionCommands::Bash => Some(CompletionShell::Bash),
+            CompletionCommands::PowerShell => Some(CompletionShell::PowerShell),
+            CompletionCommands::Zsh => Some(CompletionShell::Zsh),
+            CompletionCommands::Install => None,
+        }
     }
 
     fn as_str(self) -> &'static str {
@@ -184,8 +214,10 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    if let Commands::Completions { shell } = &cli.command {
-        shell.generate();
+    if let Commands::Completions { command } = &cli.command
+        && CompletionShell::from_command(command).is_some()
+    {
+        command.generate();
         return Ok(());
     }
 
@@ -258,6 +290,9 @@ async fn run(cli: Cli) -> Result<()> {
 
     match cli.command {
         Commands::Init(_) => unreachable!(),
+        Commands::Completions {
+            command: CompletionCommands::Install,
+        } => Box::pin(shells::handle_completion_install(&config)).await,
         Commands::Completions { .. } => unreachable!(),
         Commands::Clear(_) => unreachable!(),
         Commands::Install { category } => handle_install_shim(&config, &category).await,
@@ -1922,7 +1957,7 @@ mod tests {
     fn runtime_schema_warning_is_skipped_for_lifecycle_commands() {
         let init = Commands::Init(InitCommand { yes: false });
         let completions = Commands::Completions {
-            shell: CompletionShell::Bash,
+            command: CompletionCommands::Bash,
         };
         let clear = Commands::Clear(ClearCommand { dry_run: false });
         let list = Commands::List;
@@ -2141,7 +2176,8 @@ mod tests {
     }
 
     #[test]
-    fn cli_completions_accepts_supported_shells() {
+    fn cli_completions_accepts_supported_commands() {
+        assert!(Cli::try_parse_from(["shine", "completions", "install"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "completions", "bash"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "completions", "powershell"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "completions", "zsh"]).is_ok());

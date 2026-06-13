@@ -9,11 +9,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
-- Added automatic `shine` command completion setup through `shine shell install` and `shine shell reinstall`, including dynamic preset category candidates.
+- Added `shine completions install` for automatic `shine` command completion setup without installing presets, including dynamic preset category candidates.
 
 ### Docs
 
-- Documented automatic shell completion setup and the manual `shine completions <shell>` fallback.
+- Documented automatic shell completion setup, specific shell preset install refresh behavior, and the manual `shine completions <shell>` fallback.
 
 ## [0.32.0] — 2026-06-13
 

@@ -149,11 +149,12 @@ shine shell uninstall proxy --purge  # 卸载 proxy 并删除其预设目录
 ### Shell 补全
 
 ```bash
-shine shell install      # 新安装会自动启用 shine 补全
-shine shell reinstall    # 已安装用户可刷新补全配置
+shine completions install
 ```
 
 打开新 shell，或手动重新加载一次 shell 配置（`source ~/.zshrc` 或 `source ~/.bashrc`）。
+
+安装或重装某个具体 shell 预设（例如 `shine shell install proxy`）时，也会在刷新 managed shell profile 的同时更新补全配置。
 
 如果需要手动配置或检查脚本，`shine completions <shell>` 仍会把 `bash`、`zsh` 和 `powershell` 的注册脚本输出到 `stdout`。
 

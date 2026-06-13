@@ -149,11 +149,12 @@ When a category is specified only that category's files and symlinks are removed
 ### Shell completions
 
 ```bash
-shine shell install      # new installs enable shine completions automatically
-shine shell reinstall    # refresh completions for an existing install
+shine completions install
 ```
 
 Open a new shell, or reload your shell config once (`source ~/.zshrc` or `source ~/.bashrc`).
+
+Installing or reinstalling a specific shell preset, such as `shine shell install proxy`, also refreshes completions as part of the managed shell profile update.
 
 For manual setup or inspection, `shine completions <shell>` prints the registration script to `stdout` for `bash`, `zsh`, and `powershell`.
 
