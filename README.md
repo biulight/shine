@@ -193,12 +193,12 @@ shine sys init --preset recommended
 shine sys init --dry-run
 ```
 
-`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After all items finish, it calls the same script with `__shine_finalize` so the preset can apply shared profile or shell integration once.
+`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After successful item work, `shine` refreshes managed shell profile integration from Rust.
 
 - In a TTY, `shine sys init` opens an interactive multi-select with defaults taken from the preset's `default_profile`.
 - `shine sys init --preset <PROFILE>` skips the prompt and applies that named profile directly.
 - Without a TTY, `shine sys init` falls back to `default_profile`.
-- `shine sys init --dry-run` prints the resolved items, per-item script invocations, finalize invocation, and script content without executing anything.
+- `shine sys init --dry-run` prints the resolved items, per-item script invocations, the internal profile update step, and script content without executing anything.
 
 System init presets use this metadata shape:
 
@@ -229,7 +229,7 @@ Current built-in presets:
 - `macos` — offers selectable Homebrew, Yazi, Starship, Neovim, AstroNvim, ZeroTier, zsh plugin, zoxide, Atuin, fzf, bat, eza, nvm, Bun, pnpm, and Fastfetch steps. The `recommended` profile includes Homebrew and the core terminal/editor tools; the `all` profile adds JavaScript runtimes and Fastfetch.
 - `windows` — offers selectable Rust, Yazi, Starship, zoxide, Atuin, fzf, bat, eza, ZeroTier, Bun, pnpm, and mise steps. The `recommended` profile includes Rust and core terminal tools; the `all` profile adds JavaScript runtime and environment manager steps.
 
-When selected tools need shell integration, sys init installs managed profile blocks. Ubuntu uses a managed shell profile loader for tools such as Yazi, Starship, zoxide, Atuin, fzf, and mise. Windows uses a managed PowerShell profile loader for Yazi, Starship, zoxide, Atuin, fzf, and mise. Managed profile updates are merged into the existing profile file so user edits outside the managed block are preserved.
+When selected tools need shell integration, sys init installs managed `pre` and `post` profile loaders. The `pre` loader runs near the top of the user profile for PATH, Homebrew, and completion search path setup; the `post` loader runs near the end for Yazi, Starship, zoxide, Atuin, fzf, mise, aliases, and shell plugins. Managed profile files are merged so user edits inside them are preserved or reported for review.
 
 ### Show app preset details
 

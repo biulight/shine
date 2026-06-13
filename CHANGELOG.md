@@ -10,6 +10,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 ### Features
 
 - Added `shine completions install` for automatic `shine` command completion setup without installing presets, including dynamic preset category candidates.
+- Split `shine sys init` shell integration into `pre` and `post` managed profile loaders so PATH and completion setup can run before user profile customizations while prompts and plugins stay near the end.
 
 ### Bug Fixes
 
@@ -18,6 +19,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 ### Docs
 
 - Documented automatic shell completion setup, specific shell preset install refresh behavior, and the manual `shine completions <shell>` fallback.
+- Documented the `shine sys init` pre/post managed profile loader behavior.
 
 ## [0.32.0] — 2026-06-13
 
