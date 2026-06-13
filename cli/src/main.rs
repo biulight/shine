@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use clap_complete::{Generator, generate};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use dialoguer::Select;
 use std::path::PathBuf;
 
@@ -10,6 +9,7 @@ mod check;
 mod clear;
 mod colors;
 mod commands;
+mod completion;
 mod config;
 mod env;
 mod list;
@@ -143,18 +143,14 @@ enum CompletionShell {
 
 impl CompletionShell {
     fn generate(self) {
-        let mut command = Cli::command();
-        let mut stdout = std::io::stdout();
+        completion::generate_registration(self);
+    }
+
+    fn as_str(self) -> &'static str {
         match self {
-            CompletionShell::Bash => {
-                write_completions(clap_complete::shells::Bash, &mut command, &mut stdout)
-            }
-            CompletionShell::PowerShell => {
-                write_completions(clap_complete::shells::PowerShell, &mut command, &mut stdout)
-            }
-            CompletionShell::Zsh => {
-                write_completions(clap_complete::shells::Zsh, &mut command, &mut stdout)
-            }
+            CompletionShell::Bash => "bash",
+            CompletionShell::PowerShell => "powershell",
+            CompletionShell::Zsh => "zsh",
         }
     }
 }
@@ -184,6 +180,8 @@ struct ClearCommand {
 }
 
 fn main() -> Result<()> {
+    completion::complete_from_env();
+
     let cli = Cli::parse();
 
     if let Commands::Completions { shell } = &cli.command {
@@ -595,14 +593,6 @@ fn confirm_init(dir: &std::path::Path) -> Result<bool> {
     std::io::stdin().read_line(&mut input)?;
     let answer = input.trim();
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
-}
-
-fn write_completions<G: Generator>(
-    generator: G,
-    command: &mut clap::Command,
-    out: &mut dyn std::io::Write,
-) {
-    generate(generator, command, command.get_name().to_string(), out);
 }
 
 async fn handle_env_show(config: &Config) -> Result<()> {
@@ -2164,19 +2154,28 @@ mod tests {
             CompletionShell::PowerShell,
             CompletionShell::Zsh,
         ] {
-            let mut command = Cli::command();
+            let mut command = completion::command();
             let mut output = Vec::new();
 
             match shell {
-                CompletionShell::Bash => {
-                    write_completions(clap_complete::shells::Bash, &mut command, &mut output)
-                }
-                CompletionShell::PowerShell => {
-                    write_completions(clap_complete::shells::PowerShell, &mut command, &mut output)
-                }
-                CompletionShell::Zsh => {
-                    write_completions(clap_complete::shells::Zsh, &mut command, &mut output)
-                }
+                CompletionShell::Bash => clap_complete::generate(
+                    clap_complete::shells::Bash,
+                    &mut command,
+                    "shine",
+                    &mut output,
+                ),
+                CompletionShell::PowerShell => clap_complete::generate(
+                    clap_complete::shells::PowerShell,
+                    &mut command,
+                    "shine",
+                    &mut output,
+                ),
+                CompletionShell::Zsh => clap_complete::generate(
+                    clap_complete::shells::Zsh,
+                    &mut command,
+                    "shine",
+                    &mut output,
+                ),
             }
 
             let script = String::from_utf8(output).unwrap();

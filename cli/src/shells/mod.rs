@@ -864,7 +864,25 @@ fn managed_profile_snippet(
             }
         }
     }
+    if let Some(snippet) = completion_registration_snippet(shell) {
+        body.push_str(snippet);
+    }
     format!("{body}\n")
+}
+
+fn completion_registration_snippet(shell: &ShellType) -> Option<&'static str> {
+    match shell {
+        ShellType::Bash => {
+            Some("\nif command -v shine >/dev/null 2>&1; then\n  source <(COMPLETE=bash shine)\nfi")
+        }
+        ShellType::Zsh => {
+            Some("\nif command -v shine >/dev/null 2>&1; then\n  source <(COMPLETE=zsh shine)\nfi")
+        }
+        ShellType::PowerShell => Some(
+            "\nif (Get-Command shine -ErrorAction SilentlyContinue) { $env:COMPLETE = 'powershell'; shine | Out-String | Invoke-Expression; Remove-Item Env:\\COMPLETE -ErrorAction SilentlyContinue }",
+        ),
+        ShellType::Fish | ShellType::Elvish => None,
+    }
 }
 
 fn shell_config_snippet(shell: &ShellType, profile_path: &Path, home_dir: &Path) -> String {
@@ -1509,7 +1527,30 @@ mod tests {
                 "{shell:?} should have if-guard: {snippet}"
             );
             assert!(snippet.contains("export PATH="));
+            let shell_name: &'static str = shell.into();
+            assert!(
+                snippet.contains(&format!("COMPLETE={shell_name} shine")),
+                "{shell:?} should register shine completion: {snippet}"
+            );
         }
+    }
+
+    #[test]
+    fn snippet_powershell_registers_completion_but_fish_does_not() {
+        let home = PathBuf::from("/home/user");
+        let bin = home.join("bin");
+
+        let powershell = managed_profile_snippet(&ShellType::PowerShell, &bin, &home, &[]);
+        assert!(
+            powershell.contains("$env:COMPLETE = 'powershell'"),
+            "PowerShell should register shine completion: {powershell}"
+        );
+
+        let fish = managed_profile_snippet(&ShellType::Fish, &bin, &home, &[]);
+        assert!(
+            !fish.contains("COMPLETE=fish shine"),
+            "fish completion should not be changed: {fish}"
+        );
     }
 
     #[test]

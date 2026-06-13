@@ -146,15 +146,16 @@ shine shell uninstall proxy --purge  # 卸载 proxy 并删除其预设目录
 
 `--purge` 会删除目标目录：未指定类别时删除整个 `~/.shine/presets/shell/` 树，指定类别时只删除 `~/.shine/presets/shell/<category>/`。它不会删除 `~/.shine/config.toml`，也不会删除根目录 `~/.shine/`。
 
-### 生成 shell 补全
+### Shell 补全
 
 ```bash
-shine completions bash > ~/.local/share/bash-completion/completions/shine
-shine completions zsh > ~/.zfunc/_shine
-shine completions powershell > shine-completions.ps1
+shine shell install      # 新安装会自动启用 shine 补全
+shine shell reinstall    # 已安装用户可刷新补全配置
 ```
 
-`shine completions <shell>` 会把补全脚本输出到 `stdout`，需要你手动安装。支持 `bash`、`zsh` 和 `powershell`，不会自动修改 shell 配置。
+打开新 shell，或手动重新加载一次 shell 配置（`source ~/.zshrc` 或 `source ~/.bashrc`）。
+
+如果需要手动配置或检查脚本，`shine completions <shell>` 仍会把 `bash`、`zsh` 和 `powershell` 的注册脚本输出到 `stdout`。
 
 ### 查看可用的应用预设
 

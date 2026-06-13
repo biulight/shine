@@ -146,15 +146,16 @@ When a category is specified only that category's files and symlinks are removed
 
 `--purge` removes the target directory (the whole `~/.shine/presets/shell/` tree when no category is given, or only `~/.shine/presets/shell/<category>/` when one is specified). It never removes `~/.shine/config.toml` or the root `~/.shine/` directory.
 
-### Generate shell completions
+### Shell completions
 
 ```bash
-shine completions bash > ~/.local/share/bash-completion/completions/shine
-shine completions zsh > ~/.zfunc/_shine
-shine completions powershell > shine-completions.ps1
+shine shell install      # new installs enable shine completions automatically
+shine shell reinstall    # refresh completions for an existing install
 ```
 
-`shine completions <shell>` prints a completion script to `stdout` for manual installation. It supports `bash`, `zsh`, and `powershell`, and it does not modify your shell config automatically.
+Open a new shell, or reload your shell config once (`source ~/.zshrc` or `source ~/.bashrc`).
+
+For manual setup or inspection, `shine completions <shell>` prints the registration script to `stdout` for `bash`, `zsh`, and `powershell`.
 
 ### List available app presets
 
