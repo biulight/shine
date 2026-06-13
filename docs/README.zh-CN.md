@@ -583,8 +583,10 @@ DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
 用你现有的 GPG key 生成该加密值。如果私钥托管在 YubiKey 上，`gpg-agent` 会在执行 `ccenv` 时处理 PIN / touch 提示：
 
 ```bash
-shine env encrypt -r <key-id> --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
+shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 ```
+
+`shine env encrypt` 默认使用 `config.toml` 中的 `gpg_key_id`。如需单次覆盖，可传入 `-r/--recipient <key-id>`。
 
 也可以直接解密当前 env 配置中的任意 base64 GPG secret：
 
@@ -648,6 +650,12 @@ presets_dir = "/custom/presets"
 
 ```toml
 app_default_dest_root = "~/.config"
+```
+
+为 `shine env encrypt` 设置默认 GPG recipient：
+
+```toml
+gpg_key_id = "<key-id>"
 ```
 
 模板变量放在 `[env]` 表里：

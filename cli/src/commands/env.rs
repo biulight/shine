@@ -39,7 +39,7 @@ pub(crate) enum EnvCommands {
 pub(crate) struct EnvEncryptCommand {
     /// GPG recipient key ID, fingerprint, or email
     #[arg(short = 'r', long)]
-    pub recipient: String,
+    pub recipient: Option<String>,
     /// Store the encrypted base64 value in config.toml [env] instead of printing it
     #[arg(long)]
     pub set: Option<String>,

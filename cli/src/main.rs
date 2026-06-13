@@ -362,7 +362,7 @@ async fn run(cli: Cli) -> Result<()> {
             EnvCommands::Encrypt(cmd) => {
                 handle_env_encrypt(
                     &config,
-                    &cmd.recipient,
+                    cmd.recipient.as_deref(),
                     cmd.set.as_deref(),
                     cmd.from.as_deref(),
                 )
@@ -771,14 +771,33 @@ fn resolve_env_encrypt_output(
     Ok(EnvEncryptOutput::Print)
 }
 
+fn resolve_env_encrypt_recipient(config: &Config, recipient: Option<&str>) -> Result<String> {
+    if let Some(recipient) = recipient
+        .map(str::trim)
+        .filter(|recipient| !recipient.is_empty())
+    {
+        return Ok(recipient.to_string());
+    }
+    if let Some(recipient) = config
+        .gpg_key_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|recipient| !recipient.is_empty())
+    {
+        return Ok(recipient.to_string());
+    }
+    bail!("GPG recipient is required; pass -r/--recipient or set gpg_key_id in config.toml");
+}
+
 async fn handle_env_encrypt(
     config: &Config,
-    recipient: &str,
+    recipient: Option<&str>,
     set_key: Option<&str>,
     from_key: Option<&str>,
 ) -> Result<()> {
     use std::io::Read as _;
 
+    let recipient = resolve_env_encrypt_recipient(config, recipient)?;
     let plaintext = if let Some(key) = from_key {
         let env = env::EnvConfig::load_or_init(config).await?;
         let Some(value) = env.get(key) else {
@@ -792,7 +811,7 @@ async fn handle_env_encrypt(
             .context("reading secret from stdin")?;
         input
     };
-    let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, recipient)
+    let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, &recipient)
         .await
         .with_context(|| format!("encrypting secret for {recipient}"))?;
     match resolve_env_encrypt_output(set_key, from_key)? {
@@ -1572,6 +1591,29 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn cli_accepts_env_encrypt_without_recipient() {
+        let cli = Cli::try_parse_from(["shine", "env", "encrypt", "--from", "MY_TOKEN"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Encrypt(cmd)
+            } if cmd.recipient.is_none() && cmd.from.as_deref() == Some("MY_TOKEN")
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_env_encrypt_with_recipient() {
+        let cli =
+            Cli::try_parse_from(["shine", "env", "encrypt", "-r", "alice@example.com"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Encrypt(cmd)
+            } if cmd.recipient.as_deref() == Some("alice@example.com")
+        ));
+    }
+
     #[tokio::test]
     async fn env_delete_removes_key_from_saved_config() {
         let dir = make_temp_dir().await;
@@ -1748,6 +1790,63 @@ mod tests {
             err.to_string()
                 .contains("env export key must contain only letters, digits, and underscores"),
             "error should explain invalid inferred key: {err:#}"
+        );
+    }
+
+    #[test]
+    fn env_encrypt_recipient_cli_wins_over_config() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
+        let mut config = config_in(&dir);
+        config.gpg_key_id = Some("config@example.com".to_string());
+
+        assert_eq!(
+            resolve_env_encrypt_recipient(&config, Some("cli@example.com")).unwrap(),
+            "cli@example.com"
+        );
+    }
+
+    #[test]
+    fn env_encrypt_recipient_falls_back_to_config() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
+        let mut config = config_in(&dir);
+        config.gpg_key_id = Some("config@example.com".to_string());
+
+        assert_eq!(
+            resolve_env_encrypt_recipient(&config, None).unwrap(),
+            "config@example.com"
+        );
+    }
+
+    #[test]
+    fn env_encrypt_recipient_treats_empty_config_as_missing() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
+        let mut config = config_in(&dir);
+        config.gpg_key_id = Some("  ".to_string());
+
+        let err = resolve_env_encrypt_recipient(&config, None).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("pass -r/--recipient or set gpg_key_id"),
+            "error should explain how to set recipient: {err:#}"
+        );
+    }
+
+    #[test]
+    fn env_encrypt_recipient_errors_when_missing() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
+        let config = config_in(&dir);
+
+        let err = resolve_env_encrypt_recipient(&config, None).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("pass -r/--recipient or set gpg_key_id"),
+            "error should explain how to set recipient: {err:#}"
         );
     }
 

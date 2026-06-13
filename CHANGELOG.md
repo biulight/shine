@@ -7,6 +7,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [0.31.1] — 2026-06-11
 
+### Features
+
+- Added `gpg_key_id` as a default GPG recipient for `shine env encrypt`, while keeping `-r/--recipient` available for per-command overrides.
+
 ### Bug Fixes
 
 - Fixed update checks and self-upgrade requests to use the configured GitHub token and show GitHub API errors when release lookup fails.

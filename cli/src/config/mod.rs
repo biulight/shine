@@ -92,6 +92,10 @@ pub(crate) struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub self_install_dest: Option<PathBuf>,
+    /// Default GPG recipient key used by `shine env encrypt` when the command
+    /// does not provide `-r/--recipient`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpg_key_id: Option<String>,
     /// Environment variables substituted into template-enabled presets.
     #[serde(default = "default_env_map")]
     pub env: BTreeMap<String, String>,
@@ -380,6 +384,7 @@ impl Config {
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
+            gpg_key_id: None,
             env: default_env_map(),
         }
     }
@@ -594,6 +599,7 @@ impl Default for Config {
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
+            gpg_key_id: None,
             env: default_env_map(),
         }
     }
@@ -917,6 +923,7 @@ mod tests {
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
+            gpg_key_id: None,
             env: default_env_map(),
         }
     }
@@ -1059,6 +1066,7 @@ mod tests {
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
+            gpg_key_id: None,
             env: default_env_map(),
         };
         assert!(config.save().await.is_err());
@@ -1912,6 +1920,21 @@ mod tests {
             loaded.presets_dir_override,
             Some(PathBuf::from("/external/presets"))
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn gpg_key_id_round_trips_through_save() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.gpg_key_id = Some("alice@example.com".to_string());
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert_eq!(loaded.gpg_key_id.as_deref(), Some("alice@example.com"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

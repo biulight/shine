@@ -590,8 +590,11 @@ Create the encrypted value with your existing GPG key. If the private key is
 backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
 
 ```bash
-shine env encrypt -r <key-id> --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
+shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 ```
+
+`shine env encrypt` uses `gpg_key_id` from `config.toml` by default. Pass
+`-r/--recipient <key-id>` to override it for a single command.
 
 You can also decrypt any base64 GPG secret from the active env config directly:
 
@@ -604,7 +607,7 @@ store it as `<KEY>_SECRET` for encrypted storage or `<KEY>` for plaintext
 fallback, then evaluate the generated shell code:
 
 ```bash
-shine env encrypt -r <key-id> --from MY_TOKEN
+shine env encrypt --from MY_TOKEN
 eval "$(shine env export MY_TOKEN)"
 ```
 
@@ -674,6 +677,12 @@ You can also change the fallback install root for app presets that do not carry 
 
 ```toml
 app_default_dest_root = "~/.config"
+```
+
+Set a default GPG recipient for `shine env encrypt`:
+
+```toml
+gpg_key_id = "<key-id>"
 ```
 
 Template variables live in the `[env]` table:
