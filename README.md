@@ -9,7 +9,7 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 ## Features
 
 - **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
-- **External presets** — point `presets_dir` at your own directory (e.g. a dotfiles repo) and `shine` reads from there instead; `shine export` seeds it with the built-ins
+- **External presets and overlays** — point `presets_dir` at your own directory for a full replacement, or link a small overlay directory to override selected embedded preset files
 - **Project-local presets** — run `shine init` inside a presets repo to create a local `shine.config.toml` that points `presets_dir` at the repo
 - **Managed bin directory** — `~/.shine/bin/` holds flat symlinks on Unix and command shims on Windows
 - **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
@@ -146,15 +146,17 @@ When a category is specified only that category's files and symlinks are removed
 
 `--purge` removes the target directory (the whole `~/.shine/presets/shell/` tree when no category is given, or only `~/.shine/presets/shell/<category>/` when one is specified). It never removes `~/.shine/config.toml` or the root `~/.shine/` directory.
 
-### Generate shell completions
+### Shell completions
 
 ```bash
-shine completions bash > ~/.local/share/bash-completion/completions/shine
-shine completions zsh > ~/.zfunc/_shine
-shine completions powershell > shine-completions.ps1
+shine completions install
 ```
 
-`shine completions <shell>` prints a completion script to `stdout` for manual installation. It supports `bash`, `zsh`, and `powershell`, and it does not modify your shell config automatically.
+Open a new shell, or reload your shell config once (`source ~/.zshrc` or `source ~/.bashrc`).
+
+Installing or reinstalling a specific shell preset, such as `shine shell install proxy`, also refreshes completions as part of the managed shell profile update.
+
+For manual setup or inspection, `shine completions <shell>` prints the registration script to `stdout` for `bash`, `zsh`, and `powershell`.
 
 ### List available app presets
 
@@ -189,14 +191,16 @@ Lists the built-in OS bootstrap presets and marks the current platform with `▶
 shine sys init
 shine sys init --preset recommended
 shine sys init --dry-run
+shine sys status
 ```
 
-`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After all items finish, it calls the same script with `__shine_finalize` so the preset can apply shared profile or shell integration once.
+`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After successful item work, `shine` refreshes managed shell profile integration from Rust.
 
 - In a TTY, `shine sys init` opens an interactive multi-select with defaults taken from the preset's `default_profile`.
 - `shine sys init --preset <PROFILE>` skips the prompt and applies that named profile directly.
 - Without a TTY, `shine sys init` falls back to `default_profile`.
-- `shine sys init --dry-run` prints the resolved items, per-item script invocations, finalize invocation, and script content without executing anything.
+- `shine sys init --dry-run` prints the resolved items, per-item script invocations, the internal profile update step, and script content without executing anything.
+- `shine sys status` shows the init items previously recorded for the current OS.
 
 System init presets use this metadata shape:
 
@@ -224,10 +228,10 @@ Supported states are `installed`, `already-installed`, `skipped`, `updated`, `ne
 Current built-in presets:
 
 - `ubuntu` — offers selectable Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza, pnpm, mise, Homebrew, and ZeroTier steps. The `recommended` profile includes the core editor, history, file manager, prompt, navigation, and shell utility steps while leaving pnpm, mise, Homebrew, and ZeroTier opt-in through the `all` profile or explicit selection.
-- `macos` — offers selectable Homebrew, Yazi, Starship, Neovim, AstroNvim, ZeroTier, zsh plugin, zoxide, Atuin, fzf, bat, eza, nvm, Bun, pnpm, and Fastfetch steps. The `recommended` profile includes Homebrew and the core terminal/editor tools; the `all` profile adds JavaScript runtimes and Fastfetch.
+- `macos` — offers selectable Homebrew, Rust, Yazi, Starship, Neovim, AstroNvim, ZeroTier, zsh plugin, zoxide, Atuin, fzf, bat, eza, nvm, Bun, pnpm, mise, and Fastfetch steps. The `recommended` profile includes Homebrew and the core terminal/editor tools; the `all` profile adds JavaScript runtimes, mise, and Fastfetch.
 - `windows` — offers selectable Rust, Yazi, Starship, zoxide, Atuin, fzf, bat, eza, ZeroTier, Bun, pnpm, and mise steps. The `recommended` profile includes Rust and core terminal tools; the `all` profile adds JavaScript runtime and environment manager steps.
 
-When selected tools need shell integration, sys init installs managed profile blocks. Ubuntu uses a managed shell profile loader for tools such as Yazi, Starship, zoxide, Atuin, fzf, and mise. Windows uses a managed PowerShell profile loader for Yazi, Starship, zoxide, Atuin, fzf, and mise. Managed profile updates are merged into the existing profile file so user edits outside the managed block are preserved.
+When selected tools need shell integration, sys init installs managed `pre` and `post` profile loaders. The `pre` loader runs near the top of the user profile for PATH, Homebrew, and completion search path setup; the `post` loader runs near the end for Yazi, Starship, zoxide, Atuin, fzf, mise, aliases, and shell plugins. Managed profile files are merged so user edits inside them are preserved or reported for review.
 
 ### Show app preset details
 
@@ -463,6 +467,14 @@ SHINE_PRESETS=~/dotfiles/shine-presets shine export
 
 All `install`, `update`, and `list` commands will automatically read from the external directory when `presets_dir` is configured. The active preset source is printed in each command's output so you always know which files are being used.
 
+For smaller customizations, use a presets overlay. Overlay files are merged over the embedded presets by matching the same relative paths, such as `app/starship/starship.toml` or `shell/proxy/set_proxy.sh`. A full external `presets_dir` takes priority over overlays.
+
+```bash
+shine overlay link ~/dotfiles/shine-overlay --create
+shine overlay show
+shine overlay unlink
+```
+
 ### Initialize a presets directory
 
 ```bash
@@ -499,7 +511,7 @@ shine upgrade --verbose  # include env-template check details
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.32.0+preview.abc1234`, while stable binaries continue to report `0.32.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.33.0+preview.abc1234`, while stable binaries continue to report `0.33.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -509,7 +521,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.32.0 sh install.sh
+SHINE_VERSION=0.33.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -517,7 +529,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.32.0"; .\install.ps1
+$env:SHINE_VERSION = "0.33.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 

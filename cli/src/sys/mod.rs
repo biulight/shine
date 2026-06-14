@@ -1,12 +1,14 @@
 use anyhow::{Context, Result, bail};
 use console::{Style, style};
 use dialoguer::{MultiSelect, theme::ColorfulTheme};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use similar::{DiffTag, TextDiff};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io::AsyncWriteExt;
 
 use crate::colors;
 use crate::config::Config;
@@ -65,7 +67,8 @@ struct ResolvedSelection {
     source: SelectionSource,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 enum SysItemStatus {
     Installed,
     AlreadyInstalled,
@@ -86,6 +89,48 @@ struct SysItemOutcome {
 }
 
 const SYS_STATUS_PREFIX: &str = "SHINE_SYS_STATUS\t";
+const SYS_MANIFEST_FILE: &str = "sys-manifest.toml";
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+struct SysRunManifest {
+    #[serde(default)]
+    entries: Vec<SysRunEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct SysRunEntry {
+    os_id: String,
+    item_id: String,
+    label: String,
+    status: SysItemStatus,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    detail: String,
+    updated_at: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SysProfilePhase {
+    Pre,
+    Post,
+}
+
+const SYS_PROFILE_PHASES: [SysProfilePhase; 2] = [SysProfilePhase::Pre, SysProfilePhase::Post];
+
+impl SysProfilePhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pre => "pre",
+            Self::Post => "post",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShellProfileBlockPosition {
+    Start,
+    End,
+}
+
 impl SelectionSource {
     fn describe(&self) -> String {
         match self {
@@ -93,6 +138,57 @@ impl SelectionSource {
             Self::DefaultProfile(name) => format!("default profile `{name}`"),
             Self::Interactive => "interactive selection".to_string(),
             Self::NoItems => "no selectable items".to_string(),
+        }
+    }
+}
+
+impl SysRunManifest {
+    async fn load(shine_dir: &Path) -> Result<Self> {
+        let path = shine_dir.join(SYS_MANIFEST_FILE);
+        match tokio::fs::read_to_string(&path).await {
+            Ok(content) => toml::from_str(&content).context("failed to parse sys manifest"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e).context("failed to read sys manifest"),
+        }
+    }
+
+    async fn save(&self, shine_dir: &Path) -> Result<()> {
+        tokio::fs::create_dir_all(shine_dir)
+            .await
+            .with_context(|| format!("creating {}", shine_dir.display()))?;
+
+        let path = shine_dir.join(SYS_MANIFEST_FILE);
+        let content = toml::to_string_pretty(self).context("failed to serialize sys manifest")?;
+        let temp = shine_dir.join(format!(".sys-manifest-{}.tmp", uuid::Uuid::new_v4()));
+        let mut file = tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp)
+            .await
+            .context("failed to create temp sys manifest file")?;
+        file.write_all(content.as_bytes())
+            .await
+            .context("failed to write sys manifest")?;
+        file.sync_all()
+            .await
+            .context("failed to sync sys manifest")?;
+        drop(file);
+
+        tokio::fs::rename(&temp, &path)
+            .await
+            .context("failed to finalize sys manifest")?;
+        Ok(())
+    }
+
+    fn upsert(&mut self, entry: SysRunEntry) {
+        if let Some(existing) = self
+            .entries
+            .iter_mut()
+            .find(|existing| existing.os_id == entry.os_id && existing.item_id == entry.item_id)
+        {
+            *existing = entry;
+        } else {
+            self.entries.push(entry);
         }
     }
 }
@@ -184,6 +280,50 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
         "{}",
         colors::dim("Run `shine sys init` to initialize the current system.")
     );
+    Ok(())
+}
+
+pub(crate) async fn handle_status(config: &Config) -> Result<()> {
+    let os_id = detect_os_id().await?;
+    let manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let entries: Vec<&SysRunEntry> = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.os_id == os_id)
+        .collect();
+
+    if entries.is_empty() {
+        println!(
+            "{}",
+            colors::dim(&format!(
+                "No system init items recorded for {os_id}. Run `shine sys init` to initialize the current system."
+            ))
+        );
+        return Ok(());
+    }
+
+    println!("{}\n", colors::bold("Initialized System Items"));
+
+    let label_width = entries
+        .iter()
+        .map(|entry| entry.label.len())
+        .max()
+        .unwrap_or(14)
+        .max(14);
+
+    for entry in entries {
+        print_item_outcome(
+            &SysItemOutcome {
+                item_id: entry.item_id.clone(),
+                label: entry.label.clone(),
+                status: entry.status,
+                detail: entry.detail.clone(),
+                logs: Vec::new(),
+            },
+            label_width,
+        );
+    }
+
     Ok(())
 }
 
@@ -281,6 +421,7 @@ async fn handle_init_for_os(
 
     println!();
     print_sys_summary(&outcomes);
+    record_sys_item_outcomes(config, os_id, &outcomes).await?;
 
     if outcomes
         .iter()
@@ -290,6 +431,47 @@ async fn handle_init_for_os(
     }
 
     Ok(())
+}
+
+async fn record_sys_item_outcomes(
+    config: &Config,
+    os_id: &str,
+    outcomes: &[SysItemOutcome],
+) -> Result<()> {
+    // "profile" is a synthetic item for shell-profile wiring, not a recorded sys item.
+    // Failed items are dropped so a transient failure doesn't mask a future success;
+    // Skipped/NeedsAction are kept so `shine sys status` reflects what the user chose.
+    let entries = outcomes
+        .iter()
+        .filter(|outcome| outcome.item_id != "profile" && outcome.status != SysItemStatus::Failed)
+        .map(|outcome| SysRunEntry {
+            os_id: os_id.to_string(),
+            item_id: outcome.item_id.clone(),
+            label: outcome.label.clone(),
+            status: outcome.status,
+            detail: outcome.detail.clone(),
+            updated_at: current_unix_timestamp().to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    let mut manifest = SysRunManifest::load(config.shine_dir()).await?;
+    for entry in entries {
+        manifest.upsert(entry);
+    }
+    manifest.save(config.shine_dir()).await
+}
+
+fn current_unix_timestamp() -> u64 {
+    // `duration_since` only errs if the system clock is set before the Unix epoch,
+    // which is not a realistic scenario; fall back to 0 rather than failing the run.
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 async fn print_dry_run(
@@ -320,7 +502,7 @@ async fn print_dry_run(
         );
     }
     if !selection.item_ids.is_empty() {
-        println!("    shine internal sys profile update");
+        println!("    shine internal sys profile pre/post update");
     }
     println!();
     let content = tokio::fs::read_to_string(&loaded.script_path)
@@ -465,20 +647,49 @@ async fn install_sys_profile_files(
     force_profile: bool,
 ) -> Result<SysProfileFileUpdate> {
     let ext = if os_id == "windows" { "ps1" } else { "sh" };
-    let stem = format!("{os_id}-sys");
-    let template_path = script_dir.join(format!("profile.{ext}"));
+    let profile_dir = config.home_dir.join(".shine/profile");
+    tokio::fs::create_dir_all(&profile_dir)
+        .await
+        .with_context(|| format!("creating {}", profile_dir.display()))?;
+
+    let mut updated = false;
+    let mut needs_action = false;
+    let mut details = Vec::new();
+
+    for phase in SYS_PROFILE_PHASES {
+        let phase_update =
+            install_sys_profile_phase(&profile_dir, os_id, script_dir, phase, ext, force_profile)
+                .await?;
+
+        updated |= phase_update.updated;
+        needs_action |= phase_update.needs_action;
+        details.push(format!("{}: {}", phase.as_str(), phase_update.detail));
+    }
+
+    Ok(SysProfileFileUpdate {
+        updated,
+        needs_action,
+        detail: details.join("; "),
+    })
+}
+
+async fn install_sys_profile_phase(
+    profile_dir: &Path,
+    os_id: &str,
+    script_dir: &Path,
+    phase: SysProfilePhase,
+    ext: &str,
+    force_profile: bool,
+) -> Result<SysProfileFileUpdate> {
+    let template_path = script_dir.join(format!("profile.{}.{ext}", phase.as_str()));
     let template = tokio::fs::read(&template_path)
         .await
         .with_context(|| format!("reading {}", template_path.display()))?;
 
-    let profile_dir = config.home_dir.join(".shine/profile");
-    let active_path = profile_dir.join(format!("{stem}.{ext}"));
-    let base_path = profile_dir.join(format!("{stem}.base.{ext}"));
-    let new_path = profile_dir.join(format!("{stem}.new.{ext}"));
-    let merge_path = profile_dir.join(format!("{stem}.merge.{ext}"));
-    tokio::fs::create_dir_all(&profile_dir)
-        .await
-        .with_context(|| format!("creating {}", profile_dir.display()))?;
+    let active_path = sys_profile_file_path(profile_dir, os_id, phase, ext);
+    let base_path = sys_profile_base_path(profile_dir, os_id, phase, ext);
+    let new_path = sys_profile_new_path(profile_dir, os_id, phase, ext);
+    let merge_path = sys_profile_merge_path(profile_dir, os_id, phase, ext);
 
     if force_profile {
         return apply_force_profile(
@@ -982,6 +1193,42 @@ fn profile_backup_path(active_path: &Path, ext: &str) -> PathBuf {
     active_path.with_extension(format!("{ext}.bak.{}", uuid::Uuid::new_v4().simple()))
 }
 
+fn sys_profile_file_path(
+    profile_dir: &Path,
+    os_id: &str,
+    phase: SysProfilePhase,
+    ext: &str,
+) -> PathBuf {
+    profile_dir.join(format!("{os_id}-sys.{}.{ext}", phase.as_str()))
+}
+
+fn sys_profile_base_path(
+    profile_dir: &Path,
+    os_id: &str,
+    phase: SysProfilePhase,
+    ext: &str,
+) -> PathBuf {
+    profile_dir.join(format!("{os_id}-sys.{}.base.{ext}", phase.as_str()))
+}
+
+fn sys_profile_new_path(
+    profile_dir: &Path,
+    os_id: &str,
+    phase: SysProfilePhase,
+    ext: &str,
+) -> PathBuf {
+    profile_dir.join(format!("{os_id}-sys.{}.new.{ext}", phase.as_str()))
+}
+
+fn sys_profile_merge_path(
+    profile_dir: &Path,
+    os_id: &str,
+    phase: SysProfilePhase,
+    ext: &str,
+) -> PathBuf {
+    profile_dir.join(format!("{os_id}-sys.{}.merge.{ext}", phase.as_str()))
+}
+
 async fn update_sys_shell_profiles(
     config: &Config,
     os_id: &str,
@@ -1001,8 +1248,7 @@ async fn update_sys_shell_profiles(
 
 async fn update_macos_shell_profile(config: &Config, os_id: &str) -> Result<SysShellProfileUpdate> {
     let path = config.home_dir.join(".zshrc");
-    let block = sys_shell_profile_block(os_id, None);
-    let updated = update_shell_profile_block(&path, sys_sentinel(os_id), &block).await?;
+    let updated = update_sys_shell_profile_blocks(&path, os_id, None).await?;
     Ok(SysShellProfileUpdate {
         updated,
         unsupported_shell: false,
@@ -1017,15 +1263,13 @@ async fn update_ubuntu_shell_profile(
 ) -> Result<SysShellProfileUpdate> {
     match config.shell_type {
         ShellType::Bash => {
-            let block = sys_shell_profile_block(os_id, Some("bash"));
-            let updated = update_shell_profile_block(
+            let updated = update_sys_shell_profile_blocks(
                 &config.home_dir.join(".bashrc"),
-                sys_sentinel(os_id),
-                &block,
+                os_id,
+                Some("bash"),
             )
             .await?;
-            remove_shell_profile_block(&config.home_dir.join(".zshrc"), sys_sentinel(os_id))
-                .await?;
+            remove_sys_shell_profile_blocks(&config.home_dir.join(".zshrc"), os_id).await?;
             Ok(SysShellProfileUpdate {
                 updated,
                 unsupported_shell: false,
@@ -1033,15 +1277,13 @@ async fn update_ubuntu_shell_profile(
             })
         }
         ShellType::Zsh => {
-            let block = sys_shell_profile_block(os_id, Some("zsh"));
-            let updated = update_shell_profile_block(
+            let updated = update_sys_shell_profile_blocks(
                 &config.home_dir.join(".zshrc"),
-                sys_sentinel(os_id),
-                &block,
+                os_id,
+                Some("zsh"),
             )
             .await?;
-            remove_shell_profile_block(&config.home_dir.join(".bashrc"), sys_sentinel(os_id))
-                .await?;
+            remove_sys_shell_profile_blocks(&config.home_dir.join(".bashrc"), os_id).await?;
             Ok(SysShellProfileUpdate {
                 updated,
                 unsupported_shell: false,
@@ -1060,7 +1302,6 @@ async fn update_windows_shell_profile(
     config: &Config,
     os_id: &str,
 ) -> Result<SysShellProfileUpdate> {
-    let block = sys_shell_profile_block(os_id, None);
     let mut updated = false;
     for path in [
         config
@@ -1070,7 +1311,7 @@ async fn update_windows_shell_profile(
             .home_dir
             .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
     ] {
-        updated |= update_shell_profile_block(&path, sys_sentinel(os_id), &block).await?;
+        updated |= update_sys_shell_profile_blocks(&path, os_id, None).await?;
     }
     Ok(SysShellProfileUpdate {
         updated,
@@ -1079,7 +1320,57 @@ async fn update_windows_shell_profile(
     })
 }
 
-fn sys_sentinel(os_id: &str) -> (&'static str, &'static str) {
+async fn update_sys_shell_profile_blocks(
+    path: &Path,
+    os_id: &str,
+    shell_name: Option<&str>,
+) -> Result<bool> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let pre_block = sys_shell_profile_block(os_id, SysProfilePhase::Pre, shell_name);
+    let post_block = sys_shell_profile_block(os_id, SysProfilePhase::Post, shell_name);
+    let pre_sentinel = sys_sentinel(os_id, SysProfilePhase::Pre);
+    let post_sentinel = sys_sentinel(os_id, SysProfilePhase::Post);
+
+    if extract_sentinel_block(&content, legacy_sys_sentinel(os_id)).is_none()
+        && extract_sentinel_block(&content, pre_sentinel) == Some(pre_block.as_str())
+        && extract_sentinel_block(&content, post_sentinel) == Some(post_block.as_str())
+        && sentinel_order_is_valid(&content, pre_sentinel, post_sentinel)
+    {
+        return Ok(false);
+    }
+
+    let mut updated = remove_sentinel_block(&content, legacy_sys_sentinel(os_id));
+    updated = remove_sentinel_block(&updated, pre_sentinel);
+    updated = remove_sentinel_block(&updated, post_sentinel);
+    updated = trim_outer_blank_lines(&updated);
+    updated = insert_shell_profile_block(&updated, &pre_block, ShellProfileBlockPosition::Start);
+    updated = insert_shell_profile_block(&updated, &post_block, ShellProfileBlockPosition::End);
+
+    tokio::fs::write(path, updated)
+        .await
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
+async fn remove_sys_shell_profile_blocks(path: &Path, os_id: &str) -> Result<bool> {
+    let mut updated = remove_shell_profile_block(path, legacy_sys_sentinel(os_id)).await?;
+    for phase in SYS_PROFILE_PHASES {
+        updated |= remove_shell_profile_block(path, sys_sentinel(os_id, phase)).await?;
+    }
+    Ok(updated)
+}
+
+fn legacy_sys_sentinel(os_id: &str) -> (&'static str, &'static str) {
     match os_id {
         "macos" => ("# >>> shine macos sys >>>", "# <<< shine macos sys <<<"),
         "windows" => ("# >>> shine windows sys >>>", "# <<< shine windows sys <<<"),
@@ -1087,75 +1378,120 @@ fn sys_sentinel(os_id: &str) -> (&'static str, &'static str) {
     }
 }
 
-fn sys_shell_profile_block(os_id: &str, shell_name: Option<&str>) -> String {
-    let (start, end) = sys_sentinel(os_id);
+fn sys_sentinel(os_id: &str, phase: SysProfilePhase) -> (&'static str, &'static str) {
+    match (os_id, phase) {
+        ("macos", SysProfilePhase::Pre) => (
+            "# >>> shine macos sys pre >>>",
+            "# <<< shine macos sys pre <<<",
+        ),
+        ("macos", SysProfilePhase::Post) => (
+            "# >>> shine macos sys post >>>",
+            "# <<< shine macos sys post <<<",
+        ),
+        ("windows", SysProfilePhase::Pre) => (
+            "# >>> shine windows sys pre >>>",
+            "# <<< shine windows sys pre <<<",
+        ),
+        ("windows", SysProfilePhase::Post) => (
+            "# >>> shine windows sys post >>>",
+            "# <<< shine windows sys post <<<",
+        ),
+        (_, SysProfilePhase::Pre) => (
+            "# >>> shine ubuntu sys pre >>>",
+            "# <<< shine ubuntu sys pre <<<",
+        ),
+        (_, SysProfilePhase::Post) => (
+            "# >>> shine ubuntu sys post >>>",
+            "# <<< shine ubuntu sys post <<<",
+        ),
+    }
+}
+
+fn sys_shell_profile_block(
+    os_id: &str,
+    phase: SysProfilePhase,
+    shell_name: Option<&str>,
+) -> String {
+    let (start, end) = sys_sentinel(os_id, phase);
     match os_id {
         "windows" => format!(
             r#"{start}
-$shineWindowsSysProfile = Join-Path $HOME ".shine\profile\windows-sys.ps1"
+$shineWindowsSysProfile = Join-Path $HOME ".shine\profile\windows-sys.{phase}.ps1"
 if (Test-Path -LiteralPath $shineWindowsSysProfile) {{
     . $shineWindowsSysProfile
 }}
 {end}
-"#
+"#,
+            phase = phase.as_str()
         ),
         "macos" => format!(
             r#"{start}
-shine_macos_sys_profile="$HOME/.shine/profile/macos-sys.sh"
+shine_macos_sys_profile="$HOME/.shine/profile/macos-sys.{phase}.sh"
 if [[ -f "$shine_macos_sys_profile" ]]; then
   source "$shine_macos_sys_profile"
 fi
 {end}
-"#
+"#,
+            phase = phase.as_str()
         ),
         _ => {
             let shell_name = shell_name.unwrap_or("bash");
             format!(
                 r#"{start}
-shine_ubuntu_sys_profile="$HOME/.shine/profile/ubuntu-sys.sh"
+shine_ubuntu_sys_profile="$HOME/.shine/profile/ubuntu-sys.{phase}.sh"
 if [[ -f "$shine_ubuntu_sys_profile" ]]; then
   SHINE_UBUNTU_SYS_SHELL="{shell_name}"
   source "$shine_ubuntu_sys_profile"
 fi
 {end}
-"#
+"#,
+                phase = phase.as_str()
             )
         }
     }
 }
 
-async fn update_shell_profile_block(
-    path: &Path,
-    sentinel: (&str, &str),
+fn insert_shell_profile_block(
+    content: &str,
     desired_block: &str,
-) -> Result<bool> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("creating {}", parent.display()))?;
+    position: ShellProfileBlockPosition,
+) -> String {
+    match position {
+        ShellProfileBlockPosition::Start => {
+            let mut updated = String::new();
+            updated.push_str(desired_block);
+            if !content.is_empty() {
+                if !desired_block.ends_with('\n') {
+                    updated.push('\n');
+                }
+                updated.push('\n');
+                updated.push_str(content);
+            }
+            updated
+        }
+        ShellProfileBlockPosition::End => {
+            let mut updated = content.to_string();
+            if !updated.ends_with('\n') && !updated.is_empty() {
+                updated.push('\n');
+            }
+            if !updated.is_empty() {
+                updated.push('\n');
+            }
+            updated.push_str(desired_block);
+            updated
+        }
     }
-    let content = match tokio::fs::read_to_string(path).await {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-    };
-    if extract_sentinel_block(&content, sentinel) == Some(desired_block) {
-        return Ok(false);
-    }
+}
 
-    let mut updated = remove_sentinel_block(&content, sentinel);
-    if !updated.ends_with('\n') && !updated.is_empty() {
-        updated.push('\n');
+fn sentinel_order_is_valid(content: &str, first: (&str, &str), second: (&str, &str)) -> bool {
+    match (content.find(first.0), content.find(second.0)) {
+        (Some(first), Some(second)) => first < second,
+        _ => false,
     }
-    if !updated.is_empty() {
-        updated.push('\n');
-    }
-    updated.push_str(desired_block);
+}
 
-    tokio::fs::write(path, updated)
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(true)
+fn trim_outer_blank_lines(content: &str) -> String {
+    content.trim_matches('\n').to_string()
 }
 
 async fn remove_shell_profile_block(path: &Path, sentinel: (&str, &str)) -> Result<bool> {
@@ -1209,7 +1545,7 @@ fn remove_sentinel_block(content: &str, sentinel: (&str, &str)) -> String {
 
 fn sys_loader_display(os_id: &str) -> String {
     format!(
-        "~/.shine/profile/{os_id}-sys.{}",
+        "~/.shine/profile/{os_id}-sys.{{pre,post}}.{}",
         if os_id == "windows" { "ps1" } else { "sh" }
     )
 }
@@ -1760,6 +2096,62 @@ label = "Neovim"
         assert!(err.to_string().contains("default profile `recommended`"));
     }
 
+    // --- sys run manifest ---
+
+    fn sample_sys_run_entry(os_id: &str, item_id: &str, label: &str) -> SysRunEntry {
+        SysRunEntry {
+            os_id: os_id.to_string(),
+            item_id: item_id.to_string(),
+            label: label.to_string(),
+            status: SysItemStatus::Installed,
+            detail: "ok".to_string(),
+            updated_at: "123".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn sys_run_manifest_load_returns_empty_when_missing() {
+        let dir = make_temp_dir().await;
+        let manifest = SysRunManifest::load(&dir).await.unwrap();
+        assert!(manifest.entries.is_empty());
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sys_run_manifest_save_and_load_roundtrip() {
+        let dir = make_temp_dir().await;
+        let mut manifest = SysRunManifest::default();
+        manifest.upsert(sample_sys_run_entry("macos", "rust", "Rust"));
+        manifest.save(&dir).await.unwrap();
+
+        let loaded = SysRunManifest::load(&dir).await.unwrap();
+        assert_eq!(loaded, manifest);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn sys_run_manifest_upsert_replaces_by_os_and_item() {
+        let mut manifest = SysRunManifest::default();
+        manifest.upsert(sample_sys_run_entry("macos", "rust", "Rust"));
+        manifest.upsert(sample_sys_run_entry("ubuntu", "rust", "Rust"));
+
+        let mut replacement = sample_sys_run_entry("macos", "rust", "Rust");
+        replacement.status = SysItemStatus::AlreadyInstalled;
+        replacement.detail = "rustup 1.28.2".to_string();
+        replacement.updated_at = "456".to_string();
+        manifest.upsert(replacement);
+
+        assert_eq!(manifest.entries.len(), 2);
+        let macos = manifest
+            .entries
+            .iter()
+            .find(|entry| entry.os_id == "macos" && entry.item_id == "rust")
+            .unwrap();
+        assert_eq!(macos.status, SysItemStatus::AlreadyInstalled);
+        assert_eq!(macos.detail, "rustup 1.28.2");
+        assert_eq!(macos.updated_at, "456");
+    }
+
     // --- selection resolution ---
 
     #[test]
@@ -1959,7 +2351,10 @@ description = "Placeholder"
         let dir = make_temp_dir().await;
         let script_dir = dir.join("presets/sys/ubuntu");
         fs::create_dir_all(&script_dir).await.unwrap();
-        fs::write(script_dir.join("profile.sh"), "echo template\n")
+        fs::write(script_dir.join("profile.pre.sh"), "echo pre template\n")
+            .await
+            .unwrap();
+        fs::write(script_dir.join("profile.post.sh"), "echo post template\n")
             .await
             .unwrap();
         let config = Config::new_for_test(&dir);
@@ -1972,16 +2367,28 @@ description = "Placeholder"
         assert!(!update.needs_action);
         let profile_dir = dir.join(".shine/profile");
         assert_eq!(
-            fs::read_to_string(profile_dir.join("ubuntu-sys.sh"))
+            fs::read_to_string(profile_dir.join("ubuntu-sys.pre.sh"))
                 .await
                 .unwrap(),
-            "echo template\n"
+            "echo pre template\n"
         );
         assert_eq!(
-            fs::read_to_string(profile_dir.join("ubuntu-sys.base.sh"))
+            fs::read_to_string(profile_dir.join("ubuntu-sys.pre.base.sh"))
                 .await
                 .unwrap(),
-            "echo template\n"
+            "echo pre template\n"
+        );
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.post.sh"))
+                .await
+                .unwrap(),
+            "echo post template\n"
+        );
+        assert_eq!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.post.base.sh"))
+                .await
+                .unwrap(),
+            "echo post template\n"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -1994,10 +2401,13 @@ description = "Placeholder"
         let profile_dir = dir.join(".shine/profile");
         fs::create_dir_all(&script_dir).await.unwrap();
         fs::create_dir_all(&profile_dir).await.unwrap();
-        fs::write(script_dir.join("profile.sh"), "echo new template\n")
+        fs::write(script_dir.join("profile.pre.sh"), "echo new template\n")
             .await
             .unwrap();
-        fs::write(profile_dir.join("ubuntu-sys.sh"), "echo user edit\n")
+        fs::write(script_dir.join("profile.post.sh"), "echo post template\n")
+            .await
+            .unwrap();
+        fs::write(profile_dir.join("ubuntu-sys.pre.sh"), "echo user edit\n")
             .await
             .unwrap();
         let config = Config::new_for_test(&dir);
@@ -2009,13 +2419,13 @@ description = "Placeholder"
         assert!(update.updated);
         assert!(update.needs_action);
         assert_eq!(
-            fs::read_to_string(profile_dir.join("ubuntu-sys.sh"))
+            fs::read_to_string(profile_dir.join("ubuntu-sys.pre.sh"))
                 .await
                 .unwrap(),
             "echo user edit\n"
         );
         assert!(
-            fs::read_to_string(profile_dir.join("ubuntu-sys.new.sh"))
+            fs::read_to_string(profile_dir.join("ubuntu-sys.pre.new.sh"))
                 .await
                 .unwrap()
                 .contains("echo new template")
@@ -2033,10 +2443,13 @@ description = "Placeholder"
         fs::create_dir_all(&profile_dir).await.unwrap();
         let template = "# fastfetch\n# if [[ -z \"$ZELLIJ\" ]] && command -v fastfetch >/dev/null 2>&1; then\n#   fastfetch\n# fi\n";
         let active = "# fastfetch\nif [[ -z \"$ZELLIJ\" ]] && command -v fastfetch >/dev/null 2>&1; then\n  fastfetch\nfi\n";
-        fs::write(script_dir.join("profile.sh"), template)
+        fs::write(script_dir.join("profile.pre.sh"), "echo pre template\n")
             .await
             .unwrap();
-        fs::write(profile_dir.join("macos-sys.sh"), active)
+        fs::write(script_dir.join("profile.post.sh"), template)
+            .await
+            .unwrap();
+        fs::write(profile_dir.join("macos-sys.post.sh"), active)
             .await
             .unwrap();
         let config = Config::new_for_test(&dir);
@@ -2048,18 +2461,18 @@ description = "Placeholder"
         assert!(update.updated);
         assert!(!update.needs_action);
         assert_eq!(
-            fs::read_to_string(profile_dir.join("macos-sys.sh"))
+            fs::read_to_string(profile_dir.join("macos-sys.post.sh"))
                 .await
                 .unwrap(),
             active
         );
         assert_eq!(
-            fs::read_to_string(profile_dir.join("macos-sys.base.sh"))
+            fs::read_to_string(profile_dir.join("macos-sys.post.base.sh"))
                 .await
                 .unwrap(),
             template
         );
-        assert!(!profile_dir.join("macos-sys.new.sh").exists());
+        assert!(!profile_dir.join("macos-sys.post.new.sh").exists());
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2071,10 +2484,13 @@ description = "Placeholder"
         let profile_dir = dir.join(".shine/profile");
         fs::create_dir_all(&script_dir).await.unwrap();
         fs::create_dir_all(&profile_dir).await.unwrap();
-        fs::write(script_dir.join("profile.sh"), "echo template\n")
+        fs::write(script_dir.join("profile.pre.sh"), "echo template\n")
             .await
             .unwrap();
-        fs::write(profile_dir.join("ubuntu-sys.sh"), "echo user edit\n")
+        fs::write(script_dir.join("profile.post.sh"), "echo post template\n")
+            .await
+            .unwrap();
+        fs::write(profile_dir.join("ubuntu-sys.pre.sh"), "echo user edit\n")
             .await
             .unwrap();
         let config = Config::new_for_test(&dir);
@@ -2086,13 +2502,13 @@ description = "Placeholder"
         assert!(update.updated);
         assert!(!update.needs_action);
         assert_eq!(
-            fs::read_to_string(profile_dir.join("ubuntu-sys.sh"))
+            fs::read_to_string(profile_dir.join("ubuntu-sys.pre.sh"))
                 .await
                 .unwrap(),
             "echo template\n"
         );
         assert_eq!(
-            fs::read_to_string(profile_dir.join("ubuntu-sys.base.sh"))
+            fs::read_to_string(profile_dir.join("ubuntu-sys.pre.base.sh"))
                 .await
                 .unwrap(),
             "echo template\n"
@@ -2102,11 +2518,11 @@ description = "Placeholder"
         while let Some(entry) = entries.next_entry().await.unwrap() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("ubuntu-sys.sh.bak.") {
+            if name.starts_with("ubuntu-sys.pre.sh.bak.") {
                 backup_found = true;
             }
         }
-        assert!(backup_found, "legacy profile backup should be created");
+        assert!(backup_found, "pre profile backup should be created");
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2141,7 +2557,7 @@ description = "Placeholder"
         config.shell_type = ShellType::Bash;
         fs::write(
             dir.join(".zshrc"),
-            "# before\n# >>> shine ubuntu sys >>>\nold\n# <<< shine ubuntu sys <<<\n# after\n",
+            "# before\n# >>> shine ubuntu sys >>>\nold\n# <<< shine ubuntu sys <<<\n# >>> shine ubuntu sys pre >>>\nold pre\n# <<< shine ubuntu sys pre <<<\n# >>> shine ubuntu sys post >>>\nold post\n# <<< shine ubuntu sys post <<<\n# after\n",
         )
         .await
         .unwrap();
@@ -2153,11 +2569,69 @@ description = "Placeholder"
         assert!(update.updated);
         let bashrc = fs::read_to_string(dir.join(".bashrc")).await.unwrap();
         assert!(bashrc.contains("SHINE_UBUNTU_SYS_SHELL=\"bash\""));
+        assert!(bashrc.contains("# >>> shine ubuntu sys pre >>>"));
+        assert!(bashrc.contains("ubuntu-sys.pre.sh"));
+        assert!(bashrc.contains("# >>> shine ubuntu sys post >>>"));
+        assert!(bashrc.contains("ubuntu-sys.post.sh"));
         assert!(bashrc.contains("source \"$shine_ubuntu_sys_profile\""));
+        assert!(
+            bashrc.find("# >>> shine ubuntu sys pre >>>").unwrap()
+                < bashrc.find("# >>> shine ubuntu sys post >>>").unwrap()
+        );
         let zshrc = fs::read_to_string(dir.join(".zshrc")).await.unwrap();
         assert!(!zshrc.contains("# >>> shine ubuntu sys >>>"));
+        assert!(!zshrc.contains("# >>> shine ubuntu sys pre >>>"));
+        assert!(!zshrc.contains("# >>> shine ubuntu sys post >>>"));
         assert!(zshrc.contains("# before"));
         assert!(zshrc.contains("# after"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profiles_wraps_existing_profile_with_pre_and_post_blocks() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.shell_type = ShellType::Zsh;
+        fs::write(dir.join(".zshrc"), "# user config\n")
+            .await
+            .unwrap();
+
+        let update = update_sys_shell_profiles(&config, "ubuntu", "zsh")
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        let zshrc = fs::read_to_string(dir.join(".zshrc")).await.unwrap();
+        let pre = zshrc.find("# >>> shine ubuntu sys pre >>>").unwrap();
+        let user = zshrc.find("# user config").unwrap();
+        let post = zshrc.find("# >>> shine ubuntu sys post >>>").unwrap();
+        assert!(pre < user);
+        assert!(user < post);
+        assert!(zshrc.contains("ubuntu-sys.pre.sh"));
+        assert!(zshrc.contains("ubuntu-sys.post.sh"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profiles_is_idempotent_after_pre_post_install() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.shell_type = ShellType::Zsh;
+
+        let first = update_sys_shell_profiles(&config, "ubuntu", "zsh")
+            .await
+            .unwrap();
+        let before = fs::read_to_string(dir.join(".zshrc")).await.unwrap();
+        let second = update_sys_shell_profiles(&config, "ubuntu", "zsh")
+            .await
+            .unwrap();
+        let after = fs::read_to_string(dir.join(".zshrc")).await.unwrap();
+
+        assert!(first.updated);
+        assert!(!second.updated);
+        assert_eq!(before, after);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2265,6 +2739,34 @@ description = "Placeholder"
     }
 
     #[test]
+    fn embedded_macos_profiles_cover_recommended_and_all_items() {
+        let content = crate::presets::read_asset_bytes("sys/macos/shine.toml")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded macOS manifest");
+        let manifest = parse_and_validate_manifest(&content).unwrap();
+        let recommended = manifest
+            .profiles
+            .get("recommended")
+            .expect("missing macOS recommended profile");
+        let all = manifest
+            .profiles
+            .get("all")
+            .expect("missing macOS all profile");
+
+        assert!(manifest.items.iter().any(|item| item.id == "rust"));
+        assert!(manifest.items.iter().any(|item| item.id == "mise"));
+        assert!(recommended.items.iter().any(|item| item == "rust"));
+        assert!(!recommended.items.iter().any(|item| item == "mise"));
+
+        let item_ids: BTreeSet<&str> = manifest.items.iter().map(|item| item.id.as_str()).collect();
+        let all_ids: BTreeSet<&str> = all.items.iter().map(String::as_str).collect();
+        assert_eq!(
+            all_ids, item_ids,
+            "macOS all profile should include every item"
+        );
+    }
+
+    #[test]
     fn embedded_windows_init_uses_current_atuin_winget_id() {
         let content = crate::presets::read_asset_bytes("sys/windows/init.ps1")
             .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -2277,9 +2779,9 @@ description = "Placeholder"
     #[test]
     fn embedded_sys_init_scripts_include_yazi_shell_wrapper() {
         for (path, marker) in [
-            ("sys/ubuntu/profile.sh", "y() {"),
-            ("sys/macos/profile.sh", "y() {"),
-            ("sys/windows/profile.ps1", "function y {"),
+            ("sys/ubuntu/profile.post.sh", "y() {"),
+            ("sys/macos/profile.post.sh", "y() {"),
+            ("sys/windows/profile.post.ps1", "function y {"),
         ] {
             let content = crate::presets::read_asset_bytes(path)
                 .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -2325,37 +2827,53 @@ description = "Placeholder"
         assert!(content.contains(
             "__shine_finalize) status \"completed\" \"profile is managed by shine CLI\""
         ));
+        assert!(content.contains("https://sh.rustup.rs | sh -s -- -y --no-modify-path"));
+        assert!(content.contains("rust) install_rust ;;"));
+        assert!(content.contains("mise) install_mise ;;"));
         assert!(!content.contains("append_zshrc_block"));
         assert!(!content.contains("cp \"$template_path\" \"$managed_path\""));
     }
 
     #[test]
     fn embedded_macos_profile_initializes_homebrew_zsh_completions() {
-        let content = crate::presets::read_asset_bytes("sys/macos/profile.sh")
+        let content = crate::presets::read_asset_bytes("sys/macos/profile.pre.sh")
             .and_then(|bytes| String::from_utf8(bytes).ok())
-            .expect("missing embedded macOS profile script");
+            .expect("missing embedded macOS pre profile script");
 
         assert!(content.contains("share/zsh/site-functions"));
         assert!(content.contains("ZSH_VERSION"));
         assert!(content.contains("typeset -U fpath"));
+        assert!(content.contains("\"$HOME/.cargo/bin\""));
+    }
+
+    #[test]
+    fn embedded_macos_profile_initializes_mise() {
+        let content = crate::presets::read_asset_bytes("sys/macos/profile.post.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded macOS post profile script");
+
+        assert!(content.contains("mise activate zsh"));
     }
 
     #[test]
     fn embedded_ubuntu_profile_initializes_atuin() {
-        let content = crate::presets::read_asset_bytes("sys/ubuntu/profile.sh")
+        let pre = crate::presets::read_asset_bytes("sys/ubuntu/profile.pre.sh")
             .and_then(|bytes| String::from_utf8(bytes).ok())
-            .expect("missing embedded Ubuntu profile script");
+            .expect("missing embedded Ubuntu pre profile script");
+        let post = crate::presets::read_asset_bytes("sys/ubuntu/profile.post.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu post profile script");
 
-        assert!(content.contains("atuin init"));
-        assert!(content.contains("shine_ubuntu_sys_shell"));
-        assert!(content.contains(". \"$HOME/.atuin/bin/env\""));
+        assert!(post.contains("atuin init"));
+        assert!(post.contains("shine_ubuntu_sys_shell"));
+        assert!(pre.contains(". \"$HOME/.atuin/bin/env\""));
     }
 
     #[test]
     fn embedded_ubuntu_profile_initializes_homebrew_zsh_completions() {
-        let content = crate::presets::read_asset_bytes("sys/ubuntu/profile.sh")
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/profile.pre.sh")
             .and_then(|bytes| String::from_utf8(bytes).ok())
-            .expect("missing embedded Ubuntu profile script");
+            .expect("missing embedded Ubuntu pre profile script");
 
         assert!(content.contains("share/zsh/site-functions"));
         assert!(content.contains("shine_ubuntu_sys_shell"));
@@ -2512,6 +3030,10 @@ items = ["touch-file"]
             .await
             .unwrap();
         assert!(!sentinel.exists(), "script must not have been executed");
+        assert!(
+            !dir.join(SYS_MANIFEST_FILE).exists(),
+            "dry-run must not write sys manifest"
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2545,7 +3067,10 @@ items = ["first", "second"]
         .unwrap();
 
         let calls = dir.join("calls");
-        fs::write(os_dir.join("profile.sh"), "echo fake profile\n")
+        fs::write(os_dir.join("profile.pre.sh"), "echo fake pre profile\n")
+            .await
+            .unwrap();
+        fs::write(os_dir.join("profile.post.sh"), "echo fake post profile\n")
             .await
             .unwrap();
 
@@ -2573,17 +3098,51 @@ esac
 
         let calls = fs::read_to_string(&calls).await.unwrap();
         assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "second"]);
-        assert_eq!(
-            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.sh"))
-                .await
-                .unwrap(),
-            "echo fake profile\n"
+        let sys_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        assert_eq!(sys_manifest.entries.len(), 2);
+        assert!(sys_manifest.entries.iter().any(|entry| {
+            entry.os_id == "fakeos"
+                && entry.item_id == "first"
+                && entry.label == "First"
+                && entry.status == SysItemStatus::Installed
+                && entry.detail == "first ok"
+        }));
+        assert!(sys_manifest.entries.iter().any(|entry| {
+            entry.os_id == "fakeos"
+                && entry.item_id == "second"
+                && entry.label == "Second"
+                && entry.status == SysItemStatus::Completed
+                && entry.detail.is_empty()
+        }));
+        assert!(
+            !sys_manifest
+                .entries
+                .iter()
+                .any(|entry| entry.item_id == "profile")
         );
         assert_eq!(
-            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.base.sh"))
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.pre.sh"))
                 .await
                 .unwrap(),
-            "echo fake profile\n"
+            "echo fake pre profile\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.pre.base.sh"))
+                .await
+                .unwrap(),
+            "echo fake pre profile\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.post.sh"))
+                .await
+                .unwrap(),
+            "echo fake post profile\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.post.base.sh"))
+                .await
+                .unwrap(),
+            "echo fake post profile\n"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -2622,7 +3181,10 @@ items = ["first", "fails", "after"]
         .unwrap();
 
         let calls = dir.join("calls");
-        fs::write(os_dir.join("profile.sh"), "echo fake profile\n")
+        fs::write(os_dir.join("profile.pre.sh"), "echo fake pre profile\n")
+            .await
+            .unwrap();
+        fs::write(os_dir.join("profile.post.sh"), "echo fake post profile\n")
             .await
             .unwrap();
 
@@ -2652,18 +3214,50 @@ esac
         assert!(err.to_string().contains("sys init failed"));
         let calls = fs::read_to_string(&calls).await.unwrap();
         assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "fails"]);
-        assert_eq!(
-            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.sh"))
-                .await
-                .unwrap(),
-            "echo fake profile\n"
+        let sys_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        assert_eq!(sys_manifest.entries.len(), 1);
+        assert_eq!(sys_manifest.entries[0].item_id, "first");
+        assert_eq!(sys_manifest.entries[0].status, SysItemStatus::Installed);
+        assert!(
+            !sys_manifest
+                .entries
+                .iter()
+                .any(|entry| entry.item_id == "fails" || entry.item_id == "after")
         );
         assert_eq!(
-            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.base.sh"))
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.pre.sh"))
                 .await
                 .unwrap(),
-            "echo fake profile\n"
+            "echo fake pre profile\n"
         );
+        assert_eq!(
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.pre.base.sh"))
+                .await
+                .unwrap(),
+            "echo fake pre profile\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.post.sh"))
+                .await
+                .unwrap(),
+            "echo fake post profile\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join(".shine/profile/fakeos-sys.post.base.sh"))
+                .await
+                .unwrap(),
+            "echo fake post profile\n"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn handle_status_succeeds_without_sys_manifest() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+
+        handle_status(&config).await.unwrap();
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

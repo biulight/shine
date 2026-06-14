@@ -1,6 +1,5 @@
 use anyhow::{Context, Result, bail};
-use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use clap_complete::{Generator, generate};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use dialoguer::Select;
 use std::path::PathBuf;
 
@@ -10,6 +9,7 @@ mod check;
 mod clear;
 mod colors;
 mod commands;
+mod completion;
 mod config;
 mod env;
 mod list;
@@ -21,12 +21,15 @@ mod secret;
 mod shells;
 mod show;
 mod sys;
+#[cfg(test)]
+mod test_support;
 mod update_check;
 mod version;
 
 use crate::config::Config;
 use commands::{
-    AppCommands, EnvCommands, ExportCommand, LinkCommand, SelfCommands, ShellCommands, SysCommands,
+    AppCommands, EnvCommands, ExportCommand, LinkCommand, OverlayCommands, SelfCommands,
+    ShellCommands, SysCommands,
 };
 use update_check::{ReleaseChannel, UpdateStatus};
 
@@ -74,11 +77,10 @@ enum Commands {
         #[arg(value_name = "CATEGORY")]
         category: String,
     },
-    #[command(about = "Generate shell completion scripts for manual installation")]
+    /// Generate or install shell completion scripts
     Completions {
-        /// Target shell
-        #[arg(value_enum)]
-        shell: CompletionShell,
+        #[command(subcommand)]
+        command: CompletionCommands,
     },
     /// List installed shell presets and app configs
     List,
@@ -100,6 +102,11 @@ enum Commands {
     Link(LinkCommand),
     /// Remove the external presets directory from the active config
     Unlink,
+    /// Manage the personal presets overlay directory
+    Overlay {
+        #[command(subcommand)]
+        command: OverlayCommands,
+    },
     /// Show installed config status and check for a newer version of shine
     Update(UpdateCommand),
     /// Force-update installed shell and app configs
@@ -135,31 +142,53 @@ struct InitCommand {
 enum CompletionShell {
     #[value(name = "bash")]
     Bash,
-    #[value(name = "fish")]
-    Fish,
     #[value(name = "powershell")]
     PowerShell,
     #[value(name = "zsh")]
     Zsh,
 }
 
-impl CompletionShell {
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Subcommand)]
+enum CompletionCommands {
+    /// Install completions into the managed shell profile without installing presets
+    Install,
+    /// Generate bash completion registration script
+    Bash,
+    /// Generate PowerShell completion registration script
+    #[command(name = "powershell")]
+    PowerShell,
+    /// Generate zsh completion registration script
+    Zsh,
+}
+
+impl CompletionCommands {
     fn generate(self) {
-        let mut command = Cli::command();
-        let mut stdout = std::io::stdout();
         match self {
-            CompletionShell::Bash => {
-                write_completions(clap_complete::shells::Bash, &mut command, &mut stdout)
+            CompletionCommands::Bash => completion::generate_registration(CompletionShell::Bash),
+            CompletionCommands::PowerShell => {
+                completion::generate_registration(CompletionShell::PowerShell)
             }
-            CompletionShell::Fish => {
-                write_completions(clap_complete::shells::Fish, &mut command, &mut stdout)
-            }
-            CompletionShell::PowerShell => {
-                write_completions(clap_complete::shells::PowerShell, &mut command, &mut stdout)
-            }
-            CompletionShell::Zsh => {
-                write_completions(clap_complete::shells::Zsh, &mut command, &mut stdout)
-            }
+            CompletionCommands::Zsh => completion::generate_registration(CompletionShell::Zsh),
+            CompletionCommands::Install => unreachable!("install is handled by the async runtime"),
+        }
+    }
+}
+
+impl CompletionShell {
+    fn from_command(command: &CompletionCommands) -> Option<Self> {
+        match command {
+            CompletionCommands::Bash => Some(CompletionShell::Bash),
+            CompletionCommands::PowerShell => Some(CompletionShell::PowerShell),
+            CompletionCommands::Zsh => Some(CompletionShell::Zsh),
+            CompletionCommands::Install => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            CompletionShell::Bash => "bash",
+            CompletionShell::PowerShell => "powershell",
+            CompletionShell::Zsh => "zsh",
         }
     }
 }
@@ -189,10 +218,14 @@ struct ClearCommand {
 }
 
 fn main() -> Result<()> {
+    completion::complete_from_env();
+
     let cli = Cli::parse();
 
-    if let Commands::Completions { shell } = &cli.command {
-        shell.generate();
+    if let Commands::Completions { command } = &cli.command
+        && CompletionShell::from_command(command).is_some()
+    {
+        command.generate();
         return Ok(());
     }
 
@@ -239,6 +272,7 @@ async fn run(cli: Cli) -> Result<()> {
             | Commands::Export(..)
             | Commands::Link(..)
             | Commands::Unlink
+            | Commands::Overlay { .. }
             | Commands::Clear(..)
             | Commands::Self_ { .. }
             | Commands::Env { .. }
@@ -265,6 +299,9 @@ async fn run(cli: Cli) -> Result<()> {
 
     match cli.command {
         Commands::Init(_) => unreachable!(),
+        Commands::Completions {
+            command: CompletionCommands::Install,
+        } => Box::pin(shells::handle_completion_install(&config)).await,
         Commands::Completions { .. } => unreachable!(),
         Commands::Clear(_) => unreachable!(),
         Commands::Install { category } => handle_install_shim(&config, &category).await,
@@ -319,6 +356,13 @@ async fn run(cli: Cli) -> Result<()> {
             Box::pin(handle_presets_link(&config, path, create)).await
         }
         Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
+        Commands::Overlay { command } => match command {
+            OverlayCommands::Link(LinkCommand { path, create }) => {
+                Box::pin(handle_overlay_link(&config, path, create)).await
+            }
+            OverlayCommands::Unlink => Box::pin(handle_overlay_unlink(&config)).await,
+            OverlayCommands::Show => handle_overlay_show(&config),
+        },
         Commands::List => Box::pin(list::handle_list(&config)).await,
         Commands::Info {
             target,
@@ -371,6 +415,7 @@ async fn run(cli: Cli) -> Result<()> {
         },
         Commands::Sys { command } => match command {
             SysCommands::List => Box::pin(sys::handle_list(&config)).await,
+            SysCommands::Status => Box::pin(sys::handle_status(&config)).await,
             SysCommands::Init {
                 preset,
                 dry_run,
@@ -600,14 +645,6 @@ fn confirm_init(dir: &std::path::Path) -> Result<bool> {
     std::io::stdin().read_line(&mut input)?;
     let answer = input.trim();
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
-}
-
-fn write_completions<G: Generator>(
-    generator: G,
-    command: &mut clap::Command,
-    out: &mut dyn std::io::Write,
-) {
-    generate(generator, command, command.get_name().to_string(), out);
 }
 
 async fn handle_env_show(config: &Config) -> Result<()> {
@@ -1205,6 +1242,118 @@ async fn handle_presets_unlink(config: &Config) -> Result<()> {
     Ok(())
 }
 
+async fn handle_overlay_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
+    use anyhow::Context as _;
+
+    let raw = path.to_string_lossy();
+    let expanded =
+        crate::config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
+    let expanded = PathBuf::from(expanded);
+
+    if create {
+        tokio::fs::create_dir_all(&expanded)
+            .await
+            .with_context(|| format!("creating directory: {}", expanded.display()))?;
+    }
+
+    let meta = tokio::fs::metadata(&expanded).await.with_context(|| {
+        if create {
+            format!("accessing directory: {}", expanded.display())
+        } else {
+            format!(
+                "path does not exist: {} (use --create to create it)",
+                expanded.display()
+            )
+        }
+    })?;
+
+    if !meta.is_dir() {
+        bail!("path is not a directory: {}", expanded.display());
+    }
+
+    let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
+
+    if config
+        .presets_overlay_dir_override
+        .as_deref()
+        .is_some_and(|p| p == absolute)
+    {
+        println!(
+            "{}",
+            colors::dim(&format!("overlay already linked: {}", absolute.display()))
+        );
+        return Ok(());
+    }
+
+    let updated = config
+        .clone()
+        .with_presets_overlay_dir_override(Some(absolute.clone()));
+    updated.save().await?;
+
+    println!("{}", colors::presets_overlay_note(&absolute));
+    if config.is_external_presets {
+        println!(
+            "{}",
+            colors::yellow(
+                "Warning: a full external presets source is active, so this overlay is configured but not used."
+            )
+        );
+    } else {
+        println!(
+            "{}",
+            colors::dim("Overlay files override built-in presets by matching path.")
+        );
+    }
+
+    Ok(())
+}
+
+async fn handle_overlay_unlink(config: &Config) -> Result<()> {
+    if config.presets_overlay_dir_override.is_none() {
+        println!(
+            "{}",
+            colors::dim("No presets overlay directory is configured.")
+        );
+        return Ok(());
+    }
+
+    let updated = config.clone().with_presets_overlay_dir_override(None);
+    updated.save().await?;
+
+    println!(
+        "{}",
+        colors::green("Presets overlay directory removed from the active config.")
+    );
+    println!(
+        "{}",
+        colors::dim("Built-in embedded presets will be used without overlay on the next run.")
+    );
+
+    Ok(())
+}
+
+fn handle_overlay_show(config: &Config) -> Result<()> {
+    if let Some(dir) = &config.presets_overlay_dir_override {
+        println!("{}", colors::presets_overlay_note(dir));
+        if config.is_external_presets {
+            println!(
+                "{}",
+                colors::yellow(
+                    "Inactive: a full external presets source is active and takes priority."
+                )
+            );
+        } else {
+            println!("{}", colors::green("Active"));
+        }
+    } else {
+        println!(
+            "{}",
+            colors::dim("No presets overlay directory is configured.")
+        );
+    }
+    Ok(())
+}
+
 async fn handle_self_install(mut config: Config, dest: Option<std::path::PathBuf>) -> Result<()> {
     use anyhow::{Context as _, bail};
 
@@ -1323,16 +1472,8 @@ fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
+    use crate::test_support::env_lock;
     use tokio::fs;
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("env lock must not be poisoned")
-    }
 
     async fn make_temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("shine-main-test-{}", uuid::Uuid::new_v4()));
@@ -1552,6 +1693,35 @@ mod tests {
 
         let cli = Cli::try_parse_from(["shine", "unlink"]).unwrap();
         assert!(matches!(cli.command, Commands::Unlink));
+    }
+
+    #[test]
+    fn cli_accepts_overlay_commands() {
+        let cli = Cli::try_parse_from(["shine", "overlay", "link", "/tmp/presets"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Overlay {
+                command: OverlayCommands::Link(LinkCommand {
+                    ref path,
+                    create: false
+                })
+            } if path.as_path() == std::path::Path::new("/tmp/presets")
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "overlay", "link", "/tmp/presets", "--create"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Overlay {
+                command: OverlayCommands::Link(LinkCommand {
+                    ref path,
+                    create: true
+                })
+            } if path.as_path() == std::path::Path::new("/tmp/presets")
+        ));
+
+        assert!(Cli::try_parse_from(["shine", "overlay", "unlink"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "overlay", "show"]).is_ok());
     }
 
     #[test]
@@ -1937,7 +2107,7 @@ mod tests {
     fn runtime_schema_warning_is_skipped_for_lifecycle_commands() {
         let init = Commands::Init(InitCommand { yes: false });
         let completions = Commands::Completions {
-            shell: CompletionShell::Bash,
+            command: CompletionCommands::Bash,
         };
         let clear = Commands::Clear(ClearCommand { dry_run: false });
         let list = Commands::List;
@@ -2150,14 +2320,26 @@ mod tests {
     }
 
     #[test]
-    fn cli_completions_rejects_unsupported_shells() {
-        assert!(Cli::try_parse_from(["shine", "completions", "elvish"]).is_err());
+    fn cli_accepts_sys_status() {
+        let cli = Cli::try_parse_from(["shine", "sys", "status"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Status
+            }
+        ));
     }
 
     #[test]
-    fn cli_completions_accepts_supported_shells() {
+    fn cli_completions_rejects_unsupported_shells() {
+        assert!(Cli::try_parse_from(["shine", "completions", "elvish"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "completions", "fish"]).is_err());
+    }
+
+    #[test]
+    fn cli_completions_accepts_supported_commands() {
+        assert!(Cli::try_parse_from(["shine", "completions", "install"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "completions", "bash"]).is_ok());
-        assert!(Cli::try_parse_from(["shine", "completions", "fish"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "completions", "powershell"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "completions", "zsh"]).is_ok());
     }
@@ -2166,26 +2348,31 @@ mod tests {
     fn completions_output_is_non_empty_for_supported_shells() {
         for shell in [
             CompletionShell::Bash,
-            CompletionShell::Fish,
             CompletionShell::PowerShell,
             CompletionShell::Zsh,
         ] {
-            let mut command = Cli::command();
+            let mut command = completion::command();
             let mut output = Vec::new();
 
             match shell {
-                CompletionShell::Bash => {
-                    write_completions(clap_complete::shells::Bash, &mut command, &mut output)
-                }
-                CompletionShell::Fish => {
-                    write_completions(clap_complete::shells::Fish, &mut command, &mut output)
-                }
-                CompletionShell::PowerShell => {
-                    write_completions(clap_complete::shells::PowerShell, &mut command, &mut output)
-                }
-                CompletionShell::Zsh => {
-                    write_completions(clap_complete::shells::Zsh, &mut command, &mut output)
-                }
+                CompletionShell::Bash => clap_complete::generate(
+                    clap_complete::shells::Bash,
+                    &mut command,
+                    "shine",
+                    &mut output,
+                ),
+                CompletionShell::PowerShell => clap_complete::generate(
+                    clap_complete::shells::PowerShell,
+                    &mut command,
+                    "shine",
+                    &mut output,
+                ),
+                CompletionShell::Zsh => clap_complete::generate(
+                    clap_complete::shells::Zsh,
+                    &mut command,
+                    "shine",
+                    &mut output,
+                ),
             }
 
             let script = String::from_utf8(output).unwrap();

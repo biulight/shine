@@ -314,18 +314,10 @@ mod tests {
     use super::*;
     use crate::apps::{AppFile, AppInstallStrategy};
     use crate::config::Config;
+    #[cfg(windows)]
+    use crate::test_support::env_lock;
     use std::path::PathBuf;
-    #[cfg(windows)]
-    use std::sync::{Mutex, OnceLock};
     use tokio::fs;
-
-    #[cfg(windows)]
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("env lock must not be poisoned")
-    }
 
     async fn make_temp_dir() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("shine-check-{}", uuid::Uuid::new_v4()));

@@ -69,6 +69,14 @@ pub(crate) struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub presets_dir_override: Option<PathBuf>,
+    /// Optional overlay directory merged over embedded presets.
+    /// Ignored when a full external presets source is active.
+    #[serde(
+        rename = "presets_overlay_dir",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub presets_overlay_dir_override: Option<PathBuf>,
     /// Optional override for the default destination root used by `shine app install`
     /// when a preset file carries no `shine-dest:` annotation.
     /// Defaults to `~/.config` when not set.
@@ -130,6 +138,7 @@ impl Config {
             bin_dir: shine_dir.join("bin"),
             home_dir: effective_home_dir(),
             presets_dir_override: Some(PathBuf::from(".")),
+            presets_overlay_dir_override: None,
             is_external_presets: true,
             ..Config::default()
         };
@@ -205,6 +214,8 @@ impl Config {
             config.bin_dir = bin_dir;
             config.home_dir = home_dir;
             config.is_external_presets = is_external_presets;
+            config.resolve_presets_overlay_dir(&config_dir);
+            crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
             config.migrate_env(config_has_env).await?;
             config.apply_global_env_override().await?;
             if let Some(project_config) = &project_config {
@@ -222,6 +233,7 @@ impl Config {
                 is_external_presets,
                 ..Config::default()
             };
+            crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
             config.migrate_env(false).await?;
             config.apply_global_env_override().await?;
             Ok(config)
@@ -294,6 +306,8 @@ impl Config {
             config.bin_dir = bin_dir;
             config.home_dir = home_dir;
             config.is_external_presets = is_external_presets;
+            config.resolve_presets_overlay_dir(&config_dir);
+            crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
             Ok((config, true))
         } else {
             let config = Config {
@@ -306,6 +320,7 @@ impl Config {
                 is_external_presets,
                 ..Config::default()
             };
+            crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
             Ok((config, false))
         }
     }
@@ -381,6 +396,7 @@ impl Config {
             last_cleared_schema_version: None,
             shell_type: ShellType::default(),
             presets_dir_override: None,
+            presets_overlay_dir_override: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
@@ -394,6 +410,28 @@ impl Config {
         Self {
             presets_dir_override: value,
             ..self
+        }
+    }
+
+    /// Return a clone of this config with `presets_overlay_dir_override` replaced.
+    pub(crate) fn with_presets_overlay_dir_override(self, value: Option<PathBuf>) -> Self {
+        Self {
+            presets_overlay_dir_override: value,
+            ..self
+        }
+    }
+
+    pub(crate) fn active_presets_overlay_dir(&self) -> Option<&Path> {
+        if self.is_external_presets {
+            None
+        } else {
+            self.presets_overlay_dir_override.as_deref()
+        }
+    }
+
+    fn resolve_presets_overlay_dir(&mut self, config_dir: &Path) {
+        if let Some(path) = self.presets_overlay_dir_override.as_deref() {
+            self.presets_overlay_dir_override = Some(resolve_config_presets_path(path, config_dir));
         }
     }
 
@@ -575,6 +613,18 @@ pub(crate) fn print_presets_note(config: &Config) {
             "{}",
             crate::colors::external_presets_note(config.presets_dir())
         );
+        if let Some(dir) = &config.presets_overlay_dir_override {
+            println!(
+                "{}",
+                crate::colors::yellow(&format!(
+                    "Presets overlay configured but inactive: {}",
+                    crate::path_display::format(dir)
+                ))
+            );
+        }
+        println!();
+    } else if let Some(dir) = config.active_presets_overlay_dir() {
+        println!("{}", crate::colors::presets_overlay_note(dir));
         println!();
     }
 }
@@ -596,6 +646,7 @@ impl Default for Config {
             last_cleared_schema_version: None,
             shell_type: ShellType::default(),
             presets_dir_override: None,
+            presets_overlay_dir_override: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
@@ -897,15 +948,7 @@ fn resolve_runtime_config_dirs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
+    use crate::test_support::env_lock;
 
     fn config_in(dir: &Path) -> Config {
         Config {
@@ -920,6 +963,7 @@ mod tests {
             last_cleared_schema_version: None,
             shell_type: ShellType::default(),
             presets_dir_override: None,
+            presets_overlay_dir_override: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
@@ -1063,6 +1107,7 @@ mod tests {
             last_cleared_schema_version: None,
             shell_type: ShellType::default(),
             presets_dir_override: None,
+            presets_overlay_dir_override: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
             self_install_dest: None,
@@ -1919,6 +1964,26 @@ mod tests {
         assert_eq!(
             loaded.presets_dir_override,
             Some(PathBuf::from("/external/presets"))
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn presets_overlay_dir_override_round_trips_through_save() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.presets_overlay_dir_override = Some(PathBuf::from("/external/overlay"));
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        assert!(content.contains("presets_overlay_dir"));
+
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert_eq!(
+            loaded.presets_overlay_dir_override,
+            Some(PathBuf::from("/external/overlay"))
         );
 
         fs::remove_dir_all(&dir).await.unwrap();

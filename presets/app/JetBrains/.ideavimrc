@@ -24,7 +24,9 @@ set surround
 " 共享系统粘贴板
 set clipboard+=unnamed
 " 忽略大小写
-set igcase
+set ignorecase
+" 智能大小写
+set smartcase
 " 上下方保留5行预览代码
 set scrolloff=5
 " 设置命令历史记录条数
@@ -46,24 +48,26 @@ set hlsearch
 " ================================================================================================
 inoremap jk <ESC>
 
+" 行首/行尾
 nnoremap H ^
 nnoremap L g_
-nnoremap J 5j
-nnoremap K 5k
-
 vnoremap H ^
 vnoremap L g_
+
+" 快速移动
+nnoremap J 5j
+nnoremap K 5k
 vnoremap J 5j
 vnoremap K 5k
 
 " g: go to somewhere
-map ge <action>(GotoNextError)
-map gj <action>(MethodDown)
-map gk <action>(MethodUp)
-map gp <action>(WebOpenInAction)
-map gi <action>(GotoImplementation)
-map ga '.
-map g/ <action>(FindInPath)
+nnoremap ge <action>(GotoNextError)
+nnoremap gj <action>(MethodDown)
+nnoremap gk <action>(MethodUp)
+nnoremap gp <action>(WebOpenInAction)
+nnoremap gi <action>(GotoImplementation)
+nnoremap ga '.
+nnoremap g/ <action>(FindInPath)
 
 " input in somewhere
 " 在标签内输入
@@ -125,7 +129,8 @@ let mapleader=" "
 "  Which-Key
 " ================================================================================================
 set which-key
-set notimeout
+set timeout
+set timeoutlen=500
 
 " a ⭐️
 let g:WhichKeyDesc_a = "<leader>a 作者"
@@ -196,10 +201,9 @@ else
   vmap <leader>fc :action ReformatCode<CR>
 endif
 
-let g:WhichKeyDesc_f_FormatFile = "<leader>lf 格式化文件"
-nmap <leader>lf <action>(ShowReformatFileDialog)
-vmap <leader>lf <action>(ShowReformatFileDialog)
-
+" let g:WhichKeyDesc_f_FormatFile = "<leader>fd 格式化文件"
+" nmap <leader>fd <action>(ShowReformatFileDialog)
+" vmap <leader>fd <action>(ShowReformatFileDialog)
 
 let g:WhichKeyDesc_f_FullScreen = "<leader>fs 全屏"
 nmap <leader>fs <action>(ToggleZenMode)

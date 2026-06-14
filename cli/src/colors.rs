@@ -75,6 +75,15 @@ pub(crate) fn external_presets_note(dir: &std::path::Path) -> String {
     format!("{}  {}", label, path_display::format(dir))
 }
 
+/// Returns a formatted note indicating the active presets overlay directory.
+pub(crate) fn presets_overlay_note(dir: &std::path::Path) -> String {
+    use owo_colors::Style;
+    let label = "◈ Presets Overlay"
+        .if_supports_color(Stream::Stdout, |t| t.style(Style::new().bold().yellow()))
+        .to_string();
+    format!("{}  {}", label, path_display::format(dir))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

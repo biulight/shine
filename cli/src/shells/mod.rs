@@ -322,6 +322,53 @@ pub(crate) async fn handle_upgrade_installed(
     })
 }
 
+pub(crate) async fn handle_completion_install(config: &Config) -> Result<()> {
+    let source_commands = installed_source_commands(config).await?;
+    let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
+    let shell_update = append_path_to_shell_config(config, false, &source_commands).await?;
+    let profile_path = managed_shell_profile_path(config);
+
+    if shell_update.profile_updated {
+        output::detail_line(
+            "Shell Profile",
+            &colors::green("updated"),
+            Some(profile_path.display().to_string()),
+        );
+    } else {
+        output::detail_line(
+            "Shell Profile",
+            &colors::dim("up to date"),
+            Some(profile_path.display().to_string()),
+        );
+    }
+
+    match shell_update.config_status {
+        PathUpdateStatus::AlreadyConfigured => {
+            output::detail_line(
+                "Shell Config",
+                &colors::dim("up to date"),
+                Some(shell_config_path.display().to_string()),
+            );
+        }
+        PathUpdateStatus::Updated(path) => {
+            output::detail_line(
+                "Shell Config",
+                &colors::green("updated"),
+                Some(path.display().to_string()),
+            );
+        }
+    }
+
+    output::hint_line(
+        "Next Step",
+        &format!(
+            "run `{}` once, or open a new shell",
+            shell_source_command(&config.shell_type, &shell_config_path)
+        ),
+    );
+    Ok(())
+}
+
 fn shell_link_exists(link: &Path) -> bool {
     link.exists()
         || std::fs::symlink_metadata(link)
@@ -864,7 +911,25 @@ fn managed_profile_snippet(
             }
         }
     }
+    if let Some(snippet) = completion_registration_snippet(shell) {
+        body.push_str(snippet);
+    }
     format!("{body}\n")
+}
+
+fn completion_registration_snippet(shell: &ShellType) -> Option<&'static str> {
+    match shell {
+        ShellType::Bash => {
+            Some("\nif command -v shine >/dev/null 2>&1; then\n  source <(COMPLETE=bash shine)\nfi")
+        }
+        ShellType::Zsh => Some(
+            "\nif command -v shine >/dev/null 2>&1; then\n  if (( ! $+functions[compdef] )); then\n    autoload -Uz compinit\n    compinit -i\n  fi\n  source <(COMPLETE=zsh shine)\nfi",
+        ),
+        ShellType::PowerShell => Some(
+            "\nif (Get-Command shine -ErrorAction SilentlyContinue) { $env:COMPLETE = 'powershell'; shine | Out-String | Invoke-Expression; Remove-Item Env:\\COMPLETE -ErrorAction SilentlyContinue }",
+        ),
+        ShellType::Fish | ShellType::Elvish => None,
+    }
 }
 
 fn shell_config_snippet(shell: &ShellType, profile_path: &Path, home_dir: &Path) -> String {
@@ -1509,7 +1574,40 @@ mod tests {
                 "{shell:?} should have if-guard: {snippet}"
             );
             assert!(snippet.contains("export PATH="));
+            let shell_name: &'static str = shell.into();
+            assert!(
+                snippet.contains(&format!("COMPLETE={shell_name} shine")),
+                "{shell:?} should register shine completion: {snippet}"
+            );
+            if matches!(shell, ShellType::Zsh) {
+                assert!(
+                    snippet.contains("autoload -Uz compinit"),
+                    "zsh completion registration should initialize compinit: {snippet}"
+                );
+                assert!(
+                    snippet.contains("compinit -i"),
+                    "zsh completion registration should avoid insecure-dir prompts: {snippet}"
+                );
+            }
         }
+    }
+
+    #[test]
+    fn snippet_powershell_registers_completion_but_fish_does_not() {
+        let home = PathBuf::from("/home/user");
+        let bin = home.join("bin");
+
+        let powershell = managed_profile_snippet(&ShellType::PowerShell, &bin, &home, &[]);
+        assert!(
+            powershell.contains("$env:COMPLETE = 'powershell'"),
+            "PowerShell should register shine completion: {powershell}"
+        );
+
+        let fish = managed_profile_snippet(&ShellType::Fish, &bin, &home, &[]);
+        assert!(
+            !fish.contains("COMPLETE=fish shine"),
+            "fish completion should not be changed: {fish}"
+        );
     }
 
     #[test]
@@ -1683,6 +1781,27 @@ mod tests {
         assert!(
             content.contains(SENTINEL_START),
             "sentinel should be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_install_updates_profile_without_installing_presets() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+
+        handle_completion_install(&config).await.unwrap();
+
+        let profile = fs::read_to_string(managed_shell_profile_path(&config))
+            .await
+            .unwrap();
+        let shell_name: &'static str = config.shell_type.into();
+        assert!(
+            profile.contains(&format!("COMPLETE={shell_name} shine")),
+            "profile should register shine completion: {profile}"
+        );
+        assert!(
+            !config.presets_dir().join("shell/proxy").exists(),
+            "completion install must not extract or install shell presets"
         );
     }
 
