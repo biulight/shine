@@ -7,10 +7,16 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [0.33.0] — 2026-06-14
+
 ### Features
 
 - Added `shine completions install` for automatic `shine` command completion setup without installing presets, including dynamic preset category candidates.
+- Added personal presets overlays so selected files can override embedded presets without switching to a full external presets directory.
 - Split `shine sys init` shell integration into `pre` and `post` managed profile loaders so PATH and completion setup can run before user profile customizations while prompts and plugins stay near the end.
+- Added `shine sys status` and sys init run tracking so previously initialized items can be inspected later.
+- Added Rust and mise setup steps to the macOS sys init preset.
+- Refreshed the bundled JetBrains IdeaVim preset with smartcase search, timeout tuning, and improved navigation mappings.
 
 ### Bug Fixes
 
@@ -19,7 +25,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 ### Docs
 
 - Documented automatic shell completion setup, specific shell preset install refresh behavior, and the manual `shine completions <shell>` fallback.
-- Documented the `shine sys init` pre/post managed profile loader behavior.
+- Documented presets overlays, `shine sys status`, updated macOS sys init items, and the `shine sys init` pre/post managed profile loader behavior.
 
 ## [0.32.0] — 2026-06-13
 

@@ -9,7 +9,7 @@ English README: [`../README.md`](../README.md)
 ## 功能特性
 
 - **内置预设** — shell 脚本和应用配置会编译进二进制；安装后不需要联网
-- **外部预设目录** — 可将 `presets_dir` 指向你自己的目录（例如 dotfiles 仓库），之后 `shine` 会优先从那里读取；`shine export` 可把内置预设导出过去
+- **外部预设目录和 overlay** — 可用 `presets_dir` 完整替换预设来源，也可链接一个小型 overlay 目录，只覆盖少量内置预设文件
 - **项目本地预设仓库** — 在预设仓库内运行 `shine init`，即可创建指向当前仓库的 `shine.config.toml`
 - **受管 bin 目录** — `~/.shine/bin/` 在 Unix 上保存展平后的符号链接，在 Windows 上保存命令 shim
 - **自动配置 PATH** — `install` 会自动把 `~/.shine/bin` 追加到你的 shell 配置文件
@@ -191,14 +191,16 @@ shine sys list
 shine sys init
 shine sys init --preset recommended
 shine sys init --dry-run
+shine sys status
 ```
 
-`shine sys init` 会检测当前操作系统，读取 `presets/sys/<os>/shine.toml`，解析出待执行的安装项，然后对每个选中的 item 分别调用一次当前平台的初始化脚本。所有 item 完成后，会再用 `__shine_finalize` 调用一次同一个脚本，让预设统一处理 profile 或 shell 集成。
+`shine sys init` 会检测当前操作系统，读取 `presets/sys/<os>/shine.toml`，解析出待执行的安装项，然后对每个选中的 item 分别调用一次当前平台的初始化脚本。所有 item 成功完成后，`shine` 会在 Rust 侧刷新受管 shell profile 集成。
 
 - 在 TTY 中，`shine sys init` 会打开一个交互式多选界面，默认值来自预设的 `default_profile`
 - `shine sys init --preset <PROFILE>` 会跳过交互，直接应用指定 profile
 - 非 TTY 环境下，`shine sys init` 会回退到 `default_profile`
-- `shine sys init --dry-run` 会输出解析后的项目、逐项脚本调用命令、finalize 调用命令，以及脚本内容，但不会执行
+- `shine sys init --dry-run` 会输出解析后的项目、逐项脚本调用命令、内部 profile 更新步骤，以及脚本内容，但不会执行
+- `shine sys status` 会显示当前操作系统此前记录过的初始化项目
 
 系统初始化预设使用如下元数据结构：
 
@@ -226,10 +228,10 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "nvim found"
 当前内置预设：
 
 - `ubuntu` — 提供 Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza、pnpm、mise、Homebrew 和 ZeroTier 的可选步骤。`recommended` profile 包含核心编辑器、历史记录、文件管理器、提示符、目录跳转和 shell 工具步骤；pnpm、mise、Homebrew 和 ZeroTier 通过 `all` profile 或显式选择启用。
-- `macos` — 提供 Homebrew、Yazi、Starship、Neovim、AstroNvim、ZeroTier、zsh 插件、zoxide、Atuin、fzf、bat、eza、nvm、Bun、pnpm 和 Fastfetch 的可选步骤。`recommended` profile 包含 Homebrew 和核心终端/编辑器工具；`all` profile 额外包含 JavaScript 运行时和 Fastfetch。
+- `macos` — 提供 Homebrew、Rust、Yazi、Starship、Neovim、AstroNvim、ZeroTier、zsh 插件、zoxide、Atuin、fzf、bat、eza、nvm、Bun、pnpm、mise 和 Fastfetch 的可选步骤。`recommended` profile 包含 Homebrew 和核心终端/编辑器工具；`all` profile 额外包含 JavaScript 运行时、mise 和 Fastfetch。
 - `windows` — 提供 Rust、Yazi、Starship、zoxide、Atuin、fzf、bat、eza、ZeroTier、Bun、pnpm 和 mise 的可选步骤。`recommended` profile 包含 Rust 和核心终端工具；`all` profile 额外包含 JavaScript 运行时和环境管理器步骤。
 
-当所选工具需要 shell 集成时，sys init 会安装受管 profile 区块。Ubuntu 会为 Yazi、Starship、zoxide、Atuin、fzf 和 mise 等工具安装受管 shell profile loader。Windows 会为 Yazi、Starship、zoxide、Atuin、fzf 和 mise 安装受管 PowerShell profile loader。受管 profile 更新会合并到现有 profile 文件中，保留受管区块之外的用户自定义内容。
+当所选工具需要 shell 集成时，sys init 会安装受管的 `pre` 和 `post` profile loader。`pre` loader 会放在用户 profile 靠前位置，用于 PATH、Homebrew 和补全搜索路径；`post` loader 会放在靠后位置，用于 Yazi、Starship、zoxide、Atuin、fzf、mise、别名和 shell 插件。受管 profile 文件会被合并，用户在其中的修改会保留或提示需要检查。
 
 ### 查看应用预设详情
 
@@ -465,6 +467,14 @@ SHINE_PRESETS=~/dotfiles/shine-presets shine export
 
 当配置了 `presets_dir` 后，所有 `install`、`update` 和 `list` 命令都会自动从外部目录读取。每个命令输出中都会显示当前激活的预设来源，避免你混淆实际使用的是哪份文件。
 
+如果只想做少量自定义，可以使用 presets overlay。Overlay 文件会按相同相对路径覆盖内置预设，例如 `app/starship/starship.toml` 或 `shell/proxy/set_proxy.sh`。完整外部 `presets_dir` 的优先级高于 overlay。
+
+```bash
+shine overlay link ~/dotfiles/shine-overlay --create
+shine overlay show
+shine overlay unlink
+```
+
 ### 初始化一个预设目录
 
 ```bash
@@ -497,7 +507,7 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.32.0+preview.abc1234`；稳定版则继续显示 `0.32.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.33.0+preview.abc1234`；稳定版则继续显示 `0.33.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -507,7 +517,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.32.0 sh install.sh
+SHINE_VERSION=0.33.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -515,7 +525,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.32.0"; .\install.ps1
+$env:SHINE_VERSION = "0.33.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
