@@ -17,6 +17,9 @@ const GITHUB_PREVIEW_RELEASE_URL: &str =
     "https://api.github.com/repos/biulight/shine/releases/tags/preview";
 const UPDATE_CACHE_FILE: &str = "update-check.json";
 const UPDATE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Defense-in-depth cap on downloaded release archives; the real binaries
+/// are a few MB, so anything past this points at a corrupted or malicious asset.
+const MAX_RELEASE_ASSET_BYTES: u64 = 200 * 1024 * 1024;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 pub enum ReleaseChannel {
@@ -132,31 +135,25 @@ pub(crate) async fn upgrade_to_release(
             let now_secs = unix_timestamp_now()?;
             let cache_path = config.shine_dir().join(UPDATE_CACHE_FILE);
             store_cache_if_possible(&cache_path, &latest, now_secs).await;
+
+            if !force_install && latest <= current {
+                return Ok(UpgradeResult::AlreadyUpToDate {
+                    channel,
+                    latest: latest.to_string(),
+                });
+            }
             Some(latest)
         }
-        ReleaseChannel::Preview => None,
+        ReleaseChannel::Preview => {
+            if preview_release_version_label(&release).as_deref() == Some(current_display) {
+                return Ok(UpgradeResult::AlreadyUpToDate {
+                    channel,
+                    latest: current_display.to_string(),
+                });
+            }
+            None
+        }
     };
-
-    if channel == ReleaseChannel::Preview
-        && preview_release_version_label(&release).as_deref() == Some(current_display)
-    {
-        return Ok(UpgradeResult::AlreadyUpToDate {
-            channel,
-            latest: current_display.to_string(),
-        });
-    }
-
-    if channel == ReleaseChannel::Stable
-        && !force_install
-        && latest.as_ref().is_some_and(|latest| latest <= &current)
-    {
-        return Ok(UpgradeResult::AlreadyUpToDate {
-            channel,
-            latest: latest
-                .expect("stable release has a parsed version")
-                .to_string(),
-        });
-    }
 
     let asset = find_release_asset(
         &release,
@@ -314,11 +311,27 @@ async fn download_asset_bytes(download_url: &str) -> Result<Vec<u8>> {
         );
     }
 
-    response
+    if let Some(len) = response.content_length()
+        && len > MAX_RELEASE_ASSET_BYTES
+    {
+        bail!(
+            "release asset at {download_url} reports {len} bytes, exceeding the {MAX_RELEASE_ASSET_BYTES}-byte limit"
+        );
+    }
+
+    let bytes = response
         .bytes()
         .await
-        .context("failed to read release asset bytes")
-        .map(|bytes| bytes.to_vec())
+        .context("failed to read release asset bytes")?;
+
+    if bytes.len() as u64 > MAX_RELEASE_ASSET_BYTES {
+        bail!(
+            "release asset at {download_url} is {} bytes, exceeding the {MAX_RELEASE_ASSET_BYTES}-byte limit",
+            bytes.len()
+        );
+    }
+
+    Ok(bytes.to_vec())
 }
 
 async fn installed_version_label(current_exe: &Path, fallback: &str) -> String {

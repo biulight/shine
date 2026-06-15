@@ -377,15 +377,7 @@ async fn handle_init_for_os(
     print_run_header(os_id, sys_shell, &selection);
 
     let item_labels = manifest_item_labels(&loaded.manifest);
-    let label_width = selection
-        .item_ids
-        .iter()
-        .filter_map(|item_id| item_labels.get(item_id.as_str()))
-        .map(String::len)
-        .chain(std::iter::once("profile".len()))
-        .max()
-        .unwrap_or(14)
-        .max(14);
+    let label_width = sys_item_label_width(&selection, &item_labels);
     let mut outcomes = Vec::new();
     for item_id in &selection.item_ids {
         let label = item_labels
@@ -550,6 +542,23 @@ fn manifest_item_labels(manifest: &SysManifest) -> BTreeMap<&str, String> {
         .iter()
         .map(|item| (item.id.as_str(), item.label.clone()))
         .collect()
+}
+
+/// Width of the widest selected item label (or "profile", whichever is longer),
+/// used to align the status column when printing per-item outcomes.
+fn sys_item_label_width(
+    selection: &ResolvedSelection,
+    item_labels: &BTreeMap<&str, String>,
+) -> usize {
+    selection
+        .item_ids
+        .iter()
+        .filter_map(|item_id| item_labels.get(item_id.as_str()))
+        .map(String::len)
+        .chain(std::iter::once("profile".len()))
+        .max()
+        .unwrap_or(14)
+        .max(14)
 }
 
 fn print_run_header(os_id: &str, sys_shell: &str, selection: &ResolvedSelection) {
@@ -734,17 +743,30 @@ async fn install_sys_profile_phase(
         Err(err) => return Err(err).with_context(|| format!("reading {}", base_path.display())),
     };
 
-    apply_merge_result(
-        &active_path,
-        &base_path,
-        &template_path,
-        &new_path,
-        &merge_path,
-        &base,
-        &active,
-        &template,
-    )
+    apply_merge_result(MergeInputs {
+        active_path: &active_path,
+        base_path: &base_path,
+        template_path: &template_path,
+        new_path: &new_path,
+        merge_path: &merge_path,
+        base: &base,
+        active: &active,
+        template: &template,
+    })
     .await
+}
+
+/// Paths and file contents needed to reconcile a single sys profile file
+/// against its base snapshot and the latest template.
+struct MergeInputs<'a> {
+    active_path: &'a Path,
+    base_path: &'a Path,
+    template_path: &'a Path,
+    new_path: &'a Path,
+    merge_path: &'a Path,
+    base: &'a [u8],
+    active: &'a [u8],
+    template: &'a [u8],
 }
 
 async fn apply_force_profile(
@@ -861,17 +883,18 @@ async fn handle_missing_base(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn apply_merge_result(
-    active_path: &Path,
-    base_path: &Path,
-    template_path: &Path,
-    new_path: &Path,
-    merge_path: &Path,
-    base: &[u8],
-    active: &[u8],
-    template: &[u8],
-) -> Result<SysProfileFileUpdate> {
+async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpdate> {
+    let MergeInputs {
+        active_path,
+        base_path,
+        template_path,
+        new_path,
+        merge_path,
+        base,
+        active,
+        template,
+    } = inputs;
+
     if active == template {
         let updated = write_if_changed(base_path, template).await?;
         remove_if_exists(new_path).await?;

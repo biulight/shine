@@ -15,6 +15,8 @@ pub(crate) struct AppCategory {
     pub destination_root: Option<String>,
     pub files: Vec<AppFile>,
     pub list_mode: AppListMode,
+    // Tracks whether the category came from an explicit metadata file vs. auto-collection;
+    // reserved for future upgrade/list logic.
     #[allow(dead_code)]
     pub uses_metadata: bool,
     /// `true` when shine.toml has an explicit `[[files]]` section;

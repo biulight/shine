@@ -130,8 +130,8 @@ fn collect_managed_subset(
     managed
 }
 
-fn parse_json_object(bytes: &[u8], context: &str) -> Result<Map<String, Value>> {
-    let value: Value = serde_json::from_slice(bytes).context(context.to_string())?;
+fn parse_json_object(bytes: &[u8], context: &'static str) -> Result<Map<String, Value>> {
+    let value: Value = serde_json::from_slice(bytes).context(context)?;
     let Value::Object(object) = value else {
         bail!("{context}");
     };
