@@ -954,7 +954,7 @@ async fn cleanup_stale_entry(
             print_stale_removed(
                 config,
                 &entry.destination,
-                &format!(
+                format!(
                     "(removed stale file, restored {})",
                     path_display::format_home(&backup, &config.home_dir)
                 ),
@@ -1105,12 +1105,12 @@ fn print_install_error(label: &str, err: &anyhow::Error) {
 
 // --- Stale-entry cleanup reporting -------------------------------------------------------
 
-fn print_stale_removed(config: &Config, destination: &Path, note: &str) {
+fn print_stale_removed(config: &Config, destination: &Path, note: impl AsRef<str>) {
     println!(
         "  {}  {}  {}",
         colors::symbol("✓"),
         colors::dim(&path_display::format_home(destination, &config.home_dir)),
-        colors::dim(note),
+        colors::dim(note.as_ref()),
     );
 }
 
@@ -1548,6 +1548,7 @@ mod tests {
         let dir = make_temp_dir().await;
 
         // Point HOME at the temp dir so ~ expands there
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -1582,6 +1583,7 @@ mod tests {
             "manifest should be empty after uninstall"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1591,6 +1593,7 @@ mod tests {
     async fn uninstall_dry_run_leaves_everything_intact() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -1619,6 +1622,7 @@ mod tests {
             );
         }
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1678,6 +1682,7 @@ mod tests {
     async fn uninstall_force_removes_user_modified_file_and_manifest_entry() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"debug\": true\n}\n").await;
@@ -1705,6 +1710,7 @@ mod tests {
             "force uninstall should remove modified file"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1714,6 +1720,7 @@ mod tests {
     async fn install_is_idempotent() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -1733,6 +1740,7 @@ mod tests {
             "re-install must not duplicate manifest entries"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1742,6 +1750,7 @@ mod tests {
     async fn upgrade_skips_up_to_date_app_config() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(
@@ -1765,6 +1774,7 @@ mod tests {
         assert_eq!(report.skipped, 1, "up-to-date app config should be skipped");
         assert_eq!(fs::read(&dest).await.unwrap(), before);
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1774,6 +1784,7 @@ mod tests {
     async fn upgrade_updates_app_config_when_source_changes() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1802,6 +1813,7 @@ mod tests {
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1811,6 +1823,7 @@ mod tests {
     async fn upgrade_installs_new_app_file_from_installed_category() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1847,6 +1860,7 @@ mod tests {
             "new app file should be tracked in manifest"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1856,6 +1870,7 @@ mod tests {
     async fn upgrade_skips_new_app_file_when_destination_is_unmanaged() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1892,6 +1907,7 @@ mod tests {
             "unmanaged destination should not be added to manifest"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1901,6 +1917,7 @@ mod tests {
     async fn upgrade_prune_stale_removes_unmodified_file_and_manifest_entry() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1927,6 +1944,7 @@ mod tests {
             "stale manifest entry should be removed"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1936,6 +1954,7 @@ mod tests {
     async fn upgrade_prune_stale_removes_manifest_entry_when_destination_is_missing() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1962,6 +1981,7 @@ mod tests {
             "missing stale destination should be removed from manifest"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1971,6 +1991,7 @@ mod tests {
     async fn upgrade_without_prune_keeps_stale_file_and_manifest_entry() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1997,6 +2018,7 @@ mod tests {
             "stale manifest entry should remain without prune"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2006,6 +2028,7 @@ mod tests {
     async fn upgrade_prune_stale_keeps_user_modified_file() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -2034,6 +2057,7 @@ mod tests {
             "user-modified stale entry should remain tracked"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2043,6 +2067,7 @@ mod tests {
     async fn upgrade_prune_stale_allows_renamed_source_to_reinstall_same_destination() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"old\"\n}\n").await;
@@ -2083,6 +2108,7 @@ mod tests {
         let entry = manifest.find_by_dest(&dest).unwrap();
         assert_eq!(entry.source, "app/sample/daemon-renamed.jsonc");
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2092,6 +2118,7 @@ mod tests {
     async fn upgrade_skips_user_modified_app_config() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -2114,6 +2141,7 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert_eq!(fs::read(&dest).await.unwrap(), b"{\"user\":true}\n");
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2292,6 +2320,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     async fn install_places_vim_under_directory_root() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -2313,6 +2342,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         let destination = resolve_install_destination(vim, vimrc, &config).unwrap();
         assert_eq!(destination, dir.join(".vim").join("vimrc"));
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2322,6 +2352,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     async fn install_places_ghostty_config_under_config_root() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -2358,6 +2389,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
                 .join("themes/light_iTerm2 Solarized Light")
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2367,6 +2399,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     async fn install_renders_ghostty_light_and_dark_background_images() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let mut config = Config::new_for_test(&dir);
@@ -2409,6 +2442,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         assert!(dark_theme.contains("cursor-color = #73fa91"));
         assert!(dark_theme.contains("background-image = /tmp/shine-dark-wallpaper.png"));
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2418,6 +2452,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     async fn uninstall_specific_category_only_removes_that_category() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -2469,6 +2504,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             "uninstalled category must not appear in manifest"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2478,6 +2514,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     async fn uninstall_unknown_category_returns_early() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -2489,6 +2526,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             .await
             .unwrap();
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
