@@ -198,6 +198,9 @@ struct UpdateCommand {
     /// Show installed entries that are already current or need attention
     #[arg(long)]
     verbose: bool,
+    /// Bypass the 24-hour version cache and check GitHub now
+    #[arg(long)]
+    refresh: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -345,7 +348,7 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
             }
         },
-        Commands::Update(cmd) => handle_update(&config, cmd.verbose).await,
+        Commands::Update(cmd) => handle_update(&config, cmd.verbose, cmd.refresh).await,
         Commands::Upgrade(cmd) => {
             handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
         }
@@ -863,7 +866,7 @@ async fn handle_env_encrypt(
     Ok(())
 }
 
-async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
+async fn handle_update(config: &Config, verbose: bool, refresh: bool) -> Result<()> {
     let mut printed_update = if verbose {
         Box::pin(list::handle_status_list(config)).await?;
         println!();
@@ -877,7 +880,13 @@ async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
         println!("Checking for updates (current: {current})...");
     }
 
-    match update_check::check_for_update_forced(config).await {
+    let update_status = if refresh {
+        update_check::check_for_update_forced(config).await
+    } else {
+        update_check::check_for_update(config).await
+    };
+
+    match update_status {
         Ok(UpdateStatus::UpToDate) => {
             if verbose {
                 println!(
@@ -1594,13 +1603,28 @@ mod tests {
         let cli = Cli::try_parse_from(["shine", "update"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Update(UpdateCommand { verbose: false })
+            Commands::Update(UpdateCommand {
+                verbose: false,
+                refresh: false
+            })
         ));
 
         let cli = Cli::try_parse_from(["shine", "update", "--verbose"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Update(UpdateCommand { verbose: true })
+            Commands::Update(UpdateCommand {
+                verbose: true,
+                refresh: false
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "update", "--refresh"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                verbose: false,
+                refresh: true
+            })
         ));
 
         let cli = Cli::try_parse_from(["shine", "upgrade"]).unwrap();
@@ -2521,11 +2545,13 @@ mod tests {
         let presets = make_temp_dir().await;
         let config = config_in(&dir);
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
         unsafe { std::env::set_var("SHINE_PRESETS", "/some/override") };
         // Should succeed even with env var set
         handle_presets_link(&config, presets.clone(), false)
             .await
             .unwrap();
+        // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
         unsafe { std::env::remove_var("SHINE_PRESETS") };
 
         fs::remove_dir_all(&dir).await.unwrap();
