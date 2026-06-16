@@ -913,8 +913,7 @@ async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
             printed_update = true;
         }
         Err(e) => {
-            eprintln!("Update check failed: {e}");
-            std::process::exit(1);
+            eprintln!("{}", format_update_check_failure_warning(&e));
         }
     }
 
@@ -923,6 +922,10 @@ async fn handle_update(config: &Config, verbose: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn format_update_check_failure_warning(err: &anyhow::Error) -> String {
+    colors::yellow(&format!("warning: skipped shine version check: {err}"))
 }
 
 async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
@@ -1638,6 +1641,18 @@ mod tests {
             cli.command,
             Commands::Clear(ClearCommand { dry_run: true })
         ));
+    }
+
+    #[test]
+    fn update_check_failure_warning_is_non_fatal_wording() {
+        let err = anyhow::anyhow!(
+            "GitHub stable release request failed: HTTP 403 Forbidden: API rate limit exceeded"
+        );
+        let warning = format_update_check_failure_warning(&err);
+
+        assert!(warning.contains("warning: skipped shine version check"));
+        assert!(warning.contains("HTTP 403 Forbidden"));
+        assert!(!warning.contains("Update check failed"));
     }
 
     #[test]
