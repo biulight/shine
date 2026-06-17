@@ -40,15 +40,7 @@ fi
 
 # pnpm
 export PNPM_HOME="$HOME/Library/pnpm"
-if [[ -d "$PNPM_HOME" ]]; then
-  case ":$PATH:" in
-    *":$PNPM_HOME:"*) ;;
-    *) path=("$PNPM_HOME" $path) ;;
-  esac
-fi
-if [[ -d "$PNPM_HOME/bin" ]]; then
-  case ":$PATH:" in
-    *":$PNPM_HOME/bin:"*) ;;
-    *) path=("$PNPM_HOME/bin" $path) ;;
-  esac
-fi
+case ":$PATH:" in
+  *":$PNPM_HOME/bin:"*) ;;
+  *) path=("$PNPM_HOME/bin" $path) ;;
+esac

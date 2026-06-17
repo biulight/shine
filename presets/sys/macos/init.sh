@@ -152,6 +152,7 @@ install_bun() {
 
 install_pnpm() {
     install_shell_formula pnpm pnpm
+    mkdir -p "$HOME/Library/pnpm/bin"
 }
 
 install_mise() {

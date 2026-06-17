@@ -2867,6 +2867,9 @@ description = "Placeholder"
         assert!(content.contains("ZSH_VERSION"));
         assert!(content.contains("typeset -U fpath"));
         assert!(content.contains("\"$HOME/.cargo/bin\""));
+        assert!(content.contains("export PNPM_HOME=\"$HOME/Library/pnpm\""));
+        assert!(content.contains("\"$PNPM_HOME/bin\""));
+        assert!(!content.contains("[[ -d \"$PNPM_HOME/bin\" ]]"));
     }
 
     #[test]
