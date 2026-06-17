@@ -4,7 +4,7 @@ use dialoguer::{MultiSelect, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 use similar::{DiffTag, TextDiff};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::IsTerminal;
+use std::io::{ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -691,9 +691,7 @@ async fn install_sys_profile_phase(
     force_profile: bool,
 ) -> Result<SysProfileFileUpdate> {
     let template_path = script_dir.join(format!("profile.{}.{ext}", phase.as_str()));
-    let template = tokio::fs::read(&template_path)
-        .await
-        .with_context(|| format!("reading {}", template_path.display()))?;
+    let template = read_sys_profile_template(&template_path, os_id, phase, ext).await?;
 
     let active_path = sys_profile_file_path(profile_dir, os_id, phase, ext);
     let base_path = sys_profile_base_path(profile_dir, os_id, phase, ext);
@@ -754,6 +752,23 @@ async fn install_sys_profile_phase(
         template: &template,
     })
     .await
+}
+
+async fn read_sys_profile_template(
+    template_path: &Path,
+    os_id: &str,
+    phase: SysProfilePhase,
+    ext: &str,
+) -> Result<Vec<u8>> {
+    match tokio::fs::read(template_path).await {
+        Ok(template) => Ok(template),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            let asset_path = format!("sys/{os_id}/profile.{}.{ext}", phase.as_str());
+            crate::presets::read_asset_bytes(&asset_path)
+                .with_context(|| format!("reading {}", template_path.display()))
+        }
+        Err(err) => Err(err).with_context(|| format!("reading {}", template_path.display())),
+    }
 }
 
 /// Paths and file contents needed to reconcile a single sys profile file
@@ -2412,6 +2427,37 @@ description = "Placeholder"
                 .await
                 .unwrap(),
             "echo post template\n"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn install_sys_profile_files_falls_back_to_embedded_templates_for_stale_external_ubuntu()
+    {
+        let dir = make_temp_dir().await;
+        let script_dir = dir.join("presets/sys/ubuntu");
+        fs::create_dir_all(&script_dir).await.unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let update = install_sys_profile_files(&config, "ubuntu", &script_dir, false)
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        assert!(!update.needs_action);
+        let profile_dir = dir.join(".shine/profile");
+        assert!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.pre.sh"))
+                .await
+                .unwrap()
+                .contains("Managed by `shine sys init` for Ubuntu")
+        );
+        assert!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.post.sh"))
+                .await
+                .unwrap()
+                .contains("mise activate")
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
