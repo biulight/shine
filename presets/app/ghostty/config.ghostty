@@ -3,7 +3,7 @@ font-size = 13
 font-thicken = true
 
 # Set GHOSTTY_BG_LIGHT / GHOSTTY_BG_DARK in `shine env` to populate them.
-theme = light:light_Github Light Default,dark:dark_Alien Blood
+theme = light:Shine Light,dark:dark_Alien Blood
 
 window-save-state = always
 
