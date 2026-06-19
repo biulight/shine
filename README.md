@@ -233,6 +233,8 @@ Current built-in presets:
 
 When selected tools need shell integration, sys init installs managed `pre` and `post` profile loaders. The `pre` loader runs near the top of the user profile for PATH, Homebrew, and completion search path setup; the `post` loader runs near the end for Yazi, Starship, zoxide, Atuin, fzf, mise, aliases, and shell plugins. Managed profile files are merged so user edits inside them are preserved or reported for review.
 
+On Ubuntu and macOS, the managed `pre` profile also queries the interactive terminal background with OSC 11 and exports `SHINE_TERMINAL_THEME=light|dark`. It keeps bat aligned by setting `BAT_THEME` to `GitHub` for light backgrounds and `OneHalfDark` for dark backgrounds. Set `SHINE_SYNC_TERMINAL_THEME=0` before the managed profile loads to disable this behavior, or override the mapped themes with `SHINE_BAT_LIGHT_THEME` and `SHINE_BAT_DARK_THEME`. Failed or unsupported queries are skipped silently; macOS sys profile management continues to target zsh, while Ubuntu supports bash and zsh.
+
 ### Show app preset details
 
 ```bash

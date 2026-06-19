@@ -2919,6 +2919,28 @@ description = "Placeholder"
     }
 
     #[test]
+    fn embedded_unix_profiles_sync_terminal_theme_from_osc_11() {
+        for path in ["sys/ubuntu/profile.pre.sh", "sys/macos/profile.pre.sh"] {
+            let content = crate::presets::read_asset_bytes(path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .unwrap_or_else(|| panic!("missing embedded sys profile: {path}"));
+
+            assert!(content.contains("case \"$-\" in"));
+            assert!(content.contains("${SHINE_SYNC_TERMINAL_THEME:-1}"));
+            assert!(content.contains("\\033]11;?\\033\\\\"));
+            assert!(content.contains("read_timeout=\"0.15\""));
+            assert!(content.contains("export SHINE_TERMINAL_THEME=\"light\""));
+            assert!(content.contains("export SHINE_TERMINAL_THEME=\"dark\""));
+            assert!(content.contains("${SHINE_BAT_LIGHT_THEME:-GitHub}"));
+            assert!(content.contains("${SHINE_BAT_DARK_THEME:-OneHalfDark}"));
+            assert!(content.contains("shine_apply_terminal_theme \"$response\""));
+            assert!(
+                content.contains("unset -f shine_apply_terminal_theme shine_sync_terminal_theme")
+            );
+        }
+    }
+
+    #[test]
     fn embedded_macos_profile_initializes_mise() {
         let content = crate::presets::read_asset_bytes("sys/macos/profile.post.sh")
             .and_then(|bytes| String::from_utf8(bytes).ok())

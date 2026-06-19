@@ -233,6 +233,8 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "nvim found"
 
 当所选工具需要 shell 集成时，sys init 会安装受管的 `pre` 和 `post` profile loader。`pre` loader 会放在用户 profile 靠前位置，用于 PATH、Homebrew 和补全搜索路径；`post` loader 会放在靠后位置，用于 Yazi、Starship、zoxide、Atuin、fzf、mise、别名和 shell 插件。受管 profile 文件会被合并，用户在其中的修改会保留或提示需要检查。
 
+在 Ubuntu 和 macOS 上，受管的 `pre` profile 还会通过 OSC 11 查询交互式终端的背景色，并导出 `SHINE_TERMINAL_THEME=light|dark`。它会同步设置 bat：浅色背景使用 `GitHub`，深色背景使用 `OneHalfDark`。在受管 profile 加载前设置 `SHINE_SYNC_TERMINAL_THEME=0` 可关闭此功能；使用 `SHINE_BAT_LIGHT_THEME` 和 `SHINE_BAT_DARK_THEME` 可自定义对应主题。查询失败或终端不支持时会静默跳过；macOS 的 sys profile 仍仅管理 zsh，Ubuntu 支持 bash 和 zsh。
+
 ### 查看应用预设详情
 
 ```bash

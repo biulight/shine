@@ -7,6 +7,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Features
+
+- Added OSC 11 terminal background detection to the managed Ubuntu and macOS sys profiles so interactive shells can keep bat's theme aligned with the active terminal.
+
 ## [0.33.0] — 2026-06-14
 
 ### Features
