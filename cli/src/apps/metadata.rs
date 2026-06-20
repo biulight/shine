@@ -790,7 +790,18 @@ install_mode = "json-merge"
                 Some("~/.config/ghostty")
             );
             assert_eq!(ghostty.list_mode, AppListMode::Category);
-            assert_eq!(ghostty.files.len(), 5);
+            assert_eq!(ghostty.files.len(), 6);
+
+            let shine_light = ghostty
+                .files
+                .iter()
+                .find(|f| f.source_rel == std::path::Path::new("themes/Shine Light"))
+                .unwrap();
+            assert_eq!(
+                shine_light.target_rel,
+                std::path::Path::new("themes/Shine Light")
+            );
+            assert_eq!(shine_light.transforms, vec!["template"]);
 
             let light = ghostty
                 .files

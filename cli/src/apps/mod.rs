@@ -2421,9 +2421,13 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         let config_text = fs::read_to_string(dir.join(".config/ghostty/config.ghostty"))
             .await
             .unwrap();
-        assert!(
-            config_text.contains("theme = light:light_Github Light Default,dark:dark_Alien Blood")
-        );
+        assert!(config_text.contains("theme = light:Shine Light,dark:dark_Alien Blood"));
+
+        let default_light_theme =
+            fs::read_to_string(dir.join(".config/ghostty/themes/Shine Light"))
+                .await
+                .unwrap();
+        assert!(default_light_theme.contains("background-image = /tmp/shine-light-wallpaper.png"));
 
         let light_theme =
             fs::read_to_string(dir.join(".config/ghostty/themes/light_Github Light Default"))
