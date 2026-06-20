@@ -7,9 +7,23 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [0.34.0] — 2026-06-21
+
 ### Features
 
 - Added OSC 11 terminal background detection to the managed Ubuntu and macOS sys profiles so interactive shells can keep bat's theme aligned with the active terminal.
+- Added a bundled Shine Light theme for Ghostty and made it the default light appearance theme.
+
+### Bug Fixes
+
+- Fixed sys profile updates so UTF-8 BOM markers remain at the start of PowerShell profiles and profiles damaged by older versions are repaired automatically.
+- Fixed sys profile installation to fall back to embedded templates when extracted external presets are stale.
+- Added the pnpm global bin directory to the managed macOS sys profile PATH.
+- Made release update checks tolerate transient failures and cache GitHub rate-limit responses to avoid repeated requests.
+
+### Docs
+
+- Documented terminal background theme synchronization and the bundled Ghostty Shine Light theme.
 
 ## [0.33.0] — 2026-06-14
 
