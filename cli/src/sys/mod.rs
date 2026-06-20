@@ -1374,6 +1374,9 @@ async fn update_sys_shell_profile_blocks(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
+    let had_utf8_bom = content.contains('\u{feff}');
+    let bom_was_at_start = content.starts_with('\u{feff}');
+    let content = content.replace('\u{feff}', "");
     let pre_block = sys_shell_profile_block(os_id, SysProfilePhase::Pre, shell_name);
     let post_block = sys_shell_profile_block(os_id, SysProfilePhase::Post, shell_name);
     let pre_sentinel = sys_sentinel(os_id, SysProfilePhase::Pre);
@@ -1383,6 +1386,7 @@ async fn update_sys_shell_profile_blocks(
         && extract_sentinel_block(&content, pre_sentinel) == Some(pre_block.as_str())
         && extract_sentinel_block(&content, post_sentinel) == Some(post_block.as_str())
         && sentinel_order_is_valid(&content, pre_sentinel, post_sentinel)
+        && (!had_utf8_bom || bom_was_at_start)
     {
         return Ok(false);
     }
@@ -1393,6 +1397,9 @@ async fn update_sys_shell_profile_blocks(
     updated = trim_outer_blank_lines(&updated);
     updated = insert_shell_profile_block(&updated, &pre_block, ShellProfileBlockPosition::Start);
     updated = insert_shell_profile_block(&updated, &post_block, ShellProfileBlockPosition::End);
+    if had_utf8_bom {
+        updated.insert(0, '\u{feff}');
+    }
 
     tokio::fs::write(path, updated)
         .await
@@ -2679,6 +2686,44 @@ description = "Placeholder"
         assert!(user < post);
         assert!(zshrc.contains("ubuntu-sys.pre.sh"));
         assert!(zshrc.contains("ubuntu-sys.post.sh"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profile_blocks_keeps_utf8_bom_at_file_start() {
+        let dir = make_temp_dir().await;
+        let profile = dir.join("Microsoft.PowerShell_profile.ps1");
+        fs::write(&profile, "\u{feff}Import-Module posh-git\n")
+            .await
+            .unwrap();
+
+        update_sys_shell_profile_blocks(&profile, "windows", None)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&profile).await.unwrap();
+        assert!(content.starts_with('\u{feff}'));
+        assert_eq!(content.matches('\u{feff}').count(), 1);
+        assert!(content.contains("\nImport-Module posh-git\n"));
+
+        // Older versions moved the original BOM in front of the user's first command.
+        let broken = content.trim_start_matches('\u{feff}').replacen(
+            "\nImport-Module posh-git\n",
+            "\n\u{feff}Import-Module posh-git\n",
+            1,
+        );
+        fs::write(&profile, broken).await.unwrap();
+
+        assert!(
+            update_sys_shell_profile_blocks(&profile, "windows", None)
+                .await
+                .unwrap()
+        );
+        let repaired = fs::read_to_string(&profile).await.unwrap();
+        assert!(repaired.starts_with('\u{feff}'));
+        assert_eq!(repaired.matches('\u{feff}').count(), 1);
+        assert!(repaired.contains("\nImport-Module posh-git\n"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
