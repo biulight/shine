@@ -67,7 +67,8 @@ nnoremap gk <action>(MethodUp)
 nnoremap gp <action>(WebOpenInAction)
 nnoremap gi <action>(GotoImplementation)
 nnoremap ga '.
-nnoremap g/ <action>(FindInPath)
+" nnoremap g/ 不符合预期，插入文本
+nmap g/ <action>(FindInPath)
 
 " input in somewhere
 " 在标签内输入
