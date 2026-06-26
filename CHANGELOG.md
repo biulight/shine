@@ -7,6 +7,14 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [0.34.1] — 2026-06-26
+
+### Bug Fixes
+
+- Fixed JetBrains `.ideavimrc` `g` mappings to use consistent prefix across all configurations.
+- Corrected `g/` mapping in JetBrains `.ideavimrc` that was previously mismatched.
+- Upgraded `quinn-proto` dependency from 0.11.14 to 0.11.15 to resolve RUSTSEC-2026-0185 (remote memory exhaustion via unbounded out-of-order stream reassembly, severity 7.5).
+
 ## [0.34.0] — 2026-06-21
 
 ### Features
