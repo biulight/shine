@@ -438,16 +438,11 @@ pub(crate) async fn handle_install(
                 String::new()
             };
 
+            let file_label = file.source_rel.display().to_string();
+
             match outcome {
                 Ok(InstallOutcome::Installed { hash }) => {
-                    println!(
-                        "  {}  {}{}  {}  {}",
-                        colors::symbol("✓"),
-                        file.source_rel.display(),
-                        transform_label,
-                        colors::dim("→"),
-                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
-                    );
+                    print_install_success(&file_label, &transform_label, &destination, config);
                     manifest.upsert(AppEntry {
                         source: format!("app/{}/{}", cat.name, file.source_rel.display()),
                         destination,
@@ -459,26 +454,16 @@ pub(crate) async fn handle_install(
                     installed += 1;
                 }
                 Ok(InstallOutcome::AlreadyManaged) => {
-                    println!(
-                        "  {}  {}  {}",
-                        colors::dim("-"),
-                        file.source_rel.display(),
-                        colors::dim("already up to date"),
-                    );
+                    print_already_managed(&file_label);
                     skipped += 1;
                 }
                 Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
-                    println!(
-                        "  {}  {}{}  {}  {}  {}",
-                        colors::symbol("✓"),
-                        file.source_rel.display(),
-                        transform_label,
-                        colors::dim("→"),
-                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
-                        colors::dim(&format!(
-                            "(backup: {})",
-                            path_display::format_home(&backup, &config.home_dir)
-                        )),
+                    print_install_success_with_backup(
+                        &file_label,
+                        &transform_label,
+                        &destination,
+                        &backup,
+                        config,
                     );
                     manifest.upsert(AppEntry {
                         source: format!("app/{}/{}", cat.name, file.source_rel.display()),
@@ -492,18 +477,11 @@ pub(crate) async fn handle_install(
                     backed_up += 1;
                 }
                 Ok(InstallOutcome::DryRun) => {
-                    println!(
-                        "  {}  {}{}  {}  {}",
-                        colors::dim("[dry-run]"),
-                        file.source_rel.display(),
-                        transform_label,
-                        colors::dim("→"),
-                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
-                    );
+                    print_dry_run_install(&file_label, &transform_label, &destination, config);
                     skipped += 1;
                 }
                 Err(e) => {
-                    eprintln!("  {} {display_name}: {e:#}", colors::symbol("✗"));
+                    print_install_error(&display_name, &e);
                 }
             }
         }
@@ -605,15 +583,19 @@ pub(crate) async fn handle_upgrade_installed(
         };
 
         let Some(cat) = categories_by_name.get(cat_name) else {
-            let outcome = cleanup_stale_entry(config, entry, prune_stale, interactive).await?;
-            apply_stale_outcome(
-                outcome,
-                entry.destination.clone(),
-                &mut pending_removals,
-                &mut updated,
-                &mut user_modified,
-                &mut skipped,
-            );
+            handle_stale_entry(
+                config,
+                entry,
+                prune_stale,
+                interactive,
+                &mut StaleEntryCounters {
+                    pending_removals: &mut pending_removals,
+                    updated: &mut updated,
+                    user_modified: &mut user_modified,
+                    skipped: &mut skipped,
+                },
+            )
+            .await?;
             continue;
         };
         let Some(file) = cat
@@ -621,15 +603,19 @@ pub(crate) async fn handle_upgrade_installed(
             .iter()
             .find(|file| file.source_rel.to_string_lossy().as_ref() == file_rel)
         else {
-            let outcome = cleanup_stale_entry(config, entry, prune_stale, interactive).await?;
-            apply_stale_outcome(
-                outcome,
-                entry.destination.clone(),
-                &mut pending_removals,
-                &mut updated,
-                &mut user_modified,
-                &mut skipped,
-            );
+            handle_stale_entry(
+                config,
+                entry,
+                prune_stale,
+                interactive,
+                &mut StaleEntryCounters {
+                    pending_removals: &mut pending_removals,
+                    updated: &mut updated,
+                    user_modified: &mut user_modified,
+                    skipped: &mut skipped,
+                },
+            )
+            .await?;
             continue;
         };
 
@@ -687,7 +673,7 @@ async fn try_upgrade_entry(
     let content = match upgrade_file_content(config, cat, file, env_map).await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            print_install_error(&entry.source, &e);
             return EntryUpgradeResult::Failed;
         }
     };
@@ -695,7 +681,7 @@ async fn try_upgrade_entry(
     let new_hash = match desired_content_hash(file, &content) {
         Ok(h) => h,
         Err(e) => {
-            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            print_install_error(&entry.source, &e);
             return EntryUpgradeResult::Failed;
         }
     };
@@ -713,7 +699,7 @@ async fn try_upgrade_entry(
                     return EntryUpgradeResult::UserModified;
                 }
                 Err(e) => {
-                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+                    print_install_error(&entry.source, &e);
                     return EntryUpgradeResult::Failed;
                 }
             };
@@ -731,7 +717,7 @@ async fn try_upgrade_entry(
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
-            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            print_install_error(&entry.source, &anyhow::Error::from(e));
             return EntryUpgradeResult::Failed;
         }
     }
@@ -744,28 +730,21 @@ async fn try_upgrade_entry(
                 .as_deref()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-            println!(
-                "  {}  {}  {}  {}",
-                colors::symbol("✓"),
-                display_name,
-                colors::dim("→"),
-                colors::dim(&path_display::format_home(
-                    &entry.destination,
-                    &config.home_dir
-                )),
-            );
+            print_install_success(&display_name, "", &entry.destination, config);
             EntryUpgradeResult::Updated(AppEntry {
+                source: entry.source.clone(),
+                destination: entry.destination.clone(),
+                backup: entry.backup.clone(),
                 content_hash: hash,
                 install_strategy: file.install_strategy.clone(),
                 uses_env: file.transforms.iter().any(|t| t == "template"),
-                ..entry.clone()
             })
         }
         Ok(InstallOutcome::AlreadyManaged) | Ok(InstallOutcome::DryRun) => {
             EntryUpgradeResult::Skipped
         }
         Err(e) => {
-            eprintln!("  {} {}: {e:#}", colors::symbol("✗"), entry.source);
+            print_install_error(&entry.source, &e);
             EntryUpgradeResult::Failed
         }
     }
@@ -799,6 +778,34 @@ fn apply_stale_outcome(
             *skipped += 1;
         }
     }
+}
+
+/// Mutable counters threaded through the upgrade loop, grouped to keep
+/// `handle_stale_entry`'s argument count within clippy's limit.
+struct StaleEntryCounters<'a> {
+    pending_removals: &'a mut Vec<PathBuf>,
+    updated: &'a mut usize,
+    user_modified: &'a mut usize,
+    skipped: &'a mut usize,
+}
+
+async fn handle_stale_entry(
+    config: &Config,
+    entry: &AppEntry,
+    prune_stale: bool,
+    interactive: bool,
+    counters: &mut StaleEntryCounters<'_>,
+) -> Result<()> {
+    let outcome = cleanup_stale_entry(config, entry, prune_stale, interactive).await?;
+    apply_stale_outcome(
+        outcome,
+        entry.destination.clone(),
+        counters.pending_removals,
+        counters.updated,
+        counters.user_modified,
+        counters.skipped,
+    );
+    Ok(())
 }
 
 async fn install_new_category_files(
@@ -869,13 +876,7 @@ async fn install_new_category_files(
                         .as_deref()
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-                    println!(
-                        "  {}  {}  {}  {}",
-                        colors::symbol("✓"),
-                        display_name,
-                        colors::dim("→"),
-                        colors::dim(&path_display::format_home(&destination, &config.home_dir)),
-                    );
+                    print_install_success(&display_name, "", &destination, config);
                     new_upserts.push(AppEntry {
                         source,
                         destination,
@@ -946,29 +947,17 @@ async fn cleanup_stale_entry(
 
     match uninstall_app_entry(entry, false, false).await? {
         UninstallOutcome::Removed => {
-            println!(
-                "  {}  {}  {}",
-                colors::symbol("✓"),
-                colors::dim(&path_display::format_home(
-                    &entry.destination,
-                    &config.home_dir
-                )),
-                colors::dim("(removed stale managed file)"),
-            );
+            print_stale_removed(config, &entry.destination, "(removed stale managed file)");
             Ok(StaleCleanupOutcome::Removed)
         }
         UninstallOutcome::RestoredBackup { backup } => {
-            println!(
-                "  {}  {}  {}",
-                colors::symbol("✓"),
-                colors::dim(&path_display::format_home(
-                    &entry.destination,
-                    &config.home_dir
-                )),
-                colors::dim(&format!(
+            print_stale_removed(
+                config,
+                &entry.destination,
+                format!(
                     "(removed stale file, restored {})",
                     path_display::format_home(&backup, &config.home_dir)
-                )),
+                ),
             );
             Ok(StaleCleanupOutcome::Removed)
         }
@@ -976,15 +965,7 @@ async fn cleanup_stale_entry(
             Ok(StaleCleanupOutcome::Removed)
         }
         UninstallOutcome::NotFound => {
-            println!(
-                "  {}  {}  {}",
-                colors::dim("-"),
-                colors::dim(&path_display::format_home(
-                    &entry.destination,
-                    &config.home_dir
-                )),
-                colors::dim("stale destination missing, manifest cleaned"),
-            );
+            print_stale_not_found(config, &entry.destination);
             Ok(StaleCleanupOutcome::NotFound)
         }
         UninstallOutcome::UserModified => {
@@ -1064,6 +1045,158 @@ fn app_source_parts(source: &str) -> Option<(&str, &str)> {
     }
 }
 
+// --- Install/upgrade outcome reporting --------------------------------------------------
+
+fn print_install_success(label: &str, transform_label: &str, destination: &Path, config: &Config) {
+    println!(
+        "  {}  {}{}  {}  {}",
+        colors::symbol("✓"),
+        label,
+        transform_label,
+        colors::dim("→"),
+        colors::dim(&path_display::format_home(destination, &config.home_dir)),
+    );
+}
+
+fn print_install_success_with_backup(
+    label: &str,
+    transform_label: &str,
+    destination: &Path,
+    backup: &Path,
+    config: &Config,
+) {
+    println!(
+        "  {}  {}{}  {}  {}  {}",
+        colors::symbol("✓"),
+        label,
+        transform_label,
+        colors::dim("→"),
+        colors::dim(&path_display::format_home(destination, &config.home_dir)),
+        colors::dim(&format!(
+            "(backup: {})",
+            path_display::format_home(backup, &config.home_dir)
+        )),
+    );
+}
+
+fn print_already_managed(label: &str) {
+    println!(
+        "  {}  {}  {}",
+        colors::dim("-"),
+        label,
+        colors::dim("already up to date"),
+    );
+}
+
+fn print_dry_run_install(label: &str, transform_label: &str, destination: &Path, config: &Config) {
+    println!(
+        "  {}  {}{}  {}  {}",
+        colors::dim("[dry-run]"),
+        label,
+        transform_label,
+        colors::dim("→"),
+        colors::dim(&path_display::format_home(destination, &config.home_dir)),
+    );
+}
+
+fn print_install_error(label: &str, err: &anyhow::Error) {
+    eprintln!("  {} {label}: {err:#}", colors::symbol("✗"));
+}
+
+// --- Stale-entry cleanup reporting -------------------------------------------------------
+
+fn print_stale_removed(config: &Config, destination: &Path, note: impl AsRef<str>) {
+    println!(
+        "  {}  {}  {}",
+        colors::symbol("✓"),
+        colors::dim(&path_display::format_home(destination, &config.home_dir)),
+        colors::dim(note.as_ref()),
+    );
+}
+
+fn print_stale_not_found(config: &Config, destination: &Path) {
+    println!(
+        "  {}  {}  {}",
+        colors::dim("-"),
+        colors::dim(&path_display::format_home(destination, &config.home_dir)),
+        colors::dim("stale destination missing, manifest cleaned"),
+    );
+}
+
+// --- Uninstall outcome reporting ----------------------------------------------------------
+
+fn print_removed(config: &Config, destination: &Path) {
+    println!(
+        "  {}  {}",
+        colors::symbol("✓"),
+        colors::dim(&path_display::format_home(destination, &config.home_dir)),
+    );
+}
+
+fn print_removed_with_restore(config: &Config, destination: &Path, backup: &Path) {
+    println!(
+        "  {}  {}  {}",
+        colors::symbol("✓"),
+        colors::dim(&path_display::format_home(destination, &config.home_dir)),
+        colors::dim(&format!(
+            "(restored {})",
+            path_display::format_home(backup, &config.home_dir)
+        )),
+    );
+}
+
+fn print_force_removed(destination: &Path) {
+    println!(
+        "  {}  {}  {}",
+        colors::symbol("✓"),
+        colors::dim(&destination.display().to_string()),
+        colors::dim("force removed"),
+    );
+}
+
+fn print_force_removed_with_restore(destination: &Path, backup: &Path) {
+    println!(
+        "  {}  {}  {}",
+        colors::symbol("✓"),
+        colors::dim(&destination.display().to_string()),
+        colors::dim(&format!("force removed, restored {}", backup.display())),
+    );
+}
+
+fn print_uninstall_not_found(config: &Config, destination: &Path) {
+    println!(
+        "  {}  {}  {}",
+        colors::dim("-"),
+        colors::dim(&path_display::format_home(destination, &config.home_dir)),
+        colors::dim("not found, skipped"),
+    );
+}
+
+fn print_user_modified_kept(config: &Config, destination: &Path) {
+    println!(
+        "  {}  {}  {}",
+        colors::symbol("!"),
+        path_display::format_home(destination, &config.home_dir),
+        colors::yellow("modified after install, left in place"),
+    );
+}
+
+fn print_uninstall_dry_run(config: &Config, destination: &Path) {
+    println!(
+        "  {}  {}",
+        colors::dim("[dry-run]"),
+        colors::dim(&path_display::format_home(destination, &config.home_dir)),
+    );
+}
+
+fn print_uninstall_error(config: &Config, destination: &Path, err: &anyhow::Error) {
+    eprintln!(
+        "  {} {}: {err}",
+        colors::symbol("✗"),
+        path_display::format_home(destination, &config.home_dir)
+    );
+}
+
 pub(crate) async fn handle_uninstall(
     config: &Config,
     category: Option<&str>,
@@ -1099,94 +1232,42 @@ pub(crate) async fn handle_uninstall(
     for entry in &entries {
         match uninstall_app_entry(entry, dry_run, force).await {
             Ok(UninstallOutcome::Removed) => {
-                println!(
-                    "  {}  {}",
-                    colors::symbol("✓"),
-                    colors::dim(&path_display::format_home(
-                        &entry.destination,
-                        &config.home_dir
-                    )),
-                );
+                print_removed(config, &entry.destination);
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
             }
             Ok(UninstallOutcome::RestoredBackup { backup }) => {
-                println!(
-                    "  {}  {}  {}",
-                    colors::symbol("✓"),
-                    colors::dim(&path_display::format_home(
-                        &entry.destination,
-                        &config.home_dir
-                    )),
-                    colors::dim(&format!(
-                        "(restored {})",
-                        path_display::format_home(&backup, &config.home_dir)
-                    )),
-                );
+                print_removed_with_restore(config, &entry.destination, &backup);
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 restored += 1;
             }
             Ok(UninstallOutcome::ForceRemoved) => {
-                println!(
-                    "  {}  {}  {}",
-                    colors::symbol("✓"),
-                    colors::dim(&entry.destination.display().to_string()),
-                    colors::dim("force removed"),
-                );
+                print_force_removed(&entry.destination);
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
             }
             Ok(UninstallOutcome::ForceRestoredBackup { backup }) => {
-                println!(
-                    "  {}  {}  {}",
-                    colors::symbol("✓"),
-                    colors::dim(&entry.destination.display().to_string()),
-                    colors::dim(&format!("force removed, restored {}", backup.display())),
-                );
+                print_force_removed_with_restore(&entry.destination, &backup);
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 restored += 1;
             }
             Ok(UninstallOutcome::NotFound) => {
-                println!(
-                    "  {}  {}  {}",
-                    colors::dim("-"),
-                    colors::dim(&path_display::format_home(
-                        &entry.destination,
-                        &config.home_dir
-                    )),
-                    colors::dim("not found, skipped"),
-                );
+                print_uninstall_not_found(config, &entry.destination);
                 manifest.remove_by_dest(&entry.destination);
                 skipped += 1;
             }
             Ok(UninstallOutcome::UserModified) => {
-                println!(
-                    "  {}  {}  {}",
-                    colors::symbol("!"),
-                    path_display::format_home(&entry.destination, &config.home_dir),
-                    colors::yellow("modified after install, left in place"),
-                );
+                print_user_modified_kept(config, &entry.destination);
                 user_modified += 1;
             }
             Ok(UninstallOutcome::DryRun) => {
-                println!(
-                    "  {}  {}",
-                    colors::dim("[dry-run]"),
-                    colors::dim(&path_display::format_home(
-                        &entry.destination,
-                        &config.home_dir
-                    )),
-                );
+                print_uninstall_dry_run(config, &entry.destination);
                 skipped += 1;
             }
             Err(e) => {
-                eprintln!(
-                    "  {} {}: {e}",
-                    colors::symbol("✗"),
-                    path_display::format_home(&entry.destination, &config.home_dir)
-                );
+                print_uninstall_error(config, &entry.destination, &e);
             }
         }
     }
@@ -1467,6 +1548,7 @@ mod tests {
         let dir = make_temp_dir().await;
 
         // Point HOME at the temp dir so ~ expands there
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -1501,6 +1583,7 @@ mod tests {
             "manifest should be empty after uninstall"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1510,6 +1593,7 @@ mod tests {
     async fn uninstall_dry_run_leaves_everything_intact() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -1538,6 +1622,7 @@ mod tests {
             );
         }
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1597,6 +1682,7 @@ mod tests {
     async fn uninstall_force_removes_user_modified_file_and_manifest_entry() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"debug\": true\n}\n").await;
@@ -1624,6 +1710,7 @@ mod tests {
             "force uninstall should remove modified file"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1633,6 +1720,7 @@ mod tests {
     async fn install_is_idempotent() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -1652,6 +1740,7 @@ mod tests {
             "re-install must not duplicate manifest entries"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1661,6 +1750,7 @@ mod tests {
     async fn upgrade_skips_up_to_date_app_config() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(
@@ -1684,6 +1774,7 @@ mod tests {
         assert_eq!(report.skipped, 1, "up-to-date app config should be skipped");
         assert_eq!(fs::read(&dest).await.unwrap(), before);
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1693,6 +1784,7 @@ mod tests {
     async fn upgrade_updates_app_config_when_source_changes() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1721,6 +1813,7 @@ mod tests {
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1730,6 +1823,7 @@ mod tests {
     async fn upgrade_installs_new_app_file_from_installed_category() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1766,6 +1860,7 @@ mod tests {
             "new app file should be tracked in manifest"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1775,6 +1870,7 @@ mod tests {
     async fn upgrade_skips_new_app_file_when_destination_is_unmanaged() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1811,6 +1907,7 @@ mod tests {
             "unmanaged destination should not be added to manifest"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1820,6 +1917,7 @@ mod tests {
     async fn upgrade_prune_stale_removes_unmodified_file_and_manifest_entry() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1846,6 +1944,7 @@ mod tests {
             "stale manifest entry should be removed"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1855,6 +1954,7 @@ mod tests {
     async fn upgrade_prune_stale_removes_manifest_entry_when_destination_is_missing() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1881,6 +1981,7 @@ mod tests {
             "missing stale destination should be removed from manifest"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1890,6 +1991,7 @@ mod tests {
     async fn upgrade_without_prune_keeps_stale_file_and_manifest_entry() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1916,6 +2018,7 @@ mod tests {
             "stale manifest entry should remain without prune"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1925,6 +2028,7 @@ mod tests {
     async fn upgrade_prune_stale_keeps_user_modified_file() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -1953,6 +2057,7 @@ mod tests {
             "user-modified stale entry should remain tracked"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1962,6 +2067,7 @@ mod tests {
     async fn upgrade_prune_stale_allows_renamed_source_to_reinstall_same_destination() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"old\"\n}\n").await;
@@ -2002,6 +2108,7 @@ mod tests {
         let entry = manifest.find_by_dest(&dest).unwrap();
         assert_eq!(entry.source, "app/sample/daemon-renamed.jsonc");
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2011,6 +2118,7 @@ mod tests {
     async fn upgrade_skips_user_modified_app_config() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         write_external_sample_app(&dir, b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n").await;
@@ -2033,6 +2141,7 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert_eq!(fs::read(&dest).await.unwrap(), b"{\"user\":true}\n");
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2211,6 +2320,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     async fn install_places_vim_under_directory_root() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -2232,6 +2342,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         let destination = resolve_install_destination(vim, vimrc, &config).unwrap();
         assert_eq!(destination, dir.join(".vim").join("vimrc"));
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2241,6 +2352,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     async fn install_places_ghostty_config_under_config_root() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -2277,6 +2389,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
                 .join("themes/light_iTerm2 Solarized Light")
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2286,6 +2399,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     async fn install_renders_ghostty_light_and_dark_background_images() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let mut config = Config::new_for_test(&dir);
@@ -2307,9 +2421,13 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         let config_text = fs::read_to_string(dir.join(".config/ghostty/config.ghostty"))
             .await
             .unwrap();
-        assert!(
-            config_text.contains("theme = light:light_Github Light Default,dark:dark_Alien Blood")
-        );
+        assert!(config_text.contains("theme = light:Shine Light,dark:dark_Alien Blood"));
+
+        let default_light_theme =
+            fs::read_to_string(dir.join(".config/ghostty/themes/Shine Light"))
+                .await
+                .unwrap();
+        assert!(default_light_theme.contains("background-image = /tmp/shine-light-wallpaper.png"));
 
         let light_theme =
             fs::read_to_string(dir.join(".config/ghostty/themes/light_Github Light Default"))
@@ -2328,6 +2446,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
         assert!(dark_theme.contains("cursor-color = #73fa91"));
         assert!(dark_theme.contains("background-image = /tmp/shine-dark-wallpaper.png"));
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2337,6 +2456,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     async fn uninstall_specific_category_only_removes_that_category() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -2388,6 +2508,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             "uninstalled category must not appear in manifest"
         );
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2397,6 +2518,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     async fn uninstall_unknown_category_returns_early() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
 
         let config = Config::new_for_test(&dir);
@@ -2408,6 +2530,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             .await
             .unwrap();
 
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
     }

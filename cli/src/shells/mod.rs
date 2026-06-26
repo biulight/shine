@@ -95,27 +95,7 @@ pub(crate) async fn handle_install(
     // When using the default presets directory, extract the embedded assets first.
     if !config.is_external_presets {
         let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
-
-        let mut shell_parts: Vec<String> = Vec::new();
-        if !report.created.is_empty() {
-            shell_parts.push(colors::green(&format_file_action(
-                report.created.len(),
-                "created",
-            )));
-        }
-        if !report.overwritten.is_empty() {
-            shell_parts.push(colors::green(&format_file_action(
-                report.overwritten.len(),
-                "updated",
-            )));
-        }
-        if !report.skipped.is_empty() {
-            shell_parts.push(colors::dim(&format_file_action(
-                report.skipped.len(),
-                "skipped",
-            )));
-        }
-        output::summary_line("Shell Presets", &shell_parts);
+        output::summary_line("Shell Presets", &preset_extract_summary_parts(&report));
     }
 
     let categories = metadata::load_installed_categories(config, category).await?;
@@ -133,35 +113,7 @@ pub(crate) async fn handle_install(
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, force).await?;
 
-    let mut link_parts: Vec<String> = Vec::new();
-    if !link_report.created.is_empty() {
-        link_parts.push(colors::green(&format!(
-            "{} created",
-            link_report.created.len()
-        )));
-    }
-    if !link_report.overwritten.is_empty() {
-        link_parts.push(colors::green(&format!(
-            "{} updated",
-            link_report.overwritten.len()
-        )));
-    }
-    if !link_report.skipped.is_empty() {
-        link_parts.push(colors::dim(&format!(
-            "{} up to date",
-            link_report.skipped.len()
-        )));
-    }
-    if !link_report.conflicts.is_empty() {
-        link_parts.push(colors::yellow(&format!(
-            "{} conflicts",
-            link_report.conflicts.len()
-        )));
-    }
-    if link_parts.is_empty() {
-        link_parts.push(colors::dim("0 linked"));
-    }
-    output::summary_line("Bin Links", &link_parts);
+    output::summary_line("Bin Links", &link_report_summary_parts(&link_report));
     print_link_conflicts(config, &link_report.conflicts, category);
 
     let source_commands = installed_source_commands(config).await?;
@@ -195,6 +147,127 @@ pub(crate) async fn handle_install(
     }
     print_source_command_activation_hint(config, &shell_config_path, &installed_commands);
     Ok(())
+}
+
+fn preset_extract_summary_parts(report: &crate::presets::ExtractReport) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if !report.created.is_empty() {
+        parts.push(colors::green(&format_file_action(
+            report.created.len(),
+            "created",
+        )));
+    }
+    if !report.overwritten.is_empty() {
+        parts.push(colors::green(&format_file_action(
+            report.overwritten.len(),
+            "updated",
+        )));
+    }
+    if !report.skipped.is_empty() {
+        parts.push(colors::dim(&format_file_action(
+            report.skipped.len(),
+            "skipped",
+        )));
+    }
+    parts
+}
+
+fn unlink_report_summary_parts(unlink_report: &crate::bin_links::UnlinkReport) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if !unlink_report.removed.is_empty() {
+        parts.push(colors::green(&format!(
+            "{} removed",
+            unlink_report.removed.len()
+        )));
+    }
+    if !unlink_report.skipped.is_empty() {
+        parts.push(colors::dim(&format!(
+            "{} skipped",
+            unlink_report.skipped.len()
+        )));
+    }
+    parts
+}
+
+fn remove_report_summary_parts(remove_report: &crate::presets::RemoveReport) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if !remove_report.removed.is_empty() {
+        parts.push(colors::green(&format_file_action(
+            remove_report.removed.len(),
+            "removed",
+        )));
+    }
+    if !remove_report.skipped.is_empty() {
+        parts.push(colors::dim(&format_file_action(
+            remove_report.skipped.len(),
+            "skipped",
+        )));
+    }
+    parts
+}
+
+fn link_report_summary_parts(link_report: &crate::bin_links::LinkReport) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if !link_report.created.is_empty() {
+        parts.push(colors::green(&format!(
+            "{} created",
+            link_report.created.len()
+        )));
+    }
+    if !link_report.overwritten.is_empty() {
+        parts.push(colors::green(&format!(
+            "{} updated",
+            link_report.overwritten.len()
+        )));
+    }
+    if !link_report.skipped.is_empty() {
+        parts.push(colors::dim(&format!(
+            "{} up to date",
+            link_report.skipped.len()
+        )));
+    }
+    if !link_report.conflicts.is_empty() {
+        parts.push(colors::yellow(&format!(
+            "{} conflicts",
+            link_report.conflicts.len()
+        )));
+    }
+    if parts.is_empty() {
+        parts.push(colors::dim("0 linked"));
+    }
+    parts
+}
+
+fn upgrade_link_report_summary_parts(
+    link_report: &crate::bin_links::LinkReport,
+    verbose: bool,
+) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if !link_report.created.is_empty() {
+        parts.push(colors::green(&format!(
+            "{} created",
+            link_report.created.len()
+        )));
+    }
+    if !link_report.overwritten.is_empty() {
+        parts.push(colors::green(&format!(
+            "{} updated",
+            link_report.overwritten.len()
+        )));
+    }
+    if verbose && !link_report.skipped.is_empty() {
+        parts.push(colors::dim(&format!(
+            "{} up to date",
+            link_report.skipped.len()
+        )));
+    }
+    if !link_report.conflicts.is_empty() {
+        parts.push(colors::yellow(&format!(
+            "{} conflicts",
+            link_report.conflicts.len()
+        )));
+    }
+    parts
 }
 
 pub(crate) async fn handle_upgrade_installed(
@@ -268,31 +341,7 @@ pub(crate) async fn handle_upgrade_installed(
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
 
-    let mut link_parts: Vec<String> = Vec::new();
-    if !link_report.created.is_empty() {
-        link_parts.push(colors::green(&format!(
-            "{} created",
-            link_report.created.len()
-        )));
-    }
-    if !link_report.overwritten.is_empty() {
-        link_parts.push(colors::green(&format!(
-            "{} updated",
-            link_report.overwritten.len()
-        )));
-    }
-    if verbose && !link_report.skipped.is_empty() {
-        link_parts.push(colors::dim(&format!(
-            "{} up to date",
-            link_report.skipped.len()
-        )));
-    }
-    if !link_report.conflicts.is_empty() {
-        link_parts.push(colors::yellow(&format!(
-            "{} conflicts",
-            link_report.conflicts.len()
-        )));
-    }
+    let link_parts = upgrade_link_report_summary_parts(&link_report, verbose);
     if !link_parts.is_empty() {
         output::summary_line("Bin Links", &link_parts);
     }
@@ -499,40 +548,17 @@ pub(crate) async fn handle_uninstall(
         removed: [unlink_presets.removed, unlink_rendered.removed].concat(),
         skipped: [unlink_presets.skipped, unlink_rendered.skipped].concat(),
     };
-    let mut link_parts: Vec<String> = Vec::new();
-    if !unlink_report.removed.is_empty() {
-        link_parts.push(colors::green(&format!(
-            "{} removed",
-            unlink_report.removed.len()
-        )));
-    }
-    if !unlink_report.skipped.is_empty() {
-        link_parts.push(colors::dim(&format!(
-            "{} skipped",
-            unlink_report.skipped.len()
-        )));
-    }
-    output::summary_line("Bin Links", &link_parts);
+    output::summary_line("Bin Links", &unlink_report_summary_parts(&unlink_report));
 
     // When the user has a custom presets directory, the source files are theirs —
     // only remove the embedded-managed files when using the default directory.
     if !config.is_external_presets {
         let remove_report =
             crate::presets::remove_prefix(&prefix, config.presets_dir(), dry_run).await?;
-        let mut shell_parts: Vec<String> = Vec::new();
-        if !remove_report.removed.is_empty() {
-            shell_parts.push(colors::green(&format_file_action(
-                remove_report.removed.len(),
-                "removed",
-            )));
-        }
-        if !remove_report.skipped.is_empty() {
-            shell_parts.push(colors::dim(&format_file_action(
-                remove_report.skipped.len(),
-                "skipped",
-            )));
-        }
-        output::summary_line("Shell Presets", &shell_parts);
+        output::summary_line(
+            "Shell Presets",
+            &remove_report_summary_parts(&remove_report),
+        );
     }
 
     // Only purge managed directories when using the default presets directory.

@@ -52,6 +52,8 @@ pub(crate) struct Config {
     #[serde(skip)]
     pub home_dir: PathBuf,
     /// Filename
+    // Kept for Debug/diagnostics parity with the other path fields above;
+    // not currently read elsewhere.
     #[serde(skip)]
     #[allow(dead_code)]
     file_name: String,

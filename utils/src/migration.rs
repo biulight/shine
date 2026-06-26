@@ -1,3 +1,6 @@
+/// Recursively syncs `doc` (a formatted TOML document) to match `target`:
+/// removes keys absent from `target`, inserts/updates keys that differ, recurses
+/// into nested tables, and leaves unchanged values (and their formatting/comments) untouched.
 pub fn sync_table(doc: &mut toml_edit::Table, target: &toml::Table) {
     let to_remove = doc
         .iter()

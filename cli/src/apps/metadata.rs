@@ -15,6 +15,8 @@ pub(crate) struct AppCategory {
     pub destination_root: Option<String>,
     pub files: Vec<AppFile>,
     pub list_mode: AppListMode,
+    // Tracks whether the category came from an explicit metadata file vs. auto-collection;
+    // reserved for future upgrade/list logic.
     #[allow(dead_code)]
     pub uses_metadata: bool,
     /// `true` when shine.toml has an explicit `[[files]]` section;
@@ -788,7 +790,18 @@ install_mode = "json-merge"
                 Some("~/.config/ghostty")
             );
             assert_eq!(ghostty.list_mode, AppListMode::Category);
-            assert_eq!(ghostty.files.len(), 5);
+            assert_eq!(ghostty.files.len(), 6);
+
+            let shine_light = ghostty
+                .files
+                .iter()
+                .find(|f| f.source_rel == std::path::Path::new("themes/Shine Light"))
+                .unwrap();
+            assert_eq!(
+                shine_light.target_rel,
+                std::path::Path::new("themes/Shine Light")
+            );
+            assert_eq!(shine_light.transforms, vec!["template"]);
 
             let light = ghostty
                 .files

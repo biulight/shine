@@ -5,7 +5,9 @@ use flate2::read::GzDecoder;
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
 use std::ffi::OsStr;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tar::Archive;
@@ -17,6 +19,9 @@ const GITHUB_PREVIEW_RELEASE_URL: &str =
     "https://api.github.com/repos/biulight/shine/releases/tags/preview";
 const UPDATE_CACHE_FILE: &str = "update-check.json";
 const UPDATE_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+/// Defense-in-depth cap on downloaded release archives; the real binaries
+/// are a few MB, so anything past this points at a corrupted or malicious asset.
+const MAX_RELEASE_ASSET_BYTES: u64 = 200 * 1024 * 1024;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 pub enum ReleaseChannel {
@@ -58,8 +63,21 @@ pub(crate) enum UpgradeResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct UpdateCache {
-    latest_version: String,
-    checked_at_unix_secs: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    latest_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    checked_at_unix_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rate_limited_until_unix_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rate_limited_auth_mode: Option<AuthMode>,
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum AuthMode {
+    Anonymous,
+    Token,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -83,6 +101,35 @@ struct ReleaseAsset {
     download_url: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GithubApiError {
+    channel: ReleaseChannel,
+    status: reqwest::StatusCode,
+    message: String,
+    rate_limit: GithubRateLimit,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct GithubRateLimit {
+    remaining: Option<String>,
+    reset: Option<u64>,
+    resource: Option<String>,
+    retry_after: Option<String>,
+}
+
+impl fmt::Display for GithubApiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&format_github_api_error(
+            self.channel,
+            self.status,
+            &self.message,
+            &self.rate_limit,
+        ))
+    }
+}
+
+impl Error for GithubApiError {}
+
 /// Always fetches from GitHub, ignoring the 24-hour cache.
 pub(crate) async fn check_for_update_forced(config: &Config) -> Result<UpdateStatus> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
@@ -90,7 +137,8 @@ pub(crate) async fn check_for_update_forced(config: &Config) -> Result<UpdateSta
     let now_secs = unix_timestamp_now()?;
     let cache_path = config.shine_dir().join(UPDATE_CACHE_FILE);
 
-    let release = fetch_latest_release().await?;
+    guard_rate_limit_cooldown(&cache_path, now_secs, current_auth_mode()).await?;
+    let release = fetch_latest_release_for_version_check(&cache_path, now_secs).await?;
     let latest = parse_release_tag(&release.tag_name)?;
     store_cache_if_possible(&cache_path, &latest, now_secs).await;
 
@@ -106,7 +154,8 @@ pub(crate) async fn check_for_update(config: &Config) -> Result<UpdateStatus> {
     let latest = match load_cached_version_if_fresh(&cache_path, now_secs).await? {
         Some(version) => version,
         None => {
-            let release = fetch_latest_release().await?;
+            guard_rate_limit_cooldown(&cache_path, now_secs, current_auth_mode()).await?;
+            let release = fetch_latest_release_for_version_check(&cache_path, now_secs).await?;
             let fetched = parse_release_tag(&release.tag_name)?;
             store_cache_if_possible(&cache_path, &fetched, now_secs).await;
             fetched
@@ -132,31 +181,25 @@ pub(crate) async fn upgrade_to_release(
             let now_secs = unix_timestamp_now()?;
             let cache_path = config.shine_dir().join(UPDATE_CACHE_FILE);
             store_cache_if_possible(&cache_path, &latest, now_secs).await;
+
+            if !force_install && latest <= current {
+                return Ok(UpgradeResult::AlreadyUpToDate {
+                    channel,
+                    latest: latest.to_string(),
+                });
+            }
             Some(latest)
         }
-        ReleaseChannel::Preview => None,
+        ReleaseChannel::Preview => {
+            if preview_release_version_label(&release).as_deref() == Some(current_display) {
+                return Ok(UpgradeResult::AlreadyUpToDate {
+                    channel,
+                    latest: current_display.to_string(),
+                });
+            }
+            None
+        }
     };
-
-    if channel == ReleaseChannel::Preview
-        && preview_release_version_label(&release).as_deref() == Some(current_display)
-    {
-        return Ok(UpgradeResult::AlreadyUpToDate {
-            channel,
-            latest: current_display.to_string(),
-        });
-    }
-
-    if channel == ReleaseChannel::Stable
-        && !force_install
-        && latest.as_ref().is_some_and(|latest| latest <= &current)
-    {
-        return Ok(UpgradeResult::AlreadyUpToDate {
-            channel,
-            latest: latest
-                .expect("stable release has a parsed version")
-                .to_string(),
-        });
-    }
 
     let asset = find_release_asset(
         &release,
@@ -217,28 +260,57 @@ async fn load_cached_version_if_fresh(cache_path: &Path, now_secs: u64) -> Resul
         return Ok(None);
     };
 
-    if cache.checked_at_unix_secs > now_secs {
+    let Some(checked_at_unix_secs) = cache.checked_at_unix_secs else {
+        return Ok(None);
+    };
+    let Some(latest_version) = cache.latest_version else {
+        return Ok(None);
+    };
+
+    if checked_at_unix_secs > now_secs {
         return Ok(None);
     }
 
-    if now_secs - cache.checked_at_unix_secs >= UPDATE_CACHE_TTL.as_secs() {
+    if now_secs - checked_at_unix_secs >= UPDATE_CACHE_TTL.as_secs() {
         return Ok(None);
     }
 
-    Ok(parse_release_tag(&cache.latest_version).ok())
+    Ok(parse_release_tag(&latest_version).ok())
 }
 
 async fn store_cache(cache_path: &Path, latest: &Version, checked_at_unix_secs: u64) -> Result<()> {
+    let cache = UpdateCache {
+        latest_version: Some(latest.to_string()),
+        checked_at_unix_secs: Some(checked_at_unix_secs),
+        rate_limited_until_unix_secs: None,
+        rate_limited_auth_mode: None,
+    };
+    write_cache(cache_path, &cache).await
+}
+
+async fn store_rate_limit_cache(
+    cache_path: &Path,
+    rate_limited_until_unix_secs: u64,
+    auth_mode: AuthMode,
+) -> Result<()> {
+    let mut cache = load_cache(cache_path).await?.unwrap_or(UpdateCache {
+        latest_version: None,
+        checked_at_unix_secs: None,
+        rate_limited_until_unix_secs: None,
+        rate_limited_auth_mode: None,
+    });
+    cache.rate_limited_until_unix_secs = Some(rate_limited_until_unix_secs);
+    cache.rate_limited_auth_mode = Some(auth_mode);
+    write_cache(cache_path, &cache).await
+}
+
+async fn write_cache(cache_path: &Path, cache: &UpdateCache) -> Result<()> {
     if let Some(parent) = cache_path.parent() {
         fs::create_dir_all(parent)
             .await
             .with_context(|| format!("failed to create update cache dir {}", parent.display()))?;
     }
 
-    let cache = UpdateCache {
-        latest_version: latest.to_string(),
-        checked_at_unix_secs,
-    };
     let encoded = serde_json::to_vec_pretty(&cache).context("failed to serialize update cache")?;
     fs::write(cache_path, encoded)
         .await
@@ -250,6 +322,50 @@ async fn store_cache_if_possible(cache_path: &Path, latest: &Version, checked_at
     if let Err(e) = store_cache(cache_path, latest, checked_at_unix_secs).await {
         eprintln!("warning: failed to write update cache: {e:#}");
     }
+}
+
+async fn store_rate_limit_cache_if_possible(
+    cache_path: &Path,
+    rate_limited_until_unix_secs: u64,
+    auth_mode: AuthMode,
+) {
+    if let Err(e) =
+        store_rate_limit_cache(cache_path, rate_limited_until_unix_secs, auth_mode).await
+    {
+        eprintln!("warning: failed to write update rate-limit cache: {e:#}");
+    }
+}
+
+async fn load_cache(cache_path: &Path) -> Result<Option<UpdateCache>> {
+    match fs::read_to_string(cache_path).await {
+        Ok(content) => Ok(serde_json::from_str::<UpdateCache>(&content).ok()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).context("failed to read update cache"),
+    }
+}
+
+async fn guard_rate_limit_cooldown(
+    cache_path: &Path,
+    now_secs: u64,
+    auth_mode: AuthMode,
+) -> Result<()> {
+    let Some(cache) = load_cache(cache_path).await? else {
+        return Ok(());
+    };
+    let Some(rate_limited_until) = cache.rate_limited_until_unix_secs else {
+        return Ok(());
+    };
+    let Some(rate_limited_auth_mode) = cache.rate_limited_auth_mode else {
+        return Ok(());
+    };
+
+    if rate_limited_auth_mode == auth_mode && rate_limited_until > now_secs {
+        bail!(
+            "GitHub version check skipped until Unix timestamp {rate_limited_until} due to rate limiting"
+        );
+    }
+
+    Ok(())
 }
 
 /// Removes the on-disk update cache so the next command performs a fresh fetch
@@ -265,6 +381,22 @@ pub(crate) async fn invalidate_update_cache(config: &Config) {
 
 async fn fetch_latest_release() -> Result<GithubRelease> {
     fetch_release(ReleaseChannel::Stable).await
+}
+
+async fn fetch_latest_release_for_version_check(
+    cache_path: &Path,
+    now_secs: u64,
+) -> Result<GithubRelease> {
+    let auth_mode = current_auth_mode();
+    match fetch_latest_release().await {
+        Ok(release) => Ok(release),
+        Err(err) => {
+            if let Some(reset) = rate_limit_reset_from_error(&err, now_secs) {
+                store_rate_limit_cache_if_possible(cache_path, reset, auth_mode).await;
+            }
+            Err(err)
+        }
+    }
 }
 
 async fn fetch_release(channel: ReleaseChannel) -> Result<GithubRelease> {
@@ -283,10 +415,9 @@ async fn fetch_release(channel: ReleaseChannel) -> Result<GithubRelease> {
         let status = response.status();
         let headers = response.headers().clone();
         let body = response.text().await.unwrap_or_default();
-        bail!(
-            "{}",
-            format_github_api_error(channel, status, &headers, &body)
-        );
+        return Err(anyhow!(GithubApiError::from_response(
+            channel, status, &headers, &body
+        )));
     }
 
     response.json::<GithubRelease>().await.with_context(|| {
@@ -314,11 +445,27 @@ async fn download_asset_bytes(download_url: &str) -> Result<Vec<u8>> {
         );
     }
 
-    response
+    if let Some(len) = response.content_length()
+        && len > MAX_RELEASE_ASSET_BYTES
+    {
+        bail!(
+            "release asset at {download_url} reports {len} bytes, exceeding the {MAX_RELEASE_ASSET_BYTES}-byte limit"
+        );
+    }
+
+    let bytes = response
         .bytes()
         .await
-        .context("failed to read release asset bytes")
-        .map(|bytes| bytes.to_vec())
+        .context("failed to read release asset bytes")?;
+
+    if bytes.len() as u64 > MAX_RELEASE_ASSET_BYTES {
+        bail!(
+            "release asset at {download_url} is {} bytes, exceeding the {MAX_RELEASE_ASSET_BYTES}-byte limit",
+            bytes.len()
+        );
+    }
+
+    Ok(bytes.to_vec())
 }
 
 async fn installed_version_label(current_exe: &Path, fallback: &str) -> String {
@@ -384,6 +531,18 @@ fn github_auth_token_from_vars(mut var: impl FnMut(&str) -> Option<String>) -> O
     None
 }
 
+fn current_auth_mode() -> AuthMode {
+    auth_mode_from_vars(|name| std::env::var(name).ok())
+}
+
+fn auth_mode_from_vars(var: impl FnMut(&str) -> Option<String>) -> AuthMode {
+    if github_auth_token_from_vars(var).is_some() {
+        AuthMode::Token
+    } else {
+        AuthMode::Anonymous
+    }
+}
+
 fn auth_header_value(token: &str) -> Result<HeaderValue> {
     HeaderValue::from_str(&format!("Bearer {token}")).context("invalid GitHub token header")
 }
@@ -404,42 +563,87 @@ fn header_to_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name)?.to_str().ok()
 }
 
+impl GithubApiError {
+    fn from_response(
+        channel: ReleaseChannel,
+        status: reqwest::StatusCode,
+        headers: &HeaderMap,
+        body: &str,
+    ) -> Self {
+        Self {
+            channel,
+            status,
+            message: github_api_message(body).unwrap_or_else(|| {
+                format_error_body_suffix(body)
+                    .trim_start_matches(": ")
+                    .to_string()
+            }),
+            rate_limit: GithubRateLimit::from_headers(headers),
+        }
+    }
+}
+
+impl GithubRateLimit {
+    fn from_headers(headers: &HeaderMap) -> Self {
+        Self {
+            remaining: header_to_str(headers, "x-ratelimit-remaining").map(str::to_string),
+            reset: header_to_str(headers, "x-ratelimit-reset")
+                .and_then(|value| value.parse::<u64>().ok()),
+            resource: header_to_str(headers, "x-ratelimit-resource").map(str::to_string),
+            retry_after: header_to_str(headers, "retry-after").map(str::to_string),
+        }
+    }
+}
+
+fn rate_limit_reset_from_error(err: &anyhow::Error, now_secs: u64) -> Option<u64> {
+    let err = err.downcast_ref::<GithubApiError>()?;
+    if !matches!(
+        err.status,
+        reqwest::StatusCode::FORBIDDEN | reqwest::StatusCode::TOO_MANY_REQUESTS
+    ) {
+        return None;
+    }
+    if err.rate_limit.remaining.as_deref() != Some("0") {
+        return None;
+    }
+    let reset = err.rate_limit.reset?;
+    (reset > now_secs).then_some(reset)
+}
+
 fn format_github_api_error(
     channel: ReleaseChannel,
     status: reqwest::StatusCode,
-    headers: &HeaderMap,
-    body: &str,
+    api_message: &str,
+    rate_limit: &GithubRateLimit,
 ) -> String {
-    let mut message = format!(
+    let mut formatted = format!(
         "GitHub {} release request failed: HTTP {status}",
         channel.as_str()
     );
 
-    if let Some(github_message) = github_api_message(body) {
-        message.push_str(&format!(": {github_message}"));
-    } else {
-        message.push_str(&format_error_body_suffix(body));
+    if !api_message.trim().is_empty() {
+        formatted.push_str(&format!(": {api_message}"));
     }
 
     let mut rate_limit_parts = Vec::new();
-    if let Some(remaining) = header_to_str(headers, "x-ratelimit-remaining") {
+    if let Some(remaining) = &rate_limit.remaining {
         rate_limit_parts.push(format!("remaining={remaining}"));
     }
-    if let Some(reset) = header_to_str(headers, "x-ratelimit-reset") {
+    if let Some(reset) = rate_limit.reset {
         rate_limit_parts.push(format!("reset={reset}"));
     }
-    if let Some(resource) = header_to_str(headers, "x-ratelimit-resource") {
+    if let Some(resource) = &rate_limit.resource {
         rate_limit_parts.push(format!("resource={resource}"));
     }
-    if let Some(retry_after) = header_to_str(headers, "retry-after") {
+    if let Some(retry_after) = &rate_limit.retry_after {
         rate_limit_parts.push(format!("retry-after={retry_after}s"));
     }
 
     if !rate_limit_parts.is_empty() {
-        message.push_str(&format!(" (rate limit: {})", rate_limit_parts.join(", ")));
+        formatted.push_str(&format!(" (rate limit: {})", rate_limit_parts.join(", ")));
     }
 
-    message
+    formatted
 }
 
 fn format_error_body_suffix(body: &str) -> String {
@@ -772,6 +976,18 @@ mod tests {
     }
 
     #[test]
+    fn auth_mode_tracks_token_presence_without_storing_token_value() {
+        assert_eq!(auth_mode_from_vars(|_| None), AuthMode::Anonymous);
+        assert_eq!(
+            auth_mode_from_vars(|name| match name {
+                "GH_TOKEN" => Some(" token ".to_string()),
+                _ => None,
+            }),
+            AuthMode::Token
+        );
+    }
+
+    #[test]
     fn auth_header_value_formats_bearer_token() {
         assert_eq!(
             auth_header_value("secret-token").unwrap(),
@@ -786,12 +1002,13 @@ mod tests {
         headers.insert("x-ratelimit-reset", HeaderValue::from_static("1780937643"));
         headers.insert("x-ratelimit-resource", HeaderValue::from_static("core"));
 
-        let message = format_github_api_error(
+        let err = GithubApiError::from_response(
             ReleaseChannel::Stable,
             reqwest::StatusCode::FORBIDDEN,
             &headers,
             r#"{"message":"API rate limit exceeded for 156.0.200.135."}"#,
         );
+        let message = err.to_string();
 
         assert!(message.contains("GitHub stable release request failed: HTTP 403 Forbidden"));
         assert!(message.contains("API rate limit exceeded for 156.0.200.135."));
@@ -801,14 +1018,56 @@ mod tests {
     }
 
     #[test]
+    fn github_api_error_extracts_rate_limit_reset_for_primary_limit() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        headers.insert("x-ratelimit-reset", HeaderValue::from_static("1780937643"));
+        let err = anyhow!(GithubApiError::from_response(
+            ReleaseChannel::Stable,
+            reqwest::StatusCode::FORBIDDEN,
+            &headers,
+            r#"{"message":"API rate limit exceeded"}"#,
+        ));
+
+        assert_eq!(
+            rate_limit_reset_from_error(&err, 1_780_000_000),
+            Some(1_780_937_643)
+        );
+    }
+
+    #[test]
+    fn github_api_error_ignores_non_rate_limit_responses() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("12"));
+        headers.insert("x-ratelimit-reset", HeaderValue::from_static("1780937643"));
+        let err = anyhow!(GithubApiError::from_response(
+            ReleaseChannel::Stable,
+            reqwest::StatusCode::FORBIDDEN,
+            &headers,
+            r#"{"message":"forbidden"}"#,
+        ));
+        assert_eq!(rate_limit_reset_from_error(&err, 1_780_000_000), None);
+
+        headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        let err = anyhow!(GithubApiError::from_response(
+            ReleaseChannel::Stable,
+            reqwest::StatusCode::BAD_GATEWAY,
+            &headers,
+            "gateway failure",
+        ));
+        assert_eq!(rate_limit_reset_from_error(&err, 1_780_000_000), None);
+    }
+
+    #[test]
     fn github_api_error_includes_truncated_non_json_body() {
         let body = "x".repeat(350);
-        let message = format_github_api_error(
+        let err = GithubApiError::from_response(
             ReleaseChannel::Preview,
             reqwest::StatusCode::BAD_GATEWAY,
             &HeaderMap::new(),
             &body,
         );
+        let message = err.to_string();
 
         assert!(message.contains("GitHub preview release request failed: HTTP 502 Bad Gateway"));
         assert!(message.contains(&"x".repeat(300)));
@@ -1022,6 +1281,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_cached_version_supports_legacy_cache_shape() {
+        let dir = make_temp_dir().await;
+        let cache_path = dir.join(UPDATE_CACHE_FILE);
+        fs::write(
+            &cache_path,
+            br#"{"latest_version":"0.2.3","checked_at_unix_secs":1000}"#,
+        )
+        .await
+        .unwrap();
+
+        let cached = load_cached_version_if_fresh(&cache_path, 1_001)
+            .await
+            .unwrap();
+        assert_eq!(cached, Some(Version::parse("0.2.3").unwrap()));
+
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn load_cached_version_ignores_stale_cache() {
         let dir = make_temp_dir().await;
         let cache_path = dir.join(UPDATE_CACHE_FILE);
@@ -1064,6 +1342,74 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(cached, Some(Version::parse("0.2.3").unwrap()));
+
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rate_limit_cooldown_skips_same_auth_mode() {
+        let dir = make_temp_dir().await;
+        let cache_path = dir.join(UPDATE_CACHE_FILE);
+        store_rate_limit_cache(&cache_path, 2_000, AuthMode::Anonymous)
+            .await
+            .unwrap();
+
+        let err = guard_rate_limit_cooldown(&cache_path, 1_000, AuthMode::Anonymous)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("GitHub version check skipped until Unix timestamp 2000")
+        );
+
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rate_limit_cooldown_allows_changed_auth_mode() {
+        let dir = make_temp_dir().await;
+        let cache_path = dir.join(UPDATE_CACHE_FILE);
+        store_rate_limit_cache(&cache_path, 2_000, AuthMode::Anonymous)
+            .await
+            .unwrap();
+
+        guard_rate_limit_cooldown(&cache_path, 1_000, AuthMode::Token)
+            .await
+            .unwrap();
+
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rate_limit_cooldown_allows_expired_reset() {
+        let dir = make_temp_dir().await;
+        let cache_path = dir.join(UPDATE_CACHE_FILE);
+        store_rate_limit_cache(&cache_path, 2_000, AuthMode::Token)
+            .await
+            .unwrap();
+
+        guard_rate_limit_cooldown(&cache_path, 2_001, AuthMode::Token)
+            .await
+            .unwrap();
+
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn successful_cache_write_clears_rate_limit_cooldown() {
+        let dir = make_temp_dir().await;
+        let cache_path = dir.join(UPDATE_CACHE_FILE);
+        store_rate_limit_cache(&cache_path, 2_000, AuthMode::Anonymous)
+            .await
+            .unwrap();
+        store_cache(&cache_path, &Version::parse("0.2.3").unwrap(), 1_000)
+            .await
+            .unwrap();
+
+        let cache = load_cache(&cache_path).await.unwrap().unwrap();
+        assert_eq!(cache.latest_version.as_deref(), Some("0.2.3"));
+        assert_eq!(cache.rate_limited_until_unix_secs, None);
+        assert_eq!(cache.rate_limited_auth_mode, None);
 
         fs::remove_dir_all(dir).await.unwrap();
     }

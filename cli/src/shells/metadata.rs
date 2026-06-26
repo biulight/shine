@@ -10,9 +10,12 @@ use tokio::fs;
 #[derive(Debug, Clone)]
 pub(crate) struct ShellCategory {
     pub name: String,
+    // Parsed from shine.toml metadata for completeness; not yet surfaced by any command.
     #[allow(dead_code)]
     pub description: Option<String>,
     pub files: Vec<ShellFile>,
+    // Tracks whether the category came from an explicit metadata file vs. auto-collection;
+    // reserved for future upgrade/list logic, mirroring AppCategory::uses_metadata.
     #[allow(dead_code)]
     pub uses_metadata: bool,
 }

@@ -7,6 +7,32 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [0.34.1] — 2026-06-26
+
+### Bug Fixes
+
+- Fixed JetBrains `.ideavimrc` `g` mappings to use consistent prefix across all configurations.
+- Corrected `g/` mapping in JetBrains `.ideavimrc` that was previously mismatched.
+- Upgraded `quinn-proto` dependency from 0.11.14 to 0.11.15 to resolve RUSTSEC-2026-0185 (remote memory exhaustion via unbounded out-of-order stream reassembly, severity 7.5).
+
+## [0.34.0] — 2026-06-21
+
+### Features
+
+- Added OSC 11 terminal background detection to the managed Ubuntu and macOS sys profiles so interactive shells can keep bat's theme aligned with the active terminal.
+- Added a bundled Shine Light theme for Ghostty and made it the default light appearance theme.
+
+### Bug Fixes
+
+- Fixed sys profile updates so UTF-8 BOM markers remain at the start of PowerShell profiles and profiles damaged by older versions are repaired automatically.
+- Fixed sys profile installation to fall back to embedded templates when extracted external presets are stale.
+- Added the pnpm global bin directory to the managed macOS sys profile PATH.
+- Made release update checks tolerate transient failures and cache GitHub rate-limit responses to avoid repeated requests.
+
+### Docs
+
+- Documented terminal background theme synchronization and the bundled Ghostty Shine Light theme.
+
 ## [0.33.0] — 2026-06-14
 
 ### Features

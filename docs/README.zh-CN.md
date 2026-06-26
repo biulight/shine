@@ -233,6 +233,8 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "nvim found"
 
 当所选工具需要 shell 集成时，sys init 会安装受管的 `pre` 和 `post` profile loader。`pre` loader 会放在用户 profile 靠前位置，用于 PATH、Homebrew 和补全搜索路径；`post` loader 会放在靠后位置，用于 Yazi、Starship、zoxide、Atuin、fzf、mise、别名和 shell 插件。受管 profile 文件会被合并，用户在其中的修改会保留或提示需要检查。
 
+在 Ubuntu 和 macOS 上，受管的 `pre` profile 还会通过 OSC 11 查询交互式终端的背景色，并导出 `SHINE_TERMINAL_THEME=light|dark`。它会同步设置 bat：浅色背景使用 `GitHub`，深色背景使用 `OneHalfDark`。在受管 profile 加载前设置 `SHINE_SYNC_TERMINAL_THEME=0` 可关闭此功能；使用 `SHINE_BAT_LIGHT_THEME` 和 `SHINE_BAT_DARK_THEME` 可自定义对应主题。查询失败或终端不支持时会静默跳过；macOS 的 sys profile 仍仅管理 zsh，Ubuntu 支持 bash 和 zsh。
+
 ### 查看应用预设详情
 
 ```bash
@@ -507,7 +509,7 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.33.0+preview.abc1234`；稳定版则继续显示 `0.33.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.34.0+preview.abc1234`；稳定版则继续显示 `0.34.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -517,7 +519,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.33.0 sh install.sh
+SHINE_VERSION=0.34.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -525,7 +527,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.33.0"; .\install.ps1
+$env:SHINE_VERSION = "0.34.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -536,7 +538,7 @@ $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 内置的 Ghostty 预设会安装主配置 `config.ghostty`，以及位于 `~/.config/ghostty/themes/` 下成对的亮色和暗色主题。默认配置使用自动明暗切换：
 
 ```text
-theme = light:light_Github Light Default,dark:dark_Alien Blood
+theme = light:Shine Light,dark:dark_Alien Blood
 ```
 
 如果你希望内置亮色和暗色主题在安装或 `shine upgrade` 时渲染出背景图片路径，可通过 `shine env set` 设置 `GHOSTTY_BG_LIGHT` 和 `GHOSTTY_BG_DARK`。
@@ -710,7 +712,8 @@ PROXY_HOST = "127.0.0.1"
     │   │   ├── config.ghostty
     │   │   ├── themes/
     │   │   │   ├── Alien Blood
-    │   │   │   └── Github Light Default
+    │   │   │   ├── Github Light Default
+    │   │   │   └── Shine Light
     │   │   └── shine.toml
     │   ├── git/
     │   │   └── gitconfig

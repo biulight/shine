@@ -10,6 +10,12 @@ target = "config.ghostty"
 description = "Main Ghostty config with font, theme selection, clipboard, scrollback, and quick terminal settings."
 
 [[files]]
+source = "themes/Shine Light"
+target = "themes/Shine Light"
+description = "Shine Light theme with optional light background image."
+transforms = ["template"]
+
+[[files]]
 source = "themes/iTerm2 Solarized Light"
 target = "themes/light_iTerm2 Solarized Light"
 description = "iTerm2 Solarized Light theme with optional light background image."

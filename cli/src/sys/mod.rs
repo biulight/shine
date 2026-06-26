@@ -4,7 +4,7 @@ use dialoguer::{MultiSelect, theme::ColorfulTheme};
 use serde::{Deserialize, Serialize};
 use similar::{DiffTag, TextDiff};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::IsTerminal;
+use std::io::{ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -377,15 +377,7 @@ async fn handle_init_for_os(
     print_run_header(os_id, sys_shell, &selection);
 
     let item_labels = manifest_item_labels(&loaded.manifest);
-    let label_width = selection
-        .item_ids
-        .iter()
-        .filter_map(|item_id| item_labels.get(item_id.as_str()))
-        .map(String::len)
-        .chain(std::iter::once("profile".len()))
-        .max()
-        .unwrap_or(14)
-        .max(14);
+    let label_width = sys_item_label_width(&selection, &item_labels);
     let mut outcomes = Vec::new();
     for item_id in &selection.item_ids {
         let label = item_labels
@@ -552,6 +544,23 @@ fn manifest_item_labels(manifest: &SysManifest) -> BTreeMap<&str, String> {
         .collect()
 }
 
+/// Width of the widest selected item label (or "profile", whichever is longer),
+/// used to align the status column when printing per-item outcomes.
+fn sys_item_label_width(
+    selection: &ResolvedSelection,
+    item_labels: &BTreeMap<&str, String>,
+) -> usize {
+    selection
+        .item_ids
+        .iter()
+        .filter_map(|item_id| item_labels.get(item_id.as_str()))
+        .map(String::len)
+        .chain(std::iter::once("profile".len()))
+        .max()
+        .unwrap_or(14)
+        .max(14)
+}
+
 fn print_run_header(os_id: &str, sys_shell: &str, selection: &ResolvedSelection) {
     println!("{}", colors::bold("System Init"));
     println!("  OS: {os_id}");
@@ -682,9 +691,7 @@ async fn install_sys_profile_phase(
     force_profile: bool,
 ) -> Result<SysProfileFileUpdate> {
     let template_path = script_dir.join(format!("profile.{}.{ext}", phase.as_str()));
-    let template = tokio::fs::read(&template_path)
-        .await
-        .with_context(|| format!("reading {}", template_path.display()))?;
+    let template = read_sys_profile_template(&template_path, os_id, phase, ext).await?;
 
     let active_path = sys_profile_file_path(profile_dir, os_id, phase, ext);
     let base_path = sys_profile_base_path(profile_dir, os_id, phase, ext);
@@ -734,17 +741,47 @@ async fn install_sys_profile_phase(
         Err(err) => return Err(err).with_context(|| format!("reading {}", base_path.display())),
     };
 
-    apply_merge_result(
-        &active_path,
-        &base_path,
-        &template_path,
-        &new_path,
-        &merge_path,
-        &base,
-        &active,
-        &template,
-    )
+    apply_merge_result(MergeInputs {
+        active_path: &active_path,
+        base_path: &base_path,
+        template_path: &template_path,
+        new_path: &new_path,
+        merge_path: &merge_path,
+        base: &base,
+        active: &active,
+        template: &template,
+    })
     .await
+}
+
+async fn read_sys_profile_template(
+    template_path: &Path,
+    os_id: &str,
+    phase: SysProfilePhase,
+    ext: &str,
+) -> Result<Vec<u8>> {
+    match tokio::fs::read(template_path).await {
+        Ok(template) => Ok(template),
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            let asset_path = format!("sys/{os_id}/profile.{}.{ext}", phase.as_str());
+            crate::presets::read_asset_bytes(&asset_path)
+                .with_context(|| format!("reading {}", template_path.display()))
+        }
+        Err(err) => Err(err).with_context(|| format!("reading {}", template_path.display())),
+    }
+}
+
+/// Paths and file contents needed to reconcile a single sys profile file
+/// against its base snapshot and the latest template.
+struct MergeInputs<'a> {
+    active_path: &'a Path,
+    base_path: &'a Path,
+    template_path: &'a Path,
+    new_path: &'a Path,
+    merge_path: &'a Path,
+    base: &'a [u8],
+    active: &'a [u8],
+    template: &'a [u8],
 }
 
 async fn apply_force_profile(
@@ -861,17 +898,18 @@ async fn handle_missing_base(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn apply_merge_result(
-    active_path: &Path,
-    base_path: &Path,
-    template_path: &Path,
-    new_path: &Path,
-    merge_path: &Path,
-    base: &[u8],
-    active: &[u8],
-    template: &[u8],
-) -> Result<SysProfileFileUpdate> {
+async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpdate> {
+    let MergeInputs {
+        active_path,
+        base_path,
+        template_path,
+        new_path,
+        merge_path,
+        base,
+        active,
+        template,
+    } = inputs;
+
     if active == template {
         let updated = write_if_changed(base_path, template).await?;
         remove_if_exists(new_path).await?;
@@ -1336,6 +1374,9 @@ async fn update_sys_shell_profile_blocks(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
     };
+    let had_utf8_bom = content.contains('\u{feff}');
+    let bom_was_at_start = content.starts_with('\u{feff}');
+    let content = content.replace('\u{feff}', "");
     let pre_block = sys_shell_profile_block(os_id, SysProfilePhase::Pre, shell_name);
     let post_block = sys_shell_profile_block(os_id, SysProfilePhase::Post, shell_name);
     let pre_sentinel = sys_sentinel(os_id, SysProfilePhase::Pre);
@@ -1345,6 +1386,7 @@ async fn update_sys_shell_profile_blocks(
         && extract_sentinel_block(&content, pre_sentinel) == Some(pre_block.as_str())
         && extract_sentinel_block(&content, post_sentinel) == Some(post_block.as_str())
         && sentinel_order_is_valid(&content, pre_sentinel, post_sentinel)
+        && (!had_utf8_bom || bom_was_at_start)
     {
         return Ok(false);
     }
@@ -1355,6 +1397,9 @@ async fn update_sys_shell_profile_blocks(
     updated = trim_outer_blank_lines(&updated);
     updated = insert_shell_profile_block(&updated, &pre_block, ShellProfileBlockPosition::Start);
     updated = insert_shell_profile_block(&updated, &post_block, ShellProfileBlockPosition::End);
+    if had_utf8_bom {
+        updated.insert(0, '\u{feff}');
+    }
 
     tokio::fs::write(path, updated)
         .await
@@ -2395,6 +2440,37 @@ description = "Placeholder"
     }
 
     #[tokio::test]
+    async fn install_sys_profile_files_falls_back_to_embedded_templates_for_stale_external_ubuntu()
+    {
+        let dir = make_temp_dir().await;
+        let script_dir = dir.join("presets/sys/ubuntu");
+        fs::create_dir_all(&script_dir).await.unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let update = install_sys_profile_files(&config, "ubuntu", &script_dir, false)
+            .await
+            .unwrap();
+
+        assert!(update.updated);
+        assert!(!update.needs_action);
+        let profile_dir = dir.join(".shine/profile");
+        assert!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.pre.sh"))
+                .await
+                .unwrap()
+                .contains("Managed by `shine sys init` for Ubuntu")
+        );
+        assert!(
+            fs::read_to_string(profile_dir.join("ubuntu-sys.post.sh"))
+                .await
+                .unwrap()
+                .contains("mise activate")
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn install_sys_profile_files_without_base_reports_needs_action_for_legacy_edits() {
         let dir = make_temp_dir().await;
         let script_dir = dir.join("presets/sys/ubuntu");
@@ -2610,6 +2686,44 @@ description = "Placeholder"
         assert!(user < post);
         assert!(zshrc.contains("ubuntu-sys.pre.sh"));
         assert!(zshrc.contains("ubuntu-sys.post.sh"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profile_blocks_keeps_utf8_bom_at_file_start() {
+        let dir = make_temp_dir().await;
+        let profile = dir.join("Microsoft.PowerShell_profile.ps1");
+        fs::write(&profile, "\u{feff}Import-Module posh-git\n")
+            .await
+            .unwrap();
+
+        update_sys_shell_profile_blocks(&profile, "windows", None)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&profile).await.unwrap();
+        assert!(content.starts_with('\u{feff}'));
+        assert_eq!(content.matches('\u{feff}').count(), 1);
+        assert!(content.contains("\nImport-Module posh-git\n"));
+
+        // Older versions moved the original BOM in front of the user's first command.
+        let broken = content.trim_start_matches('\u{feff}').replacen(
+            "\nImport-Module posh-git\n",
+            "\n\u{feff}Import-Module posh-git\n",
+            1,
+        );
+        fs::write(&profile, broken).await.unwrap();
+
+        assert!(
+            update_sys_shell_profile_blocks(&profile, "windows", None)
+                .await
+                .unwrap()
+        );
+        let repaired = fs::read_to_string(&profile).await.unwrap();
+        assert!(repaired.starts_with('\u{feff}'));
+        assert_eq!(repaired.matches('\u{feff}').count(), 1);
+        assert!(repaired.contains("\nImport-Module posh-git\n"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2844,6 +2958,31 @@ description = "Placeholder"
         assert!(content.contains("ZSH_VERSION"));
         assert!(content.contains("typeset -U fpath"));
         assert!(content.contains("\"$HOME/.cargo/bin\""));
+        assert!(content.contains("export PNPM_HOME=\"$HOME/Library/pnpm\""));
+        assert!(content.contains("\"$PNPM_HOME/bin\""));
+        assert!(!content.contains("[[ -d \"$PNPM_HOME/bin\" ]]"));
+    }
+
+    #[test]
+    fn embedded_unix_profiles_sync_terminal_theme_from_osc_11() {
+        for path in ["sys/ubuntu/profile.pre.sh", "sys/macos/profile.pre.sh"] {
+            let content = crate::presets::read_asset_bytes(path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .unwrap_or_else(|| panic!("missing embedded sys profile: {path}"));
+
+            assert!(content.contains("case \"$-\" in"));
+            assert!(content.contains("${SHINE_SYNC_TERMINAL_THEME:-1}"));
+            assert!(content.contains("\\033]11;?\\033\\\\"));
+            assert!(content.contains("read_timeout=\"0.15\""));
+            assert!(content.contains("export SHINE_TERMINAL_THEME=\"light\""));
+            assert!(content.contains("export SHINE_TERMINAL_THEME=\"dark\""));
+            assert!(content.contains("${SHINE_BAT_LIGHT_THEME:-GitHub}"));
+            assert!(content.contains("${SHINE_BAT_DARK_THEME:-OneHalfDark}"));
+            assert!(content.contains("shine_apply_terminal_theme \"$response\""));
+            assert!(
+                content.contains("unset -f shine_apply_terminal_theme shine_sync_terminal_theme")
+            );
+        }
     }
 
     #[test]
