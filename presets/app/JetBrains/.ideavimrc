@@ -61,13 +61,12 @@ vnoremap J 5j
 vnoremap K 5k
 
 " g: go to somewhere
-nnoremap ge <action>(GotoNextError)
-nnoremap gj <action>(MethodDown)
-nnoremap gk <action>(MethodUp)
-nnoremap gp <action>(WebOpenInAction)
-nnoremap gi <action>(GotoImplementation)
-nnoremap ga '.
-" nnoremap g/ 不符合预期，插入文本
+nmap ge <action>(GotoNextError)
+nmap gj <action>(MethodDown)
+nmap gk <action>(MethodUp)
+nmap gp <action>(WebOpenInAction)
+nmap gi <action>(GotoImplementation)
+nmap ga '.
 nmap g/ <action>(FindInPath)
 
 " input in somewhere
