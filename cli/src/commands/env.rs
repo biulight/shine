@@ -30,6 +30,9 @@ pub(crate) enum EnvCommands {
     Export {
         /// Variable name to export from KEY_SECRET
         key: String,
+        /// Export under a different name in the current shell
+        #[arg(long = "as", value_name = "ALIAS")]
+        alias: Option<String>,
     },
     /// Encrypt stdin with GPG and print base64 ciphertext
     Encrypt(EnvEncryptCommand),

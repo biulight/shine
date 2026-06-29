@@ -529,17 +529,31 @@ mod tests {
         let utils = categories.iter().find(|cat| cat.name == "utils").unwrap();
 
         if cfg!(windows) {
-            assert!(utils.files.is_empty());
-        } else {
             assert_eq!(utils.files.len(), 1);
-            assert_eq!(utils.files[0].command_name, "copyfile");
-            assert_eq!(utils.files[0].source_rel, PathBuf::from("copyfile.sh"));
-            assert!(!utils.files[0].needs_source);
+            assert_eq!(utils.files[0].command_name, "shine-env-export");
+            assert!(utils.files[0].needs_source);
+        } else {
+            assert_eq!(utils.files.len(), 2);
+            let copyfile = utils
+                .files
+                .iter()
+                .find(|f| f.command_name == "copyfile")
+                .expect("copyfile should be present");
+            assert_eq!(copyfile.source_rel, PathBuf::from("copyfile.sh"));
+            assert!(!copyfile.needs_source);
             assert!(
-                utils.files[0].description.contains(
+                copyfile.description.contains(
                     &"Copy a file's contents to the local clipboard via OSC52.".to_string()
                 )
             );
+
+            let env_export = utils
+                .files
+                .iter()
+                .find(|f| f.command_name == "shine-env-export")
+                .expect("shine-env-export should be present");
+            assert_eq!(env_export.source_rel, PathBuf::from("shine-env-export.sh"));
+            assert!(env_export.needs_source);
         }
     }
 

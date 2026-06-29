@@ -405,7 +405,9 @@ async fn run(cli: Cli) -> Result<()> {
             EnvCommands::Delete { key } => handle_env_delete(&config, &key).await,
             EnvCommands::Get { key } => handle_env_get(&config, &key).await,
             EnvCommands::Decrypt { key } => handle_env_decrypt(&config, &key).await,
-            EnvCommands::Export { key } => handle_env_export(&config, &key).await,
+            EnvCommands::Export { key, alias } => {
+                handle_env_export(&config, &key, alias.as_deref()).await
+            }
             EnvCommands::Encrypt(cmd) => {
                 handle_env_encrypt(
                     &config,
@@ -715,8 +717,11 @@ async fn handle_env_decrypt(config: &Config, key: &str) -> Result<()> {
     Ok(())
 }
 
-async fn handle_env_export(config: &Config, key: &str) -> Result<()> {
+async fn handle_env_export(config: &Config, key: &str, alias: Option<&str>) -> Result<()> {
     validate_env_export_key(key)?;
+    if let Some(alias) = alias {
+        validate_env_export_key(alias)?;
+    }
     let env = env::EnvConfig::load_or_init(config).await?;
     let value = match resolve_env_export_value(&env, key)? {
         EnvExportValue::Secret {
@@ -727,7 +732,11 @@ async fn handle_env_export(config: &Config, key: &str) -> Result<()> {
             .with_context(|| format!("decrypting {secret_key}"))?,
         EnvExportValue::Plaintext(value) => value.to_string(),
     };
-    println!("{}", format_env_export(&config.shell_type, key, &value));
+    let export_as = alias.unwrap_or(key);
+    println!(
+        "{}",
+        format_env_export(&config.shell_type, export_as, &value)
+    );
     Ok(())
 }
 
@@ -1784,9 +1793,46 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Env {
-                command: EnvCommands::Export { key }
+                command: EnvCommands::Export { key, alias: None }
             } if key == "DEEPSEEK_API_KEY"
         ));
+    }
+
+    #[test]
+    fn cli_accepts_env_export_with_alias() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "export",
+            "DEEPSEEK_API_KEY",
+            "--as",
+            "AI_KEY",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Export { key, alias: Some(a) }
+            } if key == "DEEPSEEK_API_KEY" && a == "AI_KEY"
+        ));
+    }
+
+    #[test]
+    fn env_export_uses_alias_as_variable_name() {
+        let value = "secret123";
+        assert_eq!(
+            format_env_export(&shells::ShellType::Zsh, "MY_ALIAS", value),
+            "export MY_ALIAS='secret123'"
+        );
+    }
+
+    #[test]
+    fn env_export_alias_formats_powershell_correctly() {
+        let value = "secret123";
+        assert_eq!(
+            format_env_export(&shells::ShellType::PowerShell, "MY_ALIAS", value),
+            "$env:MY_ALIAS = 'secret123'"
+        );
     }
 
     #[test]
