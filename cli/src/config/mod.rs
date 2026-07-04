@@ -46,6 +46,10 @@ pub(crate) struct Config {
     /// True when this config was loaded from a project presets config.
     #[serde(skip)]
     is_project_config: bool,
+    /// Original sparse project table plus the effective config at load time.
+    /// Used to avoid materializing inherited global values when saving.
+    #[serde(skip)]
+    project_save_state: Option<ProjectSaveState>,
     /// Directory used for shine runtime state.
     #[serde(skip)]
     shine_dir: PathBuf,
@@ -117,6 +121,28 @@ pub(crate) struct Config {
     pub env_descriptions: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug)]
+struct ProjectSaveState {
+    original: toml::Table,
+    loaded: toml::Table,
+}
+
+#[derive(Default, Deserialize)]
+struct ProjectOverrides {
+    #[serde(default)]
+    presets_dir: Option<PathBuf>,
+    #[serde(default)]
+    presets_overlay_dir: Option<PathBuf>,
+    #[serde(default)]
+    app_default_dest_root: Option<PathBuf>,
+    #[serde(default)]
+    self_install_dest: Option<PathBuf>,
+    #[serde(default)]
+    gpg_key_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_env_values")]
+    env: BTreeMap<String, String>,
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum EnvValue {
@@ -186,6 +212,7 @@ impl Config {
         let config = Config {
             config_path: config_path.clone(),
             is_project_config: true,
+            project_save_state: None,
             shine_dir: shine_dir.clone(),
             presets_dir: presets_dir.clone(),
             bin_dir: shine_dir.join("bin"),
@@ -201,97 +228,105 @@ impl Config {
     }
 
     pub(crate) async fn load_or_init() -> Result<Self> {
-        let home_dir = effective_home_dir();
         let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
         let current_dir = std::env::current_dir().context("resolving current directory")?;
         let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
         let global_config_path = preliminary_shine_dir.join(GLOBAL_CONFIG_FILE);
         let project_config = find_project_config(&current_dir, &global_config_path);
-        if let Some(project_config) = &project_config
-            && project_config.is_legacy
-        {
+        let Some(project_config) = project_config else {
+            return Self::load_global_runtime_or_init().await;
+        };
+        if project_config.is_legacy {
             eprintln!(
                 "Warning: project config {} is deprecated; rename it to {}.",
                 project_config.path.display(),
                 project_config.root.join(PROJECT_CONFIG_FILE).display()
             );
         }
-        let has_project_config = project_config.is_some();
+        // Initialize and migrate the global layer before applying the sparse project layer.
+        let (mut config, global_exists) = Self::load_global_runtime_base().await?;
+        fs::create_dir_all(config.shine_dir()).await?;
+        fs::create_dir_all(config.presets_dir()).await?;
+        fs::create_dir_all(config.bin_dir()).await?;
+        let global_has_env = if global_exists {
+            let contents = fs::read_to_string(config.config_path()).await?;
+            config_toml_has_env_table(&contents)
+        } else {
+            false
+        };
+        config.migrate_env(global_has_env).await?;
 
-        // Pre-read the active config to extract an optional
-        // presets_dir override before the full resolution pass.
-        let config_path = project_config
-            .as_ref()
-            .map(|project| project.path.clone())
-            .unwrap_or_else(|| preliminary_shine_dir.join(GLOBAL_CONFIG_FILE));
-        let config_dir = config_path
-            .parent()
-            .context("Config path must have a parent directory")?
-            .to_path_buf();
-        let toml_presets = read_presets_override_from_toml(&config_path).await;
-        let toml_presets = toml_presets
-            .as_deref()
-            .map(|path| resolve_config_presets_path(path, &config_dir));
+        let contents = fs::read_to_string(&project_config.path)
+            .await
+            .context("Failed to read project config file")?;
+        let original: toml::Table =
+            toml::from_str(&contents).context("Failed to parse project config file")?;
+        let overrides: ProjectOverrides =
+            toml::from_str(&contents).context("Failed to parse project config file")?;
 
+        let project_presets = overrides
+            .presets_dir
+            .map(|path| resolve_config_presets_path(&path, &project_config.root));
+        if let Some(path) = overrides.presets_overlay_dir {
+            config.presets_overlay_dir_override =
+                Some(resolve_config_presets_path(&path, &project_config.root));
+        }
+        if let Some(path) = overrides.app_default_dest_root {
+            config.app_default_dest_root_override =
+                Some(resolve_config_presets_path(&path, &project_config.root));
+        }
+        if let Some(path) = overrides.self_install_dest {
+            config.self_install_dest =
+                Some(resolve_config_presets_path(&path, &project_config.root));
+        }
+        if overrides.gpg_key_id.is_some() {
+            config.gpg_key_id = overrides.gpg_key_id;
+        }
+        config.env.extend(overrides.env);
+        config
+            .env_descriptions
+            .extend(parse_env_descriptions(&contents));
+
+        let effective_presets = project_presets.clone().or_else(|| {
+            config
+                .is_external_presets
+                .then(|| config.presets_dir().to_path_buf())
+        });
+        if let Some(path) = &effective_presets {
+            config.presets_dir_override = Some(path.clone());
+        }
+        // SHINE_CONFIG_DIR's presets default outranks an inherited global setting,
+        // while an explicit project setting keeps the established local override behavior.
+        let runtime_presets = if project_presets.is_none()
+            && std::env::var("SHINE_CONFIG_DIR").is_ok_and(|value| !value.trim().is_empty())
+        {
+            None
+        } else {
+            effective_presets.clone()
+        };
         let (shine_dir, presets_dir, is_external_presets) = resolve_runtime_config_dirs(
             &default_shine_dir,
             &default_presets_dir,
-            toml_presets.as_deref(),
-            has_project_config,
+            runtime_presets.as_deref(),
+            true,
         );
+        config.config_path = project_config.path.clone();
+        config.is_project_config = true;
+        config.shine_dir = shine_dir;
+        config.presets_dir = presets_dir;
+        config.bin_dir = config.shine_dir.join("bin");
+        config.is_external_presets = is_external_presets;
+        fs::create_dir_all(config.presets_dir()).await?;
+        fs::create_dir_all(config.bin_dir()).await?;
 
-        let bin_dir = shine_dir.join("bin");
+        // Environment override files deliberately sit above both TOML layers.
+        config.apply_global_env_override().await?;
+        config.apply_project_env_override(&project_config).await?;
+        crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
 
-        fs::create_dir_all(&shine_dir)
-            .await
-            .with_context(|| "creating shine config dir")?;
-        fs::create_dir_all(&presets_dir)
-            .await
-            .with_context(|| "creating presets dir")?;
-        fs::create_dir_all(&bin_dir)
-            .await
-            .with_context(|| "creating bin dir")?;
-
-        if config_path.exists() {
-            let contents = fs::read_to_string(&config_path)
-                .await
-                .context("Failed to read config file")?;
-
-            let config_has_env = config_toml_has_env_table(&contents);
-            let mut config: Config =
-                toml::from_str(&contents).context("Failed to parse config file")?;
-            config.env_descriptions = parse_env_descriptions(&contents);
-            config.config_path = config_path.clone();
-            config.is_project_config = has_project_config;
-            config.shine_dir = shine_dir;
-            config.presets_dir = presets_dir;
-            config.bin_dir = bin_dir;
-            config.home_dir = home_dir;
-            config.is_external_presets = is_external_presets;
-            config.resolve_presets_overlay_dir(&config_dir);
-            crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
-            config.migrate_env(config_has_env).await?;
-            config.apply_global_env_override().await?;
-            if let Some(project_config) = &project_config {
-                config.apply_project_env_override(project_config).await?;
-            }
-            Ok(config)
-        } else {
-            let mut config = Config {
-                config_path: config_path.clone(),
-                is_project_config: has_project_config,
-                shine_dir,
-                presets_dir,
-                bin_dir,
-                home_dir,
-                is_external_presets,
-                ..Config::default()
-            };
-            crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
-            config.migrate_env(false).await?;
-            config.apply_global_env_override().await?;
-            Ok(config)
-        }
+        let loaded = config.serialize_effective_table()?;
+        config.project_save_state = Some(ProjectSaveState { original, loaded });
+        Ok(config)
     }
 
     pub(crate) async fn load_global_runtime_or_init() -> Result<Self> {
@@ -362,12 +397,20 @@ impl Config {
             config.home_dir = home_dir;
             config.is_external_presets = is_external_presets;
             config.resolve_presets_overlay_dir(&config_dir);
+            if let Some(path) = config.app_default_dest_root_override.as_deref() {
+                config.app_default_dest_root_override =
+                    Some(resolve_config_presets_path(path, &config_dir));
+            }
+            if let Some(path) = config.self_install_dest.as_deref() {
+                config.self_install_dest = Some(resolve_config_presets_path(path, &config_dir));
+            }
             crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
             Ok((config, true))
         } else {
             let config = Config {
                 config_path: config_path.clone(),
                 is_project_config: false,
+                project_save_state: None,
                 shine_dir,
                 presets_dir,
                 bin_dir,
@@ -442,6 +485,7 @@ impl Config {
         Self {
             config_path: dir.join("config.toml"),
             is_project_config: false,
+            project_save_state: None,
             shine_dir: dir.to_path_buf(),
             presets_dir: dir.join("presets"),
             bin_dir: dir.join("bin"),
@@ -492,14 +536,13 @@ impl Config {
     }
 
     pub(crate) async fn save(&self) -> Result<()> {
-        let config_to_save = self.clone();
         let config_path = self.resolve_config_path_for_save().await?;
 
         let shine_dir = config_path
             .parent()
             .context("Config path must have a parent directory")?;
 
-        let new_table = config_to_save.serialize_table_for_save()?;
+        let new_table = self.serialize_table_for_save()?;
         let new_toml = toml::to_string_pretty(&new_table).context("Failed to serialize config")?;
 
         let toml_str = if config_path.exists() {
@@ -549,16 +592,27 @@ impl Config {
     }
 
     fn serialize_table_for_save(&self) -> Result<toml::Table> {
-        let serialized = toml::to_string_pretty(self).context("Failed to serialize config")?;
-        let mut table: toml::Table =
-            toml::from_str(&serialized).context("Failed to round-trip serialize config")?;
+        let table = self.serialize_effective_table()?;
 
         if self.is_project_config {
-            table.remove("schema_version");
-            table.remove("last_cleared_schema_version");
+            let mut sparse = if let Some(state) = &self.project_save_state {
+                let mut sparse = state.original.clone();
+                apply_table_changes(&mut sparse, &state.loaded, &table);
+                sparse
+            } else {
+                table
+            };
+            sparse.remove("schema_version");
+            sparse.remove("last_cleared_schema_version");
+            return Ok(sparse);
         }
 
         Ok(table)
+    }
+
+    fn serialize_effective_table(&self) -> Result<toml::Table> {
+        let serialized = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        toml::from_str(&serialized).context("Failed to round-trip serialize config")
     }
 
     async fn resolve_config_path_for_save(&self) -> Result<PathBuf> {
@@ -695,6 +749,7 @@ impl Default for Config {
             bin_dir: shine_dir.join("bin"),
             config_path: shine_dir.join("config.toml"),
             is_project_config: false,
+            project_save_state: None,
             shine_dir,
             home_dir,
             file_name: "config.toml".to_string(),
@@ -717,6 +772,33 @@ fn config_toml_has_env_table(contents: &str) -> bool {
     toml::from_str::<toml::Table>(contents)
         .map(|table| table.contains_key("env"))
         .unwrap_or(false)
+}
+
+fn apply_table_changes(target: &mut toml::Table, loaded: &toml::Table, current: &toml::Table) {
+    let keys: std::collections::BTreeSet<_> = loaded.keys().chain(current.keys()).collect();
+    for key in keys {
+        match (loaded.get(key), current.get(key)) {
+            (Some(toml::Value::Table(before)), Some(toml::Value::Table(after))) => {
+                let entry = target
+                    .entry(key.clone())
+                    .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+                if !entry.is_table() {
+                    *entry = toml::Value::Table(toml::Table::new());
+                }
+                apply_table_changes(entry.as_table_mut().unwrap(), before, after);
+                if entry.as_table().is_some_and(toml::Table::is_empty) {
+                    target.remove(key);
+                }
+            }
+            (before, after) if before == after => {}
+            (_, Some(value)) => {
+                target.insert(key.clone(), value.clone());
+            }
+            (_, None) => {
+                target.remove(key);
+            }
+        }
+    }
 }
 
 async fn read_env_file(path: &Path) -> Result<Option<BTreeMap<String, String>>> {
@@ -1011,6 +1093,7 @@ mod tests {
         Config {
             config_path: dir.join("config.toml"),
             is_project_config: false,
+            project_save_state: None,
             shine_dir: dir.to_path_buf(),
             presets_dir: dir.join("presets"),
             bin_dir: dir.join("bin"),
@@ -1196,6 +1279,7 @@ mod tests {
         let config = Config {
             config_path: PathBuf::from("config.toml"),
             is_project_config: false,
+            project_save_state: None,
             shine_dir: PathBuf::from("shine"),
             presets_dir: PathBuf::from("presets"),
             bin_dir: PathBuf::from("bin"),
@@ -1794,8 +1878,8 @@ mod tests {
         std::env::set_current_dir(&project_dir).unwrap();
 
         let config = Config::load_or_init().await.unwrap();
-        assert_eq!(config.schema_version, 0);
-        assert_eq!(config.last_cleared_schema_version, Some(0));
+        assert_eq!(config.schema_version, CURRENT_RUNTIME_SCHEMA_VERSION);
+        assert_eq!(config.last_cleared_schema_version, None);
 
         config.save().await.unwrap();
 
@@ -1813,6 +1897,140 @@ mod tests {
         restore_current_dir(&original_dir);
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&project_dir).await.unwrap();
+        fs::remove_dir_all(&state_dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn project_config_without_presets_dir_inherits_global_config() {
+        let _guard = env_lock();
+        let original_dir = std::env::current_dir().unwrap();
+        let original_home = std::env::var("HOME").ok();
+        let project_dir = make_temp_dir().await;
+        let home_dir = make_temp_dir().await;
+        let state_dir = home_dir.join(".shine");
+        fs::create_dir_all(&state_dir).await.unwrap();
+        let global_presets = state_dir.join("shared-presets");
+        fs::create_dir_all(&global_presets).await.unwrap();
+        fs::write(
+            state_dir.join("config.toml"),
+            "presets_dir = \"shared-presets\"\ngpg_key_id = \"global-key\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            project_dir.join("shine.config.toml"),
+            "[env]\nLOCAL = \"yes\"\n",
+        )
+        .await
+        .unwrap();
+
+        unsafe { std::env::set_var("HOME", home_dir.to_str().unwrap()) };
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        std::env::set_current_dir(&project_dir).unwrap();
+
+        let config = Config::load_or_init().await.unwrap();
+        assert_eq!(
+            fs::canonicalize(config.presets_dir()).await.unwrap(),
+            fs::canonicalize(&global_presets).await.unwrap()
+        );
+        assert_eq!(config.gpg_key_id.as_deref(), Some("global-key"));
+        assert!(config.is_external_presets);
+
+        restore_current_dir(&original_dir);
+        match original_home {
+            Some(home) => unsafe { std::env::set_var("HOME", home) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+        fs::remove_dir_all(&project_dir).await.unwrap();
+        fs::remove_dir_all(&home_dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn project_config_merges_layers_and_saves_only_local_changes() {
+        let _guard = env_lock();
+        let original_dir = std::env::current_dir().unwrap();
+        let project_dir = make_temp_dir().await;
+        let state_dir = make_temp_dir().await;
+        fs::create_dir_all(project_dir.join("project-presets"))
+            .await
+            .unwrap();
+        fs::write(
+            state_dir.join("config.toml"),
+            "presets_dir = \"global-presets\"\ngpg_key_id = \"global-key\"\n[env]\nGLOBAL = \"config\"\nSHARED = \"global-config\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            state_dir.join("shine.env.toml"),
+            "SHARED = \"global-env\"\nGLOBAL_FILE = \"yes\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            project_dir.join("shine.config.toml"),
+            "presets_dir = \"project-presets\"\n[env]\nPROJECT = \"config\"\nSHARED = \"project-config\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            project_dir.join("shine.env.toml"),
+            "SHARED = \"project-env\"\nPROJECT_FILE = \"yes\"\n",
+        )
+        .await
+        .unwrap();
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        std::env::set_current_dir(&project_dir).unwrap();
+
+        let mut config = Config::load_or_init().await.unwrap();
+        assert_eq!(
+            fs::canonicalize(config.presets_dir()).await.unwrap(),
+            fs::canonicalize(project_dir.join("project-presets"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(config.env.get("GLOBAL").map(String::as_str), Some("config"));
+        assert_eq!(
+            config.env.get("PROJECT").map(String::as_str),
+            Some("config")
+        );
+        assert_eq!(
+            config.env.get("GLOBAL_FILE").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(
+            config.env.get("PROJECT_FILE").map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(
+            config.env.get("SHARED").map(String::as_str),
+            Some("project-env")
+        );
+
+        config.env.insert("ADDED".into(), "new".into());
+        config.save().await.unwrap();
+        let saved = fs::read_to_string(project_dir.join("shine.config.toml"))
+            .await
+            .unwrap();
+        let table: toml::Table = toml::from_str(&saved).unwrap();
+        assert_eq!(
+            table.get("presets_dir").and_then(toml::Value::as_str),
+            Some("project-presets")
+        );
+        assert!(!table.contains_key("gpg_key_id"));
+        let env = table.get("env").and_then(toml::Value::as_table).unwrap();
+        assert_eq!(env.get("ADDED").and_then(toml::Value::as_str), Some("new"));
+        assert!(!env.contains_key("GLOBAL"));
+        assert!(!env.contains_key("GLOBAL_FILE"));
+        assert!(!env.contains_key("PROJECT_FILE"));
+
+        restore_current_dir(&original_dir);
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         fs::remove_dir_all(&project_dir).await.unwrap();
         fs::remove_dir_all(&state_dir).await.unwrap();

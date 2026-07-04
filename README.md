@@ -695,9 +695,9 @@ Or persist a custom presets directory in `~/.shine/config.toml`:
 presets_dir = "/custom/presets"
 ```
 
-Config discovery searches the current directory and its parents for `shine.config.toml`. If none is found, legacy project `config.toml` files that contain `presets_dir` are still recognized with a warning. Otherwise, `shine` uses the global config under `~/.shine/` or `SHINE_CONFIG_DIR`.
+Config discovery searches the current directory and its parents for `shine.config.toml`. If none is found, legacy project `config.toml` files that contain `presets_dir` are still recognized with a warning. A project config is a sparse override layer on top of the global config under `~/.shine/` or `SHINE_CONFIG_DIR`: fields omitted by the project inherit their global values, while fields explicitly present in the project take priority. Relative paths are resolved from the directory containing the file that defines them. Saving a project setting does not copy inherited global values into the project file.
 
-Preset source priority is: `SHINE_PRESETS` > active config `presets_dir` > default. When `SHINE_CONFIG_DIR` is set and no project config is active, it also sets the default presets directory to `$SHINE_CONFIG_DIR/presets`.
+Preset source priority is: `SHINE_PRESETS` > project `presets_dir` > global `presets_dir` > default. `SHINE_CONFIG_DIR` selects the global config and runtime-state directory; its default presets directory is `$SHINE_CONFIG_DIR/presets`.
 
 You can also change the fallback install root for app presets that do not carry a `shine-dest:` annotation:
 
@@ -722,6 +722,8 @@ PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
 GHOSTTY_BG_LIGHT = ""
 GHOSTTY_BG_DARK = ""
 ```
+
+Environment values merge by key in this order: built-in defaults, global `[env]`, project `[env]`, global `shine.env.toml`, then project `shine.env.toml`.
 
 `shine env show` displays these values with descriptions from the active preset
 catalog and redacts sensitive values by default. Use `--reveal` when the full

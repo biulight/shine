@@ -674,9 +674,9 @@ SHINE_PRESETS=/custom/presets shine shell install   # 仅覆盖 presets 目录
 presets_dir = "/custom/presets"
 ```
 
-配置发现逻辑会从当前目录开始向父目录查找 `shine.config.toml`。如果找不到，仍会兼容识别包含 `presets_dir` 的旧式项目 `config.toml`，但会给出警告。再找不到时，`shine` 才使用 `~/.shine/` 或 `SHINE_CONFIG_DIR` 下的全局配置。
+配置发现逻辑会从当前目录开始向父目录查找 `shine.config.toml`。如果找不到，仍会兼容识别包含 `presets_dir` 的旧式项目 `config.toml`，但会给出警告。项目配置是 `~/.shine/` 或 `SHINE_CONFIG_DIR` 下全局配置之上的稀疏覆盖层：项目未声明的字段继承全局值，明确声明的字段则以项目值为准。相对路径以定义该字段的配置文件所在目录为基准解析。保存项目设置时，不会把继承的全局值复制到项目文件中。
 
-预设来源优先级为：`SHINE_PRESETS` > 当前激活配置里的 `presets_dir` > 默认目录。当设置了 `SHINE_CONFIG_DIR` 且没有激活项目配置时，默认预设目录会变成 `$SHINE_CONFIG_DIR/presets`。
+预设来源优先级为：`SHINE_PRESETS` > 项目 `presets_dir` > 全局 `presets_dir` > 默认目录。`SHINE_CONFIG_DIR` 用于选择全局配置和运行时状态目录，其默认预设目录为 `$SHINE_CONFIG_DIR/presets`。
 
 对于没有 `shine-dest:` 注解的应用预设，你也可以修改默认安装根目录：
 
@@ -701,6 +701,8 @@ PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
 GHOSTTY_BG_LIGHT = ""
 GHOSTTY_BG_DARK = ""
 ```
+
+环境变量按 key 依次合并：内置默认值、全局 `[env]`、项目 `[env]`、全局 `shine.env.toml`、项目 `shine.env.toml`。
 
 `shine env show` 会显示当前 preset catalog 提供的变量说明，并默认隐藏敏感值；需要查看完整值时可使用 `--reveal`。如果需要在当前配置中覆盖说明，可以把值和说明写在同一个 inline table 中：
 
