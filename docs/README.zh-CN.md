@@ -509,7 +509,7 @@ shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.34.0+preview.abc1234`；稳定版则继续显示 `0.34.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.35.0+preview.abc1234`；稳定版则继续显示 `0.35.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -519,7 +519,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.34.0 sh install.sh
+SHINE_VERSION=0.35.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -527,7 +527,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.34.0"; .\install.ps1
+$env:SHINE_VERSION = "0.35.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -574,9 +574,18 @@ usetproxy
 
 会清除当前会话中的代理环境变量。如果已安装 Yarn，也会删除 `setproxy` 可能写入的 Yarn 代理配置项。
 
-### shell/utils — `copyfile`
+### shell/utils — `copyfile` / `shine-env-export`
 
 面向终端工作流的小工具命令。内置的 Unix `copyfile <file>` 命令会通过 OSC52 把文件内容复制到本地剪贴板，适合在 SSH 或支持 OSC52 剪贴板集成的终端复用器中使用。
+
+先运行 `shine shell install utils` 安装跨 shell 的 env helper，之后无需手写 `eval` 或 `Invoke-Expression`，即可把 Shine env 值载入当前 shell：
+
+```bash
+shine-env-export MY_TOKEN
+shine-env-export MY_TOKEN --as API_TOKEN
+```
+
+该 helper 会优先读取并解密 `MY_TOKEN_SECRET`，不存在时回退到明文 `MY_TOKEN`。`--as API_TOKEN` 只会改变导出到 shell 的变量名。
 
 ### shell/agent — `ccenv`
 
@@ -607,6 +616,15 @@ shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 ```bash
 shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
 ```
+
+如果要把值导出到当前 shell，可直接生成 shell 代码，也可以通过 `--as` 改用另一个变量名：
+
+```bash
+eval "$(shine env export MY_TOKEN)"
+eval "$(shine env export MY_TOKEN --as API_TOKEN)"
+```
+
+安装 `utils` 预设后，也可以用 `shine-env-export MY_TOKEN --as API_TOKEN` 直接应用，无需手写 `eval`。
 
 然后安装并使用这个 helper：
 
