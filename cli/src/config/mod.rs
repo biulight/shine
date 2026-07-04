@@ -107,8 +107,59 @@ pub(crate) struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpg_key_id: Option<String>,
     /// Environment variables substituted into template-enabled presets.
-    #[serde(default = "default_env_map")]
+    #[serde(
+        default = "default_env_map",
+        deserialize_with = "deserialize_env_values"
+    )]
     pub env: BTreeMap<String, String>,
+    /// Per-variable descriptions read from detailed `[env]` entries.
+    #[serde(skip)]
+    pub env_descriptions: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum EnvValue {
+    Plain(String),
+    Detailed {
+        value: String,
+        #[allow(dead_code)]
+        description: Option<String>,
+    },
+}
+
+fn deserialize_env_values<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = BTreeMap::<String, EnvValue>::deserialize(deserializer)?;
+    Ok(values
+        .into_iter()
+        .map(|(key, value)| {
+            let value = match value {
+                EnvValue::Plain(value) | EnvValue::Detailed { value, .. } => value,
+            };
+            (key, value)
+        })
+        .collect())
+}
+
+fn parse_env_descriptions(contents: &str) -> BTreeMap<String, String> {
+    let Ok(table) = toml::from_str::<toml::Table>(contents) else {
+        return BTreeMap::new();
+    };
+    let Some(env) = table.get("env").and_then(toml::Value::as_table) else {
+        return BTreeMap::new();
+    };
+    env.iter()
+        .filter_map(|(key, value)| {
+            value
+                .as_table()
+                .and_then(|entry| entry.get("description"))
+                .and_then(toml::Value::as_str)
+                .map(|description| (key.clone(), description.to_string()))
+        })
+        .collect()
 }
 
 impl Config {
@@ -209,6 +260,7 @@ impl Config {
             let config_has_env = config_toml_has_env_table(&contents);
             let mut config: Config =
                 toml::from_str(&contents).context("Failed to parse config file")?;
+            config.env_descriptions = parse_env_descriptions(&contents);
             config.config_path = config_path.clone();
             config.is_project_config = has_project_config;
             config.shine_dir = shine_dir;
@@ -301,6 +353,7 @@ impl Config {
                 .context("Failed to read global config file")?;
             let mut config: Config =
                 toml::from_str(&contents).context("Failed to parse global config file")?;
+            config.env_descriptions = parse_env_descriptions(&contents);
             config.config_path = config_path.clone();
             config.is_project_config = false;
             config.shine_dir = shine_dir;
@@ -404,6 +457,7 @@ impl Config {
             self_install_dest: None,
             gpg_key_id: None,
             env: default_env_map(),
+            env_descriptions: BTreeMap::new(),
         }
     }
 
@@ -654,6 +708,7 @@ impl Default for Config {
             self_install_dest: None,
             gpg_key_id: None,
             env: default_env_map(),
+            env_descriptions: BTreeMap::new(),
         }
     }
 }
@@ -971,6 +1026,7 @@ mod tests {
             self_install_dest: None,
             gpg_key_id: None,
             env: default_env_map(),
+            env_descriptions: BTreeMap::new(),
         }
     }
 
@@ -1073,6 +1129,46 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[test]
+    fn detailed_env_values_are_normalized_with_descriptions() {
+        let contents = r#"
+            [env]
+            PLAIN = "value"
+            TOKEN = { value = "secret", description = "Internal token" }
+        "#;
+        let config: Config = toml::from_str(contents).unwrap();
+
+        assert_eq!(config.env.get("PLAIN").map(String::as_str), Some("value"));
+        assert_eq!(config.env.get("TOKEN").map(String::as_str), Some("secret"));
+        assert_eq!(
+            parse_env_descriptions(contents)
+                .get("TOKEN")
+                .map(String::as_str),
+            Some("Internal token")
+        );
+    }
+
+    #[tokio::test]
+    async fn save_updates_detailed_env_value_without_losing_description() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        fs::write(
+            &config.config_path,
+            "[env]\nMY_TOKEN = { value = \"old\", description = \"Internal token\" }\n",
+        )
+        .await
+        .unwrap();
+        config.env.insert("MY_TOKEN".into(), "new".into());
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        assert!(
+            content.contains("MY_TOKEN = { value = \"new\", description = \"Internal token\" }")
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[tokio::test]
     async fn save_merges_removes_stale_keys() {
         let dir = make_temp_dir().await;
@@ -1115,6 +1211,7 @@ mod tests {
             self_install_dest: None,
             gpg_key_id: None,
             env: default_env_map(),
+            env_descriptions: BTreeMap::new(),
         };
         assert!(config.save().await.is_err());
     }

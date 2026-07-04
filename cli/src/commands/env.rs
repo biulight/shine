@@ -3,7 +3,11 @@ use clap::{Args, Subcommand};
 #[derive(Subcommand, Debug)]
 pub(crate) enum EnvCommands {
     /// List all env variables
-    Show,
+    Show {
+        /// Show sensitive values instead of redacting them
+        #[arg(long)]
+        reveal: bool,
+    },
     /// Set a variable in config.toml [env]
     Set {
         /// Variable name (e.g. HTTP_PROXY_PORT)

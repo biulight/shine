@@ -702,6 +702,24 @@ GHOSTTY_BG_LIGHT = ""
 GHOSTTY_BG_DARK = ""
 ```
 
+`shine env show` 会显示当前 preset catalog 提供的变量说明，并默认隐藏敏感值；需要查看完整值时可使用 `--reveal`。如果需要在当前配置中覆盖说明，可以把值和说明写在同一个 inline table 中：
+
+```toml
+[env]
+MY_API_TOKEN = { value = "secret", description = "内部 API 的访问令牌" }
+```
+
+Preset 作者可以在 `<presets>/env.toml` 中提供共享元数据：
+
+```toml
+[[variables]]
+key = "MY_API_TOKEN"
+description = "内部 API 的访问令牌"
+sensitive = true
+```
+
+inline description 的优先级高于 preset catalog。Catalog 只保存元数据，不保存或提供变量值。
+
 设置 `GHOSTTY_BG_LIGHT` 和 `GHOSTTY_BG_DARK` 后，Ghostty 预设在不同外观模式下会安装带背景图片路径的主题。保留为空则表示安装内置 Ghostty 预设但不启用背景图。
 
 全局覆盖可通过放置在 `~/.shine/shine.env.toml` 的扁平 `shine.env.toml` 文件提供。项目本地覆盖则放在 `shine.config.toml` 同目录下。`shine.env.toml` 中的值会覆盖当前配置 `[env]` 表中的同名 key，而不会改写任一文件。当全局和项目本地 env 文件同时存在时，项目本地优先。若项目本地 `shine.env.toml` 不存在，仍会兼容读取旧的 `.env.toml`。

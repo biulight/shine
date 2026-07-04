@@ -400,7 +400,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Commands::Env { command } => match command {
-            EnvCommands::Show => handle_env_show(&config).await,
+            EnvCommands::Show { reveal } => handle_env_show(&config, reveal).await,
             EnvCommands::Set { key, value } => handle_env_set(&config, &key, &value).await,
             EnvCommands::Delete { key } => handle_env_delete(&config, &key).await,
             EnvCommands::Get { key } => handle_env_get(&config, &key).await,
@@ -652,16 +652,114 @@ fn confirm_init(dir: &std::path::Path) -> Result<bool> {
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
-async fn handle_env_show(config: &Config) -> Result<()> {
+async fn handle_env_show(config: &Config, reveal: bool) -> Result<()> {
     let env = env::EnvConfig::load_or_init(config).await?;
-    println!(
-        "{}",
-        colors::dim(&format!("# {} [env]", config.config_path().display()))
-    );
-    for (k, v) in env.iter() {
-        println!("{k} = \"{v}\"");
+    let catalog = env::catalog::load(config).await?;
+    let terminal_width = usize::from(console::Term::stdout().size().1).max(40);
+    let key_width = env
+        .iter()
+        .map(|(key, _)| key.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    println!("{}", colors::bold("Environment"));
+    println!();
+    if env.as_map().is_empty() {
+        println!("  {}", colors::dim("No variables configured."));
     }
+    for (k, v) in env.iter() {
+        let metadata = catalog.get(k);
+        let description = env
+            .description(k)
+            .or_else(|| metadata.map(|item| item.description.as_str()))
+            .unwrap_or_default();
+        let sensitive = metadata.is_some_and(|item| item.sensitive) || is_sensitive_env_key(k);
+        let display_value = display_env_value(v, sensitive, reveal);
+        let (display_value, description) =
+            fit_env_row(&display_value, description, key_width, terminal_width);
+        let key_padding = " ".repeat(key_width.saturating_sub(k.chars().count()));
+        if description.is_empty() {
+            println!("  {}{}  {}", colors::cyan(k), key_padding, display_value);
+        } else {
+            println!(
+                "  {}{}  {:<value_width$}  {}",
+                colors::cyan(k),
+                key_padding,
+                display_value,
+                colors::dim(&description),
+                value_width = env_value_width(key_width, terminal_width),
+            );
+        }
+    }
+    println!();
+    println!(
+        "  {}  {}",
+        colors::dim("Config"),
+        colors::dim(&crate::path_display::format(config.config_path()))
+    );
+    println!(
+        "  {}",
+        colors::dim(&format!("{} variables", env.as_map().len()))
+    );
     Ok(())
+}
+
+fn is_sensitive_env_key(key: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    [
+        "SECRET",
+        "TOKEN",
+        "PASSWORD",
+        "PASSPHRASE",
+        "API_KEY",
+        "PRIVATE_KEY",
+        "ACCESS_KEY",
+    ]
+    .iter()
+    .any(|suffix| key == *suffix || key.ends_with(&format!("_{suffix}")))
+}
+
+fn display_env_value(value: &str, sensitive: bool, reveal: bool) -> String {
+    if value.is_empty() {
+        "<empty>".to_string()
+    } else if sensitive && !reveal {
+        "<redacted>".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn env_value_width(key_width: usize, terminal_width: usize) -> usize {
+    terminal_width.saturating_sub(key_width + 28).clamp(12, 36)
+}
+
+fn fit_env_row(
+    value: &str,
+    description: &str,
+    key_width: usize,
+    terminal_width: usize,
+) -> (String, String) {
+    let value_width = env_value_width(key_width, terminal_width);
+    let value = truncate_text(value, value_width);
+    let description_width = terminal_width.saturating_sub(2 + key_width + 2 + value_width + 2);
+    let description = if description_width < 8 {
+        String::new()
+    } else {
+        truncate_text(description, description_width)
+    };
+    (value, description)
+}
+
+fn truncate_text(value: &str, max_width: usize) -> String {
+    if value.chars().count() <= max_width {
+        return value.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+    let mut result = value.chars().take(max_width - 1).collect::<String>();
+    result.push('…');
+    result
 }
 
 async fn handle_env_set(config: &Config, key: &str, value: &str) -> Result<()> {
@@ -1796,6 +1894,40 @@ mod tests {
                 command: EnvCommands::Export { key, alias: None }
             } if key == "DEEPSEEK_API_KEY"
         ));
+    }
+
+    #[test]
+    fn cli_accepts_env_show_reveal() {
+        let cli = Cli::try_parse_from(["shine", "env", "show", "--reveal"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Show { reveal: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn env_show_redacts_sensitive_values() {
+        assert_eq!(display_env_value("secret", true, false), "<redacted>");
+        assert_eq!(display_env_value("secret", true, true), "secret");
+        assert_eq!(display_env_value("", true, false), "<empty>");
+        assert!(is_sensitive_env_key("MY_API_KEY"));
+        assert!(is_sensitive_env_key("token"));
+        assert!(!is_sensitive_env_key("MONKEY"));
+    }
+
+    #[test]
+    fn env_show_truncates_long_values_to_requested_width() {
+        assert_eq!(truncate_text("abcdefgh", 5), "abcd…");
+        let (value, description) = fit_env_row(
+            "abcdefghijklmnopqrstuvwxyz",
+            "A description that is also fairly long",
+            8,
+            48,
+        );
+        assert!(value.chars().count() <= env_value_width(8, 48));
+        assert!(description.chars().count() <= 48);
     }
 
     #[test]

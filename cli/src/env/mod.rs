@@ -1,3 +1,4 @@
+pub(crate) mod catalog;
 pub(crate) mod upgrade;
 
 use crate::config::Config;
@@ -11,12 +12,14 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct EnvConfig {
     vars: BTreeMap<String, String>,
+    descriptions: BTreeMap<String, String>,
 }
 
 impl EnvConfig {
     pub(crate) fn from_config(config: &Config) -> Self {
         Self {
             vars: config.env.clone(),
+            descriptions: config.env_descriptions.clone(),
         }
     }
 
@@ -44,6 +47,10 @@ impl EnvConfig {
         self.vars.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
+    pub(crate) fn description(&self, key: &str) -> Option<&str> {
+        self.descriptions.get(key).map(String::as_str)
+    }
+
     pub(crate) async fn save(&self, config: &Config) -> Result<()> {
         let mut updated = config.clone();
         updated.env = self.vars.clone();
@@ -62,6 +69,7 @@ impl EnvConfig {
     fn with_defaults() -> Self {
         Self {
             vars: crate::config::default_env_map(),
+            descriptions: BTreeMap::new(),
         }
     }
 }
@@ -79,6 +87,19 @@ mod tests {
         let env = EnvConfig::from_config(&config);
 
         assert_eq!(env.get("HTTP_PROXY_PORT"), Some("7890"));
+    }
+
+    #[test]
+    fn from_config_reads_description() {
+        let dir = std::env::temp_dir().join(format!("shine-env-test-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config
+            .env_descriptions
+            .insert("MY_TOKEN".into(), "Internal token".into());
+
+        let env = EnvConfig::from_config(&config);
+
+        assert_eq!(env.description("MY_TOKEN"), Some("Internal token"));
     }
 
     #[test]

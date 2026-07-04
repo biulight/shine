@@ -723,6 +723,28 @@ GHOSTTY_BG_LIGHT = ""
 GHOSTTY_BG_DARK = ""
 ```
 
+`shine env show` displays these values with descriptions from the active preset
+catalog and redacts sensitive values by default. Use `--reveal` when the full
+value is required. A value can carry a config-local description without
+separating it from its key:
+
+```toml
+[env]
+MY_API_TOKEN = { value = "secret", description = "Internal API access token" }
+```
+
+Preset authors can provide shared metadata in `<presets>/env.toml`:
+
+```toml
+[[variables]]
+key = "MY_API_TOKEN"
+description = "Internal API access token"
+sensitive = true
+```
+
+An inline description takes precedence over the preset catalog. Catalog
+metadata never stores or supplies the variable value.
+
 Set `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK` to enable appearance-specific
 Ghostty wallpapers. Leaving them empty keeps the bundled Ghostty preset
 installed without a background image.
