@@ -674,7 +674,7 @@ SHINE_PRESETS=/custom/presets shine shell install   # 仅覆盖 presets 目录
 presets_dir = "/custom/presets"
 ```
 
-配置发现逻辑会从当前目录开始向父目录查找 `shine.config.toml`。如果找不到，仍会兼容识别包含 `presets_dir` 的旧式项目 `config.toml`，但会给出警告。项目配置是 `~/.shine/` 或 `SHINE_CONFIG_DIR` 下全局配置之上的稀疏覆盖层：项目未声明的字段继承全局值，明确声明的字段则以项目值为准。相对路径以定义该字段的配置文件所在目录为基准解析。保存项目设置时，不会把继承的全局值复制到项目文件中。
+配置发现逻辑会从当前目录开始向父目录查找 `shine.config.toml`。如果找不到，仍会兼容识别包含 `presets_dir` 的旧式项目 `config.toml`，但会给出警告。该旧文件名将在 v0.40.0 停止支持，请将其改名为 `shine.config.toml`。项目配置是 `~/.shine/` 或 `SHINE_CONFIG_DIR` 下全局配置之上的稀疏覆盖层：项目未声明的字段继承全局值，明确声明的字段则以项目值为准。相对路径以定义该字段的配置文件所在目录为基准解析。保存项目设置时，不会把继承的全局值复制到项目文件中。
 
 预设来源优先级为：`SHINE_PRESETS` > 项目 `presets_dir` > 全局 `presets_dir` > 默认目录。`SHINE_CONFIG_DIR` 用于选择全局配置和运行时状态目录，其默认预设目录为 `$SHINE_CONFIG_DIR/presets`。
 
@@ -724,7 +724,7 @@ inline description 的优先级高于 preset catalog。Catalog 只保存元数�
 
 设置 `GHOSTTY_BG_LIGHT` 和 `GHOSTTY_BG_DARK` 后，Ghostty 预设在不同外观模式下会安装带背景图片路径的主题。保留为空则表示安装内置 Ghostty 预设但不启用背景图。
 
-全局覆盖可通过放置在 `~/.shine/shine.env.toml` 的扁平 `shine.env.toml` 文件提供。项目本地覆盖则放在 `shine.config.toml` 同目录下。`shine.env.toml` 中的值会覆盖当前配置 `[env]` 表中的同名 key，而不会改写任一文件。当全局和项目本地 env 文件同时存在时，项目本地优先。若项目本地 `shine.env.toml` 不存在，仍会兼容读取旧的 `.env.toml`。
+全局覆盖可通过放置在 `~/.shine/shine.env.toml` 的扁平 `shine.env.toml` 文件提供。项目本地覆盖则放在 `shine.config.toml` 同目录下。`shine.env.toml` 中的值会覆盖当前配置 `[env]` 表中的同名 key，而不会改写任一文件。当全局和项目本地 env 文件同时存在时，项目本地优先。若项目本地 `shine.env.toml` 不存在，仍会兼容读取旧的 `.env.toml`；该兼容将在 v0.40.0 移除，请将文件改名为 `shine.env.toml`。
 
 ```toml
 HTTP_PROXY_PORT = "7890"

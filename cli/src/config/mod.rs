@@ -13,6 +13,7 @@ const PROJECT_CONFIG_FILE: &str = "shine.config.toml";
 const LEGACY_PROJECT_CONFIG_FILE: &str = "config.toml";
 const PROJECT_ENV_FILE: &str = "shine.env.toml";
 const LEGACY_PROJECT_ENV_FILE: &str = ".env.toml";
+const LEGACY_PROJECT_FILES_REMOVAL_VERSION: &str = "v0.40.0";
 
 pub(crate) const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 1;
 
@@ -238,8 +239,9 @@ impl Config {
         };
         if project_config.is_legacy {
             eprintln!(
-                "Warning: project config {} is deprecated; rename it to {}.",
+                "Warning: project config {} is deprecated and will no longer be supported in {}; rename it to {}.",
                 project_config.path.display(),
+                LEGACY_PROJECT_FILES_REMOVAL_VERSION,
                 project_config.root.join(PROJECT_CONFIG_FILE).display()
             );
         }
@@ -701,8 +703,9 @@ impl Config {
 
         if is_legacy {
             eprintln!(
-                "Warning: project env {} is deprecated; rename it to {}.",
+                "Warning: project env {} is deprecated and will no longer be supported in {}; rename it to {}.",
                 env_path.display(),
+                LEGACY_PROJECT_FILES_REMOVAL_VERSION,
                 project_config.root.join(PROJECT_ENV_FILE).display()
             );
         }
