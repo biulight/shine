@@ -1,5 +1,5 @@
 mod annotation;
-mod file_ops;
+pub(crate) mod file_ops;
 mod json_merge;
 mod manifest;
 mod metadata;
@@ -128,7 +128,12 @@ async fn install_prepared_content(
 ) -> Result<InstallOutcome> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => {
-            file_ops::install_bytes(content, destination, is_managed, dry_run, force).await
+            if file.requires_admin {
+                file_ops::install_bytes_admin(content, destination, is_managed, dry_run, force)
+                    .await
+            } else {
+                file_ops::install_bytes(content, destination, is_managed, dry_run, force).await
+            }
         }
         AppInstallStrategy::JsonMerge { managed_keys } => {
             json_merge::install(content, destination, dry_run, managed_keys).await
@@ -369,6 +374,7 @@ pub(crate) async fn handle_install(
     let mut installed = 0usize;
     let mut skipped = 0usize;
     let mut backed_up = 0usize;
+    let mut restart_hints = BTreeSet::new();
 
     for cat in &categories {
         let category_root = config.presets_dir().join("app").join(&cat.name);
@@ -452,6 +458,9 @@ pub(crate) async fn handle_install(
                         uses_env: file_uses_env,
                     });
                     installed += 1;
+                    if let Some(hint) = &file.restart_hint {
+                        restart_hints.insert(hint.clone());
+                    }
                 }
                 Ok(InstallOutcome::AlreadyManaged) => {
                     print_already_managed(&file_label);
@@ -475,6 +484,9 @@ pub(crate) async fn handle_install(
                     });
                     installed += 1;
                     backed_up += 1;
+                    if let Some(hint) = &file.restart_hint {
+                        restart_hints.insert(hint.clone());
+                    }
                 }
                 Ok(InstallOutcome::DryRun) => {
                     print_dry_run_install(&file_label, &transform_label, &destination, config);
@@ -506,6 +518,9 @@ pub(crate) async fn handle_install(
         summary_parts.push(colors::dim(&format!("{skipped} skipped")));
     }
     output::footer("Done", &summary_parts);
+    for hint in restart_hints {
+        println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+    }
 
     Ok(())
 }
@@ -515,6 +530,7 @@ pub(crate) struct AppUpgradeReport {
     pub updated: usize,
     pub skipped: usize,
     pub user_modified: usize,
+    pub restart_hints: BTreeSet<String>,
 }
 
 pub(crate) async fn handle_upgrade_installed(
@@ -569,6 +585,7 @@ pub(crate) async fn handle_upgrade_installed(
     let mut skipped = 0usize;
     let mut user_modified = 0usize;
     let mut pending_upserts: Vec<AppEntry> = Vec::new();
+    let mut restart_hints = BTreeSet::new();
     let mut pending_removals: Vec<PathBuf> = Vec::new();
 
     for entry in &manifest.entries {
@@ -623,6 +640,9 @@ pub(crate) async fn handle_upgrade_installed(
             EntryUpgradeResult::Updated(new_entry) => {
                 pending_upserts.push(new_entry);
                 updated += 1;
+                if let Some(hint) = &file.restart_hint {
+                    restart_hints.insert(hint.clone());
+                }
             }
             EntryUpgradeResult::UserModified => {
                 user_modified += 1;
@@ -638,11 +658,12 @@ pub(crate) async fn handle_upgrade_installed(
         manifest.remove_by_dest(&destination);
     }
 
-    let (new_updated, new_skipped, new_upserts) =
+    let (new_updated, new_skipped, new_upserts, new_restart_hints) =
         install_new_category_files(config, &categories_by_name, &manifest, env_map).await?;
     updated += new_updated;
     skipped += new_skipped;
     pending_upserts.extend(new_upserts);
+    restart_hints.extend(new_restart_hints);
 
     for upsert in pending_upserts {
         manifest.upsert(upsert);
@@ -653,6 +674,7 @@ pub(crate) async fn handle_upgrade_installed(
         updated,
         skipped,
         user_modified,
+        restart_hints,
     })
 }
 
@@ -813,10 +835,11 @@ async fn install_new_category_files(
     categories_by_name: &BTreeMap<String, metadata::AppCategory>,
     manifest: &AppManifest,
     env_map: &BTreeMap<String, String>,
-) -> Result<(usize, usize, Vec<AppEntry>)> {
+) -> Result<(usize, usize, Vec<AppEntry>, BTreeSet<String>)> {
     let mut updated = 0usize;
     let mut skipped = 0usize;
     let mut new_upserts: Vec<AppEntry> = Vec::new();
+    let mut restart_hints = BTreeSet::new();
 
     for cat in categories_by_name.values() {
         for file in &cat.files {
@@ -858,15 +881,8 @@ async fn install_new_category_files(
                 }
             };
 
-            let outcome = if file.install_strategy.is_copy() {
-                match install_new_upgrade_file(&content, &destination).await {
-                    Ok(Some(hash)) => Ok(InstallOutcome::Installed { hash }),
-                    Ok(None) => Ok(InstallOutcome::AlreadyManaged),
-                    Err(e) => Err(e),
-                }
-            } else {
-                install_prepared_content(file, &content, &destination, false, false, true).await
-            };
+            let outcome =
+                install_prepared_content(file, &content, &destination, false, false, true).await;
 
             match outcome {
                 Ok(InstallOutcome::Installed { hash })
@@ -886,6 +902,9 @@ async fn install_new_category_files(
                         uses_env: file.transforms.iter().any(|t| t == "template"),
                     });
                     updated += 1;
+                    if let Some(hint) = &file.restart_hint {
+                        restart_hints.insert(hint.clone());
+                    }
                 }
                 Ok(InstallOutcome::AlreadyManaged) => {
                     eprintln!(
@@ -906,7 +925,7 @@ async fn install_new_category_files(
         }
     }
 
-    Ok((updated, skipped, new_upserts))
+    Ok((updated, skipped, new_upserts, restart_hints))
 }
 
 async fn cleanup_stale_entry(
@@ -1007,30 +1026,6 @@ async fn upgrade_file_content(
         transforms::apply(&file.transforms, &raw, env_map)
             .with_context(|| format!("transform failed: {}", file.transforms.join(", ")))
     }
-}
-
-async fn install_new_upgrade_file(content: &[u8], destination: &Path) -> Result<Option<u64>> {
-    use tokio::io::AsyncWriteExt;
-    if let Some(parent) = destination.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
-    }
-
-    let mut file = match tokio::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(destination)
-        .await
-    {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
-        Err(e) => return Err(e).with_context(|| format!("opening {}", destination.display())),
-    };
-    file.write_all(content)
-        .await
-        .with_context(|| format!("writing {}", destination.display()))?;
-    Ok(Some(hash_content(content)))
 }
 
 fn app_category_from_source(source: &str) -> Option<String> {
@@ -1645,6 +1640,8 @@ mod tests {
                 legacy_dest_annotation: None,
                 transforms: vec![],
                 install_strategy: AppInstallStrategy::Copy,
+                requires_admin: false,
+                restart_hint: None,
             }],
             list_mode: AppListMode::Files,
             uses_metadata: true,

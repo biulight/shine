@@ -1,5 +1,10 @@
 use super::manifest::{AppEntry, hash_content};
 use anyhow::{Context, Result};
+use std::io::IsTerminal;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -33,6 +38,117 @@ pub(crate) async fn install_bytes(
         return Ok(InstallOutcome::DryRun);
     }
     install_bytes_impl(content, destination, is_managed, force).await
+}
+
+pub(crate) async fn install_bytes_admin(
+    content: &[u8],
+    destination: &Path,
+    is_managed: bool,
+    dry_run: bool,
+    force: bool,
+) -> Result<InstallOutcome> {
+    if dry_run {
+        return Ok(InstallOutcome::DryRun);
+    }
+    if !cfg!(unix) || std::env::var("USER").is_ok_and(|user| user == "root") {
+        return install_bytes_impl(content, destination, is_managed, force).await;
+    }
+    if !crate::privilege::ensure_admin(1).await? {
+        anyhow::bail!("administrator permission was not granted");
+    }
+
+    let hash = hash_content(content);
+    if destination.exists() && is_managed && !force {
+        let existing = fs::read(destination).await.unwrap_or_default();
+        if hash_content(&existing) == hash {
+            return Ok(InstallOutcome::AlreadyManaged);
+        }
+    }
+
+    let temp = std::env::temp_dir().join(format!("shine-admin-{}", uuid::Uuid::new_v4()));
+    #[cfg(unix)]
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&temp)
+            .with_context(|| format!("creating temporary file: {}", temp.display()))?;
+        file.write_all(content)
+            .with_context(|| format!("writing temporary file: {}", temp.display()))?;
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("destination has no parent: {}", destination.display()))?;
+
+    let mut backup = None;
+    if destination.exists() && !is_managed {
+        let path = backup_path(destination);
+        let status = sudo_command()
+            .args(["mv", "--"])
+            .arg(destination)
+            .arg(&path)
+            .status()
+            .await
+            .context("failed to run sudo for app backup")?;
+        if !status.success() {
+            let _ = fs::remove_file(&temp).await;
+            anyhow::bail!("administrator permission was not granted");
+        }
+        backup = Some(path);
+    }
+
+    let status = sudo_command()
+        .arg("mkdir")
+        .arg("-p")
+        .arg(parent)
+        .status()
+        .await
+        .context("failed to create privileged destination directory")?;
+    if !status.success() {
+        let _ = fs::remove_file(&temp).await;
+        if let Some(backup) = &backup {
+            let _ = sudo_command()
+                .args(["mv", "--"])
+                .arg(backup)
+                .arg(destination)
+                .status()
+                .await;
+        }
+        anyhow::bail!("administrator permission was not granted");
+    }
+    let status = sudo_command()
+        .args(["install", "-m", "0644", "--"])
+        .arg(&temp)
+        .arg(destination)
+        .status()
+        .await
+        .context("failed to install privileged app configuration")?;
+    let _ = fs::remove_file(&temp).await;
+    if !status.success() {
+        if let Some(backup) = &backup {
+            let _ = sudo_command()
+                .args(["mv", "--"])
+                .arg(backup)
+                .arg(destination)
+                .status()
+                .await;
+        }
+        anyhow::bail!("failed to install privileged app configuration");
+    }
+
+    Ok(match backup {
+        Some(backup) => InstallOutcome::BackedUpAndInstalled { backup, hash },
+        None => InstallOutcome::Installed { hash },
+    })
+}
+
+fn sudo_command() -> tokio::process::Command {
+    let mut command = tokio::process::Command::new("sudo");
+    if !std::io::stdin().is_terminal() {
+        command.arg("-n");
+    }
+    command
 }
 
 async fn install_bytes_impl(
@@ -123,6 +239,69 @@ pub(crate) async fn uninstall_entry(
         });
     }
 
+    Ok(if user_modified {
+        UninstallOutcome::ForceRemoved
+    } else {
+        UninstallOutcome::Removed
+    })
+}
+
+pub(crate) async fn uninstall_entry_admin(
+    entry: &AppEntry,
+    dry_run: bool,
+    force: bool,
+) -> Result<UninstallOutcome> {
+    if dry_run {
+        return Ok(UninstallOutcome::DryRun);
+    }
+    if !cfg!(unix) || std::env::var("USER").is_ok_and(|user| user == "root") {
+        return uninstall_entry(entry, false, force).await;
+    }
+    if !crate::privilege::ensure_admin(1).await? {
+        anyhow::bail!("administrator permission was not granted");
+    }
+    if !entry.destination.exists() {
+        return Ok(UninstallOutcome::NotFound);
+    }
+    let current = fs::read(&entry.destination)
+        .await
+        .with_context(|| format!("reading: {}", entry.destination.display()))?;
+    let user_modified = hash_content(&current) != entry.content_hash;
+    if user_modified && !force {
+        return Ok(UninstallOutcome::UserModified);
+    }
+    let status = sudo_command()
+        .args(["rm", "-f", "--"])
+        .arg(&entry.destination)
+        .status()
+        .await
+        .context("failed to remove privileged app configuration")?;
+    if !status.success() {
+        anyhow::bail!("administrator permission was not granted");
+    }
+    if let Some(backup) = &entry.backup
+        && backup.exists()
+    {
+        let status = sudo_command()
+            .args(["mv", "--"])
+            .arg(backup)
+            .arg(&entry.destination)
+            .status()
+            .await
+            .context("failed to restore privileged app backup")?;
+        if !status.success() {
+            anyhow::bail!("failed to restore privileged app backup");
+        }
+        return Ok(if user_modified {
+            UninstallOutcome::ForceRestoredBackup {
+                backup: backup.clone(),
+            }
+        } else {
+            UninstallOutcome::RestoredBackup {
+                backup: backup.clone(),
+            }
+        });
+    }
     Ok(if user_modified {
         UninstallOutcome::ForceRemoved
     } else {

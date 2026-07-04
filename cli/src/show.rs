@@ -872,6 +872,8 @@ mod tests {
                 legacy_dest_annotation: None,
                 transforms: vec![],
                 install_strategy: crate::apps::AppInstallStrategy::Copy,
+                requires_admin: false,
+                restart_hint: None,
             },
             destination: PathBuf::from(dest),
             status: FileStatus::UpToDate,

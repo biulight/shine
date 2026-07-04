@@ -71,6 +71,19 @@ id = "zerotier"
 label = "ZeroTier"
 description = "Install the ZeroTier Linux client for optional private network access."
 
+[[items]]
+id = "split-dns"
+label = "Private split DNS"
+description = "Route one private DNS suffix to DNS servers reachable through ZeroTier."
+mode = "managed"
+driver = "split-dns"
+requires_admin = true
+required_env = ["PRIVATE_DNS_DOMAIN", "PRIVATE_DNS_SERVERS"]
+
+[items.config]
+domain_env = "PRIVATE_DNS_DOMAIN"
+servers_env = "PRIVATE_DNS_SERVERS"
+
 [profiles.recommended]
 items = ["neovim", "astronvim", "atuin", "yazi", "starship", "zoxide", "zsh-vi-mode", "fzf", "bat", "eza"]
 

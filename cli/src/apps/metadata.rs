@@ -39,6 +39,8 @@ pub(crate) struct AppFile {
     pub legacy_dest_annotation: Option<String>,
     pub transforms: Vec<String>,
     pub install_strategy: AppInstallStrategy,
+    pub requires_admin: bool,
+    pub restart_hint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +103,9 @@ struct FileToml {
     install_mode: Option<InstallModeToml>,
     #[serde(default)]
     managed_keys: Option<Vec<String>>,
+    #[serde(default)]
+    requires_admin: bool,
+    restart_hint: Option<String>,
 }
 
 fn resolve_transforms(file: &FileToml, context: &str) -> Result<Vec<String>> {
@@ -219,6 +224,8 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                             legacy_dest_annotation: None,
                             transforms,
                             install_strategy,
+                            requires_admin: file.requires_admin,
+                            restart_hint: file.restart_hint,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?
@@ -233,6 +240,8 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                     legacy_dest_annotation: None,
                     transforms: vec![],
                     install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
                 })
                 .collect(),
         };
@@ -271,6 +280,8 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                     legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
                     transforms: vec![],
                     install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
                 }
             })
             .collect(),
@@ -320,6 +331,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                             legacy_dest_annotation: None,
                             transforms,
                             install_strategy,
+                            requires_admin: file.requires_admin,
+                            restart_hint: file.restart_hint,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?
@@ -335,6 +348,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                     legacy_dest_annotation: None,
                     transforms: vec![],
                     install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
                 })
                 .collect(),
         };
@@ -380,6 +395,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
             legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
             transforms: vec![],
             install_strategy: AppInstallStrategy::Copy,
+            requires_admin: false,
+            restart_hint: None,
         });
     }
 
@@ -628,6 +645,12 @@ mod tests {
         assert_eq!(file.target_rel, std::path::Path::new("daemon.json"));
         assert_eq!(file.transforms, vec!["template", "jsonc-to-json"]);
         assert_eq!(file.install_strategy, AppInstallStrategy::Copy);
+        assert!(file.requires_admin);
+        assert!(
+            file.restart_hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("Restart Docker Engine"))
+        );
     }
 
     #[test]
@@ -867,6 +890,8 @@ install_mode = "json-merge"
                     transforms: None,
                     install_mode: None,
                     managed_keys: None,
+                    requires_admin: false,
+                    restart_hint: None,
                 };
                 resolve_transforms(&file, "test").is_err()
             }
@@ -885,6 +910,8 @@ install_mode = "json-merge"
             transforms: Some(vec!["jsonc-to-json".to_string()]),
             install_mode: None,
             managed_keys: None,
+            requires_admin: false,
+            restart_hint: None,
         };
         assert!(resolve_transforms(&file, "test").is_err());
     }

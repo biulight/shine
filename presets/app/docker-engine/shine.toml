@@ -9,3 +9,5 @@ source      = "daemon.jsonc"
 target      = "daemon.json"
 description = "Docker Engine daemon options (mirrors, runtime, proxies, etc.)"
 transforms  = ["template", "jsonc-to-json"]
+requires_admin = true
+restart_hint = "Restart Docker Engine to apply the updated daemon configuration."

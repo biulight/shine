@@ -17,6 +17,7 @@ mod output;
 mod path_display;
 mod platform;
 mod presets;
+mod privilege;
 mod secret;
 mod shells;
 mod show;
@@ -451,6 +452,12 @@ async fn run(cli: Cli) -> Result<()> {
                     force_profile,
                 ))
                 .await
+            }
+            SysCommands::Apply { item, dry_run } => {
+                Box::pin(sys::handle_apply(&config, item.as_deref(), dry_run)).await
+            }
+            SysCommands::Uninstall { item, dry_run } => {
+                Box::pin(sys::handle_uninstall(&config, &item, dry_run)).await
             }
         },
     }
@@ -1140,14 +1147,16 @@ async fn handle_config_upgrade(config: &Config, verbose: bool, prune_stale: bool
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
     let shell_report = Box::pin(shells::handle_upgrade_installed(config, verbose)).await?;
     let app_report = Box::pin(apps::handle_upgrade_installed(config, prune_stale)).await?;
+    let sys_report = Box::pin(sys::handle_upgrade_managed(config)).await?;
 
     let updated = env_report.updated
         + shell_report.templates_updated
         + shell_report.links_created
         + shell_report.links_updated
         + usize::from(shell_report.path_changed)
-        + app_report.updated;
-    let skipped = env_report.skipped + app_report.skipped;
+        + app_report.updated
+        + sys_report.updated;
+    let skipped = env_report.skipped + app_report.skipped + sys_report.skipped;
     let user_modified = env_report.user_modified + app_report.user_modified;
 
     let mut summary: Vec<String> = Vec::new();
@@ -1172,6 +1181,16 @@ async fn handle_config_upgrade(config: &Config, verbose: bool, prune_stale: bool
         summary.push(colors::dim("nothing changed"));
     }
     output::footer("Done", &summary);
+    for hint in &app_report.restart_hints {
+        println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
+    }
+
+    if sys_report.failed > 0 {
+        bail!(
+            "{} managed system configuration item(s) failed",
+            sys_report.failed
+        );
+    }
 
     Ok(())
 }
@@ -2605,6 +2624,31 @@ mod tests {
             Commands::Sys {
                 command: SysCommands::Status
             }
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_sys_apply_and_uninstall() {
+        let cli = Cli::try_parse_from(["shine", "sys", "apply", "split-dns", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Apply {
+                    item: Some(ref item),
+                    dry_run: true
+                }
+            } if item == "split-dns"
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "uninstall", "split-dns"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Uninstall {
+                    ref item,
+                    dry_run: false
+                }
+            } if item == "split-dns"
         ));
     }
 

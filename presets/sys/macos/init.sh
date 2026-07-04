@@ -228,4 +228,4 @@ run_item() {
 
 ensure_macos
 
-run_item "${1:-}"
+run_item "${1:-}" "${2:-}"

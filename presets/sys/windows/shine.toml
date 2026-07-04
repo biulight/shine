@@ -47,6 +47,19 @@ label = "ZeroTier"
 description = "Install the ZeroTier One Windows client."
 
 [[items]]
+id = "split-dns"
+label = "Private split DNS"
+description = "Route one private DNS suffix to DNS servers reachable through ZeroTier."
+mode = "managed"
+driver = "split-dns"
+requires_admin = true
+required_env = ["PRIVATE_DNS_DOMAIN", "PRIVATE_DNS_SERVERS"]
+
+[items.config]
+domain_env = "PRIVATE_DNS_DOMAIN"
+servers_env = "PRIVATE_DNS_SERVERS"
+
+[[items]]
 id = "bun"
 label = "Bun"
 description = "Install the Bun JavaScript runtime."
