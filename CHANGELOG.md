@@ -7,6 +7,17 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [0.35.0] — 2026-07-04
+
+### Features
+
+- Added the cross-shell `shine-env-export` helper for loading encrypted or plaintext Shine env values into the current shell session.
+- Added `shine env export <KEY> --as <ALIAS>` to export a stored value under a different environment variable name.
+
+### Docs
+
+- Documented the `shine-env-export` helper and aliased env export workflow in the English and Chinese READMEs.
+
 ## [0.34.1] — 2026-06-26
 
 ### Bug Fixes

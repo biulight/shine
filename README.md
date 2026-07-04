@@ -513,7 +513,7 @@ shine upgrade --verbose  # include env-template check details
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.34.0+preview.abc1234`, while stable binaries continue to report `0.34.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.35.0+preview.abc1234`, while stable binaries continue to report `0.35.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -523,7 +523,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.34.0 sh install.sh
+SHINE_VERSION=0.35.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -531,7 +531,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.34.0"; .\install.ps1
+$env:SHINE_VERSION = "0.35.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -579,9 +579,18 @@ usetproxy
 
 Clears the session proxy environment variables. If Yarn is installed, it also removes the Yarn proxy config entries that `setproxy` may have written.
 
-### shell/utils — `copyfile`
+### shell/utils — `copyfile` / `shine-env-export`
 
 Small utility commands for terminal workflows. The built-in Unix `copyfile <file>` command copies a file's contents to the local clipboard via OSC52, which is useful over SSH or inside terminal multiplexers that support OSC52 clipboard integration.
+
+Install the cross-shell env helper with `shine shell install utils`, then load a Shine env value into the current shell without writing `eval` or `Invoke-Expression` manually:
+
+```bash
+shine-env-export MY_TOKEN
+shine-env-export MY_TOKEN --as API_TOKEN
+```
+
+The helper prefers `MY_TOKEN_SECRET`, decrypts it when present, and otherwise falls back to plaintext `MY_TOKEN`. `--as API_TOKEN` changes only the exported shell variable name.
 
 ### shell/agent — `ccenv`
 
@@ -623,12 +632,15 @@ fallback, then evaluate the generated shell code:
 ```bash
 shine env encrypt --from MY_TOKEN
 eval "$(shine env export MY_TOKEN)"
+eval "$(shine env export MY_TOKEN --as API_TOKEN)"
 ```
 
 `shine env export MY_TOKEN` prefers `MY_TOKEN_SECRET`, decrypts it when present,
 and otherwise falls back to `MY_TOKEN`. It prints shell-specific assignment code;
-the `eval` step is what applies it to the current terminal session. Use `--set`
-when you need a custom encrypted target key.
+the `eval` step is what applies it to the current terminal session. Pass `--as
+API_TOKEN` to use a different variable name in the shell, or install the `utils`
+preset and run `shine-env-export MY_TOKEN --as API_TOKEN` to apply it directly.
+Use `--set` when you need a custom encrypted target key.
 
 Then install and use the helper:
 
