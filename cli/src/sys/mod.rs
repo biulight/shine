@@ -144,10 +144,10 @@ struct SysRunEntry {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SysUpgradeReport {
-    pub(crate) updated: usize,
-    pub(crate) skipped: usize,
-    pub(crate) failed: usize,
+pub struct SysUpgradeReport {
+    pub updated: usize,
+    pub skipped: usize,
+    pub failed: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,7 +256,7 @@ fn sys_init_theme() -> ColorfulTheme {
 
 /// Detect the current OS identifier using `std::env::consts::OS` and, on Linux,
 /// the `ID=` field from `/etc/os-release`.
-pub(crate) async fn detect_os_id() -> Result<String> {
+pub async fn detect_os_id() -> Result<String> {
     let os_release = tokio::fs::read_to_string("/etc/os-release").await.ok();
     detect_os_id_from(std::env::consts::OS, os_release.as_deref())
 }
@@ -285,7 +285,7 @@ fn detect_os_id_from(os: &str, os_release: Option<&str>) -> Result<String> {
     }
 }
 
-pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+pub async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
 
     let current_os = detect_os_id().await.ok();
@@ -325,7 +325,7 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_status(config: &Config) -> Result<()> {
+pub async fn handle_status(config: &Config) -> Result<()> {
     let os_id = detect_os_id().await?;
     let manifest = SysRunManifest::load(config.shine_dir()).await?;
     let entries: Vec<&SysRunEntry> = manifest
@@ -369,7 +369,7 @@ pub(crate) async fn handle_status(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_init(
+pub async fn handle_init(
     config: &Config,
     preset: Option<&str>,
     dry_run: bool,
@@ -526,7 +526,7 @@ impl SysAction {
     }
 }
 
-pub(crate) async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) -> Result<()> {
+pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) -> Result<()> {
     let report = run_managed(config, item, SysAction::Apply, dry_run, true).await?;
     if report.failed > 0 {
         bail!(
@@ -537,7 +537,7 @@ pub(crate) async fn handle_apply(config: &Config, item: Option<&str>, dry_run: b
     Ok(())
 }
 
-pub(crate) async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Result<()> {
+pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Result<()> {
     let report = run_managed(config, Some(item), SysAction::Remove, dry_run, true).await?;
     if report.failed > 0 {
         bail!("failed to remove managed system configuration `{item}`");
@@ -545,7 +545,7 @@ pub(crate) async fn handle_uninstall(config: &Config, item: &str, dry_run: bool)
     Ok(())
 }
 
-pub(crate) async fn handle_upgrade_managed(config: &Config) -> Result<SysUpgradeReport> {
+pub async fn handle_upgrade_managed(config: &Config) -> Result<SysUpgradeReport> {
     run_managed(config, None, SysAction::Apply, false, false).await
 }
 

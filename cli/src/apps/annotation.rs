@@ -2,7 +2,7 @@ use crate::config::Config;
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
-pub(crate) fn resolve_destination(
+pub fn resolve_destination(
     annotation: Option<&str>,
     category: &str,
     relative_path: &str,

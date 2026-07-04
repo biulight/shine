@@ -2,7 +2,7 @@ use clap::{Args, Subcommand};
 use std::{ffi::OsString, path::PathBuf};
 
 #[derive(Subcommand, Debug)]
-pub(crate) enum EnvCommands {
+pub enum EnvCommands {
     /// List all env variables
     Show {
         /// Show sensitive values instead of redacting them
@@ -48,7 +48,7 @@ pub(crate) enum EnvCommands {
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct EnvEncryptCommand {
+pub struct EnvEncryptCommand {
     /// GPG recipient key ID, fingerprint, or email
     #[arg(short = 'r', long)]
     pub recipient: Option<String>,
@@ -61,7 +61,7 @@ pub(crate) struct EnvEncryptCommand {
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct EnvSealCommand {
+pub struct EnvSealCommand {
     /// Seal only this environment source file
     #[arg(value_name = "FILE")]
     pub file: Option<PathBuf>,
@@ -74,7 +74,7 @@ pub(crate) struct EnvSealCommand {
 }
 
 #[derive(Args, Debug)]
-pub(crate) struct EnvRunCommand {
+pub struct EnvRunCommand {
     /// Workspace definition (defaults to the nearest shine.workspace.toml)
     #[arg(long, value_name = "FILE")]
     pub workspace: Option<PathBuf>,

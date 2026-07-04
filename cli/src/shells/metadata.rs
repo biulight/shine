@@ -8,7 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ShellCategory {
+pub struct ShellCategory {
     pub name: String,
     // Parsed from shine.toml metadata for completeness; not yet surfaced by any command.
     #[allow(dead_code)]
@@ -21,7 +21,7 @@ pub(crate) struct ShellCategory {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ShellFile {
+pub struct ShellFile {
     pub source_rel: PathBuf,
     pub command_name: String,
     pub description: Vec<String>,
@@ -42,7 +42,7 @@ struct FileToml {
     platforms: Option<Vec<String>>,
 }
 
-pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<ShellCategory>> {
+pub fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<ShellCategory>> {
     let names = collect_embedded_category_names(filter);
     let mut categories = Vec::new();
     for name in names {
@@ -51,7 +51,7 @@ pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<Shell
     Ok(categories)
 }
 
-pub(crate) async fn load_installed_categories(
+pub async fn load_installed_categories(
     config: &Config,
     filter: Option<&str>,
 ) -> Result<Vec<ShellCategory>> {

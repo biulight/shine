@@ -20,7 +20,7 @@ enum WindowsShimStatus {
     NotManaged,
 }
 
-pub(crate) struct LinkReport {
+pub struct LinkReport {
     pub created: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
     pub conflicts: Vec<LinkConflict>,
@@ -28,24 +28,24 @@ pub(crate) struct LinkReport {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LinkConflictKind {
+pub enum LinkConflictKind {
     ExistingEntry,
     DuplicateName,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LinkConflict {
+pub struct LinkConflict {
     pub link_path: PathBuf,
     pub source: PathBuf,
     pub kind: LinkConflictKind,
 }
 
-pub(crate) struct UnlinkReport {
+pub struct UnlinkReport {
     pub removed: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
 }
 
-pub(crate) struct LinkSpec {
+pub struct LinkSpec {
     pub source: PathBuf,
     pub link_name: OsString,
 }
@@ -55,7 +55,7 @@ pub(crate) struct LinkSpec {
 /// Non-symlinks and symlinks pointing outside `managed_root` are untouched.
 /// Missing `bin_dir` is treated as a no-op (returns empty report).
 /// When `dry_run` is true, nothing is removed.
-pub(crate) async fn unlink_managed(
+pub async fn unlink_managed(
     bin_dir: &Path,
     managed_root: &Path,
     dry_run: bool,
@@ -140,7 +140,7 @@ pub(crate) async fn unlink_managed(
 ///   unless `overwrite` is true.
 /// - Two sources sharing the same filename → second is recorded as a conflict.
 #[cfg(test)]
-pub(crate) async fn link_executables(
+pub async fn link_executables(
     bin_dir: &Path,
     sources: &[PathBuf],
     overwrite: bool,
@@ -155,7 +155,7 @@ pub(crate) async fn link_executables(
     link_executables_with_names(bin_dir, &specs, overwrite).await
 }
 
-pub(crate) async fn link_executables_with_names(
+pub async fn link_executables_with_names(
     bin_dir: &Path,
     specs: &[LinkSpec],
     overwrite: bool,
@@ -254,7 +254,7 @@ pub(crate) async fn link_executables_with_names(
     Ok(report)
 }
 
-pub(crate) fn command_path_for_name(bin_dir: &Path, stem: &OsStr) -> PathBuf {
+pub fn command_path_for_name(bin_dir: &Path, stem: &OsStr) -> PathBuf {
     #[cfg(unix)]
     {
         bin_dir.join(stem)
@@ -267,7 +267,7 @@ pub(crate) fn command_path_for_name(bin_dir: &Path, stem: &OsStr) -> PathBuf {
     }
 }
 
-pub(crate) fn link_stem(path: &Path) -> std::ffi::OsString {
+pub fn link_stem(path: &Path) -> std::ffi::OsString {
     if has_linkable_script_extension(path) {
         path.file_stem().map(|s| s.to_owned()).unwrap_or_default()
     } else {

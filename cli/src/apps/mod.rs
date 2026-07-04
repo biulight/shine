@@ -1,15 +1,15 @@
 mod annotation;
-pub(crate) mod file_ops;
+pub mod file_ops;
 mod json_merge;
 mod manifest;
 mod metadata;
 mod transforms;
 
-pub(crate) use manifest::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
-pub(crate) use metadata::{
+pub use manifest::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
+pub use metadata::{
     AppCategory, AppFile, AppListMode, load_embedded_categories, load_installed_categories,
 };
-pub(crate) use transforms::apply as apply_transforms;
+pub use transforms::apply as apply_transforms;
 
 use crate::colors;
 use crate::config::Config;
@@ -36,7 +36,7 @@ display_name = "config.toml"
 transforms = []
 "#;
 
-pub(crate) async fn handle_init_template(force: bool) -> Result<()> {
+pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
     let (path, overwritten) = write_init_template_at(&dir, force).await?;
     if overwritten {
@@ -62,7 +62,7 @@ async fn write_init_template_at(dir: &Path, force: bool) -> Result<(PathBuf, boo
 /// Hash the effective install content for `file` — applies transforms if declared.
 ///
 /// Returns `None` when the source cannot be read (e.g. not yet extracted).
-pub(crate) async fn source_bytes_for_file(
+pub async fn source_bytes_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
     file: &metadata::AppFile,
@@ -87,7 +87,7 @@ pub(crate) async fn source_bytes_for_file(
     }
 }
 
-pub(crate) async fn source_hash_for_file(
+pub async fn source_hash_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
     file: &metadata::AppFile,
@@ -97,7 +97,7 @@ pub(crate) async fn source_hash_for_file(
     desired_content_hash(file, &effective).ok()
 }
 
-pub(crate) fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u64> {
+pub fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u64> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(hash_content(bytes)),
         AppInstallStrategy::JsonMerge { managed_keys } => {
@@ -106,10 +106,7 @@ pub(crate) fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Re
     }
 }
 
-pub(crate) fn installed_content_hash(
-    file: &metadata::AppFile,
-    bytes: &[u8],
-) -> Result<Option<u64>> {
+pub fn installed_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<Option<u64>> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(Some(hash_content(bytes))),
         AppInstallStrategy::JsonMerge { managed_keys } => {
@@ -154,7 +151,7 @@ async fn uninstall_app_entry(
     }
 }
 
-pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
+pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
     crate::config::print_presets_note(config);
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, Some(category)).await?
@@ -265,7 +262,7 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+pub async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
@@ -325,7 +322,7 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_install(
+pub async fn handle_install(
     config: &Config,
     category: Option<&str>,
     dry_run: bool,
@@ -526,14 +523,14 @@ pub(crate) async fn handle_install(
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct AppUpgradeReport {
+pub struct AppUpgradeReport {
     pub updated: usize,
     pub skipped: usize,
     pub user_modified: usize,
     pub restart_hints: BTreeSet<String>,
 }
 
-pub(crate) async fn handle_upgrade_installed(
+pub async fn handle_upgrade_installed(
     config: &Config,
     prune_stale: bool,
 ) -> Result<AppUpgradeReport> {
@@ -1192,7 +1189,7 @@ fn print_uninstall_error(config: &Config, destination: &Path, err: &anyhow::Erro
     );
 }
 
-pub(crate) async fn handle_uninstall(
+pub async fn handle_uninstall(
     config: &Config,
     category: Option<&str>,
     force: bool,
@@ -1391,7 +1388,7 @@ fn append_manifest_entries_for_category_destinations(
     }
 }
 
-pub(crate) fn resolve_install_destination(
+pub fn resolve_install_destination(
     category: &metadata::AppCategory,
     file: &metadata::AppFile,
     config: &Config,

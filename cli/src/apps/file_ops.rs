@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 
 #[derive(Debug)]
-pub(crate) enum InstallOutcome {
+pub enum InstallOutcome {
     Installed { hash: u64 },
     AlreadyManaged,
     BackedUpAndInstalled { backup: PathBuf, hash: u64 },
@@ -17,7 +17,7 @@ pub(crate) enum InstallOutcome {
 }
 
 #[derive(Debug)]
-pub(crate) enum UninstallOutcome {
+pub enum UninstallOutcome {
     Removed,
     RestoredBackup { backup: PathBuf },
     ForceRemoved,
@@ -27,7 +27,7 @@ pub(crate) enum UninstallOutcome {
     DryRun,
 }
 
-pub(crate) async fn install_bytes(
+pub async fn install_bytes(
     content: &[u8],
     destination: &Path,
     is_managed: bool,
@@ -40,7 +40,7 @@ pub(crate) async fn install_bytes(
     install_bytes_impl(content, destination, is_managed, force).await
 }
 
-pub(crate) async fn install_bytes_admin(
+pub async fn install_bytes_admin(
     content: &[u8],
     destination: &Path,
     is_managed: bool,
@@ -197,7 +197,7 @@ async fn install_bytes_impl(
     Ok(InstallOutcome::Installed { hash })
 }
 
-pub(crate) async fn uninstall_entry(
+pub async fn uninstall_entry(
     entry: &AppEntry,
     dry_run: bool,
     force: bool,
@@ -246,7 +246,7 @@ pub(crate) async fn uninstall_entry(
     })
 }
 
-pub(crate) async fn uninstall_entry_admin(
+pub async fn uninstall_entry_admin(
     entry: &AppEntry,
     dry_run: bool,
     force: bool,

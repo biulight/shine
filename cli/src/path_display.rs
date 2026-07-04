@@ -1,10 +1,10 @@
 use std::path::Path;
 
-pub(crate) fn format(path: &Path) -> String {
+pub fn format(path: &Path) -> String {
     normalize(&path.to_string_lossy())
 }
 
-pub(crate) fn format_home(path: &Path, home_dir: &Path) -> String {
+pub fn format_home(path: &Path, home_dir: &Path) -> String {
     match path.strip_prefix(home_dir) {
         Ok(relative) if relative.as_os_str().is_empty() => "~".to_string(),
         Ok(relative) => format!("~/{}", normalize(&relative.to_string_lossy())),
@@ -12,12 +12,12 @@ pub(crate) fn format_home(path: &Path, home_dir: &Path) -> String {
     }
 }
 
-pub(crate) fn format_tilde_path(path: &str, home_dir: &Path) -> String {
+pub fn format_tilde_path(path: &str, home_dir: &Path) -> String {
     let expanded = crate::config::tilde_expand(path);
     format_home(Path::new(&expanded), home_dir)
 }
 
-pub(crate) fn strip_windows_verbatim_prefix(value: &str) -> String {
+pub fn strip_windows_verbatim_prefix(value: &str) -> String {
     value
         .strip_prefix(r"\\?\UNC\")
         .map(|path| format!(r"\\{path}"))

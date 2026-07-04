@@ -50,12 +50,7 @@ struct ShellShowFile {
     status: &'static str,
 }
 
-pub(crate) async fn handle_show(
-    config: &Config,
-    target: &str,
-    diff: bool,
-    verbose: bool,
-) -> Result<()> {
+pub async fn handle_show(config: &Config, target: &str, diff: bool, verbose: bool) -> Result<()> {
     crate::config::print_presets_note(config);
     let app_files = collect_app_files(config).await?;
     let shell_files = collect_shell_files(config).await?;

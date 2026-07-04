@@ -12,7 +12,7 @@ fn join_summary(parts: &[String]) -> String {
     }
 }
 
-pub(crate) fn summary_line(label: &str, parts: &[String]) {
+pub fn summary_line(label: &str, parts: &[String]) {
     println!(
         "{}{}{}",
         colors::bold(label),
@@ -21,12 +21,12 @@ pub(crate) fn summary_line(label: &str, parts: &[String]) {
     );
 }
 
-pub(crate) fn footer(label: &str, parts: &[String]) {
+pub fn footer(label: &str, parts: &[String]) {
     println!();
     summary_line(label, parts);
 }
 
-pub(crate) fn detail_line(label: &str, status: &str, detail: Option<String>) {
+pub fn detail_line(label: &str, status: &str, detail: Option<String>) {
     let detail = detail
         .filter(|value| !value.is_empty())
         .map(|value| format!("  {}", colors::dim(&value)))
@@ -42,7 +42,7 @@ pub(crate) fn detail_line(label: &str, status: &str, detail: Option<String>) {
     );
 }
 
-pub(crate) fn hint_line(label: &str, detail: &str) {
+pub fn hint_line(label: &str, detail: &str) {
     println!(
         "{}{}{}",
         colors::bold(label),

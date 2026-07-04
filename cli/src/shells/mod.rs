@@ -1,4 +1,4 @@
-pub(crate) mod metadata;
+pub mod metadata;
 
 use crate::colors;
 use crate::config::Config;
@@ -11,7 +11,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-pub(crate) const SENTINEL_START: &str = "# >>> shine >>>";
+pub const SENTINEL_START: &str = "# >>> shine >>>";
 const SENTINEL_END: &str = "# <<< shine <<<";
 
 const SHELL_TEMPLATE: &str = r#"# Shell preset metadata for shine.
@@ -29,7 +29,7 @@ needs_source = false
 "#;
 
 #[derive(Debug, Default)]
-pub(crate) struct ShellUpgradeReport {
+pub struct ShellUpgradeReport {
     pub templates_updated: usize,
     pub links_created: usize,
     pub links_updated: usize,
@@ -50,7 +50,7 @@ struct ShellConfigUpdate {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub(crate) enum ShellType {
+pub enum ShellType {
     Bash,
     Fish,
     Zsh,
@@ -58,7 +58,7 @@ pub(crate) enum ShellType {
     Elvish,
 }
 
-pub(crate) async fn handle_init_template(force: bool) -> Result<()> {
+pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
     let (path, overwritten) = write_init_template_at(&dir, force).await?;
     if overwritten {
@@ -81,11 +81,7 @@ async fn write_init_template_at(dir: &Path, force: bool) -> Result<(PathBuf, boo
     Ok((path, exists))
 }
 
-pub(crate) async fn handle_install(
-    config: &Config,
-    category: Option<&str>,
-    force: bool,
-) -> Result<()> {
+pub async fn handle_install(config: &Config, category: Option<&str>, force: bool) -> Result<()> {
     crate::config::print_presets_note(config);
     let prefix = match category {
         Some(cat) => format!("shell/{cat}"),
@@ -270,7 +266,7 @@ fn upgrade_link_report_summary_parts(
     parts
 }
 
-pub(crate) async fn handle_upgrade_installed(
+pub async fn handle_upgrade_installed(
     config: &Config,
     verbose: bool,
 ) -> Result<ShellUpgradeReport> {
@@ -371,7 +367,7 @@ pub(crate) async fn handle_upgrade_installed(
     })
 }
 
-pub(crate) async fn handle_completion_install(config: &Config) -> Result<()> {
+pub async fn handle_completion_install(config: &Config) -> Result<()> {
     let source_commands = installed_source_commands(config).await?;
     let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
     let shell_update = append_path_to_shell_config(config, false, &source_commands).await?;
@@ -514,7 +510,7 @@ fn shell_category_after_root(path: &Path) -> Option<String> {
     components.next()?.as_os_str().to_str().map(str::to_string)
 }
 
-pub(crate) async fn handle_uninstall(
+pub async fn handle_uninstall(
     config: &Config,
     category: Option<&str>,
     purge: bool,
@@ -608,7 +604,7 @@ pub(crate) async fn handle_uninstall(
     Ok(())
 }
 
-pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+pub async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
@@ -1231,7 +1227,7 @@ async fn remove_managed_shell_profile(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn get_shell() -> Result<ShellType> {
+pub fn get_shell() -> Result<ShellType> {
     match std::env::var("SHELL") {
         Ok(shell) => shell.parse(),
         Err(_) if cfg!(windows) => Ok(ShellType::PowerShell),
@@ -1239,7 +1235,7 @@ pub(crate) fn get_shell() -> Result<ShellType> {
     }
 }
 
-pub(crate) fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) -> Result<PathBuf> {
+pub fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) -> Result<PathBuf> {
     get_shell_config_paths(shell_type, home_path)?
         .into_iter()
         .next()

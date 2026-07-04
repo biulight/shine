@@ -1,17 +1,17 @@
-use crate::CompletionShell;
+use crate::commands::CompletionShell;
 use crate::config;
 use clap::CommandFactory;
 use clap_complete::engine::{ArgValueCandidates, CompletionCandidate};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn complete_from_env() {
+pub fn complete_from_env() {
     clap_complete::CompleteEnv::with_factory(command)
         .bin("shine")
         .complete();
 }
 
-pub(crate) fn generate_registration(shell: CompletionShell) {
+pub fn generate_registration(shell: CompletionShell) {
     // SAFETY: this is called during single-threaded startup before Tokio is
     // initialized, and `CompleteEnv` removes the variable before returning.
     unsafe { std::env::set_var("COMPLETE", shell.as_str()) };
@@ -22,12 +22,12 @@ pub(crate) fn generate_registration(shell: CompletionShell) {
         .unwrap_or_else(|e| e.exit());
 }
 
-pub(crate) fn command() -> clap::Command {
+pub fn command() -> clap::Command {
     let all_categories = ArgValueCandidates::new(all_category_candidates);
     let shell_categories = ArgValueCandidates::new(shell_category_candidates);
     let app_categories = ArgValueCandidates::new(app_category_candidates);
 
-    crate::Cli::command()
+    crate::commands::Cli::command()
         .mut_subcommand("install", |cmd| {
             cmd.mut_arg("category", |arg| arg.add(all_categories.clone()))
         })

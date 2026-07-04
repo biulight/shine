@@ -7,7 +7,7 @@ use tokio::fs;
 const ENV_CATALOG_FILE: &str = "env.toml";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct EnvMetadata {
+pub struct EnvMetadata {
     pub description: String,
     pub sensitive: bool,
 }
@@ -26,7 +26,7 @@ struct EnvMetadataToml {
     sensitive: bool,
 }
 
-pub(crate) async fn load(config: &Config) -> Result<BTreeMap<String, EnvMetadata>> {
+pub async fn load(config: &Config) -> Result<BTreeMap<String, EnvMetadata>> {
     let bytes = if config.is_external_presets {
         let path = config.presets_dir().join(ENV_CATALOG_FILE);
         match fs::read(&path).await {

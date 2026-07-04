@@ -16,14 +16,14 @@ const WORKSPACE_FILE: &str = "shine.workspace.toml";
 const FORMAT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct Workspace {
+pub struct Workspace {
     #[serde(default = "format_version")]
     version: u32,
-    pub(crate) env: WorkspaceEnv,
+    pub env: WorkspaceEnv,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct WorkspaceEnv {
+pub struct WorkspaceEnv {
     #[serde(default)]
     default_mode: Option<String>,
     #[serde(default)]
@@ -89,7 +89,7 @@ fn format_version() -> u32 {
     FORMAT_VERSION
 }
 
-pub(crate) async fn handle_seal(
+pub async fn handle_seal(
     config: &Config,
     workspace_arg: Option<&Path>,
     file: Option<&Path>,
@@ -128,7 +128,7 @@ pub(crate) async fn handle_seal(
     Ok(())
 }
 
-pub(crate) async fn handle_run(
+pub async fn handle_run(
     config: &Config,
     workspace_arg: Option<&Path>,
     mode_arg: Option<&str>,

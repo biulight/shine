@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static AUTHORIZED: AtomicBool = AtomicBool::new(false);
 
-pub(crate) async fn ensure_admin(action_count: usize) -> Result<bool> {
+pub async fn ensure_admin(action_count: usize) -> Result<bool> {
     if AUTHORIZED.load(Ordering::Acquire) {
         return Ok(true);
     }

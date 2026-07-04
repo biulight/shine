@@ -15,9 +15,9 @@ const PROJECT_ENV_FILE: &str = "shine.env.toml";
 const LEGACY_PROJECT_ENV_FILE: &str = ".env.toml";
 const LEGACY_PROJECT_FILES_REMOVAL_VERSION: &str = "v0.40.0";
 
-pub(crate) const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 1;
 
-pub(crate) const DEFAULT_ENV_VARS: &[(&str, &str)] = &[
+pub const DEFAULT_ENV_VARS: &[(&str, &str)] = &[
     ("HTTP_PROXY_PORT", "6152"),
     ("SOCKS5_PROXY_PORT", "6153"),
     ("PROXY_HOST", "127.0.0.1"),
@@ -26,7 +26,7 @@ pub(crate) const DEFAULT_ENV_VARS: &[(&str, &str)] = &[
     ("GHOSTTY_BG_DARK", ""),
 ];
 
-pub(crate) fn default_env_map() -> BTreeMap<String, String> {
+pub fn default_env_map() -> BTreeMap<String, String> {
     DEFAULT_ENV_VARS
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -34,7 +34,7 @@ pub(crate) fn default_env_map() -> BTreeMap<String, String> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub(crate) struct Config {
+pub struct Config {
     /// Presets directory - computed at runtime, not serialized
     #[serde(skip)]
     presets_dir: PathBuf,
@@ -190,7 +190,7 @@ fn parse_env_descriptions(contents: &str) -> BTreeMap<String, String> {
 }
 
 impl Config {
-    pub(crate) async fn init_current_dir_config() -> Result<PathBuf> {
+    pub async fn init_current_dir_config() -> Result<PathBuf> {
         let current_dir = std::env::current_dir().context("resolving current directory")?;
         let (default_shine_dir, _) = default_config_and_presets_dir()?;
         let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
@@ -228,7 +228,7 @@ impl Config {
         Ok(config_path)
     }
 
-    pub(crate) async fn load_or_init() -> Result<Self> {
+    pub async fn load_or_init() -> Result<Self> {
         let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
         let current_dir = std::env::current_dir().context("resolving current directory")?;
         let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
@@ -331,7 +331,7 @@ impl Config {
         Ok(config)
     }
 
-    pub(crate) async fn load_global_runtime_or_init() -> Result<Self> {
+    pub async fn load_global_runtime_or_init() -> Result<Self> {
         let (mut config, exists) = Self::load_global_runtime_base().await?;
 
         fs::create_dir_all(config.shine_dir())
@@ -357,7 +357,7 @@ impl Config {
         Ok(config)
     }
 
-    pub(crate) async fn load_global_runtime_for_dry_run() -> Result<Self> {
+    pub async fn load_global_runtime_for_dry_run() -> Result<Self> {
         let (config, _) = Self::load_global_runtime_base().await?;
         Ok(config)
     }
@@ -425,7 +425,7 @@ impl Config {
         }
     }
 
-    pub(crate) async fn read_global_runtime_schema_version() -> Result<u32> {
+    pub async fn read_global_runtime_schema_version() -> Result<u32> {
         let (default_shine_dir, _) = default_config_and_presets_dir()?;
         let config_path =
             preliminary_shine_dir_from_env(&default_shine_dir).join(GLOBAL_CONFIG_FILE);
@@ -450,29 +450,29 @@ impl Config {
             .with_context(|| format!("Failed to parse {}", config_path.display()))
     }
 
-    pub(crate) fn presets_dir(&self) -> &Path {
+    pub fn presets_dir(&self) -> &Path {
         &self.presets_dir
     }
 
-    pub(crate) fn bin_dir(&self) -> &Path {
+    pub fn bin_dir(&self) -> &Path {
         &self.bin_dir
     }
 
-    pub(crate) fn shine_dir(&self) -> &Path {
+    pub fn shine_dir(&self) -> &Path {
         &self.shine_dir
     }
 
-    pub(crate) fn config_path(&self) -> &Path {
+    pub fn config_path(&self) -> &Path {
         &self.config_path
     }
 
     /// Directory where template-rendered shell scripts are written.
     /// Always inside shine_dir so it is never confused with user-owned presets.
-    pub(crate) fn rendered_dir(&self) -> PathBuf {
+    pub fn rendered_dir(&self) -> PathBuf {
         self.shine_dir().join("rendered")
     }
 
-    pub(crate) fn app_default_dest_root(&self) -> PathBuf {
+    pub fn app_default_dest_root(&self) -> PathBuf {
         match &self.app_default_dest_root_override {
             Some(p) => {
                 let s = p.to_str().unwrap_or("~/.config");
@@ -482,8 +482,7 @@ impl Config {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_for_test(dir: &Path) -> Self {
+    pub fn new_for_test(dir: &Path) -> Self {
         Self {
             config_path: dir.join("config.toml"),
             is_project_config: false,
@@ -508,7 +507,7 @@ impl Config {
     }
 
     /// Return a clone of this config with `presets_dir_override` replaced.
-    pub(crate) fn with_presets_dir_override(self, value: Option<PathBuf>) -> Self {
+    pub fn with_presets_dir_override(self, value: Option<PathBuf>) -> Self {
         Self {
             presets_dir_override: value,
             ..self
@@ -516,14 +515,14 @@ impl Config {
     }
 
     /// Return a clone of this config with `presets_overlay_dir_override` replaced.
-    pub(crate) fn with_presets_overlay_dir_override(self, value: Option<PathBuf>) -> Self {
+    pub fn with_presets_overlay_dir_override(self, value: Option<PathBuf>) -> Self {
         Self {
             presets_overlay_dir_override: value,
             ..self
         }
     }
 
-    pub(crate) fn active_presets_overlay_dir(&self) -> Option<&Path> {
+    pub fn active_presets_overlay_dir(&self) -> Option<&Path> {
         if self.is_external_presets {
             None
         } else {
@@ -537,7 +536,7 @@ impl Config {
         }
     }
 
-    pub(crate) async fn save(&self) -> Result<()> {
+    pub async fn save(&self) -> Result<()> {
         let config_path = self.resolve_config_path_for_save().await?;
 
         let shine_dir = config_path
@@ -720,7 +719,7 @@ impl Config {
 
 /// Print a note showing the active external presets directory.
 /// No-op when the embedded presets are in use.
-pub(crate) fn print_presets_note(config: &Config) {
+pub fn print_presets_note(config: &Config) {
     if config.is_external_presets {
         println!(
             "{}",
@@ -870,19 +869,19 @@ fn effective_home_dir() -> PathBuf {
 
 /// Expand a leading `~` using the effective home directory instead of `HOME`.
 /// Needed because `sudo` resets `HOME` to `/root`.
-pub(crate) fn tilde_expand(s: &str) -> String {
+pub fn tilde_expand(s: &str) -> String {
     let home = effective_home_dir().to_string_lossy().into_owned();
     shellexpand::tilde_with_context(s, || Some(home)).into_owned()
 }
 
 /// Like `shellexpand::full` but uses the effective home for both `~` and `$HOME`.
-pub(crate) fn full_expand(s: &str) -> Result<String, shellexpand::LookupError<std::env::VarError>> {
+pub fn full_expand(s: &str) -> Result<String, shellexpand::LookupError<std::env::VarError>> {
     full_expand_with_home(s, &effective_home_dir())
 }
 
 /// Like `full_expand` but takes an explicit home directory instead of reading the environment.
 /// Use this when a `Config` is available — pass `&config.home_dir` to avoid a data race in tests.
-pub(crate) fn full_expand_with_home(
+pub fn full_expand_with_home(
     s: &str,
     home: &std::path::Path,
 ) -> Result<String, shellexpand::LookupError<std::env::VarError>> {

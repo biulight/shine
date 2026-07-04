@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 static DISPLAY_VERSION: OnceLock<String> = OnceLock::new();
 
-pub(crate) fn display() -> &'static str {
+pub fn display() -> &'static str {
     DISPLAY_VERSION
         .get_or_init(|| {
             format_version(
@@ -13,7 +13,7 @@ pub(crate) fn display() -> &'static str {
         .as_str()
 }
 
-pub(crate) fn package() -> &'static str {
+pub fn package() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 

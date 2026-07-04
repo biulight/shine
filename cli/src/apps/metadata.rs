@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
 #[derive(Debug, Clone)]
-pub(crate) struct AppCategory {
+pub struct AppCategory {
     pub name: String,
     pub description: Option<String>,
     pub destination_root: Option<String>,
@@ -25,13 +25,13 @@ pub(crate) struct AppCategory {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AppListMode {
+pub enum AppListMode {
     Category,
     Files,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AppFile {
+pub struct AppFile {
     pub source_rel: PathBuf,
     pub target_rel: PathBuf,
     pub description: Option<String>,
@@ -158,7 +158,7 @@ fn default_list_mode(has_explicit_files: bool) -> AppListMode {
     }
 }
 
-pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<AppCategory>> {
+pub fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<AppCategory>> {
     let filter = filter.map(str::to_string);
     let names = collect_embedded_category_names(filter.as_deref());
     let mut categories = Vec::new();
@@ -172,7 +172,7 @@ pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<AppCa
     Ok(categories)
 }
 
-pub(crate) async fn load_installed_categories(
+pub async fn load_installed_categories(
     config: &Config,
     filter: Option<&str>,
 ) -> Result<Vec<AppCategory>> {

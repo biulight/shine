@@ -18,7 +18,7 @@ use std::path::Path;
 /// Per-file status used for aggregation within a category.
 /// Higher discriminant = higher priority (wins in fold).
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub(crate) enum FileStatus {
+pub enum FileStatus {
     NotInstalled,
     UpToDate,
     UpdateAvail,
@@ -27,22 +27,22 @@ pub(crate) enum FileStatus {
     Missing,
 }
 
-pub(crate) struct ShellRow {
-    pub(crate) symbol: String,
-    pub(crate) label: String,
-    pub(crate) status_sym: &'static str,
-    pub(crate) status_text: &'static str,
+pub struct ShellRow {
+    pub symbol: String,
+    pub label: String,
+    pub status_sym: &'static str,
+    pub status_text: &'static str,
     /// `true` when at least one of preset-file or bin-symlink exists.
-    pub(crate) is_installed: bool,
+    pub is_installed: bool,
 }
 
-pub(crate) struct AppRow {
-    pub(crate) sym: &'static str,
-    pub(crate) label: String,
-    pub(crate) simple_label: String,
-    pub(crate) dest: Option<String>,
-    pub(crate) status_text: &'static str,
-    pub(crate) file_status: FileStatus,
+pub struct AppRow {
+    pub sym: &'static str,
+    pub label: String,
+    pub simple_label: String,
+    pub dest: Option<String>,
+    pub status_text: &'static str,
+    pub file_status: FileStatus,
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ pub(crate) struct AppRow {
 // ---------------------------------------------------------------------------
 
 /// Build shell preset rows.  Does not include the PATH sentinel line.
-pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
+pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     let categories = if config.is_external_presets {
         crate::shells::metadata::load_installed_categories(config, None).await?
     } else {
@@ -150,10 +150,7 @@ async fn shell_template_status(
 }
 
 /// Build app config rows for the given pre-loaded categories.
-pub(crate) async fn build_app_rows(
-    config: &Config,
-    categories: &[AppCategory],
-) -> Result<Vec<AppRow>> {
+pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Result<Vec<AppRow>> {
     let manifest = AppManifest::load(config.shine_dir()).await?;
     let env = EnvConfig::load_or_init(config).await.ok();
     let empty_map = BTreeMap::new();

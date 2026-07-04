@@ -7,7 +7,7 @@ use anyhow::Result;
 
 const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
 
-pub(crate) async fn handle_update_list(config: &Config) -> Result<bool> {
+pub async fn handle_update_list(config: &Config) -> Result<bool> {
     let shell_rows = build_shell_rows(config).await?;
     let update_shell: Vec<&ShellRow> = shell_rows
         .iter()
@@ -88,7 +88,7 @@ pub(crate) async fn handle_update_list(config: &Config) -> Result<bool> {
     Ok(true)
 }
 
-pub(crate) async fn handle_status_list(config: &Config) -> Result<()> {
+pub async fn handle_status_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
@@ -221,7 +221,7 @@ pub(crate) async fn handle_status_list(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+pub async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;
     let installed_shell: Vec<&ShellRow> = shell_rows

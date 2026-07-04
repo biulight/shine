@@ -1,225 +1,23 @@
 use anyhow::{Context, Result, bail};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::Parser;
 use dialoguer::Select;
 use std::path::PathBuf;
 
-mod apps;
-mod bin_links;
-mod check;
-mod clear;
-mod colors;
-mod commands;
-mod completion;
-mod config;
-mod env;
-mod list;
-mod output;
-mod path_display;
-mod platform;
-mod presets;
-mod privilege;
-mod secret;
-mod shells;
-mod show;
-mod sys;
 #[cfg(test)]
-mod test_support;
-mod update_check;
-mod version;
-
-use crate::config::Config;
-use commands::{
-    AppCommands, EnvCommands, ExportCommand, LinkCommand, OverlayCommands, SelfCommands,
-    ShellCommands, SysCommands,
+use cli::test_support;
+use cli::{
+    apps, clear, colors, commands, completion, config, env, list, output, path_display, platform,
+    presets, secret, shells, show, sys, update_check, version,
 };
+
+use commands::{
+    AppCommands, Cli, Commands, CompletionCommands, CompletionShell, EnvCommands, ExportCommand,
+    LinkCommand, OverlayCommands, SelfCommands, ShellCommands, SysCommands,
+};
+#[cfg(test)]
+use commands::{ClearCommand, InitCommand, UpdateCommand, UpgradeCommand};
+use config::Config;
 use update_check::{ReleaseChannel, UpdateStatus};
-
-/// `Shine` - Quick config for sys
-#[derive(Parser, Debug)]
-#[command(name = "shine")]
-#[command(version = crate::version::display(), about, long_about = None)]
-struct Cli {
-    #[arg(long, global = true)]
-    config_dir: Option<String>,
-
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand, Debug)]
-enum Commands {
-    /// Initialize the current directory as a shine presets directory
-    Init(InitCommand),
-    /// Initialize quick shells
-    Shell {
-        #[command(subcommand)]
-        command: ShellCommands,
-    },
-    /// Install app config files (e.g. starship.toml, .ideavimrc) to their annotated destinations
-    App {
-        #[command(subcommand)]
-        command: AppCommands,
-    },
-    /// Install a shell or app preset category
-    Install {
-        /// Preset category to install (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
-    },
-    /// Reinstall a shell or app preset category
-    Reinstall {
-        /// Preset category to reinstall (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
-    },
-    /// Uninstall a shell or app preset category
-    Uninstall {
-        /// Preset category to uninstall (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
-    },
-    /// Generate or install shell completion scripts
-    Completions {
-        #[command(subcommand)]
-        command: CompletionCommands,
-    },
-    /// List installed shell presets and app configs
-    List,
-    /// Show details for an installed config or shell preset
-    Info {
-        /// Installed item to inspect (e.g. git, starship, proxy, setproxy)
-        #[arg(value_name = "TARGET")]
-        target: String,
-        /// Also print a unified diff against the expected content
-        #[arg(long)]
-        diff: bool,
-        /// Also print the installed or rendered file content
-        #[arg(long)]
-        verbose: bool,
-    },
-    /// Copy built-in presets to a directory for local customization
-    Export(ExportCommand),
-    /// Set the external presets directory in the active config
-    Link(LinkCommand),
-    /// Remove the external presets directory from the active config
-    Unlink,
-    /// Manage the personal presets overlay directory
-    Overlay {
-        #[command(subcommand)]
-        command: OverlayCommands,
-    },
-    /// Show installed config status and check for a newer version of shine
-    Update(UpdateCommand),
-    /// Force-update installed shell and app configs
-    Upgrade(UpgradeCommand),
-    /// Clear old shine-owned runtime state after schema changes
-    Clear(ClearCommand),
-    /// Manage the shine binary itself
-    #[command(name = "self")]
-    Self_ {
-        #[command(subcommand)]
-        command: SelfCommands,
-    },
-    /// Manage preset variables and workspace command environments
-    Env {
-        #[command(subcommand)]
-        command: EnvCommands,
-    },
-    /// Initialize or inspect system-level presets for the current OS
-    Sys {
-        #[command(subcommand)]
-        command: SysCommands,
-    },
-}
-
-#[derive(Args, Debug)]
-struct InitCommand {
-    /// Skip the confirmation prompt
-    #[arg(long)]
-    yes: bool,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-enum CompletionShell {
-    #[value(name = "bash")]
-    Bash,
-    #[value(name = "powershell")]
-    PowerShell,
-    #[value(name = "zsh")]
-    Zsh,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Subcommand)]
-enum CompletionCommands {
-    /// Install completions into the managed shell profile without installing presets
-    Install,
-    /// Generate bash completion registration script
-    Bash,
-    /// Generate PowerShell completion registration script
-    #[command(name = "powershell")]
-    PowerShell,
-    /// Generate zsh completion registration script
-    Zsh,
-}
-
-impl CompletionCommands {
-    fn generate(self) {
-        match self {
-            CompletionCommands::Bash => completion::generate_registration(CompletionShell::Bash),
-            CompletionCommands::PowerShell => {
-                completion::generate_registration(CompletionShell::PowerShell)
-            }
-            CompletionCommands::Zsh => completion::generate_registration(CompletionShell::Zsh),
-            CompletionCommands::Install => unreachable!("install is handled by the async runtime"),
-        }
-    }
-}
-
-impl CompletionShell {
-    fn from_command(command: &CompletionCommands) -> Option<Self> {
-        match command {
-            CompletionCommands::Bash => Some(CompletionShell::Bash),
-            CompletionCommands::PowerShell => Some(CompletionShell::PowerShell),
-            CompletionCommands::Zsh => Some(CompletionShell::Zsh),
-            CompletionCommands::Install => None,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            CompletionShell::Bash => "bash",
-            CompletionShell::PowerShell => "powershell",
-            CompletionShell::Zsh => "zsh",
-        }
-    }
-}
-
-#[derive(Parser, Debug)]
-struct UpdateCommand {
-    /// Show installed entries that are already current or need attention
-    #[arg(long)]
-    verbose: bool,
-    /// Bypass the 24-hour version cache and check GitHub now
-    #[arg(long)]
-    refresh: bool,
-}
-
-#[derive(Parser, Debug)]
-struct UpgradeCommand {
-    /// Show detailed env-template checks and skipped rows
-    #[arg(long)]
-    verbose: bool,
-    /// Remove stale managed app files whose preset source no longer exists
-    #[arg(long)]
-    prune_stale: bool,
-}
-
-#[derive(Parser, Debug)]
-struct ClearCommand {
-    /// Print cleanup steps without changing files
-    #[arg(long)]
-    dry_run: bool,
-}
 
 fn main() -> Result<()> {
     completion::complete_from_env();
@@ -720,7 +518,7 @@ async fn handle_env_show(config: &Config, reveal: bool) -> Result<()> {
     println!(
         "  {}  {}",
         colors::dim("Config"),
-        colors::dim(&crate::path_display::format(config.config_path()))
+        colors::dim(&path_display::format(config.config_path()))
     );
     println!(
         "  {}",
@@ -1142,7 +940,7 @@ fn format_self_upgrade_message(
 
 async fn handle_config_upgrade(config: &Config, verbose: bool, prune_stale: bool) -> Result<()> {
     println!("{}", colors::bold("Upgrading installed configs"));
-    crate::config::print_presets_note(config);
+    config::print_presets_note(config);
 
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
     let shell_report = Box::pin(shells::handle_upgrade_installed(config, verbose)).await?;
@@ -1305,8 +1103,7 @@ async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -> Re
     use anyhow::Context as _;
 
     let raw = path.to_string_lossy();
-    let expanded =
-        crate::config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
+    let expanded = config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
     let expanded = PathBuf::from(expanded);
 
     if create {
@@ -1402,8 +1199,7 @@ async fn handle_overlay_link(config: &Config, path: PathBuf, create: bool) -> Re
     use anyhow::Context as _;
 
     let raw = path.to_string_lossy();
-    let expanded =
-        crate::config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
+    let expanded = config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
     let expanded = PathBuf::from(expanded);
 
     if create {
@@ -1628,7 +1424,7 @@ fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::env_lock;
+    use test_support::env_lock;
     use tokio::fs;
 
     async fn make_temp_dir() -> PathBuf {

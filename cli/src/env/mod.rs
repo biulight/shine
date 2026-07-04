@@ -1,6 +1,6 @@
-pub(crate) mod catalog;
-pub(crate) mod upgrade;
-pub(crate) mod workspace;
+pub mod catalog;
+pub mod upgrade;
+pub mod workspace;
 
 use crate::config::Config;
 use anyhow::Result;
@@ -11,48 +11,48 @@ use std::collections::BTreeMap;
 /// Values are substituted into preset files that opt in via the `template`
 /// transform (using `@@VAR_NAME@@` placeholders).
 #[derive(Clone, Debug, Default)]
-pub(crate) struct EnvConfig {
+pub struct EnvConfig {
     vars: BTreeMap<String, String>,
     descriptions: BTreeMap<String, String>,
 }
 
 impl EnvConfig {
-    pub(crate) fn from_config(config: &Config) -> Self {
+    pub fn from_config(config: &Config) -> Self {
         Self {
             vars: config.env.clone(),
             descriptions: config.env_descriptions.clone(),
         }
     }
 
-    pub(crate) async fn load_or_init(config: &Config) -> Result<Self> {
+    pub async fn load_or_init(config: &Config) -> Result<Self> {
         Ok(Self::from_config(config))
     }
 
-    pub(crate) fn get(&self, key: &str) -> Option<&str> {
+    pub fn get(&self, key: &str) -> Option<&str> {
         self.vars.get(key).map(|s| s.as_str())
     }
 
-    pub(crate) fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
+    pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.vars.insert(key.into(), value.into());
     }
 
-    pub(crate) fn remove(&mut self, key: &str) -> Option<String> {
+    pub fn remove(&mut self, key: &str) -> Option<String> {
         self.vars.remove(key)
     }
 
-    pub(crate) fn as_map(&self) -> &BTreeMap<String, String> {
+    pub fn as_map(&self) -> &BTreeMap<String, String> {
         &self.vars
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.vars.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
-    pub(crate) fn description(&self, key: &str) -> Option<&str> {
+    pub fn description(&self, key: &str) -> Option<&str> {
         self.descriptions.get(key).map(String::as_str)
     }
 
-    pub(crate) async fn save(&self, config: &Config) -> Result<()> {
+    pub async fn save(&self, config: &Config) -> Result<()> {
         let mut updated = config.clone();
         updated.env = self.vars.clone();
         updated.save().await

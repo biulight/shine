@@ -4,7 +4,7 @@ mod template;
 use std::collections::BTreeMap;
 
 /// Validate transform spec names without applying them.
-pub(crate) fn validate(specs: &[String]) -> anyhow::Result<()> {
+pub fn validate(specs: &[String]) -> anyhow::Result<()> {
     for spec in specs {
         if !matches!(spec.as_str(), "jsonc-to-json" | "template") {
             anyhow::bail!("unknown transform {spec:?} (known: jsonc-to-json, template)");
@@ -16,7 +16,7 @@ pub(crate) fn validate(specs: &[String]) -> anyhow::Result<()> {
 /// Apply a pipeline of transforms to `input`, returning the transformed bytes.
 ///
 /// `env` is passed to the `template` transform; other transforms ignore it.
-pub(crate) fn apply(
+pub fn apply(
     specs: &[String],
     input: &[u8],
     env: &BTreeMap<String, String>,
