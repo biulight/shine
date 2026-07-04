@@ -7,6 +7,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Features
+
+- Added `shine env seal` and `shine env run` for editable, layered workspace environment files with GPG-sealed secrets and transparent mode-specific caching.
+
 ### Deprecations
 
 - Legacy project `config.toml` and `.env.toml` filenames now warn that support will be removed in v0.40.0; rename them to `shine.config.toml` and `shine.env.toml`.

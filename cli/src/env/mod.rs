@@ -1,5 +1,6 @@
 pub(crate) mod catalog;
 pub(crate) mod upgrade;
+pub(crate) mod workspace;
 
 use crate::config::Config;
 use anyhow::Result;

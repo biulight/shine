@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use std::{ffi::OsString, path::PathBuf};
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum EnvCommands {
@@ -40,6 +41,10 @@ pub(crate) enum EnvCommands {
     },
     /// Encrypt stdin with GPG and print base64 ciphertext
     Encrypt(EnvEncryptCommand),
+    /// Seal pending secrets in workspace environment files
+    Seal(EnvSealCommand),
+    /// Run a command with the workspace environment
+    Run(EnvRunCommand),
 }
 
 #[derive(Args, Debug)]
@@ -53,4 +58,30 @@ pub(crate) struct EnvEncryptCommand {
     /// Read plaintext from an existing config.toml [env] variable instead of stdin
     #[arg(long)]
     pub from: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct EnvSealCommand {
+    /// Seal only this environment source file
+    #[arg(value_name = "FILE")]
+    pub file: Option<PathBuf>,
+    /// Workspace definition (defaults to the nearest shine.workspace.toml)
+    #[arg(long, value_name = "FILE")]
+    pub workspace: Option<PathBuf>,
+    /// GPG recipient key ID, fingerprint, or email
+    #[arg(short = 'r', long)]
+    pub recipient: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct EnvRunCommand {
+    /// Workspace definition (defaults to the nearest shine.workspace.toml)
+    #[arg(long, value_name = "FILE")]
+    pub workspace: Option<PathBuf>,
+    /// Environment mode used to expand {mode} paths
+    #[arg(long)]
+    pub mode: Option<String>,
+    /// Command and arguments to run
+    #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+    pub command: Vec<OsString>,
 }

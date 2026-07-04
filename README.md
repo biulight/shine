@@ -642,6 +642,66 @@ API_TOKEN` to use a different variable name in the shell, or install the `utils`
 preset and run `shine-env-export MY_TOKEN --as API_TOKEN` to apply it directly.
 Use `--set` when you need a custom encrypted target key.
 
+### Workspace environment runner
+
+For projects that should not keep plaintext dotenv files, add a
+`shine.workspace.toml`:
+
+```toml
+version = 1
+
+[env]
+modes = ["development", "production"]
+default_mode = "development"
+files = [
+  ".env.shine.toml",
+  ".env.local.shine.toml",
+  ".env.{mode}.shine.toml",
+  ".env.{mode}.local.shine.toml",
+]
+
+[env.encryption]
+recipient = "alice@example.com"
+```
+
+Each environment source may mix plaintext and encrypted values:
+
+```toml
+version = 1
+
+[plain]
+VITE_APP_NAME = "My App"
+
+[secret]
+DATABASE_URL = true        # keep the existing encrypted value
+API_TOKEN = false          # prompt securely on the next seal
+SENTRY_TOKEN = "new-value" # seal this value, then replace it with true
+
+[payload]
+data = "<managed GPG ciphertext>"
+```
+
+Seal pending values, then run a command with the merged environment:
+
+```bash
+shine env seal
+shine env run --mode production -- bun run build
+```
+
+Sources are merged in the configured order, with later files winning. Existing
+process variables win by default; set `env.override_process_env = true` to let
+workspace values replace them. `env run` automatically maintains an encrypted,
+mode-specific cache in the operating system cache directory. The cache is an
+implementation detail and is rebuilt whenever the workspace, source contents,
+or layer order changes.
+
+Add local source files to `.gitignore` when they contain personal overrides:
+
+```gitignore
+.env.local.shine.toml
+.env.*.local.shine.toml
+```
+
 Then install and use the helper:
 
 ```bash

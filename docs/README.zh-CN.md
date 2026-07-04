@@ -626,6 +626,63 @@ eval "$(shine env export MY_TOKEN --as API_TOKEN)"
 
 安装 `utils` 预设后，也可以用 `shine-env-export MY_TOKEN --as API_TOKEN` 直接应用，无需手写 `eval`。
 
+### Workspace 环境运行器
+
+如果项目不希望保留明文 dotenv 文件，可以创建 `shine.workspace.toml`：
+
+```toml
+version = 1
+
+[env]
+modes = ["development", "production"]
+default_mode = "development"
+files = [
+  ".env.shine.toml",
+  ".env.local.shine.toml",
+  ".env.{mode}.shine.toml",
+  ".env.{mode}.local.shine.toml",
+]
+
+[env.encryption]
+recipient = "alice@example.com"
+```
+
+每个环境源文件可以同时包含明文值和加密值：
+
+```toml
+version = 1
+
+[plain]
+VITE_APP_NAME = "My App"
+
+[secret]
+DATABASE_URL = true         # 保留已有密文值
+API_TOKEN = false           # 下次 seal 时安全提示输入
+SENTRY_TOKEN = "new-value" # seal 后自动替换成 true
+
+[payload]
+data = "<由 Shine 管理的 GPG 密文>"
+```
+
+封存待处理的值，再用合并后的环境运行命令：
+
+```bash
+shine env seal
+shine env run --mode production -- bun run build
+```
+
+环境源按配置顺序合并，后面的文件覆盖前面的文件。默认保留当前进程中已存在的变量；设置
+`env.override_process_env = true` 后改由 workspace 值覆盖。`env run` 会在系统缓存目录中自动维护按
+mode 区分的加密缓存；workspace、源文件内容或覆盖顺序变化后，缓存会自动重建，不需要单独的
+compile 命令。
+
+个人覆盖文件应加入 `.gitignore`：
+
+```gitignore
+.env.local.shine.toml
+.env.*.local.shine.toml
+```
+
 然后安装并使用这个 helper：
 
 ```bash

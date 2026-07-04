@@ -119,7 +119,7 @@ enum Commands {
         #[command(subcommand)]
         command: SelfCommands,
     },
-    /// Manage environment variables used during preset installation
+    /// Manage preset variables and workspace command environments
     Env {
         #[command(subcommand)]
         command: EnvCommands,
@@ -414,6 +414,24 @@ async fn run(cli: Cli) -> Result<()> {
                     cmd.recipient.as_deref(),
                     cmd.set.as_deref(),
                     cmd.from.as_deref(),
+                )
+                .await
+            }
+            EnvCommands::Seal(cmd) => {
+                env::workspace::handle_seal(
+                    &config,
+                    cmd.workspace.as_deref(),
+                    cmd.file.as_deref(),
+                    cmd.recipient.as_deref(),
+                )
+                .await
+            }
+            EnvCommands::Run(cmd) => {
+                env::workspace::handle_run(
+                    &config,
+                    cmd.workspace.as_deref(),
+                    cmd.mode.as_deref(),
+                    &cmd.command,
                 )
                 .await
             }
@@ -1998,6 +2016,49 @@ mod tests {
             Commands::Env {
                 command: EnvCommands::Encrypt(cmd)
             } if cmd.recipient.as_deref() == Some("alice@example.com")
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_workspace_env_seal() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "seal",
+            ".env.production.shine.toml",
+            "--recipient",
+            "alice@example.com",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Seal(cmd)
+            } if cmd.file.as_deref() == Some(std::path::Path::new(".env.production.shine.toml"))
+                && cmd.recipient.as_deref() == Some("alice@example.com")
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_workspace_env_run_trailing_command() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "run",
+            "--mode",
+            "production",
+            "--",
+            "bun",
+            "run",
+            "build",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Run(cmd)
+            } if cmd.mode.as_deref() == Some("production")
+                && cmd.command == ["bun", "run", "build"]
         ));
     }
 
