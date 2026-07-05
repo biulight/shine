@@ -181,9 +181,13 @@ Run `shine app install` to install all.
 
 ```bash
 shine sys list
+shine sys list --all
+shine sys info split-dns
 ```
 
-Lists the built-in OS bootstrap presets and marks the current platform with `▶`.
+`shine sys list` shows every init and managed item available for the current OS, including its recorded status and the command used to enable it. Use `--all` to inspect every supported OS.
+
+`shine sys info <ITEM>` shows an item's type, driver, administrator requirement, required environment variable names, current status, and next commands. For example, `shine sys info split-dns` explains how to enable private split DNS without exposing configured environment values.
 
 ### Run system init for the current OS
 

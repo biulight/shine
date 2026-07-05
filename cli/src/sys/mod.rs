@@ -19,7 +19,8 @@ mod resources;
 mod selection;
 use execution::{
     format_command_preview, manifest_item_labels, print_item_outcome, print_run_header,
-    print_sys_summary, run_sys_item, run_sys_item_action, sys_init_command, sys_item_label_width,
+    print_sys_summary, run_sys_item, run_sys_item_action, status_symbol, status_text,
+    sys_init_command, sys_item_label_width,
 };
 #[cfg(test)]
 use execution::{parse_status_event, parse_sys_item_output};
@@ -304,44 +305,198 @@ fn detect_os_id_from(os: &str, os_release: Option<&str>) -> Result<String> {
     }
 }
 
-pub async fn handle_list(config: &Config) -> Result<()> {
+pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     crate::config::print_presets_note(config);
-
-    let current_os = detect_os_id().await.ok();
-
-    let entries = if config.is_external_presets {
-        list_fs_sys_entries(config.presets_dir()).await
+    let current_os = if all {
+        detect_os_id().await.ok()
     } else {
-        list_embedded_sys_entries()
+        Some(detect_os_id().await?)
     };
-
-    if entries.is_empty() {
-        println!("{}", colors::dim("No system init presets found."));
-        return Ok(());
+    let mut presets = load_available_sys_manifests(config).await?;
+    if !all {
+        presets.retain(|(os_id, _)| Some(os_id.as_str()) == current_os.as_deref());
     }
-
-    println!("{}\n", colors::bold("System Init Presets"));
-
-    for (os_id, description) in &entries {
-        let is_current = current_os.as_deref() == Some(os_id.as_str());
-        let marker = if is_current { "▶" } else { " " };
-        let label = if is_current {
-            colors::bold(os_id)
-        } else {
-            os_id.clone()
-        };
-        println!("  {marker} {label}");
-        if !description.is_empty() {
-            println!("      {}", colors::dim(description));
+    if presets.is_empty() {
+        if all {
+            println!("{}", colors::dim("No system presets found."));
+            return Ok(());
         }
-        println!();
+        let current_os = current_os.as_deref().unwrap_or("unknown");
+        bail!("No system preset found for `{current_os}`");
     }
 
+    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+    println!("{}\n", colors::bold("System Items"));
+    for (index, (os_id, manifest)) in presets.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        let current = if Some(os_id.as_str()) == current_os.as_deref() {
+            " (current)"
+        } else {
+            ""
+        };
+        println!("  {}{}", colors::bold(os_id), colors::dim(current));
+        if !manifest.description.is_empty() {
+            println!("    {}", colors::dim(&manifest.description));
+        }
+        if manifest.items.is_empty() {
+            println!("    {}", colors::dim("No items available."));
+        }
+        for item in &manifest.items {
+            let entry = run_manifest
+                .entries
+                .iter()
+                .find(|entry| entry.os_id == *os_id && entry.item_id == item.id);
+            print_available_item(item, entry);
+        }
+    }
+
+    println!();
     println!(
         "{}",
-        colors::dim("Run `shine sys init` to initialize the current system.")
+        colors::dim("Use `shine sys info <ITEM>` for details.")
     );
+    println!("{}", colors::dim("Init items: `shine sys init`."));
+    println!(
+        "{}",
+        colors::dim("Managed items: `shine sys apply <ITEM>`.")
+    );
+    if !all {
+        println!(
+            "{}",
+            colors::dim("Use `shine sys list --all` to show every OS.")
+        );
+    }
     Ok(())
+}
+
+pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
+    crate::config::print_presets_note(config);
+    let os_id = detect_os_id().await?;
+    let presets = load_available_sys_manifests(config).await?;
+    let manifest = presets
+        .iter()
+        .find(|(candidate, _)| candidate == &os_id)
+        .map(|(_, manifest)| manifest)
+        .with_context(|| format!("No system preset found for `{os_id}`"))?;
+    let item = manifest
+        .items
+        .iter()
+        .find(|candidate| candidate.id == item_id)
+        .with_context(|| {
+            let available = manifest
+                .items
+                .iter()
+                .map(|candidate| candidate.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("unknown sys item `{item_id}` for {os_id}. Available: {available}")
+        })?;
+    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let entry = run_manifest
+        .entries
+        .iter()
+        .find(|entry| entry.os_id == os_id && entry.item_id == item.id);
+
+    println!("{}\n", colors::bold("System Item"));
+    println!(
+        "  {}  {}",
+        colors::bold(&item.label),
+        colors::dim(&format!("({})", item.id))
+    );
+    if !item.description.is_empty() {
+        println!("  {}", item.description);
+    }
+    println!();
+    println!("  {:<14} {}", "OS", os_id);
+    println!("  {:<14} {}", "Type", item_mode_name(item.mode));
+    println!("  {:<14} {}", "Driver", driver_name(item.driver));
+    println!(
+        "  {:<14} {}",
+        "Admin access",
+        if item.requires_admin {
+            "required"
+        } else {
+            "not required"
+        }
+    );
+    println!(
+        "  {:<14} {}",
+        "Status",
+        entry
+            .map(|entry| status_text(entry.status))
+            .unwrap_or("not recorded")
+    );
+    if let Some(entry) = entry
+        && !entry.detail.is_empty()
+    {
+        println!("  {:<14} {}", "Status detail", entry.detail);
+    }
+    println!(
+        "  {:<14} {}",
+        "Required env",
+        if item.required_env.is_empty() {
+            "none".to_string()
+        } else {
+            item.required_env.join(", ")
+        }
+    );
+    println!();
+    match item.mode {
+        SysItemMode::Init => println!("  Next: run `shine sys init` and select `{}`.", item.id),
+        SysItemMode::Managed if entry.is_some() => {
+            println!("  Apply:     `shine sys apply {}`", item.id);
+            println!("  Uninstall: `shine sys uninstall {}`", item.id);
+        }
+        SysItemMode::Managed => println!("  Next: run `shine sys apply {}`.", item.id),
+    }
+    Ok(())
+}
+
+fn print_available_item(item: &SysItem, entry: Option<&SysRunEntry>) {
+    let kind = item_mode_name(item.mode);
+    let status = entry
+        .map(|entry| {
+            let symbol = status_symbol(entry.status);
+            format!(
+                "{} {}",
+                colors::symbol(symbol),
+                colors::status_label(status_text(entry.status), symbol)
+            )
+        })
+        .unwrap_or_else(|| colors::dim("not recorded"));
+    println!(
+        "    {:<18} {:<9} {}  {}",
+        item.id,
+        format!("[{kind}]"),
+        colors::bold(&item.label),
+        status
+    );
+    if !item.description.is_empty() {
+        println!("      {}", colors::dim(&item.description));
+    }
+    if item.mode == SysItemMode::Managed {
+        println!(
+            "      {}",
+            colors::dim(&format!("Run: shine sys apply {}", item.id))
+        );
+    }
+}
+
+fn item_mode_name(mode: SysItemMode) -> &'static str {
+    match mode {
+        SysItemMode::Init => "init",
+        SysItemMode::Managed => "managed",
+    }
+}
+
+fn driver_name(driver: SysDriverKind) -> &'static str {
+    match driver {
+        SysDriverKind::Script => "script",
+        SysDriverKind::SplitDns => "split-dns",
+        SysDriverKind::ManagedFile => "managed-file",
+    }
 }
 
 pub async fn handle_status(config: &Config) -> Result<()> {
@@ -985,7 +1140,15 @@ async fn print_dry_run(
     Ok(())
 }
 
-fn list_embedded_sys_entries() -> Vec<(String, String)> {
+async fn load_available_sys_manifests(config: &Config) -> Result<Vec<(String, SysManifest)>> {
+    if config.is_external_presets {
+        load_fs_sys_manifests(config.presets_dir()).await
+    } else {
+        load_embedded_sys_manifests()
+    }
+}
+
+fn load_embedded_sys_manifests() -> Result<Vec<(String, SysManifest)>> {
     let mut os_ids: BTreeSet<String> = BTreeSet::new();
 
     for path in crate::presets::asset_paths("sys") {
@@ -1004,48 +1167,44 @@ fn list_embedded_sys_entries() -> Vec<(String, String)> {
         .into_iter()
         .map(|os_id| {
             let toml_path = format!("sys/{os_id}/shine.toml");
-            let description = crate::presets::read_asset_bytes(&toml_path)
-                .and_then(|b| String::from_utf8(b).ok())
-                .and_then(|s| toml::from_str::<SysManifest>(&s).ok())
-                .map(|m| m.description)
-                .unwrap_or_default();
-            (os_id, description)
+            let bytes = crate::presets::read_asset_bytes(&toml_path)
+                .with_context(|| format!("missing embedded preset manifest `{toml_path}`"))?;
+            let content = String::from_utf8(bytes)
+                .with_context(|| format!("preset manifest `{toml_path}` is not UTF-8"))?;
+            let manifest = manifest::parse_and_validate_manifest(&content)
+                .with_context(|| format!("parsing embedded preset manifest `{toml_path}`"))?;
+            Ok((os_id, manifest))
         })
         .collect()
 }
 
-async fn list_fs_sys_entries(presets_dir: &Path) -> Vec<(String, String)> {
+async fn load_fs_sys_manifests(presets_dir: &Path) -> Result<Vec<(String, SysManifest)>> {
     let sys_root = presets_dir.join("sys");
     if !sys_root.is_dir() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
-    let mut entries: BTreeMap<String, String> = BTreeMap::new();
+    let mut entries: BTreeMap<String, SysManifest> = BTreeMap::new();
+    let mut dir = tokio::fs::read_dir(&sys_root)
+        .await
+        .with_context(|| format!("reading {}", sys_root.display()))?;
 
-    let Ok(mut dir) = tokio::fs::read_dir(&sys_root).await else {
-        return Vec::new();
-    };
-
-    while let Ok(Some(entry)) = dir.next_entry().await {
-        let Ok(ft) = entry.file_type().await else {
-            continue;
-        };
+    while let Some(entry) = dir.next_entry().await? {
+        let ft = entry.file_type().await?;
         if !ft.is_dir() {
             continue;
         }
         let os_id = entry.file_name().to_string_lossy().to_string();
         let toml_path = sys_root.join(&os_id).join("shine.toml");
-        let description = if let Ok(content) = tokio::fs::read_to_string(&toml_path).await {
-            toml::from_str::<SysManifest>(&content)
-                .map(|m| m.description)
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        entries.insert(os_id, description);
+        let content = tokio::fs::read_to_string(&toml_path)
+            .await
+            .with_context(|| format!("reading {}", toml_path.display()))?;
+        let manifest = manifest::parse_and_validate_manifest(&content)
+            .with_context(|| format!("parsing {}", toml_path.display()))?;
+        entries.insert(os_id, manifest);
     }
 
-    entries.into_iter().collect()
+    Ok(entries.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -1874,11 +2033,11 @@ required_env = ["NOT-AN-ENV"]
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    // --- list_embedded_sys_entries ---
+    // --- load_embedded_sys_manifests ---
 
     #[test]
     fn embedded_entries_include_supported_systems() {
-        let entries = list_embedded_sys_entries();
+        let entries = load_embedded_sys_manifests().unwrap();
         let ids: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
         assert!(ids.contains(&"ubuntu"), "ubuntu missing: {ids:?}");
         assert!(ids.contains(&"macos"), "macos missing: {ids:?}");
@@ -1887,15 +2046,37 @@ required_env = ["NOT-AN-ENV"]
 
     #[test]
     fn embedded_entries_have_descriptions() {
-        let entries = list_embedded_sys_entries();
-        for (id, desc) in &entries {
-            assert!(!desc.is_empty(), "description for {id} should not be empty");
+        let entries = load_embedded_sys_manifests().unwrap();
+        for (id, manifest) in &entries {
+            assert!(
+                !manifest.description.is_empty(),
+                "description for {id} should not be empty"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_current_platforms_expose_split_dns() {
+        let entries = load_embedded_sys_manifests().unwrap();
+        for os_id in ["macos", "ubuntu", "windows"] {
+            let manifest = entries
+                .iter()
+                .find(|(candidate, _)| candidate == os_id)
+                .map(|(_, manifest)| manifest)
+                .unwrap_or_else(|| panic!("missing {os_id} manifest"));
+            let item = manifest
+                .items
+                .iter()
+                .find(|item| item.id == "split-dns")
+                .unwrap_or_else(|| panic!("split-dns missing for {os_id}"));
+            assert_eq!(item.mode, SysItemMode::Managed);
+            assert_eq!(item.driver, SysDriverKind::SplitDns);
         }
     }
 
     #[test]
     fn embedded_sys_manifests_are_valid() {
-        for (id, _) in list_embedded_sys_entries() {
+        for (id, _) in load_embedded_sys_manifests().unwrap() {
             let toml_path = format!("sys/{id}/shine.toml");
             let content = crate::presets::read_asset_bytes(&toml_path)
                 .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -2211,19 +2392,19 @@ required_env = ["NOT-AN-ENV"]
 
     #[test]
     fn embedded_entries_sorted_alphabetically() {
-        let entries = list_embedded_sys_entries();
+        let entries = load_embedded_sys_manifests().unwrap();
         let ids: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
         let mut sorted = ids.clone();
         sorted.sort();
         assert_eq!(ids, sorted, "entries should be alphabetically sorted");
     }
 
-    // --- list_fs_sys_entries ---
+    // --- load_fs_sys_manifests ---
 
     #[tokio::test]
     async fn list_fs_returns_empty_when_sys_dir_missing() {
         let dir = make_temp_dir().await;
-        let entries = list_fs_sys_entries(&dir).await;
+        let entries = load_fs_sys_manifests(&dir).await.unwrap();
         assert!(entries.is_empty());
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2240,10 +2421,28 @@ required_env = ["NOT-AN-ENV"]
         .await
         .unwrap();
 
-        let entries = list_fs_sys_entries(&dir).await;
+        let entries = load_fs_sys_manifests(&dir).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "testlinux");
-        assert_eq!(entries[0].1, "A test distro.");
+        assert_eq!(entries[0].1.description, "A test distro.");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_fs_rejects_invalid_manifest() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("sys/testlinux");
+        fs::create_dir_all(&os_dir).await.unwrap();
+        fs::write(
+            os_dir.join("shine.toml"),
+            b"[[items]]\nid = \"bad id\"\nlabel = \"Bad\"\n",
+        )
+        .await
+        .unwrap();
+
+        let error = load_fs_sys_manifests(&dir).await.unwrap_err();
+        assert!(error.to_string().contains("parsing"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2254,7 +2453,7 @@ required_env = ["NOT-AN-ENV"]
     async fn handle_list_succeeds_with_embedded_presets() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
-        handle_list(&config).await.unwrap();
+        handle_list(&config, false).await.unwrap();
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

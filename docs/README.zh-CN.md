@@ -181,9 +181,13 @@ Run `shine app install` to install all.
 
 ```bash
 shine sys list
+shine sys list --all
+shine sys info split-dns
 ```
 
-它会列出内置的操作系统初始化预设，并用 `▶` 标记当前平台。
+`shine sys list` 会列出当前操作系统可用的全部初始化项和托管项，包括已记录状态及启用命令。使用 `--all` 可查看所有受支持的操作系统。
+
+`shine sys info <ITEM>` 会显示 item 的类型、驱动、管理员权限要求、必需环境变量名称、当前状态和下一步命令。例如，`shine sys info split-dns` 能直接说明如何启用私有 split DNS，且不会暴露环境变量的配置值。
 
 ### 运行当前操作系统的初始化流程
 

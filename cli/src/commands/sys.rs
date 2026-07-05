@@ -2,8 +2,18 @@ use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 pub enum SysCommands {
-    /// List available system init presets
-    List,
+    /// List available system items
+    List {
+        /// Show items for every supported operating system
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show detailed information about a system item
+    Info {
+        /// System item to inspect
+        #[arg(value_name = "ITEM")]
+        item: String,
+    },
     /// Show system init items previously initialized by shine
     Status,
     /// Run the system init script for the current OS

@@ -255,7 +255,8 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Commands::Sys { command } => match command {
-            SysCommands::List => Box::pin(sys::handle_list(&config)).await,
+            SysCommands::List { all } => Box::pin(sys::handle_list(&config, all)).await,
+            SysCommands::Info { item } => Box::pin(sys::handle_info(&config, &item)).await,
             SysCommands::Status => Box::pin(sys::handle_status(&config)).await,
             SysCommands::Init {
                 preset,
@@ -1814,6 +1815,25 @@ mod tests {
             Commands::Sys {
                 command: SysCommands::Status
             }
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_sys_list_and_info() {
+        let cli = Cli::try_parse_from(["shine", "sys", "list", "--all"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::List { all: true }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "info", "split-dns"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Info { ref item }
+            } if item == "split-dns"
         ));
     }
 

@@ -274,7 +274,7 @@ pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
     }
 }
 
-fn status_symbol(status: SysItemStatus) -> &'static str {
+pub(super) fn status_symbol(status: SysItemStatus) -> &'static str {
     match status {
         SysItemStatus::Skipped | SysItemStatus::NeedsAction => "~",
         SysItemStatus::Failed => "✗",
@@ -282,7 +282,7 @@ fn status_symbol(status: SysItemStatus) -> &'static str {
     }
 }
 
-fn status_text(status: SysItemStatus) -> &'static str {
+pub(super) fn status_text(status: SysItemStatus) -> &'static str {
     match status {
         SysItemStatus::Installed => "installed",
         SysItemStatus::AlreadyInstalled => "already installed",
