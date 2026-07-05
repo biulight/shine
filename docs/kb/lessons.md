@@ -3,6 +3,16 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-05 — Filtered overlay lookup must search the merged preset namespace
+
+- **Symptom**: `shine upgrade` failed with `app preset category not found: JetBrains` when the
+  category existed in the external presets directory but not in the configured overlay.
+- **Root cause**: filtered app-category discovery treated a miss in either the base or overlay
+  directory as fatal instead of checking whether the category existed in their union.
+- **Fix**: defer the not-found error until base and overlay category names have been merged.
+- **Rule**: filtered preset lookup must resolve against the merged namespace; a category only
+  needs to exist in one source, while matching overlay paths still take precedence.
+
 ## 2026-07-04 — `requires_admin` dropped from manifest entries broke sudo uninstall
 
 - **Symptom**: CI failure in `install_then_uninstall_roundtrip`; uninstall of

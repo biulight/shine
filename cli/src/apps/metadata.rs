@@ -184,6 +184,11 @@ pub async fn load_installed_categories(
     if let Some(overlay) = config.active_presets_overlay_dir() {
         category_names.extend(collect_fs_category_names(&overlay.join("app"), filter).await?);
     }
+    if let Some(filter) = filter
+        && category_names.is_empty()
+    {
+        bail!("app preset category not found: {filter}");
+    }
     let mut categories = Vec::new();
 
     for name in category_names {
@@ -458,7 +463,7 @@ async fn collect_fs_category_names(app_root: &Path, filter: Option<&str>) -> Res
         if path.exists() {
             return Ok(vec![filter.to_string()]);
         }
-        bail!("app preset category not found: {filter}");
+        return Ok(Vec::new());
     }
 
     if !app_root.exists() {
@@ -629,6 +634,45 @@ fn parse_legacy_description(content: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn write_test_category(root: &Path, name: &str) {
+        let category = root.join("app").join(name);
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(category.join("shine.toml"), "dest = \"~/.config/test\"\n")
+            .await
+            .unwrap();
+        fs::write(category.join("config.toml"), "test = true\n")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn filtered_category_may_exist_in_only_one_merged_presets_root() {
+        let dir = std::env::temp_dir().join(format!(
+            "shine-app-metadata-merged-filter-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let overlay = dir.join("overlay");
+        let mut config = Config::new_for_test(&dir);
+        config.presets_overlay_dir_override = Some(overlay.clone());
+
+        write_test_category(config.presets_dir(), "base-only").await;
+        write_test_category(&overlay, "overlay-only").await;
+
+        let base = load_installed_categories(&config, Some("base-only"))
+            .await
+            .unwrap();
+        let overlaid = load_installed_categories(&config, Some("overlay-only"))
+            .await
+            .unwrap();
+
+        assert_eq!(base.len(), 1);
+        assert_eq!(base[0].name, "base-only");
+        assert_eq!(overlaid.len(), 1);
+        assert_eq!(overlaid[0].name, "overlay-only");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
 
     #[test]
     fn embedded_vim_uses_metadata() {
