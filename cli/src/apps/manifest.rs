@@ -41,6 +41,9 @@ pub struct AppEntry {
     /// Used by config upgrade to skip files that never used env vars.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub uses_env: bool,
+    /// True when installing/removing this file requires elevated (sudo) permissions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requires_admin: bool,
 }
 
 pub fn hash_content(bytes: &[u8]) -> u64 {
@@ -128,6 +131,7 @@ mod tests {
             content_hash: 42,
             install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
+            requires_admin: false,
         }
     }
 
@@ -178,6 +182,7 @@ mod tests {
             content_hash: 1,
             install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
+            requires_admin: false,
         });
         manifest.upsert(AppEntry {
             source: "app/x/foo.toml".to_string(),
@@ -186,6 +191,7 @@ mod tests {
             content_hash: 2,
             install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
+            requires_admin: false,
         });
         assert_eq!(manifest.entries.len(), 1);
         assert_eq!(manifest.entries[0].content_hash, 2);

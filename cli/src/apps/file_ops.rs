@@ -334,6 +334,7 @@ mod tests {
             content_hash: hash,
             install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
+            requires_admin: false,
         }
     }
 
@@ -452,6 +453,7 @@ mod tests {
             content_hash: hash_content(content),
             install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
+            requires_admin: false,
         };
         let outcome = uninstall_entry(&entry, false, false).await.unwrap();
         assert!(matches!(outcome, UninstallOutcome::RestoredBackup { .. }));
@@ -512,6 +514,7 @@ mod tests {
             content_hash: hash_content(b"managed"),
             install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
+            requires_admin: false,
         };
 
         let outcome = uninstall_entry(&entry, false, true).await.unwrap();

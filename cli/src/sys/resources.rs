@@ -430,6 +430,7 @@ async fn remove_split_dns(receipt: &SplitDnsReceipt, dry_run: bool) -> Result<Re
                 content_hash: hash_content(&current),
                 install_strategy: AppInstallStrategy::Copy,
                 uses_env: false,
+                requires_admin: true,
             };
             let outcome = uninstall_entry_admin(&entry, false, false).await?;
             if receipt.os_id == "ubuntu" {
@@ -668,6 +669,7 @@ async fn remove_managed_file(
         content_hash: receipt.content_hash,
         install_strategy: AppInstallStrategy::Copy,
         uses_env: false,
+        requires_admin: receipt.privileged,
     };
     let outcome = if receipt.privileged {
         uninstall_entry_admin(&entry, dry_run, false).await?

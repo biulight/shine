@@ -141,6 +141,9 @@ async fn uninstall_app_entry(
     force: bool,
 ) -> Result<UninstallOutcome> {
     match &entry.install_strategy {
+        AppInstallStrategy::Copy if entry.requires_admin => {
+            file_ops::uninstall_entry_admin(entry, dry_run, force).await
+        }
         AppInstallStrategy::Copy => file_ops::uninstall_entry(entry, dry_run, force).await,
         AppInstallStrategy::JsonMerge { managed_keys } => {
             json_merge::uninstall(entry, dry_run, force, managed_keys).await
@@ -450,6 +453,7 @@ pub async fn handle_install(
                         content_hash: hash,
                         install_strategy: file.install_strategy.clone(),
                         uses_env: file_uses_env,
+                        requires_admin: file.requires_admin,
                     });
                     installed += 1;
                     if let Some(hint) = &file.restart_hint {
@@ -475,6 +479,7 @@ pub async fn handle_install(
                         content_hash: hash,
                         install_strategy: file.install_strategy.clone(),
                         uses_env: file_uses_env,
+                        requires_admin: file.requires_admin,
                     });
                     installed += 1;
                     backed_up += 1;
@@ -997,6 +1002,7 @@ mod tests {
                 content_hash: 42,
                 install_strategy: AppInstallStrategy::Copy,
                 uses_env: false,
+                requires_admin: false,
             }],
         };
         let mut entries_by_dest = BTreeMap::new();

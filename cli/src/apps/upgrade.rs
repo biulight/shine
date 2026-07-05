@@ -258,6 +258,7 @@ async fn try_upgrade_entry(
                 content_hash: hash,
                 install_strategy: file.install_strategy.clone(),
                 uses_env: file.transforms.iter().any(|t| t == "template"),
+                requires_admin: file.requires_admin,
             })
         }
         Ok(InstallOutcome::AlreadyManaged) | Ok(InstallOutcome::DryRun) => {
@@ -398,6 +399,7 @@ async fn install_new_category_files(
                         content_hash: hash,
                         install_strategy: file.install_strategy.clone(),
                         uses_env: file.transforms.iter().any(|t| t == "template"),
+                        requires_admin: file.requires_admin,
                     });
                     updated += 1;
                     if let Some(hint) = &file.restart_hint {
