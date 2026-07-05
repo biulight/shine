@@ -1,7 +1,9 @@
-pub(crate) mod upgrade;
+pub mod catalog;
+pub mod upgrade;
+pub mod workspace;
 
 use crate::config::Config;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 
 /// User-editable environment variables stored in `config.toml` under `[env]`.
@@ -9,42 +11,48 @@ use std::collections::BTreeMap;
 /// Values are substituted into preset files that opt in via the `template`
 /// transform (using `@@VAR_NAME@@` placeholders).
 #[derive(Clone, Debug, Default)]
-pub(crate) struct EnvConfig {
+pub struct EnvConfig {
     vars: BTreeMap<String, String>,
+    descriptions: BTreeMap<String, String>,
 }
 
 impl EnvConfig {
-    pub(crate) fn from_config(config: &Config) -> Self {
+    pub fn from_config(config: &Config) -> Self {
         Self {
             vars: config.env.clone(),
+            descriptions: config.env_descriptions.clone(),
         }
     }
 
-    pub(crate) async fn load_or_init(config: &Config) -> Result<Self> {
+    pub async fn load_or_init(config: &Config) -> Result<Self> {
         Ok(Self::from_config(config))
     }
 
-    pub(crate) fn get(&self, key: &str) -> Option<&str> {
+    pub fn get(&self, key: &str) -> Option<&str> {
         self.vars.get(key).map(|s| s.as_str())
     }
 
-    pub(crate) fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
+    pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.vars.insert(key.into(), value.into());
     }
 
-    pub(crate) fn remove(&mut self, key: &str) -> Option<String> {
+    pub fn remove(&mut self, key: &str) -> Option<String> {
         self.vars.remove(key)
     }
 
-    pub(crate) fn as_map(&self) -> &BTreeMap<String, String> {
+    pub fn as_map(&self) -> &BTreeMap<String, String> {
         &self.vars
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.vars.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
-    pub(crate) async fn save(&self, config: &Config) -> Result<()> {
+    pub fn description(&self, key: &str) -> Option<&str> {
+        self.descriptions.get(key).map(String::as_str)
+    }
+
+    pub async fn save(&self, config: &Config) -> Result<()> {
         let mut updated = config.clone();
         updated.env = self.vars.clone();
         updated.save().await
@@ -57,11 +65,39 @@ impl From<EnvConfig> for BTreeMap<String, String> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+/// A config environment value selected using encrypted-first lookup.
+pub enum StoredValue<'a> {
+    Secret { key: String, value: &'a str },
+    Plaintext(&'a str),
+}
+
+/// Resolve `KEY_SECRET` first, falling back to plaintext `KEY`.
+pub fn resolve_stored_value<'a>(env: &'a EnvConfig, key: &str) -> Result<StoredValue<'a>> {
+    let secret_key = secret_key(key);
+    if let Some(value) = env.get(&secret_key) {
+        return Ok(StoredValue::Secret {
+            key: secret_key,
+            value,
+        });
+    }
+    if let Some(value) = env.get(key) {
+        return Ok(StoredValue::Plaintext(value));
+    }
+    bail!("{secret_key} or {key} is not set in the active config [env]");
+}
+
+/// Return the encrypted-storage key associated with an environment variable.
+pub fn secret_key(key: &str) -> String {
+    format!("{key}_SECRET")
+}
+
 impl EnvConfig {
     #[cfg(test)]
     fn with_defaults() -> Self {
         Self {
             vars: crate::config::default_env_map(),
+            descriptions: BTreeMap::new(),
         }
     }
 }
@@ -79,6 +115,19 @@ mod tests {
         let env = EnvConfig::from_config(&config);
 
         assert_eq!(env.get("HTTP_PROXY_PORT"), Some("7890"));
+    }
+
+    #[test]
+    fn from_config_reads_description() {
+        let dir = std::env::temp_dir().join(format!("shine-env-test-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config
+            .env_descriptions
+            .insert("MY_TOKEN".into(), "Internal token".into());
+
+        let env = EnvConfig::from_config(&config);
+
+        assert_eq!(env.description("MY_TOKEN"), Some("Internal token"));
     }
 
     #[test]

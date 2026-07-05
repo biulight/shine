@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
 #[derive(Debug, Clone)]
-pub(crate) struct AppCategory {
+pub struct AppCategory {
     pub name: String,
     pub description: Option<String>,
     pub destination_root: Option<String>,
@@ -25,13 +25,13 @@ pub(crate) struct AppCategory {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AppListMode {
+pub enum AppListMode {
     Category,
     Files,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AppFile {
+pub struct AppFile {
     pub source_rel: PathBuf,
     pub target_rel: PathBuf,
     pub description: Option<String>,
@@ -39,6 +39,8 @@ pub(crate) struct AppFile {
     pub legacy_dest_annotation: Option<String>,
     pub transforms: Vec<String>,
     pub install_strategy: AppInstallStrategy,
+    pub requires_admin: bool,
+    pub restart_hint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,6 +103,9 @@ struct FileToml {
     install_mode: Option<InstallModeToml>,
     #[serde(default)]
     managed_keys: Option<Vec<String>>,
+    #[serde(default)]
+    requires_admin: bool,
+    restart_hint: Option<String>,
 }
 
 fn resolve_transforms(file: &FileToml, context: &str) -> Result<Vec<String>> {
@@ -153,7 +158,7 @@ fn default_list_mode(has_explicit_files: bool) -> AppListMode {
     }
 }
 
-pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<AppCategory>> {
+pub fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<AppCategory>> {
     let filter = filter.map(str::to_string);
     let names = collect_embedded_category_names(filter.as_deref());
     let mut categories = Vec::new();
@@ -167,12 +172,23 @@ pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<AppCa
     Ok(categories)
 }
 
-pub(crate) async fn load_installed_categories(
+pub async fn load_installed_categories(
     config: &Config,
     filter: Option<&str>,
 ) -> Result<Vec<AppCategory>> {
     let app_root = config.presets_dir().join("app");
-    let category_names = collect_fs_category_names(&app_root, filter).await?;
+    let mut category_names: BTreeSet<String> = collect_fs_category_names(&app_root, filter)
+        .await?
+        .into_iter()
+        .collect();
+    if let Some(overlay) = config.active_presets_overlay_dir() {
+        category_names.extend(collect_fs_category_names(&overlay.join("app"), filter).await?);
+    }
+    if let Some(filter) = filter
+        && category_names.is_empty()
+    {
+        bail!("app preset category not found: {filter}");
+    }
     let mut categories = Vec::new();
 
     for name in category_names {
@@ -219,6 +235,8 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                             legacy_dest_annotation: None,
                             transforms,
                             install_strategy,
+                            requires_admin: file.requires_admin,
+                            restart_hint: file.restart_hint,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?
@@ -233,6 +251,8 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                     legacy_dest_annotation: None,
                     transforms: vec![],
                     install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
                 })
                 .collect(),
         };
@@ -271,6 +291,8 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                     legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
                     transforms: vec![],
                     install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
                 }
             })
             .collect(),
@@ -281,8 +303,8 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
 }
 
 async fn load_installed_category(config: &Config, name: &str) -> Result<Option<AppCategory>> {
-    let category_root = config.presets_dir().join("app").join(name);
-    let metadata_path = category_root.join("shine.toml");
+    let category_rel = Path::new("app").join(name);
+    let metadata_path = config.preset_path(category_rel.join("shine.toml"));
 
     if metadata_path.exists() {
         let bytes = fs::read(&metadata_path)
@@ -320,11 +342,13 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                             legacy_dest_annotation: None,
                             transforms,
                             install_strategy,
+                            requires_admin: file.requires_admin,
+                            restart_hint: file.restart_hint,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?
             }
-            None => collect_fs_files(&category_root)
+            None => collect_merged_fs_files(config, &category_rel)
                 .await?
                 .into_iter()
                 .map(|rel| AppFile {
@@ -335,6 +359,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                     legacy_dest_annotation: None,
                     transforms: vec![],
                     install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
                 })
                 .collect(),
         };
@@ -343,7 +369,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         }
 
         for file in &files {
-            let source_path = category_root.join(&file.source_rel);
+            let source_path = config.preset_path(category_rel.join(&file.source_rel));
             if !source_path.exists() {
                 bail!(
                     "app/{name}/shine.toml references missing file: {}",
@@ -367,8 +393,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
     }
 
     let mut files = Vec::new();
-    for rel in collect_fs_files(&category_root).await? {
-        let source_path = category_root.join(&rel);
+    for rel in collect_merged_fs_files(config, &category_rel).await? {
+        let source_path = config.preset_path(category_rel.join(&rel));
         let bytes = fs::read(&source_path)
             .await
             .with_context(|| format!("reading preset file: {}", source_path.display()))?;
@@ -380,6 +406,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
             legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
             transforms: vec![],
             install_strategy: AppInstallStrategy::Copy,
+            requires_admin: false,
+            restart_hint: None,
         });
     }
 
@@ -392,6 +420,25 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         uses_metadata: false,
         has_explicit_files: false,
     }))
+}
+
+async fn collect_merged_fs_files(config: &Config, category_rel: &Path) -> Result<Vec<PathBuf>> {
+    let base_category = config.presets_dir().join(category_rel);
+    let mut files: BTreeSet<PathBuf> = if base_category.is_dir() {
+        collect_fs_files(&base_category)
+            .await?
+            .into_iter()
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    if let Some(overlay) = config.active_presets_overlay_dir() {
+        let overlay_category = overlay.join(category_rel);
+        if overlay_category.is_dir() {
+            files.extend(collect_fs_files(&overlay_category).await?);
+        }
+    }
+    Ok(files.into_iter().collect())
 }
 
 fn collect_embedded_category_names(filter: Option<&str>) -> Vec<String> {
@@ -416,7 +463,7 @@ async fn collect_fs_category_names(app_root: &Path, filter: Option<&str>) -> Res
         if path.exists() {
             return Ok(vec![filter.to_string()]);
         }
-        bail!("app preset category not found: {filter}");
+        return Ok(Vec::new());
     }
 
     if !app_root.exists() {
@@ -588,6 +635,45 @@ fn parse_legacy_description(content: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
 
+    async fn write_test_category(root: &Path, name: &str) {
+        let category = root.join("app").join(name);
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(category.join("shine.toml"), "dest = \"~/.config/test\"\n")
+            .await
+            .unwrap();
+        fs::write(category.join("config.toml"), "test = true\n")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn filtered_category_may_exist_in_only_one_merged_presets_root() {
+        let dir = std::env::temp_dir().join(format!(
+            "shine-app-metadata-merged-filter-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let overlay = dir.join("overlay");
+        let mut config = Config::new_for_test(&dir);
+        config.presets_overlay_dir_override = Some(overlay.clone());
+
+        write_test_category(config.presets_dir(), "base-only").await;
+        write_test_category(&overlay, "overlay-only").await;
+
+        let base = load_installed_categories(&config, Some("base-only"))
+            .await
+            .unwrap();
+        let overlaid = load_installed_categories(&config, Some("overlay-only"))
+            .await
+            .unwrap();
+
+        assert_eq!(base.len(), 1);
+        assert_eq!(base[0].name, "base-only");
+        assert_eq!(overlaid.len(), 1);
+        assert_eq!(overlaid[0].name, "overlay-only");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[test]
     fn embedded_vim_uses_metadata() {
         let categories = load_embedded_categories(Some("vim")).unwrap();
@@ -628,6 +714,12 @@ mod tests {
         assert_eq!(file.target_rel, std::path::Path::new("daemon.json"));
         assert_eq!(file.transforms, vec!["template", "jsonc-to-json"]);
         assert_eq!(file.install_strategy, AppInstallStrategy::Copy);
+        assert!(file.requires_admin);
+        assert!(
+            file.restart_hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("Restart Docker Engine"))
+        );
     }
 
     #[test]
@@ -867,6 +959,8 @@ install_mode = "json-merge"
                     transforms: None,
                     install_mode: None,
                     managed_keys: None,
+                    requires_admin: false,
+                    restart_hint: None,
                 };
                 resolve_transforms(&file, "test").is_err()
             }
@@ -885,6 +979,8 @@ install_mode = "json-merge"
             transforms: Some(vec!["jsonc-to-json".to_string()]),
             install_mode: None,
             managed_keys: None,
+            requires_admin: false,
+            restart_hint: None,
         };
         assert!(resolve_transforms(&file, "test").is_err());
     }

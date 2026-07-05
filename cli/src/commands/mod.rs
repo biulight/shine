@@ -1,13 +1,15 @@
 mod app;
+mod cli;
 mod env;
 mod preset;
 mod self_install;
 mod shell;
 mod sys;
 
-pub(crate) use app::*;
-pub(crate) use env::*;
-pub(crate) use preset::*;
-pub(crate) use self_install::*;
-pub(crate) use shell::*;
-pub(crate) use sys::*;
+pub use app::*;
+pub use cli::*;
+pub use env::*;
+pub use preset::*;
+pub use self_install::*;
+pub use shell::*;
+pub use sys::*;

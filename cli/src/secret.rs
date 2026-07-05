@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
-pub(crate) async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<String> {
+pub async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<String> {
     if encoded_secret.trim().is_empty() {
         bail!("secret is empty");
     }
@@ -22,10 +22,7 @@ pub(crate) async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<St
     decrypt_gpg_file(encrypted_file.path()).await
 }
 
-pub(crate) async fn encrypt_gpg_secret_to_base64(
-    plaintext: &[u8],
-    recipient: &str,
-) -> Result<String> {
+pub async fn encrypt_gpg_secret_to_base64(plaintext: &[u8], recipient: &str) -> Result<String> {
     if plaintext.is_empty() {
         bail!("secret is empty");
     }

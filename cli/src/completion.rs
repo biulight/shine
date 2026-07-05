@@ -1,17 +1,17 @@
-use crate::CompletionShell;
+use crate::commands::CompletionShell;
 use crate::config;
 use clap::CommandFactory;
 use clap_complete::engine::{ArgValueCandidates, CompletionCandidate};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn complete_from_env() {
+pub fn complete_from_env() {
     clap_complete::CompleteEnv::with_factory(command)
         .bin("shine")
         .complete();
 }
 
-pub(crate) fn generate_registration(shell: CompletionShell) {
+pub fn generate_registration(shell: CompletionShell) {
     // SAFETY: this is called during single-threaded startup before Tokio is
     // initialized, and `CompleteEnv` removes the variable before returning.
     unsafe { std::env::set_var("COMPLETE", shell.as_str()) };
@@ -22,12 +22,13 @@ pub(crate) fn generate_registration(shell: CompletionShell) {
         .unwrap_or_else(|e| e.exit());
 }
 
-pub(crate) fn command() -> clap::Command {
+pub fn command() -> clap::Command {
     let all_categories = ArgValueCandidates::new(all_category_candidates);
     let shell_categories = ArgValueCandidates::new(shell_category_candidates);
     let app_categories = ArgValueCandidates::new(app_category_candidates);
+    let sys_items = ArgValueCandidates::new(sys_item_candidates);
 
-    crate::Cli::command()
+    crate::commands::Cli::command()
         .mut_subcommand("install", |cmd| {
             cmd.mut_arg("category", |arg| arg.add(all_categories.clone()))
         })
@@ -62,6 +63,17 @@ pub(crate) fn command() -> clap::Command {
                 cmd.mut_arg("category", |arg| arg.add(app_categories.clone()))
             })
         })
+        .mut_subcommand("sys", |cmd| {
+            cmd.mut_subcommand("info", |cmd| {
+                cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
+            })
+            .mut_subcommand("apply", |cmd| {
+                cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
+            })
+            .mut_subcommand("uninstall", |cmd| {
+                cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
+            })
+        })
 }
 
 fn all_category_candidates() -> Vec<CompletionCandidate> {
@@ -77,6 +89,57 @@ fn shell_category_candidates() -> Vec<CompletionCandidate> {
 
 fn app_category_candidates() -> Vec<CompletionCandidate> {
     completion_candidates(category_names("app"))
+}
+
+fn sys_item_candidates() -> Vec<CompletionCandidate> {
+    completion_candidates(sys_item_names())
+}
+
+fn sys_item_names() -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    if let Some((presets_dir, true)) = runtime_presets_dir() {
+        collect_fs_sys_item_names(&presets_dir.join("sys"), &mut names);
+        return names;
+    }
+
+    for path in crate::presets::asset_paths("sys") {
+        if !path.ends_with("/shine.toml") {
+            continue;
+        }
+        if let Some(bytes) = crate::presets::read_asset_bytes(&path) {
+            collect_toml_sys_item_names(&bytes, &mut names);
+        }
+    }
+    names
+}
+
+fn collect_fs_sys_item_names(root: &Path, names: &mut BTreeSet<String>) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let manifest = entry.path().join("shine.toml");
+        if let Ok(bytes) = std::fs::read(manifest) {
+            collect_toml_sys_item_names(&bytes, names);
+        }
+    }
+}
+
+fn collect_toml_sys_item_names(bytes: &[u8], names: &mut BTreeSet<String>) {
+    let Ok(content) = std::str::from_utf8(bytes) else {
+        return;
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(content) else {
+        return;
+    };
+    let Some(items) = value.get("items").and_then(toml::Value::as_array) else {
+        return;
+    };
+    names.extend(items.iter().filter_map(|item| {
+        item.get("id")
+            .and_then(toml::Value::as_str)
+            .map(str::to_string)
+    }));
 }
 
 fn completion_candidates(names: BTreeSet<String>) -> Vec<CompletionCandidate> {
@@ -284,9 +347,11 @@ mod tests {
 
         let shell = category_names("shell");
         let app = category_names("app");
+        let sys = sys_item_names();
 
         assert!(shell.contains("proxy"), "shell candidates: {shell:?}");
         assert!(app.contains("starship"), "app candidates: {app:?}");
+        assert!(sys.contains("split-dns"), "sys candidates: {sys:?}");
     }
 
     #[test]
@@ -295,6 +360,12 @@ mod tests {
         let dir = temp_dir("config-dir");
         std::fs::create_dir_all(dir.join("presets/shell/custom-shell")).unwrap();
         std::fs::create_dir_all(dir.join("presets/app/custom-app")).unwrap();
+        std::fs::create_dir_all(dir.join("presets/sys/custom-os")).unwrap();
+        std::fs::write(
+            dir.join("presets/sys/custom-os/shine.toml"),
+            "[[items]]\nid = \"custom-sys\"\nlabel = \"Custom sys\"\n",
+        )
+        .unwrap();
 
         unsafe {
             std::env::set_var("SHINE_CONFIG_DIR", &dir);
@@ -303,6 +374,7 @@ mod tests {
 
         assert!(category_names("shell").contains("custom-shell"));
         assert!(category_names("app").contains("custom-app"));
+        assert!(sys_item_names().contains("custom-sys"));
         assert!(
             !dir.join("config.toml").exists(),
             "completion must not initialize config files"

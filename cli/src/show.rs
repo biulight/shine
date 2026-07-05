@@ -50,12 +50,7 @@ struct ShellShowFile {
     status: &'static str,
 }
 
-pub(crate) async fn handle_show(
-    config: &Config,
-    target: &str,
-    diff: bool,
-    verbose: bool,
-) -> Result<()> {
+pub async fn handle_show(config: &Config, target: &str, diff: bool, verbose: bool) -> Result<()> {
     crate::config::print_presets_note(config);
     let app_files = collect_app_files(config).await?;
     let shell_files = collect_shell_files(config).await?;
@@ -181,11 +176,11 @@ async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShowFile>> {
     let mut files = Vec::new();
     for category in categories {
         for file in &category.files {
-            let source_path = config
-                .presets_dir()
-                .join("shell")
-                .join(&category.name)
-                .join(&file.source_rel);
+            let source_path = config.preset_path(
+                Path::new("shell")
+                    .join(&category.name)
+                    .join(&file.source_rel),
+            );
             let rendered_path = config
                 .rendered_dir()
                 .join("shell")
@@ -872,6 +867,8 @@ mod tests {
                 legacy_dest_annotation: None,
                 transforms: vec![],
                 install_strategy: crate::apps::AppInstallStrategy::Copy,
+                requires_admin: false,
+                restart_hint: None,
             },
             destination: PathBuf::from(dest),
             status: FileStatus::UpToDate,

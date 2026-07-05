@@ -7,6 +7,37 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [0.36.0] — 2026-07-05
+
+### Features
+
+- Added `shine env seal` and `shine env run` for editable, layered workspace environment files with GPG-sealed secrets and transparent mode-specific caching.
+- Added `shine env run --with` for injecting selected encrypted or plaintext config values into a child process without modifying the current shell.
+- Added environment variable descriptions, sensitive-value redaction, preset-provided metadata, and detailed inline `{ value, description }` overrides.
+- Added managed system resource drivers and expanded `shine sys list` / `shine sys info` to expose available init and managed items with their status and setup commands.
+- Added overlay environment overrides and made overlays compose with embedded or external preset sources, including overlay-only categories.
+- Added `shine pull` plus `update --pull` and `upgrade --pull` for safe, fast-forward-only updates of Git-managed preset and overlay sources.
+
+### Bug Fixes
+
+- Fixed project configuration discovery so sparse project settings inherit global values while retaining the documented source-priority behavior.
+- Fixed privileged app uninstall state and serialized administrator-level filesystem operations across concurrent processes.
+- Fixed filtered app category resolution when categories or metadata are supplied by an overlay.
+- Fixed proxy status checks so environment changes supplied by an overlay are detected.
+
+### Deprecations
+
+- Legacy project `config.toml` and `.env.toml` filenames now warn that support will be removed in v0.40.0; rename them to `shine.config.toml` and `shine.env.toml`.
+
+### Internal
+
+- Split the CLI library, command handlers, and app, shell, system, and configuration implementations into focused modules without changing their command routing.
+
+### Docs
+
+- Expanded the English and Chinese READMEs for workspace environments, managed system resources, composable overlays, detailed environment values, and Git-managed preset updates.
+- Added the maintainer knowledge base covering architecture, invariants, decisions, conventions, operations, and lessons learned.
+
 ## [0.35.0] — 2026-07-04
 
 ### Features

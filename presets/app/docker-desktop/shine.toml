@@ -10,3 +10,4 @@ description = "Docker Desktop proxy and containers proxy settings"
 transforms = ["template", "jsonc-to-json"]
 install_mode = "json-merge"
 managed_keys = ["proxy", "containersProxy"]
+restart_hint = "Restart Docker Desktop to apply the updated proxy configuration."

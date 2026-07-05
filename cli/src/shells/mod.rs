@@ -1,8 +1,22 @@
-pub(crate) mod metadata;
+pub mod metadata;
+mod profile;
+mod template;
+
+use template::{ScriptTemplate, apply_template_to_scripts};
+
+use profile::{
+    append_path_to_shell_config, managed_shell_profile_path, print_source_command_activation_hint,
+    remove_managed_shell_profile, remove_path_from_shell_config, shell_source_command,
+    write_managed_shell_profile,
+};
+#[cfg(test)]
+use profile::{
+    managed_profile_snippet, powershell_bin_assignment, powershell_quote, remove_sentinel_block,
+    shell_config_snippet,
+};
 
 use crate::colors;
 use crate::config::Config;
-use crate::env::EnvConfig;
 use crate::output;
 use crate::path_display;
 use anyhow::{Context, Result, bail};
@@ -11,7 +25,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-pub(crate) const SENTINEL_START: &str = "# >>> shine >>>";
+pub const SENTINEL_START: &str = "# >>> shine >>>";
 const SENTINEL_END: &str = "# <<< shine <<<";
 
 const SHELL_TEMPLATE: &str = r#"# Shell preset metadata for shine.
@@ -29,7 +43,7 @@ needs_source = false
 "#;
 
 #[derive(Debug, Default)]
-pub(crate) struct ShellUpgradeReport {
+pub struct ShellUpgradeReport {
     pub templates_updated: usize,
     pub links_created: usize,
     pub links_updated: usize,
@@ -50,7 +64,7 @@ struct ShellConfigUpdate {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub(crate) enum ShellType {
+pub enum ShellType {
     Bash,
     Fish,
     Zsh,
@@ -58,9 +72,10 @@ pub(crate) enum ShellType {
     Elvish,
 }
 
-pub(crate) async fn handle_init_template(force: bool) -> Result<()> {
+pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
-    let (path, overwritten) = write_init_template_at(&dir, force).await?;
+    let (path, overwritten) =
+        utils::init_template::write_shine_toml_template(&dir, force, SHELL_TEMPLATE)?;
     if overwritten {
         println!("Updated shell preset template: {}", path.display());
     } else {
@@ -69,23 +84,7 @@ pub(crate) async fn handle_init_template(force: bool) -> Result<()> {
     Ok(())
 }
 
-async fn write_init_template_at(dir: &Path, force: bool) -> Result<(PathBuf, bool)> {
-    let path = dir.join("shine.toml");
-    let exists = path.exists();
-    if exists && !force {
-        bail!("shine.toml already exists; use --force to overwrite");
-    }
-    tokio::fs::write(&path, SHELL_TEMPLATE)
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok((path, exists))
-}
-
-pub(crate) async fn handle_install(
-    config: &Config,
-    category: Option<&str>,
-    force: bool,
-) -> Result<()> {
+pub async fn handle_install(config: &Config, category: Option<&str>, force: bool) -> Result<()> {
     crate::config::print_presets_note(config);
     let prefix = match category {
         Some(cat) => format!("shell/{cat}"),
@@ -270,7 +269,7 @@ fn upgrade_link_report_summary_parts(
     parts
 }
 
-pub(crate) async fn handle_upgrade_installed(
+pub async fn handle_upgrade_installed(
     config: &Config,
     verbose: bool,
 ) -> Result<ShellUpgradeReport> {
@@ -371,7 +370,7 @@ pub(crate) async fn handle_upgrade_installed(
     })
 }
 
-pub(crate) async fn handle_completion_install(config: &Config) -> Result<()> {
+pub async fn handle_completion_install(config: &Config) -> Result<()> {
     let source_commands = installed_source_commands(config).await?;
     let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
     let shell_update = append_path_to_shell_config(config, false, &source_commands).await?;
@@ -514,7 +513,7 @@ fn shell_category_after_root(path: &Path) -> Option<String> {
     components.next()?.as_os_str().to_str().map(str::to_string)
 }
 
-pub(crate) async fn handle_uninstall(
+pub async fn handle_uninstall(
     config: &Config,
     category: Option<&str>,
     purge: bool,
@@ -608,7 +607,7 @@ pub(crate) async fn handle_uninstall(
     Ok(())
 }
 
-pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+pub async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
@@ -689,11 +688,8 @@ fn build_script_pairs(
         .iter()
         .flat_map(|cat| {
             cat.files.iter().map(|file| {
-                let source = config
-                    .presets_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
+                let source =
+                    config.preset_path(Path::new("shell").join(&cat.name).join(&file.source_rel));
                 let rendered = config
                     .rendered_dir()
                     .join("shell")
@@ -717,11 +713,8 @@ fn build_link_specs(
         .iter()
         .flat_map(|cat| {
             cat.files.iter().map(|file| {
-                let source = config
-                    .presets_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
+                let source =
+                    config.preset_path(Path::new("shell").join(&cat.name).join(&file.source_rel));
                 let rendered = config
                     .rendered_dir()
                     .join("shell")
@@ -764,474 +757,12 @@ async fn installed_source_commands_for_categories(
     Ok(commands)
 }
 
-/// `config.toml` `[env]`, and write the rendered result to `rendered_path`
-/// (rendered_dir — always shine-managed).  File permissions are copied from source.
-struct ScriptTemplate {
-    source_path: PathBuf,
-    rendered_path: PathBuf,
-    display_name: String,
-}
-
-#[derive(Default)]
-struct TemplateRenderReport {
-    updated: Vec<String>,
-}
-
-async fn apply_template_to_scripts(
-    config: &Config,
-    script_pairs: &[ScriptTemplate],
-) -> Result<TemplateRenderReport> {
-    let env = EnvConfig::load_or_init(config).await?;
-    let env_map = env.as_map();
-    let mut report = TemplateRenderReport::default();
-
-    for script in script_pairs {
-        let content = match tokio::fs::read(&script.source_path).await {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-
-        if !crate::presets::parse_template_annotation(&content) {
-            continue;
-        }
-
-        let script_env_map = env_map_for_script(script, env_map);
-        let rendered = match crate::apps::apply_transforms(
-            &["template".to_string()],
-            &content,
-            &script_env_map,
-        ) {
-            Ok(b) => b,
-            Err(e) => bail!(
-                "template substitution failed for {}: {e:#}",
-                script.source_path.display()
-            ),
-        };
-
-        #[cfg(unix)]
-        let mode = {
-            use std::os::unix::fs::PermissionsExt;
-            tokio::fs::metadata(&script.source_path)
-                .await
-                .map(|m| m.permissions().mode())
-                .unwrap_or(0o755)
-        };
-
-        let was_changed = tokio::fs::read(&script.rendered_path)
-            .await
-            .map(|current| current != rendered)
-            .unwrap_or(true);
-
-        if let Some(parent) = script.rendered_path.parent() {
-            tokio::fs::create_dir_all(parent).await.with_context(|| {
-                format!("creating rendered script directory: {}", parent.display())
-            })?;
-        }
-
-        tokio::fs::write(&script.rendered_path, &rendered)
-            .await
-            .with_context(|| {
-                format!(
-                    "writing rendered script: {}",
-                    script.rendered_path.display()
-                )
-            })?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(mode);
-            tokio::fs::set_permissions(&script.rendered_path, perms)
-                .await
-                .with_context(|| {
-                    format!(
-                        "setting rendered script permissions: {}",
-                        script.rendered_path.display()
-                    )
-                })?;
-        }
-
-        if was_changed {
-            report.updated.push(script.display_name.clone());
-        }
-    }
-
-    Ok(report)
-}
-
-fn env_map_for_script<'a>(
-    script: &ScriptTemplate,
-    env_map: &'a std::collections::BTreeMap<String, String>,
-) -> std::borrow::Cow<'a, std::collections::BTreeMap<String, String>> {
-    if script.display_name == "agent/ccenv" {
-        let mut map = env_map.clone();
-        map.entry("DEEPSEEK_API_KEY".to_string()).or_default();
-        std::borrow::Cow::Owned(map)
-    } else {
-        std::borrow::Cow::Borrowed(env_map)
-    }
-}
-
 fn format_file_action(count: usize, action: &str) -> String {
     let noun = if count == 1 { "file" } else { "files" };
     format!("{count} {noun} {action}")
 }
 
-fn managed_shell_profile_path(config: &Config) -> PathBuf {
-    config
-        .shine_dir()
-        .join("shell")
-        .join(match config.shell_type {
-            ShellType::Fish => "config.fish",
-            ShellType::PowerShell => "profile.ps1",
-            _ => "profile.sh",
-        })
-}
-
-fn home_relative_path(path: &Path, home_dir: &Path) -> String {
-    match path.strip_prefix(home_dir) {
-        Ok(rel) => format!("$HOME/{}", rel.display()),
-        Err(_) => path.display().to_string(),
-    }
-}
-
-/// Build the managed profile body under `~/.shine/shell/`.
-/// User shell config files source this file from a small sentinel block.
-fn managed_profile_snippet(
-    shell: &ShellType,
-    bin_dir: &Path,
-    home_dir: &Path,
-    source_commands: &[String],
-) -> String {
-    let bin_str = home_relative_path(bin_dir, home_dir);
-    let mut body = match shell {
-        ShellType::Fish => format!("fish_add_path \"{bin_str}\""),
-        ShellType::PowerShell => powershell_path_snippet(&bin_str),
-        _ => format!(
-            "if [[ \":$PATH:\" != *\":{bin_str}:\"* ]]; then\n  export PATH=\"{bin_str}:$PATH\"\nfi"
-        ),
-    };
-    // Wrapper functions for scripts that must be sourced to export env vars.
-    for cmd in source_commands {
-        match shell {
-            ShellType::Fish => {
-                body.push_str(&format!(
-                    "\nfunction {cmd}\n  source \"{bin_str}/{cmd}\" $argv\nend"
-                ));
-            }
-            ShellType::PowerShell => {
-                let script_name = if cfg!(windows) {
-                    format!("{cmd}.ps1")
-                } else {
-                    cmd.clone()
-                };
-                body.push_str(&format!(
-                    "\nfunction {cmd} {{ . (Join-Path $shineBin '{}') @args }}",
-                    script_name.replace('\'', "''")
-                ));
-            }
-            _ => {
-                body.push_str(&format!(
-                    "\n{cmd}() {{ source \"{bin_str}/{cmd}\" \"$@\"; }}"
-                ));
-            }
-        }
-    }
-    if let Some(snippet) = completion_registration_snippet(shell) {
-        body.push_str(snippet);
-    }
-    format!("{body}\n")
-}
-
-fn completion_registration_snippet(shell: &ShellType) -> Option<&'static str> {
-    match shell {
-        ShellType::Bash => {
-            Some("\nif command -v shine >/dev/null 2>&1; then\n  source <(COMPLETE=bash shine)\nfi")
-        }
-        ShellType::Zsh => Some(
-            "\nif command -v shine >/dev/null 2>&1; then\n  if (( ! $+functions[compdef] )); then\n    autoload -Uz compinit\n    compinit -i\n  fi\n  source <(COMPLETE=zsh shine)\nfi",
-        ),
-        ShellType::PowerShell => Some(
-            "\nif (Get-Command shine -ErrorAction SilentlyContinue) { $env:COMPLETE = 'powershell'; shine | Out-String | Invoke-Expression; Remove-Item Env:\\COMPLETE -ErrorAction SilentlyContinue }",
-        ),
-        ShellType::Fish | ShellType::Elvish => None,
-    }
-}
-
-fn shell_config_snippet(shell: &ShellType, profile_path: &Path, home_dir: &Path) -> String {
-    let profile_str = home_relative_path(profile_path, home_dir);
-    let body = match shell {
-        ShellType::PowerShell => format!(". {}", powershell_path_expr(&profile_str)),
-        _ => format!("source {}", shell_quote_expand_home(&profile_str)),
-    };
-    format!("{SENTINEL_START}\n{body}\n{SENTINEL_END}\n")
-}
-
-fn powershell_path_snippet(bin_str: &str) -> String {
-    let assignment = powershell_bin_assignment(bin_str);
-    format!(
-        "{assignment}\n$shinePathEntries = $env:Path -split [System.IO.Path]::PathSeparator\nif ($shinePathEntries -notcontains $shineBin) {{\n  $env:Path = \"$shineBin$([System.IO.Path]::PathSeparator)$env:Path\"\n}}"
-    )
-}
-
-fn powershell_bin_assignment(bin_str: &str) -> String {
-    let bin_str = crate::path_display::strip_windows_verbatim_prefix(bin_str);
-    let normalized = bin_str.replace('\\', "/");
-    if let Some(rel) = normalized.strip_prefix("$HOME/") {
-        let escaped = rel.replace('\'', "''");
-        format!("$shineBin = Join-Path $HOME '{escaped}'")
-    } else if normalized == "$HOME" {
-        "$shineBin = $HOME".to_string()
-    } else {
-        let escaped = bin_str.replace('\'', "''");
-        format!("$shineBin = '{escaped}'")
-    }
-}
-
-fn shell_source_command(shell: &ShellType, config_path: &Path) -> String {
-    match shell {
-        ShellType::PowerShell => format!(". {}", powershell_quote(config_path)),
-        _ => format!("source {}", shell_quote(config_path)),
-    }
-}
-
-fn shell_quote(path: &Path) -> String {
-    shell_quote_str(&path.display().to_string())
-}
-
-fn powershell_quote(path: &Path) -> String {
-    powershell_quote_str(&crate::path_display::strip_windows_verbatim_prefix(
-        &path.display().to_string(),
-    ))
-}
-
-fn shell_quote_str(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn powershell_quote_str(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-fn shell_quote_expand_home(value: &str) -> String {
-    if value == "$HOME" || value.starts_with("$HOME/") {
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-    } else {
-        shell_quote_str(value)
-    }
-}
-
-fn powershell_path_expr(value: &str) -> String {
-    let value = crate::path_display::strip_windows_verbatim_prefix(value);
-    let normalized = value.replace('\\', "/");
-    if let Some(rel) = normalized.strip_prefix("$HOME/") {
-        format!("(Join-Path $HOME '{}')", rel.replace('\'', "''"))
-    } else if normalized == "$HOME" {
-        "$HOME".to_string()
-    } else {
-        powershell_quote_str(&value)
-    }
-}
-
-fn print_source_command_activation_hint(
-    config: &Config,
-    shell_config_path: &Path,
-    source_commands: &[String],
-) {
-    if source_commands.is_empty() {
-        return;
-    }
-
-    output::hint_line(
-        "Next Step",
-        &format!(
-            "run `{}` once, or open a new shell",
-            shell_source_command(&config.shell_type, shell_config_path)
-        ),
-    );
-    output::hint_line(
-        "Commands",
-        &format!("available after reload: {}", source_commands.join(", ")),
-    );
-}
-
-/// Remove the shine sentinel block from `content`, including one preceding blank line.
-fn remove_sentinel_block(content: &str) -> String {
-    let start = match content.find(SENTINEL_START) {
-        Some(i) => i,
-        None => return content.to_string(),
-    };
-    let end_marker = match content.find(SENTINEL_END) {
-        Some(i) => i + SENTINEL_END.len(),
-        None => return content.to_string(),
-    };
-    // Consume the newline that follows SENTINEL_END.
-    let end = if content[end_marker..].starts_with('\n') {
-        end_marker + 1
-    } else {
-        end_marker
-    };
-    // Also consume one preceding blank line (the separator we wrote).
-    let block_start = if start > 0 && content[..start].ends_with("\n\n") {
-        start - 1
-    } else {
-        start
-    };
-    format!("{}{}", &content[..block_start], &content[end..])
-}
-
-fn sentinel_block(content: &str) -> Option<&str> {
-    let start = content.find(SENTINEL_START)?;
-    let end = content[start..].find(SENTINEL_END)? + start + SENTINEL_END.len();
-    Some(&content[start..end])
-}
-
-async fn append_path_to_shell_config(
-    config: &Config,
-    force: bool,
-    source_commands: &[String],
-) -> Result<ShellConfigUpdate> {
-    let profile_updated = write_managed_shell_profile(config, source_commands).await?;
-    let config_paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
-    let mut updated_path = None;
-
-    for config_path in config_paths {
-        if append_path_to_single_shell_config(config, force, &config_path).await? {
-            updated_path.get_or_insert(config_path);
-        }
-    }
-
-    let config_status = match updated_path {
-        Some(path) => PathUpdateStatus::Updated(path),
-        None => PathUpdateStatus::AlreadyConfigured,
-    };
-    Ok(ShellConfigUpdate {
-        profile_updated,
-        config_status,
-    })
-}
-
-async fn write_managed_shell_profile(config: &Config, source_commands: &[String]) -> Result<bool> {
-    let profile_path = managed_shell_profile_path(config);
-    if let Some(parent) = profile_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("creating managed shell profile dir: {parent:?}"))?;
-    }
-
-    let snippet = managed_profile_snippet(
-        &config.shell_type,
-        config.bin_dir(),
-        &config.home_dir,
-        source_commands,
-    );
-    let current = tokio::fs::read_to_string(&profile_path)
-        .await
-        .unwrap_or_default();
-    if current == snippet {
-        return Ok(false);
-    }
-
-    tokio::fs::write(&profile_path, snippet.as_bytes())
-        .await
-        .with_context(|| format!("writing managed shell profile: {}", profile_path.display()))?;
-    Ok(true)
-}
-
-async fn append_path_to_single_shell_config(
-    config: &Config,
-    force: bool,
-    config_path: &Path,
-) -> Result<bool> {
-    if let Some(parent) = config_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("creating directory for shell config: {parent:?}"))?;
-    }
-
-    let existing = tokio::fs::read_to_string(&config_path)
-        .await
-        .unwrap_or_default();
-    let profile_path = managed_shell_profile_path(config);
-    let snippet = shell_config_snippet(&config.shell_type, &profile_path, &config.home_dir);
-
-    if let Some(existing_block) = sentinel_block(&existing) {
-        let expected_block = snippet.trim_end_matches('\n');
-        if !force && existing_block == expected_block {
-            return Ok(false);
-        }
-        // Force or stale managed block: remove old sentinel block and re-add
-        // the small entry that sources the shine-managed shell profile.
-        let cleaned = remove_sentinel_block(&existing);
-        tokio::fs::write(&config_path, cleaned.as_bytes())
-            .await
-            .with_context(|| format!("rewriting shell config: {config_path:?}"))?;
-    }
-
-    let existing = tokio::fs::read_to_string(&config_path)
-        .await
-        .unwrap_or_default();
-
-    // Write the complete new content atomically so the file is closed (and thus
-    // fully visible to subsequent reads) before this function returns.
-    let new_content = format!("{existing}\n{snippet}");
-    tokio::fs::write(&config_path, new_content.as_bytes())
-        .await
-        .with_context(|| format!("writing to shell config: {config_path:?}"))?;
-
-    Ok(true)
-}
-
-async fn remove_path_from_shell_config(config: &Config) -> Result<()> {
-    let config_paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
-
-    for config_path in config_paths {
-        if !config_path.exists() {
-            continue;
-        }
-
-        let content = tokio::fs::read_to_string(&config_path)
-            .await
-            .with_context(|| format!("reading shell config: {config_path:?}"))?;
-
-        if !content.contains(SENTINEL_START) {
-            continue;
-        }
-
-        let cleaned = remove_sentinel_block(&content);
-        tokio::fs::write(&config_path, cleaned.as_bytes())
-            .await
-            .with_context(|| format!("writing shell config: {config_path:?}"))?;
-
-        println!(
-            "Shell config ({}): shine entry removed",
-            path_display::format_home(&config_path, &config.home_dir)
-        );
-    }
-    Ok(())
-}
-
-async fn remove_managed_shell_profile(config: &Config) -> Result<()> {
-    let profile_path = managed_shell_profile_path(config);
-    if !profile_path.exists() {
-        return Ok(());
-    }
-
-    tokio::fs::remove_file(&profile_path)
-        .await
-        .with_context(|| format!("removing managed shell profile: {}", profile_path.display()))?;
-    println!(
-        "Shell profile ({}): removed",
-        path_display::format_home(&profile_path, &config.home_dir)
-    );
-
-    if let Some(parent) = profile_path.parent() {
-        let _ = tokio::fs::remove_dir(parent).await;
-    }
-    Ok(())
-}
-
-pub(crate) fn get_shell() -> Result<ShellType> {
+pub fn get_shell() -> Result<ShellType> {
     match std::env::var("SHELL") {
         Ok(shell) => shell.parse(),
         Err(_) if cfg!(windows) => Ok(ShellType::PowerShell),
@@ -1239,7 +770,7 @@ pub(crate) fn get_shell() -> Result<ShellType> {
     }
 }
 
-pub(crate) fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) -> Result<PathBuf> {
+pub fn get_shell_config_path(shell_type: &ShellType, home_path: &Path) -> Result<PathBuf> {
     get_shell_config_paths(shell_type, home_path)?
         .into_iter()
         .next()
@@ -2280,7 +1811,9 @@ mod tests {
         let cat_dir = dir.join("presets/shell/custom");
         fs::create_dir_all(&cat_dir).await.unwrap();
 
-        let (path, overwritten) = write_init_template_at(&cat_dir, false).await.unwrap();
+        let (path, overwritten) =
+            utils::init_template::write_shine_toml_template(&cat_dir, false, SHELL_TEMPLATE)
+                .unwrap();
         fs::write(
             cat_dir.join("my_tool.sh"),
             b"#!/bin/bash\n# My tool.\necho hi\n",
@@ -2315,14 +1848,16 @@ mod tests {
         let dir = make_temp_dir().await;
         fs::write(dir.join("shine.toml"), b"old").await.unwrap();
 
-        let err = write_init_template_at(&dir, false).await.unwrap_err();
+        let err = utils::init_template::write_shine_toml_template(&dir, false, SHELL_TEMPLATE)
+            .unwrap_err();
         assert!(
             err.to_string().contains("use --force to overwrite"),
             "unexpected error: {err:#}"
         );
         assert_eq!(fs::read(dir.join("shine.toml")).await.unwrap(), b"old");
 
-        let (_path, overwritten) = write_init_template_at(&dir, true).await.unwrap();
+        let (_path, overwritten) =
+            utils::init_template::write_shine_toml_template(&dir, true, SHELL_TEMPLATE).unwrap();
         assert!(overwritten);
         let content = fs::read_to_string(dir.join("shine.toml")).await.unwrap();
         assert!(content.contains("target = \"mytool\""));

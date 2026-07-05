@@ -14,7 +14,7 @@ anyhow = { workspace = true }
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
 console = "0.16.3"
-dialoguer = { version = "0.12.0", default-features = false }
+dialoguer = { version = "0.12.0", default-features = false, features = ["password"] }
 directories = { workspace = true }
 serde = { version = "1.0.228", features = ["derive"] }
 shellexpand = "3.1.2"
@@ -31,3 +31,4 @@ jsonc-parser = { version = "0.32.3", features = ["serde"] }
 flate2 = "1.1.4"
 tar = "0.4.44"
 uuid = { version = "1.23.1", features = ["serde", "v4", "v7"] }
+sha2 = "0.10.9"

@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
-pub(crate) fn executable_name_for_os(os: &str) -> &'static str {
+pub fn executable_name_for_os(os: &str) -> &'static str {
     if os == "windows" {
         "shine.exe"
     } else {
@@ -9,15 +9,15 @@ pub(crate) fn executable_name_for_os(os: &str) -> &'static str {
     }
 }
 
-pub(crate) fn current_executable_name() -> &'static str {
+pub fn current_executable_name() -> &'static str {
     executable_name_for_os(std::env::consts::OS)
 }
 
-pub(crate) fn current_platform() -> &'static str {
+pub fn current_platform() -> &'static str {
     if cfg!(windows) { "windows" } else { "unix" }
 }
 
-pub(crate) fn release_target(os: &str, arch: &str) -> Result<String> {
+pub fn release_target(os: &str, arch: &str) -> Result<String> {
     let normalized_os = match os {
         "macos" => "darwin",
         "linux" => "linux",
@@ -34,17 +34,14 @@ pub(crate) fn release_target(os: &str, arch: &str) -> Result<String> {
     Ok(format!("{normalized_os}-{normalized_arch}"))
 }
 
-pub(crate) fn default_self_install_dest() -> Result<PathBuf> {
+pub fn default_self_install_dest() -> Result<PathBuf> {
     default_self_install_dest_for(
         std::env::consts::OS,
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from),
     )
 }
 
-pub(crate) fn default_self_install_dest_for(
-    os: &str,
-    local_appdata: Option<PathBuf>,
-) -> Result<PathBuf> {
+pub fn default_self_install_dest_for(os: &str, local_appdata: Option<PathBuf>) -> Result<PathBuf> {
     match os {
         "windows" => {
             let Some(local_appdata) = local_appdata else {
@@ -59,7 +56,7 @@ pub(crate) fn default_self_install_dest_for(
     }
 }
 
-pub(crate) fn current_path_contains_dir(dir: &Path) -> bool {
+pub fn current_path_contains_dir(dir: &Path) -> bool {
     let var_name = if cfg!(windows) { "Path" } else { "PATH" };
     let Some(path_value) = std::env::var_os(var_name) else {
         return false;
@@ -67,7 +64,7 @@ pub(crate) fn current_path_contains_dir(dir: &Path) -> bool {
     std::env::split_paths(&path_value).any(|entry| paths_equivalent(&entry, dir))
 }
 
-pub(crate) fn path_install_hint(dir: &Path) -> String {
+pub fn path_install_hint(dir: &Path) -> String {
     if cfg!(windows) {
         let escaped = dir.display().to_string().replace('\'', "''");
         format!(

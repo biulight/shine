@@ -9,7 +9,7 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 ## Features
 
 - **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
-- **External presets and overlays** — point `presets_dir` at your own directory for a full replacement, or link a small overlay directory to override selected embedded preset files
+- **External presets and overlays** — point `presets_dir` at your own base directory, then optionally link a small overlay to override selected preset files
 - **Project-local presets** — run `shine init` inside a presets repo to create a local `shine.config.toml` that points `presets_dir` at the repo
 - **Managed bin directory** — `~/.shine/bin/` holds flat symlinks on Unix and command shims on Windows
 - **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
@@ -181,9 +181,13 @@ Run `shine app install` to install all.
 
 ```bash
 shine sys list
+shine sys list --all
+shine sys info split-dns
 ```
 
-Lists the built-in OS bootstrap presets and marks the current platform with `▶`.
+`shine sys list` shows every init and managed item available for the current OS, including its recorded status and the command used to enable it. Use `--all` to inspect every supported OS.
+
+`shine sys info <ITEM>` shows an item's type, driver, administrator requirement, required environment variable names, current status, and next commands. For example, `shine sys info split-dns` explains how to enable private split DNS without exposing configured environment values.
 
 ### Run system init for the current OS
 
@@ -469,13 +473,25 @@ SHINE_PRESETS=~/dotfiles/shine-presets shine export
 
 All `install`, `update`, and `list` commands will automatically read from the external directory when `presets_dir` is configured. The active preset source is printed in each command's output so you always know which files are being used.
 
-For smaller customizations, use a presets overlay. Overlay files are merged over the embedded presets by matching the same relative paths, such as `app/starship/starship.toml` or `shell/proxy/set_proxy.sh`. A full external `presets_dir` takes priority over overlays.
+For smaller customizations, use a presets overlay. Overlay files are merged over the active presets source—embedded or external—by matching the same relative paths, such as `app/starship/starship.toml` or `shell/proxy/set_proxy.sh`. Matching overlay files take priority, and overlay-only categories are added to the base source.
 
 ```bash
 shine overlay link ~/dotfiles/shine-overlay --create
 shine overlay show
 shine overlay unlink
 ```
+
+When the active preset source or overlay is managed by Git, Shine can safely fast-forward it:
+
+```bash
+shine pull             # pull preset and overlay repositories
+shine update --pull    # pull first, then reload configuration and check status
+shine upgrade --pull   # pull first, then reload configuration and apply presets
+```
+
+Pull refuses dirty worktrees and uses `git pull --ff-only`; it never stashes, rebases, resets, or
+resolves conflicts. Non-Git sources are skipped, and sources inside the same repository are pulled
+only once.
 
 ### Initialize a presets directory
 
@@ -502,18 +518,20 @@ Manual commands:
 ```bash
 shine update        # show available updates, then force-check the latest release
 shine update --verbose  # include up-to-date and non-update status rows
+shine update --pull  # pull Git-managed presets before checking status
 shine self install  # copy the current binary to the platform default install path
 shine self install --dest ~/.local/bin/shine  # install to a custom path
 shine self upgrade  # download and install the latest stable release for this platform
 shine self upgrade --channel stable   # explicitly reinstall the stable release
 shine self upgrade --channel preview  # install the moving preview prerelease
 shine upgrade       # force-update installed shell and app configs
+shine upgrade --pull  # pull Git-managed presets before applying configs
 shine upgrade --verbose  # include env-template check details
 ```
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.35.0+preview.abc1234`, while stable binaries continue to report `0.35.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.36.0+preview.abc1234`, while stable binaries continue to report `0.36.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -523,7 +541,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.35.0 sh install.sh
+SHINE_VERSION=0.36.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -531,7 +549,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.35.0"; .\install.ps1
+$env:SHINE_VERSION = "0.36.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -642,6 +660,81 @@ API_TOKEN` to use a different variable name in the shell, or install the `utils`
 preset and run `shine-env-export MY_TOKEN --as API_TOKEN` to apply it directly.
 Use `--set` when you need a custom encrypted target key.
 
+To expose values only to one child process without changing the current shell,
+use the repeatable `--with` option on `env run`:
+
+```bash
+shine env run --with MY_TOKEN -- bun run build
+shine env run --with MY_TOKEN=API_TOKEN -- bun run build
+shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
+```
+
+Each value follows the same encrypted-first lookup as `env export`. The optional
+name after `=` is the environment variable visible to the child process. Explicit
+`--with` values override variables inherited from the shell and values loaded from
+a workspace, and no workspace file is required when at least one `--with` is used.
+
+### Workspace environment runner
+
+For projects that should not keep plaintext dotenv files, add a
+`shine.workspace.toml`:
+
+```toml
+version = 1
+
+[env]
+modes = ["development", "production"]
+default_mode = "development"
+files = [
+  ".env.shine.toml",
+  ".env.local.shine.toml",
+  ".env.{mode}.shine.toml",
+  ".env.{mode}.local.shine.toml",
+]
+
+[env.encryption]
+recipient = "alice@example.com"
+```
+
+Each environment source may mix plaintext and encrypted values:
+
+```toml
+version = 1
+
+[plain]
+VITE_APP_NAME = "My App"
+
+[secret]
+DATABASE_URL = true        # keep the existing encrypted value
+API_TOKEN = false          # prompt securely on the next seal
+SENTRY_TOKEN = "new-value" # seal this value, then replace it with true
+
+[payload]
+data = "<managed GPG ciphertext>"
+```
+
+Seal pending values, then run a command with the merged environment:
+
+```bash
+shine env seal
+shine env run --mode production -- bun run build
+```
+
+Sources are merged in the configured order, with later files winning. Existing
+process variables win by default; set `env.override_process_env = true` to let
+workspace values replace them. Explicit `--with` values always win when combined
+with a workspace. `env run` automatically maintains an encrypted,
+mode-specific cache in the operating system cache directory. The cache is an
+implementation detail and is rebuilt whenever the workspace, source contents,
+or layer order changes.
+
+Add local source files to `.gitignore` when they contain personal overrides:
+
+```gitignore
+.env.local.shine.toml
+.env.*.local.shine.toml
+```
+
 Then install and use the helper:
 
 ```bash
@@ -695,9 +788,9 @@ Or persist a custom presets directory in `~/.shine/config.toml`:
 presets_dir = "/custom/presets"
 ```
 
-Config discovery searches the current directory and its parents for `shine.config.toml`. If none is found, legacy project `config.toml` files that contain `presets_dir` are still recognized with a warning. Otherwise, `shine` uses the global config under `~/.shine/` or `SHINE_CONFIG_DIR`.
+Config discovery searches the current directory and its parents for `shine.config.toml`. If none is found, legacy project `config.toml` files that contain `presets_dir` are still recognized with a warning. This legacy filename will no longer be supported in v0.40.0; rename it to `shine.config.toml`. A project config is a sparse override layer on top of the global config under `~/.shine/` or `SHINE_CONFIG_DIR`: fields omitted by the project inherit their global values, while fields explicitly present in the project take priority. Relative paths are resolved from the directory containing the file that defines them. Saving a project setting does not copy inherited global values into the project file.
 
-Preset source priority is: `SHINE_PRESETS` > active config `presets_dir` > default. When `SHINE_CONFIG_DIR` is set and no project config is active, it also sets the default presets directory to `$SHINE_CONFIG_DIR/presets`.
+Preset source priority is: `SHINE_PRESETS` > project `presets_dir` > global `presets_dir` > default. `SHINE_CONFIG_DIR` selects the global config and runtime-state directory; its default presets directory is `$SHINE_CONFIG_DIR/presets`.
 
 You can also change the fallback install root for app presets that do not carry a `shine-dest:` annotation:
 
@@ -723,6 +816,30 @@ GHOSTTY_BG_LIGHT = ""
 GHOSTTY_BG_DARK = ""
 ```
 
+Environment values merge by key in this order: built-in defaults, global `[env]`, project `[env]`, global `shine.env.toml`, active presets-overlay `shine.env.toml`, then project `shine.env.toml`.
+
+`shine env show` displays these values with descriptions from the active preset
+catalog and redacts sensitive values by default. Use `--reveal` when the full
+value is required. A value can carry a config-local description without
+separating it from its key:
+
+```toml
+[env]
+MY_API_TOKEN = { value = "secret", description = "Internal API access token" }
+```
+
+Preset authors can provide shared metadata in `<presets>/env.toml`:
+
+```toml
+[[variables]]
+key = "MY_API_TOKEN"
+description = "Internal API access token"
+sensitive = true
+```
+
+An inline description takes precedence over the preset catalog. Catalog
+metadata never stores or supplies the variable value.
+
 Set `GHOSTTY_BG_LIGHT` and `GHOSTTY_BG_DARK` to enable appearance-specific
 Ghostty wallpapers. Leaving them empty keeps the bundled Ghostty preset
 installed without a background image.
@@ -733,12 +850,27 @@ For global overrides, place a flat `shine.env.toml` next to the global config at
 override matching keys from the active config's `[env]` table without modifying
 either file. When both global and project-local env files are present, the
 project-local file wins. Legacy project `.env.toml` files are still recognized
-when project `shine.env.toml` is absent.
+when project `shine.env.toml` is absent, but this compatibility will be removed
+in v0.40.0; rename the file to `shine.env.toml`.
+
+An active directory linked with `shine overlay link <path>` may also contain a
+flat `<path>/shine.env.toml`. Its values override global env values and are
+available from any working directory; project-local `shine.env.toml` values
+still take priority. The file is re-read on every run, requires no project
+`shine.config.toml`, and stops applying after `shine overlay unlink`. Overlays
+also compose with a full external presets source: matching overlay paths win,
+while other files continue to come from the external source.
 
 ```toml
 HTTP_PROXY_PORT = "7890"
-PROXY_HOST = "127.0.0.1"
+PROXY_HOST = { value = "127.0.0.1", description = "Local proxy host" }
 ```
+
+Like config `[env]` entries, every flat override value may be either a string or
+an inline `{ value, description }` table. A detailed override replaces both the
+value and its description; a string override replaces only the value and keeps
+any description inherited from a lower-priority config or preset catalog.
+Invalid value types are reported as errors rather than ignored.
 
 ## Directory Layout
 

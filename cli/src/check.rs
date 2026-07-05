@@ -18,7 +18,7 @@ use std::path::Path;
 /// Per-file status used for aggregation within a category.
 /// Higher discriminant = higher priority (wins in fold).
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub(crate) enum FileStatus {
+pub enum FileStatus {
     NotInstalled,
     UpToDate,
     UpdateAvail,
@@ -27,22 +27,22 @@ pub(crate) enum FileStatus {
     Missing,
 }
 
-pub(crate) struct ShellRow {
-    pub(crate) symbol: String,
-    pub(crate) label: String,
-    pub(crate) status_sym: &'static str,
-    pub(crate) status_text: &'static str,
+pub struct ShellRow {
+    pub symbol: String,
+    pub label: String,
+    pub status_sym: &'static str,
+    pub status_text: &'static str,
     /// `true` when at least one of preset-file or bin-symlink exists.
-    pub(crate) is_installed: bool,
+    pub is_installed: bool,
 }
 
-pub(crate) struct AppRow {
-    pub(crate) sym: &'static str,
-    pub(crate) label: String,
-    pub(crate) simple_label: String,
-    pub(crate) dest: Option<String>,
-    pub(crate) status_text: &'static str,
-    pub(crate) file_status: FileStatus,
+pub struct AppRow {
+    pub sym: &'static str,
+    pub label: String,
+    pub simple_label: String,
+    pub dest: Option<String>,
+    pub status_text: &'static str,
+    pub file_status: FileStatus,
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ pub(crate) struct AppRow {
 // ---------------------------------------------------------------------------
 
 /// Build shell preset rows.  Does not include the PATH sentinel line.
-pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
+pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     let categories = if config.is_external_presets {
         crate::shells::metadata::load_installed_categories(config, None).await?
     } else {
@@ -60,13 +60,13 @@ pub(crate) async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
         return Ok(Vec::new());
     }
 
-    let presets_shell = config.presets_dir().join("shell");
     let bin_dir = config.bin_dir();
     let mut rows: Vec<ShellRow> = Vec::new();
 
     for cat in &categories {
         for script in &cat.files {
-            let script_path = presets_shell.join(&cat.name).join(&script.source_rel);
+            let script_path =
+                config.preset_path(Path::new("shell").join(&cat.name).join(&script.source_rel));
             let source_key = format!("shell/{}/{}", cat.name, script.source_rel.display());
             let rendered_path = config
                 .rendered_dir()
@@ -150,10 +150,7 @@ async fn shell_template_status(
 }
 
 /// Build app config rows for the given pre-loaded categories.
-pub(crate) async fn build_app_rows(
-    config: &Config,
-    categories: &[AppCategory],
-) -> Result<Vec<AppRow>> {
+pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Result<Vec<AppRow>> {
     let manifest = AppManifest::load(config.shine_dir()).await?;
     let env = EnvConfig::load_or_init(config).await.ok();
     let empty_map = BTreeMap::new();
@@ -452,6 +449,50 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_env_change_reports_update_available() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/proxy");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            cat_dir.join("set_proxy.sh"),
+            b"#!/bin/bash\n# shine-template: true\nPROXY_NO_PROXY=\"@@PROXY_NO_PROXY@@\"\n",
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        crate::shells::handle_install(&config, Some("proxy"), false)
+            .await
+            .unwrap();
+
+        config.env.insert(
+            "PROXY_NO_PROXY".to_string(),
+            "localhost,127.0.0.1,::1,.local".to_string(),
+        );
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "proxy/setproxy")
+            .expect("proxy/setproxy row should exist");
+
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[tokio::test]
     async fn category_list_mode_aggregates_explicit_app_files() {
         let dir = make_temp_dir().await;
@@ -471,6 +512,8 @@ mod tests {
                     legacy_dest_annotation: None,
                     transforms: vec![],
                     install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
                 },
                 AppFile {
                     source_rel: PathBuf::from("themes/shine-light"),
@@ -480,6 +523,8 @@ mod tests {
                     legacy_dest_annotation: None,
                     transforms: vec!["template".to_string()],
                     install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
                 },
             ],
             list_mode: AppListMode::Category,
@@ -517,6 +562,8 @@ mod tests {
                     legacy_dest_annotation: None,
                     transforms: vec![],
                     install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
                 },
                 AppFile {
                     source_rel: PathBuf::from("theme.toml"),
@@ -526,6 +573,8 @@ mod tests {
                     legacy_dest_annotation: None,
                     transforms: vec![],
                     install_strategy: AppInstallStrategy::Copy,
+                    requires_admin: false,
+                    restart_hint: None,
                 },
             ],
             list_mode: AppListMode::Files,

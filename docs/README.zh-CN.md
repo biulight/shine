@@ -9,7 +9,7 @@ English README: [`../README.md`](../README.md)
 ## 功能特性
 
 - **内置预设** — shell 脚本和应用配置会编译进二进制；安装后不需要联网
-- **外部预设目录和 overlay** — 可用 `presets_dir` 完整替换预设来源，也可链接一个小型 overlay 目录，只覆盖少量内置预设文件
+- **外部预设目录和 overlay** — 可用 `presets_dir` 指定基础预设来源，再链接一个小型 overlay 覆盖少量预设文件
 - **项目本地预设仓库** — 在预设仓库内运行 `shine init`，即可创建指向当前仓库的 `shine.config.toml`
 - **受管 bin 目录** — `~/.shine/bin/` 在 Unix 上保存展平后的符号链接，在 Windows 上保存命令 shim
 - **自动配置 PATH** — `install` 会自动把 `~/.shine/bin` 追加到你的 shell 配置文件
@@ -181,9 +181,13 @@ Run `shine app install` to install all.
 
 ```bash
 shine sys list
+shine sys list --all
+shine sys info split-dns
 ```
 
-它会列出内置的操作系统初始化预设，并用 `▶` 标记当前平台。
+`shine sys list` 会列出当前操作系统可用的全部初始化项和托管项，包括已记录状态及启用命令。使用 `--all` 可查看所有受支持的操作系统。
+
+`shine sys info <ITEM>` 会显示 item 的类型、驱动、管理员权限要求、必需环境变量名称、当前状态和下一步命令。例如，`shine sys info split-dns` 能直接说明如何启用私有 split DNS，且不会暴露环境变量的配置值。
 
 ### 运行当前操作系统的初始化流程
 
@@ -469,13 +473,24 @@ SHINE_PRESETS=~/dotfiles/shine-presets shine export
 
 当配置了 `presets_dir` 后，所有 `install`、`update` 和 `list` 命令都会自动从外部目录读取。每个命令输出中都会显示当前激活的预设来源，避免你混淆实际使用的是哪份文件。
 
-如果只想做少量自定义，可以使用 presets overlay。Overlay 文件会按相同相对路径覆盖内置预设，例如 `app/starship/starship.toml` 或 `shell/proxy/set_proxy.sh`。完整外部 `presets_dir` 的优先级高于 overlay。
+如果只想做少量自定义，可以使用 presets overlay。Overlay 会按相同相对路径覆盖当前预设来源（内置或外部），例如 `app/starship/starship.toml` 或 `shell/proxy/set_proxy.sh`。同路径文件以 overlay 为准，overlay 独有的分类也会加入基础来源。
 
 ```bash
 shine overlay link ~/dotfiles/shine-overlay --create
 shine overlay show
 shine overlay unlink
 ```
+
+如果当前 preset 来源或 overlay 由 Git 管理，可以让 Shine 安全地快进拉取：
+
+```bash
+shine pull             # 拉取 preset 与 overlay 仓库
+shine update --pull    # 先拉取并重新加载配置，再检查状态
+shine upgrade --pull   # 先拉取并重新加载配置，再应用 preset
+```
+
+拉取会拒绝有未提交改动的工作区，并使用 `git pull --ff-only`；不会自动 stash、rebase、
+reset 或解决冲突。非 Git 来源会被跳过，位于同一仓库的两个来源只会拉取一次。
 
 ### 初始化一个预设目录
 
@@ -502,14 +517,16 @@ shine init
 ```bash
 shine update        # 显示可用配置更新，然后强制检查最新 release
 shine update --verbose  # 同时显示已是最新和非更新类状态
+shine update --pull  # 拉取 Git 管理的 preset 后再检查状态
 shine self upgrade  # 下载并安装当前平台的最新稳定版
 shine self upgrade --channel stable   # 显式重装稳定版
 shine self upgrade --channel preview  # 安装持续滚动的 preview 预发布版
 shine upgrade       # 强制更新已安装的 shell 和应用配置
+shine upgrade --pull  # 拉取 Git 管理的 preset 后再应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.35.0+preview.abc1234`；稳定版则继续显示 `0.35.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.36.0+preview.abc1234`；稳定版则继续显示 `0.36.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -519,7 +536,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.35.0 sh install.sh
+SHINE_VERSION=0.36.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -527,7 +544,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.35.0"; .\install.ps1
+$env:SHINE_VERSION = "0.36.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -626,6 +643,77 @@ eval "$(shine env export MY_TOKEN --as API_TOKEN)"
 
 安装 `utils` 预设后，也可以用 `shine-env-export MY_TOKEN --as API_TOKEN` 直接应用，无需手写 `eval`。
 
+如果只想把变量提供给一个子进程、而不修改当前终端，可使用 `env run` 中可重复的
+`--with` 参数：
+
+```bash
+shine env run --with MY_TOKEN -- bun run build
+shine env run --with MY_TOKEN=API_TOKEN -- bun run build
+shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
+```
+
+每个变量都沿用 `env export` 的规则，优先解密 `<KEY>_SECRET`，否则读取明文 `<KEY>`。
+等号右侧可指定子进程看到的变量名。显式 `--with` 值会覆盖当前终端和 workspace 中的
+同名变量；只要指定了至少一个 `--with`，就不要求存在 workspace 文件。
+
+### Workspace 环境运行器
+
+如果项目不希望保留明文 dotenv 文件，可以创建 `shine.workspace.toml`：
+
+```toml
+version = 1
+
+[env]
+modes = ["development", "production"]
+default_mode = "development"
+files = [
+  ".env.shine.toml",
+  ".env.local.shine.toml",
+  ".env.{mode}.shine.toml",
+  ".env.{mode}.local.shine.toml",
+]
+
+[env.encryption]
+recipient = "alice@example.com"
+```
+
+每个环境源文件可以同时包含明文值和加密值：
+
+```toml
+version = 1
+
+[plain]
+VITE_APP_NAME = "My App"
+
+[secret]
+DATABASE_URL = true         # 保留已有密文值
+API_TOKEN = false           # 下次 seal 时安全提示输入
+SENTRY_TOKEN = "new-value" # seal 后自动替换成 true
+
+[payload]
+data = "<由 Shine 管理的 GPG 密文>"
+```
+
+封存待处理的值，再用合并后的环境运行命令：
+
+```bash
+shine env seal
+shine env run --mode production -- bun run build
+```
+
+环境源按配置顺序合并，后面的文件覆盖前面的文件。默认保留当前进程中已存在的变量；设置
+`env.override_process_env = true` 后改由 workspace 值覆盖。与 workspace 同时使用时，显式
+`--with` 值始终优先。`env run` 会在系统缓存目录中自动维护按
+mode 区分的加密缓存；workspace、源文件内容或覆盖顺序变化后，缓存会自动重建，不需要单独的
+compile 命令。
+
+个人覆盖文件应加入 `.gitignore`：
+
+```gitignore
+.env.local.shine.toml
+.env.*.local.shine.toml
+```
+
 然后安装并使用这个 helper：
 
 ```bash
@@ -674,9 +762,9 @@ SHINE_PRESETS=/custom/presets shine shell install   # 仅覆盖 presets 目录
 presets_dir = "/custom/presets"
 ```
 
-配置发现逻辑会从当前目录开始向父目录查找 `shine.config.toml`。如果找不到，仍会兼容识别包含 `presets_dir` 的旧式项目 `config.toml`，但会给出警告。再找不到时，`shine` 才使用 `~/.shine/` 或 `SHINE_CONFIG_DIR` 下的全局配置。
+配置发现逻辑会从当前目录开始向父目录查找 `shine.config.toml`。如果找不到，仍会兼容识别包含 `presets_dir` 的旧式项目 `config.toml`，但会给出警告。该旧文件名将在 v0.40.0 停止支持，请将其改名为 `shine.config.toml`。项目配置是 `~/.shine/` 或 `SHINE_CONFIG_DIR` 下全局配置之上的稀疏覆盖层：项目未声明的字段继承全局值，明确声明的字段则以项目值为准。相对路径以定义该字段的配置文件所在目录为基准解析。保存项目设置时，不会把继承的全局值复制到项目文件中。
 
-预设来源优先级为：`SHINE_PRESETS` > 当前激活配置里的 `presets_dir` > 默认目录。当设置了 `SHINE_CONFIG_DIR` 且没有激活项目配置时，默认预设目录会变成 `$SHINE_CONFIG_DIR/presets`。
+预设来源优先级为：`SHINE_PRESETS` > 项目 `presets_dir` > 全局 `presets_dir` > 默认目录。`SHINE_CONFIG_DIR` 用于选择全局配置和运行时状态目录，其默认预设目录为 `$SHINE_CONFIG_DIR/presets`。
 
 对于没有 `shine-dest:` 注解的应用预设，你也可以修改默认安装根目录：
 
@@ -702,14 +790,46 @@ GHOSTTY_BG_LIGHT = ""
 GHOSTTY_BG_DARK = ""
 ```
 
+环境变量按 key 依次合并：内置默认值、全局 `[env]`、项目 `[env]`、全局 `shine.env.toml`、当前 presets overlay 的 `shine.env.toml`、项目 `shine.env.toml`。
+
+`shine env show` 会显示当前 preset catalog 提供的变量说明，并默认隐藏敏感值；需要查看完整值时可使用 `--reveal`。如果需要在当前配置中覆盖说明，可以把值和说明写在同一个 inline table 中：
+
+```toml
+[env]
+MY_API_TOKEN = { value = "secret", description = "内部 API 的访问令牌" }
+```
+
+Preset 作者可以在 `<presets>/env.toml` 中提供共享元数据：
+
+```toml
+[[variables]]
+key = "MY_API_TOKEN"
+description = "内部 API 的访问令牌"
+sensitive = true
+```
+
+inline description 的优先级高于 preset catalog。Catalog 只保存元数据，不保存或提供变量值。
+
 设置 `GHOSTTY_BG_LIGHT` 和 `GHOSTTY_BG_DARK` 后，Ghostty 预设在不同外观模式下会安装带背景图片路径的主题。保留为空则表示安装内置 Ghostty 预设但不启用背景图。
 
-全局覆盖可通过放置在 `~/.shine/shine.env.toml` 的扁平 `shine.env.toml` 文件提供。项目本地覆盖则放在 `shine.config.toml` 同目录下。`shine.env.toml` 中的值会覆盖当前配置 `[env]` 表中的同名 key，而不会改写任一文件。当全局和项目本地 env 文件同时存在时，项目本地优先。若项目本地 `shine.env.toml` 不存在，仍会兼容读取旧的 `.env.toml`。
+全局覆盖可通过放置在 `~/.shine/shine.env.toml` 的扁平 `shine.env.toml` 文件提供。项目本地覆盖则放在 `shine.config.toml` 同目录下。`shine.env.toml` 中的值会覆盖当前配置 `[env]` 表中的同名 key，而不会改写任一文件。当全局和项目本地 env 文件同时存在时，项目本地优先。若项目本地 `shine.env.toml` 不存在，仍会兼容读取旧的 `.env.toml`；该兼容将在 v0.40.0 移除，请将文件改名为 `shine.env.toml`。
+
+通过 `shine overlay link <path>` 关联的有效 overlay 目录也可以包含扁平的
+`<path>/shine.env.toml`。其中的值会覆盖全局 env，并可在任意工作目录下生效；
+项目本地 `shine.env.toml` 仍拥有更高优先级。该文件会在每次运行时重新读取，
+无需项目级 `shine.config.toml`；执行 `shine overlay unlink` 后即停止生效。
+Overlay 也可以与完整的外部 presets 来源同时使用：同路径文件以 overlay 为准，
+其余文件继续来自外部 presets。
 
 ```toml
 HTTP_PROXY_PORT = "7890"
-PROXY_HOST = "127.0.0.1"
+PROXY_HOST = { value = "127.0.0.1", description = "本地代理主机" }
 ```
+
+与配置文件的 `[env]` 条目一样，扁平 override 中的每个值既可以是字符串，也可以是
+inline `{ value, description }` 表。详细项会同时覆盖值和说明；字符串只覆盖值，并
+保留从低优先级配置或 preset catalog 继承的说明。无效的值类型会明确报错，不会被
+静默忽略。
 
 ## 目录布局
 

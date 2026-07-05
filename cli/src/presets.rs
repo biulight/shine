@@ -15,7 +15,7 @@ fn overlay_dir_cell() -> &'static Mutex<Option<PathBuf>> {
     OVERLAY_DIR.get_or_init(|| Mutex::new(None))
 }
 
-pub(crate) fn set_overlay_dir(dir: Option<&Path>) {
+pub fn set_overlay_dir(dir: Option<&Path>) {
     let mut guard = overlay_dir_cell()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -29,30 +29,30 @@ fn overlay_dir() -> Option<PathBuf> {
         .clone()
 }
 
-pub(crate) struct ExtractReport {
+pub struct ExtractReport {
     pub created: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
     pub overwritten: Vec<PathBuf>,
 }
 
-pub(crate) struct RemoveReport {
+pub struct RemoveReport {
     pub removed: Vec<PathBuf>,
     pub skipped: Vec<PathBuf>,
 }
 
 #[cfg(test)]
-pub(crate) struct ScriptInfo {
+pub struct ScriptInfo {
     pub name: String,
     pub description: Vec<String>,
 }
 
 #[cfg(test)]
-pub(crate) struct CategoryInfo {
+pub struct CategoryInfo {
     pub name: String,
     pub scripts: Vec<ScriptInfo>,
 }
 
-pub(crate) fn asset_paths(prefix: &str) -> Vec<String> {
+pub fn asset_paths(prefix: &str) -> Vec<String> {
     let normalized = prefix.trim_end_matches('/');
     let filter = if normalized.is_empty() {
         String::new()
@@ -72,7 +72,7 @@ pub(crate) fn asset_paths(prefix: &str) -> Vec<String> {
     paths.into_iter().collect()
 }
 
-pub(crate) fn read_asset_bytes(path: &str) -> Option<Vec<u8>> {
+pub fn read_asset_bytes(path: &str) -> Option<Vec<u8>> {
     if !is_safe_asset_path(path) {
         return None;
     }
@@ -131,7 +131,7 @@ fn is_safe_asset_path(path: &str) -> bool {
 /// Extract a `shine-dest:` annotation from a single comment line.
 ///
 /// Recognises `# shine-dest:` (shell/TOML/INI) and `" shine-dest:` (VimScript).
-pub(crate) fn extract_annotation_from_line(line: &str) -> Option<String> {
+pub fn extract_annotation_from_line(line: &str) -> Option<String> {
     const PREFIXES: &[&str] = &["# shine-dest:", "\" shine-dest:"];
     for &prefix in PREFIXES {
         if let Some(rest) = line.trim_start().strip_prefix(prefix) {
@@ -145,7 +145,7 @@ pub(crate) fn extract_annotation_from_line(line: &str) -> Option<String> {
 }
 
 /// Parse the `shine-dest:` annotation from the first (or second, if shebang) line.
-pub(crate) fn parse_dest_annotation(content: &[u8]) -> Option<String> {
+pub fn parse_dest_annotation(content: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(content).ok()?;
     let mut lines = text.lines();
     let first = lines.next()?;
@@ -160,7 +160,7 @@ pub(crate) fn parse_dest_annotation(content: &[u8]) -> Option<String> {
 /// Return `true` if the script opts into env-variable substitution.
 ///
 /// Looks for `# shine-template: true` in the shebang or leading comment block.
-pub(crate) fn parse_template_annotation(content: &[u8]) -> bool {
+pub fn parse_template_annotation(content: &[u8]) -> bool {
     let text = match std::str::from_utf8(content) {
         Ok(t) => t,
         Err(_) => return false,
@@ -186,7 +186,7 @@ pub(crate) fn parse_template_annotation(content: &[u8]) -> bool {
 ///
 /// Collects consecutive lines starting with `# ` or bare `#` until the first
 /// non-comment, non-shebang line. Trailing empty description lines are trimmed.
-pub(crate) fn parse_script_description(content: &[u8]) -> Vec<String> {
+pub fn parse_script_description(content: &[u8]) -> Vec<String> {
     let Ok(text) = std::str::from_utf8(content) else {
         return vec![];
     };
@@ -223,7 +223,7 @@ pub(crate) fn parse_script_description(content: &[u8]) -> Vec<String> {
 /// Categories are the immediate subdirectories of `prefix/`. Scripts within each
 /// category are sorted by name. Returns categories in alphabetical order.
 #[cfg(test)]
-pub(crate) fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
+pub fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
     let normalized = prefix.trim_end_matches('/');
     let filter = format!("{normalized}/");
 
@@ -273,7 +273,7 @@ pub(crate) fn list_categories(prefix: &str) -> Vec<CategoryInfo> {
 /// it are the scripts. Descriptions are parsed from each script's leading comment block.
 /// Returns categories in alphabetical order.
 #[cfg(test)]
-pub(crate) async fn list_fs_shell_categories(presets_dir: &Path) -> Vec<CategoryInfo> {
+pub async fn list_fs_shell_categories(presets_dir: &Path) -> Vec<CategoryInfo> {
     let shell_root = presets_dir.join("shell");
     if !shell_root.is_dir() {
         return Vec::new();
@@ -334,10 +334,7 @@ pub(crate) async fn list_fs_shell_categories(presets_dir: &Path) -> Vec<Category
 /// Used by `shell install` when `is_external_presets` is true, to link scripts
 /// that already exist on disk without extracting embedded assets.
 #[cfg(test)]
-pub(crate) async fn collect_fs_shell_scripts(
-    presets_dir: &Path,
-    prefix: &str,
-) -> Result<Vec<PathBuf>> {
+pub async fn collect_fs_shell_scripts(presets_dir: &Path, prefix: &str) -> Result<Vec<PathBuf>> {
     let root = presets_dir.join(prefix);
     if !root.is_dir() {
         return Ok(Vec::new());
@@ -371,11 +368,7 @@ pub(crate) async fn collect_fs_shell_scripts(
 /// never touched. Empty subdirectories within the prefix root are cleaned up
 /// after file removal. Missing files are recorded in `skipped`.
 /// When `dry_run` is true, nothing is removed.
-pub(crate) async fn remove_prefix(
-    prefix: &str,
-    target_dir: &Path,
-    dry_run: bool,
-) -> Result<RemoveReport> {
+pub async fn remove_prefix(prefix: &str, target_dir: &Path, dry_run: bool) -> Result<RemoveReport> {
     let normalized = prefix.trim_end_matches('/');
 
     let mut report = RemoveReport {
@@ -418,7 +411,7 @@ pub(crate) async fn remove_prefix(
 }
 
 /// Extract only assets whose path starts with `prefix/`.
-pub(crate) async fn extract_prefix(
+pub async fn extract_prefix(
     prefix: &str,
     target_dir: &Path,
     overwrite: bool,
@@ -429,7 +422,7 @@ pub(crate) async fn extract_prefix(
 }
 
 /// Extract all embedded assets.
-pub(crate) async fn extract_all(target_dir: &Path, overwrite: bool) -> Result<ExtractReport> {
+pub async fn extract_all(target_dir: &Path, overwrite: bool) -> Result<ExtractReport> {
     extract_matching(|_| true, target_dir, overwrite).await
 }
 

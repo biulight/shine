@@ -1,224 +1,42 @@
 use anyhow::{Context, Result, bail};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::Parser;
 use dialoguer::Select;
+#[cfg(test)]
 use std::path::PathBuf;
 
-mod apps;
-mod bin_links;
-mod check;
-mod clear;
-mod colors;
-mod commands;
-mod completion;
-mod config;
-mod env;
-mod list;
-mod output;
-mod path_display;
-mod platform;
-mod presets;
-mod secret;
-mod shells;
-mod show;
-mod sys;
 #[cfg(test)]
-mod test_support;
-mod update_check;
-mod version;
-
-use crate::config::Config;
-use commands::{
-    AppCommands, EnvCommands, ExportCommand, LinkCommand, OverlayCommands, SelfCommands,
-    ShellCommands, SysCommands,
+use cli::test_support;
+use cli::{
+    apps, clear, colors, commands, completion, config, env, git_pull, list, path_display, secret,
+    shells, show, sys, update_check, version,
 };
-use update_check::{ReleaseChannel, UpdateStatus};
 
-/// `Shine` - Quick config for sys
-#[derive(Parser, Debug)]
-#[command(name = "shine")]
-#[command(version = crate::version::display(), about, long_about = None)]
-struct Cli {
-    #[arg(long, global = true)]
-    config_dir: Option<String>,
+use commands::{
+    AppCommands, Cli, Commands, CompletionCommands, CompletionShell, EnvCommands, ExportCommand,
+    LinkCommand, OverlayCommands, SelfCommands, ShellCommands, SysCommands,
+};
+#[cfg(test)]
+use commands::{ClearCommand, InitCommand, UpdateCommand, UpgradeCommand};
+use config::Config;
+#[cfg(test)]
+use update_check::ReleaseChannel;
+use update_check::UpdateStatus;
 
-    #[command(subcommand)]
-    command: Commands,
-}
+mod presets_commands;
+mod self_install;
 
-#[derive(Subcommand, Debug)]
-enum Commands {
-    /// Initialize the current directory as a shine presets directory
-    Init(InitCommand),
-    /// Initialize quick shells
-    Shell {
-        #[command(subcommand)]
-        command: ShellCommands,
-    },
-    /// Install app config files (e.g. starship.toml, .ideavimrc) to their annotated destinations
-    App {
-        #[command(subcommand)]
-        command: AppCommands,
-    },
-    /// Install a shell or app preset category
-    Install {
-        /// Preset category to install (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
-    },
-    /// Reinstall a shell or app preset category
-    Reinstall {
-        /// Preset category to reinstall (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
-    },
-    /// Uninstall a shell or app preset category
-    Uninstall {
-        /// Preset category to uninstall (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
-    },
-    /// Generate or install shell completion scripts
-    Completions {
-        #[command(subcommand)]
-        command: CompletionCommands,
-    },
-    /// List installed shell presets and app configs
-    List,
-    /// Show details for an installed config or shell preset
-    Info {
-        /// Installed item to inspect (e.g. git, starship, proxy, setproxy)
-        #[arg(value_name = "TARGET")]
-        target: String,
-        /// Also print a unified diff against the expected content
-        #[arg(long)]
-        diff: bool,
-        /// Also print the installed or rendered file content
-        #[arg(long)]
-        verbose: bool,
-    },
-    /// Copy built-in presets to a directory for local customization
-    Export(ExportCommand),
-    /// Set the external presets directory in the active config
-    Link(LinkCommand),
-    /// Remove the external presets directory from the active config
-    Unlink,
-    /// Manage the personal presets overlay directory
-    Overlay {
-        #[command(subcommand)]
-        command: OverlayCommands,
-    },
-    /// Show installed config status and check for a newer version of shine
-    Update(UpdateCommand),
-    /// Force-update installed shell and app configs
-    Upgrade(UpgradeCommand),
-    /// Clear old shine-owned runtime state after schema changes
-    Clear(ClearCommand),
-    /// Manage the shine binary itself
-    #[command(name = "self")]
-    Self_ {
-        #[command(subcommand)]
-        command: SelfCommands,
-    },
-    /// Manage environment variables used during preset installation
-    Env {
-        #[command(subcommand)]
-        command: EnvCommands,
-    },
-    /// Initialize or inspect system-level presets for the current OS
-    Sys {
-        #[command(subcommand)]
-        command: SysCommands,
-    },
-}
-
-#[derive(Args, Debug)]
-struct InitCommand {
-    /// Skip the confirmation prompt
-    #[arg(long)]
-    yes: bool,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-enum CompletionShell {
-    #[value(name = "bash")]
-    Bash,
-    #[value(name = "powershell")]
-    PowerShell,
-    #[value(name = "zsh")]
-    Zsh,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Subcommand)]
-enum CompletionCommands {
-    /// Install completions into the managed shell profile without installing presets
-    Install,
-    /// Generate bash completion registration script
-    Bash,
-    /// Generate PowerShell completion registration script
-    #[command(name = "powershell")]
-    PowerShell,
-    /// Generate zsh completion registration script
-    Zsh,
-}
-
-impl CompletionCommands {
-    fn generate(self) {
-        match self {
-            CompletionCommands::Bash => completion::generate_registration(CompletionShell::Bash),
-            CompletionCommands::PowerShell => {
-                completion::generate_registration(CompletionShell::PowerShell)
-            }
-            CompletionCommands::Zsh => completion::generate_registration(CompletionShell::Zsh),
-            CompletionCommands::Install => unreachable!("install is handled by the async runtime"),
-        }
-    }
-}
-
-impl CompletionShell {
-    fn from_command(command: &CompletionCommands) -> Option<Self> {
-        match command {
-            CompletionCommands::Bash => Some(CompletionShell::Bash),
-            CompletionCommands::PowerShell => Some(CompletionShell::PowerShell),
-            CompletionCommands::Zsh => Some(CompletionShell::Zsh),
-            CompletionCommands::Install => None,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            CompletionShell::Bash => "bash",
-            CompletionShell::PowerShell => "powershell",
-            CompletionShell::Zsh => "zsh",
-        }
-    }
-}
-
-#[derive(Parser, Debug)]
-struct UpdateCommand {
-    /// Show installed entries that are already current or need attention
-    #[arg(long)]
-    verbose: bool,
-    /// Bypass the 24-hour version cache and check GitHub now
-    #[arg(long)]
-    refresh: bool,
-}
-
-#[derive(Parser, Debug)]
-struct UpgradeCommand {
-    /// Show detailed env-template checks and skipped rows
-    #[arg(long)]
-    verbose: bool,
-    /// Remove stale managed app files whose preset source no longer exists
-    #[arg(long)]
-    prune_stale: bool,
-}
-
-#[derive(Parser, Debug)]
-struct ClearCommand {
-    /// Print cleanup steps without changing files
-    #[arg(long)]
-    dry_run: bool,
-}
+use presets_commands::{
+    handle_overlay_link, handle_overlay_show, handle_overlay_unlink, handle_presets_export,
+    handle_presets_link, handle_presets_unlink,
+};
+#[cfg(test)]
+use self_install::{
+    SelfInstallSync, format_self_upgrade_message, format_update_check_failure_warning,
+    install_binary_atomically, sync_self_install_dest_from,
+};
+use self_install::{
+    handle_config_upgrade, handle_self_install, handle_self_upgrade, handle_update,
+};
 
 fn main() -> Result<()> {
     completion::complete_from_env();
@@ -269,9 +87,10 @@ async fn run(cli: Cli) -> Result<()> {
     // Skip the background version check for update/self commands. `shine update`
     // and `shine self upgrade` do their own forced fetch below; `shine self install`
     // should remain available even when the current binary is version-gated.
-    if !matches!(
-        cli.command,
+    let skip_background_update_check = matches!(
+        &cli.command,
         Commands::Update(..)
+            | Commands::Pull
             | Commands::Export(..)
             | Commands::Link(..)
             | Commands::Unlink
@@ -279,7 +98,8 @@ async fn run(cli: Cli) -> Result<()> {
             | Commands::Clear(..)
             | Commands::Self_ { .. }
             | Commands::Env { .. }
-    ) {
+    ) || matches!(&cli.command, Commands::Upgrade(cmd) if cmd.pull);
+    if !skip_background_update_check {
         match update_check::check_for_update(&config).await {
             Ok(UpdateStatus::UpToDate) => {}
             Ok(UpdateStatus::UpdateAvailable { latest }) => {
@@ -348,9 +168,24 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
             }
         },
-        Commands::Update(cmd) => handle_update(&config, cmd.verbose, cmd.refresh).await,
+        Commands::Pull => git_pull::handle_pull(&config).await,
+        Commands::Update(cmd) => {
+            if cmd.pull {
+                git_pull::handle_pull(&config).await?;
+                let config = Box::pin(Config::load_or_init()).await?;
+                handle_update(&config, cmd.verbose, cmd.refresh).await
+            } else {
+                handle_update(&config, cmd.verbose, cmd.refresh).await
+            }
+        }
         Commands::Upgrade(cmd) => {
-            handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
+            if cmd.pull {
+                git_pull::handle_pull(&config).await?;
+                let config = Box::pin(Config::load_or_init()).await?;
+                handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
+            } else {
+                handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
+            }
         }
         Commands::Export(ExportCommand { dir, force }) => {
             Box::pin(handle_presets_export(&config, dir, force)).await
@@ -400,7 +235,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Commands::Env { command } => match command {
-            EnvCommands::Show => handle_env_show(&config).await,
+            EnvCommands::Show { reveal } => handle_env_show(&config, reveal).await,
             EnvCommands::Set { key, value } => handle_env_set(&config, &key, &value).await,
             EnvCommands::Delete { key } => handle_env_delete(&config, &key).await,
             EnvCommands::Get { key } => handle_env_get(&config, &key).await,
@@ -417,9 +252,29 @@ async fn run(cli: Cli) -> Result<()> {
                 )
                 .await
             }
+            EnvCommands::Seal(cmd) => {
+                env::workspace::handle_seal(
+                    &config,
+                    cmd.workspace.as_deref(),
+                    cmd.file.as_deref(),
+                    cmd.recipient.as_deref(),
+                )
+                .await
+            }
+            EnvCommands::Run(cmd) => {
+                env::workspace::handle_run(
+                    &config,
+                    cmd.workspace.as_deref(),
+                    cmd.mode.as_deref(),
+                    &cmd.with,
+                    &cmd.command,
+                )
+                .await
+            }
         },
         Commands::Sys { command } => match command {
-            SysCommands::List => Box::pin(sys::handle_list(&config)).await,
+            SysCommands::List { all } => Box::pin(sys::handle_list(&config, all)).await,
+            SysCommands::Info { item } => Box::pin(sys::handle_info(&config, &item)).await,
             SysCommands::Status => Box::pin(sys::handle_status(&config)).await,
             SysCommands::Init {
                 preset,
@@ -433,6 +288,12 @@ async fn run(cli: Cli) -> Result<()> {
                     force_profile,
                 ))
                 .await
+            }
+            SysCommands::Apply { item, dry_run } => {
+                Box::pin(sys::handle_apply(&config, item.as_deref(), dry_run)).await
+            }
+            SysCommands::Uninstall { item, dry_run } => {
+                Box::pin(sys::handle_uninstall(&config, &item, dry_run)).await
             }
         },
     }
@@ -558,7 +419,7 @@ async fn handle_uninstall_shim(config: &Config, category: &str) -> Result<()> {
 
 async fn resolve_shim_category(config: &Config, category: &str) -> Result<ShimResolution> {
     let shell_matches = if config.is_external_presets {
-        let shell_path = config.presets_dir().join("shell").join(category);
+        let shell_path = config.preset_path(std::path::Path::new("shell").join(category));
         if shell_path.exists() {
             shells::metadata::load_installed_categories(config, Some(category))
                 .await?
@@ -570,7 +431,7 @@ async fn resolve_shim_category(config: &Config, category: &str) -> Result<ShimRe
         shells::metadata::load_embedded_categories(Some(category))?.len()
     };
     let app_matches = if config.is_external_presets {
-        let app_path = config.presets_dir().join("app").join(category);
+        let app_path = config.preset_path(std::path::Path::new("app").join(category));
         if app_path.exists() {
             apps::load_installed_categories(config, Some(category))
                 .await?
@@ -652,16 +513,114 @@ fn confirm_init(dir: &std::path::Path) -> Result<bool> {
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
-async fn handle_env_show(config: &Config) -> Result<()> {
+async fn handle_env_show(config: &Config, reveal: bool) -> Result<()> {
     let env = env::EnvConfig::load_or_init(config).await?;
-    println!(
-        "{}",
-        colors::dim(&format!("# {} [env]", config.config_path().display()))
-    );
-    for (k, v) in env.iter() {
-        println!("{k} = \"{v}\"");
+    let catalog = env::catalog::load(config).await?;
+    let terminal_width = usize::from(console::Term::stdout().size().1).max(40);
+    let key_width = env
+        .iter()
+        .map(|(key, _)| key.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    println!("{}", colors::bold("Environment"));
+    println!();
+    if env.as_map().is_empty() {
+        println!("  {}", colors::dim("No variables configured."));
     }
+    for (k, v) in env.iter() {
+        let metadata = catalog.get(k);
+        let description = env
+            .description(k)
+            .or_else(|| metadata.map(|item| item.description.as_str()))
+            .unwrap_or_default();
+        let sensitive = metadata.is_some_and(|item| item.sensitive) || is_sensitive_env_key(k);
+        let display_value = display_env_value(v, sensitive, reveal);
+        let (display_value, description) =
+            fit_env_row(&display_value, description, key_width, terminal_width);
+        let key_padding = " ".repeat(key_width.saturating_sub(k.chars().count()));
+        if description.is_empty() {
+            println!("  {}{}  {}", colors::cyan(k), key_padding, display_value);
+        } else {
+            println!(
+                "  {}{}  {:<value_width$}  {}",
+                colors::cyan(k),
+                key_padding,
+                display_value,
+                colors::dim(&description),
+                value_width = env_value_width(key_width, terminal_width),
+            );
+        }
+    }
+    println!();
+    println!(
+        "  {}  {}",
+        colors::dim("Config"),
+        colors::dim(&path_display::format(config.config_path()))
+    );
+    println!(
+        "  {}",
+        colors::dim(&format!("{} variables", env.as_map().len()))
+    );
     Ok(())
+}
+
+fn is_sensitive_env_key(key: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    [
+        "SECRET",
+        "TOKEN",
+        "PASSWORD",
+        "PASSPHRASE",
+        "API_KEY",
+        "PRIVATE_KEY",
+        "ACCESS_KEY",
+    ]
+    .iter()
+    .any(|suffix| key == *suffix || key.ends_with(&format!("_{suffix}")))
+}
+
+fn display_env_value(value: &str, sensitive: bool, reveal: bool) -> String {
+    if value.is_empty() {
+        "<empty>".to_string()
+    } else if sensitive && !reveal {
+        "<redacted>".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn env_value_width(key_width: usize, terminal_width: usize) -> usize {
+    terminal_width.saturating_sub(key_width + 28).clamp(12, 36)
+}
+
+fn fit_env_row(
+    value: &str,
+    description: &str,
+    key_width: usize,
+    terminal_width: usize,
+) -> (String, String) {
+    let value_width = env_value_width(key_width, terminal_width);
+    let value = truncate_text(value, value_width);
+    let description_width = terminal_width.saturating_sub(2 + key_width + 2 + value_width + 2);
+    let description = if description_width < 8 {
+        String::new()
+    } else {
+        truncate_text(description, description_width)
+    };
+    (value, description)
+}
+
+fn truncate_text(value: &str, max_width: usize) -> String {
+    if value.chars().count() <= max_width {
+        return value.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+    let mut result = value.chars().take(max_width - 1).collect::<String>();
+    result.push('…');
+    result
 }
 
 async fn handle_env_set(config: &Config, key: &str, value: &str) -> Result<()> {
@@ -740,28 +699,14 @@ async fn handle_env_export(config: &Config, key: &str, alias: Option<&str>) -> R
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum EnvExportValue<'a> {
-    Secret { key: String, value: &'a str },
-    Plaintext(&'a str),
-}
+type EnvExportValue<'a> = env::StoredValue<'a>;
 
 fn resolve_env_export_value<'a>(env: &'a env::EnvConfig, key: &str) -> Result<EnvExportValue<'a>> {
-    let secret_key = env_export_secret_key(key);
-    if let Some(value) = env.get(&secret_key) {
-        return Ok(EnvExportValue::Secret {
-            key: secret_key,
-            value,
-        });
-    }
-    if let Some(value) = env.get(key) {
-        return Ok(EnvExportValue::Plaintext(value));
-    }
-    bail!("{secret_key} or {key} is not set in the active config [env]");
+    env::resolve_stored_value(env, key)
 }
 
 fn env_export_secret_key(key: &str) -> String {
-    format!("{key}_SECRET")
+    env::secret_key(key)
 }
 
 fn validate_env_export_key(key: &str) -> Result<()> {
@@ -875,625 +820,10 @@ async fn handle_env_encrypt(
     Ok(())
 }
 
-async fn handle_update(config: &Config, verbose: bool, refresh: bool) -> Result<()> {
-    let mut printed_update = if verbose {
-        Box::pin(list::handle_status_list(config)).await?;
-        println!();
-        true
-    } else {
-        Box::pin(list::handle_update_list(config)).await?
-    };
-
-    let current = version::display();
-    if verbose {
-        println!("Checking for updates (current: {current})...");
-    }
-
-    let update_status = if refresh {
-        update_check::check_for_update_forced(config).await
-    } else {
-        update_check::check_for_update(config).await
-    };
-
-    match update_status {
-        Ok(UpdateStatus::UpToDate) => {
-            if verbose {
-                println!(
-                    "{}",
-                    colors::green(&format!("shine {current} is up to date."))
-                );
-            }
-        }
-        Ok(UpdateStatus::UpdateAvailable { latest }) => {
-            if printed_update && !verbose {
-                println!();
-            }
-            println!(
-                "{}",
-                colors::yellow(&format!(
-                    "A newer version of shine is available: {current} -> {latest}."
-                ))
-            );
-            println!("Run `shine self upgrade` to install it.");
-            printed_update = true;
-        }
-        Ok(UpdateStatus::UpdateRequired { latest }) => {
-            if printed_update && !verbose {
-                println!();
-            }
-            println!(
-                "{}",
-                colors::yellow(&format!(
-                    "A newer patch release of shine is available: {current} -> {latest}."
-                ))
-            );
-            println!("Run `shine self upgrade` to install it.");
-            printed_update = true;
-        }
-        Err(e) => {
-            eprintln!("{}", format_update_check_failure_warning(&e));
-        }
-    }
-
-    if !printed_update {
-        println!("{}", colors::dim("Nothing to update."));
-    }
-
-    Ok(())
-}
-
-fn format_update_check_failure_warning(err: &anyhow::Error) -> String {
-    colors::yellow(&format!("warning: skipped shine version check: {err}"))
-}
-
-async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
-    let current = version::display();
-    let selected_channel = channel.unwrap_or(ReleaseChannel::Stable);
-    let force_install = channel.is_some();
-    println!(
-        "Checking for {} upgrades (current: {current})...",
-        selected_channel.as_str()
-    );
-
-    match update_check::upgrade_to_release(config, selected_channel, force_install).await {
-        Ok(update_check::UpgradeResult::AlreadyUpToDate { channel, latest }) => {
-            println!(
-                "{}",
-                colors::green(&format!(
-                    "shine {current} is up to date on the {} channel ({latest}).",
-                    channel.as_str()
-                ))
-            );
-        }
-        Ok(update_check::UpgradeResult::Upgraded {
-            channel,
-            previous: _,
-            previous_display,
-            release_tag,
-            installed_version,
-            installed_path,
-        }) => {
-            println!(
-                "{}",
-                colors::green(&format_self_upgrade_message(
-                    channel,
-                    &previous_display,
-                    &installed_version,
-                    &release_tag,
-                ))
-            );
-            sync_self_install_dest(config, &installed_path).await;
-        }
-        Err(e) => {
-            update_check::invalidate_update_cache(config).await;
-            bail!("Upgrade failed: {e}");
-        }
-    }
-
-    Ok(())
-}
-
-fn format_self_upgrade_message(
-    channel: ReleaseChannel,
-    previous_display: &str,
-    installed_version: &str,
-    release_tag: &str,
-) -> String {
-    match channel {
-        ReleaseChannel::Stable => {
-            format!("Upgraded shine from {previous_display} to {installed_version}.")
-        }
-        ReleaseChannel::Preview => {
-            if previous_display.contains("+preview.") {
-                format!(
-                    "Updated shine preview from {previous_display} to {installed_version} ({release_tag})."
-                )
-            } else {
-                format!(
-                    "Installed shine preview {installed_version} over stable {previous_display} ({release_tag})."
-                )
-            }
-        }
-    }
-}
-
-async fn handle_config_upgrade(config: &Config, verbose: bool, prune_stale: bool) -> Result<()> {
-    println!("{}", colors::bold("Upgrading installed configs"));
-    crate::config::print_presets_note(config);
-
-    let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
-    let shell_report = Box::pin(shells::handle_upgrade_installed(config, verbose)).await?;
-    let app_report = Box::pin(apps::handle_upgrade_installed(config, prune_stale)).await?;
-
-    let updated = env_report.updated
-        + shell_report.templates_updated
-        + shell_report.links_created
-        + shell_report.links_updated
-        + usize::from(shell_report.path_changed)
-        + app_report.updated;
-    let skipped = env_report.skipped + app_report.skipped;
-    let user_modified = env_report.user_modified + app_report.user_modified;
-
-    let mut summary: Vec<String> = Vec::new();
-    if updated > 0 {
-        summary.push(colors::green(&format!("{updated} updated")));
-    }
-    if user_modified > 0 {
-        summary.push(colors::yellow(&format!(
-            "{user_modified} user-modified (kept)"
-        )));
-    }
-    if shell_report.link_conflicts > 0 {
-        summary.push(colors::yellow(&format!(
-            "{} link conflicts",
-            shell_report.link_conflicts
-        )));
-    }
-    if skipped > 0 {
-        summary.push(colors::dim(&format!("{skipped} skipped")));
-    }
-    if summary.is_empty() {
-        summary.push(colors::dim("nothing changed"));
-    }
-    output::footer("Done", &summary);
-
-    Ok(())
-}
-
-/// After a successful self-upgrade, try to sync the new binary to the self-install destination.
-/// If the copy fails due to permissions, print a targeted hint instead of failing.
-async fn sync_self_install_dest(config: &Config, src: &std::path::Path) {
-    let dest = match &config.self_install_dest {
-        Some(d) => d,
-        None => return,
-    };
-    match sync_self_install_dest_from(src, dest) {
-        Ok(SelfInstallSync::Synced) => println!(
-            "{}",
-            colors::green(&format!("Synced system copy at {}", dest.display()))
-        ),
-        Ok(SelfInstallSync::AlreadyCurrent) => {}
-        Err(e) if has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied) => {
-            let hint = if cfg!(windows) {
-                format!(
-                    "Installed copy at {} needs manual sync; rerun from an elevated terminal if needed.",
-                    dest.display()
-                )
-            } else {
-                format!(
-                    "System copy at {} needs manual sync — run: sudo {} self install",
-                    dest.display(),
-                    src.display()
-                )
-            };
-            println!("{}", colors::yellow(&hint));
-        }
-        Err(e) => eprintln!(
-            "Warning: failed to sync system copy at {}: {e}",
-            dest.display()
-        ),
-    }
-}
-
-enum SelfInstallSync {
-    Synced,
-    AlreadyCurrent,
-}
-
-fn sync_self_install_dest_from(
-    src: &std::path::Path,
-    dest: &std::path::Path,
-) -> Result<SelfInstallSync> {
-    if dest.exists() {
-        let canonical_src = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
-        let canonical_dest = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
-        if canonical_src == canonical_dest {
-            return Ok(SelfInstallSync::AlreadyCurrent);
-        }
-    }
-
-    install_binary_atomically(src, dest).map(|()| SelfInstallSync::Synced)
-}
-
-fn has_io_error_kind(err: &anyhow::Error, kind: std::io::ErrorKind) -> bool {
-    err.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io_err| io_err.kind() == kind)
-    })
-}
-
-async fn handle_presets_export(config: &Config, dir: Option<PathBuf>, force: bool) -> Result<()> {
-    use anyhow::Context as _;
-
-    let target = dir.unwrap_or_else(|| config.presets_dir().to_owned());
-    tokio::fs::create_dir_all(&target)
-        .await
-        .with_context(|| format!("creating export directory: {}", target.display()))?;
-
-    println!("Exporting built-in presets to {} ...", target.display());
-
-    let report = presets::extract_all(&target, force).await?;
-
-    let created = report.created.len();
-    let overwritten = report.overwritten.len();
-    let skipped = report.skipped.len();
-
-    if created > 0 {
-        println!("{}", colors::green(&format!("  {created} file(s) created")));
-    }
-    if overwritten > 0 {
-        println!(
-            "{}",
-            colors::yellow(&format!("  {overwritten} file(s) updated (overwritten)"))
-        );
-    }
-    if skipped > 0 {
-        println!("  {skipped} file(s) skipped (already exist; use --force to overwrite)");
-    }
-    if created == 0 && overwritten == 0 && skipped == 0 {
-        println!("  No files exported (empty embedded asset set).");
-    }
-
-    if !config.is_external_presets {
-        println!();
-        println!(
-            "Tip: run `shine link {}` to activate this directory.",
-            target.display()
-        );
-    }
-
-    Ok(())
-}
-
-async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
-    use anyhow::Context as _;
-
-    let raw = path.to_string_lossy();
-    let expanded =
-        crate::config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
-    let expanded = PathBuf::from(expanded);
-
-    if create {
-        tokio::fs::create_dir_all(&expanded)
-            .await
-            .with_context(|| format!("creating directory: {}", expanded.display()))?;
-    }
-
-    let meta = tokio::fs::metadata(&expanded).await.with_context(|| {
-        if create {
-            format!("accessing directory: {}", expanded.display())
-        } else {
-            format!(
-                "path does not exist: {} (use --create to create it)",
-                expanded.display()
-            )
-        }
-    })?;
-
-    if !meta.is_dir() {
-        bail!("path is not a directory: {}", expanded.display());
-    }
-
-    let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
-
-    if config
-        .presets_dir_override
-        .as_deref()
-        .is_some_and(|p| p == absolute)
-    {
-        println!(
-            "{}",
-            colors::dim(&format!("already linked: {}", absolute.display()))
-        );
-        return Ok(());
-    }
-
-    let updated = config
-        .clone()
-        .with_presets_dir_override(Some(absolute.clone()));
-    updated.save().await?;
-
-    if std::env::var("SHINE_CONFIG_DIR")
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false)
-        || std::env::var("SHINE_PRESETS")
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false)
-    {
-        println!(
-            "{}",
-            colors::yellow(
-                "Warning: SHINE_CONFIG_DIR or SHINE_PRESETS is set and takes priority over \
-                 the active config at runtime. Unset the env var for this setting to take effect."
-            )
-        );
-    }
-
-    println!("{}", colors::external_presets_note(&absolute));
-    println!(
-        "{}",
-        colors::dim("Run `shine export` to populate the directory with built-in presets.")
-    );
-
-    Ok(())
-}
-
-async fn handle_presets_unlink(config: &Config) -> Result<()> {
-    if config.presets_dir_override.is_none() {
-        println!(
-            "{}",
-            colors::dim("No external presets directory is configured.")
-        );
-        return Ok(());
-    }
-
-    let updated = config.clone().with_presets_dir_override(None);
-    updated.save().await?;
-
-    println!(
-        "{}",
-        colors::green("External presets directory removed from the active config.")
-    );
-    println!(
-        "{}",
-        colors::dim("Built-in embedded presets will be used on the next run.")
-    );
-
-    Ok(())
-}
-
-async fn handle_overlay_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
-    use anyhow::Context as _;
-
-    let raw = path.to_string_lossy();
-    let expanded =
-        crate::config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
-    let expanded = PathBuf::from(expanded);
-
-    if create {
-        tokio::fs::create_dir_all(&expanded)
-            .await
-            .with_context(|| format!("creating directory: {}", expanded.display()))?;
-    }
-
-    let meta = tokio::fs::metadata(&expanded).await.with_context(|| {
-        if create {
-            format!("accessing directory: {}", expanded.display())
-        } else {
-            format!(
-                "path does not exist: {} (use --create to create it)",
-                expanded.display()
-            )
-        }
-    })?;
-
-    if !meta.is_dir() {
-        bail!("path is not a directory: {}", expanded.display());
-    }
-
-    let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
-
-    if config
-        .presets_overlay_dir_override
-        .as_deref()
-        .is_some_and(|p| p == absolute)
-    {
-        println!(
-            "{}",
-            colors::dim(&format!("overlay already linked: {}", absolute.display()))
-        );
-        return Ok(());
-    }
-
-    let updated = config
-        .clone()
-        .with_presets_overlay_dir_override(Some(absolute.clone()));
-    updated.save().await?;
-
-    println!("{}", colors::presets_overlay_note(&absolute));
-    if config.is_external_presets {
-        println!(
-            "{}",
-            colors::yellow(
-                "Warning: a full external presets source is active, so this overlay is configured but not used."
-            )
-        );
-    } else {
-        println!(
-            "{}",
-            colors::dim("Overlay files override built-in presets by matching path.")
-        );
-    }
-
-    Ok(())
-}
-
-async fn handle_overlay_unlink(config: &Config) -> Result<()> {
-    if config.presets_overlay_dir_override.is_none() {
-        println!(
-            "{}",
-            colors::dim("No presets overlay directory is configured.")
-        );
-        return Ok(());
-    }
-
-    let updated = config.clone().with_presets_overlay_dir_override(None);
-    updated.save().await?;
-
-    println!(
-        "{}",
-        colors::green("Presets overlay directory removed from the active config.")
-    );
-    println!(
-        "{}",
-        colors::dim("Built-in embedded presets will be used without overlay on the next run.")
-    );
-
-    Ok(())
-}
-
-fn handle_overlay_show(config: &Config) -> Result<()> {
-    if let Some(dir) = &config.presets_overlay_dir_override {
-        println!("{}", colors::presets_overlay_note(dir));
-        if config.is_external_presets {
-            println!(
-                "{}",
-                colors::yellow(
-                    "Inactive: a full external presets source is active and takes priority."
-                )
-            );
-        } else {
-            println!("{}", colors::green("Active"));
-        }
-    } else {
-        println!(
-            "{}",
-            colors::dim("No presets overlay directory is configured.")
-        );
-    }
-    Ok(())
-}
-
-async fn handle_self_install(mut config: Config, dest: Option<std::path::PathBuf>) -> Result<()> {
-    use anyhow::{Context as _, bail};
-
-    let src = std::env::current_exe().context("failed to resolve current executable path")?;
-    let dest = match dest {
-        Some(dest) => dest,
-        None => platform::default_self_install_dest()?,
-    };
-
-    if dest.exists() {
-        let canonical_src = src.canonicalize().unwrap_or_else(|_| src.clone());
-        let canonical_dest = dest.canonicalize().unwrap_or_else(|_| dest.clone());
-        if canonical_src == canonical_dest {
-            let example = if cfg!(windows) {
-                r"C:\path\to\new\shine.exe self install"
-            } else {
-                "sudo /path/to/new/shine self install"
-            };
-            bail!(
-                "source and destination are the same binary: {}. Run the newer binary by full path, e.g. `{example}`, to overwrite this copy.",
-                dest.display()
-            );
-        }
-    }
-
-    install_binary_atomically(&src, &dest)
-        .with_context(|| self_install_failure_hint(&src, &dest))?;
-
-    // Remember where we installed so `shine self upgrade` can sync this copy automatically.
-    config.self_install_dest = Some(dest.clone());
-    config
-        .save()
-        .await
-        .context("failed to save self_install_dest to config")?;
-
-    println!(
-        "{}",
-        colors::green(&format!("installed to {}", dest.display()))
-    );
-    print_self_install_activation_hint(&dest);
-
-    Ok(())
-}
-
-fn self_install_failure_hint(src: &std::path::Path, dest: &std::path::Path) -> String {
-    if cfg!(windows) {
-        format!("failed to copy to {}", dest.display())
-    } else {
-        format!(
-            "failed to copy to {} — try: sudo {} self install",
-            dest.display(),
-            src.display()
-        )
-    }
-}
-
-fn print_self_install_activation_hint(dest: &std::path::Path) {
-    let Some(dir) = dest.parent() else {
-        return;
-    };
-    if platform::current_path_contains_dir(dir) {
-        println!(
-            "{}",
-            colors::dim("The install directory is already on PATH.")
-        );
-    } else {
-        println!(
-            "{}",
-            colors::yellow(&format!(
-                "Install directory is not on PATH: {}",
-                dir.display()
-            ))
-        );
-        println!("{}", colors::dim(&platform::path_install_hint(dir)));
-    }
-}
-
-fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
-    use anyhow::Context as _;
-
-    let parent = dest
-        .parent()
-        .with_context(|| format!("destination has no parent: {}", dest.display()))?;
-    std::fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create destination dir: {}", parent.display()))?;
-
-    let temp = parent.join(format!(".shine-self-install-{}", uuid::Uuid::new_v4()));
-    std::fs::copy(src, &temp).with_context(|| {
-        format!(
-            "failed to stage binary from {} to {}",
-            src.display(),
-            temp.display()
-        )
-    })?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(src)
-            .map(|m| m.permissions().mode())
-            .unwrap_or(0o755);
-        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(mode))
-            .with_context(|| format!("failed to set permissions on {}", temp.display()))?;
-    }
-
-    match std::fs::rename(&temp, dest) {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            let _ = std::fs::remove_file(&temp);
-            Err(err)
-                .with_context(|| format!("failed to replace {} with staged binary", dest.display()))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::env_lock;
+    use test_support::env_lock;
     use tokio::fs;
 
     async fn make_temp_dir() -> PathBuf {
@@ -1613,6 +943,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                pull: false,
                 verbose: false,
                 refresh: false
             })
@@ -1622,6 +953,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                pull: false,
                 verbose: true,
                 refresh: false
             })
@@ -1631,8 +963,22 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                pull: false,
                 verbose: false,
                 refresh: true
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "pull"]).unwrap();
+        assert!(matches!(cli.command, Commands::Pull));
+
+        let cli = Cli::try_parse_from(["shine", "update", "--pull"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                pull: true,
+                verbose: false,
+                refresh: false
             })
         ));
 
@@ -1640,6 +986,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Upgrade(UpgradeCommand {
+                pull: false,
                 verbose: false,
                 prune_stale: false
             })
@@ -1649,6 +996,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Upgrade(UpgradeCommand {
+                pull: false,
                 verbose: true,
                 prune_stale: false
             })
@@ -1658,8 +1006,19 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Upgrade(UpgradeCommand {
+                pull: false,
                 verbose: false,
                 prune_stale: true
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "upgrade", "--pull"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Upgrade(UpgradeCommand {
+                pull: true,
+                verbose: false,
+                prune_stale: false
             })
         ));
 
@@ -1799,6 +1158,40 @@ mod tests {
     }
 
     #[test]
+    fn cli_accepts_env_show_reveal() {
+        let cli = Cli::try_parse_from(["shine", "env", "show", "--reveal"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Show { reveal: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn env_show_redacts_sensitive_values() {
+        assert_eq!(display_env_value("secret", true, false), "<redacted>");
+        assert_eq!(display_env_value("secret", true, true), "secret");
+        assert_eq!(display_env_value("", true, false), "<empty>");
+        assert!(is_sensitive_env_key("MY_API_KEY"));
+        assert!(is_sensitive_env_key("token"));
+        assert!(!is_sensitive_env_key("MONKEY"));
+    }
+
+    #[test]
+    fn env_show_truncates_long_values_to_requested_width() {
+        assert_eq!(truncate_text("abcdefgh", 5), "abcd…");
+        let (value, description) = fit_env_row(
+            "abcdefghijklmnopqrstuvwxyz",
+            "A description that is also fairly long",
+            8,
+            48,
+        );
+        assert!(value.chars().count() <= env_value_width(8, 48));
+        assert!(description.chars().count() <= 48);
+    }
+
+    #[test]
     fn cli_accepts_env_export_with_alias() {
         let cli = Cli::try_parse_from([
             "shine",
@@ -1866,6 +1259,75 @@ mod tests {
             Commands::Env {
                 command: EnvCommands::Encrypt(cmd)
             } if cmd.recipient.as_deref() == Some("alice@example.com")
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_workspace_env_seal() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "seal",
+            ".env.production.shine.toml",
+            "--recipient",
+            "alice@example.com",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Seal(cmd)
+            } if cmd.file.as_deref() == Some(std::path::Path::new(".env.production.shine.toml"))
+                && cmd.recipient.as_deref() == Some("alice@example.com")
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_workspace_env_run_trailing_command() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "run",
+            "--mode",
+            "production",
+            "--",
+            "bun",
+            "run",
+            "build",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Run(cmd)
+            } if cmd.mode.as_deref() == Some("production")
+                && cmd.with.is_empty()
+                && cmd.command == ["bun", "run", "build"]
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_env_run_with_multiple_explicit_values() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "run",
+            "--with",
+            "TOKEN_A",
+            "--with",
+            "TOKEN_B=OTHER_TOKEN",
+            "--",
+            "bun",
+            "run",
+            "build",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Run(cmd)
+            } if cmd.with == ["TOKEN_A", "TOKEN_B=OTHER_TOKEN"]
+                && cmd.command == ["bun", "run", "build"]
         ));
     }
 
@@ -2412,6 +1874,50 @@ mod tests {
             Commands::Sys {
                 command: SysCommands::Status
             }
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_sys_list_and_info() {
+        let cli = Cli::try_parse_from(["shine", "sys", "list", "--all"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::List { all: true }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "info", "split-dns"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Info { ref item }
+            } if item == "split-dns"
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_sys_apply_and_uninstall() {
+        let cli = Cli::try_parse_from(["shine", "sys", "apply", "split-dns", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Apply {
+                    item: Some(ref item),
+                    dry_run: true
+                }
+            } if item == "split-dns"
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "uninstall", "split-dns"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Uninstall {
+                    ref item,
+                    dry_run: false
+                }
+            } if item == "split-dns"
         ));
     }
 

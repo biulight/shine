@@ -1,18 +1,42 @@
 use anyhow::{Context, Result, bail};
 use console::{Style, style};
-use dialoguer::{MultiSelect, theme::ColorfulTheme};
+use dialoguer::theme::ColorfulTheme;
 use serde::{Deserialize, Serialize};
-use similar::{DiffTag, TextDiff};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{ErrorKind, IsTerminal};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 
 use crate::colors;
 use crate::config::Config;
-use crate::shells::ShellType;
+use crate::env::EnvConfig;
+
+mod execution;
+mod manifest;
+mod profile;
+mod resources;
+mod selection;
+use execution::{
+    format_command_preview, manifest_item_labels, print_item_outcome, print_run_header,
+    print_sys_summary, run_sys_item, run_sys_item_action, status_symbol, status_text,
+    sys_init_command, sys_item_label_width,
+};
+#[cfg(test)]
+use execution::{parse_status_event, parse_sys_item_output};
+use manifest::load_sys_preset;
+#[cfg(test)]
+use manifest::{parse_and_validate_manifest, sys_init_script_name};
+use profile::install_sys_profile_loader;
+#[cfg(test)]
+use profile::{
+    fallback_three_way_merge, install_sys_profile_files, update_sys_shell_profile_blocks,
+    update_sys_shell_profiles,
+};
+use resources::SystemDriver;
+use selection::resolve_selection;
+#[cfg(test)]
+use selection::{format_interactive_item, format_item_ids};
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct SysManifest {
@@ -33,6 +57,33 @@ struct SysItem {
     description: String,
     #[serde(default)]
     default: bool,
+    #[serde(default)]
+    mode: SysItemMode,
+    #[serde(default)]
+    requires_admin: bool,
+    #[serde(default)]
+    required_env: Vec<String>,
+    #[serde(default)]
+    driver: SysDriverKind,
+    #[serde(default)]
+    config: toml::Table,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum SysDriverKind {
+    #[default]
+    Script,
+    SplitDns,
+    ManagedFile,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum SysItemMode {
+    #[default]
+    Init,
+    Managed,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -106,6 +157,17 @@ struct SysRunEntry {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     detail: String,
     updated_at: String,
+    #[serde(default)]
+    managed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    receipt: Option<resources::SystemReceipt>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SysUpgradeReport {
+    pub updated: usize,
+    pub skipped: usize,
+    pub failed: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,7 +255,7 @@ impl SysRunManifest {
     }
 }
 
-fn sys_init_theme() -> ColorfulTheme {
+pub(super) fn sys_init_theme() -> ColorfulTheme {
     ColorfulTheme {
         prompt_prefix: style(">".to_string()).for_stderr().cyan().bold(),
         prompt_suffix: style("".to_string()).for_stderr(),
@@ -214,7 +276,7 @@ fn sys_init_theme() -> ColorfulTheme {
 
 /// Detect the current OS identifier using `std::env::consts::OS` and, on Linux,
 /// the `ID=` field from `/etc/os-release`.
-pub(crate) async fn detect_os_id() -> Result<String> {
+pub async fn detect_os_id() -> Result<String> {
     let os_release = tokio::fs::read_to_string("/etc/os-release").await.ok();
     detect_os_id_from(std::env::consts::OS, os_release.as_deref())
 }
@@ -243,47 +305,201 @@ fn detect_os_id_from(os: &str, os_release: Option<&str>) -> Result<String> {
     }
 }
 
-pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     crate::config::print_presets_note(config);
-
-    let current_os = detect_os_id().await.ok();
-
-    let entries = if config.is_external_presets {
-        list_fs_sys_entries(config.presets_dir()).await
+    let current_os = if all {
+        detect_os_id().await.ok()
     } else {
-        list_embedded_sys_entries()
+        Some(detect_os_id().await?)
     };
-
-    if entries.is_empty() {
-        println!("{}", colors::dim("No system init presets found."));
-        return Ok(());
+    let mut presets = load_available_sys_manifests(config).await?;
+    if !all {
+        presets.retain(|(os_id, _)| Some(os_id.as_str()) == current_os.as_deref());
     }
-
-    println!("{}\n", colors::bold("System Init Presets"));
-
-    for (os_id, description) in &entries {
-        let is_current = current_os.as_deref() == Some(os_id.as_str());
-        let marker = if is_current { "▶" } else { " " };
-        let label = if is_current {
-            colors::bold(os_id)
-        } else {
-            os_id.clone()
-        };
-        println!("  {marker} {label}");
-        if !description.is_empty() {
-            println!("      {}", colors::dim(description));
+    if presets.is_empty() {
+        if all {
+            println!("{}", colors::dim("No system presets found."));
+            return Ok(());
         }
-        println!();
+        let current_os = current_os.as_deref().unwrap_or("unknown");
+        bail!("No system preset found for `{current_os}`");
     }
 
+    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+    println!("{}\n", colors::bold("System Items"));
+    for (index, (os_id, manifest)) in presets.iter().enumerate() {
+        if index > 0 {
+            println!();
+        }
+        let current = if Some(os_id.as_str()) == current_os.as_deref() {
+            " (current)"
+        } else {
+            ""
+        };
+        println!("  {}{}", colors::bold(os_id), colors::dim(current));
+        if !manifest.description.is_empty() {
+            println!("    {}", colors::dim(&manifest.description));
+        }
+        if manifest.items.is_empty() {
+            println!("    {}", colors::dim("No items available."));
+        }
+        for item in &manifest.items {
+            let entry = run_manifest
+                .entries
+                .iter()
+                .find(|entry| entry.os_id == *os_id && entry.item_id == item.id);
+            print_available_item(item, entry);
+        }
+    }
+
+    println!();
     println!(
         "{}",
-        colors::dim("Run `shine sys init` to initialize the current system.")
+        colors::dim("Use `shine sys info <ITEM>` for details.")
     );
+    println!("{}", colors::dim("Init items: `shine sys init`."));
+    println!(
+        "{}",
+        colors::dim("Managed items: `shine sys apply <ITEM>`.")
+    );
+    if !all {
+        println!(
+            "{}",
+            colors::dim("Use `shine sys list --all` to show every OS.")
+        );
+    }
     Ok(())
 }
 
-pub(crate) async fn handle_status(config: &Config) -> Result<()> {
+pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
+    crate::config::print_presets_note(config);
+    let os_id = detect_os_id().await?;
+    let presets = load_available_sys_manifests(config).await?;
+    let manifest = presets
+        .iter()
+        .find(|(candidate, _)| candidate == &os_id)
+        .map(|(_, manifest)| manifest)
+        .with_context(|| format!("No system preset found for `{os_id}`"))?;
+    let item = manifest
+        .items
+        .iter()
+        .find(|candidate| candidate.id == item_id)
+        .with_context(|| {
+            let available = manifest
+                .items
+                .iter()
+                .map(|candidate| candidate.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("unknown sys item `{item_id}` for {os_id}. Available: {available}")
+        })?;
+    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let entry = run_manifest
+        .entries
+        .iter()
+        .find(|entry| entry.os_id == os_id && entry.item_id == item.id);
+
+    println!("{}\n", colors::bold("System Item"));
+    println!(
+        "  {}  {}",
+        colors::bold(&item.label),
+        colors::dim(&format!("({})", item.id))
+    );
+    if !item.description.is_empty() {
+        println!("  {}", item.description);
+    }
+    println!();
+    println!("  {:<14} {}", "OS", os_id);
+    println!("  {:<14} {}", "Type", item_mode_name(item.mode));
+    println!("  {:<14} {}", "Driver", driver_name(item.driver));
+    println!(
+        "  {:<14} {}",
+        "Admin access",
+        if item.requires_admin {
+            "required"
+        } else {
+            "not required"
+        }
+    );
+    println!(
+        "  {:<14} {}",
+        "Status",
+        entry
+            .map(|entry| status_text(entry.status))
+            .unwrap_or("not recorded")
+    );
+    if let Some(entry) = entry
+        && !entry.detail.is_empty()
+    {
+        println!("  {:<14} {}", "Status detail", entry.detail);
+    }
+    println!(
+        "  {:<14} {}",
+        "Required env",
+        if item.required_env.is_empty() {
+            "none".to_string()
+        } else {
+            item.required_env.join(", ")
+        }
+    );
+    println!();
+    match item.mode {
+        SysItemMode::Init => println!("  Next: run `shine sys init` and select `{}`.", item.id),
+        SysItemMode::Managed if entry.is_some() => {
+            println!("  Apply:     `shine sys apply {}`", item.id);
+            println!("  Uninstall: `shine sys uninstall {}`", item.id);
+        }
+        SysItemMode::Managed => println!("  Next: run `shine sys apply {}`.", item.id),
+    }
+    Ok(())
+}
+
+fn print_available_item(item: &SysItem, entry: Option<&SysRunEntry>) {
+    let kind = item_mode_name(item.mode);
+    let status = entry
+        .map(|entry| {
+            let symbol = status_symbol(entry.status);
+            format!(
+                "{} {}",
+                colors::symbol(symbol),
+                colors::status_label(status_text(entry.status), symbol)
+            )
+        })
+        .unwrap_or_else(|| colors::dim("not recorded"));
+    println!(
+        "    {:<18} {:<9} {}  {}",
+        item.id,
+        format!("[{kind}]"),
+        colors::bold(&item.label),
+        status
+    );
+    if !item.description.is_empty() {
+        println!("      {}", colors::dim(&item.description));
+    }
+    if item.mode == SysItemMode::Managed {
+        println!(
+            "      {}",
+            colors::dim(&format!("Run: shine sys apply {}", item.id))
+        );
+    }
+}
+
+fn item_mode_name(mode: SysItemMode) -> &'static str {
+    match mode {
+        SysItemMode::Init => "init",
+        SysItemMode::Managed => "managed",
+    }
+}
+
+fn driver_name(driver: SysDriverKind) -> &'static str {
+    match driver {
+        SysDriverKind::Script => "script",
+        SysDriverKind::SplitDns => "split-dns",
+        SysDriverKind::ManagedFile => "managed-file",
+    }
+}
+
+pub async fn handle_status(config: &Config) -> Result<()> {
     let os_id = detect_os_id().await?;
     let manifest = SysRunManifest::load(config.shine_dir()).await?;
     let entries: Vec<&SysRunEntry> = manifest
@@ -327,7 +543,7 @@ pub(crate) async fn handle_status(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_init(
+pub async fn handle_init(
     config: &Config,
     preset: Option<&str>,
     dry_run: bool,
@@ -413,7 +629,7 @@ async fn handle_init_for_os(
 
     println!();
     print_sys_summary(&outcomes);
-    record_sys_item_outcomes(config, os_id, &outcomes).await?;
+    record_sys_item_outcomes(config, os_id, &loaded.manifest, &outcomes).await?;
 
     if outcomes
         .iter()
@@ -428,6 +644,7 @@ async fn handle_init_for_os(
 async fn record_sys_item_outcomes(
     config: &Config,
     os_id: &str,
+    sys_manifest: &SysManifest,
     outcomes: &[SysItemOutcome],
 ) -> Result<()> {
     // "profile" is a synthetic item for shell-profile wiring, not a recorded sys item.
@@ -443,6 +660,17 @@ async fn record_sys_item_outcomes(
             status: outcome.status,
             detail: outcome.detail.clone(),
             updated_at: current_unix_timestamp().to_string(),
+            managed: sys_manifest
+                .items
+                .iter()
+                .find(|item| item.id == outcome.item_id)
+                .is_some_and(|item| item.mode == SysItemMode::Managed),
+            receipt: sys_manifest
+                .items
+                .iter()
+                .find(|item| item.id == outcome.item_id)
+                .filter(|item| item.mode == SysItemMode::Managed)
+                .map(|_| resources::SystemReceipt::script()),
         })
         .collect::<Vec<_>>();
 
@@ -455,6 +683,413 @@ async fn record_sys_item_outcomes(
         manifest.upsert(entry);
     }
     manifest.save(config.shine_dir()).await
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SysAction {
+    Apply,
+    Remove,
+}
+
+impl SysAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Apply => "apply",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) -> Result<()> {
+    let report = run_managed(config, item, SysAction::Apply, dry_run, true).await?;
+    if report.failed > 0 {
+        bail!(
+            "{} managed system configuration item(s) failed",
+            report.failed
+        );
+    }
+    Ok(())
+}
+
+pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Result<()> {
+    let report = run_managed(config, Some(item), SysAction::Remove, dry_run, true).await?;
+    if report.failed > 0 {
+        bail!("failed to remove managed system configuration `{item}`");
+    }
+    Ok(())
+}
+
+pub async fn handle_upgrade_managed(config: &Config) -> Result<SysUpgradeReport> {
+    run_managed(config, None, SysAction::Apply, false, false).await
+}
+
+async fn run_managed(
+    config: &Config,
+    requested: Option<&str>,
+    action: SysAction,
+    dry_run: bool,
+    explicit: bool,
+) -> Result<SysUpgradeReport> {
+    let os_id = detect_os_id().await?;
+    run_managed_for_os(config, &os_id, requested, action, dry_run, explicit).await
+}
+
+async fn run_managed_for_os(
+    config: &Config,
+    os_id: &str,
+    requested: Option<&str>,
+    action: SysAction,
+    dry_run: bool,
+    explicit: bool,
+) -> Result<SysUpgradeReport> {
+    let mut run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+
+    // Built-in resources can be removed entirely from their recorded receipt,
+    // even when the originating preset no longer exists.
+    if action == SysAction::Remove
+        && let Some(item_id) = requested
+        && let Some(entry) = run_manifest
+            .entries
+            .iter()
+            .find(|entry| entry.os_id == os_id && entry.item_id == item_id)
+            .cloned()
+        && let Some(receipt) = entry.receipt.as_ref()
+        && receipt.driver() != SysDriverKind::Script
+    {
+        println!("{}", colors::bold("Remove Managed System Config"));
+        println!("  {} {}", colors::symbol("•"), entry.label);
+        if receipt.requires_admin() && !dry_run && !authorize_admin(1).await? {
+            return Ok(SysUpgradeReport {
+                failed: 1,
+                ..SysUpgradeReport::default()
+            });
+        }
+        let driver = resources::BuiltinDriver::new(receipt.driver());
+        match driver.remove(None, receipt, dry_run).await {
+            Ok(outcome) => {
+                let status = if dry_run || !outcome.changed {
+                    SysItemStatus::Skipped
+                } else {
+                    SysItemStatus::Updated
+                };
+                print_item_outcome(
+                    &SysItemOutcome {
+                        item_id: item_id.to_string(),
+                        label: entry.label,
+                        status,
+                        detail: outcome.detail,
+                        logs: Vec::new(),
+                    },
+                    14,
+                );
+                if !dry_run {
+                    run_manifest.entries.retain(|candidate| {
+                        !(candidate.os_id == os_id && candidate.item_id == item_id)
+                    });
+                    run_manifest.save(config.shine_dir()).await?;
+                }
+                return Ok(SysUpgradeReport {
+                    updated: usize::from(!dry_run && outcome.changed),
+                    skipped: usize::from(dry_run || !outcome.changed),
+                    failed: 0,
+                });
+            }
+            Err(error) => {
+                print_item_outcome(
+                    &SysItemOutcome {
+                        item_id: item_id.to_string(),
+                        label: entry.label,
+                        status: SysItemStatus::Failed,
+                        detail: format!("{error:#}"),
+                        logs: Vec::new(),
+                    },
+                    14,
+                );
+                return Ok(SysUpgradeReport {
+                    failed: 1,
+                    ..SysUpgradeReport::default()
+                });
+            }
+        }
+    }
+
+    if requested.is_none()
+        && !run_manifest
+            .entries
+            .iter()
+            .any(|entry| entry.os_id == os_id && entry.managed)
+    {
+        return Ok(SysUpgradeReport::default());
+    }
+    let loaded = load_sys_preset(config, os_id).await?;
+    let mut selected: Vec<&SysItem> = Vec::new();
+
+    if let Some(item_id) = requested {
+        let item = loaded
+            .manifest
+            .items
+            .iter()
+            .find(|candidate| candidate.id == item_id)
+            .with_context(|| format!("unknown sys item `{item_id}`"))?;
+        if item.mode != SysItemMode::Managed {
+            bail!("sys item `{item_id}` is not managed and cannot be reapplied");
+        }
+        selected.push(item);
+    } else {
+        let enabled: BTreeSet<&str> = run_manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.os_id == os_id && entry.managed)
+            .map(|entry| entry.item_id.as_str())
+            .collect();
+        selected.extend(loaded.manifest.items.iter().filter(|item| {
+            item.mode == SysItemMode::Managed && enabled.contains(item.id.as_str())
+        }));
+    }
+
+    if selected.is_empty() {
+        if explicit {
+            println!(
+                "{}",
+                colors::dim("No managed system configuration items selected.")
+            );
+        }
+        return Ok(SysUpgradeReport::default());
+    }
+
+    println!(
+        "{}",
+        colors::bold(match action {
+            SysAction::Apply => "Managed System Configs",
+            SysAction::Remove => "Remove Managed System Config",
+        })
+    );
+    for item in &selected {
+        println!("  {} {}", colors::symbol("•"), item.label);
+    }
+
+    let env = EnvConfig::load_or_init(config).await?;
+    let script_dir = loaded
+        .script_path
+        .parent()
+        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
+
+    if dry_run {
+        let mut failed = 0usize;
+        for item in &selected {
+            let missing = item
+                .required_env
+                .iter()
+                .filter(|key| env.get(key).is_none_or(str::is_empty))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                failed += 1;
+                eprintln!(
+                    "  {} {}: missing environment variable(s): {}",
+                    colors::symbol("✗"),
+                    item.id,
+                    missing.join(", ")
+                );
+                continue;
+            }
+            if item.driver == SysDriverKind::Script {
+                println!(
+                    "  {} script {} {} {}",
+                    colors::dim("[dry-run]"),
+                    loaded.script_path.display(),
+                    item.id,
+                    action.as_str()
+                );
+            } else {
+                let context = resources::DriverContext {
+                    config,
+                    os_id,
+                    item,
+                    preset_root: script_dir,
+                    env: env.as_map(),
+                    dry_run: true,
+                };
+                match resources::BuiltinDriver::new(item.driver)
+                    .plan(&context, action == SysAction::Remove)
+                {
+                    Ok(plan) => println!(
+                        "  {} {}{}{}",
+                        colors::dim("[dry-run]"),
+                        plan.description,
+                        if plan.requires_admin { " [admin]" } else { "" },
+                        plan.restart_hint
+                            .as_deref()
+                            .map(|hint| format!(" [restart required: {hint}]"))
+                            .unwrap_or_default()
+                    ),
+                    Err(error) => {
+                        failed += 1;
+                        eprintln!("  {} {}: {error:#}", colors::symbol("✗"), item.id);
+                    }
+                }
+            }
+        }
+        return Ok(SysUpgradeReport {
+            skipped: selected.len() - failed,
+            failed,
+            ..SysUpgradeReport::default()
+        });
+    }
+
+    let needs_admin = selected.iter().any(|item| item.requires_admin);
+    if needs_admin && !authorize_admin(selected.len()).await? {
+        return Ok(SysUpgradeReport {
+            failed: selected.len(),
+            ..SysUpgradeReport::default()
+        });
+    }
+
+    let command = sys_init_command(os_id);
+    let sys_shell: &'static str = config.shell_type.into();
+    let mut report = SysUpgradeReport::default();
+
+    for item in selected {
+        let missing = item
+            .required_env
+            .iter()
+            .filter(|key| env.get(key).is_none_or(str::is_empty))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            let outcome = SysItemOutcome {
+                item_id: item.id.clone(),
+                label: item.label.clone(),
+                status: SysItemStatus::Failed,
+                detail: format!("missing environment variable(s): {}", missing.join(", ")),
+                logs: Vec::new(),
+            };
+            print_item_outcome(&outcome, item.label.len().max(14));
+            report.failed += 1;
+            continue;
+        }
+
+        let previous_receipt = run_manifest
+            .entries
+            .iter()
+            .find(|entry| entry.os_id == os_id && entry.item_id == item.id)
+            .and_then(|entry| entry.receipt.as_ref());
+
+        let mut next_receipt = None;
+        let mut restart_hint = None;
+        let outcome = if item.driver == SysDriverKind::Script {
+            match run_sys_item_action(
+                &command,
+                script_dir,
+                &loaded.script_path,
+                sys_shell,
+                item,
+                action,
+                env.as_map(),
+            )
+            .await
+            {
+                Ok(outcome) => {
+                    if action == SysAction::Apply {
+                        next_receipt = Some(resources::SystemReceipt::script());
+                    }
+                    outcome
+                }
+                Err(error) => SysItemOutcome {
+                    item_id: item.id.clone(),
+                    label: item.label.clone(),
+                    status: SysItemStatus::Failed,
+                    detail: format!("{error:#}"),
+                    logs: Vec::new(),
+                },
+            }
+        } else {
+            let context = resources::DriverContext {
+                config,
+                os_id,
+                item,
+                preset_root: script_dir,
+                env: env.as_map(),
+                dry_run: false,
+            };
+            let driver = resources::BuiltinDriver::new(item.driver);
+            let result = match action {
+                SysAction::Apply => driver.apply(&context, previous_receipt).await,
+                SysAction::Remove => match previous_receipt {
+                    Some(receipt) => driver.remove(Some(&context), receipt, false).await,
+                    None => Err(anyhow::anyhow!(
+                        "managed item `{}` has no receipt to remove",
+                        item.id
+                    )),
+                },
+            };
+            match result {
+                Ok(resource) => {
+                    next_receipt = resource.receipt;
+                    restart_hint = resource.restart_hint;
+                    SysItemOutcome {
+                        item_id: item.id.clone(),
+                        label: item.label.clone(),
+                        status: if resource.changed {
+                            SysItemStatus::Updated
+                        } else {
+                            SysItemStatus::AlreadyInstalled
+                        },
+                        detail: resource.detail,
+                        logs: Vec::new(),
+                    }
+                }
+                Err(error) => SysItemOutcome {
+                    item_id: item.id.clone(),
+                    label: item.label.clone(),
+                    status: SysItemStatus::Failed,
+                    detail: format!("{error:#}"),
+                    logs: Vec::new(),
+                },
+            }
+        };
+        print_item_outcome(&outcome, item.label.len().max(14));
+        if let Some(hint) = restart_hint
+            && outcome.status != SysItemStatus::Failed
+        {
+            println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+        }
+        if outcome.status == SysItemStatus::Failed {
+            report.failed += 1;
+            continue;
+        }
+
+        match outcome.status {
+            SysItemStatus::Updated | SysItemStatus::Installed | SysItemStatus::Completed => {
+                report.updated += 1;
+            }
+            _ => report.skipped += 1,
+        }
+
+        if action == SysAction::Remove {
+            run_manifest
+                .entries
+                .retain(|entry| !(entry.os_id == os_id && entry.item_id == item.id));
+        } else {
+            run_manifest.upsert(SysRunEntry {
+                os_id: os_id.to_string(),
+                item_id: item.id.clone(),
+                label: item.label.clone(),
+                status: outcome.status,
+                detail: outcome.detail.clone(),
+                updated_at: current_unix_timestamp().to_string(),
+                managed: true,
+                receipt: next_receipt,
+            });
+        }
+    }
+
+    run_manifest.save(config.shine_dir()).await?;
+    Ok(report)
+}
+
+async fn authorize_admin(item_count: usize) -> Result<bool> {
+    crate::privilege::ensure_admin(item_count).await
 }
 
 fn current_unix_timestamp() -> u64 {
@@ -505,1434 +1140,23 @@ async fn print_dry_run(
     Ok(())
 }
 
-fn sys_init_command(os_id: &str) -> SysInitCommand {
-    match os_id {
-        "windows" => SysInitCommand {
-            program: "powershell.exe",
-            fixed_args: vec!["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"],
-        },
-        "macos" => SysInitCommand {
-            program: "zsh",
-            fixed_args: Vec::new(),
-        },
-        _ => SysInitCommand {
-            program: "bash",
-            fixed_args: Vec::new(),
-        },
-    }
-}
-
-fn format_command_preview(
-    command: &SysInitCommand,
-    script_path: &Path,
-    item_ids: &[String],
-) -> String {
-    let script = script_path.display().to_string();
-    std::iter::once(command.program)
-        .chain(command.fixed_args.iter().copied())
-        .chain(std::iter::once(script.as_str()))
-        .chain(item_ids.iter().map(String::as_str))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn manifest_item_labels(manifest: &SysManifest) -> BTreeMap<&str, String> {
-    manifest
-        .items
-        .iter()
-        .map(|item| (item.id.as_str(), item.label.clone()))
-        .collect()
-}
-
-/// Width of the widest selected item label (or "profile", whichever is longer),
-/// used to align the status column when printing per-item outcomes.
-fn sys_item_label_width(
-    selection: &ResolvedSelection,
-    item_labels: &BTreeMap<&str, String>,
-) -> usize {
-    selection
-        .item_ids
-        .iter()
-        .filter_map(|item_id| item_labels.get(item_id.as_str()))
-        .map(String::len)
-        .chain(std::iter::once("profile".len()))
-        .max()
-        .unwrap_or(14)
-        .max(14)
-}
-
-fn print_run_header(os_id: &str, sys_shell: &str, selection: &ResolvedSelection) {
-    println!("{}", colors::bold("System Init"));
-    println!("  OS: {os_id}");
-    println!("  Shell: {sys_shell}");
-    println!("  Selection: {}", selection.source.describe());
-    println!("  Items: {} selected", selection.item_ids.len());
-    println!("  {}", colors::dim(&format_item_ids(&selection.item_ids)));
-    println!();
-}
-
-async fn run_sys_item(
-    command: &SysInitCommand,
-    script_dir: &Path,
-    script_path: &Path,
-    sys_shell: &str,
-    item_id: &str,
-    label: &str,
-) -> Result<SysItemOutcome> {
-    let output = tokio::process::Command::new(command.program)
-        .current_dir(script_dir)
-        .env("SHINE_SYS_PRESET_ROOT", script_dir)
-        .env("SHINE_SYS_SHELL", sys_shell)
-        .args(&command.fixed_args)
-        .arg(script_path)
-        .arg(item_id)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .with_context(|| format!("failed to execute {}", script_path.display()))?;
-
-    Ok(parse_sys_item_output(
-        item_id,
-        label,
-        output.status.success(),
-        &String::from_utf8_lossy(&output.stdout),
-        &String::from_utf8_lossy(&output.stderr),
-    ))
-}
-
-async fn install_sys_profile_loader(
-    config: &Config,
-    os_id: &str,
-    script_dir: &Path,
-    sys_shell: &str,
-    force_profile: bool,
-) -> Result<SysItemOutcome> {
-    let update = install_sys_profile_files(config, os_id, script_dir, force_profile).await?;
-    let shell_update = update_sys_shell_profiles(config, os_id, sys_shell).await?;
-    let status = if update.needs_action {
-        SysItemStatus::NeedsAction
-    } else if update.updated || shell_update.updated {
-        SysItemStatus::Updated
+async fn load_available_sys_manifests(config: &Config) -> Result<Vec<(String, SysManifest)>> {
+    if config.is_external_presets {
+        let mut manifests: BTreeMap<String, SysManifest> =
+            load_fs_sys_manifests(config.presets_dir())
+                .await?
+                .into_iter()
+                .collect();
+        if let Some(overlay) = config.active_presets_overlay_dir() {
+            manifests.extend(load_fs_sys_manifests(overlay).await?);
+        }
+        Ok(manifests.into_iter().collect())
     } else {
-        SysItemStatus::Skipped
-    };
-    let detail = if update.needs_action {
-        update.detail
-    } else if shell_update.unsupported_shell {
-        format!("unsupported shell for sys profile: {sys_shell}")
-    } else {
-        shell_update.detail
-    };
-
-    Ok(SysItemOutcome {
-        item_id: "profile".to_string(),
-        label: "profile".to_string(),
-        status,
-        detail,
-        logs: Vec::new(),
-    })
-}
-
-#[derive(Debug)]
-struct SysProfileFileUpdate {
-    updated: bool,
-    needs_action: bool,
-    detail: String,
-}
-
-#[derive(Debug)]
-struct SysShellProfileUpdate {
-    updated: bool,
-    unsupported_shell: bool,
-    detail: String,
-}
-
-async fn install_sys_profile_files(
-    config: &Config,
-    os_id: &str,
-    script_dir: &Path,
-    force_profile: bool,
-) -> Result<SysProfileFileUpdate> {
-    let ext = if os_id == "windows" { "ps1" } else { "sh" };
-    let profile_dir = config.home_dir.join(".shine/profile");
-    tokio::fs::create_dir_all(&profile_dir)
-        .await
-        .with_context(|| format!("creating {}", profile_dir.display()))?;
-
-    let mut updated = false;
-    let mut needs_action = false;
-    let mut details = Vec::new();
-
-    for phase in SYS_PROFILE_PHASES {
-        let phase_update =
-            install_sys_profile_phase(&profile_dir, os_id, script_dir, phase, ext, force_profile)
-                .await?;
-
-        updated |= phase_update.updated;
-        needs_action |= phase_update.needs_action;
-        details.push(format!("{}: {}", phase.as_str(), phase_update.detail));
-    }
-
-    Ok(SysProfileFileUpdate {
-        updated,
-        needs_action,
-        detail: details.join("; "),
-    })
-}
-
-async fn install_sys_profile_phase(
-    profile_dir: &Path,
-    os_id: &str,
-    script_dir: &Path,
-    phase: SysProfilePhase,
-    ext: &str,
-    force_profile: bool,
-) -> Result<SysProfileFileUpdate> {
-    let template_path = script_dir.join(format!("profile.{}.{ext}", phase.as_str()));
-    let template = read_sys_profile_template(&template_path, os_id, phase, ext).await?;
-
-    let active_path = sys_profile_file_path(profile_dir, os_id, phase, ext);
-    let base_path = sys_profile_base_path(profile_dir, os_id, phase, ext);
-    let new_path = sys_profile_new_path(profile_dir, os_id, phase, ext);
-    let merge_path = sys_profile_merge_path(profile_dir, os_id, phase, ext);
-
-    if force_profile {
-        return apply_force_profile(
-            &active_path,
-            &base_path,
-            &new_path,
-            &merge_path,
-            ext,
-            &template,
-        )
-        .await;
-    }
-
-    let active = match tokio::fs::read(&active_path).await {
-        Ok(active) => active,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return handle_fresh_install(
-                &active_path,
-                &base_path,
-                &new_path,
-                &merge_path,
-                &template,
-            )
-            .await;
-        }
-        Err(err) => return Err(err).with_context(|| format!("reading {}", active_path.display())),
-    };
-
-    let base = match tokio::fs::read(&base_path).await {
-        Ok(base) => base,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return handle_missing_base(
-                &active_path,
-                &base_path,
-                &new_path,
-                &merge_path,
-                &template,
-                &active,
-            )
-            .await;
-        }
-        Err(err) => return Err(err).with_context(|| format!("reading {}", base_path.display())),
-    };
-
-    apply_merge_result(MergeInputs {
-        active_path: &active_path,
-        base_path: &base_path,
-        template_path: &template_path,
-        new_path: &new_path,
-        merge_path: &merge_path,
-        base: &base,
-        active: &active,
-        template: &template,
-    })
-    .await
-}
-
-async fn read_sys_profile_template(
-    template_path: &Path,
-    os_id: &str,
-    phase: SysProfilePhase,
-    ext: &str,
-) -> Result<Vec<u8>> {
-    match tokio::fs::read(template_path).await {
-        Ok(template) => Ok(template),
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            let asset_path = format!("sys/{os_id}/profile.{}.{ext}", phase.as_str());
-            crate::presets::read_asset_bytes(&asset_path)
-                .with_context(|| format!("reading {}", template_path.display()))
-        }
-        Err(err) => Err(err).with_context(|| format!("reading {}", template_path.display())),
-    }
-}
-
-/// Paths and file contents needed to reconcile a single sys profile file
-/// against its base snapshot and the latest template.
-struct MergeInputs<'a> {
-    active_path: &'a Path,
-    base_path: &'a Path,
-    template_path: &'a Path,
-    new_path: &'a Path,
-    merge_path: &'a Path,
-    base: &'a [u8],
-    active: &'a [u8],
-    template: &'a [u8],
-}
-
-async fn apply_force_profile(
-    active_path: &Path,
-    base_path: &Path,
-    new_path: &Path,
-    merge_path: &Path,
-    ext: &str,
-    template: &[u8],
-) -> Result<SysProfileFileUpdate> {
-    let backup = if let Ok(active) = tokio::fs::read(active_path).await
-        && active != template
-    {
-        let backup_path = profile_backup_path(active_path, ext);
-        tokio::fs::copy(active_path, &backup_path)
-            .await
-            .with_context(|| {
-                format!(
-                    "backing up sys profile {} to {}",
-                    active_path.display(),
-                    backup_path.display()
-                )
-            })?;
-        Some(backup_path)
-    } else {
-        None
-    };
-    write_if_changed(active_path, template).await?;
-    write_if_changed(base_path, template).await?;
-    remove_if_exists(new_path).await?;
-    remove_if_exists(merge_path).await?;
-    let detail = backup
-        .map(|path| {
-            format!(
-                "{} replaced; previous profile backed up to {}",
-                active_path.display(),
-                path.display()
-            )
-        })
-        .unwrap_or_else(|| format!("{} refreshed", active_path.display()));
-    Ok(SysProfileFileUpdate {
-        updated: true,
-        needs_action: false,
-        detail,
-    })
-}
-
-async fn handle_fresh_install(
-    active_path: &Path,
-    base_path: &Path,
-    new_path: &Path,
-    merge_path: &Path,
-    template: &[u8],
-) -> Result<SysProfileFileUpdate> {
-    tokio::fs::write(active_path, template)
-        .await
-        .with_context(|| format!("writing {}", active_path.display()))?;
-    tokio::fs::write(base_path, template)
-        .await
-        .with_context(|| format!("writing {}", base_path.display()))?;
-    remove_if_exists(new_path).await?;
-    remove_if_exists(merge_path).await?;
-    Ok(SysProfileFileUpdate {
-        updated: true,
-        needs_action: false,
-        detail: format!("{} created", active_path.display()),
-    })
-}
-
-async fn handle_missing_base(
-    active_path: &Path,
-    base_path: &Path,
-    new_path: &Path,
-    merge_path: &Path,
-    template: &[u8],
-    active: &[u8],
-) -> Result<SysProfileFileUpdate> {
-    if active == template {
-        tokio::fs::write(base_path, template)
-            .await
-            .with_context(|| format!("writing {}", base_path.display()))?;
-        remove_if_exists(new_path).await?;
-        remove_if_exists(merge_path).await?;
-        return Ok(SysProfileFileUpdate {
-            updated: true,
-            needs_action: false,
-            detail: format!("{} initialized", base_path.display()),
-        });
-    }
-    if is_initial_user_profile_edit(template, active) {
-        tokio::fs::write(base_path, template)
-            .await
-            .with_context(|| format!("writing {}", base_path.display()))?;
-        remove_if_exists(new_path).await?;
-        remove_if_exists(merge_path).await?;
-        return Ok(SysProfileFileUpdate {
-            updated: true,
-            needs_action: false,
-            detail: format!("{} initialized with user edits", base_path.display()),
-        });
-    }
-    tokio::fs::write(new_path, template)
-        .await
-        .with_context(|| format!("writing {}", new_path.display()))?;
-    remove_if_exists(merge_path).await?;
-    Ok(SysProfileFileUpdate {
-        updated: true,
-        needs_action: true,
-        detail: format!(
-            "no merge base for {}; review new template at {} or rerun with --force-profile",
-            active_path.display(),
-            new_path.display()
-        ),
-    })
-}
-
-async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpdate> {
-    let MergeInputs {
-        active_path,
-        base_path,
-        template_path,
-        new_path,
-        merge_path,
-        base,
-        active,
-        template,
-    } = inputs;
-
-    if active == template {
-        let updated = write_if_changed(base_path, template).await?;
-        remove_if_exists(new_path).await?;
-        remove_if_exists(merge_path).await?;
-        return Ok(SysProfileFileUpdate {
-            updated,
-            needs_action: false,
-            detail: format!("{} already current", active_path.display()),
-        });
-    }
-    if base == template {
-        remove_if_exists(new_path).await?;
-        remove_if_exists(merge_path).await?;
-        return Ok(SysProfileFileUpdate {
-            updated: false,
-            needs_action: false,
-            detail: format!("{} already configured", active_path.display()),
-        });
-    }
-    if active == base {
-        tokio::fs::write(active_path, template)
-            .await
-            .with_context(|| format!("writing {}", active_path.display()))?;
-        tokio::fs::write(base_path, template)
-            .await
-            .with_context(|| format!("writing {}", base_path.display()))?;
-        remove_if_exists(new_path).await?;
-        remove_if_exists(merge_path).await?;
-        return Ok(SysProfileFileUpdate {
-            updated: true,
-            needs_action: false,
-            detail: format!("{} updated", active_path.display()),
-        });
-    }
-    match merge_sys_profile(
-        active_path,
-        base_path,
-        template_path,
-        base,
-        active,
-        template,
-    )
-    .await?
-    {
-        ProfileMerge::Clean(merged) => {
-            tokio::fs::write(active_path, merged)
-                .await
-                .with_context(|| format!("writing {}", active_path.display()))?;
-            tokio::fs::write(base_path, template)
-                .await
-                .with_context(|| format!("writing {}", base_path.display()))?;
-            remove_if_exists(new_path).await?;
-            remove_if_exists(merge_path).await?;
-            Ok(SysProfileFileUpdate {
-                updated: true,
-                needs_action: false,
-                detail: format!("{} merged", active_path.display()),
-            })
-        }
-        ProfileMerge::Conflict(merged) => {
-            tokio::fs::write(new_path, template)
-                .await
-                .with_context(|| format!("writing {}", new_path.display()))?;
-            tokio::fs::write(merge_path, merged)
-                .await
-                .with_context(|| format!("writing {}", merge_path.display()))?;
-            Ok(SysProfileFileUpdate {
-                updated: true,
-                needs_action: true,
-                detail: format!(
-                    "merge conflict for {}; review {} and {}",
-                    active_path.display(),
-                    new_path.display(),
-                    merge_path.display()
-                ),
-            })
-        }
-    }
-}
-
-enum ProfileMerge {
-    Clean(Vec<u8>),
-    Conflict(Vec<u8>),
-}
-
-async fn merge_sys_profile(
-    active_path: &Path,
-    base_path: &Path,
-    template_path: &Path,
-    base: &[u8],
-    active: &[u8],
-    template: &[u8],
-) -> Result<ProfileMerge> {
-    if let Some(result) = try_git_merge_file(active_path, base_path, template_path).await? {
-        return Ok(result);
-    }
-
-    Ok(match fallback_three_way_merge(base, active, template) {
-        Some(merged) => ProfileMerge::Clean(merged),
-        None => ProfileMerge::Conflict(conflict_marker_merge(base, active, template)),
-    })
-}
-
-async fn try_git_merge_file(
-    active_path: &Path,
-    base_path: &Path,
-    template_path: &Path,
-) -> Result<Option<ProfileMerge>> {
-    let output = match tokio::process::Command::new("git")
-        .arg("merge-file")
-        .arg("-p")
-        .arg(active_path)
-        .arg(base_path)
-        .arg(template_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-    {
-        Ok(output) => output,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err).context("running git merge-file"),
-    };
-
-    match output.status.code() {
-        Some(0) => Ok(Some(ProfileMerge::Clean(output.stdout))),
-        Some(1) => Ok(Some(ProfileMerge::Conflict(output.stdout))),
-        _ => Ok(None),
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ProfileChange {
-    old_start: usize,
-    old_end: usize,
-    new_lines: Vec<String>,
-}
-
-fn fallback_three_way_merge(base: &[u8], active: &[u8], template: &[u8]) -> Option<Vec<u8>> {
-    let base = std::str::from_utf8(base).ok()?;
-    let active = std::str::from_utf8(active).ok()?;
-    let template = std::str::from_utf8(template).ok()?;
-
-    if active == base {
-        return Some(template.as_bytes().to_vec());
-    }
-    if template == base || active == template {
-        return Some(active.as_bytes().to_vec());
-    }
-
-    let base_lines = split_profile_lines(base);
-    let active_lines = split_profile_lines(active);
-    let template_lines = split_profile_lines(template);
-    let user_changes = profile_changes(&base_lines, &active_lines);
-    let template_changes = profile_changes(&base_lines, &template_lines);
-
-    if has_profile_change_conflicts(&user_changes, &template_changes) {
-        return None;
-    }
-
-    let mut changes = Vec::new();
-    for change in user_changes.into_iter().chain(template_changes) {
-        if !changes.iter().any(|existing| existing == &change) {
-            changes.push(change);
-        }
-    }
-    changes.sort_by_key(|change| (change.old_start, change.old_end));
-
-    let mut merged = Vec::new();
-    let mut cursor = 0;
-    for change in changes {
-        if change.old_start < cursor {
-            return None;
-        }
-        merged.extend_from_slice(&base_lines[cursor..change.old_start]);
-        merged.extend(change.new_lines);
-        cursor = change.old_end;
-    }
-    merged.extend_from_slice(&base_lines[cursor..]);
-    Some(merged.concat().into_bytes())
-}
-
-fn split_profile_lines(content: &str) -> Vec<String> {
-    if content.is_empty() {
-        Vec::new()
-    } else {
-        content.split_inclusive('\n').map(str::to_string).collect()
-    }
-}
-
-fn profile_changes(base_lines: &[String], new_lines: &[String]) -> Vec<ProfileChange> {
-    let base_refs = base_lines.iter().map(String::as_str).collect::<Vec<_>>();
-    let new_refs = new_lines.iter().map(String::as_str).collect::<Vec<_>>();
-    TextDiff::from_slices(&base_refs, &new_refs)
-        .ops()
-        .iter()
-        .filter_map(|op| {
-            if matches!(op.tag(), DiffTag::Equal) {
-                return None;
-            }
-            let old_range = op.old_range();
-            let new_range = op.new_range();
-            Some(ProfileChange {
-                old_start: old_range.start,
-                old_end: old_range.end,
-                new_lines: new_lines[new_range].to_vec(),
-            })
-        })
-        .collect()
-}
-
-fn is_initial_user_profile_edit(template: &[u8], active: &[u8]) -> bool {
-    let Ok(template) = std::str::from_utf8(template) else {
-        return false;
-    };
-    let Ok(active) = std::str::from_utf8(active) else {
-        return false;
-    };
-
-    let template_lines = split_profile_lines(template);
-    let active_lines = split_profile_lines(active);
-    profile_changes(&template_lines, &active_lines)
-        .into_iter()
-        .all(|change| is_initial_user_profile_change(&template_lines, &change))
-}
-
-fn is_initial_user_profile_change(template_lines: &[String], change: &ProfileChange) -> bool {
-    if change.old_start == change.old_end {
-        return true;
-    }
-
-    let old_lines = &template_lines[change.old_start..change.old_end];
-    if old_lines.len() != change.new_lines.len() {
-        return false;
-    }
-
-    old_lines
-        .iter()
-        .zip(&change.new_lines)
-        .all(|(old, new)| uncomment_profile_line(old).as_deref() == Some(new.as_str()))
-}
-
-fn uncomment_profile_line(line: &str) -> Option<String> {
-    let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
-    let (indent, rest) = line.split_at(indent_len);
-    let uncommented = rest.strip_prefix("# ")?;
-    Some(format!("{indent}{uncommented}"))
-}
-
-fn has_profile_change_conflicts(left: &[ProfileChange], right: &[ProfileChange]) -> bool {
-    left.iter().any(|left| {
-        right.iter().any(|right| {
-            if left == right {
-                return false;
-            }
-            profile_changes_overlap(left, right)
-        })
-    })
-}
-
-fn profile_changes_overlap(left: &ProfileChange, right: &ProfileChange) -> bool {
-    let left_insert = left.old_start == left.old_end;
-    let right_insert = right.old_start == right.old_end;
-
-    if left_insert && right_insert {
-        return left.old_start == right.old_start;
-    }
-    if left_insert {
-        return left.old_start >= right.old_start && left.old_start <= right.old_end;
-    }
-    if right_insert {
-        return right.old_start >= left.old_start && right.old_start <= left.old_end;
-    }
-
-    left.old_start < right.old_end && right.old_start < left.old_end
-}
-
-fn conflict_marker_merge(base: &[u8], active: &[u8], template: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    out.extend_from_slice(b"<<<<<<< current\n");
-    out.extend_from_slice(active);
-    if !active.ends_with(b"\n") {
-        out.extend_from_slice(b"\n");
-    }
-    out.extend_from_slice(b"||||||| base\n");
-    out.extend_from_slice(base);
-    if !base.ends_with(b"\n") {
-        out.extend_from_slice(b"\n");
-    }
-    out.extend_from_slice(b"=======\n");
-    out.extend_from_slice(template);
-    if !template.ends_with(b"\n") {
-        out.extend_from_slice(b"\n");
-    }
-    out.extend_from_slice(b">>>>>>> shine\n");
-    out
-}
-
-async fn write_if_changed(path: &Path, content: &[u8]) -> Result<bool> {
-    if tokio::fs::read(path).await.ok().as_deref() == Some(content) {
-        return Ok(false);
-    }
-    tokio::fs::write(path, content)
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(true)
-}
-
-async fn remove_if_exists(path: &Path) -> Result<bool> {
-    match tokio::fs::remove_file(path).await {
-        Ok(()) => Ok(true),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(err) => Err(err).with_context(|| format!("removing {}", path.display())),
-    }
-}
-
-fn profile_backup_path(active_path: &Path, ext: &str) -> PathBuf {
-    active_path.with_extension(format!("{ext}.bak.{}", uuid::Uuid::new_v4().simple()))
-}
-
-fn sys_profile_file_path(
-    profile_dir: &Path,
-    os_id: &str,
-    phase: SysProfilePhase,
-    ext: &str,
-) -> PathBuf {
-    profile_dir.join(format!("{os_id}-sys.{}.{ext}", phase.as_str()))
-}
-
-fn sys_profile_base_path(
-    profile_dir: &Path,
-    os_id: &str,
-    phase: SysProfilePhase,
-    ext: &str,
-) -> PathBuf {
-    profile_dir.join(format!("{os_id}-sys.{}.base.{ext}", phase.as_str()))
-}
-
-fn sys_profile_new_path(
-    profile_dir: &Path,
-    os_id: &str,
-    phase: SysProfilePhase,
-    ext: &str,
-) -> PathBuf {
-    profile_dir.join(format!("{os_id}-sys.{}.new.{ext}", phase.as_str()))
-}
-
-fn sys_profile_merge_path(
-    profile_dir: &Path,
-    os_id: &str,
-    phase: SysProfilePhase,
-    ext: &str,
-) -> PathBuf {
-    profile_dir.join(format!("{os_id}-sys.{}.merge.{ext}", phase.as_str()))
-}
-
-async fn update_sys_shell_profiles(
-    config: &Config,
-    os_id: &str,
-    sys_shell: &str,
-) -> Result<SysShellProfileUpdate> {
-    match os_id {
-        "macos" => update_macos_shell_profile(config, os_id).await,
-        "ubuntu" => update_ubuntu_shell_profile(config, os_id, sys_shell).await,
-        "windows" => update_windows_shell_profile(config, os_id).await,
-        _ => Ok(SysShellProfileUpdate {
-            updated: false,
-            unsupported_shell: true,
-            detail: format!("unsupported OS for sys profile: {os_id}"),
-        }),
-    }
-}
-
-async fn update_macos_shell_profile(config: &Config, os_id: &str) -> Result<SysShellProfileUpdate> {
-    let path = config.home_dir.join(".zshrc");
-    let updated = update_sys_shell_profile_blocks(&path, os_id, None).await?;
-    Ok(SysShellProfileUpdate {
-        updated,
-        unsupported_shell: false,
-        detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
-    })
-}
-
-async fn update_ubuntu_shell_profile(
-    config: &Config,
-    os_id: &str,
-    sys_shell: &str,
-) -> Result<SysShellProfileUpdate> {
-    match config.shell_type {
-        ShellType::Bash => {
-            let updated = update_sys_shell_profile_blocks(
-                &config.home_dir.join(".bashrc"),
-                os_id,
-                Some("bash"),
-            )
-            .await?;
-            remove_sys_shell_profile_blocks(&config.home_dir.join(".zshrc"), os_id).await?;
-            Ok(SysShellProfileUpdate {
-                updated,
-                unsupported_shell: false,
-                detail: format!("~/.bashrc -> {}", sys_loader_display(os_id)),
-            })
-        }
-        ShellType::Zsh => {
-            let updated = update_sys_shell_profile_blocks(
-                &config.home_dir.join(".zshrc"),
-                os_id,
-                Some("zsh"),
-            )
-            .await?;
-            remove_sys_shell_profile_blocks(&config.home_dir.join(".bashrc"), os_id).await?;
-            Ok(SysShellProfileUpdate {
-                updated,
-                unsupported_shell: false,
-                detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
-            })
-        }
-        _ => Ok(SysShellProfileUpdate {
-            updated: false,
-            unsupported_shell: true,
-            detail: format!("unsupported shell for sys profile: {sys_shell}"),
-        }),
-    }
-}
-
-async fn update_windows_shell_profile(
-    config: &Config,
-    os_id: &str,
-) -> Result<SysShellProfileUpdate> {
-    let mut updated = false;
-    for path in [
-        config
-            .home_dir
-            .join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
-        config
-            .home_dir
-            .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
-    ] {
-        updated |= update_sys_shell_profile_blocks(&path, os_id, None).await?;
-    }
-    Ok(SysShellProfileUpdate {
-        updated,
-        unsupported_shell: false,
-        detail: "PowerShell profiles".to_string(),
-    })
-}
-
-async fn update_sys_shell_profile_blocks(
-    path: &Path,
-    os_id: &str,
-    shell_name: Option<&str>,
-) -> Result<bool> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-
-    let content = match tokio::fs::read_to_string(path).await {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-    };
-    let had_utf8_bom = content.contains('\u{feff}');
-    let bom_was_at_start = content.starts_with('\u{feff}');
-    let content = content.replace('\u{feff}', "");
-    let pre_block = sys_shell_profile_block(os_id, SysProfilePhase::Pre, shell_name);
-    let post_block = sys_shell_profile_block(os_id, SysProfilePhase::Post, shell_name);
-    let pre_sentinel = sys_sentinel(os_id, SysProfilePhase::Pre);
-    let post_sentinel = sys_sentinel(os_id, SysProfilePhase::Post);
-
-    if extract_sentinel_block(&content, legacy_sys_sentinel(os_id)).is_none()
-        && extract_sentinel_block(&content, pre_sentinel) == Some(pre_block.as_str())
-        && extract_sentinel_block(&content, post_sentinel) == Some(post_block.as_str())
-        && sentinel_order_is_valid(&content, pre_sentinel, post_sentinel)
-        && (!had_utf8_bom || bom_was_at_start)
-    {
-        return Ok(false);
-    }
-
-    let mut updated = remove_sentinel_block(&content, legacy_sys_sentinel(os_id));
-    updated = remove_sentinel_block(&updated, pre_sentinel);
-    updated = remove_sentinel_block(&updated, post_sentinel);
-    updated = trim_outer_blank_lines(&updated);
-    updated = insert_shell_profile_block(&updated, &pre_block, ShellProfileBlockPosition::Start);
-    updated = insert_shell_profile_block(&updated, &post_block, ShellProfileBlockPosition::End);
-    if had_utf8_bom {
-        updated.insert(0, '\u{feff}');
-    }
-
-    tokio::fs::write(path, updated)
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(true)
-}
-
-async fn remove_sys_shell_profile_blocks(path: &Path, os_id: &str) -> Result<bool> {
-    let mut updated = remove_shell_profile_block(path, legacy_sys_sentinel(os_id)).await?;
-    for phase in SYS_PROFILE_PHASES {
-        updated |= remove_shell_profile_block(path, sys_sentinel(os_id, phase)).await?;
-    }
-    Ok(updated)
-}
-
-fn legacy_sys_sentinel(os_id: &str) -> (&'static str, &'static str) {
-    match os_id {
-        "macos" => ("# >>> shine macos sys >>>", "# <<< shine macos sys <<<"),
-        "windows" => ("# >>> shine windows sys >>>", "# <<< shine windows sys <<<"),
-        _ => ("# >>> shine ubuntu sys >>>", "# <<< shine ubuntu sys <<<"),
-    }
-}
-
-fn sys_sentinel(os_id: &str, phase: SysProfilePhase) -> (&'static str, &'static str) {
-    match (os_id, phase) {
-        ("macos", SysProfilePhase::Pre) => (
-            "# >>> shine macos sys pre >>>",
-            "# <<< shine macos sys pre <<<",
-        ),
-        ("macos", SysProfilePhase::Post) => (
-            "# >>> shine macos sys post >>>",
-            "# <<< shine macos sys post <<<",
-        ),
-        ("windows", SysProfilePhase::Pre) => (
-            "# >>> shine windows sys pre >>>",
-            "# <<< shine windows sys pre <<<",
-        ),
-        ("windows", SysProfilePhase::Post) => (
-            "# >>> shine windows sys post >>>",
-            "# <<< shine windows sys post <<<",
-        ),
-        (_, SysProfilePhase::Pre) => (
-            "# >>> shine ubuntu sys pre >>>",
-            "# <<< shine ubuntu sys pre <<<",
-        ),
-        (_, SysProfilePhase::Post) => (
-            "# >>> shine ubuntu sys post >>>",
-            "# <<< shine ubuntu sys post <<<",
-        ),
-    }
-}
-
-fn sys_shell_profile_block(
-    os_id: &str,
-    phase: SysProfilePhase,
-    shell_name: Option<&str>,
-) -> String {
-    let (start, end) = sys_sentinel(os_id, phase);
-    match os_id {
-        "windows" => format!(
-            r#"{start}
-$shineWindowsSysProfile = Join-Path $HOME ".shine\profile\windows-sys.{phase}.ps1"
-if (Test-Path -LiteralPath $shineWindowsSysProfile) {{
-    . $shineWindowsSysProfile
-}}
-{end}
-"#,
-            phase = phase.as_str()
-        ),
-        "macos" => format!(
-            r#"{start}
-shine_macos_sys_profile="$HOME/.shine/profile/macos-sys.{phase}.sh"
-if [[ -f "$shine_macos_sys_profile" ]]; then
-  source "$shine_macos_sys_profile"
-fi
-{end}
-"#,
-            phase = phase.as_str()
-        ),
-        _ => {
-            let shell_name = shell_name.unwrap_or("bash");
-            format!(
-                r#"{start}
-shine_ubuntu_sys_profile="$HOME/.shine/profile/ubuntu-sys.{phase}.sh"
-if [[ -f "$shine_ubuntu_sys_profile" ]]; then
-  SHINE_UBUNTU_SYS_SHELL="{shell_name}"
-  source "$shine_ubuntu_sys_profile"
-fi
-{end}
-"#,
-                phase = phase.as_str()
-            )
-        }
-    }
-}
-
-fn insert_shell_profile_block(
-    content: &str,
-    desired_block: &str,
-    position: ShellProfileBlockPosition,
-) -> String {
-    match position {
-        ShellProfileBlockPosition::Start => {
-            let mut updated = String::new();
-            updated.push_str(desired_block);
-            if !content.is_empty() {
-                if !desired_block.ends_with('\n') {
-                    updated.push('\n');
-                }
-                updated.push('\n');
-                updated.push_str(content);
-            }
-            updated
-        }
-        ShellProfileBlockPosition::End => {
-            let mut updated = content.to_string();
-            if !updated.ends_with('\n') && !updated.is_empty() {
-                updated.push('\n');
-            }
-            if !updated.is_empty() {
-                updated.push('\n');
-            }
-            updated.push_str(desired_block);
-            updated
-        }
-    }
-}
-
-fn sentinel_order_is_valid(content: &str, first: (&str, &str), second: (&str, &str)) -> bool {
-    match (content.find(first.0), content.find(second.0)) {
-        (Some(first), Some(second)) => first < second,
-        _ => false,
-    }
-}
-
-fn trim_outer_blank_lines(content: &str) -> String {
-    content.trim_matches('\n').to_string()
-}
-
-async fn remove_shell_profile_block(path: &Path, sentinel: (&str, &str)) -> Result<bool> {
-    let Ok(content) = tokio::fs::read_to_string(path).await else {
-        return Ok(false);
-    };
-    let updated = remove_sentinel_block(&content, sentinel);
-    if updated == content {
-        return Ok(false);
-    }
-    tokio::fs::write(path, updated)
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(true)
-}
-
-fn extract_sentinel_block<'a>(content: &'a str, sentinel: (&str, &str)) -> Option<&'a str> {
-    let start = content.find(sentinel.0)?;
-    let after_start = &content[start..];
-    let end = after_start.find(sentinel.1)? + sentinel.1.len();
-    let end = if after_start[end..].starts_with('\n') {
-        end + 1
-    } else {
-        end
-    };
-    Some(&after_start[..end])
-}
-
-fn remove_sentinel_block(content: &str, sentinel: (&str, &str)) -> String {
-    let mut output = Vec::new();
-    let mut skip = false;
-    for line in content.lines() {
-        if line == sentinel.0 {
-            skip = true;
-            continue;
-        }
-        if line == sentinel.1 {
-            skip = false;
-            continue;
-        }
-        if !skip {
-            output.push(line);
-        }
-    }
-    let mut result = output.join("\n");
-    if content.ends_with('\n') && !result.is_empty() {
-        result.push('\n');
-    }
-    result
-}
-
-fn sys_loader_display(os_id: &str) -> String {
-    format!(
-        "~/.shine/profile/{os_id}-sys.{{pre,post}}.{}",
-        if os_id == "windows" { "ps1" } else { "sh" }
-    )
-}
-
-fn parse_sys_item_output(
-    item_id: &str,
-    label: &str,
-    success: bool,
-    stdout: &str,
-    stderr: &str,
-) -> SysItemOutcome {
-    let mut status = None;
-    let mut logs = Vec::new();
-
-    for line in stdout.lines().chain(stderr.lines()) {
-        if let Some(parsed) = parse_status_event(line) {
-            status = Some(parsed);
-        } else if !line.trim().is_empty() {
-            logs.push(line.to_string());
-        }
-    }
-
-    let (status, detail) = if !success {
-        let detail = status
-            .map(|(_, detail)| detail)
-            .filter(|detail| !detail.is_empty())
-            .unwrap_or_else(|| "script exited with a non-zero status".to_string());
-        (SysItemStatus::Failed, detail)
-    } else if let Some((status, detail)) = status {
-        (status, detail)
-    } else {
-        (SysItemStatus::Completed, String::new())
-    };
-
-    SysItemOutcome {
-        item_id: item_id.to_string(),
-        label: label.to_string(),
-        status,
-        detail,
-        logs,
-    }
-}
-
-fn parse_status_event(line: &str) -> Option<(SysItemStatus, String)> {
-    let rest = line.strip_prefix(SYS_STATUS_PREFIX)?;
-    let mut parts = rest.splitn(2, '\t');
-    let status = match parts.next()? {
-        "installed" => SysItemStatus::Installed,
-        "already-installed" => SysItemStatus::AlreadyInstalled,
-        "skipped" => SysItemStatus::Skipped,
-        "updated" => SysItemStatus::Updated,
-        "needs-action" => SysItemStatus::NeedsAction,
-        "completed" => SysItemStatus::Completed,
-        "failed" => SysItemStatus::Failed,
-        _ => return None,
-    };
-    let detail = normalize_status_detail(parts.next().unwrap_or_default().trim());
-    Some((status, detail))
-}
-
-fn normalize_status_detail(detail: &str) -> String {
-    detail
-        .strip_suffix(" ()")
-        .unwrap_or(detail)
-        .trim()
-        .to_string()
-}
-
-fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
-    let symbol = status_symbol(outcome.status);
-    let label = format!("{:<label_width$}", outcome.label);
-    let status = format!("{:<17}", status_text(outcome.status));
-    let detail = if outcome.detail.is_empty() {
-        String::new()
-    } else {
-        colors::dim(&outcome.detail)
-    };
-
-    println!(
-        "{} {} {} {}",
-        colors::symbol(symbol),
-        colors::bold(&label),
-        colors::status_label(&status, symbol),
-        detail
-    );
-
-    for line in &outcome.logs {
-        println!("  {}", colors::dim(line));
-    }
-}
-
-fn status_symbol(status: SysItemStatus) -> &'static str {
-    match status {
-        SysItemStatus::Skipped | SysItemStatus::NeedsAction => "~",
-        SysItemStatus::Failed => "✗",
-        _ => "✓",
-    }
-}
-
-fn status_text(status: SysItemStatus) -> &'static str {
-    match status {
-        SysItemStatus::Installed => "installed",
-        SysItemStatus::AlreadyInstalled => "already installed",
-        SysItemStatus::Skipped => "skipped",
-        SysItemStatus::Updated => "updated",
-        SysItemStatus::NeedsAction => "needs action",
-        SysItemStatus::Completed => "completed",
-        SysItemStatus::Failed => "failed",
-    }
-}
-
-fn print_sys_summary(outcomes: &[SysItemOutcome]) {
-    let mut counts = BTreeMap::<SysItemStatus, usize>::new();
-    for outcome in outcomes {
-        *counts.entry(outcome.status).or_default() += 1;
-    }
-
-    let parts = [
-        SysItemStatus::Installed,
-        SysItemStatus::AlreadyInstalled,
-        SysItemStatus::Skipped,
-        SysItemStatus::Updated,
-        SysItemStatus::NeedsAction,
-        SysItemStatus::Completed,
-        SysItemStatus::Failed,
-    ]
-    .into_iter()
-    .filter_map(|status| {
-        counts
-            .get(&status)
-            .copied()
-            .filter(|count| *count > 0)
-            .map(|count| format!("{count} {}", status_text(status)))
-    })
-    .collect::<Vec<_>>();
-
-    println!("Summary: {}", parts.join(", "));
-}
-
-async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset> {
-    if os_id.contains('/') || os_id.contains('\\') || os_id.contains("..") {
-        bail!("invalid os id: {os_id:?}");
-    }
-    let prefix = format!("sys/{os_id}");
-    if !config.is_external_presets {
-        crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
-    }
-
-    let root = config.presets_dir().join("sys").join(os_id);
-    let script_path = root.join(sys_init_script_name(os_id));
-    if !script_path.exists() {
-        bail!(
-            "No init script found for '{}'. Expected: {}",
-            os_id,
-            script_path.display()
-        );
-    }
-
-    let manifest_path = root.join("shine.toml");
-    let content = tokio::fs::read_to_string(&manifest_path)
-        .await
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let manifest = parse_and_validate_manifest(&content)
-        .with_context(|| format!("parsing {}", manifest_path.display()))?;
-
-    Ok(LoadedSysPreset {
-        manifest,
-        script_path,
-    })
-}
-
-fn sys_init_script_name(os_id: &str) -> &'static str {
-    if os_id == "windows" {
-        "init.ps1"
-    } else {
-        "init.sh"
-    }
-}
-
-fn parse_and_validate_manifest(content: &str) -> Result<SysManifest> {
-    let manifest: SysManifest = toml::from_str(content)?;
-    validate_manifest(&manifest)?;
-    Ok(manifest)
-}
-
-fn validate_manifest(manifest: &SysManifest) -> Result<()> {
-    let mut ids = BTreeSet::new();
-    for item in &manifest.items {
-        validate_item_id(&item.id)?;
-        if item.label.trim().is_empty() {
-            bail!("sys init item `{}` must have a label", item.id);
-        }
-        if !ids.insert(item.id.clone()) {
-            bail!("duplicate sys init item id `{}`", item.id);
-        }
-    }
-
-    if let Some(default_profile) = &manifest.default_profile
-        && !manifest.profiles.contains_key(default_profile)
-    {
-        bail!("default profile `{default_profile}` is not defined");
-    }
-
-    for (profile_name, profile) in &manifest.profiles {
-        for item_id in &profile.items {
-            if !ids.contains(item_id) {
-                bail!("profile `{profile_name}` references unknown item `{item_id}`");
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_item_id(item_id: &str) -> Result<()> {
-    if item_id.trim().is_empty() {
-        bail!("sys init item ids must not be empty");
-    }
-    if !item_id
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        bail!(
-            "sys init item id `{item_id}` contains invalid characters (allowed: a-z A-Z 0-9 - _)"
-        );
-    }
-    Ok(())
-}
-
-fn resolve_selection(
-    manifest: &SysManifest,
-    preset: Option<&str>,
-    interactive: bool,
-) -> Result<ResolvedSelection> {
-    if let Some(profile_name) = preset {
-        return Ok(ResolvedSelection {
-            item_ids: profile_items(manifest, profile_name)?.to_vec(),
-            source: SelectionSource::Profile(profile_name.to_string()),
-        });
-    }
-
-    if manifest.items.is_empty() {
-        return Ok(ResolvedSelection {
-            item_ids: Vec::new(),
-            source: SelectionSource::NoItems,
-        });
-    }
-
-    if interactive {
-        return select_items_interactively(manifest);
-    }
-
-    let Some(default_profile) = manifest.default_profile.as_deref() else {
-        bail!("sys init requires `default_profile` for non-interactive runs");
-    };
-
-    Ok(ResolvedSelection {
-        item_ids: profile_items(manifest, default_profile)?.to_vec(),
-        source: SelectionSource::DefaultProfile(default_profile.to_string()),
-    })
-}
-
-fn profile_items<'a>(manifest: &'a SysManifest, profile_name: &str) -> Result<&'a [String]> {
-    let profile = manifest
-        .profiles
-        .get(profile_name)
-        .with_context(|| format!("unknown sys init profile `{profile_name}`"))?;
-    Ok(&profile.items)
-}
-
-fn default_flags(manifest: &SysManifest) -> Vec<bool> {
-    if let Some(default_profile) = manifest.default_profile.as_deref()
-        && let Some(profile) = manifest.profiles.get(default_profile)
-    {
-        let item_set: BTreeSet<&str> = profile.items.iter().map(String::as_str).collect();
-        return manifest
-            .items
-            .iter()
-            .map(|item| item_set.contains(item.id.as_str()))
-            .collect();
-    }
-
-    manifest.items.iter().map(|item| item.default).collect()
-}
-
-fn select_items_interactively(manifest: &SysManifest) -> Result<ResolvedSelection> {
-    print_interactive_header(manifest);
-
-    let labels: Vec<String> = manifest.items.iter().map(format_interactive_item).collect();
-    let defaults = default_flags(manifest);
-
-    let selection = MultiSelect::with_theme(&sys_init_theme())
-        .with_prompt("Select system init items")
-        .items(&labels)
-        .defaults(&defaults)
-        .report(false)
-        .interact()?;
-
-    let item_ids = selection
-        .into_iter()
-        .map(|index| manifest.items[index].id.clone())
-        .collect();
-
-    Ok(ResolvedSelection {
-        item_ids,
-        source: SelectionSource::Interactive,
-    })
-}
-
-fn format_interactive_item(item: &SysItem) -> String {
-    let label = style(item.label.as_str()).for_stderr().bold().to_string();
-    if item.description.is_empty() {
-        return label;
-    }
-
-    let description = style(item.description.as_str())
-        .for_stderr()
-        .dim()
-        .to_string();
-    format!("{label}  ·  {description}")
-}
-
-fn print_interactive_header(manifest: &SysManifest) {
-    if let Some(default_profile) = manifest.default_profile.as_deref() {
-        println!(
-            "{}",
-            colors::dim(&format!("Default profile: {default_profile}"))
-        );
-    }
-    println!("{}", colors::dim("Use Space to toggle, Enter to confirm."));
-    println!();
-}
-
-fn format_item_ids(item_ids: &[String]) -> String {
-    if item_ids.is_empty() {
-        "(none)".to_string()
-    } else {
-        item_ids.join(", ")
+        load_embedded_sys_manifests()
     }
 }
 
-fn list_embedded_sys_entries() -> Vec<(String, String)> {
+fn load_embedded_sys_manifests() -> Result<Vec<(String, SysManifest)>> {
     let mut os_ids: BTreeSet<String> = BTreeSet::new();
 
     for path in crate::presets::asset_paths("sys") {
@@ -1951,48 +1175,44 @@ fn list_embedded_sys_entries() -> Vec<(String, String)> {
         .into_iter()
         .map(|os_id| {
             let toml_path = format!("sys/{os_id}/shine.toml");
-            let description = crate::presets::read_asset_bytes(&toml_path)
-                .and_then(|b| String::from_utf8(b).ok())
-                .and_then(|s| toml::from_str::<SysManifest>(&s).ok())
-                .map(|m| m.description)
-                .unwrap_or_default();
-            (os_id, description)
+            let bytes = crate::presets::read_asset_bytes(&toml_path)
+                .with_context(|| format!("missing embedded preset manifest `{toml_path}`"))?;
+            let content = String::from_utf8(bytes)
+                .with_context(|| format!("preset manifest `{toml_path}` is not UTF-8"))?;
+            let manifest = manifest::parse_and_validate_manifest(&content)
+                .with_context(|| format!("parsing embedded preset manifest `{toml_path}`"))?;
+            Ok((os_id, manifest))
         })
         .collect()
 }
 
-async fn list_fs_sys_entries(presets_dir: &Path) -> Vec<(String, String)> {
+async fn load_fs_sys_manifests(presets_dir: &Path) -> Result<Vec<(String, SysManifest)>> {
     let sys_root = presets_dir.join("sys");
     if !sys_root.is_dir() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
-    let mut entries: BTreeMap<String, String> = BTreeMap::new();
+    let mut entries: BTreeMap<String, SysManifest> = BTreeMap::new();
+    let mut dir = tokio::fs::read_dir(&sys_root)
+        .await
+        .with_context(|| format!("reading {}", sys_root.display()))?;
 
-    let Ok(mut dir) = tokio::fs::read_dir(&sys_root).await else {
-        return Vec::new();
-    };
-
-    while let Ok(Some(entry)) = dir.next_entry().await {
-        let Ok(ft) = entry.file_type().await else {
-            continue;
-        };
+    while let Some(entry) = dir.next_entry().await? {
+        let ft = entry.file_type().await?;
         if !ft.is_dir() {
             continue;
         }
         let os_id = entry.file_name().to_string_lossy().to_string();
         let toml_path = sys_root.join(&os_id).join("shine.toml");
-        let description = if let Ok(content) = tokio::fs::read_to_string(&toml_path).await {
-            toml::from_str::<SysManifest>(&content)
-                .map(|m| m.description)
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        entries.insert(os_id, description);
+        let content = tokio::fs::read_to_string(&toml_path)
+            .await
+            .with_context(|| format!("reading {}", toml_path.display()))?;
+        let manifest = manifest::parse_and_validate_manifest(&content)
+            .with_context(|| format!("parsing {}", toml_path.display()))?;
+        entries.insert(os_id, manifest);
     }
 
-    entries.into_iter().collect()
+    Ok(entries.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -2151,6 +1371,8 @@ label = "Neovim"
             status: SysItemStatus::Installed,
             detail: "ok".to_string(),
             updated_at: "123".to_string(),
+            managed: false,
+            receipt: None,
         }
     }
 
@@ -2160,6 +1382,25 @@ label = "Neovim"
         let manifest = SysRunManifest::load(&dir).await.unwrap();
         assert!(manifest.entries.is_empty());
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn old_sys_manifest_without_receipt_remains_compatible() {
+        let manifest: SysRunManifest = toml::from_str(
+            r#"
+[[entries]]
+os_id = "macos"
+item_id = "legacy-managed"
+label = "Legacy"
+status = "installed"
+updated_at = "123"
+managed = true
+"#,
+        )
+        .unwrap();
+        assert_eq!(manifest.entries.len(), 1);
+        assert!(manifest.entries[0].managed);
+        assert!(manifest.entries[0].receipt.is_none());
     }
 
     #[tokio::test]
@@ -2233,6 +1474,46 @@ description = "Placeholder"
     }
 
     #[test]
+    fn managed_item_metadata_parses_and_old_items_default_to_init() {
+        let manifest = parse_and_validate_manifest(
+            r#"
+[[items]]
+id = "legacy"
+label = "Legacy"
+
+[[items]]
+id = "dns"
+label = "DNS"
+mode = "managed"
+requires_admin = true
+required_env = ["PRIVATE_DNS_DOMAIN", "PRIVATE_DNS_SERVERS"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(manifest.items[0].mode, SysItemMode::Init);
+        assert!(!manifest.items[0].requires_admin);
+        assert_eq!(manifest.items[1].mode, SysItemMode::Managed);
+        assert_eq!(manifest.items[1].driver, SysDriverKind::Script);
+        assert!(manifest.items[1].requires_admin);
+        assert_eq!(manifest.items[1].required_env.len(), 2);
+    }
+
+    #[test]
+    fn managed_item_rejects_invalid_required_env_name() {
+        let error = parse_and_validate_manifest(
+            r#"
+[[items]]
+id = "dns"
+label = "DNS"
+mode = "managed"
+required_env = ["NOT-AN-ENV"]
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid required_env"));
+    }
+
+    #[test]
     fn shell_type_into_static_str() {
         assert_eq!(<&'static str>::from(ShellType::Bash), "bash");
         assert_eq!(<&'static str>::from(ShellType::Zsh), "zsh");
@@ -2248,6 +1529,11 @@ description = "Placeholder"
             label: "Neovim".to_string(),
             description: "Install Neovim".to_string(),
             default: false,
+            mode: SysItemMode::Init,
+            requires_admin: false,
+            required_env: Vec::new(),
+            driver: SysDriverKind::Script,
+            config: toml::Table::new(),
         };
         let rendered = format_interactive_item(&item);
         assert!(rendered.contains("Neovim"));
@@ -2262,6 +1548,11 @@ description = "Placeholder"
             label: "Atuin".to_string(),
             description: String::new(),
             default: false,
+            mode: SysItemMode::Init,
+            requires_admin: false,
+            required_env: Vec::new(),
+            driver: SysDriverKind::Script,
+            config: toml::Table::new(),
         };
         let rendered = format_interactive_item(&item);
         assert_eq!(rendered, "Atuin");
@@ -2750,11 +2041,11 @@ description = "Placeholder"
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    // --- list_embedded_sys_entries ---
+    // --- load_embedded_sys_manifests ---
 
     #[test]
     fn embedded_entries_include_supported_systems() {
-        let entries = list_embedded_sys_entries();
+        let entries = load_embedded_sys_manifests().unwrap();
         let ids: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
         assert!(ids.contains(&"ubuntu"), "ubuntu missing: {ids:?}");
         assert!(ids.contains(&"macos"), "macos missing: {ids:?}");
@@ -2763,21 +2054,80 @@ description = "Placeholder"
 
     #[test]
     fn embedded_entries_have_descriptions() {
-        let entries = list_embedded_sys_entries();
-        for (id, desc) in &entries {
-            assert!(!desc.is_empty(), "description for {id} should not be empty");
+        let entries = load_embedded_sys_manifests().unwrap();
+        for (id, manifest) in &entries {
+            assert!(
+                !manifest.description.is_empty(),
+                "description for {id} should not be empty"
+            );
+        }
+    }
+
+    #[test]
+    fn embedded_current_platforms_expose_split_dns() {
+        let entries = load_embedded_sys_manifests().unwrap();
+        for os_id in ["macos", "ubuntu", "windows"] {
+            let manifest = entries
+                .iter()
+                .find(|(candidate, _)| candidate == os_id)
+                .map(|(_, manifest)| manifest)
+                .unwrap_or_else(|| panic!("missing {os_id} manifest"));
+            let item = manifest
+                .items
+                .iter()
+                .find(|item| item.id == "split-dns")
+                .unwrap_or_else(|| panic!("split-dns missing for {os_id}"));
+            assert_eq!(item.mode, SysItemMode::Managed);
+            assert_eq!(item.driver, SysDriverKind::SplitDns);
         }
     }
 
     #[test]
     fn embedded_sys_manifests_are_valid() {
-        for (id, _) in list_embedded_sys_entries() {
+        for (id, _) in load_embedded_sys_manifests().unwrap() {
             let toml_path = format!("sys/{id}/shine.toml");
             let content = crate::presets::read_asset_bytes(&toml_path)
                 .and_then(|bytes| String::from_utf8(bytes).ok())
                 .unwrap_or_else(|| panic!("missing embedded manifest: {toml_path}"));
             parse_and_validate_manifest(&content)
                 .unwrap_or_else(|err| panic!("invalid embedded manifest {toml_path}: {err}"));
+        }
+    }
+
+    #[test]
+    fn embedded_split_dns_items_are_managed_and_safely_marked() {
+        for (os_id, script_name) in [
+            ("macos", "init.sh"),
+            ("ubuntu", "init.sh"),
+            ("windows", "init.ps1"),
+        ] {
+            let manifest_path = format!("sys/{os_id}/shine.toml");
+            let content = crate::presets::read_asset_bytes(&manifest_path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .unwrap();
+            let manifest = parse_and_validate_manifest(&content).unwrap();
+            let item = manifest
+                .items
+                .iter()
+                .find(|item| item.id == "split-dns")
+                .unwrap();
+            assert_eq!(item.mode, SysItemMode::Managed);
+            assert!(item.requires_admin);
+            assert_eq!(item.driver, SysDriverKind::SplitDns);
+            assert_eq!(
+                item.required_env,
+                ["PRIVATE_DNS_DOMAIN", "PRIVATE_DNS_SERVERS"]
+            );
+            assert_eq!(
+                item.config.get("domain_env").and_then(toml::Value::as_str),
+                Some("PRIVATE_DNS_DOMAIN")
+            );
+
+            let script_path = format!("sys/{os_id}/{script_name}");
+            let script = crate::presets::read_asset_bytes(&script_path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .unwrap();
+            assert!(!script.contains("Managed by shine: split-dns"));
         }
     }
 
@@ -2806,7 +2156,12 @@ description = "Placeholder"
         assert!(!recommended.items.iter().any(|item| item == "mise"));
         assert!(!recommended.items.iter().any(|item| item == "homebrew"));
 
-        let item_ids: BTreeSet<&str> = manifest.items.iter().map(|item| item.id.as_str()).collect();
+        let item_ids: BTreeSet<&str> = manifest
+            .items
+            .iter()
+            .filter(|item| item.mode == SysItemMode::Init)
+            .map(|item| item.id.as_str())
+            .collect();
         let all_ids: BTreeSet<&str> = all.items.iter().map(String::as_str).collect();
         assert_eq!(
             all_ids, item_ids,
@@ -2844,7 +2199,12 @@ description = "Placeholder"
         assert!(!recommended.items.iter().any(|item| item == "pnpm"));
         assert!(!recommended.items.iter().any(|item| item == "mise"));
 
-        let item_ids: BTreeSet<&str> = manifest.items.iter().map(|item| item.id.as_str()).collect();
+        let item_ids: BTreeSet<&str> = manifest
+            .items
+            .iter()
+            .filter(|item| item.mode == SysItemMode::Init)
+            .map(|item| item.id.as_str())
+            .collect();
         let all_ids: BTreeSet<&str> = all.items.iter().map(String::as_str).collect();
         assert_eq!(
             all_ids, item_ids,
@@ -2872,7 +2232,12 @@ description = "Placeholder"
         assert!(recommended.items.iter().any(|item| item == "rust"));
         assert!(!recommended.items.iter().any(|item| item == "mise"));
 
-        let item_ids: BTreeSet<&str> = manifest.items.iter().map(|item| item.id.as_str()).collect();
+        let item_ids: BTreeSet<&str> = manifest
+            .items
+            .iter()
+            .filter(|item| item.mode == SysItemMode::Init)
+            .map(|item| item.id.as_str())
+            .collect();
         let all_ids: BTreeSet<&str> = all.items.iter().map(String::as_str).collect();
         assert_eq!(
             all_ids, item_ids,
@@ -3035,19 +2400,19 @@ description = "Placeholder"
 
     #[test]
     fn embedded_entries_sorted_alphabetically() {
-        let entries = list_embedded_sys_entries();
+        let entries = load_embedded_sys_manifests().unwrap();
         let ids: Vec<&str> = entries.iter().map(|(id, _)| id.as_str()).collect();
         let mut sorted = ids.clone();
         sorted.sort();
         assert_eq!(ids, sorted, "entries should be alphabetically sorted");
     }
 
-    // --- list_fs_sys_entries ---
+    // --- load_fs_sys_manifests ---
 
     #[tokio::test]
     async fn list_fs_returns_empty_when_sys_dir_missing() {
         let dir = make_temp_dir().await;
-        let entries = list_fs_sys_entries(&dir).await;
+        let entries = load_fs_sys_manifests(&dir).await.unwrap();
         assert!(entries.is_empty());
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -3064,10 +2429,28 @@ description = "Placeholder"
         .await
         .unwrap();
 
-        let entries = list_fs_sys_entries(&dir).await;
+        let entries = load_fs_sys_manifests(&dir).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "testlinux");
-        assert_eq!(entries[0].1, "A test distro.");
+        assert_eq!(entries[0].1.description, "A test distro.");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn load_fs_rejects_invalid_manifest() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("sys/testlinux");
+        fs::create_dir_all(&os_dir).await.unwrap();
+        fs::write(
+            os_dir.join("shine.toml"),
+            b"[[items]]\nid = \"bad id\"\nlabel = \"Bad\"\n",
+        )
+        .await
+        .unwrap();
+
+        let error = load_fs_sys_manifests(&dir).await.unwrap_err();
+        assert!(error.to_string().contains("parsing"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -3078,7 +2461,7 @@ description = "Placeholder"
     async fn handle_list_succeeds_with_embedded_presets() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
-        handle_list(&config).await.unwrap();
+        handle_list(&config, false).await.unwrap();
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -3282,6 +2665,161 @@ esac
                 .await
                 .unwrap(),
             "echo fake post profile\n"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_item_apply_upgrade_and_uninstall_lifecycle() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/fakeos");
+        fs::create_dir_all(&os_dir).await.unwrap();
+        fs::write(
+            os_dir.join("shine.toml"),
+            r#"
+description = "Managed test"
+
+[[items]]
+id = "managed-test"
+label = "Managed test"
+mode = "managed"
+required_env = ["ACTION_LOG"]
+"#,
+        )
+        .await
+        .unwrap();
+        fs::write(
+            os_dir.join("init.sh"),
+            r#"#!/bin/bash
+set -eu
+printf '%s\n' "$2" >> "$ACTION_LOG"
+printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
+"#,
+        )
+        .await
+        .unwrap();
+
+        let action_log = dir.join("actions");
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config
+            .env
+            .insert("ACTION_LOG".to_string(), action_log.display().to_string());
+
+        run_managed_for_os(
+            &config,
+            "fakeos",
+            Some("managed-test"),
+            SysAction::Apply,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+        let first_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        assert!(
+            first_manifest
+                .entries
+                .iter()
+                .any(|entry| { entry.item_id == "managed-test" && entry.managed })
+        );
+
+        let report = run_managed_for_os(&config, "fakeos", None, SysAction::Apply, false, false)
+            .await
+            .unwrap();
+        assert_eq!(report.updated, 1);
+        run_managed_for_os(
+            &config,
+            "fakeos",
+            Some("managed-test"),
+            SysAction::Remove,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+
+        let actions = fs::read_to_string(&action_log).await.unwrap();
+        assert_eq!(
+            actions.lines().collect::<Vec<_>>(),
+            ["apply", "apply", "remove"]
+        );
+        let final_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        assert!(final_manifest.entries.is_empty());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn builtin_receipt_uninstalls_after_preset_is_deleted() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/fakeos");
+        fs::create_dir_all(&os_dir).await.unwrap();
+        let destination = dir.join("managed-output.txt");
+        fs::write(os_dir.join("desired.txt"), "managed")
+            .await
+            .unwrap();
+        fs::write(os_dir.join("init.sh"), "#!/bin/bash\n")
+            .await
+            .unwrap();
+        fs::write(
+            os_dir.join("shine.toml"),
+            format!(
+                r#"
+description = "Managed resource test"
+
+[[items]]
+id = "managed-file-test"
+label = "Managed file test"
+mode = "managed"
+driver = "managed-file"
+
+[items.config]
+source = "desired.txt"
+target = {:?}
+"#,
+                destination.display().to_string()
+            ),
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let applied = run_managed_for_os(
+            &config,
+            "fakeos",
+            Some("managed-file-test"),
+            SysAction::Apply,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(applied.updated, 1);
+        assert_eq!(fs::read_to_string(&destination).await.unwrap(), "managed");
+
+        fs::remove_dir_all(&os_dir).await.unwrap();
+        let removed = run_managed_for_os(
+            &config,
+            "fakeos",
+            Some("managed-file-test"),
+            SysAction::Remove,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(removed.updated, 1);
+        assert!(!destination.exists());
+        assert!(
+            SysRunManifest::load(config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
         );
 
         fs::remove_dir_all(&dir).await.unwrap();

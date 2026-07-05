@@ -6,7 +6,7 @@ use std::pin::Pin;
 
 const UPDATE_CACHE_FILE: &str = "update-check.json";
 
-pub(crate) async fn handle_clear(config: &Config, dry_run: bool) -> Result<()> {
+pub async fn handle_clear(config: &Config, dry_run: bool) -> Result<()> {
     let schema_version = config.schema_version;
     if schema_version > CURRENT_RUNTIME_SCHEMA_VERSION {
         bail!(
@@ -71,7 +71,7 @@ pub(crate) async fn handle_clear(config: &Config, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn pending_schema_warning(schema_version: u32) -> Option<String> {
+pub fn pending_schema_warning(schema_version: u32) -> Option<String> {
     if schema_version >= CURRENT_RUNTIME_SCHEMA_VERSION {
         return None;
     }

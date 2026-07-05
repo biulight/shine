@@ -22,6 +22,20 @@ pub fn sync_table(doc: &mut toml_edit::Table, target: &toml::Table) {
                 }
             }
             _ => {
+                if let (Some(inline), toml::Value::String(value)) = (
+                    doc.get_mut(key).and_then(|item| item.as_inline_table_mut()),
+                    target_value,
+                ) && inline.contains_key("value")
+                {
+                    let unchanged = inline
+                        .get("value")
+                        .and_then(toml_edit::Value::as_str)
+                        .is_some_and(|existing| existing == value);
+                    if !unchanged {
+                        inline.insert("value", toml_edit::Value::from(value.as_str()));
+                    }
+                    continue;
+                }
                 if let Some(existing) = doc.get(key).and_then(|t| t.as_value())
                     && values_equal(existing, target_value)
                 {
@@ -248,6 +262,22 @@ mod tests {
         let before = doc.to_string();
         sync_table(doc.as_table_mut(), &target);
         assert_eq!(doc.to_string(), before);
+    }
+
+    #[test]
+    fn sync_table_updates_inline_env_value_and_preserves_description() {
+        let mut doc = make_doc(
+            r#"[env]
+TOKEN = { value = "old", description = "API token" }
+"#,
+        );
+        let target = make_target("[env]\nTOKEN = \"new\"\n");
+
+        sync_table(doc.as_table_mut(), &target);
+
+        let inline = doc["env"]["TOKEN"].as_inline_table().unwrap();
+        assert_eq!(inline["value"].as_str(), Some("new"));
+        assert_eq!(inline["description"].as_str(), Some("API token"));
     }
 
     #[test]

@@ -7,14 +7,14 @@ use tokio::io::AsyncWriteExt;
 const MANIFEST_FILE: &str = "app-manifest.toml";
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub(crate) struct AppManifest {
+pub struct AppManifest {
     #[serde(default)]
     pub entries: Vec<AppEntry>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(tag = "mode", rename_all = "kebab-case")]
-pub(crate) enum AppInstallStrategy {
+pub enum AppInstallStrategy {
     #[default]
     Copy,
     JsonMerge {
@@ -23,13 +23,13 @@ pub(crate) enum AppInstallStrategy {
 }
 
 impl AppInstallStrategy {
-    pub(crate) fn is_copy(&self) -> bool {
+    pub fn is_copy(&self) -> bool {
         matches!(self, Self::Copy)
     }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub(crate) struct AppEntry {
+pub struct AppEntry {
     pub source: String,
     pub destination: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,9 +41,12 @@ pub(crate) struct AppEntry {
     /// Used by config upgrade to skip files that never used env vars.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub uses_env: bool,
+    /// True when installing/removing this file requires elevated (sudo) permissions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub requires_admin: bool,
 }
 
-pub(crate) fn hash_content(bytes: &[u8]) -> u64 {
+pub fn hash_content(bytes: &[u8]) -> u64 {
     // FNV-1a: stable across Rust versions, unlike DefaultHasher
     const FNV_OFFSET: u64 = 14695981039346656037;
     const FNV_PRIME: u64 = 1099511628211;
@@ -53,7 +56,7 @@ pub(crate) fn hash_content(bytes: &[u8]) -> u64 {
 }
 
 impl AppManifest {
-    pub(crate) async fn load(shine_dir: &Path) -> Result<Self> {
+    pub async fn load(shine_dir: &Path) -> Result<Self> {
         let path = shine_dir.join(MANIFEST_FILE);
         match fs::read_to_string(&path).await {
             Ok(content) => toml::from_str(&content).context("failed to parse app manifest"),
@@ -62,7 +65,7 @@ impl AppManifest {
         }
     }
 
-    pub(crate) async fn save(&self, shine_dir: &Path) -> Result<()> {
+    pub async fn save(&self, shine_dir: &Path) -> Result<()> {
         let path = shine_dir.join(MANIFEST_FILE);
         let content = toml::to_string_pretty(self).context("failed to serialize app manifest")?;
 
@@ -85,7 +88,7 @@ impl AppManifest {
         Ok(())
     }
 
-    pub(crate) fn upsert(&mut self, entry: AppEntry) {
+    pub fn upsert(&mut self, entry: AppEntry) {
         if let Some(existing) = self
             .entries
             .iter_mut()
@@ -97,7 +100,7 @@ impl AppManifest {
         }
     }
 
-    pub(crate) fn remove_by_dest(&mut self, dest: &Path) -> Option<AppEntry> {
+    pub fn remove_by_dest(&mut self, dest: &Path) -> Option<AppEntry> {
         if let Some(pos) = self.entries.iter().position(|e| e.destination == dest) {
             Some(self.entries.remove(pos))
         } else {
@@ -105,7 +108,7 @@ impl AppManifest {
         }
     }
 
-    pub(crate) fn find_by_dest(&self, dest: &Path) -> Option<&AppEntry> {
+    pub fn find_by_dest(&self, dest: &Path) -> Option<&AppEntry> {
         self.entries.iter().find(|e| e.destination == dest)
     }
 }
@@ -128,6 +131,7 @@ mod tests {
             content_hash: 42,
             install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
+            requires_admin: false,
         }
     }
 
@@ -178,6 +182,7 @@ mod tests {
             content_hash: 1,
             install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
+            requires_admin: false,
         });
         manifest.upsert(AppEntry {
             source: "app/x/foo.toml".to_string(),
@@ -186,6 +191,7 @@ mod tests {
             content_hash: 2,
             install_strategy: AppInstallStrategy::Copy,
             uses_env: false,
+            requires_admin: false,
         });
         assert_eq!(manifest.entries.len(), 1);
         assert_eq!(manifest.entries[0].content_hash, 2);

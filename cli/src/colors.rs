@@ -2,7 +2,7 @@ use owo_colors::{OwoColorize, Stream};
 
 use crate::path_display;
 
-pub(crate) fn symbol(s: &str) -> String {
+pub fn symbol(s: &str) -> String {
     match s {
         "✓" => s
             .if_supports_color(Stream::Stdout, |t| t.green())
@@ -21,36 +21,36 @@ pub(crate) fn symbol(s: &str) -> String {
     }
 }
 
-pub(crate) fn green(s: &str) -> String {
+pub fn green(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.green())
         .to_string()
 }
 
-pub(crate) fn yellow(s: &str) -> String {
+pub fn yellow(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.yellow())
         .to_string()
 }
 
-pub(crate) fn red(s: &str) -> String {
+pub fn red(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.red()).to_string()
 }
 
-pub(crate) fn bold(s: &str) -> String {
+pub fn bold(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.bold())
         .to_string()
 }
 
-pub(crate) fn dim(s: &str) -> String {
+pub fn dim(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.dimmed())
         .to_string()
 }
 
-pub(crate) fn cyan(s: &str) -> String {
+pub fn cyan(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.cyan())
         .to_string()
 }
 
-pub(crate) fn status_label(s: &str, sym: &str) -> String {
+pub fn status_label(s: &str, sym: &str) -> String {
     match sym {
         "✓" => s
             .if_supports_color(Stream::Stdout, |t| t.green())
@@ -67,7 +67,7 @@ pub(crate) fn status_label(s: &str, sym: &str) -> String {
 }
 
 /// Returns a formatted note indicating the active external presets directory.
-pub(crate) fn external_presets_note(dir: &std::path::Path) -> String {
+pub fn external_presets_note(dir: &std::path::Path) -> String {
     use owo_colors::Style;
     let label = "◈ External Presets"
         .if_supports_color(Stream::Stdout, |t| t.style(Style::new().bold().cyan()))
@@ -76,7 +76,7 @@ pub(crate) fn external_presets_note(dir: &std::path::Path) -> String {
 }
 
 /// Returns a formatted note indicating the active presets overlay directory.
-pub(crate) fn presets_overlay_note(dir: &std::path::Path) -> String {
+pub fn presets_overlay_note(dir: &std::path::Path) -> String {
     use owo_colors::Style;
     let label = "◈ Presets Overlay"
         .if_supports_color(Stream::Stdout, |t| t.style(Style::new().bold().yellow()))

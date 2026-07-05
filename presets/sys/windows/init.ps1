@@ -126,7 +126,9 @@ function Install-mise {
 function Install-Item {
     param(
         [Parameter(Mandatory = $true)]
-        [string] $Item
+        [string] $Item,
+
+        [string] $Action = "apply"
     )
 
     switch ($Item) {
@@ -159,4 +161,4 @@ if ($item -ne "__shine_finalize") {
     Assert-WinGet
 }
 
-Install-Item $item
+Install-Item $item $(if ($args.Count -gt 1) { $args[1] } else { "apply" })

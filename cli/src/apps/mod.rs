@@ -1,15 +1,25 @@
 mod annotation;
-mod file_ops;
+pub mod file_ops;
 mod json_merge;
 mod manifest;
 mod metadata;
+mod report;
 mod transforms;
+mod upgrade;
 
-pub(crate) use manifest::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
-pub(crate) use metadata::{
+pub use manifest::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
+pub use metadata::{
     AppCategory, AppFile, AppListMode, load_embedded_categories, load_installed_categories,
 };
-pub(crate) use transforms::apply as apply_transforms;
+use report::{
+    print_already_managed, print_dry_run_install, print_force_removed,
+    print_force_removed_with_restore, print_install_error, print_install_success,
+    print_install_success_with_backup, print_removed, print_removed_with_restore,
+    print_uninstall_dry_run, print_uninstall_error, print_uninstall_not_found,
+    print_user_modified_kept,
+};
+pub use transforms::apply as apply_transforms;
+pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
 
 use crate::colors;
 use crate::config::Config;
@@ -18,10 +28,8 @@ use crate::output;
 use crate::path_display;
 use crate::presets;
 use anyhow::{Context, Result};
-use dialoguer::Confirm;
 use file_ops::{InstallOutcome, UninstallOutcome};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 const APP_TEMPLATE: &str = r#"# App preset metadata for shine.
 description = "My app configuration."
@@ -36,9 +44,10 @@ display_name = "config.toml"
 transforms = []
 "#;
 
-pub(crate) async fn handle_init_template(force: bool) -> Result<()> {
+pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
-    let (path, overwritten) = write_init_template_at(&dir, force).await?;
+    let (path, overwritten) =
+        utils::init_template::write_shine_toml_template(&dir, force, APP_TEMPLATE)?;
     if overwritten {
         println!("Updated app preset template: {}", path.display());
     } else {
@@ -47,33 +56,17 @@ pub(crate) async fn handle_init_template(force: bool) -> Result<()> {
     Ok(())
 }
 
-async fn write_init_template_at(dir: &Path, force: bool) -> Result<(PathBuf, bool)> {
-    let path = dir.join("shine.toml");
-    let exists = path.exists();
-    if exists && !force {
-        anyhow::bail!("shine.toml already exists; use --force to overwrite");
-    }
-    tokio::fs::write(&path, APP_TEMPLATE)
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok((path, exists))
-}
-
 /// Hash the effective install content for `file` — applies transforms if declared.
 ///
 /// Returns `None` when the source cannot be read (e.g. not yet extracted).
-pub(crate) async fn source_bytes_for_file(
+pub async fn source_bytes_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
     file: &metadata::AppFile,
     env: &BTreeMap<String, String>,
 ) -> Option<Vec<u8>> {
     let raw = if config.is_external_presets {
-        let path = config
-            .presets_dir()
-            .join("app")
-            .join(&cat.name)
-            .join(&file.source_rel);
+        let path = config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
         tokio::fs::read(&path).await.ok()?
     } else {
         let key = format!("app/{}/{}", cat.name, file.source_rel.display());
@@ -87,7 +80,7 @@ pub(crate) async fn source_bytes_for_file(
     }
 }
 
-pub(crate) async fn source_hash_for_file(
+pub async fn source_hash_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
     file: &metadata::AppFile,
@@ -97,7 +90,7 @@ pub(crate) async fn source_hash_for_file(
     desired_content_hash(file, &effective).ok()
 }
 
-pub(crate) fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u64> {
+pub fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u64> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(hash_content(bytes)),
         AppInstallStrategy::JsonMerge { managed_keys } => {
@@ -106,10 +99,7 @@ pub(crate) fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Re
     }
 }
 
-pub(crate) fn installed_content_hash(
-    file: &metadata::AppFile,
-    bytes: &[u8],
-) -> Result<Option<u64>> {
+pub fn installed_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<Option<u64>> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(Some(hash_content(bytes))),
         AppInstallStrategy::JsonMerge { managed_keys } => {
@@ -128,7 +118,12 @@ async fn install_prepared_content(
 ) -> Result<InstallOutcome> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => {
-            file_ops::install_bytes(content, destination, is_managed, dry_run, force).await
+            if file.requires_admin {
+                file_ops::install_bytes_admin(content, destination, is_managed, dry_run, force)
+                    .await
+            } else {
+                file_ops::install_bytes(content, destination, is_managed, dry_run, force).await
+            }
         }
         AppInstallStrategy::JsonMerge { managed_keys } => {
             json_merge::install(content, destination, dry_run, managed_keys).await
@@ -142,6 +137,9 @@ async fn uninstall_app_entry(
     force: bool,
 ) -> Result<UninstallOutcome> {
     match &entry.install_strategy {
+        AppInstallStrategy::Copy if entry.requires_admin => {
+            file_ops::uninstall_entry_admin(entry, dry_run, force).await
+        }
         AppInstallStrategy::Copy => file_ops::uninstall_entry(entry, dry_run, force).await,
         AppInstallStrategy::JsonMerge { managed_keys } => {
             json_merge::uninstall(entry, dry_run, force, managed_keys).await
@@ -149,7 +147,7 @@ async fn uninstall_app_entry(
     }
 }
 
-pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
+pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
     crate::config::print_presets_note(config);
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, Some(category)).await?
@@ -260,7 +258,7 @@ pub(crate) async fn handle_info(config: &Config, category: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_list(config: &Config) -> Result<()> {
+pub async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
@@ -320,7 +318,7 @@ pub(crate) async fn handle_list(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn handle_install(
+pub async fn handle_install(
     config: &Config,
     category: Option<&str>,
     dry_run: bool,
@@ -369,11 +367,12 @@ pub(crate) async fn handle_install(
     let mut installed = 0usize;
     let mut skipped = 0usize;
     let mut backed_up = 0usize;
+    let mut restart_hints = BTreeSet::new();
 
     for cat in &categories {
-        let category_root = config.presets_dir().join("app").join(&cat.name);
         for file in &cat.files {
-            let source_path = category_root.join(&file.source_rel);
+            let source_path =
+                config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
             let display_name = format!("{}/{}", cat.name, file.source_rel.display());
             let destination = match resolve_install_destination(cat, file, config) {
                 Ok(d) => d,
@@ -450,8 +449,12 @@ pub(crate) async fn handle_install(
                         content_hash: hash,
                         install_strategy: file.install_strategy.clone(),
                         uses_env: file_uses_env,
+                        requires_admin: file.requires_admin,
                     });
                     installed += 1;
+                    if let Some(hint) = &file.restart_hint {
+                        restart_hints.insert(hint.clone());
+                    }
                 }
                 Ok(InstallOutcome::AlreadyManaged) => {
                     print_already_managed(&file_label);
@@ -472,9 +475,13 @@ pub(crate) async fn handle_install(
                         content_hash: hash,
                         install_strategy: file.install_strategy.clone(),
                         uses_env: file_uses_env,
+                        requires_admin: file.requires_admin,
                     });
                     installed += 1;
                     backed_up += 1;
+                    if let Some(hint) = &file.restart_hint {
+                        restart_hints.insert(hint.clone());
+                    }
                 }
                 Ok(InstallOutcome::DryRun) => {
                     print_dry_run_install(&file_label, &transform_label, &destination, config);
@@ -506,531 +513,11 @@ pub(crate) async fn handle_install(
         summary_parts.push(colors::dim(&format!("{skipped} skipped")));
     }
     output::footer("Done", &summary_parts);
+    for hint in restart_hints {
+        println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+    }
 
     Ok(())
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct AppUpgradeReport {
-    pub updated: usize,
-    pub skipped: usize,
-    pub user_modified: usize,
-}
-
-pub(crate) async fn handle_upgrade_installed(
-    config: &Config,
-    prune_stale: bool,
-) -> Result<AppUpgradeReport> {
-    let mut manifest = AppManifest::load(config.shine_dir()).await?;
-    if manifest.entries.is_empty() {
-        return Ok(AppUpgradeReport::default());
-    }
-
-    let env = EnvConfig::load_or_init(config).await?;
-    let env_map = env.as_map();
-    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let installed_categories: BTreeSet<String> = manifest
-        .entries
-        .iter()
-        .filter_map(|entry| app_category_from_source(&entry.source))
-        .collect();
-
-    if !config.is_external_presets {
-        for category in &installed_categories {
-            let prefix = format!("app/{category}");
-            let _ = crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
-        }
-    }
-
-    let mut categories_by_name: BTreeMap<String, metadata::AppCategory> = BTreeMap::new();
-    for cat_name in &installed_categories {
-        if config.is_external_presets && !config.presets_dir().join("app").join(cat_name).exists() {
-            continue;
-        }
-        let categories = if config.is_external_presets {
-            metadata::load_installed_categories(config, Some(cat_name)).await?
-        } else {
-            metadata::load_embedded_categories(Some(cat_name))?
-        };
-        if let Some(cat) = categories.into_iter().find(|cat| cat.name == *cat_name) {
-            categories_by_name.insert(cat_name.clone(), cat);
-        }
-    }
-
-    output::summary_line(
-        "App Configs",
-        &[colors::dim(&format!(
-            "{} installed file(s)",
-            manifest.entries.len()
-        ))],
-    );
-
-    let mut updated = 0usize;
-    let mut skipped = 0usize;
-    let mut user_modified = 0usize;
-    let mut pending_upserts: Vec<AppEntry> = Vec::new();
-    let mut pending_removals: Vec<PathBuf> = Vec::new();
-
-    for entry in &manifest.entries {
-        let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
-            eprintln!(
-                "  {} {}: invalid source, skipped",
-                colors::symbol("!"),
-                entry.source
-            );
-            skipped += 1;
-            continue;
-        };
-
-        let Some(cat) = categories_by_name.get(cat_name) else {
-            handle_stale_entry(
-                config,
-                entry,
-                prune_stale,
-                interactive,
-                &mut StaleEntryCounters {
-                    pending_removals: &mut pending_removals,
-                    updated: &mut updated,
-                    user_modified: &mut user_modified,
-                    skipped: &mut skipped,
-                },
-            )
-            .await?;
-            continue;
-        };
-        let Some(file) = cat
-            .files
-            .iter()
-            .find(|file| file.source_rel.to_string_lossy().as_ref() == file_rel)
-        else {
-            handle_stale_entry(
-                config,
-                entry,
-                prune_stale,
-                interactive,
-                &mut StaleEntryCounters {
-                    pending_removals: &mut pending_removals,
-                    updated: &mut updated,
-                    user_modified: &mut user_modified,
-                    skipped: &mut skipped,
-                },
-            )
-            .await?;
-            continue;
-        };
-
-        match try_upgrade_entry(config, entry, cat, file, env_map).await {
-            EntryUpgradeResult::Updated(new_entry) => {
-                pending_upserts.push(new_entry);
-                updated += 1;
-            }
-            EntryUpgradeResult::UserModified => {
-                user_modified += 1;
-                skipped += 1;
-            }
-            EntryUpgradeResult::Skipped | EntryUpgradeResult::Failed => {
-                skipped += 1;
-            }
-        }
-    }
-
-    for destination in pending_removals {
-        manifest.remove_by_dest(&destination);
-    }
-
-    let (new_updated, new_skipped, new_upserts) =
-        install_new_category_files(config, &categories_by_name, &manifest, env_map).await?;
-    updated += new_updated;
-    skipped += new_skipped;
-    pending_upserts.extend(new_upserts);
-
-    for upsert in pending_upserts {
-        manifest.upsert(upsert);
-    }
-    manifest.save(config.shine_dir()).await?;
-
-    Ok(AppUpgradeReport {
-        updated,
-        skipped,
-        user_modified,
-    })
-}
-
-enum EntryUpgradeResult {
-    Updated(AppEntry),
-    UserModified,
-    Skipped,
-    Failed,
-}
-
-async fn try_upgrade_entry(
-    config: &Config,
-    entry: &AppEntry,
-    cat: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    env_map: &BTreeMap<String, String>,
-) -> EntryUpgradeResult {
-    let content = match upgrade_file_content(config, cat, file, env_map).await {
-        Ok(c) => c,
-        Err(e) => {
-            print_install_error(&entry.source, &e);
-            return EntryUpgradeResult::Failed;
-        }
-    };
-
-    let new_hash = match desired_content_hash(file, &content) {
-        Ok(h) => h,
-        Err(e) => {
-            print_install_error(&entry.source, &e);
-            return EntryUpgradeResult::Failed;
-        }
-    };
-
-    match tokio::fs::read(&entry.destination).await {
-        Ok(current) => {
-            let current_hash = match installed_content_hash(file, &current) {
-                Ok(Some(h)) => h,
-                Ok(None) => {
-                    eprintln!(
-                        "  {} {}: managed keys missing, skipped",
-                        colors::symbol("!"),
-                        entry.source
-                    );
-                    return EntryUpgradeResult::UserModified;
-                }
-                Err(e) => {
-                    print_install_error(&entry.source, &e);
-                    return EntryUpgradeResult::Failed;
-                }
-            };
-            if current_hash != entry.content_hash {
-                eprintln!(
-                    "  {} {}: user-modified, skipped",
-                    colors::symbol("!"),
-                    entry.source
-                );
-                return EntryUpgradeResult::UserModified;
-            }
-            if new_hash == entry.content_hash {
-                return EntryUpgradeResult::Skipped;
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            print_install_error(&entry.source, &anyhow::Error::from(e));
-            return EntryUpgradeResult::Failed;
-        }
-    }
-
-    match install_prepared_content(file, &content, &entry.destination, true, false, true).await {
-        Ok(InstallOutcome::Installed { hash })
-        | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
-            let display_name = file
-                .display_name
-                .as_deref()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-            print_install_success(&display_name, "", &entry.destination, config);
-            EntryUpgradeResult::Updated(AppEntry {
-                source: entry.source.clone(),
-                destination: entry.destination.clone(),
-                backup: entry.backup.clone(),
-                content_hash: hash,
-                install_strategy: file.install_strategy.clone(),
-                uses_env: file.transforms.iter().any(|t| t == "template"),
-            })
-        }
-        Ok(InstallOutcome::AlreadyManaged) | Ok(InstallOutcome::DryRun) => {
-            EntryUpgradeResult::Skipped
-        }
-        Err(e) => {
-            print_install_error(&entry.source, &e);
-            EntryUpgradeResult::Failed
-        }
-    }
-}
-
-enum StaleCleanupOutcome {
-    Removed,
-    NotFound,
-    UserModified,
-    Skipped,
-}
-
-fn apply_stale_outcome(
-    outcome: StaleCleanupOutcome,
-    destination: PathBuf,
-    pending_removals: &mut Vec<PathBuf>,
-    updated: &mut usize,
-    user_modified: &mut usize,
-    skipped: &mut usize,
-) {
-    match outcome {
-        StaleCleanupOutcome::Removed | StaleCleanupOutcome::NotFound => {
-            pending_removals.push(destination);
-            *updated += 1;
-        }
-        StaleCleanupOutcome::UserModified => {
-            *user_modified += 1;
-            *skipped += 1;
-        }
-        StaleCleanupOutcome::Skipped => {
-            *skipped += 1;
-        }
-    }
-}
-
-/// Mutable counters threaded through the upgrade loop, grouped to keep
-/// `handle_stale_entry`'s argument count within clippy's limit.
-struct StaleEntryCounters<'a> {
-    pending_removals: &'a mut Vec<PathBuf>,
-    updated: &'a mut usize,
-    user_modified: &'a mut usize,
-    skipped: &'a mut usize,
-}
-
-async fn handle_stale_entry(
-    config: &Config,
-    entry: &AppEntry,
-    prune_stale: bool,
-    interactive: bool,
-    counters: &mut StaleEntryCounters<'_>,
-) -> Result<()> {
-    let outcome = cleanup_stale_entry(config, entry, prune_stale, interactive).await?;
-    apply_stale_outcome(
-        outcome,
-        entry.destination.clone(),
-        counters.pending_removals,
-        counters.updated,
-        counters.user_modified,
-        counters.skipped,
-    );
-    Ok(())
-}
-
-async fn install_new_category_files(
-    config: &Config,
-    categories_by_name: &BTreeMap<String, metadata::AppCategory>,
-    manifest: &AppManifest,
-    env_map: &BTreeMap<String, String>,
-) -> Result<(usize, usize, Vec<AppEntry>)> {
-    let mut updated = 0usize;
-    let mut skipped = 0usize;
-    let mut new_upserts: Vec<AppEntry> = Vec::new();
-
-    for cat in categories_by_name.values() {
-        for file in &cat.files {
-            let destination = match resolve_install_destination(cat, file, config) {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!(
-                        "  {} {}/{}: bad destination: {e:#}",
-                        colors::symbol("✗"),
-                        cat.name,
-                        file.source_rel.display()
-                    );
-                    skipped += 1;
-                    continue;
-                }
-            };
-            if manifest.find_by_dest(&destination).is_some() {
-                continue;
-            }
-
-            let source = format!("app/{}/{}", cat.name, file.source_rel.display());
-
-            if destination.exists() && file.install_strategy.is_copy() {
-                eprintln!(
-                    "  {} {}: destination exists and is not managed, skipped",
-                    colors::symbol("!"),
-                    source
-                );
-                skipped += 1;
-                continue;
-            }
-
-            let content = match upgrade_file_content(config, cat, file, env_map).await {
-                Ok(content) => content,
-                Err(e) => {
-                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), source);
-                    skipped += 1;
-                    continue;
-                }
-            };
-
-            let outcome = if file.install_strategy.is_copy() {
-                match install_new_upgrade_file(&content, &destination).await {
-                    Ok(Some(hash)) => Ok(InstallOutcome::Installed { hash }),
-                    Ok(None) => Ok(InstallOutcome::AlreadyManaged),
-                    Err(e) => Err(e),
-                }
-            } else {
-                install_prepared_content(file, &content, &destination, false, false, true).await
-            };
-
-            match outcome {
-                Ok(InstallOutcome::Installed { hash })
-                | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
-                    let display_name = file
-                        .display_name
-                        .as_deref()
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-                    print_install_success(&display_name, "", &destination, config);
-                    new_upserts.push(AppEntry {
-                        source,
-                        destination,
-                        backup: None,
-                        content_hash: hash,
-                        install_strategy: file.install_strategy.clone(),
-                        uses_env: file.transforms.iter().any(|t| t == "template"),
-                    });
-                    updated += 1;
-                }
-                Ok(InstallOutcome::AlreadyManaged) => {
-                    eprintln!(
-                        "  {} {}: destination exists and is not managed, skipped",
-                        colors::symbol("!"),
-                        source
-                    );
-                    skipped += 1;
-                }
-                Ok(InstallOutcome::DryRun) => {
-                    skipped += 1;
-                }
-                Err(e) => {
-                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), source);
-                    skipped += 1;
-                }
-            }
-        }
-    }
-
-    Ok((updated, skipped, new_upserts))
-}
-
-async fn cleanup_stale_entry(
-    config: &Config,
-    entry: &AppEntry,
-    prune_stale: bool,
-    interactive: bool,
-) -> Result<StaleCleanupOutcome> {
-    let should_remove = if prune_stale {
-        true
-    } else if interactive {
-        let prompt = format!(
-            "Preset source '{}' no longer exists. Remove managed file {}?",
-            entry.source,
-            path_display::format_home(&entry.destination, &config.home_dir)
-        );
-        Confirm::new()
-            .with_prompt(prompt)
-            .default(false)
-            .interact()?
-    } else {
-        eprintln!(
-            "  {} {}: stale source, skipped (use --prune-stale to clean)",
-            colors::symbol("!"),
-            entry.source
-        );
-        return Ok(StaleCleanupOutcome::Skipped);
-    };
-
-    if !should_remove {
-        eprintln!(
-            "  {} {}: stale source, skipped",
-            colors::symbol("!"),
-            entry.source
-        );
-        return Ok(StaleCleanupOutcome::Skipped);
-    }
-
-    match uninstall_app_entry(entry, false, false).await? {
-        UninstallOutcome::Removed => {
-            print_stale_removed(config, &entry.destination, "(removed stale managed file)");
-            Ok(StaleCleanupOutcome::Removed)
-        }
-        UninstallOutcome::RestoredBackup { backup } => {
-            print_stale_removed(
-                config,
-                &entry.destination,
-                format!(
-                    "(removed stale file, restored {})",
-                    path_display::format_home(&backup, &config.home_dir)
-                ),
-            );
-            Ok(StaleCleanupOutcome::Removed)
-        }
-        UninstallOutcome::ForceRemoved | UninstallOutcome::ForceRestoredBackup { .. } => {
-            Ok(StaleCleanupOutcome::Removed)
-        }
-        UninstallOutcome::NotFound => {
-            print_stale_not_found(config, &entry.destination);
-            Ok(StaleCleanupOutcome::NotFound)
-        }
-        UninstallOutcome::UserModified => {
-            eprintln!(
-                "  {} {}: stale source but user-modified, kept",
-                colors::symbol("!"),
-                entry.source
-            );
-            Ok(StaleCleanupOutcome::UserModified)
-        }
-        UninstallOutcome::DryRun => Ok(StaleCleanupOutcome::Skipped),
-    }
-}
-
-async fn upgrade_file_content(
-    config: &Config,
-    cat: &metadata::AppCategory,
-    file: &metadata::AppFile,
-    env_map: &BTreeMap<String, String>,
-) -> Result<Vec<u8>> {
-    let raw = if config.is_external_presets {
-        let path = config
-            .presets_dir()
-            .join("app")
-            .join(&cat.name)
-            .join(&file.source_rel);
-        tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("reading {}", path.display()))?
-    } else {
-        let source = format!("app/{}/{}", cat.name, file.source_rel.display());
-        presets::read_asset_bytes(&source)
-            .with_context(|| format!("embedded source not found: {source}"))?
-    };
-
-    if file.transforms.is_empty() {
-        Ok(raw)
-    } else {
-        transforms::apply(&file.transforms, &raw, env_map)
-            .with_context(|| format!("transform failed: {}", file.transforms.join(", ")))
-    }
-}
-
-async fn install_new_upgrade_file(content: &[u8], destination: &Path) -> Result<Option<u64>> {
-    use tokio::io::AsyncWriteExt;
-    if let Some(parent) = destination.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
-    }
-
-    let mut file = match tokio::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(destination)
-        .await
-    {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
-        Err(e) => return Err(e).with_context(|| format!("opening {}", destination.display())),
-    };
-    file.write_all(content)
-        .await
-        .with_context(|| format!("writing {}", destination.display()))?;
-    Ok(Some(hash_content(content)))
 }
 
 fn app_category_from_source(source: &str) -> Option<String> {
@@ -1045,159 +532,7 @@ fn app_source_parts(source: &str) -> Option<(&str, &str)> {
     }
 }
 
-// --- Install/upgrade outcome reporting --------------------------------------------------
-
-fn print_install_success(label: &str, transform_label: &str, destination: &Path, config: &Config) {
-    println!(
-        "  {}  {}{}  {}  {}",
-        colors::symbol("✓"),
-        label,
-        transform_label,
-        colors::dim("→"),
-        colors::dim(&path_display::format_home(destination, &config.home_dir)),
-    );
-}
-
-fn print_install_success_with_backup(
-    label: &str,
-    transform_label: &str,
-    destination: &Path,
-    backup: &Path,
-    config: &Config,
-) {
-    println!(
-        "  {}  {}{}  {}  {}  {}",
-        colors::symbol("✓"),
-        label,
-        transform_label,
-        colors::dim("→"),
-        colors::dim(&path_display::format_home(destination, &config.home_dir)),
-        colors::dim(&format!(
-            "(backup: {})",
-            path_display::format_home(backup, &config.home_dir)
-        )),
-    );
-}
-
-fn print_already_managed(label: &str) {
-    println!(
-        "  {}  {}  {}",
-        colors::dim("-"),
-        label,
-        colors::dim("already up to date"),
-    );
-}
-
-fn print_dry_run_install(label: &str, transform_label: &str, destination: &Path, config: &Config) {
-    println!(
-        "  {}  {}{}  {}  {}",
-        colors::dim("[dry-run]"),
-        label,
-        transform_label,
-        colors::dim("→"),
-        colors::dim(&path_display::format_home(destination, &config.home_dir)),
-    );
-}
-
-fn print_install_error(label: &str, err: &anyhow::Error) {
-    eprintln!("  {} {label}: {err:#}", colors::symbol("✗"));
-}
-
-// --- Stale-entry cleanup reporting -------------------------------------------------------
-
-fn print_stale_removed(config: &Config, destination: &Path, note: impl AsRef<str>) {
-    println!(
-        "  {}  {}  {}",
-        colors::symbol("✓"),
-        colors::dim(&path_display::format_home(destination, &config.home_dir)),
-        colors::dim(note.as_ref()),
-    );
-}
-
-fn print_stale_not_found(config: &Config, destination: &Path) {
-    println!(
-        "  {}  {}  {}",
-        colors::dim("-"),
-        colors::dim(&path_display::format_home(destination, &config.home_dir)),
-        colors::dim("stale destination missing, manifest cleaned"),
-    );
-}
-
-// --- Uninstall outcome reporting ----------------------------------------------------------
-
-fn print_removed(config: &Config, destination: &Path) {
-    println!(
-        "  {}  {}",
-        colors::symbol("✓"),
-        colors::dim(&path_display::format_home(destination, &config.home_dir)),
-    );
-}
-
-fn print_removed_with_restore(config: &Config, destination: &Path, backup: &Path) {
-    println!(
-        "  {}  {}  {}",
-        colors::symbol("✓"),
-        colors::dim(&path_display::format_home(destination, &config.home_dir)),
-        colors::dim(&format!(
-            "(restored {})",
-            path_display::format_home(backup, &config.home_dir)
-        )),
-    );
-}
-
-fn print_force_removed(destination: &Path) {
-    println!(
-        "  {}  {}  {}",
-        colors::symbol("✓"),
-        colors::dim(&destination.display().to_string()),
-        colors::dim("force removed"),
-    );
-}
-
-fn print_force_removed_with_restore(destination: &Path, backup: &Path) {
-    println!(
-        "  {}  {}  {}",
-        colors::symbol("✓"),
-        colors::dim(&destination.display().to_string()),
-        colors::dim(&format!("force removed, restored {}", backup.display())),
-    );
-}
-
-fn print_uninstall_not_found(config: &Config, destination: &Path) {
-    println!(
-        "  {}  {}  {}",
-        colors::dim("-"),
-        colors::dim(&path_display::format_home(destination, &config.home_dir)),
-        colors::dim("not found, skipped"),
-    );
-}
-
-fn print_user_modified_kept(config: &Config, destination: &Path) {
-    println!(
-        "  {}  {}  {}",
-        colors::symbol("!"),
-        path_display::format_home(destination, &config.home_dir),
-        colors::yellow("modified after install, left in place"),
-    );
-}
-
-fn print_uninstall_dry_run(config: &Config, destination: &Path) {
-    println!(
-        "  {}  {}",
-        colors::dim("[dry-run]"),
-        colors::dim(&path_display::format_home(destination, &config.home_dir)),
-    );
-}
-
-fn print_uninstall_error(config: &Config, destination: &Path, err: &anyhow::Error) {
-    eprintln!(
-        "  {} {}: {err}",
-        colors::symbol("✗"),
-        path_display::format_home(destination, &config.home_dir)
-    );
-}
-
-pub(crate) async fn handle_uninstall(
+pub async fn handle_uninstall(
     config: &Config,
     category: Option<&str>,
     force: bool,
@@ -1396,7 +731,7 @@ fn append_manifest_entries_for_category_destinations(
     }
 }
 
-pub(crate) fn resolve_install_destination(
+pub fn resolve_install_destination(
     category: &metadata::AppCategory,
     file: &metadata::AppFile,
     config: &Config,
@@ -1488,7 +823,8 @@ mod tests {
         let cat_dir = dir.join("presets/app/sample");
         fs::create_dir_all(&cat_dir).await.unwrap();
 
-        let (path, overwritten) = write_init_template_at(&cat_dir, false).await.unwrap();
+        let (path, overwritten) =
+            utils::init_template::write_shine_toml_template(&cat_dir, false, APP_TEMPLATE).unwrap();
         fs::write(cat_dir.join("config.toml"), b"name = \"sample\"\n")
             .await
             .unwrap();
@@ -1526,14 +862,16 @@ mod tests {
         let dir = make_temp_dir().await;
         fs::write(dir.join("shine.toml"), b"old").await.unwrap();
 
-        let err = write_init_template_at(&dir, false).await.unwrap_err();
+        let err =
+            utils::init_template::write_shine_toml_template(&dir, false, APP_TEMPLATE).unwrap_err();
         assert!(
             err.to_string().contains("use --force to overwrite"),
             "unexpected error: {err:#}"
         );
         assert_eq!(fs::read(dir.join("shine.toml")).await.unwrap(), b"old");
 
-        let (_path, overwritten) = write_init_template_at(&dir, true).await.unwrap();
+        let (_path, overwritten) =
+            utils::init_template::write_shine_toml_template(&dir, true, APP_TEMPLATE).unwrap();
         assert!(overwritten);
         let content = fs::read_to_string(dir.join("shine.toml")).await.unwrap();
         assert!(content.contains("dest = \"~/.config/my-app\""));
@@ -1544,6 +882,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_then_uninstall_roundtrip() {
+        let _admin_guard = crate::test_support::admin_category_test_lock().await;
         let _guard = env_lock();
         let dir = make_temp_dir().await;
 
@@ -1591,6 +930,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_dry_run_leaves_everything_intact() {
+        let _admin_guard = crate::test_support::admin_category_test_lock().await;
         let _guard = env_lock();
         let dir = make_temp_dir().await;
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
@@ -1645,6 +985,8 @@ mod tests {
                 legacy_dest_annotation: None,
                 transforms: vec![],
                 install_strategy: AppInstallStrategy::Copy,
+                requires_admin: false,
+                restart_hint: None,
             }],
             list_mode: AppListMode::Files,
             uses_metadata: true,
@@ -1658,6 +1000,7 @@ mod tests {
                 content_hash: 42,
                 install_strategy: AppInstallStrategy::Copy,
                 uses_env: false,
+                requires_admin: false,
             }],
         };
         let mut entries_by_dest = BTreeMap::new();
@@ -1718,6 +1061,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_is_idempotent() {
+        let _admin_guard = crate::test_support::admin_category_test_lock().await;
         let _guard = env_lock();
         let dir = make_temp_dir().await;
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
@@ -2454,6 +1798,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_specific_category_only_removes_that_category() {
+        let _admin_guard = crate::test_support::admin_category_test_lock().await;
         let _guard = env_lock();
         let dir = make_temp_dir().await;
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.

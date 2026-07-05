@@ -30,7 +30,7 @@ pub enum ReleaseChannel {
 }
 
 impl ReleaseChannel {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Stable => "stable",
             Self::Preview => "preview",
@@ -39,14 +39,14 @@ impl ReleaseChannel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum UpdateStatus {
+pub enum UpdateStatus {
     UpToDate,
     UpdateAvailable { latest: Version },
     UpdateRequired { latest: Version },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum UpgradeResult {
+pub enum UpgradeResult {
     AlreadyUpToDate {
         channel: ReleaseChannel,
         latest: String,
@@ -131,7 +131,7 @@ impl fmt::Display for GithubApiError {
 impl Error for GithubApiError {}
 
 /// Always fetches from GitHub, ignoring the 24-hour cache.
-pub(crate) async fn check_for_update_forced(config: &Config) -> Result<UpdateStatus> {
+pub async fn check_for_update_forced(config: &Config) -> Result<UpdateStatus> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .context("current package version must be valid semver")?;
     let now_secs = unix_timestamp_now()?;
@@ -145,7 +145,7 @@ pub(crate) async fn check_for_update_forced(config: &Config) -> Result<UpdateSta
     Ok(compare_versions(&current, &latest))
 }
 
-pub(crate) async fn check_for_update(config: &Config) -> Result<UpdateStatus> {
+pub async fn check_for_update(config: &Config) -> Result<UpdateStatus> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .context("current package version must be valid semver")?;
     let now_secs = unix_timestamp_now()?;
@@ -165,7 +165,7 @@ pub(crate) async fn check_for_update(config: &Config) -> Result<UpdateStatus> {
     Ok(compare_versions(&current, &latest))
 }
 
-pub(crate) async fn upgrade_to_release(
+pub async fn upgrade_to_release(
     config: &Config,
     channel: ReleaseChannel,
     force_install: bool,
@@ -370,7 +370,7 @@ async fn guard_rate_limit_cooldown(
 
 /// Removes the on-disk update cache so the next command performs a fresh fetch
 /// rather than reading a stale "update required" entry left behind by a failed upgrade.
-pub(crate) async fn invalidate_update_cache(config: &Config) {
+pub async fn invalidate_update_cache(config: &Config) {
     let cache_path = config.shine_dir().join(UPDATE_CACHE_FILE);
     if let Err(e) = fs::remove_file(&cache_path).await
         && e.kind() != std::io::ErrorKind::NotFound

@@ -8,7 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
 #[derive(Debug, Clone)]
-pub(crate) struct ShellCategory {
+pub struct ShellCategory {
     pub name: String,
     // Parsed from shine.toml metadata for completeness; not yet surfaced by any command.
     #[allow(dead_code)]
@@ -21,7 +21,7 @@ pub(crate) struct ShellCategory {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ShellFile {
+pub struct ShellFile {
     pub source_rel: PathBuf,
     pub command_name: String,
     pub description: Vec<String>,
@@ -42,7 +42,7 @@ struct FileToml {
     platforms: Option<Vec<String>>,
 }
 
-pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<ShellCategory>> {
+pub fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<ShellCategory>> {
     let names = collect_embedded_category_names(filter);
     let mut categories = Vec::new();
     for name in names {
@@ -51,12 +51,18 @@ pub(crate) fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<Shell
     Ok(categories)
 }
 
-pub(crate) async fn load_installed_categories(
+pub async fn load_installed_categories(
     config: &Config,
     filter: Option<&str>,
 ) -> Result<Vec<ShellCategory>> {
     let shell_root = config.presets_dir().join("shell");
-    let names = collect_fs_category_names(&shell_root, filter).await?;
+    let mut names: BTreeSet<String> = collect_fs_category_names(&shell_root, filter)
+        .await?
+        .into_iter()
+        .collect();
+    if let Some(overlay) = config.active_presets_overlay_dir() {
+        names.extend(collect_fs_category_names(&overlay.join("shell"), filter).await?);
+    }
     let mut categories = Vec::new();
     for name in names {
         categories.push(load_installed_category(config, &name).await?);
@@ -140,8 +146,8 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
 }
 
 async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCategory> {
-    let category_root = config.presets_dir().join("shell").join(name);
-    let metadata_path = category_root.join("shine.toml");
+    let category_rel = Path::new("shell").join(name);
+    let metadata_path = config.preset_path(category_rel.join("shine.toml"));
 
     if metadata_path.exists() {
         let bytes = fs::read(&metadata_path)
@@ -169,7 +175,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
                     Ok((source_rel, command_name, needs_source))
                 })
                 .collect::<Result<Vec<_>>>()?,
-            None => collect_fs_scripts(&category_root)
+            None => collect_merged_fs_scripts(config, &category_rel)
                 .await?
                 .into_iter()
                 .map(|source_rel| {
@@ -181,7 +187,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
 
         let mut shell_files = Vec::new();
         for (source_rel, command_name, needs_source) in files {
-            let source_path = category_root.join(&source_rel);
+            let source_path = config.preset_path(category_rel.join(&source_rel));
             if !source_path.exists() {
                 bail!(
                     "shell/{name}/shine.toml references missing file: {}",
@@ -208,8 +214,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
     }
 
     let mut files = Vec::new();
-    for source_rel in collect_fs_scripts(&category_root).await? {
-        let source_path = category_root.join(&source_rel);
+    for source_rel in collect_merged_fs_scripts(config, &category_rel).await? {
+        let source_path = config.preset_path(category_rel.join(&source_rel));
         let bytes = fs::read(&source_path)
             .await
             .with_context(|| format!("reading preset file: {}", source_path.display()))?;
@@ -227,6 +233,25 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
         files,
         uses_metadata: false,
     })
+}
+
+async fn collect_merged_fs_scripts(config: &Config, category_rel: &Path) -> Result<Vec<PathBuf>> {
+    let base_category = config.presets_dir().join(category_rel);
+    let mut scripts: BTreeSet<PathBuf> = if base_category.is_dir() {
+        collect_fs_scripts(&base_category)
+            .await?
+            .into_iter()
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    if let Some(overlay) = config.active_presets_overlay_dir() {
+        let overlay_category = overlay.join(category_rel);
+        if overlay_category.is_dir() {
+            scripts.extend(collect_fs_scripts(&overlay_category).await?);
+        }
+    }
+    Ok(scripts.into_iter().collect())
 }
 
 fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
@@ -582,6 +607,50 @@ mod tests {
             .unwrap();
         assert_eq!(categories.len(), 1);
         assert_eq!(categories[0].files[0].command_name, "setproxy");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn external_presets_and_overlay_categories_are_merged() {
+        let dir = make_temp_dir().await;
+        let base_root = dir.join("presets/shell/custom");
+        let overlay = dir.join("overlay");
+        let overlay_root = overlay.join("shell/custom");
+        let overlay_only = overlay.join("shell/personal");
+        fs::create_dir_all(&base_root).await.unwrap();
+        fs::create_dir_all(&overlay_root).await.unwrap();
+        fs::create_dir_all(&overlay_only).await.unwrap();
+        fs::write(
+            base_root.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(base_root.join("tool.sh"), b"#!/bin/bash\n# Base tool.\n")
+            .await
+            .unwrap();
+        fs::write(
+            overlay_root.join("tool.sh"),
+            b"#!/bin/bash\n# Overlay tool.\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            overlay_only.join("personal.sh"),
+            b"#!/bin/bash\n# Personal tool.\n",
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.presets_overlay_dir_override = Some(overlay);
+        let categories = load_installed_categories(&config, None).await.unwrap();
+
+        let custom = categories.iter().find(|cat| cat.name == "custom").unwrap();
+        assert_eq!(custom.files[0].description, vec!["Overlay tool."]);
+        assert!(categories.iter().any(|cat| cat.name == "personal"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
