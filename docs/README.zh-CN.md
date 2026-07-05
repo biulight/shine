@@ -481,6 +481,17 @@ shine overlay show
 shine overlay unlink
 ```
 
+如果当前 preset 来源或 overlay 由 Git 管理，可以让 Shine 安全地快进拉取：
+
+```bash
+shine pull             # 拉取 preset 与 overlay 仓库
+shine update --pull    # 先拉取并重新加载配置，再检查状态
+shine upgrade --pull   # 先拉取并重新加载配置，再应用 preset
+```
+
+拉取会拒绝有未提交改动的工作区，并使用 `git pull --ff-only`；不会自动 stash、rebase、
+reset 或解决冲突。非 Git 来源会被跳过，位于同一仓库的两个来源只会拉取一次。
+
 ### 初始化一个预设目录
 
 ```bash
@@ -506,10 +517,12 @@ shine init
 ```bash
 shine update        # 显示可用配置更新，然后强制检查最新 release
 shine update --verbose  # 同时显示已是最新和非更新类状态
+shine update --pull  # 拉取 Git 管理的 preset 后再检查状态
 shine self upgrade  # 下载并安装当前平台的最新稳定版
 shine self upgrade --channel stable   # 显式重装稳定版
 shine self upgrade --channel preview  # 安装持续滚动的 preview 预发布版
 shine upgrade       # 强制更新已安装的 shell 和应用配置
+shine upgrade --pull  # 拉取 Git 管理的 preset 后再应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 

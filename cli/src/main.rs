@@ -7,8 +7,8 @@ use std::path::PathBuf;
 #[cfg(test)]
 use cli::test_support;
 use cli::{
-    apps, clear, colors, commands, completion, config, env, list, path_display, secret, shells,
-    show, sys, update_check, version,
+    apps, clear, colors, commands, completion, config, env, git_pull, list, path_display, secret,
+    shells, show, sys, update_check, version,
 };
 
 use commands::{
@@ -87,9 +87,10 @@ async fn run(cli: Cli) -> Result<()> {
     // Skip the background version check for update/self commands. `shine update`
     // and `shine self upgrade` do their own forced fetch below; `shine self install`
     // should remain available even when the current binary is version-gated.
-    if !matches!(
-        cli.command,
+    let skip_background_update_check = matches!(
+        &cli.command,
         Commands::Update(..)
+            | Commands::Pull
             | Commands::Export(..)
             | Commands::Link(..)
             | Commands::Unlink
@@ -97,7 +98,8 @@ async fn run(cli: Cli) -> Result<()> {
             | Commands::Clear(..)
             | Commands::Self_ { .. }
             | Commands::Env { .. }
-    ) {
+    ) || matches!(&cli.command, Commands::Upgrade(cmd) if cmd.pull);
+    if !skip_background_update_check {
         match update_check::check_for_update(&config).await {
             Ok(UpdateStatus::UpToDate) => {}
             Ok(UpdateStatus::UpdateAvailable { latest }) => {
@@ -166,9 +168,24 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
             }
         },
-        Commands::Update(cmd) => handle_update(&config, cmd.verbose, cmd.refresh).await,
+        Commands::Pull => git_pull::handle_pull(&config).await,
+        Commands::Update(cmd) => {
+            if cmd.pull {
+                git_pull::handle_pull(&config).await?;
+                let config = Box::pin(Config::load_or_init()).await?;
+                handle_update(&config, cmd.verbose, cmd.refresh).await
+            } else {
+                handle_update(&config, cmd.verbose, cmd.refresh).await
+            }
+        }
         Commands::Upgrade(cmd) => {
-            handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
+            if cmd.pull {
+                git_pull::handle_pull(&config).await?;
+                let config = Box::pin(Config::load_or_init()).await?;
+                handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
+            } else {
+                handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
+            }
         }
         Commands::Export(ExportCommand { dir, force }) => {
             Box::pin(handle_presets_export(&config, dir, force)).await
@@ -926,6 +943,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                pull: false,
                 verbose: false,
                 refresh: false
             })
@@ -935,6 +953,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                pull: false,
                 verbose: true,
                 refresh: false
             })
@@ -944,8 +963,22 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                pull: false,
                 verbose: false,
                 refresh: true
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "pull"]).unwrap();
+        assert!(matches!(cli.command, Commands::Pull));
+
+        let cli = Cli::try_parse_from(["shine", "update", "--pull"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                pull: true,
+                verbose: false,
+                refresh: false
             })
         ));
 
@@ -953,6 +986,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Upgrade(UpgradeCommand {
+                pull: false,
                 verbose: false,
                 prune_stale: false
             })
@@ -962,6 +996,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Upgrade(UpgradeCommand {
+                pull: false,
                 verbose: true,
                 prune_stale: false
             })
@@ -971,8 +1006,19 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Upgrade(UpgradeCommand {
+                pull: false,
                 verbose: false,
                 prune_stale: true
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "upgrade", "--pull"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Upgrade(UpgradeCommand {
+                pull: true,
+                verbose: false,
+                prune_stale: false
             })
         ));
 

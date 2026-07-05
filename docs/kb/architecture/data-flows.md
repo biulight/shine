@@ -67,6 +67,14 @@ from script stdout into the run report; anything else is rendered as indented lo
 `shine self upgrade --channel preview` targets the moving `preview` tag instead of the latest
 stable `v*` release.
 
+## Git-managed preset pull
+
+`git_pull.rs::handle_pull` resolves the effective `presets_dir` and overlay to their Git roots,
+de-duplicates shared repositories, and validates every worktree before running
+`git pull --ff-only`. Dirty worktrees, detached HEADs, missing upstreams, and pull failures stop
+the operation. `update --pull` and `upgrade --pull` pull first, reload `Config`, then check or
+apply presets so updated project and environment configuration takes effect immediately.
+
 ## Config discovery
 
 `config/discovery.rs` priority chain (highest first):

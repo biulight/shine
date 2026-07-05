@@ -7,6 +7,7 @@ pub mod commands;
 pub mod completion;
 pub mod config;
 pub mod env;
+pub mod git_pull;
 pub mod list;
 pub mod output;
 pub mod path_display;

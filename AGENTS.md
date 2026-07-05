@@ -120,6 +120,7 @@ shine/
 │       ├── env/
 │       │   ├── mod.rs        # EnvConfig: [env] table in config.toml, @@VAR@@ substitution
 │       │   └── upgrade.rs    # Re-apply env template transforms to installed presets
+│       ├── git_pull.rs       # Safe FF-only pulls for Git-managed preset sources
 │       ├── shells/
 │       │   ├── mod.rs        # ShellType, handle_install/uninstall/list, link-conflict reporting
 │       │   ├── profile.rs    # Managed profile file/PATH/sentinel-block install+removal
@@ -185,6 +186,7 @@ shine/
 | `list` | `cli/src/list.rs` |
 | `info <TARGET>` | `cli/src/show.rs` |
 | `export` / `link` / `unlink` / `overlay` | `cli/src/presets_commands.rs` |
+| `pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
 | `init` | `main.rs` inline handler |
 | `self install/upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
 | `update` / `upgrade` | `cli/src/self_install.rs` + `update_check.rs` |

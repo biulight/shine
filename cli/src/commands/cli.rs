@@ -81,6 +81,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: OverlayCommands,
     },
+    /// Pull Git-managed preset and overlay repositories
+    Pull,
     /// Show installed config status and check for a newer version of shine
     Update(UpdateCommand),
     /// Force-update installed shell and app configs
@@ -169,6 +171,9 @@ impl CompletionShell {
 
 #[derive(Parser, Debug)]
 pub struct UpdateCommand {
+    /// Pull Git-managed preset sources before checking status
+    #[arg(long)]
+    pub pull: bool,
     /// Show installed entries that are already current or need attention
     #[arg(long)]
     pub verbose: bool,
@@ -179,6 +184,9 @@ pub struct UpdateCommand {
 
 #[derive(Parser, Debug)]
 pub struct UpgradeCommand {
+    /// Pull Git-managed preset sources before upgrading installed configs
+    #[arg(long)]
+    pub pull: bool,
     /// Show detailed env-template checks and skipped rows
     #[arg(long)]
     pub verbose: bool,

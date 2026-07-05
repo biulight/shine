@@ -481,6 +481,18 @@ shine overlay show
 shine overlay unlink
 ```
 
+When the active preset source or overlay is managed by Git, Shine can safely fast-forward it:
+
+```bash
+shine pull             # pull preset and overlay repositories
+shine update --pull    # pull first, then reload configuration and check status
+shine upgrade --pull   # pull first, then reload configuration and apply presets
+```
+
+Pull refuses dirty worktrees and uses `git pull --ff-only`; it never stashes, rebases, resets, or
+resolves conflicts. Non-Git sources are skipped, and sources inside the same repository are pulled
+only once.
+
 ### Initialize a presets directory
 
 ```bash
@@ -506,12 +518,14 @@ Manual commands:
 ```bash
 shine update        # show available updates, then force-check the latest release
 shine update --verbose  # include up-to-date and non-update status rows
+shine update --pull  # pull Git-managed presets before checking status
 shine self install  # copy the current binary to the platform default install path
 shine self install --dest ~/.local/bin/shine  # install to a custom path
 shine self upgrade  # download and install the latest stable release for this platform
 shine self upgrade --channel stable   # explicitly reinstall the stable release
 shine self upgrade --channel preview  # install the moving preview prerelease
 shine upgrade       # force-update installed shell and app configs
+shine upgrade --pull  # pull Git-managed presets before applying configs
 shine upgrade --verbose  # include env-template check details
 ```
 
