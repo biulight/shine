@@ -2,6 +2,30 @@
 
 This file provides guidance to AI coding agents when working with code in this repository.
 
+`shine` is a self-contained Rust CLI that bundles shell scripts, app config presets, and OS
+bootstrap presets into one binary (rust-embed), installs them under `~/.shine/`, and supports
+safe, manifest-tracked uninstall. Cargo workspace: `cli/` (binary + lib) and `utils/`.
+
+## Where knowledge lives
+
+| Need | Read |
+|---|---|
+| Build/test/lint commands, module map, command routing, preset authoring | this file |
+| Cross-module data flows | [`docs/kb/architecture/data-flows.md`](docs/kb/architecture/data-flows.md) |
+| Invariants that must not be broken | [`docs/kb/architecture/invariants.md`](docs/kb/architecture/invariants.md) |
+| Why things are the way they are (ADRs) | [`docs/kb/decisions/`](docs/kb/decisions/) |
+| Commit/versioning/testing conventions | [`docs/kb/conventions.md`](docs/kb/conventions.md) |
+| Release runbook, CI pipelines, troubleshooting | [`docs/kb/operations/`](docs/kb/operations/) |
+| Past bugs and the rules they taught | [`docs/kb/lessons.md`](docs/kb/lessons.md) |
+
+Start any non-trivial task by checking `docs/kb/architecture/invariants.md` and grepping
+`docs/kb/lessons.md` for the modules you are about to touch.
+
+Keep the KB alive by updating it **in the same change** that makes it stale: bug with a
+non-obvious cause → `lessons.md`; design choice → numbered ADR in `decisions/`; changed data
+flow or invariant → the matching file under `architecture/`; moved/renamed modules → sync this
+file. Full protocol: [`docs/kb/README.md`](docs/kb/README.md).
+
 ## Commands
 
 ```bash
@@ -242,47 +266,21 @@ Shell categories can declare `needs_source = true` in `shine.toml` to mark a scr
 
 **Never `git push` to the remote without explicit user approval.** Commit locally, then stop and let the user review before pushing. This applies to branch pushes, tag pushes, and force-pushes.
 
-## CHANGELOG
+## Releases
 
-Do **not** use `git cliff` to generate CHANGELOG entries. Write entries manually based on the actual changes in the release. Follow the existing format:
+Hard rules (details and runbook: [`docs/kb/conventions.md`](docs/kb/conventions.md),
+[`docs/kb/operations/release-runbook.md`](docs/kb/operations/release-runbook.md),
+[ADR 0002](docs/kb/decisions/0002-hand-written-changelog.md)):
 
-```
-## [x.y.z] — YYYY-MM-DD
-
-### Features / Bug Fixes / Internal / Docs
-
-- Plain-English description of what changed and why
-```
-
-Keep entries concise and user-facing. Internal refactors can be grouped under **Internal**.
-
-Note: `cliff.toml` still exists and `release.yml` invokes `git cliff` to generate the GitHub Release notes body from conventional-commit messages. That is a separate, automated artifact from the hand-written `CHANGELOG.md` — the two do not overwrite each other, and both may legitimately describe the same release in different words.
-
-## Release Versioning
-
-When deciding whether to bump the release version, always compare the current branch against the most recent **stable** release tag, not the moving `preview` tag.
-
-- Treat `preview` as a prerelease channel marker only; it is not the previous release baseline.
-- Use the latest `v*` tag such as `v0.20.0` as the baseline for release notes and version-bump decisions.
-- Do not rely on `git describe --tags --abbrev=0` by itself in this repo, because it may resolve to `preview`.
-- Prefer commands that filter for stable tags explicitly, for example `git tag --list 'v*' --sort=-version:refname | head -1`.
-- If there are user-facing features since the last stable tag, bump `minor`; if there are only user-facing fixes, bump `patch`.
-
-### Commit scope convention for internal fixes
-
-Fix commits that exist only because new feature code in the same release introduced them (clippy noise, lint, formatting, typos) must use one of these scopes so `git cliff` automatically skips them:
-
-| Scope | Example |
-|-------|---------|
-| `fix(lint): ...` | clippy allow/deny rule adjustment |
-| `fix(clippy): ...` | clippy suggestion |
-| `fix(fmt): ...` | rustfmt formatting |
-| `fix(typo): ...` | spell-check fix in new code |
-| `fix(build): ...` | build/compile error in new code |
-| `fix(ci): ...` | CI pipeline fix |
-| `fix(internal): ...` | any other non-user-facing cleanup |
-
-Real user-facing bug fixes must **not** use these scopes — use the affected feature area instead (e.g. `fix(install): ...`, `fix(shell): ...`).
+- `CHANGELOG.md` is **hand-written** — never generate it with `git cliff`. (The `git cliff` run
+  in `release.yml` produces the GitHub Release notes body, a separate automated artifact.)
+- Version-bump baseline is the latest **stable `v*` tag**, never the moving `preview` tag:
+  `git tag --list 'v*' --sort=-version:refname | head -1`.
+- Internal-only fix commits caused by new code in the same release must use the
+  git-cliff-skipped scopes (`fix(lint|clippy|fmt|typo|build|ci|internal)`) — full table in
+  `docs/kb/conventions.md` § Commits.
+- Work lands on the `release` branch; `main` only receives automated post-release sync PRs
+  ([ADR 0001](docs/kb/decisions/0001-release-branch-model.md)).
 
 ## Adding a new preset category
 
