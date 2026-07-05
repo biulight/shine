@@ -176,11 +176,11 @@ async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShowFile>> {
     let mut files = Vec::new();
     for category in categories {
         for file in &category.files {
-            let source_path = config
-                .presets_dir()
-                .join("shell")
-                .join(&category.name)
-                .join(&file.source_rel);
+            let source_path = config.preset_path(
+                Path::new("shell")
+                    .join(&category.name)
+                    .join(&file.source_rel),
+            );
             let rendered_path = config
                 .rendered_dir()
                 .join("shell")

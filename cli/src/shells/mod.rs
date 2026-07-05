@@ -688,11 +688,8 @@ fn build_script_pairs(
         .iter()
         .flat_map(|cat| {
             cat.files.iter().map(|file| {
-                let source = config
-                    .presets_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
+                let source =
+                    config.preset_path(Path::new("shell").join(&cat.name).join(&file.source_rel));
                 let rendered = config
                     .rendered_dir()
                     .join("shell")
@@ -716,11 +713,8 @@ fn build_link_specs(
         .iter()
         .flat_map(|cat| {
             cat.files.iter().map(|file| {
-                let source = config
-                    .presets_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
+                let source =
+                    config.preset_path(Path::new("shell").join(&cat.name).join(&file.source_rel));
                 let rendered = config
                     .rendered_dir()
                     .join("shell")

@@ -9,7 +9,7 @@ English README: [`../README.md`](../README.md)
 ## 功能特性
 
 - **内置预设** — shell 脚本和应用配置会编译进二进制；安装后不需要联网
-- **外部预设目录和 overlay** — 可用 `presets_dir` 完整替换预设来源，也可链接一个小型 overlay 目录，只覆盖少量内置预设文件
+- **外部预设目录和 overlay** — 可用 `presets_dir` 指定基础预设来源，再链接一个小型 overlay 覆盖少量预设文件
 - **项目本地预设仓库** — 在预设仓库内运行 `shine init`，即可创建指向当前仓库的 `shine.config.toml`
 - **受管 bin 目录** — `~/.shine/bin/` 在 Unix 上保存展平后的符号链接，在 Windows 上保存命令 shim
 - **自动配置 PATH** — `install` 会自动把 `~/.shine/bin` 追加到你的 shell 配置文件
@@ -473,7 +473,7 @@ SHINE_PRESETS=~/dotfiles/shine-presets shine export
 
 当配置了 `presets_dir` 后，所有 `install`、`update` 和 `list` 命令都会自动从外部目录读取。每个命令输出中都会显示当前激活的预设来源，避免你混淆实际使用的是哪份文件。
 
-如果只想做少量自定义，可以使用 presets overlay。Overlay 文件会按相同相对路径覆盖内置预设，例如 `app/starship/starship.toml` 或 `shell/proxy/set_proxy.sh`。完整外部 `presets_dir` 的优先级高于 overlay。
+如果只想做少量自定义，可以使用 presets overlay。Overlay 会按相同相对路径覆盖当前预设来源（内置或外部），例如 `app/starship/starship.toml` 或 `shell/proxy/set_proxy.sh`。同路径文件以 overlay 为准，overlay 独有的分类也会加入基础来源。
 
 ```bash
 shine overlay link ~/dotfiles/shine-overlay --create
@@ -791,7 +791,8 @@ inline description 的优先级高于 preset catalog。Catalog 只保存元数�
 `<path>/shine.env.toml`。其中的值会覆盖全局 env，并可在任意工作目录下生效；
 项目本地 `shine.env.toml` 仍拥有更高优先级。该文件会在每次运行时重新读取，
 无需项目级 `shine.config.toml`；执行 `shine overlay unlink` 后即停止生效。
-当完整的外部 presets 来源生效时，overlay env 不会加载。
+Overlay 也可以与完整的外部 presets 来源同时使用：同路径文件以 overlay 为准，
+其余文件继续来自外部 presets。
 
 ```toml
 HTTP_PROXY_PORT = "7890"

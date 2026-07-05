@@ -401,7 +401,7 @@ async fn handle_uninstall_shim(config: &Config, category: &str) -> Result<()> {
 
 async fn resolve_shim_category(config: &Config, category: &str) -> Result<ShimResolution> {
     let shell_matches = if config.is_external_presets {
-        let shell_path = config.presets_dir().join("shell").join(category);
+        let shell_path = config.preset_path(std::path::Path::new("shell").join(category));
         if shell_path.exists() {
             shells::metadata::load_installed_categories(config, Some(category))
                 .await?
@@ -413,7 +413,7 @@ async fn resolve_shim_category(config: &Config, category: &str) -> Result<ShimRe
         shells::metadata::load_embedded_categories(Some(category))?.len()
     };
     let app_matches = if config.is_external_presets {
-        let app_path = config.presets_dir().join("app").join(category);
+        let app_path = config.preset_path(std::path::Path::new("app").join(category));
         if app_path.exists() {
             apps::load_installed_categories(config, Some(category))
                 .await?

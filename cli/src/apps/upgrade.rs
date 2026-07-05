@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use dialoguer::Confirm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::colors;
 use crate::config::Config;
@@ -58,7 +58,9 @@ pub async fn handle_upgrade_installed(
 
     let mut categories_by_name: BTreeMap<String, metadata::AppCategory> = BTreeMap::new();
     for cat_name in &installed_categories {
-        if config.is_external_presets && !config.presets_dir().join("app").join(cat_name).exists() {
+        if config.is_external_presets
+            && !config.preset_path(Path::new("app").join(cat_name)).exists()
+        {
             continue;
         }
         let categories = if config.is_external_presets {
@@ -506,11 +508,7 @@ async fn upgrade_file_content(
     env_map: &BTreeMap<String, String>,
 ) -> Result<Vec<u8>> {
     let raw = if config.is_external_presets {
-        let path = config
-            .presets_dir()
-            .join("app")
-            .join(&cat.name)
-            .join(&file.source_rel);
+        let path = config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
         tokio::fs::read(&path)
             .await
             .with_context(|| format!("reading {}", path.display()))?

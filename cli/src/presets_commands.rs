@@ -205,19 +205,10 @@ pub(super) async fn handle_overlay_link(
     updated.save().await?;
 
     println!("{}", colors::presets_overlay_note(&absolute));
-    if config.is_external_presets {
-        println!(
-            "{}",
-            colors::yellow(
-                "Warning: a full external presets source is active, so this overlay is configured but not used."
-            )
-        );
-    } else {
-        println!(
-            "{}",
-            colors::dim("Overlay files override built-in presets by matching path.")
-        );
-    }
+    println!(
+        "{}",
+        colors::dim("Overlay files override the active presets source by matching path.")
+    );
 
     Ok(())
 }
@@ -249,16 +240,7 @@ pub(super) async fn handle_overlay_unlink(config: &Config) -> Result<()> {
 pub(super) fn handle_overlay_show(config: &Config) -> Result<()> {
     if let Some(dir) = &config.presets_overlay_dir_override {
         println!("{}", colors::presets_overlay_note(dir));
-        if config.is_external_presets {
-            println!(
-                "{}",
-                colors::yellow(
-                    "Inactive: a full external presets source is active and takes priority."
-                )
-            );
-        } else {
-            println!("{}", colors::green("Active"));
-        }
+        println!("{}", colors::green("Active"));
     } else {
         println!(
             "{}",

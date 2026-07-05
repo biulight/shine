@@ -82,8 +82,7 @@ pub struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub presets_dir_override: Option<PathBuf>,
-    /// Optional overlay directory merged over embedded presets.
-    /// Ignored when a full external presets source is active.
+    /// Optional overlay directory merged over the active presets source.
     #[serde(
         rename = "presets_overlay_dir",
         default,
@@ -531,11 +530,19 @@ impl Config {
     }
 
     pub fn active_presets_overlay_dir(&self) -> Option<&Path> {
-        if self.is_external_presets {
-            None
-        } else {
-            self.presets_overlay_dir_override.as_deref()
+        self.presets_overlay_dir_override.as_deref()
+    }
+
+    /// Resolve a preset file with the overlay taking precedence over the base source.
+    pub fn preset_path(&self, relative: impl AsRef<Path>) -> PathBuf {
+        let relative = relative.as_ref();
+        if let Some(overlay) = self.active_presets_overlay_dir() {
+            let candidate = overlay.join(relative);
+            if candidate.exists() {
+                return candidate;
+            }
         }
+        self.presets_dir().join(relative)
     }
 
     fn resolve_presets_overlay_dir(&mut self, config_dir: &Path) {
@@ -748,14 +755,8 @@ pub fn print_presets_note(config: &Config) {
             "{}",
             crate::colors::external_presets_note(config.presets_dir())
         );
-        if let Some(dir) = &config.presets_overlay_dir_override {
-            println!(
-                "{}",
-                crate::colors::yellow(&format!(
-                    "Presets overlay configured but inactive: {}",
-                    crate::path_display::format(dir)
-                ))
-            );
+        if let Some(dir) = config.active_presets_overlay_dir() {
+            println!("{}", crate::colors::presets_overlay_note(dir));
         }
         println!();
     } else if let Some(dir) = config.active_presets_overlay_dir() {
@@ -2213,7 +2214,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn overlay_env_is_ignored_when_external_presets_are_active() {
+    async fn overlay_env_is_loaded_when_external_presets_are_active() {
         let dir = make_temp_dir().await;
         let overlay_dir = dir.join("overlay");
         fs::create_dir_all(&overlay_dir).await.unwrap();
@@ -2228,7 +2229,10 @@ mod tests {
         config.presets_overlay_dir_override = Some(overlay_dir);
         config.is_external_presets = true;
         config.apply_overlay_env_override().await.unwrap();
-        assert!(!config.env.contains_key("OVERLAY_ONLY"));
+        assert_eq!(
+            config.env.get("OVERLAY_ONLY").map(String::as_str),
+            Some("yes")
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

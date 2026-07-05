@@ -60,13 +60,13 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
         return Ok(Vec::new());
     }
 
-    let presets_shell = config.presets_dir().join("shell");
     let bin_dir = config.bin_dir();
     let mut rows: Vec<ShellRow> = Vec::new();
 
     for cat in &categories {
         for script in &cat.files {
-            let script_path = presets_shell.join(&cat.name).join(&script.source_rel);
+            let script_path =
+                config.preset_path(Path::new("shell").join(&cat.name).join(&script.source_rel));
             let source_key = format!("shell/{}/{}", cat.name, script.source_rel.display());
             let rendered_path = config
                 .rendered_dir()

@@ -28,7 +28,7 @@ struct EnvMetadataToml {
 
 pub async fn load(config: &Config) -> Result<BTreeMap<String, EnvMetadata>> {
     let bytes = if config.is_external_presets {
-        let path = config.presets_dir().join(ENV_CATALOG_FILE);
+        let path = config.preset_path(ENV_CATALOG_FILE);
         match fs::read(&path).await {
             Ok(bytes) => Some(bytes),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,

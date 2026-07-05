@@ -1142,7 +1142,15 @@ async fn print_dry_run(
 
 async fn load_available_sys_manifests(config: &Config) -> Result<Vec<(String, SysManifest)>> {
     if config.is_external_presets {
-        load_fs_sys_manifests(config.presets_dir()).await
+        let mut manifests: BTreeMap<String, SysManifest> =
+            load_fs_sys_manifests(config.presets_dir())
+                .await?
+                .into_iter()
+                .collect();
+        if let Some(overlay) = config.active_presets_overlay_dir() {
+            manifests.extend(load_fs_sys_manifests(overlay).await?);
+        }
+        Ok(manifests.into_iter().collect())
     } else {
         load_embedded_sys_manifests()
     }

@@ -9,7 +9,7 @@ A Rust CLI for managing shell presets, app configs, and system bootstrap presets
 ## Features
 
 - **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
-- **External presets and overlays** — point `presets_dir` at your own directory for a full replacement, or link a small overlay directory to override selected embedded preset files
+- **External presets and overlays** — point `presets_dir` at your own base directory, then optionally link a small overlay to override selected preset files
 - **Project-local presets** — run `shine init` inside a presets repo to create a local `shine.config.toml` that points `presets_dir` at the repo
 - **Managed bin directory** — `~/.shine/bin/` holds flat symlinks on Unix and command shims on Windows
 - **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
@@ -473,7 +473,7 @@ SHINE_PRESETS=~/dotfiles/shine-presets shine export
 
 All `install`, `update`, and `list` commands will automatically read from the external directory when `presets_dir` is configured. The active preset source is printed in each command's output so you always know which files are being used.
 
-For smaller customizations, use a presets overlay. Overlay files are merged over the embedded presets by matching the same relative paths, such as `app/starship/starship.toml` or `shell/proxy/set_proxy.sh`. A full external `presets_dir` takes priority over overlays.
+For smaller customizations, use a presets overlay. Overlay files are merged over the active presets source—embedded or external—by matching the same relative paths, such as `app/starship/starship.toml` or `shell/proxy/set_proxy.sh`. Matching overlay files take priority, and overlay-only categories are added to the base source.
 
 ```bash
 shine overlay link ~/dotfiles/shine-overlay --create
@@ -828,8 +828,9 @@ An active directory linked with `shine overlay link <path>` may also contain a
 flat `<path>/shine.env.toml`. Its values override global env values and are
 available from any working directory; project-local `shine.env.toml` values
 still take priority. The file is re-read on every run, requires no project
-`shine.config.toml`, and stops applying after `shine overlay unlink`. Overlay
-env values are inactive when a full external presets source is active.
+`shine.config.toml`, and stops applying after `shine overlay unlink`. Overlays
+also compose with a full external presets source: matching overlay paths win,
+while other files continue to come from the external source.
 
 ```toml
 HTTP_PROXY_PORT = "7890"

@@ -66,11 +66,7 @@ pub async fn source_bytes_for_file(
     env: &BTreeMap<String, String>,
 ) -> Option<Vec<u8>> {
     let raw = if config.is_external_presets {
-        let path = config
-            .presets_dir()
-            .join("app")
-            .join(&cat.name)
-            .join(&file.source_rel);
+        let path = config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
         tokio::fs::read(&path).await.ok()?
     } else {
         let key = format!("app/{}/{}", cat.name, file.source_rel.display());
@@ -374,9 +370,9 @@ pub async fn handle_install(
     let mut restart_hints = BTreeSet::new();
 
     for cat in &categories {
-        let category_root = config.presets_dir().join("app").join(&cat.name);
         for file in &cat.files {
-            let source_path = category_root.join(&file.source_rel);
+            let source_path =
+                config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
             let display_name = format!("{}/{}", cat.name, file.source_rel.display());
             let destination = match resolve_install_destination(cat, file, config) {
                 Ok(d) => d,

@@ -177,7 +177,13 @@ pub async fn load_installed_categories(
     filter: Option<&str>,
 ) -> Result<Vec<AppCategory>> {
     let app_root = config.presets_dir().join("app");
-    let category_names = collect_fs_category_names(&app_root, filter).await?;
+    let mut category_names: BTreeSet<String> = collect_fs_category_names(&app_root, filter)
+        .await?
+        .into_iter()
+        .collect();
+    if let Some(overlay) = config.active_presets_overlay_dir() {
+        category_names.extend(collect_fs_category_names(&overlay.join("app"), filter).await?);
+    }
     let mut categories = Vec::new();
 
     for name in category_names {
@@ -292,8 +298,8 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
 }
 
 async fn load_installed_category(config: &Config, name: &str) -> Result<Option<AppCategory>> {
-    let category_root = config.presets_dir().join("app").join(name);
-    let metadata_path = category_root.join("shine.toml");
+    let category_rel = Path::new("app").join(name);
+    let metadata_path = config.preset_path(category_rel.join("shine.toml"));
 
     if metadata_path.exists() {
         let bytes = fs::read(&metadata_path)
@@ -337,7 +343,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                     })
                     .collect::<Result<Vec<_>>>()?
             }
-            None => collect_fs_files(&category_root)
+            None => collect_merged_fs_files(config, &category_rel)
                 .await?
                 .into_iter()
                 .map(|rel| AppFile {
@@ -358,7 +364,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         }
 
         for file in &files {
-            let source_path = category_root.join(&file.source_rel);
+            let source_path = config.preset_path(category_rel.join(&file.source_rel));
             if !source_path.exists() {
                 bail!(
                     "app/{name}/shine.toml references missing file: {}",
@@ -382,8 +388,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
     }
 
     let mut files = Vec::new();
-    for rel in collect_fs_files(&category_root).await? {
-        let source_path = category_root.join(&rel);
+    for rel in collect_merged_fs_files(config, &category_rel).await? {
+        let source_path = config.preset_path(category_rel.join(&rel));
         let bytes = fs::read(&source_path)
             .await
             .with_context(|| format!("reading preset file: {}", source_path.display()))?;
@@ -409,6 +415,25 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         uses_metadata: false,
         has_explicit_files: false,
     }))
+}
+
+async fn collect_merged_fs_files(config: &Config, category_rel: &Path) -> Result<Vec<PathBuf>> {
+    let base_category = config.presets_dir().join(category_rel);
+    let mut files: BTreeSet<PathBuf> = if base_category.is_dir() {
+        collect_fs_files(&base_category)
+            .await?
+            .into_iter()
+            .collect()
+    } else {
+        BTreeSet::new()
+    };
+    if let Some(overlay) = config.active_presets_overlay_dir() {
+        let overlay_category = overlay.join(category_rel);
+        if overlay_category.is_dir() {
+            files.extend(collect_fs_files(&overlay_category).await?);
+        }
+    }
+    Ok(files.into_iter().collect())
 }
 
 fn collect_embedded_category_names(filter: Option<&str>) -> Vec<String> {

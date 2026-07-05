@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use crate::config::Config;
 
@@ -14,8 +15,8 @@ pub(super) async fn load_sys_preset(config: &Config, os_id: &str) -> Result<Load
         crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
     }
 
-    let root = config.presets_dir().join("sys").join(os_id);
-    let script_path = root.join(sys_init_script_name(os_id));
+    let root = Path::new("sys").join(os_id);
+    let script_path = config.preset_path(root.join(sys_init_script_name(os_id)));
     if !script_path.exists() {
         bail!(
             "No init script found for '{}'. Expected: {}",
@@ -24,7 +25,7 @@ pub(super) async fn load_sys_preset(config: &Config, os_id: &str) -> Result<Load
         );
     }
 
-    let manifest_path = root.join("shine.toml");
+    let manifest_path = config.preset_path(root.join("shine.toml"));
     let content = tokio::fs::read_to_string(&manifest_path)
         .await
         .with_context(|| format!("reading {}", manifest_path.display()))?;
