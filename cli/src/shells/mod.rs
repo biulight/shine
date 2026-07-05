@@ -74,25 +74,14 @@ pub enum ShellType {
 
 pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
-    let (path, overwritten) = write_init_template_at(&dir, force).await?;
+    let (path, overwritten) =
+        utils::init_template::write_shine_toml_template(&dir, force, SHELL_TEMPLATE)?;
     if overwritten {
         println!("Updated shell preset template: {}", path.display());
     } else {
         println!("Created shell preset template: {}", path.display());
     }
     Ok(())
-}
-
-async fn write_init_template_at(dir: &Path, force: bool) -> Result<(PathBuf, bool)> {
-    let path = dir.join("shine.toml");
-    let exists = path.exists();
-    if exists && !force {
-        bail!("shine.toml already exists; use --force to overwrite");
-    }
-    tokio::fs::write(&path, SHELL_TEMPLATE)
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok((path, exists))
 }
 
 pub async fn handle_install(config: &Config, category: Option<&str>, force: bool) -> Result<()> {
@@ -1828,7 +1817,9 @@ mod tests {
         let cat_dir = dir.join("presets/shell/custom");
         fs::create_dir_all(&cat_dir).await.unwrap();
 
-        let (path, overwritten) = write_init_template_at(&cat_dir, false).await.unwrap();
+        let (path, overwritten) =
+            utils::init_template::write_shine_toml_template(&cat_dir, false, SHELL_TEMPLATE)
+                .unwrap();
         fs::write(
             cat_dir.join("my_tool.sh"),
             b"#!/bin/bash\n# My tool.\necho hi\n",
@@ -1863,14 +1854,16 @@ mod tests {
         let dir = make_temp_dir().await;
         fs::write(dir.join("shine.toml"), b"old").await.unwrap();
 
-        let err = write_init_template_at(&dir, false).await.unwrap_err();
+        let err = utils::init_template::write_shine_toml_template(&dir, false, SHELL_TEMPLATE)
+            .unwrap_err();
         assert!(
             err.to_string().contains("use --force to overwrite"),
             "unexpected error: {err:#}"
         );
         assert_eq!(fs::read(dir.join("shine.toml")).await.unwrap(), b"old");
 
-        let (_path, overwritten) = write_init_template_at(&dir, true).await.unwrap();
+        let (_path, overwritten) =
+            utils::init_template::write_shine_toml_template(&dir, true, SHELL_TEMPLATE).unwrap();
         assert!(overwritten);
         let content = fs::read_to_string(dir.join("shine.toml")).await.unwrap();
         assert!(content.contains("target = \"mytool\""));

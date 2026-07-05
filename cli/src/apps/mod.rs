@@ -46,25 +46,14 @@ transforms = []
 
 pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
-    let (path, overwritten) = write_init_template_at(&dir, force).await?;
+    let (path, overwritten) =
+        utils::init_template::write_shine_toml_template(&dir, force, APP_TEMPLATE)?;
     if overwritten {
         println!("Updated app preset template: {}", path.display());
     } else {
         println!("Created app preset template: {}", path.display());
     }
     Ok(())
-}
-
-async fn write_init_template_at(dir: &Path, force: bool) -> Result<(PathBuf, bool)> {
-    let path = dir.join("shine.toml");
-    let exists = path.exists();
-    if exists && !force {
-        anyhow::bail!("shine.toml already exists; use --force to overwrite");
-    }
-    tokio::fs::write(&path, APP_TEMPLATE)
-        .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok((path, exists))
 }
 
 /// Hash the effective install content for `file` — applies transforms if declared.
@@ -833,7 +822,8 @@ mod tests {
         let cat_dir = dir.join("presets/app/sample");
         fs::create_dir_all(&cat_dir).await.unwrap();
 
-        let (path, overwritten) = write_init_template_at(&cat_dir, false).await.unwrap();
+        let (path, overwritten) =
+            utils::init_template::write_shine_toml_template(&cat_dir, false, APP_TEMPLATE).unwrap();
         fs::write(cat_dir.join("config.toml"), b"name = \"sample\"\n")
             .await
             .unwrap();
@@ -871,14 +861,16 @@ mod tests {
         let dir = make_temp_dir().await;
         fs::write(dir.join("shine.toml"), b"old").await.unwrap();
 
-        let err = write_init_template_at(&dir, false).await.unwrap_err();
+        let err =
+            utils::init_template::write_shine_toml_template(&dir, false, APP_TEMPLATE).unwrap_err();
         assert!(
             err.to_string().contains("use --force to overwrite"),
             "unexpected error: {err:#}"
         );
         assert_eq!(fs::read(dir.join("shine.toml")).await.unwrap(), b"old");
 
-        let (_path, overwritten) = write_init_template_at(&dir, true).await.unwrap();
+        let (_path, overwritten) =
+            utils::init_template::write_shine_toml_template(&dir, true, APP_TEMPLATE).unwrap();
         assert!(overwritten);
         let content = fs::read_to_string(dir.join("shine.toml")).await.unwrap();
         assert!(content.contains("dest = \"~/.config/my-app\""));
