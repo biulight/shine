@@ -759,7 +759,7 @@ GHOSTTY_BG_LIGHT = ""
 GHOSTTY_BG_DARK = ""
 ```
 
-环境变量按 key 依次合并：内置默认值、全局 `[env]`、项目 `[env]`、全局 `shine.env.toml`、项目 `shine.env.toml`。
+环境变量按 key 依次合并：内置默认值、全局 `[env]`、项目 `[env]`、全局 `shine.env.toml`、当前 presets overlay 的 `shine.env.toml`、项目 `shine.env.toml`。
 
 `shine env show` 会显示当前 preset catalog 提供的变量说明，并默认隐藏敏感值；需要查看完整值时可使用 `--reveal`。如果需要在当前配置中覆盖说明，可以把值和说明写在同一个 inline table 中：
 
@@ -782,6 +782,12 @@ inline description 的优先级高于 preset catalog。Catalog 只保存元数�
 设置 `GHOSTTY_BG_LIGHT` 和 `GHOSTTY_BG_DARK` 后，Ghostty 预设在不同外观模式下会安装带背景图片路径的主题。保留为空则表示安装内置 Ghostty 预设但不启用背景图。
 
 全局覆盖可通过放置在 `~/.shine/shine.env.toml` 的扁平 `shine.env.toml` 文件提供。项目本地覆盖则放在 `shine.config.toml` 同目录下。`shine.env.toml` 中的值会覆盖当前配置 `[env]` 表中的同名 key，而不会改写任一文件。当全局和项目本地 env 文件同时存在时，项目本地优先。若项目本地 `shine.env.toml` 不存在，仍会兼容读取旧的 `.env.toml`；该兼容将在 v0.40.0 移除，请将文件改名为 `shine.env.toml`。
+
+通过 `shine overlay link <path>` 关联的有效 overlay 目录也可以包含扁平的
+`<path>/shine.env.toml`。其中的值会覆盖全局 env，并可在任意工作目录下生效；
+项目本地 `shine.env.toml` 仍拥有更高优先级。该文件会在每次运行时重新读取，
+无需项目级 `shine.config.toml`；执行 `shine overlay unlink` 后即停止生效。
+当完整的外部 presets 来源生效时，overlay env 不会加载。
 
 ```toml
 HTTP_PROXY_PORT = "7890"

@@ -783,7 +783,7 @@ GHOSTTY_BG_LIGHT = ""
 GHOSTTY_BG_DARK = ""
 ```
 
-Environment values merge by key in this order: built-in defaults, global `[env]`, project `[env]`, global `shine.env.toml`, then project `shine.env.toml`.
+Environment values merge by key in this order: built-in defaults, global `[env]`, project `[env]`, global `shine.env.toml`, active presets-overlay `shine.env.toml`, then project `shine.env.toml`.
 
 `shine env show` displays these values with descriptions from the active preset
 catalog and redacts sensitive values by default. Use `--reveal` when the full
@@ -819,6 +819,13 @@ either file. When both global and project-local env files are present, the
 project-local file wins. Legacy project `.env.toml` files are still recognized
 when project `shine.env.toml` is absent, but this compatibility will be removed
 in v0.40.0; rename the file to `shine.env.toml`.
+
+An active directory linked with `shine overlay link <path>` may also contain a
+flat `<path>/shine.env.toml`. Its values override global env values and are
+available from any working directory; project-local `shine.env.toml` values
+still take priority. The file is re-read on every run, requires no project
+`shine.config.toml`, and stops applying after `shine overlay unlink`. Overlay
+env values are inactive when a full external presets source is active.
 
 ```toml
 HTTP_PROXY_PORT = "7890"

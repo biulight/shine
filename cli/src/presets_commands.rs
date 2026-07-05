@@ -185,6 +185,8 @@ pub(super) async fn handle_overlay_link(
 
     let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
 
+    config::validate_env_override_file(&absolute.join("shine.env.toml")).await?;
+
     if config
         .presets_overlay_dir_override
         .as_deref()
@@ -264,4 +266,51 @@ pub(super) fn handle_overlay_show(config: &Config) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cli::test_support::env_lock;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn overlay_link_rejects_invalid_env_without_saving_link() {
+        let _guard = env_lock();
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("shine-overlay-link-{suffix}"));
+        let state_dir = root.join("state");
+        let overlay_dir = root.join("overlay");
+        tokio::fs::create_dir_all(&overlay_dir).await.unwrap();
+        tokio::fs::write(
+            overlay_dir.join("shine.env.toml"),
+            "INVALID = \"unterminated\n",
+        )
+        .await
+        .unwrap();
+
+        // SAFETY: env_lock serializes process-global environment changes in tests.
+        unsafe {
+            std::env::set_var("SHINE_CONFIG_DIR", &state_dir);
+            std::env::remove_var("SHINE_PRESETS");
+        }
+        let config = Config::load_or_init().await.unwrap();
+        let error = handle_overlay_link(&config, overlay_dir.clone(), false)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("shine.env.toml"));
+
+        let saved = tokio::fs::read_to_string(state_dir.join("config.toml"))
+            .await
+            .unwrap();
+        assert!(!saved.contains("presets_overlay_dir"));
+
+        // SAFETY: env_lock serializes process-global environment changes in tests.
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
 }

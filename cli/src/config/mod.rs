@@ -329,6 +329,7 @@ impl Config {
 
         // Environment override files deliberately sit above both TOML layers.
         config.apply_global_env_override().await?;
+        config.apply_overlay_env_override().await?;
         config.apply_project_env_override(&project_config).await?;
         crate::presets::set_overlay_dir(config.active_presets_overlay_dir());
 
@@ -360,6 +361,7 @@ impl Config {
         };
         config.migrate_env(config_has_env).await?;
         config.apply_global_env_override().await?;
+        config.apply_overlay_env_override().await?;
         Ok(config)
     }
 
@@ -694,6 +696,21 @@ impl Config {
         Ok(())
     }
 
+    async fn apply_overlay_env_override(&mut self) -> Result<()> {
+        let Some(overlay_dir) = self.active_presets_overlay_dir() else {
+            return Ok(());
+        };
+        let Some(vars) = read_env_file(&overlay_dir.join(PROJECT_ENV_FILE)).await? else {
+            return Ok(());
+        };
+
+        for (key, value) in vars {
+            self.env.insert(key, value);
+        }
+
+        Ok(())
+    }
+
     async fn apply_project_env_override(&mut self, project_config: &ProjectConfig) -> Result<()> {
         let env_path = project_config.root.join(PROJECT_ENV_FILE);
         let (env_path, is_legacy) = if env_path.exists() {
@@ -807,6 +824,11 @@ fn apply_table_changes(target: &mut toml::Table, loaded: &toml::Table, current: 
             }
         }
     }
+}
+
+#[doc(hidden)]
+pub async fn validate_env_override_file(path: &Path) -> Result<()> {
+    read_env_file(path).await.map(|_| ())
 }
 
 async fn read_env_file(path: &Path) -> Result<Option<BTreeMap<String, String>>> {
@@ -2137,6 +2159,76 @@ mod tests {
             loaded.presets_overlay_dir_override,
             Some(PathBuf::from("/external/overlay"))
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn overlay_env_sits_between_global_and_project_env_overrides() {
+        let dir = make_temp_dir().await;
+        let overlay_dir = dir.join("overlay");
+        let project_dir = dir.join("project");
+        fs::create_dir_all(&overlay_dir).await.unwrap();
+        fs::create_dir_all(&project_dir).await.unwrap();
+        fs::write(dir.join(PROJECT_ENV_FILE), "SHARED = \"global\"\n")
+            .await
+            .unwrap();
+        fs::write(
+            overlay_dir.join(PROJECT_ENV_FILE),
+            "SHARED = \"overlay\"\nOVERLAY_ONLY = \"yes\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(project_dir.join(PROJECT_ENV_FILE), "SHARED = \"project\"\n")
+            .await
+            .unwrap();
+
+        let mut config = config_in(&dir);
+        config.presets_overlay_dir_override = Some(overlay_dir);
+        config.apply_global_env_override().await.unwrap();
+        config.apply_overlay_env_override().await.unwrap();
+        assert_eq!(
+            config.env.get("SHARED").map(String::as_str),
+            Some("overlay")
+        );
+        assert_eq!(
+            config.env.get("OVERLAY_ONLY").map(String::as_str),
+            Some("yes")
+        );
+
+        config
+            .apply_project_env_override(&ProjectConfig {
+                path: project_dir.join(PROJECT_CONFIG_FILE),
+                root: project_dir,
+                is_legacy: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            config.env.get("SHARED").map(String::as_str),
+            Some("project")
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn overlay_env_is_ignored_when_external_presets_are_active() {
+        let dir = make_temp_dir().await;
+        let overlay_dir = dir.join("overlay");
+        fs::create_dir_all(&overlay_dir).await.unwrap();
+        fs::write(
+            overlay_dir.join(PROJECT_ENV_FILE),
+            "OVERLAY_ONLY = \"yes\"\n",
+        )
+        .await
+        .unwrap();
+
+        let mut config = config_in(&dir);
+        config.presets_overlay_dir_override = Some(overlay_dir);
+        config.is_external_presets = true;
+        config.apply_overlay_env_override().await.unwrap();
+        assert!(!config.env.contains_key("OVERLAY_ONLY"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
