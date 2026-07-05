@@ -17,6 +17,7 @@ fi
 HTTP_PROXY_PORT=@@HTTP_PROXY_PORT@@
 SOCKS5_PROXY_PORT=@@SOCKS5_PROXY_PORT@@
 PROXY_HOST=@@PROXY_HOST@@
+PROXY_NO_PROXY="@@PROXY_NO_PROXY@@"
 HTTP_PROXY="http://${PROXY_HOST}:${HTTP_PROXY_PORT}"
 SOCKS5_PROXY="socks5://${PROXY_HOST}:${SOCKS5_PROXY_PORT}"
 
@@ -55,8 +56,8 @@ set_proxy() {
     export all_proxy="${proxy_address}"
     export ALL_PROXY="${proxy_address}"
 
-    export no_proxy="localhost,127.0.0.1,::1,.local"
-    export NO_PROXY="localhost,127.0.0.1,::1,.local"
+    export no_proxy="${PROXY_NO_PROXY}"
+    export NO_PROXY="${PROXY_NO_PROXY}"
 
     # npm and pnpm read npm_config_* values from the process environment.
     local tool_proxy="http://${PROXY_HOST}:${HTTP_PROXY_PORT}"

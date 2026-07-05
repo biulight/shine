@@ -449,6 +449,50 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_env_change_reports_update_available() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/proxy");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            cat_dir.join("set_proxy.sh"),
+            b"#!/bin/bash\n# shine-template: true\nPROXY_NO_PROXY=\"@@PROXY_NO_PROXY@@\"\n",
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        crate::shells::handle_install(&config, Some("proxy"), false)
+            .await
+            .unwrap();
+
+        config.env.insert(
+            "PROXY_NO_PROXY".to_string(),
+            "localhost,127.0.0.1,::1,.local".to_string(),
+        );
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "proxy/setproxy")
+            .expect("proxy/setproxy row should exist");
+
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[tokio::test]
     async fn category_list_mode_aggregates_explicit_app_files() {
         let dir = make_temp_dir().await;

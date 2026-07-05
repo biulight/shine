@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-05 — Template update checks only see variables used by the template
+
+- **Symptom**: changing `PROXY_NO_PROXY` in an overlay `shine.env.toml` did not make
+  `shine update` report the installed Unix `setproxy` command as stale.
+- **Root cause**: the Unix proxy template declared template support but hard-coded `no_proxy`, so
+  changing `PROXY_NO_PROXY` did not change the rendered output that update detection compares.
+- **Fix**: render `PROXY_NO_PROXY` into the Unix proxy script and cover env-only changes in the
+  shell update-status tests.
+- **Rule**: every documented preset environment setting must occur in the rendered template;
+  update detection is content-based and cannot observe unused variables.
+
 ## 2026-07-05 — Typed config readers must not silently discard invalid entries
 
 - **Symptom**: `{ value, description }` entries in `shine.env.toml` appeared valid but had no
