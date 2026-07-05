@@ -81,6 +81,9 @@ pub struct EnvRunCommand {
     /// Environment mode used to expand {mode} paths
     #[arg(long)]
     pub mode: Option<String>,
+    /// Inject a config [env] value as KEY or KEY=ALIAS (repeatable)
+    #[arg(long = "with", value_name = "KEY[=ALIAS]")]
+    pub with: Vec<String>,
     /// Command and arguments to run
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<OsString>,

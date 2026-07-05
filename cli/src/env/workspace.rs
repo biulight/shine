@@ -132,48 +132,93 @@ pub async fn handle_run(
     config: &Config,
     workspace_arg: Option<&Path>,
     mode_arg: Option<&str>,
+    with: &[String],
     command: &[OsString],
 ) -> Result<()> {
-    let workspace_path = find_workspace(workspace_arg).await?;
-    let workspace = load_workspace(&workspace_path).await?;
-    let mode = mode_arg
-        .or(workspace.env.default_mode.as_deref())
-        .context("environment mode is required; pass --mode or set env.default_mode")?;
-    validate_mode(mode)?;
-    let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
-    let input_hash = calculate_input_hash(&workspace_path, mode, &sources).await?;
-
-    let recipient = resolve_recipient_optional(
-        workspace.env.encryption.recipient.as_deref(),
-        config.gpg_key_id.as_deref(),
-    );
-    let cache_path = cache_path(&workspace_path, mode)?;
-    let values = match read_valid_cache(&cache_path, mode, &input_hash).await {
-        Ok(Some(values)) => values,
-        Ok(None) => {
-            let values = compile_sources(&sources).await?;
-            if let Some(recipient) = recipient
-                && let Err(error) = write_cache(
-                    &cache_path,
-                    &workspace_path,
-                    mode,
-                    &input_hash,
-                    &values,
-                    recipient,
-                )
-                .await
-            {
-                eprintln!("Warning: could not update environment cache: {error:#}");
+    let explicit = resolve_explicit_values(config, with).await?;
+    let workspace_path = find_workspace_optional(workspace_arg).await?;
+    let (values, override_process_env) = if let Some(workspace_path) = workspace_path {
+        let workspace = load_workspace(&workspace_path).await?;
+        let mode = mode_arg
+            .or(workspace.env.default_mode.as_deref())
+            .context("environment mode is required; pass --mode or set env.default_mode")?;
+        validate_mode(mode)?;
+        let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
+        let input_hash = calculate_input_hash(&workspace_path, mode, &sources).await?;
+        let recipient = resolve_recipient_optional(
+            workspace.env.encryption.recipient.as_deref(),
+            config.gpg_key_id.as_deref(),
+        );
+        let cache_path = cache_path(&workspace_path, mode)?;
+        let values = match read_valid_cache(&cache_path, mode, &input_hash).await {
+            Ok(Some(values)) => values,
+            Ok(None) => {
+                let values = compile_sources(&sources).await?;
+                if let Some(recipient) = recipient
+                    && let Err(error) = write_cache(
+                        &cache_path,
+                        &workspace_path,
+                        mode,
+                        &input_hash,
+                        &values,
+                        recipient,
+                    )
+                    .await
+                {
+                    eprintln!("Warning: could not update environment cache: {error:#}");
+                }
+                values
             }
-            values
+            Err(error) => {
+                eprintln!("Warning: ignoring unreadable environment cache: {error:#}");
+                compile_sources(&sources).await?
+            }
+        };
+        (values, workspace.env.override_process_env)
+    } else {
+        if explicit.is_empty() {
+            bail!("shine.workspace.toml was not found; pass --workspace");
         }
-        Err(error) => {
-            eprintln!("Warning: ignoring unreadable environment cache: {error:#}");
-            compile_sources(&sources).await?
+        if mode_arg.is_some() {
+            bail!("--mode requires a shine.workspace.toml");
         }
+        (BTreeMap::new(), false)
     };
 
-    run_command(command, &values, workspace.env.override_process_env).await
+    run_command(command, &values, override_process_env, &explicit).await
+}
+
+async fn resolve_explicit_values(
+    config: &Config,
+    specs: &[String],
+) -> Result<BTreeMap<String, String>> {
+    let mut parsed = Vec::with_capacity(specs.len());
+    let mut targets = BTreeSet::new();
+    for spec in specs {
+        let (key, target) = spec.split_once('=').unwrap_or((spec, spec));
+        validate_env_key(key)?;
+        validate_env_key(target)?;
+        if !targets.insert(target.to_string()) {
+            bail!("duplicate --with target variable: {target}");
+        }
+        parsed.push((key, target));
+    }
+
+    let env = super::EnvConfig::load_or_init(config).await?;
+    let mut values = BTreeMap::new();
+    for (key, target) in parsed {
+        let value = match super::resolve_stored_value(&env, key)? {
+            super::StoredValue::Secret {
+                key: secret_key,
+                value: ciphertext,
+            } => secret::decrypt_base64_gpg_secret(ciphertext)
+                .await
+                .with_context(|| format!("decrypting {secret_key}"))?,
+            super::StoredValue::Plaintext(value) => value.to_string(),
+        };
+        values.insert(target.to_string(), value);
+    }
+    Ok(values)
 }
 
 async fn find_workspace_optional(explicit: Option<&Path>) -> Result<Option<PathBuf>> {
@@ -185,12 +230,6 @@ async fn find_workspace_optional(explicit: Option<&Path>) -> Result<Option<PathB
         .ancestors()
         .map(|directory| directory.join(WORKSPACE_FILE))
         .find(|path| path.is_file()))
-}
-
-async fn find_workspace(explicit: Option<&Path>) -> Result<PathBuf> {
-    find_workspace_optional(explicit)
-        .await?
-        .context("shine.workspace.toml was not found; pass --workspace")
 }
 
 async fn load_workspace(path: &Path) -> Result<Workspace> {
@@ -549,6 +588,7 @@ async fn run_command(
     command: &[OsString],
     values: &BTreeMap<String, String>,
     override_process_env: bool,
+    explicit: &BTreeMap<String, String>,
 ) -> Result<()> {
     let (program, args) = command
         .split_first()
@@ -560,6 +600,7 @@ async fn run_command(
             child.env(key, value);
         }
     }
+    child.envs(explicit);
     let status = child
         .status()
         .await
@@ -717,8 +758,103 @@ mod tests {
             ],
             &values,
             true,
+            &BTreeMap::new(),
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_values_support_aliases_and_multiple_keys() {
+        let directory = std::env::temp_dir().join(format!("shine-with-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&directory);
+        config.env.insert("TOKEN_A".into(), "alpha".into());
+        config.env.insert("TOKEN_B".into(), "beta".into());
+
+        let values =
+            resolve_explicit_values(&config, &["TOKEN_A".into(), "TOKEN_B=OTHER_TOKEN".into()])
+                .await
+                .unwrap();
+
+        assert_eq!(values.get("TOKEN_A").map(String::as_str), Some("alpha"));
+        assert_eq!(values.get("OTHER_TOKEN").map(String::as_str), Some("beta"));
+    }
+
+    #[tokio::test]
+    async fn explicit_values_reject_duplicate_targets_before_resolution() {
+        let directory = std::env::temp_dir().join(format!("shine-with-{}", uuid::Uuid::new_v4()));
+        let config = Config::new_for_test(&directory);
+
+        let error =
+            resolve_explicit_values(&config, &["TOKEN_A=TOKEN".into(), "TOKEN_B=TOKEN".into()])
+                .await
+                .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate --with target variable")
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_values_reject_invalid_or_missing_keys() {
+        let directory = std::env::temp_dir().join(format!("shine-with-{}", uuid::Uuid::new_v4()));
+        let config = Config::new_for_test(&directory);
+
+        let invalid = resolve_explicit_values(&config, &["BAD-KEY".into()])
+            .await
+            .unwrap_err();
+        assert!(
+            invalid
+                .to_string()
+                .contains("invalid environment variable name")
+        );
+
+        let missing = resolve_explicit_values(&config, &["MISSING".into()])
+            .await
+            .unwrap_err();
+        assert!(
+            missing
+                .to_string()
+                .contains("MISSING_SECRET or MISSING is not set")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn explicit_values_override_workspace_and_process_values() {
+        let _guard = crate::test_support::env_lock();
+        // SAFETY: the shared test env lock serializes process environment mutation.
+        unsafe { std::env::set_var("SHINE_RUN_OVERRIDE_TEST", "process") };
+        let workspace = BTreeMap::from([(
+            "SHINE_RUN_OVERRIDE_TEST".to_string(),
+            "workspace".to_string(),
+        )]);
+        let explicit = BTreeMap::from([(
+            "SHINE_RUN_OVERRIDE_TEST".to_string(),
+            "explicit".to_string(),
+        )]);
+
+        run_command(
+            &[
+                OsString::from("sh"),
+                OsString::from("-c"),
+                OsString::from("test \"$SHINE_RUN_OVERRIDE_TEST\" = explicit"),
+            ],
+            &workspace,
+            false,
+            &explicit,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            std::env::var("SHINE_RUN_OVERRIDE_TEST").as_deref(),
+            Ok("process")
+        );
+        // SAFETY: the shared test env lock serializes process environment mutation.
+        unsafe { std::env::remove_var("SHINE_RUN_OVERRIDE_TEST") };
     }
 }

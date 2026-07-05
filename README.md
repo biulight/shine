@@ -646,6 +646,20 @@ API_TOKEN` to use a different variable name in the shell, or install the `utils`
 preset and run `shine-env-export MY_TOKEN --as API_TOKEN` to apply it directly.
 Use `--set` when you need a custom encrypted target key.
 
+To expose values only to one child process without changing the current shell,
+use the repeatable `--with` option on `env run`:
+
+```bash
+shine env run --with MY_TOKEN -- bun run build
+shine env run --with MY_TOKEN=API_TOKEN -- bun run build
+shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
+```
+
+Each value follows the same encrypted-first lookup as `env export`. The optional
+name after `=` is the environment variable visible to the child process. Explicit
+`--with` values override variables inherited from the shell and values loaded from
+a workspace, and no workspace file is required when at least one `--with` is used.
+
 ### Workspace environment runner
 
 For projects that should not keep plaintext dotenv files, add a
@@ -694,7 +708,8 @@ shine env run --mode production -- bun run build
 
 Sources are merged in the configured order, with later files winning. Existing
 process variables win by default; set `env.override_process_env = true` to let
-workspace values replace them. `env run` automatically maintains an encrypted,
+workspace values replace them. Explicit `--with` values always win when combined
+with a workspace. `env run` automatically maintains an encrypted,
 mode-specific cache in the operating system cache directory. The cache is an
 implementation detail and is rebuilt whenever the workspace, source contents,
 or layer order changes.

@@ -249,6 +249,7 @@ async fn run(cli: Cli) -> Result<()> {
                     &config,
                     cmd.workspace.as_deref(),
                     cmd.mode.as_deref(),
+                    &cmd.with,
                     &cmd.command,
                 )
                 .await
@@ -681,28 +682,14 @@ async fn handle_env_export(config: &Config, key: &str, alias: Option<&str>) -> R
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum EnvExportValue<'a> {
-    Secret { key: String, value: &'a str },
-    Plaintext(&'a str),
-}
+type EnvExportValue<'a> = env::StoredValue<'a>;
 
 fn resolve_env_export_value<'a>(env: &'a env::EnvConfig, key: &str) -> Result<EnvExportValue<'a>> {
-    let secret_key = env_export_secret_key(key);
-    if let Some(value) = env.get(&secret_key) {
-        return Ok(EnvExportValue::Secret {
-            key: secret_key,
-            value,
-        });
-    }
-    if let Some(value) = env.get(key) {
-        return Ok(EnvExportValue::Plaintext(value));
-    }
-    bail!("{secret_key} or {key} is not set in the active config [env]");
+    env::resolve_stored_value(env, key)
 }
 
 fn env_export_secret_key(key: &str) -> String {
-    format!("{key}_SECRET")
+    env::secret_key(key)
 }
 
 fn validate_env_export_key(key: &str) -> Result<()> {
@@ -1268,6 +1255,32 @@ mod tests {
             Commands::Env {
                 command: EnvCommands::Run(cmd)
             } if cmd.mode.as_deref() == Some("production")
+                && cmd.with.is_empty()
+                && cmd.command == ["bun", "run", "build"]
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_env_run_with_multiple_explicit_values() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "run",
+            "--with",
+            "TOKEN_A",
+            "--with",
+            "TOKEN_B=OTHER_TOKEN",
+            "--",
+            "bun",
+            "run",
+            "build",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Run(cmd)
+            } if cmd.with == ["TOKEN_A", "TOKEN_B=OTHER_TOKEN"]
                 && cmd.command == ["bun", "run", "build"]
         ));
     }

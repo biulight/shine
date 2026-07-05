@@ -630,6 +630,19 @@ eval "$(shine env export MY_TOKEN --as API_TOKEN)"
 
 安装 `utils` 预设后，也可以用 `shine-env-export MY_TOKEN --as API_TOKEN` 直接应用，无需手写 `eval`。
 
+如果只想把变量提供给一个子进程、而不修改当前终端，可使用 `env run` 中可重复的
+`--with` 参数：
+
+```bash
+shine env run --with MY_TOKEN -- bun run build
+shine env run --with MY_TOKEN=API_TOKEN -- bun run build
+shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
+```
+
+每个变量都沿用 `env export` 的规则，优先解密 `<KEY>_SECRET`，否则读取明文 `<KEY>`。
+等号右侧可指定子进程看到的变量名。显式 `--with` 值会覆盖当前终端和 workspace 中的
+同名变量；只要指定了至少一个 `--with`，就不要求存在 workspace 文件。
+
 ### Workspace 环境运行器
 
 如果项目不希望保留明文 dotenv 文件，可以创建 `shine.workspace.toml`：
@@ -676,7 +689,8 @@ shine env run --mode production -- bun run build
 ```
 
 环境源按配置顺序合并，后面的文件覆盖前面的文件。默认保留当前进程中已存在的变量；设置
-`env.override_process_env = true` 后改由 workspace 值覆盖。`env run` 会在系统缓存目录中自动维护按
+`env.override_process_env = true` 后改由 workspace 值覆盖。与 workspace 同时使用时，显式
+`--with` 值始终优先。`env run` 会在系统缓存目录中自动维护按
 mode 区分的加密缓存；workspace、源文件内容或覆盖顺序变化后，缓存会自动重建，不需要单独的
 compile 命令。
 

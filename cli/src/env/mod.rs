@@ -3,7 +3,7 @@ pub mod upgrade;
 pub mod workspace;
 
 use crate::config::Config;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 
 /// User-editable environment variables stored in `config.toml` under `[env]`.
@@ -63,6 +63,33 @@ impl From<EnvConfig> for BTreeMap<String, String> {
     fn from(value: EnvConfig) -> Self {
         value.vars
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+/// A config environment value selected using encrypted-first lookup.
+pub enum StoredValue<'a> {
+    Secret { key: String, value: &'a str },
+    Plaintext(&'a str),
+}
+
+/// Resolve `KEY_SECRET` first, falling back to plaintext `KEY`.
+pub fn resolve_stored_value<'a>(env: &'a EnvConfig, key: &str) -> Result<StoredValue<'a>> {
+    let secret_key = secret_key(key);
+    if let Some(value) = env.get(&secret_key) {
+        return Ok(StoredValue::Secret {
+            key: secret_key,
+            value,
+        });
+    }
+    if let Some(value) = env.get(key) {
+        return Ok(StoredValue::Plaintext(value));
+    }
+    bail!("{secret_key} or {key} is not set in the active config [env]");
+}
+
+/// Return the encrypted-storage key associated with an environment variable.
+pub fn secret_key(key: &str) -> String {
+    format!("{key}_SECRET")
 }
 
 impl EnvConfig {
