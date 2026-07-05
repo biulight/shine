@@ -155,9 +155,14 @@ enum EnvValue {
     Plain(String),
     Detailed {
         value: String,
-        #[allow(dead_code)]
         description: Option<String>,
     },
+}
+
+#[derive(Default)]
+struct EnvOverrides {
+    values: BTreeMap<String, String>,
+    descriptions: BTreeMap<String, String>,
 }
 
 fn deserialize_env_values<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
@@ -649,8 +654,8 @@ impl Config {
         let legacy_env = read_env_file(&legacy_path).await?;
         let has_legacy = legacy_env.is_some();
 
-        if let Some(vars) = legacy_env {
-            for (key, value) in vars {
+        if let Some(overrides) = legacy_env {
+            for (key, value) in overrides.values {
                 if config_has_env {
                     if let std::collections::btree_map::Entry::Vacant(entry) = self.env.entry(key) {
                         entry.insert(value);
@@ -692,14 +697,10 @@ impl Config {
 
     async fn apply_global_env_override(&mut self) -> Result<()> {
         let env_path = self.shine_dir().join(PROJECT_ENV_FILE);
-        let Some(vars) = read_env_file(&env_path).await? else {
+        let Some(overrides) = read_env_file(&env_path).await? else {
             return Ok(());
         };
-
-        for (key, value) in vars {
-            self.env.insert(key, value);
-        }
-
+        self.apply_env_overrides(overrides);
         Ok(())
     }
 
@@ -707,14 +708,10 @@ impl Config {
         let Some(overlay_dir) = self.active_presets_overlay_dir() else {
             return Ok(());
         };
-        let Some(vars) = read_env_file(&overlay_dir.join(PROJECT_ENV_FILE)).await? else {
+        let Some(overrides) = read_env_file(&overlay_dir.join(PROJECT_ENV_FILE)).await? else {
             return Ok(());
         };
-
-        for (key, value) in vars {
-            self.env.insert(key, value);
-        }
-
+        self.apply_env_overrides(overrides);
         Ok(())
     }
 
@@ -726,7 +723,7 @@ impl Config {
             let legacy_env_path = project_config.root.join(LEGACY_PROJECT_ENV_FILE);
             (legacy_env_path, true)
         };
-        let Some(vars) = read_env_file(&env_path).await? else {
+        let Some(overrides) = read_env_file(&env_path).await? else {
             return Ok(());
         };
 
@@ -739,11 +736,13 @@ impl Config {
             );
         }
 
-        for (key, value) in vars {
-            self.env.insert(key, value);
-        }
-
+        self.apply_env_overrides(overrides);
         Ok(())
+    }
+
+    fn apply_env_overrides(&mut self, overrides: EnvOverrides) {
+        self.env.extend(overrides.values);
+        self.env_descriptions.extend(overrides.descriptions);
     }
 }
 
@@ -832,7 +831,7 @@ pub async fn validate_env_override_file(path: &Path) -> Result<()> {
     read_env_file(path).await.map(|_| ())
 }
 
-async fn read_env_file(path: &Path) -> Result<Option<BTreeMap<String, String>>> {
+async fn read_env_file(path: &Path) -> Result<Option<EnvOverrides>> {
     let content = match fs::read_to_string(path).await {
         Ok(content) => content,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -841,11 +840,27 @@ async fn read_env_file(path: &Path) -> Result<Option<BTreeMap<String, String>>> 
 
     let table: toml::Table =
         toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
-    let vars = table
-        .into_iter()
-        .filter_map(|(key, value)| value.as_str().map(|value| (key, value.to_string())))
-        .collect();
-    Ok(Some(vars))
+    let mut overrides = EnvOverrides::default();
+    for (key, value) in table {
+        let parsed: EnvValue = value.try_into().with_context(|| {
+            format!(
+                "invalid env variable `{key}` in {}: expected a string or {{ value, description }}",
+                path.display()
+            )
+        })?;
+        match parsed {
+            EnvValue::Plain(value) => {
+                overrides.values.insert(key, value);
+            }
+            EnvValue::Detailed { value, description } => {
+                overrides.values.insert(key.clone(), value);
+                if let Some(description) = description {
+                    overrides.descriptions.insert(key, description);
+                }
+            }
+        }
+    }
+    Ok(Some(overrides))
 }
 
 /// Return the home directory of the original (pre-sudo) user when the process
@@ -2171,18 +2186,28 @@ mod tests {
         let project_dir = dir.join("project");
         fs::create_dir_all(&overlay_dir).await.unwrap();
         fs::create_dir_all(&project_dir).await.unwrap();
-        fs::write(dir.join(PROJECT_ENV_FILE), "SHARED = \"global\"\n")
-            .await
-            .unwrap();
         fs::write(
-            overlay_dir.join(PROJECT_ENV_FILE),
-            "SHARED = \"overlay\"\nOVERLAY_ONLY = \"yes\"\n",
+            dir.join(PROJECT_ENV_FILE),
+            "SHARED = { value = \"global\", description = \"global description\" }\n\
+             DETAILED = { value = \"global\", description = \"global detail\" }\n",
         )
         .await
         .unwrap();
-        fs::write(project_dir.join(PROJECT_ENV_FILE), "SHARED = \"project\"\n")
-            .await
-            .unwrap();
+        fs::write(
+            overlay_dir.join(PROJECT_ENV_FILE),
+            "SHARED = { value = \"overlay\", description = \"overlay description\" }\n\
+             DETAILED = { value = \"overlay\", description = \"overlay detail\" }\n\
+             OVERLAY_ONLY = { value = \"yes\", description = \"overlay only\" }\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            project_dir.join(PROJECT_ENV_FILE),
+            "SHARED = \"project\"\n\
+             DETAILED = { value = \"project\", description = \"project detail\" }\n",
+        )
+        .await
+        .unwrap();
 
         let mut config = config_in(&dir);
         config.presets_overlay_dir_override = Some(overlay_dir);
@@ -2195,6 +2220,17 @@ mod tests {
         assert_eq!(
             config.env.get("OVERLAY_ONLY").map(String::as_str),
             Some("yes")
+        );
+        assert_eq!(
+            config.env_descriptions.get("SHARED").map(String::as_str),
+            Some("overlay description")
+        );
+        assert_eq!(
+            config
+                .env_descriptions
+                .get("OVERLAY_ONLY")
+                .map(String::as_str),
+            Some("overlay only")
         );
 
         config
@@ -2209,6 +2245,44 @@ mod tests {
             config.env.get("SHARED").map(String::as_str),
             Some("project")
         );
+        assert_eq!(
+            config.env_descriptions.get("SHARED").map(String::as_str),
+            Some("overlay description"),
+            "a plain override must preserve the inherited description"
+        );
+        assert_eq!(
+            config.env.get("DETAILED").map(String::as_str),
+            Some("project")
+        );
+        assert_eq!(
+            config.env_descriptions.get("DETAILED").map(String::as_str),
+            Some("project detail")
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn env_override_rejects_invalid_values_with_path_and_key() {
+        let dir = make_temp_dir().await;
+        let path = dir.join(PROJECT_ENV_FILE);
+        let invalid_values = [
+            "TOKEN = 42\n",
+            "TOKEN = [\"one\", \"two\"]\n",
+            "TOKEN = { description = \"missing value\" }\n",
+            "TOKEN = { value = 42, description = \"wrong type\" }\n",
+        ];
+
+        for content in invalid_values {
+            fs::write(&path, content).await.unwrap();
+            let error = validate_env_override_file(&path).await.unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains("TOKEN"), "missing key in: {message}");
+            assert!(
+                message.contains(path.to_str().unwrap()),
+                "missing path in: {message}"
+            );
+        }
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

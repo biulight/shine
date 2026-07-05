@@ -849,8 +849,14 @@ while other files continue to come from the external source.
 
 ```toml
 HTTP_PROXY_PORT = "7890"
-PROXY_HOST = "127.0.0.1"
+PROXY_HOST = { value = "127.0.0.1", description = "Local proxy host" }
 ```
+
+Like config `[env]` entries, every flat override value may be either a string or
+an inline `{ value, description }` table. A detailed override replaces both the
+value and its description; a string override replaces only the value and keeps
+any description inherited from a lower-priority config or preset catalog.
+Invalid value types are reported as errors rather than ignored.
 
 ## Directory Layout
 

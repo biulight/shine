@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-05 — Typed config readers must not silently discard invalid entries
+
+- **Symptom**: `{ value, description }` entries in `shine.env.toml` appeared valid but had no
+  effect, while the same shape worked in `config.toml` `[env]`.
+- **Root cause**: the override reader parsed a generic TOML table and used `filter_map` to keep
+  strings, silently dropping every other value instead of applying the shared env value model.
+- **Fix**: parse each override entry as the same string-or-detailed env type, merge optional
+  descriptions by layer, and report invalid entries with their key and file path.
+- **Rule**: typed configuration readers must reject unsupported value shapes explicitly; never
+  use filtering as validation when a dropped entry changes user-visible behavior.
+
 ## 2026-07-05 — Filtered overlay lookup must search the merged preset namespace
 
 - **Symptom**: `shine upgrade` failed with `app preset category not found: JetBrains` when the

@@ -810,8 +810,13 @@ Overlay 也可以与完整的外部 presets 来源同时使用：同路径文件
 
 ```toml
 HTTP_PROXY_PORT = "7890"
-PROXY_HOST = "127.0.0.1"
+PROXY_HOST = { value = "127.0.0.1", description = "本地代理主机" }
 ```
+
+与配置文件的 `[env]` 条目一样，扁平 override 中的每个值既可以是字符串，也可以是
+inline `{ value, description }` 表。详细项会同时覆盖值和说明；字符串只覆盖值，并
+保留从低优先级配置或 preset catalog 继承的说明。无效的值类型会明确报错，不会被
+静默忽略。
 
 ## 目录布局
 
