@@ -6,7 +6,42 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use tokio::fs;
+
+/// Cross-process advisory lock serialising privileged (sudo) filesystem
+/// mutations. `nextest` runs each test in its own OS process, so an
+/// in-process `Mutex` cannot prevent concurrent test processes from racing
+/// on a real, shared system path (e.g. `/etc/docker/daemon.json`); this
+/// lock closes that window for both tests and real concurrent invocations.
+struct AdminLockGuard {
+    path: PathBuf,
+}
+
+impl Drop for AdminLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir(&self.path);
+    }
+}
+
+async fn admin_lock() -> Result<AdminLockGuard> {
+    let path = std::env::temp_dir().join("shine-admin.lock");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match fs::create_dir(&path).await {
+            Ok(()) => return Ok(AdminLockGuard { path }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if Instant::now() >= deadline {
+                    // Stale lock from a crashed process: reclaim it.
+                    let _ = fs::remove_dir(&path).await;
+                    continue;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(e) => return Err(e).context("failed to acquire admin operation lock"),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum InstallOutcome {
@@ -53,6 +88,7 @@ pub async fn install_bytes_admin(
     if !cfg!(unix) || std::env::var("USER").is_ok_and(|user| user == "root") {
         return install_bytes_impl(content, destination, is_managed, force).await;
     }
+    let _lock = admin_lock().await?;
     if !crate::privilege::ensure_admin(1).await? {
         anyhow::bail!("administrator permission was not granted");
     }
@@ -257,6 +293,7 @@ pub async fn uninstall_entry_admin(
     if !cfg!(unix) || std::env::var("USER").is_ok_and(|user| user == "root") {
         return uninstall_entry(entry, false, force).await;
     }
+    let _lock = admin_lock().await?;
     if !crate::privilege::ensure_admin(1).await? {
         anyhow::bail!("administrator permission was not granted");
     }

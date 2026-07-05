@@ -886,6 +886,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_then_uninstall_roundtrip() {
+        let _admin_guard = crate::test_support::admin_category_test_lock().await;
         let _guard = env_lock();
         let dir = make_temp_dir().await;
 
@@ -933,6 +934,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_dry_run_leaves_everything_intact() {
+        let _admin_guard = crate::test_support::admin_category_test_lock().await;
         let _guard = env_lock();
         let dir = make_temp_dir().await;
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
@@ -1063,6 +1065,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn install_is_idempotent() {
+        let _admin_guard = crate::test_support::admin_category_test_lock().await;
         let _guard = env_lock();
         let dir = make_temp_dir().await;
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
@@ -1799,6 +1802,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn uninstall_specific_category_only_removes_that_category() {
+        let _admin_guard = crate::test_support::admin_category_test_lock().await;
         let _guard = env_lock();
         let dir = make_temp_dir().await;
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
