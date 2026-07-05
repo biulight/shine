@@ -63,12 +63,21 @@ env SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine cargo run --target-dir target -- app 
 
 ```
 shine/
-├── cli/          # Main binary crate
+├── cli/          # Main binary crate ("shine"), backed by a lib crate ("cli")
 │   ├── build.rs  # cargo:rerun-if-changed=../presets (rust-embed trigger)
 │   └── src/
-│       ├── main.rs           # CLI entry, command routing
+│       ├── lib.rs            # Module tree root for the `cli` library crate
+│       ├── main.rs           # Bin crate root: `fn main`, `run()` dispatch, shim
+│       │                     # resolution, `init`, `env show/set/get/decrypt/
+│       │                     # export/encrypt` handlers
+│       ├── presets_commands.rs # export/link/unlink, overlay link/unlink/show
+│       ├── self_install.rs   # update/self-upgrade/upgrade-installed-configs,
+│       │                     # atomic self-install binary copy
 │       ├── commands/
 │       │   ├── mod.rs        # Clap subcommand enums (ShellCommands, AppCommands, etc.)
+│       │   ├── cli.rs        # Cli, Commands, CompletionShell/Commands, and the
+│       │   │                 # other top-level clap arg types (lives in the lib
+│       │   │                 # crate since completion.rs needs them)
 │       │   ├── app.rs        # AppCommands enum
 │       │   ├── env.rs        # EnvCommands enum
 │       │   ├── preset.rs     # ExportCommand, LinkCommand structs
@@ -77,6 +86,8 @@ shine/
 │       │   └── sys.rs        # SysCommands enum
 │       ├── apps/
 │       │   ├── mod.rs        # App install/uninstall/list orchestration
+│       │   ├── report.rs     # Install/uninstall outcome print_* helpers
+│       │   ├── upgrade.rs    # handle_upgrade_installed, stale-entry cleanup
 │       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile)
 │       │   ├── annotation.rs # shine-dest: comment annotation parser
 │       │   ├── file_ops.rs   # File copy, backup (*.shine.bak), restore
@@ -86,11 +97,21 @@ shine/
 │       │   ├── mod.rs        # EnvConfig: [env] table in config.toml, @@VAR@@ substitution
 │       │   └── upgrade.rs    # Re-apply env template transforms to installed presets
 │       ├── shells/
-│       │   ├── mod.rs        # ShellType, handle_install/uninstall/list, PATH injection
+│       │   ├── mod.rs        # ShellType, handle_install/uninstall/list, link-conflict reporting
+│       │   ├── profile.rs    # Managed profile file/PATH/sentinel-block install+removal
+│       │   ├── template.rs   # @@VAR@@ template rendering for installed scripts
 │       │   └── metadata.rs   # ShellCategory/ShellFile parsing from shine.toml or .sh files
 │       ├── sys/
-│       │   └── mod.rs        # sys list/init: OS detection, profile selection, init.sh execution
-│       ├── config/           # Config struct, load/save, env-var priority chain
+│       │   ├── mod.rs        # sys handle_* entry points, shared data model types
+│       │   ├── manifest.rs   # Preset loading, parsing, and validation
+│       │   ├── profile.rs    # Shell-profile install/merge/sentinel logic
+│       │   ├── selection.rs  # Item-selection resolution (profile vs interactive)
+│       │   ├── execution.rs  # Running sys items, parsing script output, run reports
+│       │   └── resources.rs  # Built-in managed-resource drivers (split-dns, etc.)
+│       ├── config/
+│       │   ├── mod.rs        # Config struct, load/save
+│       │   └── discovery.rs  # Project-config discovery, SHINE_CONFIG_DIR/
+│       │                     # SHINE_PRESETS priority chain
 │       ├── presets.rs        # rust-embed asset extraction, list_categories, parse_script_description
 │       ├── bin_links.rs      # Symlink management in ~/.shine/bin/
 │       ├── clear.rs          # Clear stale runtime state after schema changes
@@ -98,9 +119,14 @@ shine/
 │       ├── list.rs           # Top-level `shine list` and status views
 │       ├── secret.rs         # GPG encrypt/decrypt for env secrets
 │       ├── show.rs           # `shine info <TARGET>` content display
+│       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
+│       │                     # since #[cfg(test)] doesn't cross the lib/bin boundary)
 │       ├── update_check.rs   # GitHub release version check, 24h cache
 │       └── version.rs        # Version string formatting
-├── utils/        # Library crate: TOML comment-preserving sync (utils::sync_table)
+├── utils/        # Library crate: shared helpers with no cli-crate dependencies
+│   └── src/
+│       ├── migration.rs      # TOML comment-preserving sync (utils::sync_table)
+│       └── init_template.rs  # write_shine_toml_template (shared by `app init`/`shell init`)
 └── presets/      # Embedded assets (compiled into binary via rust-embed)
     ├── shell/
     │   ├── agent/   cc.sh, cc.ps1, shine.toml  (needs_source=true; installed as `ccenv`; platform-scoped per shell family)
@@ -112,13 +138,14 @@ shine/
     │   ├── docker-engine/  daemon.jsonc, shine.toml
     │   ├── fastfetch/  config.jsonc, shine.toml
     │   ├── ghostty/    config.ghostty, shine.toml
-    │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig)
+    │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig; no shine.toml, uses annotation instead)
     │   ├── JetBrains/  shine.toml
-    │   ├── starship/   starship.toml
+    │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
         ├── macos/   init.sh, shine.toml
-        └── ubuntu/  init.sh, shine.toml
+        ├── ubuntu/  init.sh, shine.toml
+        └── windows/ init.ps1, shine.toml
 ```
 
 ### Command routing
@@ -133,10 +160,10 @@ shine/
 | `env show/set/get/decrypt/encrypt` | `cli/src/env/` |
 | `list` | `cli/src/list.rs` |
 | `info <TARGET>` | `cli/src/show.rs` |
-| `export` / `link` / `unlink` | `main.rs` inline handlers |
+| `export` / `link` / `unlink` / `overlay` | `cli/src/presets_commands.rs` |
 | `init` | `main.rs` inline handler |
-| `self install/upgrade` | `main.rs` + `update_check.rs` |
-| `update` / `upgrade` | `main.rs` + `update_check.rs` |
+| `self install/upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
+| `update` / `upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
 | `clear` | `cli/src/clear.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
 
@@ -228,6 +255,8 @@ Do **not** use `git cliff` to generate CHANGELOG entries. Write entries manually
 ```
 
 Keep entries concise and user-facing. Internal refactors can be grouped under **Internal**.
+
+Note: `cliff.toml` still exists and `release.yml` invokes `git cliff` to generate the GitHub Release notes body from conventional-commit messages. That is a separate, automated artifact from the hand-written `CHANGELOG.md` — the two do not overwrite each other, and both may legitimately describe the same release in different words.
 
 ## Release Versioning
 
