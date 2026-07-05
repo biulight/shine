@@ -1,0 +1,267 @@
+use anyhow::{Result, bail};
+use std::path::PathBuf;
+
+use cli::config::{self, Config};
+use cli::{colors, presets};
+
+pub(super) async fn handle_presets_export(
+    config: &Config,
+    dir: Option<PathBuf>,
+    force: bool,
+) -> Result<()> {
+    use anyhow::Context as _;
+
+    let target = dir.unwrap_or_else(|| config.presets_dir().to_owned());
+    tokio::fs::create_dir_all(&target)
+        .await
+        .with_context(|| format!("creating export directory: {}", target.display()))?;
+
+    println!("Exporting built-in presets to {} ...", target.display());
+
+    let report = presets::extract_all(&target, force).await?;
+
+    let created = report.created.len();
+    let overwritten = report.overwritten.len();
+    let skipped = report.skipped.len();
+
+    if created > 0 {
+        println!("{}", colors::green(&format!("  {created} file(s) created")));
+    }
+    if overwritten > 0 {
+        println!(
+            "{}",
+            colors::yellow(&format!("  {overwritten} file(s) updated (overwritten)"))
+        );
+    }
+    if skipped > 0 {
+        println!("  {skipped} file(s) skipped (already exist; use --force to overwrite)");
+    }
+    if created == 0 && overwritten == 0 && skipped == 0 {
+        println!("  No files exported (empty embedded asset set).");
+    }
+
+    if !config.is_external_presets {
+        println!();
+        println!(
+            "Tip: run `shine link {}` to activate this directory.",
+            target.display()
+        );
+    }
+
+    Ok(())
+}
+
+pub(super) async fn handle_presets_link(
+    config: &Config,
+    path: PathBuf,
+    create: bool,
+) -> Result<()> {
+    use anyhow::Context as _;
+
+    let raw = path.to_string_lossy();
+    let expanded = config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
+    let expanded = PathBuf::from(expanded);
+
+    if create {
+        tokio::fs::create_dir_all(&expanded)
+            .await
+            .with_context(|| format!("creating directory: {}", expanded.display()))?;
+    }
+
+    let meta = tokio::fs::metadata(&expanded).await.with_context(|| {
+        if create {
+            format!("accessing directory: {}", expanded.display())
+        } else {
+            format!(
+                "path does not exist: {} (use --create to create it)",
+                expanded.display()
+            )
+        }
+    })?;
+
+    if !meta.is_dir() {
+        bail!("path is not a directory: {}", expanded.display());
+    }
+
+    let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
+
+    if config
+        .presets_dir_override
+        .as_deref()
+        .is_some_and(|p| p == absolute)
+    {
+        println!(
+            "{}",
+            colors::dim(&format!("already linked: {}", absolute.display()))
+        );
+        return Ok(());
+    }
+
+    let updated = config
+        .clone()
+        .with_presets_dir_override(Some(absolute.clone()));
+    updated.save().await?;
+
+    if std::env::var("SHINE_CONFIG_DIR")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+        || std::env::var("SHINE_PRESETS")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    {
+        println!(
+            "{}",
+            colors::yellow(
+                "Warning: SHINE_CONFIG_DIR or SHINE_PRESETS is set and takes priority over \
+                 the active config at runtime. Unset the env var for this setting to take effect."
+            )
+        );
+    }
+
+    println!("{}", colors::external_presets_note(&absolute));
+    println!(
+        "{}",
+        colors::dim("Run `shine export` to populate the directory with built-in presets.")
+    );
+
+    Ok(())
+}
+
+pub(super) async fn handle_presets_unlink(config: &Config) -> Result<()> {
+    if config.presets_dir_override.is_none() {
+        println!(
+            "{}",
+            colors::dim("No external presets directory is configured.")
+        );
+        return Ok(());
+    }
+
+    let updated = config.clone().with_presets_dir_override(None);
+    updated.save().await?;
+
+    println!(
+        "{}",
+        colors::green("External presets directory removed from the active config.")
+    );
+    println!(
+        "{}",
+        colors::dim("Built-in embedded presets will be used on the next run.")
+    );
+
+    Ok(())
+}
+
+pub(super) async fn handle_overlay_link(
+    config: &Config,
+    path: PathBuf,
+    create: bool,
+) -> Result<()> {
+    use anyhow::Context as _;
+
+    let raw = path.to_string_lossy();
+    let expanded = config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
+    let expanded = PathBuf::from(expanded);
+
+    if create {
+        tokio::fs::create_dir_all(&expanded)
+            .await
+            .with_context(|| format!("creating directory: {}", expanded.display()))?;
+    }
+
+    let meta = tokio::fs::metadata(&expanded).await.with_context(|| {
+        if create {
+            format!("accessing directory: {}", expanded.display())
+        } else {
+            format!(
+                "path does not exist: {} (use --create to create it)",
+                expanded.display()
+            )
+        }
+    })?;
+
+    if !meta.is_dir() {
+        bail!("path is not a directory: {}", expanded.display());
+    }
+
+    let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
+
+    if config
+        .presets_overlay_dir_override
+        .as_deref()
+        .is_some_and(|p| p == absolute)
+    {
+        println!(
+            "{}",
+            colors::dim(&format!("overlay already linked: {}", absolute.display()))
+        );
+        return Ok(());
+    }
+
+    let updated = config
+        .clone()
+        .with_presets_overlay_dir_override(Some(absolute.clone()));
+    updated.save().await?;
+
+    println!("{}", colors::presets_overlay_note(&absolute));
+    if config.is_external_presets {
+        println!(
+            "{}",
+            colors::yellow(
+                "Warning: a full external presets source is active, so this overlay is configured but not used."
+            )
+        );
+    } else {
+        println!(
+            "{}",
+            colors::dim("Overlay files override built-in presets by matching path.")
+        );
+    }
+
+    Ok(())
+}
+
+pub(super) async fn handle_overlay_unlink(config: &Config) -> Result<()> {
+    if config.presets_overlay_dir_override.is_none() {
+        println!(
+            "{}",
+            colors::dim("No presets overlay directory is configured.")
+        );
+        return Ok(());
+    }
+
+    let updated = config.clone().with_presets_overlay_dir_override(None);
+    updated.save().await?;
+
+    println!(
+        "{}",
+        colors::green("Presets overlay directory removed from the active config.")
+    );
+    println!(
+        "{}",
+        colors::dim("Built-in embedded presets will be used without overlay on the next run.")
+    );
+
+    Ok(())
+}
+
+pub(super) fn handle_overlay_show(config: &Config) -> Result<()> {
+    if let Some(dir) = &config.presets_overlay_dir_override {
+        println!("{}", colors::presets_overlay_note(dir));
+        if config.is_external_presets {
+            println!(
+                "{}",
+                colors::yellow(
+                    "Inactive: a full external presets source is active and takes priority."
+                )
+            );
+        } else {
+            println!("{}", colors::green("Active"));
+        }
+    } else {
+        println!(
+            "{}",
+            colors::dim("No presets overlay directory is configured.")
+        );
+    }
+    Ok(())
+}
