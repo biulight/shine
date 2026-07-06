@@ -111,6 +111,11 @@ pub struct Config {
     /// does not provide `-r/--recipient`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpg_key_id: Option<String>,
+    /// Selects the [`crate::secret::SecretBackend`] used for `shine env encrypt`/
+    /// `decrypt`. Absent (the default) means GPG; reserved for a future
+    /// Touch ID / keychain backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_backend: Option<String>,
     /// Environment variables substituted into template-enabled presets.
     #[serde(
         default = "default_env_map",
@@ -179,6 +184,7 @@ impl Config {
             is_external_presets: false,
             self_install_dest: None,
             gpg_key_id: None,
+            secret_backend: None,
             env: default_env_map(),
             env_descriptions: BTreeMap::new(),
         }
@@ -263,6 +269,7 @@ impl Default for Config {
             is_external_presets: false,
             self_install_dest: None,
             gpg_key_id: None,
+            secret_backend: None,
             env: default_env_map(),
             env_descriptions: BTreeMap::new(),
         }

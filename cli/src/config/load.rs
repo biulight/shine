@@ -29,6 +29,8 @@ struct ProjectOverrides {
     self_install_dest: Option<PathBuf>,
     #[serde(default)]
     gpg_key_id: Option<String>,
+    #[serde(default)]
+    secret_backend: Option<String>,
     #[serde(default, deserialize_with = "deserialize_env_values")]
     env: BTreeMap<String, String>,
 }
@@ -127,6 +129,9 @@ impl Config {
         }
         if overrides.gpg_key_id.is_some() {
             config.gpg_key_id = overrides.gpg_key_id;
+        }
+        if overrides.secret_backend.is_some() {
+            config.secret_backend = overrides.secret_backend;
         }
         config.env.extend(overrides.env);
         config

@@ -1,6 +1,13 @@
+//! GPG-backed secret storage: base64-encoded ciphertext round-tripped through
+//! the `gpg` and `base64` CLI tools. This is the only backend today; ciphertext
+//! carries no backend tag, so a future backend router must treat untagged
+//! base64 as GPG for backward compatibility.
+
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
+
+use super::SecretBackend;
 
 pub async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<String> {
     if encoded_secret.trim().is_empty() {
@@ -35,6 +42,30 @@ pub async fn encrypt_gpg_secret_to_base64(plaintext: &[u8], recipient: &str) -> 
 
     let encrypted = encrypt_gpg(plaintext, recipient).await?;
     encode_base64_single_line(&encrypted).await
+}
+
+/// [`SecretBackend`] wrapping the free functions above, bound to a fixed
+/// recipient. Encrypt/decrypt for the default (and currently only) backend.
+pub struct GpgBackend {
+    recipient: String,
+}
+
+impl GpgBackend {
+    pub fn new(recipient: impl Into<String>) -> Self {
+        Self {
+            recipient: recipient.into(),
+        }
+    }
+}
+
+impl SecretBackend for GpgBackend {
+    async fn encrypt(&self, plaintext: &[u8]) -> Result<String> {
+        encrypt_gpg_secret_to_base64(plaintext, &self.recipient).await
+    }
+
+    async fn decrypt(&self, ciphertext: &str) -> Result<String> {
+        decrypt_base64_gpg_secret(ciphertext).await
+    }
 }
 
 fn ensure_command(name: &str) -> Result<()> {
