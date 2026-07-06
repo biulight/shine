@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-05 — Info diff and update must resolve the same effective preset
+
+- **Symptom**: `shine update` reported an embedded shell preset update while
+  `shine info proxy/setproxy --diff` said there were no content differences.
+- **Root cause**: update rendered the newly embedded template, but info rendered the stale
+  extracted copy under `~/.shine/presets/`; info status also omitted template comparison.
+- **Fix**: resolve expected shell bytes from embedded assets unless external presets mode is
+  active, and reuse update's shell rows for info status.
+- **Rule**: status and diff surfaces must share effective-source selection with the operation
+  that will apply the update.
+
 ## 2026-07-05 — Managed sys resources need desired-state update detection
 
 - **Symptom**: changing split-DNS variables in an overlay `shine.env.toml` was invisible to

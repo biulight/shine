@@ -3,7 +3,7 @@ use crate::apps::{
     load_installed_categories, resolve_install_destination, source_bytes_for_file,
     source_hash_for_file,
 };
-use crate::check::FileStatus;
+use crate::check::{FileStatus, build_shell_rows};
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
@@ -173,6 +173,7 @@ async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShowFile>> {
         load_embedded_shells(None)?
     };
 
+    let shell_rows = build_shell_rows(config).await?;
     let mut files = Vec::new();
     for category in categories {
         for file in &category.files {
@@ -198,12 +199,18 @@ async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShowFile>> {
                 continue;
             }
 
-            let status = match (source_exists || rendered_exists, link_exists) {
+            let fallback_status = match (source_exists || rendered_exists, link_exists) {
                 (true, true) => "up-to-date",
                 (true, false) => "preset present, bin symlink missing",
                 (false, true) => "bin symlink present, script missing",
                 (false, false) => "not installed",
             };
+            let label = format!("{}/{}", category.name, file.command_name);
+            let status = shell_rows
+                .iter()
+                .find(|row| row.label == label)
+                .map(|row| row.status_text)
+                .unwrap_or(fallback_status);
 
             files.push(ShellShowFile {
                 category: category.clone(),
@@ -780,16 +787,28 @@ async fn shell_diff_output(
 }
 
 async fn shell_expected_bytes(config: &Config, item: &ShellShowFile) -> Result<Option<Vec<u8>>> {
-    let source = match tokio::fs::read(&item.source_path).await {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => {
-            return Err(err).with_context(|| {
-                format!(
-                    "reading shell preset source: {}",
-                    item.source_path.display()
-                )
-            });
+    let source_key = format!(
+        "shell/{}/{}",
+        item.category.name,
+        item.file.source_rel.display()
+    );
+    let source = if config.is_external_presets {
+        match tokio::fs::read(&item.source_path).await {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "reading shell preset source: {}",
+                        item.source_path.display()
+                    )
+                });
+            }
+        }
+    } else {
+        match crate::presets::read_asset_bytes(&source_key) {
+            Some(bytes) => bytes,
+            None => return Ok(None),
         }
     };
 
@@ -934,6 +953,30 @@ mod tests {
         assert!(diff.contains("expected"));
         assert!(diff.contains("-old"));
         assert!(diff.contains("+new"));
+    }
+
+    #[tokio::test]
+    async fn embedded_shell_diff_ignores_stale_extracted_source() {
+        let dir = std::env::temp_dir().join(format!("shine-show-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let stale_source = dir.join("set_proxy.sh");
+        tokio::fs::write(&stale_source, b"#!/bin/bash\necho stale\n")
+            .await
+            .unwrap();
+        let config = Config::new_for_test(&dir);
+        let mut item = shell_file("proxy", "setproxy", "set_proxy.sh");
+        item.source_path = stale_source;
+
+        let expected = shell_expected_bytes(&config, &item)
+            .await
+            .unwrap()
+            .expect("embedded proxy source should exist");
+        let expected = String::from_utf8(expected).unwrap();
+
+        assert!(!expected.contains("echo stale"));
+        assert!(expected.contains("PROXY_NO_PROXY=\"localhost,127.0.0.1,::1\""));
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[test]
