@@ -3,6 +3,7 @@ use crate::check::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_row
 use crate::colors;
 use crate::config::Config;
 use crate::output;
+use crate::sys;
 use anyhow::Result;
 
 const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
@@ -27,8 +28,9 @@ pub async fn handle_update_list(config: &Config) -> Result<bool> {
         .iter()
         .filter(|r| r.file_status == FileStatus::UpdateAvail)
         .collect();
+    let update_sys = sys::managed_updates(config).await.unwrap_or_default();
 
-    let any = !update_shell.is_empty() || !update_app.is_empty();
+    let any = !update_shell.is_empty() || !update_app.is_empty() || !update_sys.is_empty();
     if !any {
         return Ok(false);
     }
@@ -85,6 +87,24 @@ pub async fn handle_update_list(config: &Config) -> Result<bool> {
         }
     }
 
+    if !update_sys.is_empty() {
+        if !update_shell.is_empty() || !update_app.is_empty() {
+            println!();
+        }
+        println!("{}", colors::bold("System Configs"));
+        for row in &update_sys {
+            println!(
+                "  {}  {}  {}  {}  {}",
+                colors::symbol("↑"),
+                row.label,
+                colors::dim(&format!("({})", row.item_id)),
+                colors::status_label("update available", "↑"),
+                colors::dim("run `shine upgrade`"),
+            );
+            println!("     {}", colors::dim(&row.detail));
+        }
+    }
+
     Ok(true)
 }
 
@@ -106,8 +126,9 @@ pub async fn handle_status_list(config: &Config) -> Result<()> {
         .iter()
         .filter(|r| r.file_status != FileStatus::NotInstalled)
         .collect();
+    let update_sys = sys::managed_updates(config).await.unwrap_or_default();
 
-    let any = !installed_shell.is_empty() || !installed_app.is_empty();
+    let any = !installed_shell.is_empty() || !installed_app.is_empty() || !update_sys.is_empty();
 
     if !any {
         println!(
@@ -215,6 +236,24 @@ pub async fn handle_status_list(config: &Config) -> Result<()> {
 
         if !parts.is_empty() {
             output::footer("Summary", &parts);
+        }
+    }
+
+    if !update_sys.is_empty() {
+        if !installed_shell.is_empty() || !installed_app.is_empty() {
+            println!();
+        }
+        println!("{}", colors::bold("System Configs"));
+        for row in &update_sys {
+            println!(
+                "  {}  {}  {}  {}  {}",
+                colors::symbol("↑"),
+                row.label,
+                colors::dim(&format!("({})", row.item_id)),
+                colors::status_label("update available", "↑"),
+                colors::dim("run `shine upgrade`"),
+            );
+            println!("     {}", colors::dim(&row.detail));
         }
     }
 

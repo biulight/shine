@@ -38,6 +38,11 @@ with the *current* `[env]` values) to every manifest-tracked install, and cleans
 whose preset no longer exists. `env/upgrade.rs` does the same for env-templated content. This is
 why changing an env var requires `shine upgrade` to take effect in installed files.
 
+Managed sys resources participate in the same flow. `shine update` compares the desired built-in
+resource receipt derived from the active env against `sys-manifest.toml`; `shine upgrade` then
+re-applies recorded managed resources and replaces the receipt after convergence. For split DNS,
+the receipt comparison includes the normalized domain, DNS servers, and platform resource path.
+
 ## Shell install / uninstall
 
 Documented in `AGENTS.md` § "Key data flow". Summary: extract embedded assets →

@@ -170,6 +170,13 @@ pub struct SysUpgradeReport {
     pub failed: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SysUpdateRow {
+    pub item_id: String,
+    pub label: String,
+    pub detail: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SysProfilePhase {
     Pre,
@@ -721,6 +728,61 @@ pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Res
 
 pub async fn handle_upgrade_managed(config: &Config) -> Result<SysUpgradeReport> {
     run_managed(config, None, SysAction::Apply, false, false).await
+}
+
+pub async fn managed_updates(config: &Config) -> Result<Vec<SysUpdateRow>> {
+    let os_id = detect_os_id().await?;
+    managed_updates_for_os(config, &os_id).await
+}
+
+async fn managed_updates_for_os(config: &Config, os_id: &str) -> Result<Vec<SysUpdateRow>> {
+    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let recorded = run_manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.os_id == os_id && entry.managed)
+        .collect::<Vec<_>>();
+    if recorded.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let loaded = load_sys_preset(config, os_id).await?;
+    let env = EnvConfig::load_or_init(config).await?;
+    let preset_root = loaded
+        .script_path
+        .parent()
+        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
+    let mut updates = Vec::new();
+
+    for entry in recorded {
+        let Some(item) = loaded.manifest.items.iter().find(|item| {
+            item.id == entry.item_id
+                && item.mode == SysItemMode::Managed
+                && item.driver != SysDriverKind::Script
+        }) else {
+            continue;
+        };
+        let context = resources::DriverContext {
+            config,
+            os_id,
+            item,
+            preset_root,
+            env: env.as_map(),
+            dry_run: true,
+        };
+        if resources::BuiltinDriver::new(item.driver)
+            .needs_update(&context, entry.receipt.as_ref())?
+        {
+            let plan = resources::BuiltinDriver::new(item.driver).plan(&context, false)?;
+            updates.push(SysUpdateRow {
+                item_id: item.id.clone(),
+                label: item.label.clone(),
+                detail: plan.description,
+            });
+        }
+    }
+
+    Ok(updates)
 }
 
 async fn run_managed(
@@ -2748,6 +2810,77 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
         );
         let final_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
         assert!(final_manifest.entries.is_empty());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn managed_updates_reports_split_dns_env_change() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/macos");
+        fs::create_dir_all(&os_dir).await.unwrap();
+        fs::write(
+            os_dir.join("shine.toml"),
+            r#"
+description = "Managed test"
+
+[[items]]
+id = "split-dns"
+label = "Private split DNS"
+mode = "managed"
+driver = "split-dns"
+requires_admin = true
+required_env = ["PRIVATE_DNS_DOMAIN", "PRIVATE_DNS_SERVERS"]
+
+[items.config]
+domain_env = "PRIVATE_DNS_DOMAIN"
+servers_env = "PRIVATE_DNS_SERVERS"
+"#,
+        )
+        .await
+        .unwrap();
+        fs::write(os_dir.join("init.sh"), "#!/bin/bash\n")
+            .await
+            .unwrap();
+        fs::write(
+            dir.join(SYS_MANIFEST_FILE),
+            r#"
+[[entries]]
+os_id = "macos"
+item_id = "split-dns"
+label = "Private split DNS"
+status = "updated"
+updated_at = "1"
+managed = true
+
+[entries.receipt]
+driver = "split-dns"
+version = 1
+os_id = "macos"
+item_id = "split-dns"
+domain = "private.example"
+servers = ["10.0.0.2"]
+resource = "/etc/resolver/private.example"
+"#,
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.env.insert(
+            "PRIVATE_DNS_DOMAIN".to_string(),
+            "private.example".to_string(),
+        );
+        config
+            .env
+            .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.3".to_string());
+
+        let updates = managed_updates_for_os(&config, "macos").await.unwrap();
+
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].item_id, "split-dns");
+        assert!(updates[0].detail.contains("private.example"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

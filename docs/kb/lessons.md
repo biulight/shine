@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-05 — Managed sys resources need desired-state update detection
+
+- **Symptom**: changing split-DNS variables in an overlay `shine.env.toml` was invisible to
+  `shine update`, leaving no reliable path from the configuration change to `shine upgrade`.
+- **Root cause**: update listing only inspected shell and app content; sys receipts already held
+  the applied domain and servers but were never compared with current desired values.
+- **Fix**: compare the desired built-in resource receipt with `sys-manifest.toml`, report stale
+  managed resources, and let the existing upgrade convergence replace the receipt.
+- **Rule**: every manifest-tracked subsystem included in global upgrade must expose an equivalent
+  read-only desired-state check to global update.
+
 ## 2026-07-05 — Template update checks only see variables used by the template
 
 - **Symptom**: changing `PROXY_NO_PROXY` in an overlay `shine.env.toml` did not make

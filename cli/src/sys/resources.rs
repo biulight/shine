@@ -126,6 +126,27 @@ impl BuiltinDriver {
     pub(super) fn new(kind: SysDriverKind) -> Self {
         Self { kind }
     }
+
+    pub(super) fn needs_update(
+        &self,
+        context: &DriverContext<'_>,
+        previous: Option<&SystemReceipt>,
+    ) -> Result<bool> {
+        match self.kind {
+            SysDriverKind::SplitDns => {
+                let desired = split_dns_desired(context)?;
+                let Some(SystemReceipt::SplitDns(previous)) = previous else {
+                    return Ok(true);
+                };
+                Ok(previous.os_id != desired.os_id
+                    || previous.item_id != desired.item_id
+                    || previous.domain != desired.domain
+                    || previous.servers != desired.servers
+                    || previous.resource != desired.resource)
+            }
+            SysDriverKind::ManagedFile | SysDriverKind::Script => Ok(false),
+        }
+    }
 }
 
 impl SystemDriver for BuiltinDriver {
@@ -864,5 +885,64 @@ mod tests {
         }
         assert!(normalize_servers("not-an-ip").is_err());
         assert!(normalize_servers(" ").is_err());
+    }
+
+    #[test]
+    fn split_dns_env_change_requires_update() {
+        let dir = std::env::temp_dir();
+        let config = Config::new_for_test(&dir);
+        let mut driver_config = toml::Table::new();
+        driver_config.insert(
+            "domain_env".to_string(),
+            toml::Value::String("DOMAIN".to_string()),
+        );
+        driver_config.insert(
+            "servers_env".to_string(),
+            toml::Value::String("SERVERS".to_string()),
+        );
+        let item = SysItem {
+            id: "split-dns".to_string(),
+            label: "Private DNS".to_string(),
+            description: String::new(),
+            default: false,
+            mode: SysItemMode::Managed,
+            requires_admin: true,
+            required_env: vec!["DOMAIN".to_string(), "SERVERS".to_string()],
+            driver: SysDriverKind::SplitDns,
+            config: driver_config,
+        };
+        let original_env = BTreeMap::from([
+            ("DOMAIN".to_string(), "private.example".to_string()),
+            ("SERVERS".to_string(), "10.0.0.2".to_string()),
+        ]);
+        let original_context = DriverContext {
+            config: &config,
+            os_id: "macos",
+            item: &item,
+            preset_root: &dir,
+            env: &original_env,
+            dry_run: true,
+        };
+        let receipt = SystemReceipt::SplitDns(split_dns_desired(&original_context).unwrap());
+        let driver = BuiltinDriver::new(SysDriverKind::SplitDns);
+        assert!(
+            !driver
+                .needs_update(&original_context, Some(&receipt))
+                .unwrap()
+        );
+        let changed_env = BTreeMap::from([
+            ("DOMAIN".to_string(), "private.example".to_string()),
+            ("SERVERS".to_string(), "10.0.0.3".to_string()),
+        ]);
+        let changed_context = DriverContext {
+            env: &changed_env,
+            ..original_context
+        };
+
+        assert!(
+            driver
+                .needs_update(&changed_context, Some(&receipt))
+                .unwrap()
+        );
     }
 }
