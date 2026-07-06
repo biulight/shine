@@ -1,12 +1,10 @@
 use anyhow::{Context, Result, bail};
 use console::{Style, style};
 use dialoguer::theme::ColorfulTheme;
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::AsyncWriteExt;
 
 use crate::colors;
 use crate::config::Config;
@@ -14,8 +12,10 @@ use crate::env::EnvConfig;
 
 mod execution;
 mod manifest;
+mod model;
 mod profile;
 mod resources;
+mod run_manifest;
 mod selection;
 use execution::{
     format_command_preview, manifest_item_labels, print_item_outcome, print_run_header,
@@ -27,6 +27,11 @@ use execution::{parse_status_event, parse_sys_item_output};
 use manifest::load_sys_preset;
 #[cfg(test)]
 use manifest::{parse_and_validate_manifest, sys_init_script_name};
+use model::{
+    LoadedSysPreset, ResolvedSelection, SYS_PROFILE_PHASES, SelectionSource,
+    ShellProfileBlockPosition, SysDriverKind, SysInitCommand, SysItem, SysItemMode, SysItemOutcome,
+    SysItemStatus, SysManifest, SysProfilePhase, SysUpdateRow, SysUpgradeReport,
+};
 use profile::install_sys_profile_loader;
 #[cfg(test)]
 use profile::{
@@ -34,233 +39,14 @@ use profile::{
     update_sys_shell_profiles,
 };
 use resources::SystemDriver;
+#[cfg(test)]
+use run_manifest::SYS_MANIFEST_FILE;
+use run_manifest::{SysRunEntry, SysRunManifest};
 use selection::resolve_selection;
 #[cfg(test)]
 use selection::{format_interactive_item, format_item_ids};
 
-#[derive(Clone, Debug, Default, Deserialize)]
-struct SysManifest {
-    #[serde(default)]
-    description: String,
-    default_profile: Option<String>,
-    #[serde(default)]
-    items: Vec<SysItem>,
-    #[serde(default)]
-    profiles: BTreeMap<String, SysProfile>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct SysItem {
-    id: String,
-    label: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    default: bool,
-    #[serde(default)]
-    mode: SysItemMode,
-    #[serde(default)]
-    requires_admin: bool,
-    #[serde(default)]
-    required_env: Vec<String>,
-    #[serde(default)]
-    driver: SysDriverKind,
-    #[serde(default)]
-    config: toml::Table,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-enum SysDriverKind {
-    #[default]
-    Script,
-    SplitDns,
-    ManagedFile,
-}
-
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-enum SysItemMode {
-    #[default]
-    Init,
-    Managed,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-struct SysProfile {
-    #[serde(default)]
-    items: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-struct LoadedSysPreset {
-    manifest: SysManifest,
-    script_path: PathBuf,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SysInitCommand {
-    program: &'static str,
-    fixed_args: Vec<&'static str>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum SelectionSource {
-    Profile(String),
-    DefaultProfile(String),
-    Interactive,
-    NoItems,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ResolvedSelection {
-    item_ids: Vec<String>,
-    source: SelectionSource,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum SysItemStatus {
-    Installed,
-    AlreadyInstalled,
-    Skipped,
-    Updated,
-    NeedsAction,
-    Completed,
-    Failed,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct SysItemOutcome {
-    item_id: String,
-    label: String,
-    status: SysItemStatus,
-    detail: String,
-    logs: Vec<String>,
-}
-
 const SYS_STATUS_PREFIX: &str = "SHINE_SYS_STATUS\t";
-const SYS_MANIFEST_FILE: &str = "sys-manifest.toml";
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-struct SysRunManifest {
-    #[serde(default)]
-    entries: Vec<SysRunEntry>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-struct SysRunEntry {
-    os_id: String,
-    item_id: String,
-    label: String,
-    status: SysItemStatus,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    detail: String,
-    updated_at: String,
-    #[serde(default)]
-    managed: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    receipt: Option<resources::SystemReceipt>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SysUpgradeReport {
-    pub updated: usize,
-    pub skipped: usize,
-    pub failed: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SysUpdateRow {
-    pub item_id: String,
-    pub label: String,
-    pub details: Vec<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SysProfilePhase {
-    Pre,
-    Post,
-}
-
-const SYS_PROFILE_PHASES: [SysProfilePhase; 2] = [SysProfilePhase::Pre, SysProfilePhase::Post];
-
-impl SysProfilePhase {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Pre => "pre",
-            Self::Post => "post",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ShellProfileBlockPosition {
-    Start,
-    End,
-}
-
-impl SelectionSource {
-    fn describe(&self) -> String {
-        match self {
-            Self::Profile(name) => format!("profile `{name}`"),
-            Self::DefaultProfile(name) => format!("default profile `{name}`"),
-            Self::Interactive => "interactive selection".to_string(),
-            Self::NoItems => "no selectable items".to_string(),
-        }
-    }
-}
-
-impl SysRunManifest {
-    async fn load(shine_dir: &Path) -> Result<Self> {
-        let path = shine_dir.join(SYS_MANIFEST_FILE);
-        match tokio::fs::read_to_string(&path).await {
-            Ok(content) => toml::from_str(&content).context("failed to parse sys manifest"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).context("failed to read sys manifest"),
-        }
-    }
-
-    async fn save(&self, shine_dir: &Path) -> Result<()> {
-        tokio::fs::create_dir_all(shine_dir)
-            .await
-            .with_context(|| format!("creating {}", shine_dir.display()))?;
-
-        let path = shine_dir.join(SYS_MANIFEST_FILE);
-        let content = toml::to_string_pretty(self).context("failed to serialize sys manifest")?;
-        let temp = shine_dir.join(format!(".sys-manifest-{}.tmp", uuid::Uuid::new_v4()));
-        let mut file = tokio::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)
-            .await
-            .context("failed to create temp sys manifest file")?;
-        file.write_all(content.as_bytes())
-            .await
-            .context("failed to write sys manifest")?;
-        file.sync_all()
-            .await
-            .context("failed to sync sys manifest")?;
-        drop(file);
-
-        tokio::fs::rename(&temp, &path)
-            .await
-            .context("failed to finalize sys manifest")?;
-        Ok(())
-    }
-
-    fn upsert(&mut self, entry: SysRunEntry) {
-        if let Some(existing) = self
-            .entries
-            .iter_mut()
-            .find(|existing| existing.os_id == entry.os_id && existing.item_id == entry.item_id)
-        {
-            *existing = entry;
-        } else {
-            self.entries.push(entry);
-        }
-    }
-}
 
 pub(super) fn sys_init_theme() -> ColorfulTheme {
     ColorfulTheme {
