@@ -91,9 +91,10 @@ shine/
 │   ├── build.rs  # cargo:rerun-if-changed=../presets (rust-embed trigger)
 │   └── src/
 │       ├── lib.rs            # Module tree root for the `cli` library crate
-│       ├── main.rs           # Bin crate root: `fn main`, `run()` dispatch, shim
-│       │                     # resolution, `init`, `env show/set/get/decrypt/
-│       │                     # export/encrypt` handlers
+│       ├── main.rs           # Bin crate root: `fn main`, `run()` dispatch, `init` handler
+│       ├── shim.rs           # Top-level install/reinstall/uninstall <category>:
+│       │                     # infers shell vs app preset, prompts on conflict
+│       ├── home.rs           # effective_home_dir (sudo-aware), tilde/full path expansion
 │       ├── presets_commands.rs # export/link/unlink, overlay link/unlink/show
 │       ├── self_install.rs   # update/self-upgrade/upgrade-installed-configs,
 │       │                     # atomic self-install binary copy
@@ -119,7 +120,10 @@ shine/
 │       │   └── transforms/   # File content transforms: jsonc-to-json, template
 │       ├── env/
 │       │   ├── mod.rs        # EnvConfig: [env] table in config.toml, @@VAR@@ substitution
-│       │   └── upgrade.rs    # Re-apply env template transforms to installed presets
+│       │   ├── commands.rs   # `shine env show/set/delete/get/decrypt/export/encrypt` handlers
+│       │   ├── catalog.rs    # Known env-var metadata (description, sensitive) for `env show`
+│       │   ├── upgrade.rs    # Re-apply env template transforms to installed presets
+│       │   └── workspace.rs  # `shine env seal/run`: workspace env files, `--with` injection
 │       ├── git_pull.rs       # Safe FF-only pulls for Git-managed preset sources
 │       ├── shells/
 │       │   ├── mod.rs        # ShellType, handle_install/uninstall/list, link-conflict reporting
@@ -127,22 +131,31 @@ shine/
 │       │   ├── template.rs   # @@VAR@@ template rendering for installed scripts
 │       │   └── metadata.rs   # ShellCategory/ShellFile parsing from shine.toml or .sh files
 │       ├── sys/
-│       │   ├── mod.rs        # sys handle_* entry points, shared data model types
+│       │   ├── mod.rs        # sys handle_* entry points, OS detection, init/apply orchestration
+│       │   ├── model.rs      # SysManifest/SysItem/SysItemStatus/SysItemOutcome/SelectionSource, etc.
+│       │   ├── run_manifest.rs # SysRunManifest/SysRunEntry: ~/.shine/sys-manifest.toml load/save
 │       │   ├── manifest.rs   # Preset loading, parsing, and validation
 │       │   ├── profile.rs    # Shell-profile install/merge/sentinel logic
 │       │   ├── selection.rs  # Item-selection resolution (profile vs interactive)
 │       │   ├── execution.rs  # Running sys items, parsing script output, run reports
 │       │   └── resources.rs  # Built-in managed-resource drivers (split-dns, etc.)
 │       ├── config/
-│       │   ├── mod.rs        # Config struct, load/save
+│       │   ├── mod.rs        # Config struct + accessors, Default, new_for_test
+│       │   ├── load.rs       # load_or_init, global/project layering, schema version read
+│       │   ├── save.rs       # Atomic save, comment-preserving merge, sparse project diff
+│       │   ├── env_layer.rs  # [env] table parsing, legacy env.toml migration, override files
 │       │   └── discovery.rs  # Project-config discovery, SHINE_CONFIG_DIR/
 │       │                     # SHINE_PRESETS priority chain
 │       ├── presets.rs        # rust-embed asset extraction, list_categories, parse_script_description
 │       ├── bin_links.rs      # Symlink management in ~/.shine/bin/
+│       ├── check.rs          # Shared install-status row builders used by `list`/`info`
 │       ├── clear.rs          # Clear stale runtime state after schema changes
 │       ├── colors.rs         # Terminal color helpers
 │       ├── list.rs           # Top-level `shine list` and status views
-│       ├── secret.rs         # GPG encrypt/decrypt for env secrets
+│       ├── path_display.rs   # Home-relative path formatting for terminal output
+│       ├── secret/
+│       │   ├── mod.rs        # SecretBackend trait (encrypt/decrypt), re-exports
+│       │   └── gpg.rs        # GPG-backed encrypt/decrypt for env secrets (the only backend today)
 │       ├── show.rs           # `shine info <TARGET>` content display
 │       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
 │       │                     # since #[cfg(test)] doesn't cross the lib/bin boundary)
@@ -209,7 +222,7 @@ shine/
 
 `shine env set KEY VALUE` writes to the `[env]` table in `config.toml`. App (and shell) preset files that declare `transforms = ["template"]` in their `shine.toml` have `@@KEY@@` placeholders replaced at install/upgrade time. Run `shine upgrade` after changing env vars to re-apply to installed presets.
 
-`shine env encrypt`/`shine env decrypt` use GPG (`secret.rs`) to store secrets as base64-encoded ciphertext in the `[env]` table.
+`shine env encrypt`/`shine env decrypt` use GPG (`secret/gpg.rs`, via the `SecretBackend` trait in `secret/mod.rs`) to store secrets as base64-encoded ciphertext in the `[env]` table.
 
 ### File transforms (`apps/transforms/`)
 
