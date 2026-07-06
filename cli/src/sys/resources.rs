@@ -127,24 +127,42 @@ impl BuiltinDriver {
         Self { kind }
     }
 
-    pub(super) fn needs_update(
+    pub(super) fn update_details(
         &self,
         context: &DriverContext<'_>,
         previous: Option<&SystemReceipt>,
-    ) -> Result<bool> {
+    ) -> Result<Vec<String>> {
         match self.kind {
             SysDriverKind::SplitDns => {
                 let desired = split_dns_desired(context)?;
                 let Some(SystemReceipt::SplitDns(previous)) = previous else {
-                    return Ok(true);
+                    return Ok(vec![
+                        "Receipt: missing or incompatible -> desired split DNS state".to_string(),
+                    ]);
                 };
-                Ok(previous.os_id != desired.os_id
-                    || previous.item_id != desired.item_id
-                    || previous.domain != desired.domain
-                    || previous.servers != desired.servers
-                    || previous.resource != desired.resource)
+                let mut details = Vec::new();
+                if previous.domain != desired.domain {
+                    details.push(format!("Domain: {} -> {}", previous.domain, desired.domain));
+                }
+                if previous.servers != desired.servers {
+                    details.push(format!(
+                        "Servers: {} -> {}",
+                        previous.servers.join(", "),
+                        desired.servers.join(", ")
+                    ));
+                }
+                if previous.resource != desired.resource || previous.os_id != desired.os_id {
+                    details.push(format!(
+                        "Resource: {} -> {}",
+                        previous.resource, desired.resource
+                    ));
+                }
+                if previous.item_id != desired.item_id {
+                    details.push(format!("Item: {} -> {}", previous.item_id, desired.item_id));
+                }
+                Ok(details)
             }
-            SysDriverKind::ManagedFile | SysDriverKind::Script => Ok(false),
+            SysDriverKind::ManagedFile | SysDriverKind::Script => Ok(Vec::new()),
         }
     }
 }
@@ -926,9 +944,10 @@ mod tests {
         let receipt = SystemReceipt::SplitDns(split_dns_desired(&original_context).unwrap());
         let driver = BuiltinDriver::new(SysDriverKind::SplitDns);
         assert!(
-            !driver
-                .needs_update(&original_context, Some(&receipt))
+            driver
+                .update_details(&original_context, Some(&receipt))
                 .unwrap()
+                .is_empty()
         );
         let changed_env = BTreeMap::from([
             ("DOMAIN".to_string(), "private.example".to_string()),
@@ -939,10 +958,11 @@ mod tests {
             ..original_context
         };
 
-        assert!(
+        assert_eq!(
             driver
-                .needs_update(&changed_context, Some(&receipt))
-                .unwrap()
+                .update_details(&changed_context, Some(&receipt))
+                .unwrap(),
+            ["Servers: 10.0.0.2 -> 10.0.0.3"]
         );
     }
 }

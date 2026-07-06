@@ -168,10 +168,10 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
             }
         },
-        Commands::Pull => git_pull::handle_pull(&config).await,
+        Commands::Pull => git_pull::handle_pull(&config, false).await,
         Commands::Update(cmd) => {
             if cmd.pull {
-                git_pull::handle_pull(&config).await?;
+                git_pull::handle_pull(&config, cmd.verbose).await?;
                 let config = Box::pin(Config::load_or_init()).await?;
                 handle_update(&config, cmd.verbose, cmd.refresh).await
             } else {
@@ -180,7 +180,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Upgrade(cmd) => {
             if cmd.pull {
-                git_pull::handle_pull(&config).await?;
+                git_pull::handle_pull(&config, cmd.verbose).await?;
                 let config = Box::pin(Config::load_or_init()).await?;
                 handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
             } else {

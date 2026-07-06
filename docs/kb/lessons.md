@@ -3,6 +3,24 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-06 — Embedded Git progress overwhelms command-level results
+
+- **Symptom**: `shine update --pull` printed Git transfer plumbing, fetch refs, fast-forward
+  details, skipped directories, and Shine's update report as one visually noisy stream.
+- **Fix**: capture successful pulls and summarize commit range plus short file stats; retain raw
+  progress for verbose mode and always surface captured diagnostics on failure.
+- **Rule**: wrapped tools should expose task-level outcomes by default and reserve transport-level
+  progress for verbose output, without hiding failure diagnostics.
+
+## 2026-07-05 — Managed update detection should explain the pending change
+
+- **Symptom**: split-DNS changes were detected, but update output only said `converge` and did
+  not show which recorded values would change.
+- **Fix**: derive structured field differences from the recorded and desired receipts and show
+  them in both `shine update` and `shine sys info`.
+- **Rule**: desired-state checks should return actionable differences, not only a boolean, when
+  the manifest already contains enough safe metadata to explain the change.
+
 ## 2026-07-05 — Info diff and update must resolve the same effective preset
 
 - **Symptom**: `shine update` reported an embedded shell preset update while

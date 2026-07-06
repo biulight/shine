@@ -174,7 +174,7 @@ pub struct SysUpgradeReport {
 pub struct SysUpdateRow {
     pub item_id: String,
     pub label: String,
-    pub detail: String,
+    pub details: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -449,6 +449,18 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
             item.required_env.join(", ")
         }
     );
+    if item.mode == SysItemMode::Managed
+        && entry.is_some()
+        && let Some(update) = managed_updates(config)
+            .await?
+            .into_iter()
+            .find(|update| update.item_id == item.id)
+    {
+        println!("  {:<14} update available", "Pending");
+        for detail in update.details {
+            println!("  {:<14} {}", "", detail);
+        }
+    }
     println!();
     match item.mode {
         SysItemMode::Init => println!("  Next: run `shine sys init` and select `{}`.", item.id),
@@ -770,14 +782,13 @@ async fn managed_updates_for_os(config: &Config, os_id: &str) -> Result<Vec<SysU
             env: env.as_map(),
             dry_run: true,
         };
-        if resources::BuiltinDriver::new(item.driver)
-            .needs_update(&context, entry.receipt.as_ref())?
-        {
-            let plan = resources::BuiltinDriver::new(item.driver).plan(&context, false)?;
+        let details = resources::BuiltinDriver::new(item.driver)
+            .update_details(&context, entry.receipt.as_ref())?;
+        if !details.is_empty() {
             updates.push(SysUpdateRow {
                 item_id: item.id.clone(),
                 label: item.label.clone(),
-                detail: plan.description,
+                details,
             });
         }
     }
@@ -2880,7 +2891,7 @@ resource = "/etc/resolver/private.example"
 
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].item_id, "split-dns");
-        assert!(updates[0].detail.contains("private.example"));
+        assert_eq!(updates[0].details, ["Servers: 10.0.0.2 -> 10.0.0.3"]);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

@@ -42,6 +42,8 @@ Managed sys resources participate in the same flow. `shine update` compares the 
 resource receipt derived from the active env against `sys-manifest.toml`; `shine upgrade` then
 re-applies recorded managed resources and replaces the receipt after convergence. For split DNS,
 the receipt comparison includes the normalized domain, DNS servers, and platform resource path.
+Update and sys-info output render those receipt differences field by field (`old -> new`) so the
+user can inspect the pending system change before granting administrator access to upgrade.
 
 ## Shell install / uninstall
 
@@ -79,6 +81,9 @@ de-duplicates shared repositories, and validates every worktree before running
 `git pull --ff-only`. Dirty worktrees, detached HEADs, missing upstreams, and pull failures stop
 the operation. `update --pull` and `upgrade --pull` pull first, reload `Config`, then check or
 apply presets so updated project and environment configuration takes effect immediately.
+Successful pulls are summarized as one line per repository (commit range plus short file stats),
+while raw Git progress is hidden unless the parent update/upgrade command is verbose. Failed pulls
+always include captured Git diagnostics; non-Git and duplicate sources are only shown verbosely.
 
 ## Config discovery
 

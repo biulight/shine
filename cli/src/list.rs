@@ -101,7 +101,9 @@ pub async fn handle_update_list(config: &Config) -> Result<bool> {
                 colors::status_label("update available", "↑"),
                 colors::dim("run `shine upgrade`"),
             );
-            println!("     {}", colors::dim(&row.detail));
+            for detail in &row.details {
+                println!("     {}", colors::dim(detail));
+            }
         }
     }
 
@@ -253,7 +255,9 @@ pub async fn handle_status_list(config: &Config) -> Result<()> {
                 colors::status_label("update available", "↑"),
                 colors::dim("run `shine upgrade`"),
             );
-            println!("     {}", colors::dim(&row.detail));
+            for detail in &row.details {
+                println!("     {}", colors::dim(detail));
+            }
         }
     }
 
