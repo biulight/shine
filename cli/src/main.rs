@@ -1,14 +1,13 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use dialoguer::Select;
 #[cfg(test)]
 use std::path::PathBuf;
 
 #[cfg(test)]
 use cli::test_support;
 use cli::{
-    apps, clear, colors, commands, completion, config, env, git_pull, list, path_display, secret,
-    shells, show, sys, update_check, version,
+    apps, clear, colors, commands, completion, config, env, git_pull, list, shells, show, sys,
+    update_check, version,
 };
 
 use commands::{
@@ -24,6 +23,7 @@ use update_check::UpdateStatus;
 
 mod presets_commands;
 mod self_install;
+mod shim;
 
 use presets_commands::{
     handle_overlay_link, handle_overlay_show, handle_overlay_unlink, handle_presets_export,
@@ -37,6 +37,7 @@ use self_install::{
 use self_install::{
     handle_config_upgrade, handle_self_install, handle_self_upgrade, handle_update,
 };
+use shim::{handle_install_shim, handle_reinstall_shim, handle_uninstall_shim};
 
 fn main() -> Result<()> {
     completion::complete_from_env();
@@ -235,16 +236,18 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Commands::Env { command } => match command {
-            EnvCommands::Show { reveal } => handle_env_show(&config, reveal).await,
-            EnvCommands::Set { key, value } => handle_env_set(&config, &key, &value).await,
-            EnvCommands::Delete { key } => handle_env_delete(&config, &key).await,
-            EnvCommands::Get { key } => handle_env_get(&config, &key).await,
-            EnvCommands::Decrypt { key } => handle_env_decrypt(&config, &key).await,
+            EnvCommands::Show { reveal } => env::commands::handle_show(&config, reveal).await,
+            EnvCommands::Set { key, value } => {
+                env::commands::handle_set(&config, &key, &value).await
+            }
+            EnvCommands::Delete { key } => env::commands::handle_delete(&config, &key).await,
+            EnvCommands::Get { key } => env::commands::handle_get(&config, &key).await,
+            EnvCommands::Decrypt { key } => env::commands::handle_decrypt(&config, &key).await,
             EnvCommands::Export { key, alias } => {
-                handle_env_export(&config, &key, alias.as_deref()).await
+                env::commands::handle_export(&config, &key, alias.as_deref()).await
             }
             EnvCommands::Encrypt(cmd) => {
-                handle_env_encrypt(
+                env::commands::handle_encrypt(
                     &config,
                     cmd.recipient.as_deref(),
                     cmd.set.as_deref(),
@@ -318,163 +321,6 @@ fn should_warn_runtime_schema(command: &Commands) -> bool {
     )
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum PresetKind {
-    Shell,
-    App,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum ShimResolution {
-    Found(PresetKind),
-    Conflict,
-    Missing,
-}
-
-async fn handle_install_shim(config: &Config, category: &str) -> Result<()> {
-    match resolve_shim_category(config, category).await? {
-        ShimResolution::Found(PresetKind::Shell) => {
-            Box::pin(shells::handle_install(config, Some(category), false)).await
-        }
-        ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_install(config, Some(category), false, false)).await
-        }
-        ShimResolution::Conflict => match select_shim_kind("Install", category)? {
-            PresetKind::Shell => {
-                Box::pin(shells::handle_install(config, Some(category), false)).await
-            }
-            PresetKind::App => {
-                Box::pin(apps::handle_install(config, Some(category), false, false)).await
-            }
-        },
-        ShimResolution::Missing => bail_shim_missing(category),
-    }
-}
-
-async fn handle_reinstall_shim(config: &Config, category: &str) -> Result<()> {
-    match resolve_shim_category(config, category).await? {
-        ShimResolution::Found(PresetKind::Shell) => {
-            Box::pin(shells::handle_install(config, Some(category), true)).await
-        }
-        ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_install(config, Some(category), false, true)).await
-        }
-        ShimResolution::Conflict => match select_shim_kind("Reinstall", category)? {
-            PresetKind::Shell => {
-                Box::pin(shells::handle_install(config, Some(category), true)).await
-            }
-            PresetKind::App => {
-                Box::pin(apps::handle_install(config, Some(category), false, true)).await
-            }
-        },
-        ShimResolution::Missing => bail_shim_missing(category),
-    }
-}
-
-async fn handle_uninstall_shim(config: &Config, category: &str) -> Result<()> {
-    match resolve_shim_category(config, category).await? {
-        ShimResolution::Found(PresetKind::Shell) => {
-            Box::pin(shells::handle_uninstall(
-                config,
-                Some(category),
-                false,
-                false,
-            ))
-            .await
-        }
-        ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_uninstall(
-                config,
-                Some(category),
-                false,
-                false,
-                false,
-            ))
-            .await
-        }
-        ShimResolution::Conflict => match select_shim_kind("Uninstall", category)? {
-            PresetKind::Shell => {
-                Box::pin(shells::handle_uninstall(
-                    config,
-                    Some(category),
-                    false,
-                    false,
-                ))
-                .await
-            }
-            PresetKind::App => {
-                Box::pin(apps::handle_uninstall(
-                    config,
-                    Some(category),
-                    false,
-                    false,
-                    false,
-                ))
-                .await
-            }
-        },
-        ShimResolution::Missing => bail_shim_missing(category),
-    }
-}
-
-async fn resolve_shim_category(config: &Config, category: &str) -> Result<ShimResolution> {
-    let shell_matches = if config.is_external_presets {
-        let shell_path = config.preset_path(std::path::Path::new("shell").join(category));
-        if shell_path.exists() {
-            shells::metadata::load_installed_categories(config, Some(category))
-                .await?
-                .len()
-        } else {
-            0
-        }
-    } else {
-        shells::metadata::load_embedded_categories(Some(category))?.len()
-    };
-    let app_matches = if config.is_external_presets {
-        let app_path = config.preset_path(std::path::Path::new("app").join(category));
-        if app_path.exists() {
-            apps::load_installed_categories(config, Some(category))
-                .await?
-                .len()
-        } else {
-            0
-        }
-    } else {
-        apps::load_embedded_categories(Some(category))?.len()
-    };
-
-    Ok(classify_shim_resolution(shell_matches > 0, app_matches > 0))
-}
-
-fn classify_shim_resolution(shell_matches: bool, app_matches: bool) -> ShimResolution {
-    match (shell_matches, app_matches) {
-        (true, false) => ShimResolution::Found(PresetKind::Shell),
-        (false, true) => ShimResolution::Found(PresetKind::App),
-        (true, true) => ShimResolution::Conflict,
-        (false, false) => ShimResolution::Missing,
-    }
-}
-
-fn select_shim_kind(action: &str, category: &str) -> Result<PresetKind> {
-    let choices = [format!("shell/{category}"), format!("app/{category}")];
-    let selected = Select::new()
-        .with_prompt(format!("{action} which preset?"))
-        .items(&choices)
-        .default(0)
-        .interact()?;
-    Ok(match selected {
-        0 => PresetKind::Shell,
-        1 => PresetKind::App,
-        _ => unreachable!("dialoguer Select returned out-of-range index {selected}"),
-    })
-}
-
-fn bail_shim_missing(category: &str) -> Result<()> {
-    bail!(
-        "preset category not found in shell or app presets: {category}\nRun `shine shell list` or `shine app list` to see available categories."
-    )
-}
-
 async fn handle_init(yes: bool) -> Result<()> {
     let current_dir = std::env::current_dir()?;
     let display_dir = tokio::fs::canonicalize(&current_dir)
@@ -511,313 +357,6 @@ fn confirm_init(dir: &std::path::Path) -> Result<bool> {
     std::io::stdin().read_line(&mut input)?;
     let answer = input.trim();
     Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
-}
-
-async fn handle_env_show(config: &Config, reveal: bool) -> Result<()> {
-    let env = env::EnvConfig::load_or_init(config).await?;
-    let catalog = env::catalog::load(config).await?;
-    let terminal_width = usize::from(console::Term::stdout().size().1).max(40);
-    let key_width = env
-        .iter()
-        .map(|(key, _)| key.chars().count())
-        .max()
-        .unwrap_or(0);
-
-    println!("{}", colors::bold("Environment"));
-    println!();
-    if env.as_map().is_empty() {
-        println!("  {}", colors::dim("No variables configured."));
-    }
-    for (k, v) in env.iter() {
-        let metadata = catalog.get(k);
-        let description = env
-            .description(k)
-            .or_else(|| metadata.map(|item| item.description.as_str()))
-            .unwrap_or_default();
-        let sensitive = metadata.is_some_and(|item| item.sensitive) || is_sensitive_env_key(k);
-        let display_value = display_env_value(v, sensitive, reveal);
-        let (display_value, description) =
-            fit_env_row(&display_value, description, key_width, terminal_width);
-        let key_padding = " ".repeat(key_width.saturating_sub(k.chars().count()));
-        if description.is_empty() {
-            println!("  {}{}  {}", colors::cyan(k), key_padding, display_value);
-        } else {
-            println!(
-                "  {}{}  {:<value_width$}  {}",
-                colors::cyan(k),
-                key_padding,
-                display_value,
-                colors::dim(&description),
-                value_width = env_value_width(key_width, terminal_width),
-            );
-        }
-    }
-    println!();
-    println!(
-        "  {}  {}",
-        colors::dim("Config"),
-        colors::dim(&path_display::format(config.config_path()))
-    );
-    println!(
-        "  {}",
-        colors::dim(&format!("{} variables", env.as_map().len()))
-    );
-    Ok(())
-}
-
-fn is_sensitive_env_key(key: &str) -> bool {
-    let key = key.to_ascii_uppercase();
-    [
-        "SECRET",
-        "TOKEN",
-        "PASSWORD",
-        "PASSPHRASE",
-        "API_KEY",
-        "PRIVATE_KEY",
-        "ACCESS_KEY",
-    ]
-    .iter()
-    .any(|suffix| key == *suffix || key.ends_with(&format!("_{suffix}")))
-}
-
-fn display_env_value(value: &str, sensitive: bool, reveal: bool) -> String {
-    if value.is_empty() {
-        "<empty>".to_string()
-    } else if sensitive && !reveal {
-        "<redacted>".to_string()
-    } else {
-        value.to_string()
-    }
-}
-
-fn env_value_width(key_width: usize, terminal_width: usize) -> usize {
-    terminal_width.saturating_sub(key_width + 28).clamp(12, 36)
-}
-
-fn fit_env_row(
-    value: &str,
-    description: &str,
-    key_width: usize,
-    terminal_width: usize,
-) -> (String, String) {
-    let value_width = env_value_width(key_width, terminal_width);
-    let value = truncate_text(value, value_width);
-    let description_width = terminal_width.saturating_sub(2 + key_width + 2 + value_width + 2);
-    let description = if description_width < 8 {
-        String::new()
-    } else {
-        truncate_text(description, description_width)
-    };
-    (value, description)
-}
-
-fn truncate_text(value: &str, max_width: usize) -> String {
-    if value.chars().count() <= max_width {
-        return value.to_string();
-    }
-    if max_width <= 1 {
-        return "…".to_string();
-    }
-    let mut result = value.chars().take(max_width - 1).collect::<String>();
-    result.push('…');
-    result
-}
-
-async fn handle_env_set(config: &Config, key: &str, value: &str) -> Result<()> {
-    let mut env = env::EnvConfig::load_or_init(config).await?;
-    env.set(key, value);
-    env.save(config).await?;
-    println!("{}", colors::green(&format!("set {key} = \"{value}\"")));
-    println!(
-        "{}",
-        colors::dim("Run `shine upgrade` to apply to already-installed presets.")
-    );
-    Ok(())
-}
-
-async fn handle_env_delete(config: &Config, key: &str) -> Result<()> {
-    let mut env = env::EnvConfig::load_or_init(config).await?;
-    if env.remove(key).is_none() {
-        bail!("{key} is not set in the active config [env]");
-    }
-    env.save(config).await?;
-    println!("{}", colors::green(&format!("deleted {key}")));
-    println!(
-        "{}",
-        colors::dim("Run `shine upgrade` to apply to already-installed presets.")
-    );
-    Ok(())
-}
-
-async fn handle_env_get(config: &Config, key: &str) -> Result<()> {
-    let env = env::EnvConfig::load_or_init(config).await?;
-    match env.get(key) {
-        Some(v) => println!("{v}"),
-        None => {
-            eprintln!(
-                "{}",
-                colors::yellow(&format!("{key} is not set in the active config [env]"))
-            );
-            std::process::exit(1);
-        }
-    }
-    Ok(())
-}
-
-async fn handle_env_decrypt(config: &Config, key: &str) -> Result<()> {
-    let env = env::EnvConfig::load_or_init(config).await?;
-    let Some(value) = env.get(key) else {
-        bail!("{key} is not set in the active config [env]");
-    };
-    let plaintext = secret::decrypt_base64_gpg_secret(value)
-        .await
-        .with_context(|| format!("decrypting {key}"))?;
-    print!("{plaintext}");
-    Ok(())
-}
-
-async fn handle_env_export(config: &Config, key: &str, alias: Option<&str>) -> Result<()> {
-    validate_env_export_key(key)?;
-    if let Some(alias) = alias {
-        validate_env_export_key(alias)?;
-    }
-    let env = env::EnvConfig::load_or_init(config).await?;
-    let value = match resolve_env_export_value(&env, key)? {
-        EnvExportValue::Secret {
-            key: secret_key,
-            value,
-        } => secret::decrypt_base64_gpg_secret(value)
-            .await
-            .with_context(|| format!("decrypting {secret_key}"))?,
-        EnvExportValue::Plaintext(value) => value.to_string(),
-    };
-    let export_as = alias.unwrap_or(key);
-    println!(
-        "{}",
-        format_env_export(&config.shell_type, export_as, &value)
-    );
-    Ok(())
-}
-
-type EnvExportValue<'a> = env::StoredValue<'a>;
-
-fn resolve_env_export_value<'a>(env: &'a env::EnvConfig, key: &str) -> Result<EnvExportValue<'a>> {
-    env::resolve_stored_value(env, key)
-}
-
-fn env_export_secret_key(key: &str) -> String {
-    env::secret_key(key)
-}
-
-fn validate_env_export_key(key: &str) -> Result<()> {
-    let mut chars = key.chars();
-    let Some(first) = chars.next() else {
-        bail!("env export key must not be empty");
-    };
-    if !(first == '_' || first.is_ascii_alphabetic()) {
-        bail!("env export key must start with a letter or underscore: {key}");
-    }
-    if !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
-        bail!("env export key must contain only letters, digits, and underscores: {key}");
-    }
-    Ok(())
-}
-
-fn format_env_export(shell: &shells::ShellType, key: &str, value: &str) -> String {
-    match shell {
-        shells::ShellType::Fish => format!("set -gx {key} {}", fish_quote(value)),
-        shells::ShellType::PowerShell => {
-            format!("$env:{key} = {}", powershell_string_quote(value))
-        }
-        _ => format!("export {key}={}", posix_shell_quote(value)),
-    }
-}
-
-fn posix_shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn fish_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
-}
-
-fn powershell_string_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum EnvEncryptOutput {
-    Print,
-    Set(String),
-}
-
-fn resolve_env_encrypt_output(
-    set_key: Option<&str>,
-    from_key: Option<&str>,
-) -> Result<EnvEncryptOutput> {
-    if let Some(key) = set_key {
-        return Ok(EnvEncryptOutput::Set(key.to_string()));
-    }
-    if let Some(key) = from_key {
-        validate_env_export_key(key)?;
-        return Ok(EnvEncryptOutput::Set(env_export_secret_key(key)));
-    }
-    Ok(EnvEncryptOutput::Print)
-}
-
-fn resolve_env_encrypt_recipient(config: &Config, recipient: Option<&str>) -> Result<String> {
-    if let Some(recipient) = recipient
-        .map(str::trim)
-        .filter(|recipient| !recipient.is_empty())
-    {
-        return Ok(recipient.to_string());
-    }
-    if let Some(recipient) = config
-        .gpg_key_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|recipient| !recipient.is_empty())
-    {
-        return Ok(recipient.to_string());
-    }
-    bail!("GPG recipient is required; pass -r/--recipient or set gpg_key_id in config.toml");
-}
-
-async fn handle_env_encrypt(
-    config: &Config,
-    recipient: Option<&str>,
-    set_key: Option<&str>,
-    from_key: Option<&str>,
-) -> Result<()> {
-    use std::io::Read as _;
-
-    let recipient = resolve_env_encrypt_recipient(config, recipient)?;
-    let plaintext = if let Some(key) = from_key {
-        let env = env::EnvConfig::load_or_init(config).await?;
-        let Some(value) = env.get(key) else {
-            bail!("{key} is not set in the active config [env]");
-        };
-        value.as_bytes().to_vec()
-    } else {
-        let mut input = Vec::new();
-        std::io::stdin()
-            .read_to_end(&mut input)
-            .context("reading secret from stdin")?;
-        input
-    };
-    let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, &recipient)
-        .await
-        .with_context(|| format!("encrypting secret for {recipient}"))?;
-    match resolve_env_encrypt_output(set_key, from_key)? {
-        EnvEncryptOutput::Set(key) => {
-            let mut env = env::EnvConfig::load_or_init(config).await?;
-            env.set(&key, &encoded);
-            env.save(config).await?;
-            println!("{}", colors::green(&format!("set {key} = \"{encoded}\"")));
-        }
-        EnvEncryptOutput::Print => println!("{encoded}"),
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1169,29 +708,6 @@ mod tests {
     }
 
     #[test]
-    fn env_show_redacts_sensitive_values() {
-        assert_eq!(display_env_value("secret", true, false), "<redacted>");
-        assert_eq!(display_env_value("secret", true, true), "secret");
-        assert_eq!(display_env_value("", true, false), "<empty>");
-        assert!(is_sensitive_env_key("MY_API_KEY"));
-        assert!(is_sensitive_env_key("token"));
-        assert!(!is_sensitive_env_key("MONKEY"));
-    }
-
-    #[test]
-    fn env_show_truncates_long_values_to_requested_width() {
-        assert_eq!(truncate_text("abcdefgh", 5), "abcd…");
-        let (value, description) = fit_env_row(
-            "abcdefghijklmnopqrstuvwxyz",
-            "A description that is also fairly long",
-            8,
-            48,
-        );
-        assert!(value.chars().count() <= env_value_width(8, 48));
-        assert!(description.chars().count() <= 48);
-    }
-
-    #[test]
     fn cli_accepts_env_export_with_alias() {
         let cli = Cli::try_parse_from([
             "shine",
@@ -1208,24 +724,6 @@ mod tests {
                 command: EnvCommands::Export { key, alias: Some(a) }
             } if key == "DEEPSEEK_API_KEY" && a == "AI_KEY"
         ));
-    }
-
-    #[test]
-    fn env_export_uses_alias_as_variable_name() {
-        let value = "secret123";
-        assert_eq!(
-            format_env_export(&shells::ShellType::Zsh, "MY_ALIAS", value),
-            "export MY_ALIAS='secret123'"
-        );
-    }
-
-    #[test]
-    fn env_export_alias_formats_powershell_correctly() {
-        let value = "secret123";
-        assert_eq!(
-            format_env_export(&shells::ShellType::PowerShell, "MY_ALIAS", value),
-            "$env:MY_ALIAS = 'secret123'"
-        );
     }
 
     #[test]
@@ -1331,242 +829,6 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn env_delete_removes_key_from_saved_config() {
-        let dir = make_temp_dir().await;
-        let mut config = config_in(&dir);
-        config.env.insert("MY_TOKEN".into(), "secret".into());
-        config.save().await.unwrap();
-
-        handle_env_delete(&config, "MY_TOKEN").await.unwrap();
-
-        let contents = fs::read_to_string(config.config_path()).await.unwrap();
-        let parsed: toml::Table = toml::from_str(&contents).unwrap();
-        let env = parsed
-            .get("env")
-            .and_then(|value| value.as_table())
-            .unwrap();
-        assert!(
-            !env.contains_key("MY_TOKEN"),
-            "deleted key should not remain in saved config: {contents}"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn env_delete_fails_when_key_is_missing() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        let err = handle_env_delete(&config, "MY_TOKEN").await.unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("MY_TOKEN is not set in the active config [env]"),
-            "error should explain missing key: {err:#}"
-        );
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[test]
-    fn env_export_secret_key_appends_secret_suffix() {
-        assert_eq!(
-            env_export_secret_key("DEEPSEEK_API_KEY"),
-            "DEEPSEEK_API_KEY_SECRET"
-        );
-        assert_eq!(env_export_secret_key("xxx"), "xxx_SECRET");
-    }
-
-    #[test]
-    fn env_export_resolves_secret_when_present() {
-        let mut env = env::EnvConfig::default();
-        env.set("MY_TOKEN_SECRET", "encrypted");
-
-        assert_eq!(
-            resolve_env_export_value(&env, "MY_TOKEN").unwrap(),
-            EnvExportValue::Secret {
-                key: "MY_TOKEN_SECRET".to_string(),
-                value: "encrypted"
-            }
-        );
-    }
-
-    #[test]
-    fn env_export_falls_back_to_plaintext_value() {
-        let mut env = env::EnvConfig::default();
-        env.set("MY_TOKEN", "plain");
-
-        assert_eq!(
-            resolve_env_export_value(&env, "MY_TOKEN").unwrap(),
-            EnvExportValue::Plaintext("plain")
-        );
-    }
-
-    #[test]
-    fn env_export_secret_wins_over_plaintext_value() {
-        let mut env = env::EnvConfig::default();
-        env.set("MY_TOKEN", "plain");
-        env.set("MY_TOKEN_SECRET", "encrypted");
-
-        assert_eq!(
-            resolve_env_export_value(&env, "MY_TOKEN").unwrap(),
-            EnvExportValue::Secret {
-                key: "MY_TOKEN_SECRET".to_string(),
-                value: "encrypted"
-            }
-        );
-    }
-
-    #[test]
-    fn env_export_reports_both_missing_keys() {
-        let env = env::EnvConfig::default();
-
-        let err = resolve_env_export_value(&env, "MY_TOKEN").unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("MY_TOKEN_SECRET or MY_TOKEN is not set in the active config [env]"),
-            "error should explain both checked keys: {err:#}"
-        );
-    }
-
-    #[test]
-    fn env_export_key_validation_accepts_shell_variable_names() {
-        for key in ["FOO", "_FOO", "foo_123", "A1"] {
-            validate_env_export_key(key).unwrap();
-        }
-    }
-
-    #[test]
-    fn env_export_key_validation_rejects_unsafe_names() {
-        for key in ["", "1FOO", "FOO-BAR", "FOO;BAR", "FOO BAR", "FOO.SECRET"] {
-            assert!(
-                validate_env_export_key(key).is_err(),
-                "key should be rejected: {key}"
-            );
-        }
-    }
-
-    #[test]
-    fn env_export_formats_posix_shell_code_safely() {
-        let value = "abc def'ghi$HOME\nnext; rm -rf /";
-        assert_eq!(
-            format_env_export(&shells::ShellType::Zsh, "TOKEN", value),
-            "export TOKEN='abc def'\\''ghi$HOME\nnext; rm -rf /'"
-        );
-    }
-
-    #[test]
-    fn env_export_formats_fish_shell_code_safely() {
-        let value = "abc def'ghi\\path\nnext; rm -rf /";
-        assert_eq!(
-            format_env_export(&shells::ShellType::Fish, "TOKEN", value),
-            "set -gx TOKEN 'abc def\\'ghi\\\\path\nnext; rm -rf /'"
-        );
-    }
-
-    #[test]
-    fn env_export_formats_powershell_code_safely() {
-        let value = "abc def'ghi$HOME\nnext; Remove-Item /";
-        assert_eq!(
-            format_env_export(&shells::ShellType::PowerShell, "TOKEN", value),
-            "$env:TOKEN = 'abc def''ghi$HOME\nnext; Remove-Item /'"
-        );
-    }
-
-    #[test]
-    fn env_encrypt_output_defaults_from_key_to_secret_key() {
-        assert_eq!(
-            resolve_env_encrypt_output(None, Some("GH_TOKEN")).unwrap(),
-            EnvEncryptOutput::Set("GH_TOKEN_SECRET".to_string())
-        );
-    }
-
-    #[test]
-    fn env_encrypt_output_explicit_set_wins_over_default() {
-        assert_eq!(
-            resolve_env_encrypt_output(Some("CUSTOM_SECRET"), Some("GH_TOKEN")).unwrap(),
-            EnvEncryptOutput::Set("CUSTOM_SECRET".to_string())
-        );
-    }
-
-    #[test]
-    fn env_encrypt_output_prints_stdin_without_set() {
-        assert_eq!(
-            resolve_env_encrypt_output(None, None).unwrap(),
-            EnvEncryptOutput::Print
-        );
-    }
-
-    #[test]
-    fn env_encrypt_output_rejects_invalid_inferred_from_key() {
-        let err = resolve_env_encrypt_output(None, Some("GH-TOKEN")).unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("env export key must contain only letters, digits, and underscores"),
-            "error should explain invalid inferred key: {err:#}"
-        );
-    }
-
-    #[test]
-    fn env_encrypt_recipient_cli_wins_over_config() {
-        let dir =
-            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
-        let mut config = config_in(&dir);
-        config.gpg_key_id = Some("config@example.com".to_string());
-
-        assert_eq!(
-            resolve_env_encrypt_recipient(&config, Some("cli@example.com")).unwrap(),
-            "cli@example.com"
-        );
-    }
-
-    #[test]
-    fn env_encrypt_recipient_falls_back_to_config() {
-        let dir =
-            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
-        let mut config = config_in(&dir);
-        config.gpg_key_id = Some("config@example.com".to_string());
-
-        assert_eq!(
-            resolve_env_encrypt_recipient(&config, None).unwrap(),
-            "config@example.com"
-        );
-    }
-
-    #[test]
-    fn env_encrypt_recipient_treats_empty_config_as_missing() {
-        let dir =
-            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
-        let mut config = config_in(&dir);
-        config.gpg_key_id = Some("  ".to_string());
-
-        let err = resolve_env_encrypt_recipient(&config, None).unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("pass -r/--recipient or set gpg_key_id"),
-            "error should explain how to set recipient: {err:#}"
-        );
-    }
-
-    #[test]
-    fn env_encrypt_recipient_errors_when_missing() {
-        let dir =
-            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
-        let config = config_in(&dir);
-
-        let err = resolve_env_encrypt_recipient(&config, None).unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("pass -r/--recipient or set gpg_key_id"),
-            "error should explain how to set recipient: {err:#}"
-        );
-    }
-
     #[test]
     fn cli_accepts_top_level_install_reinstall_and_uninstall_commands() {
         let cli = Cli::try_parse_from(["shine", "install", "proxy"]).unwrap();
@@ -1593,61 +855,6 @@ mod tests {
         assert!(Cli::try_parse_from(["shine", "install"]).is_err());
         assert!(Cli::try_parse_from(["shine", "reinstall"]).is_err());
         assert!(Cli::try_parse_from(["shine", "uninstall"]).is_err());
-    }
-
-    #[test]
-    fn classify_shim_resolution_handles_all_match_shapes() {
-        assert_eq!(
-            classify_shim_resolution(true, false),
-            ShimResolution::Found(PresetKind::Shell)
-        );
-        assert_eq!(
-            classify_shim_resolution(false, true),
-            ShimResolution::Found(PresetKind::App)
-        );
-        assert_eq!(
-            classify_shim_resolution(true, true),
-            ShimResolution::Conflict
-        );
-        assert_eq!(
-            classify_shim_resolution(false, false),
-            ShimResolution::Missing
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_shim_category_matches_embedded_shell_category() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        let resolution = resolve_shim_category(&config, "proxy").await.unwrap();
-
-        assert_eq!(resolution, ShimResolution::Found(PresetKind::Shell));
-        fs::remove_dir_all(dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn resolve_shim_category_matches_embedded_app_category() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        let resolution = resolve_shim_category(&config, "starship").await.unwrap();
-
-        assert_eq!(resolution, ShimResolution::Found(PresetKind::App));
-        fs::remove_dir_all(dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn resolve_shim_category_reports_missing_category() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        let resolution = resolve_shim_category(&config, "does-not-exist")
-            .await
-            .unwrap();
-
-        assert_eq!(resolution, ShimResolution::Missing);
-        fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]

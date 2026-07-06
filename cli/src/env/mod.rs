@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod commands;
 pub mod upgrade;
 pub mod workspace;
 
