@@ -3,6 +3,22 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-06 — `shine upgrade` prompted for sudo even when nothing needed root
+
+- **Symptom**: every `shine upgrade` run asked for the sudo password for the managed split-DNS
+  item, even when the resolved.conf.d file already matched the desired content and the item
+  reported `already installed` immediately after.
+- **Root cause**: the admin-authorization gate in `run_managed_for_os` decided whether to prompt
+  purely from each item's static `requires_admin` manifest flag, before the driver's `apply` ever
+  checked whether a write was actually needed. The read-only "already converged" comparison
+  already existed inside `apply_split_dns`/`apply_managed_file`, but only ran *after* the prompt.
+- **Fix**: added `SystemDriver::is_up_to_date` (read-only, no privilege required) that reuses the
+  same desired-vs-current comparison, and call it per admin-required item before `authorize_admin`
+  so the prompt is skipped when every such item is already converged.
+- **Rule**: a privilege-escalation prompt must be gated on "will this action actually change
+  anything," not on "is this category of action normally privileged" — compute the cheap
+  read-only diff first.
+
 ## 2026-07-06 — Embedded Git progress overwhelms command-level results
 
 - **Symptom**: `shine update --pull` printed Git transfer plumbing, fetch refs, fast-forward

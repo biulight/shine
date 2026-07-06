@@ -796,7 +796,38 @@ async fn run_managed_for_os(
         });
     }
 
-    let needs_admin = selected.iter().any(|item| item.requires_admin);
+    let mut needs_admin = false;
+    for item in &selected {
+        if !item.requires_admin {
+            continue;
+        }
+        if action != SysAction::Apply {
+            needs_admin = true;
+            break;
+        }
+        let previous_receipt = run_manifest
+            .entries
+            .iter()
+            .find(|entry| entry.os_id == os_id && entry.item_id == item.id)
+            .and_then(|entry| entry.receipt.as_ref());
+        let context = resources::DriverContext {
+            config,
+            os_id,
+            item,
+            preset_root: script_dir,
+            env: env.as_map(),
+            dry_run: false,
+        };
+        let up_to_date = item.driver != SysDriverKind::Script
+            && resources::BuiltinDriver::new(item.driver)
+                .is_up_to_date(&context, previous_receipt)
+                .await
+                .unwrap_or(false);
+        if !up_to_date {
+            needs_admin = true;
+            break;
+        }
+    }
     if needs_admin && !authorize_admin(selected.len()).await? {
         return Ok(SysUpgradeReport {
             failed: selected.len(),

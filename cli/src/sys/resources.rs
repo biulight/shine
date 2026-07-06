@@ -116,6 +116,13 @@ pub(super) trait SystemDriver {
         receipt: &SystemReceipt,
         dry_run: bool,
     ) -> Result<ResourceOutcome>;
+    /// Cheap, read-only check for whether `apply` would actually change anything.
+    /// Used to avoid prompting for admin privileges when a resource is already converged.
+    async fn is_up_to_date(
+        &self,
+        context: &DriverContext<'_>,
+        previous: Option<&SystemReceipt>,
+    ) -> Result<bool>;
 }
 
 pub(super) struct BuiltinDriver {
@@ -234,6 +241,18 @@ impl SystemDriver for BuiltinDriver {
                 .unwrap_or_else(|| "processing recorded system resource".to_string())
         })
     }
+
+    async fn is_up_to_date(
+        &self,
+        context: &DriverContext<'_>,
+        previous: Option<&SystemReceipt>,
+    ) -> Result<bool> {
+        match self.kind {
+            SysDriverKind::SplitDns => split_dns_up_to_date(context).await,
+            SysDriverKind::ManagedFile => managed_file_up_to_date(context, previous).await,
+            SysDriverKind::Script => Ok(false),
+        }
+    }
 }
 
 fn config_string(config: &toml::Table, key: &str) -> Result<String> {
@@ -351,6 +370,28 @@ fn split_dns_file_content(receipt: &SplitDnsReceipt) -> Vec<u8> {
         )
     };
     content.into_bytes()
+}
+
+async fn split_dns_up_to_date(context: &DriverContext<'_>) -> Result<bool> {
+    let desired = split_dns_desired(context)?;
+    if desired.os_id == "windows" {
+        return Ok(false);
+    }
+    let destination = PathBuf::from(&desired.resource);
+    if !destination.exists() {
+        return Ok(false);
+    }
+    let current = tokio::fs::read(&destination)
+        .await
+        .with_context(|| format!("reading {}", destination.display()))?;
+    let marker = format!("# {}", split_dns_marker(&desired.item_id));
+    if !String::from_utf8_lossy(&current)
+        .lines()
+        .any(|line| line == marker)
+    {
+        return Ok(false);
+    }
+    Ok(current == split_dns_file_content(&desired))
 }
 
 async fn apply_split_dns(
@@ -631,6 +672,26 @@ fn managed_file_desired(context: &DriverContext<'_>) -> Result<(PathBuf, Vec<u8>
     ))
 }
 
+async fn managed_file_up_to_date(
+    context: &DriverContext<'_>,
+    previous: Option<&SystemReceipt>,
+) -> Result<bool> {
+    let Some(SystemReceipt::ManagedFile(previous)) = previous else {
+        return Ok(false);
+    };
+    let (destination, content, _restart_hint) = managed_file_desired(context)?;
+    if previous.destination != destination || !destination.exists() {
+        return Ok(false);
+    }
+    let current = tokio::fs::read(&destination)
+        .await
+        .with_context(|| format!("reading {}", destination.display()))?;
+    if hash_content(&current) != previous.content_hash {
+        return Ok(false);
+    }
+    Ok(current == content)
+}
+
 async fn apply_managed_file(
     context: &DriverContext<'_>,
     previous: Option<&SystemReceipt>,
@@ -818,6 +879,47 @@ mod tests {
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn managed_file_is_up_to_date_matches_apply_convergence() {
+        let dir = make_temp_dir().await;
+        let source = dir.join("source.txt");
+        let destination = dir.join("destination.txt");
+        tokio::fs::write(&source, "desired").await.unwrap();
+        let config = Config::new_for_test(&dir);
+        let item = managed_file_item("source.txt", &destination);
+        let env = BTreeMap::new();
+        let context = DriverContext {
+            config: &config,
+            os_id: "fakeos",
+            item: &item,
+            preset_root: &dir,
+            env: &env,
+            dry_run: false,
+        };
+        let driver = BuiltinDriver::new(SysDriverKind::ManagedFile);
+
+        assert!(!driver.is_up_to_date(&context, None).await.unwrap());
+
+        let installed = driver.apply(&context, None).await.unwrap();
+        let receipt = installed.receipt.unwrap();
+        assert!(
+            driver
+                .is_up_to_date(&context, Some(&receipt))
+                .await
+                .unwrap()
+        );
+
+        tokio::fs::write(&source, "changed").await.unwrap();
+        assert!(
+            !driver
+                .is_up_to_date(&context, Some(&receipt))
+                .await
+                .unwrap()
+        );
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[test]
     fn receipt_roundtrips_with_version_and_driver() {
         #[derive(Serialize, Deserialize)]
@@ -894,6 +996,63 @@ mod tests {
                 assert!(content.contains("Managed by shine: split-dns:private-dns"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn split_dns_up_to_date_is_false_for_windows_and_missing_destination() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let mut driver_config = toml::Table::new();
+        driver_config.insert(
+            "domain_env".to_string(),
+            toml::Value::String("DOMAIN".to_string()),
+        );
+        driver_config.insert(
+            "servers_env".to_string(),
+            toml::Value::String("SERVERS".to_string()),
+        );
+        let item = SysItem {
+            id: format!("private-dns-{}", uuid::Uuid::new_v4()),
+            label: "Private DNS".to_string(),
+            description: String::new(),
+            default: false,
+            mode: SysItemMode::Managed,
+            requires_admin: true,
+            required_env: vec!["DOMAIN".to_string(), "SERVERS".to_string()],
+            driver: SysDriverKind::SplitDns,
+            config: driver_config,
+        };
+        let env = BTreeMap::from([
+            ("DOMAIN".to_string(), "home.example.com".to_string()),
+            ("SERVERS".to_string(), "10.0.0.2".to_string()),
+        ]);
+
+        // Windows always reports not-up-to-date: there is no cheap read-only
+        // check available, so the caller falls back to requesting admin.
+        let windows_context = DriverContext {
+            config: &config,
+            os_id: "windows",
+            item: &item,
+            preset_root: &dir,
+            env: &env,
+            dry_run: false,
+        };
+        assert!(!split_dns_up_to_date(&windows_context).await.unwrap());
+
+        // A fresh item id has never had its resource file written, so it must
+        // never be reported as up-to-date (that would skip the admin prompt
+        // for a change that hasn't actually been applied yet).
+        let ubuntu_context = DriverContext {
+            config: &config,
+            os_id: "ubuntu",
+            item: &item,
+            preset_root: &dir,
+            env: &env,
+            dry_run: false,
+        };
+        assert!(!split_dns_up_to_date(&ubuntu_context).await.unwrap());
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[test]
