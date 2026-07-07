@@ -28,12 +28,24 @@ mod dir_transfer;
 #[cfg(test)]
 mod integration_tests;
 mod protocol;
+// `remote_client` dials the forwarded socket via a Unix stream: it only
+// ever runs on the *remote* end of a session, which is always assumed
+// Linux/macOS (see module docs), so it is unconditionally unix-only —
+// unlike `agent`, which must compile on Windows too since Windows is
+// supported as the *local* side.
+#[cfg(unix)]
 mod remote_client;
 
 use anyhow::{Context, Result, bail};
 
 use crate::config::Config;
 
+#[cfg(not(unix))]
+const WINDOWS_REMOTE_UNSUPPORTED: &str = "`shine local` commands require this machine to be the \
+    remote (Linux/macOS) side of a `shine ssh` session; Windows is currently supported as the \
+    local side only";
+
+#[cfg(unix)]
 pub async fn handle_local_download(
     remote_source: &str,
     local_destination: Option<&str>,
@@ -43,6 +55,17 @@ pub async fn handle_local_download(
     remote_client::handle_download(remote_source, local_destination, force, dry_run).await
 }
 
+#[cfg(not(unix))]
+pub async fn handle_local_download(
+    _remote_source: &str,
+    _local_destination: Option<&str>,
+    _force: bool,
+    _dry_run: bool,
+) -> Result<()> {
+    bail!(WINDOWS_REMOTE_UNSUPPORTED)
+}
+
+#[cfg(unix)]
 pub async fn handle_local_upload(
     local_source: &str,
     remote_destination: Option<&str>,
@@ -52,8 +75,24 @@ pub async fn handle_local_upload(
     remote_client::handle_upload(local_source, remote_destination, force, dry_run).await
 }
 
+#[cfg(not(unix))]
+pub async fn handle_local_upload(
+    _local_source: &str,
+    _remote_destination: Option<&str>,
+    _force: bool,
+    _dry_run: bool,
+) -> Result<()> {
+    bail!(WINDOWS_REMOTE_UNSUPPORTED)
+}
+
+#[cfg(unix)]
 pub async fn handle_local_status() -> Result<()> {
     remote_client::handle_status().await
+}
+
+#[cfg(not(unix))]
+pub async fn handle_local_status() -> Result<()> {
+    bail!(WINDOWS_REMOTE_UNSUPPORTED)
 }
 
 /// Single-letter ssh options that consume a separate value, per ssh(1).

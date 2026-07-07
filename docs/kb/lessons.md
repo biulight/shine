@@ -3,6 +3,31 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-07 — Windows CI failed on a module that "obviously" only runs on the remote host
+
+- **Symptom**: the `build-preview-assets` Windows job failed with
+  `error[E0432]: unresolved import tokio::net::UnixStream` in `ssh/remote_client.rs`, even though
+  the preceding commit had already added `#[cfg(unix)]`/`#[cfg(windows)]` gating for the *local*
+  agent side (`ssh::bind_local_listener`, `agent::LocalListener`) and passed local verification.
+- **Root cause**: `remote_client.rs` implements the *remote* side of a session (it dials the
+  forwarded socket via `UnixStream`), and the remote host is always assumed Linux/macOS by design
+  — so it seemed safe to leave unconditional. But the `shine` binary is one cross-compiled artifact
+  that must *compile* for every target it ships on, regardless of which side of a session that
+  particular binary instance will ever actually play. A Windows build still needs
+  `shine local download/upload/status` to type-check even though nothing will call it as a remote
+  in practice yet. This repo's sandboxed dev environment cannot run `cargo check --target
+  x86_64-pc-windows-msvc` to completion at all (an unrelated transitive dependency, `aws-lc-sys` via
+  `reqwest`, needs the real MSVC/Windows SDK), so this gap wasn't caught before pushing — only real
+  Windows CI surfaced it.
+- **Fix**: gated `mod remote_client;` itself behind `#[cfg(unix)]`, and gave
+  `handle_local_download`/`handle_local_upload`/`handle_local_status` in `ssh/mod.rs` a
+  `#[cfg(not(unix))]` stub returning a clear "Windows is local-side only" error, so the binary
+  still compiles (and fails loudly at runtime, not compile time) on Windows.
+- **Rule**: when adding platform-specific code to a binary that ships cross-platform, gate by
+  *what the code assumes about the runtime host*, not by *which conceptual role the current
+  feature work is scoped to* — and treat any target you cannot locally `cargo check` end-to-end
+  as unverified until real CI confirms it, even after careful manual reasoning.
+
 ## 2026-07-06 — `shine upgrade` prompted for sudo even when nothing needed root
 
 - **Symptom**: every `shine upgrade` run asked for the sudo password for the managed split-DNS

@@ -312,11 +312,23 @@ on top of the macOS/Linux implementation.
    trait (`AsyncRead + AsyncWrite + Unpin + Send + 'static`) so the
    per-connection protocol logic (`handle_connection`, `handle_put_file`,
    `handle_get_file`) stays transport-agnostic and unchanged for both
-   platforms. Full Windows compilation cannot be verified in this repo's
-   sandboxed dev environment (an unrelated transitive C dependency,
+   platforms.
+9. `ssh::remote_client` (the *remote*-side of a session — it dials the
+   forwarded socket via `UnixStream`, so it only makes sense on
+   Linux/macOS, per step 8's scoping) is itself `#[cfg(unix)]`-gated;
+   `ssh::handle_local_download`/`handle_local_upload`/`handle_local_status`
+   have `#[cfg(not(unix))]` stub implementations that return a clear
+   "Windows is local-side only" error, so the binary still compiles for
+   Windows. Missing this the first time around broke the real
+   `build-preview-assets` Windows CI job
+   (`error[E0432]: unresolved import tokio::net::UnixStream` in
+   `remote_client.rs`) — this repo's sandboxed dev environment cannot
+   fully verify Windows builds (an unrelated transitive C dependency,
    `aws-lc-sys` via `reqwest`, needs the real MSVC toolchain even for
-   `cargo check --target x86_64-pc-windows-msvc`) — verify on an actual
-   Windows checkout/CI runner before relying on it.
+   `cargo check --target x86_64-pc-windows-msvc`), so a cross-check that
+   gets past `cli`/`utils` compilation and only fails in `aws-lc-sys`'s
+   own build script is the strongest confirmation available without a
+   real Windows CI run.
 
 ### Sys preset flow (`shine sys init`)
 
