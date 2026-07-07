@@ -1,39 +1,79 @@
-//! Local transfer agent: the Unix-socket server side of a `shine ssh`
-//! session. Listens on the session's local socket (the far end of the SSH
-//! `-R` forward) and serves `PutFile` (download) / `GetFile` (upload)
-//! requests from the remote `shine local` client. Directories are handled
-//! by staging/extracting a tar archive (see `dir_transfer.rs`).
+//! Local transfer agent: the server side of a `shine ssh` session's
+//! transfer channel (the far end of the SSH `-R` forward), serving
+//! `PutFile` (download) / `GetFile` (upload) requests from the remote
+//! `shine local` client. Directories are handled by staging/extracting a
+//! tar archive (see `dir_transfer.rs`).
+//!
+//! Transport: a Unix domain socket on macOS/Linux, or a loopback TCP
+//! socket on Windows (verified via `scripts/spike-ssh-forward-windows.ps1`
+//! — Windows is the local side only; the remote host is always
+//! Linux/macOS, so the remote-side Unix socket and wrapped command in
+//! `ssh/mod.rs` never change). [`LocalListener`] abstracts over the two;
+//! the per-connection protocol logic below is transport-agnostic.
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncWriteExt;
-use tokio::net::{UnixListener, UnixStream};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
+#[cfg(unix)]
+use tokio::net::UnixListener;
 
 use super::dir_transfer;
 use super::protocol::{self, ClientMessage, PROTOCOL_VERSION, ServerMessage};
 use crate::home;
 
-/// Runs the accept loop until the listener is closed (session teardown).
-/// Each connection is handled on its own task; a failed connection is
-/// logged and does not bring down the agent or the session.
-pub async fn serve(listener: UnixListener, token: String, session_local_dir: PathBuf) {
-    loop {
-        let (stream, _addr) = match listener.accept().await {
-            Ok(pair) => pair,
-            Err(_) => return,
-        };
-        let token = token.clone();
-        let session_local_dir = session_local_dir.clone();
-        tokio::spawn(async move {
-            if let Err(error) = handle_connection(stream, &token, &session_local_dir).await {
-                eprintln!("shine ssh: transfer agent connection error: {error:#}");
-            }
-        });
+/// Any duplex byte stream the agent can serve a connection over.
+trait DuplexStream: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> DuplexStream for T {}
+
+/// The local end of the session's transfer channel: a Unix socket
+/// (macOS/Linux) or a loopback TCP socket (Windows). `tokio::net::UnixListener`
+/// only exists on unix targets, hence the `Unix` variant is cfg-gated.
+pub enum LocalListener {
+    #[cfg(unix)]
+    Unix(UnixListener),
+    // Only constructed on Windows (see `ssh::bind_local_listener`); a
+    // non-Windows build never builds that constructor, hence the allow.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Tcp(TcpListener),
+}
+
+impl LocalListener {
+    /// Runs the accept loop until the listener is closed (session
+    /// teardown). Each connection is handled on its own task; a failed
+    /// connection is logged and does not bring down the agent or the
+    /// session.
+    pub async fn serve(self, token: String, session_local_dir: PathBuf) {
+        match self {
+            #[cfg(unix)]
+            LocalListener::Unix(listener) => loop {
+                let stream = match listener.accept().await {
+                    Ok((stream, _addr)) => stream,
+                    Err(_) => return,
+                };
+                spawn_connection(stream, token.clone(), session_local_dir.clone());
+            },
+            LocalListener::Tcp(listener) => loop {
+                let stream = match listener.accept().await {
+                    Ok((stream, _addr)) => stream,
+                    Err(_) => return,
+                };
+                spawn_connection(stream, token.clone(), session_local_dir.clone());
+            },
+        }
     }
 }
 
+fn spawn_connection(stream: impl DuplexStream, token: String, session_local_dir: PathBuf) {
+    tokio::spawn(async move {
+        if let Err(error) = handle_connection(stream, &token, &session_local_dir).await {
+            eprintln!("shine ssh: transfer agent connection error: {error:#}");
+        }
+    });
+}
+
 async fn handle_connection(
-    mut stream: UnixStream,
+    mut stream: impl DuplexStream,
     token: &str,
     session_local_dir: &Path,
 ) -> Result<()> {
@@ -117,7 +157,7 @@ async fn handle_connection(
     }
 }
 
-async fn send_error(stream: &mut UnixStream, message: impl Into<String>) -> Result<()> {
+async fn send_error(stream: &mut impl DuplexStream, message: impl Into<String>) -> Result<()> {
     protocol::write_message(
         stream,
         &ServerMessage::Error {
@@ -139,7 +179,7 @@ struct PutFileRequest<'a> {
 }
 
 async fn handle_put_file(
-    stream: &mut UnixStream,
+    stream: &mut impl DuplexStream,
     session_local_dir: &Path,
     request: PutFileRequest<'_>,
 ) -> Result<()> {
@@ -293,7 +333,7 @@ async fn handle_put_file(
 }
 
 async fn handle_get_file(
-    stream: &mut UnixStream,
+    stream: &mut impl DuplexStream,
     session_local_dir: &Path,
     source_hint: &str,
     dry_run: bool,

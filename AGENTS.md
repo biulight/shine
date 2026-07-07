@@ -161,7 +161,8 @@ shine/
 │       │   ├── mod.rs        # `shine ssh`: wraps system ssh, arg splitting, session
 │       │   │                 # bootstrap, wrapped remote command (env vars + EXIT trap)
 │       │   ├── protocol.rs   # Wire format shared by agent.rs and remote_client.rs
-│       │   ├── agent.rs      # Local Unix-socket transfer server (PutFile/GetFile)
+│       │   ├── agent.rs      # Local transfer server (PutFile/GetFile), Unix socket or
+│       │   │                 # loopback TCP (Windows) via LocalListener
 │       │   ├── dir_transfer.rs # Directory tar build/extract, symlink-escape validation
 │       │   └── remote_client.rs # `shine local download/upload` handlers (run on remote host)
 │       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
@@ -245,14 +246,17 @@ Transforms compose in declaration order: `transforms = ["jsonc-to-json", "templa
 ### SSH session transfer flow (`shine ssh` / `shine local`)
 
 See [`docs/ssh-local-transfer-prd.md`](docs/ssh-local-transfer-prd.md) for the full design.
-Phase 1 + 2 + 3 implemented: file/directory transfers, progress output, and
-`shine local status`, macOS/Linux only. Still deferred: Windows support.
+Phases 1-3 implemented: file/directory transfers, progress output, and
+`shine local status`. Windows support (local side only — see step 8) added
+on top of the macOS/Linux implementation.
 
-1. `shine ssh [SSH_ARGS]... <HOST> [COMMAND]` generates a session id + token,
-   binds a local Unix socket under `~/.shine/run/ssh/<id>/local.sock`, and
-   spawns `ssh` with `-t -R <remote-sock>:<local-sock>` prepended to the
-   user's own args (`ssh::split_ssh_args` locates the destination/command
-   boundary without reinterpreting ssh's own option semantics).
+1. `shine ssh [SSH_ARGS]... <HOST> [COMMAND]` generates a session id + token
+   and spawns `ssh` with `-t -R <remote-sock>:<local-forward-target>`
+   prepended to the user's own args (`ssh::split_ssh_args` locates the
+   destination/command boundary without reinterpreting ssh's own option
+   semantics). `<remote-sock>` is always a Unix socket path under `/tmp` on
+   the remote host (assumed Linux/macOS); `<local-forward-target>` is
+   platform-dependent — see step 8.
 2. The remote command is replaced with a wrapper that sets
    `SHINE_SSH_SESSION`/`SHINE_SSH_TOKEN`/`SHINE_SSH_REMOTE_SOCK` via `env`
    (not `SetEnv`/`SendEnv`, which most `sshd_config`s reject), then `exec`s
@@ -294,6 +298,25 @@ Phase 1 + 2 + 3 implemented: file/directory transfers, progress output, and
    and negotiated protocol version. If the agent is unreachable, it
    reports that instead of erroring, so the command doubles as a
    liveness check without needing a live session.
+8. Windows support is local-side only (the remote host is always assumed
+   Linux/macOS; steps 1-3 above never change). `tokio::net::UnixListener`
+   doesn't exist on non-unix targets, so `ssh::bind_local_listener` is
+   `#[cfg(unix)]`/`#[cfg(windows)]`-gated: unix binds a Unix socket as
+   before, Windows binds a loopback TCP listener (`127.0.0.1:0`, OS-picked
+   port) and the `-R` argument becomes a *mixed* forward
+   (`<remote-unix-sock>:127.0.0.1:<port>`) — verified against a real
+   Windows OpenSSH client (`OpenSSH_for_Windows_9.5p2`) via
+   `scripts/spike-ssh-forward-windows.ps1`. `agent::LocalListener` is an
+   enum over `Unix`/`Tcp` variants (the `Unix` variant itself is
+   `#[cfg(unix)]`-gated); `agent::DuplexStream` is a blanket-impl marker
+   trait (`AsyncRead + AsyncWrite + Unpin + Send + 'static`) so the
+   per-connection protocol logic (`handle_connection`, `handle_put_file`,
+   `handle_get_file`) stays transport-agnostic and unchanged for both
+   platforms. Full Windows compilation cannot be verified in this repo's
+   sandboxed dev environment (an unrelated transitive C dependency,
+   `aws-lc-sys` via `reqwest`, needs the real MSVC toolchain even for
+   `cargo check --target x86_64-pc-windows-msvc`) — verify on an actual
+   Windows checkout/CI runner before relying on it.
 
 ### Sys preset flow (`shine sys init`)
 

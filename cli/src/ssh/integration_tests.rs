@@ -39,7 +39,7 @@ async fn start_agent(token: &str, session_local_dir: PathBuf) -> PathBuf {
     let sock_dir = TempDir::new();
     let sock_path = sock_dir.path().join("local.sock");
     let listener = tokio::net::UnixListener::bind(&sock_path).unwrap();
-    tokio::spawn(agent::serve(listener, token.to_string(), session_local_dir));
+    tokio::spawn(agent::LocalListener::Unix(listener).serve(token.to_string(), session_local_dir));
     // Keep the temp dir alive for the socket file's lifetime by leaking it;
     // each test uses a fresh uuid-named path so leaked directories never
     // collide, and the OS temp dir is cleaned up independently.

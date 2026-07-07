@@ -3,8 +3,9 @@
 //! the local machine (see docs/ssh-local-transfer-prd.md).
 //!
 //! Architecture, confirmed against a real host via `scripts/spike-ssh-forward.sh`:
-//! - We prepend our own `-R <remote-sock>:<local-sock>` to the user's ssh
-//!   args (safe: ssh options may appear in any order before the destination).
+//! - We prepend our own `-R <remote-sock>:<local-forward-target>` to the
+//!   user's ssh args (safe: ssh options may appear in any order before the
+//!   destination).
 //! - We replace the remote command with a wrapper that sets
 //!   `SHINE_SSH_SESSION`/`SHINE_SSH_TOKEN`/`SHINE_SSH_REMOTE_SOCK` via `env`
 //!   (not `SetEnv`/`SendEnv`, which most sshd configs don't accept), then
@@ -13,7 +14,14 @@
 //!   (confirmed by the spike), so the wrapper registers its own `trap ...
 //!   EXIT` to remove it.
 //!
-//! Phase 1 scope: macOS/Linux only, single-file transfers (see `agent.rs`).
+//! The remote host is always assumed Linux/macOS, so `remote_sock` is
+//! always a Unix socket path and the wrapped remote command is always a
+//! POSIX shell script, regardless of the *local* platform. Locally,
+//! `bind_local_listener` uses a Unix socket on macOS/Linux, or a loopback
+//! TCP socket on Windows (`ssh -R` supports mixing a Unix-socket endpoint
+//! with a TCP endpoint on the other side; verified against a real Windows
+//! OpenSSH client via `scripts/spike-ssh-forward-windows.ps1` — see
+//! `agent::LocalListener`).
 
 mod agent;
 mod dir_transfer;
@@ -66,18 +74,14 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
     tokio::fs::create_dir_all(&session_dir)
         .await
         .with_context(|| format!("creating {}", session_dir.display()))?;
-    let local_sock = session_dir.join("local.sock");
+    // The remote host is always assumed Linux/macOS (see module docs), so
+    // its socket is always a Unix socket regardless of the local platform.
     let remote_sock = format!("/tmp/.shine-ssh-{session_id}.sock");
 
-    let listener = tokio::net::UnixListener::bind(&local_sock)
-        .with_context(|| format!("binding local transfer socket {}", local_sock.display()))?;
+    let (listener, local_forward_target) = bind_local_listener(&session_dir).await?;
     let session_local_dir = std::env::current_dir().context("reading current directory")?;
 
-    let agent_handle = tokio::spawn(agent::serve(
-        listener,
-        token.clone(),
-        session_local_dir.clone(),
-    ));
+    let agent_handle = tokio::spawn(listener.serve(token.clone(), session_local_dir.clone()));
 
     let wrapped_command =
         build_wrapped_remote_command(&session_id, &token, &remote_sock, &remote_command);
@@ -86,7 +90,7 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
     cmd.args(&ssh_options);
     cmd.arg("-t");
     cmd.arg("-R");
-    cmd.arg(format!("{remote_sock}:{}", local_sock.display()));
+    cmd.arg(format!("{remote_sock}:{local_forward_target}"));
     cmd.arg(&host);
     cmd.arg(wrapped_command);
 
@@ -108,6 +112,43 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
     }
     #[cfg(not(unix))]
     std::process::exit(1);
+}
+
+/// Binds the local end of the session's transfer channel and returns it
+/// together with the target to embed in `ssh`'s `-R <remote-sock>:<target>`
+/// argument.
+#[cfg(unix)]
+async fn bind_local_listener(
+    session_dir: &std::path::Path,
+) -> Result<(agent::LocalListener, String)> {
+    let local_sock = session_dir.join("local.sock");
+    let listener = tokio::net::UnixListener::bind(&local_sock)
+        .with_context(|| format!("binding local transfer socket {}", local_sock.display()))?;
+    Ok((
+        agent::LocalListener::Unix(listener),
+        local_sock.display().to_string(),
+    ))
+}
+
+/// Windows lacks the mature, well-tested Unix-domain-socket support that
+/// macOS/Linux have, so the local end uses a loopback TCP socket instead;
+/// `ssh -R` supports mixing this with the remote's Unix-socket endpoint
+/// (verified via `scripts/spike-ssh-forward-windows.ps1`).
+#[cfg(windows)]
+async fn bind_local_listener(
+    _session_dir: &std::path::Path,
+) -> Result<(agent::LocalListener, String)> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("binding local transfer TCP listener")?;
+    let port = listener
+        .local_addr()
+        .context("reading local TCP listener port")?
+        .port();
+    Ok((
+        agent::LocalListener::Tcp(listener),
+        format!("127.0.0.1:{port}"),
+    ))
 }
 
 /// Splits a raw `shine ssh` argument list into ssh options, the destination,
