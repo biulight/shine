@@ -162,6 +162,7 @@ shine/
 │       │   │                 # bootstrap, wrapped remote command (env vars + EXIT trap)
 │       │   ├── protocol.rs   # Wire format shared by agent.rs and remote_client.rs
 │       │   ├── agent.rs      # Local Unix-socket transfer server (PutFile/GetFile)
+│       │   ├── dir_transfer.rs # Directory tar build/extract, symlink-escape validation
 │       │   └── remote_client.rs # `shine local download/upload` handlers (run on remote host)
 │       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
 │       │                     # since #[cfg(test)] doesn't cross the lib/bin boundary)
@@ -244,7 +245,8 @@ Transforms compose in declaration order: `transforms = ["jsonc-to-json", "templa
 ### SSH session transfer flow (`shine ssh` / `shine local`)
 
 See [`docs/ssh-local-transfer-prd.md`](docs/ssh-local-transfer-prd.md) for the full design.
-Phase 1 (implemented): single-file transfers only, macOS/Linux only.
+Phase 1 + 2 implemented: file and directory transfers, macOS/Linux only.
+Still deferred: Windows support, progress bars, `shine local status`.
 
 1. `shine ssh [SSH_ARGS]... <HOST> [COMMAND]` generates a session id + token,
    binds a local Unix socket under `~/.shine/run/ssh/<id>/local.sock`, and
@@ -263,6 +265,21 @@ Phase 1 (implemented): single-file transfers only, macOS/Linux only.
    `ssh::protocol` (`PutFile`/`GetFile`/`Preview` for `--dry-run`) against
    the local agent in `ssh::agent`, which resolves destinations against the
    session's local working directory per the PRD's default-target rules.
+5. Directories are staged as an uncompressed tar archive in a local temp
+   file (`ssh::dir_transfer::build_tar_to_temp_file`/`extract_tar_from_file`,
+   run on `spawn_blocking` since the `tar` crate is synchronous) and sent
+   through the same `PutFile`/`GetFile` byte-streaming path with an
+   `is_dir` flag — never buffered fully in memory, and never assembled
+   in-memory as a whole archive. `tar::Entry::unpack_in` already rejects
+   absolute paths and `..` traversal in an entry's own path, but does
+   **not** validate a *symlink's target*, so `dir_transfer` adds its own
+   check enforcing the PRD's chosen policy: relative symlinks that resolve
+   inside the transferred tree are kept, absolute or escaping ones reject
+   the whole transfer. Non-file/dir/symlink entry types (hard links,
+   device nodes, FIFOs) are rejected outright. An existing destination
+   directory is rejected without `--force`; with `--force` the archive is
+   merged into it (existing files not present in the archive are kept,
+   matching the PRD's stated `--force` semantics for directories).
 
 ### Sys preset flow (`shine sys init`)
 

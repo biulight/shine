@@ -77,16 +77,22 @@ pub async fn handle_download(
     let metadata = tokio::fs::metadata(&resolved_source)
         .await
         .with_context(|| format!("cannot read {}", resolved_source.display()))?;
-    if metadata.is_dir() {
-        bail!(
-            "{} is a directory; directory transfers are not supported yet",
-            resolved_source.display()
-        );
-    }
+    let is_dir = metadata.is_dir();
     let filename = resolved_source
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .context("remote source has no file name")?;
+
+    // Skip staging a tar archive entirely for a directory dry-run preview.
+    let (content_path, size): (PathBuf, u64) = if is_dir {
+        if dry_run {
+            (resolved_source.clone(), 0)
+        } else {
+            super::dir_transfer::build_tar_to_temp_file(resolved_source.clone()).await?
+        }
+    } else {
+        (resolved_source.clone(), metadata.len())
+    };
 
     let mut stream = connect_and_handshake(&session.remote_sock).await?;
     protocol::write_message(
@@ -95,7 +101,8 @@ pub async fn handle_download(
             token: session.token.clone(),
             dest_hint: local_destination.map(str::to_string),
             filename,
-            size: metadata.len(),
+            is_dir,
+            size,
             force,
             dry_run,
         },
@@ -103,51 +110,68 @@ pub async fn handle_download(
     .await?;
 
     let response: ServerMessage = protocol::read_message(&mut stream).await?;
-    match response {
-        ServerMessage::Preview {
-            resolved_path,
-            would_overwrite,
-            ..
-        } => {
-            println!(
-                "Would download {} ({})\n  remote: {}\n  local:  {}",
-                human_bytes(metadata.len()),
-                if would_overwrite {
-                    "would overwrite existing file"
-                } else {
-                    "new file"
-                },
-                resolved_source.display(),
-                resolved_path
-            );
-            Ok(())
-        }
-        ServerMessage::Proceed => {
-            let mut file = tokio::fs::File::open(&resolved_source)
-                .await
-                .with_context(|| format!("opening {}", resolved_source.display()))?;
-            protocol::copy_exact(&mut file, &mut stream, metadata.len()).await?;
-            let ack: ServerMessage = protocol::read_message(&mut stream).await?;
-            match ack {
-                ServerMessage::PutAck {
-                    resolved_path,
-                    bytes_written,
-                } => {
+    let result: Result<()> = async {
+        match response {
+            ServerMessage::Preview {
+                resolved_path,
+                would_overwrite,
+                ..
+            } => {
+                let overwrite_note = match (is_dir, would_overwrite) {
+                    (true, true) => "would merge into existing directory",
+                    (true, false) => "new directory",
+                    (false, true) => "would overwrite existing file",
+                    (false, false) => "new file",
+                };
+                if is_dir {
                     println!(
-                        "Downloaded {}\n  remote: {}\n  local:  {}",
-                        human_bytes(bytes_written),
+                        "Would download directory ({overwrite_note})\n  remote: {}\n  local:  {}",
                         resolved_source.display(),
                         resolved_path
                     );
-                    Ok(())
+                } else {
+                    println!(
+                        "Would download {} ({overwrite_note})\n  remote: {}\n  local:  {}",
+                        human_bytes(size),
+                        resolved_source.display(),
+                        resolved_path
+                    );
                 }
-                ServerMessage::Error { message } => bail!("{message}"),
-                other => bail!("unexpected response: {other:?}"),
+                Ok(())
             }
+            ServerMessage::Proceed => {
+                let mut file = tokio::fs::File::open(&content_path)
+                    .await
+                    .with_context(|| format!("opening {}", content_path.display()))?;
+                protocol::copy_exact(&mut file, &mut stream, size).await?;
+                match protocol::read_message(&mut stream).await? {
+                    ServerMessage::PutAck {
+                        resolved_path,
+                        bytes_written,
+                    } => {
+                        println!(
+                            "Downloaded {}{}\n  remote: {}\n  local:  {}",
+                            if is_dir { "directory " } else { "" },
+                            human_bytes(bytes_written),
+                            resolved_source.display(),
+                            resolved_path
+                        );
+                        Ok(())
+                    }
+                    ServerMessage::Error { message } => bail!("{message}"),
+                    other => bail!("unexpected response: {other:?}"),
+                }
+            }
+            ServerMessage::Error { message } => bail!("{message}"),
+            other => bail!("unexpected response: {other:?}"),
         }
-        ServerMessage::Error { message } => bail!("{message}"),
-        other => bail!("unexpected response: {other:?}"),
     }
+    .await;
+
+    if is_dir && !dry_run {
+        let _ = tokio::fs::remove_file(&content_path).await;
+    }
+    result
 }
 
 pub async fn handle_upload(
@@ -182,12 +206,12 @@ pub async fn handle_upload(
         dest_candidate
     };
 
-    if resolved_dest.is_dir() {
-        bail!(
-            "refusing to overwrite a directory with a file: {}",
-            resolved_dest.display()
-        );
-    }
+    // The local source's type (file vs directory) is only known once the
+    // agent resolves and stats it below; this only rejects the type-agnostic
+    // "exists but no --force" case early to save a round trip in the common
+    // case. Type-mismatch checks (file vs directory) happen after the
+    // agent's response reveals which one it actually is.
+    let destination_is_dir = resolved_dest.is_dir();
     let would_overwrite = resolved_dest.exists();
     if would_overwrite && !force && !dry_run {
         bail!(
@@ -211,26 +235,81 @@ pub async fn handle_upload(
     match response {
         ServerMessage::Preview {
             resolved_path,
+            is_dir,
             size,
             ..
         } => {
-            println!(
-                "Would upload {} ({})\n  local:  {}\n  remote: {}",
-                size.map(human_bytes).unwrap_or_default(),
-                if would_overwrite {
-                    "would overwrite existing file"
-                } else {
-                    "new file"
-                },
-                resolved_path,
-                resolved_dest.display()
-            );
+            let overwrite_note = match (is_dir, would_overwrite) {
+                (true, true) => "would merge into existing directory",
+                (true, false) => "new directory",
+                (false, true) => "would overwrite existing file",
+                (false, false) => "new file",
+            };
+            if is_dir {
+                println!(
+                    "Would upload directory ({overwrite_note})\n  local:  {resolved_path}\n  remote: {}",
+                    resolved_dest.display()
+                );
+            } else {
+                println!(
+                    "Would upload {} ({overwrite_note})\n  local:  {resolved_path}\n  remote: {}",
+                    size.map(human_bytes).unwrap_or_default(),
+                    resolved_dest.display()
+                );
+            }
             Ok(())
         }
         ServerMessage::GetHeader {
             resolved_path,
+            is_dir,
             size,
         } => {
+            if destination_is_dir && !is_dir {
+                bail!(
+                    "refusing to overwrite a directory with a file: {}",
+                    resolved_dest.display()
+                );
+            }
+            if !destination_is_dir && would_overwrite && is_dir {
+                bail!(
+                    "refusing to overwrite a file with a directory: {}",
+                    resolved_dest.display()
+                );
+            }
+
+            if is_dir {
+                let temp_tar_path = std::env::temp_dir()
+                    .join(format!("shine-ssh-upload-dir-{}.tar", uuid::Uuid::new_v4()));
+                let mut temp_file = tokio::fs::File::create(&temp_tar_path)
+                    .await
+                    .with_context(|| format!("creating temp file {}", temp_tar_path.display()))?;
+                let copy_result = protocol::copy_exact(&mut stream, &mut temp_file, size).await;
+                if let Err(error) = copy_result {
+                    let _ = tokio::fs::remove_file(&temp_tar_path).await;
+                    return Err(error);
+                }
+                temp_file
+                    .sync_all()
+                    .await
+                    .context("failed to sync received tar archive to disk")?;
+                drop(temp_file);
+
+                let extract_result = super::dir_transfer::extract_tar_from_file(
+                    temp_tar_path.clone(),
+                    resolved_dest.clone(),
+                )
+                .await;
+                let _ = tokio::fs::remove_file(&temp_tar_path).await;
+                extract_result?;
+
+                println!(
+                    "Uploaded directory {}\n  local:  {resolved_path}\n  remote: {}",
+                    human_bytes(size),
+                    resolved_dest.display()
+                );
+                return Ok(());
+            }
+
             let Some(parent) = resolved_dest.parent() else {
                 bail!("destination has no parent directory");
             };
@@ -257,9 +336,8 @@ pub async fn handle_upload(
                     .with_context(|| format!("finalizing {}", resolved_dest.display()));
             }
             println!(
-                "Uploaded {}\n  local:  {}\n  remote: {}",
+                "Uploaded {}\n  local:  {resolved_path}\n  remote: {}",
                 human_bytes(size),
-                resolved_path,
                 resolved_dest.display()
             );
             Ok(())

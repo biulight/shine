@@ -1,16 +1,15 @@
 //! Local transfer agent: the Unix-socket server side of a `shine ssh`
 //! session. Listens on the session's local socket (the far end of the SSH
 //! `-R` forward) and serves `PutFile` (download) / `GetFile` (upload)
-//! requests from the remote `shine local` client.
-//!
-//! Phase 1 scope (see docs/ssh-local-transfer-prd.md): single files only,
-//! no directories/symlinks/tar streaming.
+//! requests from the remote `shine local` client. Directories are handled
+//! by staging/extracting a tar archive (see `dir_transfer.rs`).
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 
+use super::dir_transfer;
 use super::protocol::{self, ClientMessage, PROTOCOL_VERSION, ServerMessage};
 use crate::home;
 
@@ -69,6 +68,7 @@ async fn handle_connection(
             token: request_token,
             dest_hint,
             filename,
+            is_dir,
             size,
             force,
             dry_run,
@@ -79,11 +79,14 @@ async fn handle_connection(
             handle_put_file(
                 &mut stream,
                 session_local_dir,
-                dest_hint.as_deref(),
-                &filename,
-                size,
-                force,
-                dry_run,
+                PutFileRequest {
+                    dest_hint: dest_hint.as_deref(),
+                    filename: &filename,
+                    is_dir,
+                    size,
+                    force,
+                    dry_run,
+                },
             )
             .await
         }
@@ -110,40 +113,80 @@ async fn send_error(stream: &mut UnixStream, message: impl Into<String>) -> Resu
     .await
 }
 
-async fn handle_put_file(
-    stream: &mut UnixStream,
-    session_local_dir: &Path,
-    dest_hint: Option<&str>,
-    filename: &str,
+/// Bundles `PutFile` request fields to keep `handle_put_file`'s parameter
+/// list readable (and under clippy's `too_many_arguments` threshold).
+struct PutFileRequest<'a> {
+    dest_hint: Option<&'a str>,
+    filename: &'a str,
+    is_dir: bool,
     size: u64,
     force: bool,
     dry_run: bool,
+}
+
+async fn handle_put_file(
+    stream: &mut UnixStream,
+    session_local_dir: &Path,
+    request: PutFileRequest<'_>,
 ) -> Result<()> {
+    let PutFileRequest {
+        dest_hint,
+        filename,
+        is_dir,
+        size,
+        force,
+        dry_run,
+    } = request;
+
     let resolved = match resolve_target_path(session_local_dir, dest_hint, filename) {
         Ok(path) => path,
         Err(error) => return send_error(stream, error.to_string()).await,
     };
 
-    if resolved.is_dir() {
-        return send_error(
-            stream,
-            format!(
-                "refusing to overwrite a directory with a file: {}",
-                resolved.display()
-            ),
-        )
-        .await;
-    }
+    let destination_is_dir = resolved.is_dir();
     let would_overwrite = resolved.exists();
-    if would_overwrite && !force {
-        return send_error(
-            stream,
-            format!(
-                "destination already exists (pass --force to overwrite): {}",
-                resolved.display()
-            ),
-        )
-        .await;
+    if is_dir {
+        if would_overwrite && !destination_is_dir {
+            return send_error(
+                stream,
+                format!(
+                    "refusing to overwrite a file with a directory: {}",
+                    resolved.display()
+                ),
+            )
+            .await;
+        }
+        if destination_is_dir && !force {
+            return send_error(
+                stream,
+                format!(
+                    "destination directory already exists (pass --force to merge into it): {}",
+                    resolved.display()
+                ),
+            )
+            .await;
+        }
+    } else {
+        if destination_is_dir {
+            return send_error(
+                stream,
+                format!(
+                    "refusing to overwrite a directory with a file: {}",
+                    resolved.display()
+                ),
+            )
+            .await;
+        }
+        if would_overwrite && !force {
+            return send_error(
+                stream,
+                format!(
+                    "destination already exists (pass --force to overwrite): {}",
+                    resolved.display()
+                ),
+            )
+            .await;
+        }
     }
     let Some(parent) = resolved.parent() else {
         return send_error(stream, "destination has no parent directory").await;
@@ -161,6 +204,7 @@ async fn handle_put_file(
             stream,
             &ServerMessage::Preview {
                 resolved_path: resolved.display().to_string(),
+                is_dir,
                 size: None,
                 would_overwrite,
             },
@@ -169,6 +213,40 @@ async fn handle_put_file(
     }
 
     protocol::write_message(stream, &ServerMessage::Proceed).await?;
+
+    if is_dir {
+        let temp_tar_path =
+            std::env::temp_dir().join(format!("shine-ssh-put-dir-{}.tar", uuid::Uuid::new_v4()));
+        let mut temp_file = tokio::fs::File::create(&temp_tar_path)
+            .await
+            .with_context(|| format!("creating temp file {}", temp_tar_path.display()))?;
+        let copy_result = protocol::copy_exact(stream, &mut temp_file, size).await;
+        if let Err(error) = copy_result {
+            let _ = tokio::fs::remove_file(&temp_tar_path).await;
+            return Err(error);
+        }
+        temp_file
+            .sync_all()
+            .await
+            .context("failed to sync received tar archive to disk")?;
+        drop(temp_file);
+
+        let extract_result =
+            dir_transfer::extract_tar_from_file(temp_tar_path.clone(), resolved.clone()).await;
+        let _ = tokio::fs::remove_file(&temp_tar_path).await;
+        if let Err(error) = extract_result {
+            return send_error(stream, format!("{error:#}")).await;
+        }
+
+        return protocol::write_message(
+            stream,
+            &ServerMessage::PutAck {
+                resolved_path: resolved.display().to_string(),
+                bytes_written: size,
+            },
+        )
+        .await;
+    }
 
     let temp_path = parent.join(format!(".shine-ssh-put-{}", uuid::Uuid::new_v4()));
     let mut temp_file = tokio::fs::File::create(&temp_path)
@@ -221,15 +299,42 @@ async fn handle_get_file(
             .await;
         }
     };
+
     if metadata.is_dir() {
-        return send_error(
-            stream,
-            format!(
-                "{} is a directory; directory transfers are not supported yet",
-                resolved.display()
-            ),
-        )
+        if dry_run {
+            return protocol::write_message(
+                stream,
+                &ServerMessage::Preview {
+                    resolved_path: resolved.display().to_string(),
+                    is_dir: true,
+                    size: None,
+                    would_overwrite: false,
+                },
+            )
+            .await;
+        }
+
+        let (tar_path, tar_size) = dir_transfer::build_tar_to_temp_file(resolved.clone()).await?;
+        let send_result: Result<()> = async {
+            let mut tar_file = tokio::fs::File::open(&tar_path)
+                .await
+                .with_context(|| format!("opening {}", tar_path.display()))?;
+            protocol::write_message(
+                stream,
+                &ServerMessage::GetHeader {
+                    resolved_path: resolved.display().to_string(),
+                    is_dir: true,
+                    size: tar_size,
+                },
+            )
+            .await?;
+            protocol::copy_exact(&mut tar_file, stream, tar_size).await?;
+            stream.flush().await.context("failed to flush socket")?;
+            Ok(())
+        }
         .await;
+        let _ = tokio::fs::remove_file(&tar_path).await;
+        return send_result;
     }
 
     if dry_run {
@@ -237,6 +342,7 @@ async fn handle_get_file(
             stream,
             &ServerMessage::Preview {
                 resolved_path: resolved.display().to_string(),
+                is_dir: false,
                 size: Some(metadata.len()),
                 would_overwrite: false,
             },
@@ -251,6 +357,7 @@ async fn handle_get_file(
         stream,
         &ServerMessage::GetHeader {
             resolved_path: resolved.display().to_string(),
+            is_dir: false,
             size: metadata.len(),
         },
     )

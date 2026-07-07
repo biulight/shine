@@ -37,6 +37,10 @@ pub enum ClientMessage {
         /// Basename of the remote source path, used when `dest_hint` is
         /// absent or resolves to an existing directory.
         filename: String,
+        /// If true, `size` bytes are an uncompressed tar stream to be
+        /// extracted into the resolved destination directory rather than
+        /// written verbatim as a single file.
+        is_dir: bool,
         size: u64,
         force: bool,
         /// If true, only resolve the destination and report what would
@@ -71,11 +75,15 @@ pub enum ServerMessage {
     },
     GetHeader {
         resolved_path: String,
+        /// If true, `size` bytes are an uncompressed tar stream of the
+        /// resolved local directory rather than a single file's content.
+        is_dir: bool,
         size: u64,
     },
     /// Response to a `dry_run` request: no bytes were or will be sent.
     Preview {
         resolved_path: String,
+        is_dir: bool,
         size: Option<u64>,
         would_overwrite: bool,
     },

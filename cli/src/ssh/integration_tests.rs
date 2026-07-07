@@ -76,6 +76,7 @@ async fn download_round_trip_writes_file_with_matching_content() {
             token: token.to_string(),
             dest_hint: None,
             filename: "result.log".to_string(),
+            is_dir: false,
             size: content.len() as u64,
             force: false,
             dry_run: false,
@@ -118,6 +119,7 @@ async fn download_without_force_rejects_an_existing_destination() {
             token: token.to_string(),
             dest_hint: None,
             filename: "result.log".to_string(),
+            is_dir: false,
             size: 3,
             force: false,
             dry_run: false,
@@ -150,6 +152,7 @@ async fn download_with_force_overwrites_an_existing_destination() {
             token: token.to_string(),
             dest_hint: None,
             filename: "result.log".to_string(),
+            is_dir: false,
             size: new_content.len() as u64,
             force: true,
             dry_run: false,
@@ -219,6 +222,7 @@ async fn dry_run_download_does_not_write_a_file() {
             token: token.to_string(),
             dest_hint: None,
             filename: "preview.log".to_string(),
+            is_dir: false,
             size: 4,
             force: false,
             dry_run: true,
@@ -250,6 +254,7 @@ async fn invalid_token_is_rejected() {
             token: "wrong-token".to_string(),
             dest_hint: None,
             filename: "result.log".to_string(),
+            is_dir: false,
             size: 3,
             force: false,
             dry_run: false,
@@ -260,4 +265,274 @@ async fn invalid_token_is_rejected() {
 
     let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
     assert!(matches!(response, ServerMessage::Error { .. }));
+}
+
+#[tokio::test]
+async fn download_directory_round_trip_preserves_nested_files_and_safe_symlinks() {
+    let session_local_dir = TempDir::new();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let source = TempDir::new();
+    std::fs::create_dir_all(source.path().join("nested")).unwrap();
+    std::fs::write(source.path().join("nested/file.txt"), b"hello").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("nested/file.txt", source.path().join("link.txt")).unwrap();
+
+    let (tar_path, tar_size) =
+        super::dir_transfer::build_tar_to_temp_file(source.path().to_path_buf())
+            .await
+            .unwrap();
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::PutFile {
+            token: token.to_string(),
+            dest_hint: None,
+            filename: "mydir".to_string(),
+            is_dir: true,
+            size: tar_size,
+            force: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let proceed: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(proceed, ServerMessage::Proceed));
+
+    let mut tar_file = tokio::fs::File::open(&tar_path).await.unwrap();
+    protocol::copy_exact(&mut tar_file, &mut stream, tar_size)
+        .await
+        .unwrap();
+    let _ = tokio::fs::remove_file(&tar_path).await;
+
+    let ack: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(ack, ServerMessage::PutAck { .. }));
+
+    let dest_dir = session_local_dir.path().join("mydir");
+    assert_eq!(
+        std::fs::read(dest_dir.join("nested/file.txt")).unwrap(),
+        b"hello"
+    );
+    #[cfg(unix)]
+    {
+        let link_target = std::fs::read_link(dest_dir.join("link.txt")).unwrap();
+        assert_eq!(link_target, std::path::Path::new("nested/file.txt"));
+    }
+}
+
+#[tokio::test]
+async fn download_directory_without_force_rejects_an_existing_destination_directory() {
+    let session_local_dir = TempDir::new();
+    std::fs::create_dir_all(session_local_dir.path().join("mydir")).unwrap();
+    std::fs::write(session_local_dir.path().join("mydir/keep.txt"), b"keep").unwrap();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let source = TempDir::new();
+    std::fs::write(source.path().join("new.txt"), b"new").unwrap();
+    let (tar_path, tar_size) =
+        super::dir_transfer::build_tar_to_temp_file(source.path().to_path_buf())
+            .await
+            .unwrap();
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::PutFile {
+            token: token.to_string(),
+            dest_hint: None,
+            filename: "mydir".to_string(),
+            is_dir: true,
+            size: tar_size,
+            force: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+    let _ = tokio::fs::remove_file(&tar_path).await;
+
+    let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(response, ServerMessage::Error { .. }));
+    // The unrelated existing file must survive the rejected transfer.
+    assert_eq!(
+        std::fs::read(session_local_dir.path().join("mydir/keep.txt")).unwrap(),
+        b"keep"
+    );
+}
+
+#[tokio::test]
+async fn download_directory_with_force_merges_into_an_existing_destination_directory() {
+    let session_local_dir = TempDir::new();
+    std::fs::create_dir_all(session_local_dir.path().join("mydir")).unwrap();
+    std::fs::write(session_local_dir.path().join("mydir/keep.txt"), b"keep").unwrap();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let source = TempDir::new();
+    std::fs::write(source.path().join("new.txt"), b"new").unwrap();
+    let (tar_path, tar_size) =
+        super::dir_transfer::build_tar_to_temp_file(source.path().to_path_buf())
+            .await
+            .unwrap();
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::PutFile {
+            token: token.to_string(),
+            dest_hint: None,
+            filename: "mydir".to_string(),
+            is_dir: true,
+            size: tar_size,
+            force: true,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let proceed: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(proceed, ServerMessage::Proceed));
+    let mut tar_file = tokio::fs::File::open(&tar_path).await.unwrap();
+    protocol::copy_exact(&mut tar_file, &mut stream, tar_size)
+        .await
+        .unwrap();
+    let _ = tokio::fs::remove_file(&tar_path).await;
+    let ack: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(ack, ServerMessage::PutAck { .. }));
+
+    let dest_dir = session_local_dir.path().join("mydir");
+    assert_eq!(std::fs::read(dest_dir.join("keep.txt")).unwrap(), b"keep");
+    assert_eq!(std::fs::read(dest_dir.join("new.txt")).unwrap(), b"new");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn download_directory_rejects_an_escaping_symlink_via_protocol_error() {
+    let session_local_dir = TempDir::new();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let source = TempDir::new();
+    std::fs::write(source.path().join("real.txt"), b"data").unwrap();
+    std::os::unix::fs::symlink("../../../etc/passwd", source.path().join("evil")).unwrap();
+    let (tar_path, tar_size) =
+        super::dir_transfer::build_tar_to_temp_file(source.path().to_path_buf())
+            .await
+            .unwrap();
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::PutFile {
+            token: token.to_string(),
+            dest_hint: None,
+            filename: "mydir".to_string(),
+            is_dir: true,
+            size: tar_size,
+            force: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let proceed: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(proceed, ServerMessage::Proceed));
+    let mut tar_file = tokio::fs::File::open(&tar_path).await.unwrap();
+    protocol::copy_exact(&mut tar_file, &mut stream, tar_size)
+        .await
+        .unwrap();
+    let _ = tokio::fs::remove_file(&tar_path).await;
+
+    let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(response, ServerMessage::Error { .. }));
+    // The malicious entry itself must never be created, regardless of
+    // whether earlier safe entries in the same archive were extracted
+    // before the unsafe one was reached.
+    assert!(!session_local_dir.path().join("mydir/evil").exists());
+}
+
+#[tokio::test]
+async fn upload_directory_round_trip_reads_local_directory_content() {
+    let session_local_dir = TempDir::new();
+    std::fs::create_dir_all(session_local_dir.path().join("mydir/nested")).unwrap();
+    std::fs::write(
+        session_local_dir.path().join("mydir/nested/file.txt"),
+        b"payload",
+    )
+    .unwrap();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::GetFile {
+            token: token.to_string(),
+            source_hint: "mydir".to_string(),
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let header: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    let (is_dir, size) = match header {
+        ServerMessage::GetHeader { is_dir, size, .. } => (is_dir, size),
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert!(is_dir);
+
+    let dest = TempDir::new();
+    let temp_tar = dest.path().join("received.tar");
+    let mut temp_file = tokio::fs::File::create(&temp_tar).await.unwrap();
+    protocol::copy_exact(&mut stream, &mut temp_file, size)
+        .await
+        .unwrap();
+    drop(temp_file);
+
+    let extract_dest = dest.path().join("extracted");
+    super::dir_transfer::extract_tar_from_file(temp_tar, extract_dest.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(extract_dest.join("nested/file.txt")).unwrap(),
+        b"payload"
+    );
+}
+
+#[tokio::test]
+async fn upload_directory_dry_run_does_not_send_a_tar() {
+    let session_local_dir = TempDir::new();
+    std::fs::create_dir_all(session_local_dir.path().join("mydir")).unwrap();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::GetFile {
+            token: token.to_string(),
+            source_hint: "mydir".to_string(),
+            dry_run: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(
+        response,
+        ServerMessage::Preview {
+            is_dir: true,
+            size: None,
+            ..
+        }
+    ));
 }

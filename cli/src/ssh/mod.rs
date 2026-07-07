@@ -16,6 +16,7 @@
 //! Phase 1 scope: macOS/Linux only, single-file transfers (see `agent.rs`).
 
 mod agent;
+mod dir_transfer;
 #[cfg(test)]
 mod integration_tests;
 mod protocol;
