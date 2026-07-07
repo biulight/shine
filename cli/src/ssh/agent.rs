@@ -100,6 +100,20 @@ async fn handle_connection(
             }
             handle_get_file(&mut stream, session_local_dir, &source_hint, dry_run).await
         }
+        ClientMessage::Status {
+            token: request_token,
+        } => {
+            if request_token != token {
+                return send_error(&mut stream, "invalid session token").await;
+            }
+            protocol::write_message(
+                &mut stream,
+                &ServerMessage::StatusResponse {
+                    session_local_dir: session_local_dir.display().to_string(),
+                },
+            )
+            .await
+        }
     }
 }
 

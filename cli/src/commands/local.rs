@@ -6,6 +6,8 @@ pub enum LocalCommands {
     Download(LocalTransferCommand),
     /// Upload a file from the local machine to the remote host
     Upload(LocalTransferCommand),
+    /// Show the current session's local directory, connection status, and protocol version
+    Status,
 }
 
 #[derive(Args, Debug)]

@@ -213,7 +213,7 @@ shine/
 | `clear` | `cli/src/clear.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
 | `ssh [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
-| `local download/upload` | `cli/src/ssh/remote_client.rs` |
+| `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
 
 ### Key data flow
 
@@ -245,8 +245,8 @@ Transforms compose in declaration order: `transforms = ["jsonc-to-json", "templa
 ### SSH session transfer flow (`shine ssh` / `shine local`)
 
 See [`docs/ssh-local-transfer-prd.md`](docs/ssh-local-transfer-prd.md) for the full design.
-Phase 1 + 2 implemented: file and directory transfers, macOS/Linux only.
-Still deferred: Windows support, progress bars, `shine local status`.
+Phase 1 + 2 + 3 implemented: file/directory transfers, progress output, and
+`shine local status`, macOS/Linux only. Still deferred: Windows support.
 
 1. `shine ssh [SSH_ARGS]... <HOST> [COMMAND]` generates a session id + token,
    binds a local Unix socket under `~/.shine/run/ssh/<id>/local.sock`, and
@@ -280,6 +280,20 @@ Still deferred: Windows support, progress bars, `shine local status`.
    directory is rejected without `--force`; with `--force` the archive is
    merged into it (existing files not present in the archive are kept,
    matching the PRD's stated `--force` semantics for directories).
+6. `protocol::copy_exact_with_progress` reports cumulative bytes copied
+   after each chunk; `remote_client::ProgressPrinter` (throttled to ~150ms)
+   renders a single overwritten stderr line only when
+   `console::user_attended_stderr()` is true, per the PRD's requirement
+   that non-TTY environments get a stable single-line result with no live
+   redraw. `agent`'s side of transfers has no progress output — the
+   command always runs (and its stdout/stderr are visible) on the remote
+   host, not locally.
+7. `shine local status` sends a `Status` request over the same forwarded
+   socket; the agent replies with the session's local working directory,
+   and the client also reports the session id (from `SHINE_SSH_SESSION`)
+   and negotiated protocol version. If the agent is unreachable, it
+   reports that instead of erroring, so the command doubles as a
+   liveness check without needing a live session.
 
 ### Sys preset flow (`shine sys init`)
 

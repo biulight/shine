@@ -58,6 +58,11 @@ pub enum ClientMessage {
         /// bytes are sent.
         dry_run: bool,
     },
+    /// "shine local status": report session/connection info without
+    /// transferring anything.
+    Status {
+        token: String,
+    },
 }
 
 #[derive(Debug, Serialize, serde::Deserialize)]
@@ -86,6 +91,10 @@ pub enum ServerMessage {
         is_dir: bool,
         size: Option<u64>,
         would_overwrite: bool,
+    },
+    /// Response to a `Status` request.
+    StatusResponse {
+        session_local_dir: String,
     },
     Error {
         message: String,
@@ -143,7 +152,26 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    copy_exact_with_progress(reader, writer, len, |_copied| {}).await
+}
+
+/// Like [`copy_exact`], but invokes `on_progress(bytes_copied_so_far)` after
+/// each chunk — used to drive the user-facing progress display in
+/// `remote_client`. Internal callers that don't need progress (`agent`,
+/// `dir_transfer`) use `copy_exact` instead.
+pub async fn copy_exact_with_progress<R, W, F>(
+    reader: &mut R,
+    writer: &mut W,
+    len: u64,
+    mut on_progress: F,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+    F: FnMut(u64),
+{
     let mut remaining = len;
+    let mut copied = 0u64;
     let mut buf = vec![0u8; COPY_CHUNK_SIZE];
     while remaining > 0 {
         let want = remaining.min(buf.len() as u64) as usize;
@@ -156,6 +184,8 @@ where
             .await
             .context("failed to write file content")?;
         remaining -= want as u64;
+        copied += want as u64;
+        on_progress(copied);
     }
     writer
         .flush()
@@ -208,5 +238,28 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(dest, source);
+    }
+
+    #[tokio::test]
+    async fn copy_exact_with_progress_reports_cumulative_bytes() {
+        let source = vec![0u8; COPY_CHUNK_SIZE * 2 + 10];
+        let mut reader = std::io::Cursor::new(source.clone());
+        let mut dest = Vec::new();
+        let mut reported = Vec::new();
+        copy_exact_with_progress(&mut reader, &mut dest, source.len() as u64, |copied| {
+            reported.push(copied);
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(dest.len(), source.len());
+        assert_eq!(
+            reported,
+            vec![
+                COPY_CHUNK_SIZE as u64,
+                (COPY_CHUNK_SIZE * 2) as u64,
+                source.len() as u64,
+            ]
+        );
     }
 }

@@ -44,6 +44,10 @@ pub async fn handle_local_upload(
     remote_client::handle_upload(local_source, remote_destination, force, dry_run).await
 }
 
+pub async fn handle_local_status() -> Result<()> {
+    remote_client::handle_status().await
+}
+
 /// Single-letter ssh options that consume a separate value, per ssh(1).
 /// Used only to locate the destination/command boundary in the user's
 /// argument list — never to reinterpret what the options mean.

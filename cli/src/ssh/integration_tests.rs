@@ -536,3 +536,49 @@ async fn upload_directory_dry_run_does_not_send_a_tar() {
         }
     ));
 }
+
+#[tokio::test]
+async fn status_reports_the_session_local_dir() {
+    let session_local_dir = TempDir::new();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::Status {
+            token: token.to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    match response {
+        ServerMessage::StatusResponse {
+            session_local_dir: reported,
+        } => {
+            assert_eq!(reported, session_local_dir.path().display().to_string());
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn status_with_an_invalid_token_is_rejected() {
+    let session_local_dir = TempDir::new();
+    let sock_path = start_agent("correct-token", session_local_dir.path().to_path_buf()).await;
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::Status {
+            token: "wrong-token".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(response, ServerMessage::Error { .. }));
+}

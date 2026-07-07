@@ -319,6 +319,7 @@ async fn run(cli: Cli) -> Result<()> {
                 )
                 .await
             }
+            LocalCommands::Status => ssh::handle_local_status().await,
         },
     }
 }

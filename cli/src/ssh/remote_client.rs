@@ -10,20 +10,26 @@ use super::protocol::{self, ClientMessage, PROTOCOL_VERSION, ServerMessage};
 use crate::home;
 
 struct SessionEnv {
+    session_id: String,
     token: String,
     remote_sock: String,
 }
 
 fn session_from_env() -> Result<SessionEnv> {
-    let session = std::env::var("SHINE_SSH_SESSION").ok();
+    let session_id = std::env::var("SHINE_SSH_SESSION").ok();
     let token = std::env::var("SHINE_SSH_TOKEN").ok();
     let remote_sock = std::env::var("SHINE_SSH_REMOTE_SOCK").ok();
-    let (Some(_session), Some(token), Some(remote_sock)) = (session, token, remote_sock) else {
+    let (Some(session_id), Some(token), Some(remote_sock)) = (session_id, token, remote_sock)
+    else {
         bail!(
             "this shell is not inside a `shine ssh` session (SHINE_SSH_SESSION/SHINE_SSH_TOKEN/SHINE_SSH_REMOTE_SOCK are not set); run `shine ssh <host>` first"
         );
     };
-    Ok(SessionEnv { token, remote_sock })
+    Ok(SessionEnv {
+        session_id,
+        token,
+        remote_sock,
+    })
 }
 
 async fn connect_and_handshake(remote_sock: &str) -> Result<UnixStream> {
@@ -143,7 +149,19 @@ pub async fn handle_download(
                 let mut file = tokio::fs::File::open(&content_path)
                     .await
                     .with_context(|| format!("opening {}", content_path.display()))?;
-                protocol::copy_exact(&mut file, &mut stream, size).await?;
+                let mut progress = ProgressPrinter::new(
+                    if is_dir {
+                        "Downloading directory"
+                    } else {
+                        "Downloading"
+                    },
+                    size,
+                );
+                protocol::copy_exact_with_progress(&mut file, &mut stream, size, |copied| {
+                    progress.update(copied)
+                })
+                .await?;
+                progress.finish();
                 match protocol::read_message(&mut stream).await? {
                     ServerMessage::PutAck {
                         resolved_path,
@@ -283,7 +301,15 @@ pub async fn handle_upload(
                 let mut temp_file = tokio::fs::File::create(&temp_tar_path)
                     .await
                     .with_context(|| format!("creating temp file {}", temp_tar_path.display()))?;
-                let copy_result = protocol::copy_exact(&mut stream, &mut temp_file, size).await;
+                let mut progress = ProgressPrinter::new("Uploading directory", size);
+                let copy_result = protocol::copy_exact_with_progress(
+                    &mut stream,
+                    &mut temp_file,
+                    size,
+                    |copied| progress.update(copied),
+                )
+                .await;
+                progress.finish();
                 if let Err(error) = copy_result {
                     let _ = tokio::fs::remove_file(&temp_tar_path).await;
                     return Err(error);
@@ -320,7 +346,13 @@ pub async fn handle_upload(
             let mut temp_file = tokio::fs::File::create(&temp_path)
                 .await
                 .with_context(|| format!("creating temp file {}", temp_path.display()))?;
-            let copy_result = protocol::copy_exact(&mut stream, &mut temp_file, size).await;
+            let mut progress = ProgressPrinter::new("Uploading", size);
+            let copy_result =
+                protocol::copy_exact_with_progress(&mut stream, &mut temp_file, size, |copied| {
+                    progress.update(copied)
+                })
+                .await;
+            progress.finish();
             if let Err(error) = copy_result {
                 let _ = tokio::fs::remove_file(&temp_path).await;
                 return Err(error);
@@ -344,6 +376,94 @@ pub async fn handle_upload(
         }
         ServerMessage::Error { message } => bail!("{message}"),
         other => bail!("unexpected response: {other:?}"),
+    }
+}
+
+pub async fn handle_status() -> Result<()> {
+    let session = session_from_env()?;
+
+    match connect_and_handshake(&session.remote_sock).await {
+        Ok(mut stream) => {
+            protocol::write_message(
+                &mut stream,
+                &ClientMessage::Status {
+                    token: session.token.clone(),
+                },
+            )
+            .await?;
+            match protocol::read_message(&mut stream).await? {
+                ServerMessage::StatusResponse { session_local_dir } => {
+                    println!("session:    {}", session.session_id);
+                    println!("connection: connected");
+                    println!("protocol:   v{PROTOCOL_VERSION}");
+                    println!("local dir:  {session_local_dir}");
+                    Ok(())
+                }
+                ServerMessage::Error { message } => bail!("{message}"),
+                other => bail!("unexpected response: {other:?}"),
+            }
+        }
+        Err(error) => {
+            println!("session:    {}", session.session_id);
+            println!("connection: unreachable ({error:#})");
+            Ok(())
+        }
+    }
+}
+
+/// Prints a periodic, throttled progress line to stderr while a transfer is
+/// in flight — but only when stderr is an attended terminal (PRD section 7:
+/// non-TTY environments get a stable single-line result, no live redraw).
+struct ProgressPrinter {
+    label: &'static str,
+    total: u64,
+    start: std::time::Instant,
+    last_print: std::time::Instant,
+    enabled: bool,
+}
+
+impl ProgressPrinter {
+    fn new(label: &'static str, total: u64) -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            label,
+            total,
+            start: now,
+            last_print: now,
+            enabled: total > 0 && console::user_attended_stderr(),
+        }
+    }
+
+    fn update(&mut self, copied: u64) {
+        if !self.enabled {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let is_final = copied >= self.total;
+        if !is_final && now.duration_since(self.last_print) < std::time::Duration::from_millis(150)
+        {
+            return;
+        }
+        self.last_print = now;
+
+        let elapsed = now.duration_since(self.start).as_secs_f64().max(0.001);
+        let rate = (copied as f64 / elapsed) as u64;
+        let pct = ((copied as f64 / self.total as f64) * 100.0).min(100.0) as u32;
+        eprint!(
+            "\r{}: {} / {} ({pct}%) \u{2014} {}/s\x1b[K",
+            self.label,
+            human_bytes(copied),
+            human_bytes(self.total),
+            human_bytes(rate)
+        );
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+    }
+
+    fn finish(&self) {
+        if self.enabled {
+            eprint!("\r\x1b[K");
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+        }
     }
 }
 
