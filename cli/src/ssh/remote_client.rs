@@ -232,6 +232,12 @@ pub async fn handle_upload(
     let destination_is_dir = resolved_dest.is_dir();
     let would_overwrite = resolved_dest.exists();
     if would_overwrite && !force && !dry_run {
+        if destination_is_dir {
+            bail!(
+                "destination directory already exists (pass --force to merge into it): {}",
+                resolved_dest.display()
+            );
+        }
         bail!(
             "destination already exists (pass --force to overwrite): {}",
             resolved_dest.display()

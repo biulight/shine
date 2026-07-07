@@ -262,4 +262,21 @@ mod tests {
             ]
         );
     }
+
+    #[tokio::test]
+    async fn copy_exact_preserves_content_byte_for_byte_across_chunk_boundaries() {
+        // A repeating, non-uniform byte pattern (rather than all-zero data)
+        // so a misaligned or dropped chunk at a boundary would corrupt the
+        // output in a way length-only or all-same-byte assertions can't
+        // catch. Sized at more than two full chunks plus an uneven
+        // remainder to exercise both full-chunk and partial-chunk reads.
+        let len = COPY_CHUNK_SIZE * 2 + 37;
+        let source: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let mut reader = std::io::Cursor::new(source.clone());
+        let mut dest = Vec::new();
+        copy_exact(&mut reader, &mut dest, source.len() as u64)
+            .await
+            .unwrap();
+        assert_eq!(dest, source);
+    }
 }

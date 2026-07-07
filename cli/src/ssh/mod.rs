@@ -126,14 +126,26 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
         build_wrapped_remote_command(&session_id, &token, &remote_sock, &remote_command);
 
     let mut cmd = tokio::process::Command::new("ssh");
-    cmd.args(&ssh_options);
-    cmd.arg("-t");
-    cmd.arg("-R");
-    cmd.arg(format!("{remote_sock}:{local_forward_target}"));
-    cmd.arg(&host);
-    cmd.arg(wrapped_command);
+    cmd.args(build_ssh_invocation_args(
+        &ssh_options,
+        &remote_sock,
+        &local_forward_target,
+        &host,
+        &wrapped_command,
+    ));
 
-    let status = cmd.status().await.context("failed to run ssh")?;
+    // Racing against ctrl_c() (rather than just awaiting cmd.status()) is
+    // what makes the cleanup below actually run on Ctrl-C: installing this
+    // listener overrides SIGINT's default disposition for the process, so a
+    // Ctrl-C no longer kills us before we get a chance to clean up. The ssh
+    // child is in the same foreground process group and receives SIGINT
+    // independently; we still await its exit so we don't race it.
+    let mut ssh_run = std::pin::pin!(cmd.status());
+    let status = tokio::select! {
+        status = &mut ssh_run => status,
+        _ = tokio::signal::ctrl_c() => ssh_run.await,
+    }
+    .context("failed to run ssh")?;
 
     agent_handle.abort();
     let _ = tokio::fs::remove_dir_all(&session_dir).await;
@@ -234,6 +246,26 @@ fn split_ssh_args(args: &[String]) -> Result<(Vec<String>, String, Vec<String>)>
     };
     let remote_command = args[i + 1..].to_vec();
     Ok((ssh_options, host.clone(), remote_command))
+}
+
+/// Assembles the argument list passed to the `ssh` binary: the user's own
+/// options first (untouched, per module docs), then our `-t`/`-R` forward,
+/// the destination, and the wrapped remote command. Kept as a pure function
+/// so the composition can be unit-tested without spawning a real `ssh`.
+fn build_ssh_invocation_args(
+    ssh_options: &[String],
+    remote_sock: &str,
+    local_forward_target: &str,
+    host: &str,
+    wrapped_command: &str,
+) -> Vec<String> {
+    let mut args = ssh_options.to_vec();
+    args.push("-t".to_string());
+    args.push("-R".to_string());
+    args.push(format!("{remote_sock}:{local_forward_target}"));
+    args.push(host.to_string());
+    args.push(wrapped_command.to_string());
+    args
 }
 
 fn build_wrapped_remote_command(
@@ -369,6 +401,74 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&output.stdout).trim_end(),
             "it's a test"
+        );
+    }
+
+    #[test]
+    fn ssh_invocation_args_keep_user_options_verbatim_and_ahead_of_our_own() {
+        let args = vec!["-J".to_string(), "bastion".to_string()];
+        let (parsed_options, host, _command) =
+            split_ssh_args(&[args.clone(), vec!["dev".to_string()]].concat()).unwrap();
+
+        let invocation = build_ssh_invocation_args(
+            &parsed_options,
+            "/tmp/.shine-ssh-sid.sock",
+            "/tmp/shine-ssh-sid/local.sock",
+            &host,
+            "wrapped-command",
+        );
+
+        assert_eq!(
+            invocation,
+            vec![
+                "-J",
+                "bastion",
+                "-t",
+                "-R",
+                "/tmp/.shine-ssh-sid.sock:/tmp/shine-ssh-sid/local.sock",
+                "dev",
+                "wrapped-command",
+            ]
+        );
+    }
+
+    #[test]
+    fn ssh_invocation_args_preserve_repeated_o_options_in_order() {
+        let args = vec![
+            "-o".to_string(),
+            "ProxyJump=bastion".to_string(),
+            "-o".to_string(),
+            "ServerAliveInterval=30".to_string(),
+            "dev".to_string(),
+            "ls".to_string(),
+            "-la".to_string(),
+        ];
+        let (parsed_options, host, command) = split_ssh_args(&args).unwrap();
+        assert_eq!(command, vec!["ls", "-la"]);
+
+        let invocation = build_ssh_invocation_args(
+            &parsed_options,
+            "/tmp/.shine-ssh-sid.sock",
+            "/tmp/shine-ssh-sid/local.sock",
+            &host,
+            "wrapped-command",
+        );
+
+        // The user's repeated -o options must appear verbatim, in order, and
+        // ahead of our own -t/-R/host/command — never reordered or merged.
+        assert_eq!(
+            invocation,
+            vec![
+                "-o",
+                "ProxyJump=bastion",
+                "-o",
+                "ServerAliveInterval=30",
+                "-t",
+                "-R",
+                "/tmp/.shine-ssh-sid.sock:/tmp/shine-ssh-sid/local.sock",
+                "dev",
+                "wrapped-command",
+            ]
         );
     }
 

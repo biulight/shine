@@ -3,6 +3,32 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-07 — `shine ssh` could leak its local session directory on Ctrl-C
+
+- **Symptom**: a PRD audit of `docs/ssh-local-transfer-prd.md` against the implementation found
+  that `handle_ssh` (`ssh/mod.rs`) only ran its cleanup (`agent_handle.abort()` +
+  `remove_dir_all(session_dir)`) after `cmd.status().await` on the spawned `ssh` child resolved.
+  No `tokio::signal` handler existed anywhere in the crate, so a local Ctrl-C during an active
+  session was delivered under SIGINT's default disposition and could terminate the `shine`
+  process before that cleanup line ever ran, leaking `~/.shine/run/ssh/<session-id>` (containing
+  the local transfer socket). The remote side was unaffected — its `trap ... EXIT` in the wrapped
+  remote command is robust — only the local side was at risk.
+- **Root cause**: nothing in the process intercepted SIGINT, so the OS's default disposition
+  (immediate termination, no unwinding) applied. Cleanup code placed *after* an `.await` only runs
+  if that `.await` resolves normally; it is never reached if the process is killed while still
+  awaiting.
+- **Fix**: raced `cmd.status()` against `tokio::signal::ctrl_c()` via `tokio::select!`. Installing
+  the `ctrl_c()` listener itself overrides SIGINT's default disposition for the process, so once
+  polled, a Ctrl-C resolves the listener future instead of killing the process outright; the `ssh`
+  child (same foreground process group) receives SIGINT independently and exits on its own, and
+  the parent awaits that exit before falling through to the existing cleanup. Verified against a
+  stub `ssh` child (no real remote host available in this sandbox): sending `SIGINT` to the whole
+  process group (`kill -INT -$pgid`, mirroring what a terminal does on real Ctrl-C) left the
+  session directory removed and the process log clean, versus leaking it before the fix.
+- **Rule**: any cleanup that must run "no matter how this async command exits" needs an explicit
+  signal listener raced against the awaited operation — placing cleanup code after a bare
+  `.await` only covers the success path, not process-level interrupts.
+
 ## 2026-07-07 — Windows CI failed on a module that "obviously" only runs on the remote host
 
 - **Symptom**: the `build-preview-assets` Windows job failed with

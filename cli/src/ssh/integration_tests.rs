@@ -243,6 +243,136 @@ async fn dry_run_download_does_not_write_a_file() {
 }
 
 #[tokio::test]
+async fn download_round_trip_handles_filenames_with_spaces_and_non_ascii_characters() {
+    let session_local_dir = TempDir::new();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let filename = "has space and 中文.txt";
+    let content = b"tricky filename content";
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::PutFile {
+            token: token.to_string(),
+            dest_hint: None,
+            filename: filename.to_string(),
+            is_dir: false,
+            size: content.len() as u64,
+            force: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let proceed: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(proceed, ServerMessage::Proceed));
+    let mut cursor = std::io::Cursor::new(content.to_vec());
+    protocol::copy_exact(&mut cursor, &mut stream, content.len() as u64)
+        .await
+        .unwrap();
+    let ack: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    match ack {
+        ServerMessage::PutAck { resolved_path, .. } => {
+            assert!(resolved_path.ends_with(filename));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let written = std::fs::read(session_local_dir.path().join(filename)).unwrap();
+    assert_eq!(written, content);
+}
+
+#[tokio::test]
+async fn upload_round_trip_handles_filenames_with_spaces_and_non_ascii_characters() {
+    let session_local_dir = TempDir::new();
+    let filename = "notes with spaces 和汉字.txt";
+    let content = b"tricky filename content to send";
+    std::fs::write(session_local_dir.path().join(filename), content).unwrap();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::GetFile {
+            token: token.to_string(),
+            source_hint: filename.to_string(),
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let header: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    let (resolved_path, size) = match header {
+        ServerMessage::GetHeader {
+            resolved_path,
+            size,
+            ..
+        } => (resolved_path, size),
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert!(resolved_path.ends_with(filename));
+
+    let mut received = Vec::new();
+    protocol::copy_exact(&mut stream, &mut received, size)
+        .await
+        .unwrap();
+    assert_eq!(received, content);
+}
+
+#[tokio::test]
+async fn download_directory_round_trip_preserves_filenames_with_spaces_and_non_ascii_characters() {
+    let session_local_dir = TempDir::new();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let tricky_name = "nested dir 目录/文件 with space.txt";
+    let source = TempDir::new();
+    std::fs::create_dir_all(source.path().join("nested dir 目录")).unwrap();
+    std::fs::write(source.path().join(tricky_name), b"tricky nested content").unwrap();
+
+    let (tar_path, tar_size) =
+        super::dir_transfer::build_tar_to_temp_file(source.path().to_path_buf())
+            .await
+            .unwrap();
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::PutFile {
+            token: token.to_string(),
+            dest_hint: None,
+            filename: "mydir".to_string(),
+            is_dir: true,
+            size: tar_size,
+            force: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let proceed: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(proceed, ServerMessage::Proceed));
+    let mut tar_file = tokio::fs::File::open(&tar_path).await.unwrap();
+    protocol::copy_exact(&mut tar_file, &mut stream, tar_size)
+        .await
+        .unwrap();
+    let _ = tokio::fs::remove_file(&tar_path).await;
+    let ack: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(ack, ServerMessage::PutAck { .. }));
+
+    let dest_dir = session_local_dir.path().join("mydir");
+    assert_eq!(
+        std::fs::read(dest_dir.join(tricky_name)).unwrap(),
+        b"tricky nested content"
+    );
+}
+
+#[tokio::test]
 async fn invalid_token_is_rejected() {
     let session_local_dir = TempDir::new();
     let sock_path = start_agent("correct-token", session_local_dir.path().to_path_buf()).await;
@@ -562,6 +692,68 @@ async fn status_reports_the_session_local_dir() {
         }
         other => panic!("unexpected response: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn concurrent_sessions_do_not_share_tokens_or_default_directories() {
+    let session_a_dir = TempDir::new();
+    let session_b_dir = TempDir::new();
+    let token_a = "token-a";
+    let token_b = "token-b";
+    let sock_a = start_agent(token_a, session_a_dir.path().to_path_buf()).await;
+    let sock_b = start_agent(token_b, session_b_dir.path().to_path_buf()).await;
+
+    // Session A's token must not be honored against session B's socket.
+    let mut cross_stream = handshake(&sock_b).await;
+    protocol::write_message(
+        &mut cross_stream,
+        &ClientMessage::PutFile {
+            token: token_a.to_string(),
+            dest_hint: None,
+            filename: "leak.log".to_string(),
+            is_dir: false,
+            size: 3,
+            force: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+    let response: ServerMessage = protocol::read_message(&mut cross_stream).await.unwrap();
+    assert!(matches!(response, ServerMessage::Error { .. }));
+    assert!(!session_b_dir.path().join("leak.log").exists());
+
+    // A request using session A's own token against its own socket must
+    // land only in session A's directory, never session B's.
+    let content_a = b"data for session a";
+    let mut stream_a = handshake(&sock_a).await;
+    protocol::write_message(
+        &mut stream_a,
+        &ClientMessage::PutFile {
+            token: token_a.to_string(),
+            dest_hint: None,
+            filename: "result.log".to_string(),
+            is_dir: false,
+            size: content_a.len() as u64,
+            force: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+    let proceed: ServerMessage = protocol::read_message(&mut stream_a).await.unwrap();
+    assert!(matches!(proceed, ServerMessage::Proceed));
+    let mut cursor = std::io::Cursor::new(content_a.to_vec());
+    protocol::copy_exact(&mut cursor, &mut stream_a, content_a.len() as u64)
+        .await
+        .unwrap();
+    let _: ServerMessage = protocol::read_message(&mut stream_a).await.unwrap();
+
+    assert_eq!(
+        std::fs::read(session_a_dir.path().join("result.log")).unwrap(),
+        content_a
+    );
+    assert!(!session_b_dir.path().join("result.log").exists());
 }
 
 #[tokio::test]
