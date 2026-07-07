@@ -3,8 +3,8 @@ use crate::version;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use super::{
-    AppCommands, EnvCommands, ExportCommand, LinkCommand, OverlayCommands, SelfCommands,
-    ShellCommands, SysCommands,
+    AppCommands, EnvCommands, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
+    SelfCommands, ShellCommands, SysCommands,
 };
 
 /// `Shine` - Quick config for sys
@@ -104,6 +104,18 @@ pub enum Commands {
     Sys {
         #[command(subcommand)]
         command: SysCommands,
+    },
+    /// Open an interactive SSH session with a session-scoped file transfer channel
+    Ssh {
+        /// ssh options, the destination, and an optional remote command
+        /// (passed through to the system `ssh` binary; see `ssh(1)`)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Transfer files between this machine and the other end of a `shine ssh` session
+    Local {
+        #[command(subcommand)]
+        command: LocalCommands,
     },
 }
 

@@ -6,13 +6,13 @@ use std::path::PathBuf;
 #[cfg(test)]
 use cli::test_support;
 use cli::{
-    apps, clear, colors, commands, completion, config, env, git_pull, list, shells, show, sys,
+    apps, clear, colors, commands, completion, config, env, git_pull, list, shells, show, ssh, sys,
     update_check, version,
 };
 
 use commands::{
     AppCommands, Cli, Commands, CompletionCommands, CompletionShell, EnvCommands, ExportCommand,
-    LinkCommand, OverlayCommands, SelfCommands, ShellCommands, SysCommands,
+    LinkCommand, LocalCommands, OverlayCommands, SelfCommands, ShellCommands, SysCommands,
 };
 #[cfg(test)]
 use commands::{ClearCommand, InitCommand, UpdateCommand, UpgradeCommand};
@@ -297,6 +297,27 @@ async fn run(cli: Cli) -> Result<()> {
             }
             SysCommands::Uninstall { item, dry_run } => {
                 Box::pin(sys::handle_uninstall(&config, &item, dry_run)).await
+            }
+        },
+        Commands::Ssh { args } => ssh::handle_ssh(&config, &args).await,
+        Commands::Local { command } => match command {
+            LocalCommands::Download(cmd) => {
+                ssh::handle_local_download(
+                    &cmd.source,
+                    cmd.destination.as_deref(),
+                    cmd.force,
+                    cmd.dry_run,
+                )
+                .await
+            }
+            LocalCommands::Upload(cmd) => {
+                ssh::handle_local_upload(
+                    &cmd.source,
+                    cmd.destination.as_deref(),
+                    cmd.force,
+                    cmd.dry_run,
+                )
+                .await
             }
         },
     }

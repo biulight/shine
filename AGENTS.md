@@ -157,6 +157,12 @@ shine/
 │       │   ├── mod.rs        # SecretBackend trait (encrypt/decrypt), re-exports
 │       │   └── gpg.rs        # GPG-backed encrypt/decrypt for env secrets (the only backend today)
 │       ├── show.rs           # `shine info <TARGET>` content display
+│       ├── ssh/
+│       │   ├── mod.rs        # `shine ssh`: wraps system ssh, arg splitting, session
+│       │   │                 # bootstrap, wrapped remote command (env vars + EXIT trap)
+│       │   ├── protocol.rs   # Wire format shared by agent.rs and remote_client.rs
+│       │   ├── agent.rs      # Local Unix-socket transfer server (PutFile/GetFile)
+│       │   └── remote_client.rs # `shine local download/upload` handlers (run on remote host)
 │       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
 │       │                     # since #[cfg(test)] doesn't cross the lib/bin boundary)
 │       ├── update_check.rs   # GitHub release version check, 24h cache
@@ -205,6 +211,8 @@ shine/
 | `update` / `upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
 | `clear` | `cli/src/clear.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
+| `ssh [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
+| `local download/upload` | `cli/src/ssh/remote_client.rs` |
 
 ### Key data flow
 
@@ -232,6 +240,29 @@ Two transforms can be applied to preset files at install time (declared in `shin
 - **`template`** — substitutes `@@VAR_NAME@@` placeholders from the active `[env]` config table.
 
 Transforms compose in declaration order: `transforms = ["jsonc-to-json", "template"]`.
+
+### SSH session transfer flow (`shine ssh` / `shine local`)
+
+See [`docs/ssh-local-transfer-prd.md`](docs/ssh-local-transfer-prd.md) for the full design.
+Phase 1 (implemented): single-file transfers only, macOS/Linux only.
+
+1. `shine ssh [SSH_ARGS]... <HOST> [COMMAND]` generates a session id + token,
+   binds a local Unix socket under `~/.shine/run/ssh/<id>/local.sock`, and
+   spawns `ssh` with `-t -R <remote-sock>:<local-sock>` prepended to the
+   user's own args (`ssh::split_ssh_args` locates the destination/command
+   boundary without reinterpreting ssh's own option semantics).
+2. The remote command is replaced with a wrapper that sets
+   `SHINE_SSH_SESSION`/`SHINE_SSH_TOKEN`/`SHINE_SSH_REMOTE_SOCK` via `env`
+   (not `SetEnv`/`SendEnv`, which most `sshd_config`s reject), then `exec`s
+   the user's original remote command or their login shell.
+3. sshd does **not** clean up the forwarded remote socket file on
+   disconnect (verified against a real host via `scripts/spike-ssh-forward.sh`
+   before implementation) — the wrapper registers its own `trap ... EXIT`.
+4. `shine local download/upload` (run on the remote host) reads those env
+   vars, dials the forwarded socket, and speaks the framed protocol in
+   `ssh::protocol` (`PutFile`/`GetFile`/`Preview` for `--dry-run`) against
+   the local agent in `ssh::agent`, which resolves destinations against the
+   session's local working directory per the PRD's default-target rules.
 
 ### Sys preset flow (`shine sys init`)
 

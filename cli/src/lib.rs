@@ -18,6 +18,7 @@ pub mod privilege;
 pub mod secret;
 pub mod shells;
 pub mod show;
+pub mod ssh;
 pub mod sys;
 pub mod test_support;
 pub mod update_check;
