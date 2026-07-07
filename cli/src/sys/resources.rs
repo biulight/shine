@@ -180,8 +180,18 @@ impl SystemDriver for BuiltinDriver {
             SysDriverKind::SplitDns => {
                 let domain = config_env(context, "domain_env")?;
                 let action = if removing { "remove" } else { "converge" };
+                let mut description = format!("{action} split DNS for {domain}");
+                if context.os_id == "ubuntu" && !removing && !systemd_resolved_stub_active() {
+                    description.push_str(
+                        " [WARNING: systemd-resolved's DNS stub (127.0.0.53) looks disabled on \
+                         this host, likely because another service holds port 53 (e.g. a \
+                         coredns/dnsmasq container) -- the resolved.conf.d drop-in this writes \
+                         will have no effect on real lookups until the stub is re-enabled or \
+                         /etc/resolv.conf points at whatever is actually resolving DNS here]",
+                    );
+                }
                 Ok(ResourcePlan {
-                    description: format!("{action} split DNS for {domain}"),
+                    description,
                     requires_admin: context.item.requires_admin,
                     restart_hint: None,
                 })
@@ -352,6 +362,27 @@ fn split_dns_marker(item_id: &str) -> String {
     format!("{DNS_MARKER_PREFIX}{item_id}")
 }
 
+/// Whether systemd-resolved's stub listener (127.0.0.53) is actually the thing
+/// answering DNS on this host. When `DNSStubListener=no` (e.g. because another
+/// service, like a coredns container, holds port 53 instead), the `Domains=`
+/// routing rules shine writes under `/etc/systemd/resolved.conf.d/` are never
+/// consulted by real lookups: glibc and most applications read `/etc/resolv.conf`
+/// directly rather than querying resolved's routing engine. systemd-resolved
+/// documents that in that case `/run/systemd/resolve/stub-resolv.conf` becomes an
+/// alias for the plain uplink `resolv.conf` (no `nameserver 127.0.0.53` line),
+/// which is what we check for here.
+fn systemd_resolved_stub_active() -> bool {
+    const STUB_RESOLV_CONF: &str = "/run/systemd/resolve/stub-resolv.conf";
+    match std::fs::read_to_string(STUB_RESOLV_CONF) {
+        Ok(content) => content
+            .lines()
+            .any(|line| line.trim_start().starts_with("nameserver 127.0.0.53")),
+        // Can't verify (non-systemd host, resolved not running yet, etc.) --
+        // don't block on something we can't confirm is actually broken.
+        Err(_) => true,
+    }
+}
+
 fn split_dns_file_content(receipt: &SplitDnsReceipt) -> Vec<u8> {
     let marker = split_dns_marker(&receipt.item_id);
     let content = if receipt.os_id == "macos" {
@@ -399,6 +430,17 @@ async fn apply_split_dns(
     previous: Option<&SystemReceipt>,
 ) -> Result<ResourceOutcome> {
     let mut desired = split_dns_desired(context)?;
+    if desired.os_id == "ubuntu" && !systemd_resolved_stub_active() {
+        bail!(
+            "systemd-resolved's DNS stub listener (127.0.0.53) appears to be disabled on this \
+             host, likely because another service is bound to port 53 (e.g. a coredns/dnsmasq \
+             container). Split DNS routing via /etc/systemd/resolved.conf.d only takes effect \
+             when applications query that stub -- with it disabled, this change would be \
+             written but silently ineffective. Re-enable `DNSStubListener` in systemd-resolved, \
+             or point /etc/resolv.conf at whatever is actually resolving DNS on this host, \
+             before retrying."
+        );
+    }
     if context.dry_run {
         return Ok(ResourceOutcome {
             changed: true,
