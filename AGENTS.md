@@ -283,6 +283,18 @@ on top of the macOS/Linux implementation.
    `ssh::protocol` (`PutFile`/`GetFile`/`Preview` for `--dry-run`) against
    the local agent in `ssh::agent`, which resolves destinations against the
    session's local working directory per the PRD's default-target rules.
+   The only authorization on a request is the session token, which travels
+   to the remote host as plain argv/environ (`env SHINE_SSH_TOKEN=...`) and
+   is therefore readable by other local users there via `ps eww` — so the
+   agent does not otherwise trust wire-supplied fields: `PutFile.filename`
+   (meant to always be a bare basename) is rejected unless it is exactly
+   one normal path component (`agent::ensure_single_path_component`),
+   preventing a forged request from writing outside the session directory
+   via `..` or an absolute path, and `dest_hint`/`source_hint` are expanded
+   with `~`-only substitution (`home::tilde_expand`), not the full
+   `${VAR}`-style expansion used for locally-typed paths elsewhere in the
+   crate, since that would let a forged hint pull values out of the local
+   agent process's own environment.
 5. Directories are staged as an uncompressed tar archive in a local temp
    file (`ssh::dir_transfer::build_tar_to_temp_file`/`extract_tar_from_file`,
    run on `spawn_blocking` since the `tar` crate is synchronous) and sent
@@ -343,6 +355,20 @@ on top of the macOS/Linux implementation.
    gets past `cli`/`utils` compilation and only fails in `aws-lc-sys`'s
    own build script is the strongest confirmation available without a
    real Windows CI run.
+10. `handle_ssh` races the spawned `ssh` child (`cmd.status()`) against
+    `tokio::signal::ctrl_c()` so a local Ctrl-C doesn't kill the process
+    before cleanup runs — installing the listener overrides SIGINT's
+    default disposition, and the `ssh` child (same foreground process
+    group) still receives and handles its own SIGINT independently. Each
+    accepted connection is handled on its own task tracked in a shared
+    `agent::ConnectionTasks` (a `JoinSet`), not a bare detached
+    `tokio::spawn` — `agent_handle.abort()` only ever stops the *accept
+    loop*, so before removing the session directory (or exiting on a
+    nonzero `ssh` status via `std::process::exit`, which skips Rust's
+    unwind/drop machinery entirely), `handle_ssh` calls
+    `agent::drain_connection_tasks` to wait, up to a bounded grace period,
+    for any still-running transfer to notice the now-closed tunnel and
+    finish its own cleanup rather than being abandoned mid-copy.
 
 ### Sys preset flow (`shine sys init`)
 

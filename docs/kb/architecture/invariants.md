@@ -53,6 +53,23 @@ bugs. Check this list before changing the modules named in each entry.
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
   prefix, breaks every secret encrypted before the change.
 
+## SSH transfer
+
+- **`ssh::agent` must not trust wire-supplied fields beyond the session token.** The token is the
+  only authorization check on a `PutFile`/`GetFile`/`Status` request, but it travels to the remote
+  host as plain argv/environ (`env SHINE_SSH_TOKEN=...` in `ssh::mod`), so it can leak to other
+  local users there via `ps eww`. Any field documented as constrained (e.g. `PutFile.filename` is
+  meant to always be a bare basename) must be validated as such where it's consumed
+  (`agent::ensure_single_path_component`), not just produced correctly by the one trusted
+  `remote_client` implementation. `dest_hint`/`source_hint` are expanded with `~`-only
+  substitution (`home::tilde_expand`), never the full `${VAR}` expansion used for locally-typed
+  paths elsewhere, so a forged hint can't pull values out of the local agent's own environment.
+- **Per-connection transfer tasks must stay tracked in `agent::ConnectionTasks`, not bare
+  `tokio::spawn`.** `agent_handle` (the accept loop's `JoinHandle`) does not cover them —
+  `agent_handle.abort()` only stops new connections, never an in-flight transfer. `handle_ssh`
+  must drain `ConnectionTasks` before removing the session directory or exiting, so a still-running
+  transfer's own error-path cleanup gets to finish instead of being cut off by process exit.
+
 ## Update check
 
 - **A failed or rate-limited version check must never fail the user's command** (`main.rs`,
