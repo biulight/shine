@@ -526,7 +526,7 @@ shine upgrade --pull  # 拉取 Git 管理的 preset 后再应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.36.0+preview.abc1234`；稳定版则继续显示 `0.36.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.37.0+preview.abc1234`；稳定版则继续显示 `0.37.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -536,7 +536,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.36.0 sh install.sh
+SHINE_VERSION=0.37.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -544,9 +544,31 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.36.0"; .\install.ps1
+$env:SHINE_VERSION = "0.37.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
+
+### SSH 会话内文件传输
+
+`shine ssh` 会打开一个正常的交互式 SSH 会话（它包装了系统自带的 `ssh`，并复用你的 `~/.ssh/config`），同时建立一条回连到发起端机器的会话专属传输通道。会话内的 `shine local download`/`upload`/`status` 就通过这条通道工作——不需要再单独调用 `scp`/`rsync`。
+
+```bash
+cd ~/work/frontend
+shine ssh dev                     # 建立会话；~/work/frontend 成为该会话下面这些命令的“本机目录”
+
+# 连接成功后，在远端执行：
+shine local download result.log              # 远端 ./result.log -> 本机 ~/work/frontend/result.log
+shine local download output/ '~/Downloads/build/'  # 目录也可以传输（以 tar 流式传输）
+shine local upload notes.txt                  # 本机 ~/work/frontend/notes.txt -> 远端当前目录
+shine local upload assets/ ./public/assets/
+shine local status                            # 会话 ID、连接状态、本机目录
+```
+
+源/目标参数按其所属机器解析：`download` 的第一个参数和 `upload` 的第二个参数始终是远端路径，基于远端 shell 的当前目录解析；另一个参数始终基于会话的本机目录解析（即运行 `shine ssh` 时所在的目录，之后无论在远端执行多少次 `cd` 都不变）。如果希望*另一端*展开 `~`，请给路径加引号（例如 `'~/Downloads/'`），否则本机 shell 会在 `shine` 看到参数之前就把它展开。
+
+两个命令都会默认把内容写入目标端工作目录下、与源同名的位置；默认拒绝覆盖已存在的目标，除非传入 `--force`；并支持 `--dry-run` 预览传输而不实际拷贝数据。连接终端时进度以单行覆写方式显示；管道/非交互场景则只输出最终一行结果。没有传输任务时，`shine local status` 也可以当作会话的存活检测使用。
+
+`shine local` 的本机侧（运行 `shine ssh` 的那台机器）在 Windows 上同样可用；远端主机始终假定为 Linux 或 macOS。
 
 ## 内置预设
 

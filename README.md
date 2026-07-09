@@ -531,7 +531,7 @@ shine upgrade --verbose  # include env-template check details
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.36.0+preview.abc1234`, while stable binaries continue to report `0.36.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.37.0+preview.abc1234`, while stable binaries continue to report `0.37.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -541,7 +541,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.36.0 sh install.sh
+SHINE_VERSION=0.37.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -549,9 +549,32 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.36.0"; .\install.ps1
+$env:SHINE_VERSION = "0.37.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
+
+### SSH session file transfer
+
+`shine ssh` opens a normal interactive SSH session (it wraps the system `ssh` binary and reuses your `~/.ssh/config`) while also establishing a session-scoped transfer channel back to the machine you launched it from. `shine local download`/`upload`/`status` then use that channel from inside the session — no separate `scp`/`rsync` invocation needed.
+
+```bash
+cd ~/work/frontend
+shine ssh dev                     # opens the session; ~/work/frontend becomes this
+                                   # session's "local directory" for the commands below
+
+# once connected, on the remote host:
+shine local download result.log              # remote ./result.log -> local ~/work/frontend/result.log
+shine local download output/ '~/Downloads/build/'  # directories transfer too (tar-streamed)
+shine local upload notes.txt                  # local ~/work/frontend/notes.txt -> remote .
+shine local upload assets/ ./public/assets/
+shine local status                            # session id, connection state, local directory
+```
+
+Source/destination arguments are resolved by whichever side owns them: the first `download` argument and the second `upload` argument are always remote paths, resolved against the remote shell's current directory; the other side is always resolved against the session's local directory (the directory `shine ssh` was launched from, regardless of any `cd` after connecting). Quote a path (e.g. `'~/Downloads/'`) when you want the *other* side to expand `~`, since your local shell would otherwise expand it before `shine` sees it.
+
+Both commands default to writing into the destination side's working directory under the source's file name, refuse to overwrite an existing destination unless `--force` is passed, and support `--dry-run` to preview the transfer without copying data. Progress is printed as a single overwritten line when attached to a terminal; piped/non-interactive runs get one final line instead. `shine local status` also works as a liveness check for the session when nothing is transferring.
+
+The local side of `shine local` (the machine you ran `shine ssh` from) also works on Windows; the remote host is always assumed to be Linux or macOS.
 
 ## Bundled Presets
 

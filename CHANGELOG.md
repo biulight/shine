@@ -7,11 +7,32 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [0.37.0] — 2026-07-09
+
 ### Features
 
+- Added `shine ssh` and `shine local download`/`upload`/`status` for transferring files and directories between machines over a session-scoped channel piggybacked on an interactive SSH session, with throttled progress output, directory transfers (tar-streamed, symlink-escape and traversal checks), overwrite protection, and `--dry-run` previews. The local side also runs on Windows (the remote host is always assumed Linux/macOS).
 - Added an `age` secret backend for `shine env encrypt`/`decrypt`/`seal`, supporting multi-recipient encryption and Apple Touch ID (Secure Enclave) identities via `age-plugin-se`. Ciphertext is tagged so existing GPG secrets keep decrypting unmodified.
 - Added `shine env identity init`/`show` to generate and inspect age identities, including `--touch-id` for Secure Enclave identities on macOS.
 - `-r/--recipient` is now repeatable and `--backend gpg|age` selects the secret backend for `shine env encrypt` and `shine env seal`; `age_recipients` and `age_identity` config keys were added alongside the existing `gpg_key_id`/`secret_backend`.
+- `shine update` now reports pending Git-managed preset and overlay pulls alongside pending config changes.
+
+### Bug Fixes
+
+- Fixed `shine sys init`/`upgrade` prompting for sudo even when nothing needed to change, by checking each admin-required item's up-to-date state before requesting authorization.
+- Fixed `shine sys` split-DNS setup on Ubuntu to detect a disabled `systemd-resolved` stub listener and explain why split DNS can't take effect instead of reporting a false converge.
+- Fixed `shine sys` drift detection for managed system resource environment variables.
+- Fixed `shine info` shell diffs to use the same source `shine update` uses.
+
+### Internal
+
+- Split `secret.rs` into a `SecretBackend` trait plus GPG and age implementations, routed by ciphertext tag.
+- Further split the `config`, `sys`, and top-level command-handling modules for cohesion (env commands and preset shims out of `main.rs`; sys data model and run-manifest out of `sys/mod.rs`).
+
+### Docs
+
+- Documented `shine ssh` / `shine local` and the age secret backend in the English and Chinese READMEs.
+- Added ADR 0008 for the tagged-ciphertext secret backend routing decision.
 
 ## [0.36.0] — 2026-07-05
 
