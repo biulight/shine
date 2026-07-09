@@ -7,6 +7,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Features
+
+- Added an `age` secret backend for `shine env encrypt`/`decrypt`/`seal`, supporting multi-recipient encryption and Apple Touch ID (Secure Enclave) identities via `age-plugin-se`. Ciphertext is tagged so existing GPG secrets keep decrypting unmodified.
+- Added `shine env identity init`/`show` to generate and inspect age identities, including `--touch-id` for Secure Enclave identities on macOS.
+- `-r/--recipient` is now repeatable and `--backend gpg|age` selects the secret backend for `shine env encrypt` and `shine env seal`; `age_recipients` and `age_identity` config keys were added alongside the existing `gpg_key_id`/`secret_backend`.
+
 ## [0.36.0] — 2026-07-05
 
 ### Features

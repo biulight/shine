@@ -643,6 +643,43 @@ You can also decrypt any base64 GPG secret from the active env config directly:
 shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
 ```
 
+#### age + Apple Touch ID (Secure Enclave)
+
+For secrets that need to be shared through a repo and decrypted by every teammate — not just
+GPG users — `shine env encrypt`/`decrypt`/`seal` also support
+[age](https://github.com/FiloSottile/age) as a second backend, with optional Touch ID support on
+macOS via [age-plugin-se](https://github.com/remko/age-plugin-se):
+
+```bash
+brew install age age-plugin-se   # or your package manager of choice
+
+# Generate a Secure Enclave identity that prompts Touch ID on decrypt
+shine env identity init --touch-id
+
+# Or a plain identity that works on any OS
+shine env identity init
+```
+
+`identity init` prints the identity's `age1...`/`age1se1...` recipient. Add every teammate's
+recipient (their own age or Secure Enclave identity) to `age_recipients` so any of them can
+decrypt what you seal:
+
+```toml
+secret_backend = "age"
+age_recipients = ["age1se1qexample...", "age1qteammate..."]
+```
+
+```bash
+shine env encrypt --backend age --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_SECRET
+shine env decrypt DEEPSEEK_API_KEY_SECRET   # prompts Touch ID if the identity is Secure Enclave
+```
+
+Ciphertext produced by the age backend is tagged (`age:...`) so `shine` always knows which
+backend to decrypt with — existing untagged GPG secrets keep working unmodified. `-r/--recipient`
+is repeatable for both backends, so a single `encrypt`/`seal` can target several recipients at
+once. Removing a recipient from `age_recipients` does not retroactively revoke access to secrets
+already committed to git history — re-seal to rotate.
+
 For a value that should become an environment variable in the current shell,
 store it as `<KEY>_SECRET` for encrypted storage or `<KEY>` for plaintext
 fallback, then evaluate the generated shell code:
@@ -802,6 +839,15 @@ Set a default GPG recipient for `shine env encrypt`:
 
 ```toml
 gpg_key_id = "<key-id>"
+```
+
+Or make age the default backend and configure its recipients/identity (see
+[age + Apple Touch ID](#age--apple-touch-id-secure-enclave) above):
+
+```toml
+secret_backend = "age"
+age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_identity = "~/.shine/age/identity.txt"   # optional; this is also the default path
 ```
 
 Template variables live in the `[env]` table:

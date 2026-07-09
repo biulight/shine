@@ -101,3 +101,17 @@ the same lookup as `env export` (`KEY_SECRET` decrypted first, then plaintext `K
 both workspace values and inherited process variables. Without a discovered or explicit
 workspace, at least one `--with` is required. The merged environment is applied only to the
 spawned child process, whose exit status is propagated by Shine.
+
+## Secret backend routing (GPG / age)
+
+Every call site that decrypts a stored secret (`env decrypt`, `env export`, workspace
+`seal`/`run`) goes through `secret::decrypt_secret(ciphertext, age_identities)`, which inspects the
+ciphertext for an `age:` prefix (`secret::parse_tagged_ciphertext`) and dispatches to
+`secret::age`/`secret::gpg` accordingly; untagged ciphertext is always GPG. Decryption never
+reads `Config::secret_backend` — only the tag decides. Encryption (`env encrypt`, workspace
+`seal`) instead resolves a `secret::EncryptRecipients` (CLI `-r`/`--backend` > workspace
+`env.encryption` > `config.toml` `gpg_key_id`/`age_recipients`/`secret_backend` > GPG default)
+and calls `secret::encrypt_secret`, which tags age output and leaves GPG output untagged. See
+[ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md) for the full rationale.
+`shine env identity init [--touch-id]` generates the age identity file
+(`age-keygen`/`age-plugin-se keygen`) consulted via `Config::age_identities()`.

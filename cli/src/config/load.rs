@@ -31,6 +31,10 @@ struct ProjectOverrides {
     gpg_key_id: Option<String>,
     #[serde(default)]
     secret_backend: Option<String>,
+    #[serde(default)]
+    age_recipients: Vec<String>,
+    #[serde(default)]
+    age_identity: Option<String>,
     #[serde(default, deserialize_with = "deserialize_env_values")]
     env: BTreeMap<String, String>,
 }
@@ -132,6 +136,12 @@ impl Config {
         }
         if overrides.secret_backend.is_some() {
             config.secret_backend = overrides.secret_backend;
+        }
+        if !overrides.age_recipients.is_empty() {
+            config.age_recipients = overrides.age_recipients;
+        }
+        if overrides.age_identity.is_some() {
+            config.age_identity = overrides.age_identity;
         }
         config.env.extend(overrides.env);
         config
@@ -834,6 +844,49 @@ mod tests {
         assert!(!env.contains_key("GLOBAL"));
         assert!(!env.contains_key("GLOBAL_FILE"));
         assert!(!env.contains_key("PROJECT_FILE"));
+
+        restore_current_dir(&original_dir);
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&project_dir).await.unwrap();
+        fs::remove_dir_all(&state_dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn project_config_overrides_age_backend_settings() {
+        let _guard = env_lock();
+        let original_dir = std::env::current_dir().unwrap();
+        let project_dir = make_temp_dir().await;
+        let state_dir = make_temp_dir().await;
+        fs::write(
+            state_dir.join("config.toml"),
+            "secret_backend = \"gpg\"\nage_recipients = [\"age1global\"]\nage_identity = \"~/.shine/age/global.txt\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            project_dir.join("shine.config.toml"),
+            "presets_dir = \".\"\nsecret_backend = \"age\"\nage_recipients = [\"age1project-a\", \"age1project-b\"]\n",
+        )
+        .await
+        .unwrap();
+
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", state_dir.to_str().unwrap()) };
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+        std::env::set_current_dir(&project_dir).unwrap();
+
+        let config = Config::load_or_init().await.unwrap();
+
+        assert_eq!(config.secret_backend.as_deref(), Some("age"));
+        assert_eq!(
+            config.age_recipients,
+            vec!["age1project-a".to_string(), "age1project-b".to_string()]
+        );
+        // age_identity is absent from the project override, so the global value persists.
+        assert_eq!(
+            config.age_identity.as_deref(),
+            Some("~/.shine/age/global.txt")
+        );
 
         restore_current_dir(&original_dir);
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };

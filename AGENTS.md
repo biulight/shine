@@ -122,6 +122,8 @@ shine/
 │       │   ├── mod.rs        # EnvConfig: [env] table in config.toml, @@VAR@@ substitution
 │       │   ├── commands.rs   # `shine env show/set/delete/get/decrypt/export/encrypt` handlers
 │       │   ├── catalog.rs    # Known env-var metadata (description, sensitive) for `env show`
+│       │   ├── identity.rs   # `shine env identity init/show`: age identity generation
+│       │   │                 # (age-keygen / age-plugin-se --touch-id) and recipient inspection
 │       │   ├── upgrade.rs    # Re-apply env template transforms to installed presets
 │       │   └── workspace.rs  # `shine env seal/run`: workspace env files, `--with` injection
 │       ├── git_pull.rs       # Safe FF-only pulls for Git-managed preset sources
@@ -154,8 +156,13 @@ shine/
 │       ├── list.rs           # Top-level `shine list` and status views
 │       ├── path_display.rs   # Home-relative path formatting for terminal output
 │       ├── secret/
-│       │   ├── mod.rs        # SecretBackend trait (encrypt/decrypt), re-exports
-│       │   └── gpg.rs        # GPG-backed encrypt/decrypt for env secrets (the only backend today)
+│       │   ├── mod.rs        # BackendKind/EncryptRecipients, tagged-ciphertext router
+│       │   │                 # (encrypt_secret/decrypt_secret); untagged = gpg, `age:` = age
+│       │   ├── exec.rs       # Shared subprocess helpers (ensure_command, TempFile, base64
+│       │   │                 # encode/decode) used by both backends below
+│       │   ├── gpg.rs        # GPG-backed encrypt/decrypt, untagged base64 ciphertext
+│       │   └── age.rs        # age-backed encrypt/decrypt, multi-recipient + Secure Enclave
+│       │                     # (age-plugin-se) identity support, `age:`-tagged ciphertext
 │       ├── show.rs           # `shine info <TARGET>` content display
 │       ├── ssh/
 │       │   ├── mod.rs        # `shine ssh`: wraps system ssh, arg splitting, session
@@ -203,7 +210,7 @@ shine/
 | `shell list/install/uninstall` | `cli/src/shells/` |
 | `app list/install/uninstall` | `cli/src/apps/` |
 | `sys list/init` | `cli/src/sys/` |
-| `env show/set/get/decrypt/encrypt` | `cli/src/env/` |
+| `env show/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
 | `list` | `cli/src/list.rs` |
 | `info <TARGET>` | `cli/src/show.rs` |
 | `export` / `link` / `unlink` / `overlay` | `cli/src/presets_commands.rs` |
@@ -232,7 +239,14 @@ shine/
 
 `shine env set KEY VALUE` writes to the `[env]` table in `config.toml`. App (and shell) preset files that declare `transforms = ["template"]` in their `shine.toml` have `@@KEY@@` placeholders replaced at install/upgrade time. Run `shine upgrade` after changing env vars to re-apply to installed presets.
 
-`shine env encrypt`/`shine env decrypt` use GPG (`secret/gpg.rs`, via the `SecretBackend` trait in `secret/mod.rs`) to store secrets as base64-encoded ciphertext in the `[env]` table.
+`shine env encrypt`/`shine env decrypt` store secrets as base64 ciphertext in the `[env]` table,
+routed through `secret::encrypt_secret`/`decrypt_secret` (`secret/mod.rs`) to either the GPG
+(`secret/gpg.rs`, untagged ciphertext) or age (`secret/age.rs`, `age:`-tagged ciphertext, with
+optional Apple Touch ID via `age-plugin-se`) backend. Decryption always routes purely on the
+ciphertext's tag, never on config — see
+[ADR 0008](docs/kb/decisions/0008-age-secret-backend-tagged-ciphertext.md). `shine env identity
+init/show` (`env/identity.rs`) manages the age identity file consulted via
+`Config::age_identities()`.
 
 ### File transforms (`apps/transforms/`)
 

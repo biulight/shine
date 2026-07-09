@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 
 use super::{EnvConfig, StoredValue, resolve_stored_value, secret_key};
 use crate::config::Config;
+use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{colors, path_display, secret, shells};
 
 pub async fn handle_show(config: &Config, reveal: bool) -> Result<()> {
@@ -162,7 +163,7 @@ pub async fn handle_decrypt(config: &Config, key: &str) -> Result<()> {
     let Some(value) = env.get(key) else {
         bail!("{key} is not set in the active config [env]");
     };
-    let plaintext = secret::decrypt_base64_gpg_secret(value)
+    let plaintext = secret::decrypt_secret(value, &config.age_identities())
         .await
         .with_context(|| format!("decrypting {key}"))?;
     print!("{plaintext}");
@@ -179,7 +180,7 @@ pub async fn handle_export(config: &Config, key: &str, alias: Option<&str>) -> R
         EnvExportValue::Secret {
             key: secret_key,
             value,
-        } => secret::decrypt_base64_gpg_secret(value)
+        } => secret::decrypt_secret(value, &config.age_identities())
             .await
             .with_context(|| format!("decrypting {secret_key}"))?,
         EnvExportValue::Plaintext(value) => value.to_string(),
@@ -258,33 +259,84 @@ fn resolve_env_encrypt_output(
     Ok(EnvEncryptOutput::Print)
 }
 
-fn resolve_env_encrypt_recipient(config: &Config, recipient: Option<&str>) -> Result<String> {
-    if let Some(recipient) = recipient
-        .map(str::trim)
-        .filter(|recipient| !recipient.is_empty())
-    {
-        return Ok(recipient.to_string());
+fn resolve_encrypt_backend(config: &Config, backend: Option<&str>) -> Result<BackendKind> {
+    if let Some(backend) = backend.map(str::trim).filter(|value| !value.is_empty()) {
+        return backend.parse();
     }
-    if let Some(recipient) = config
-        .gpg_key_id
+    if let Some(backend) = config
+        .secret_backend
         .as_deref()
         .map(str::trim)
-        .filter(|recipient| !recipient.is_empty())
+        .filter(|value| !value.is_empty())
     {
-        return Ok(recipient.to_string());
+        return backend.parse();
     }
-    bail!("GPG recipient is required; pass -r/--recipient or set gpg_key_id in config.toml");
+    Ok(BackendKind::default())
+}
+
+fn clean_recipients(recipients: &[String]) -> Vec<String> {
+    recipients
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn resolve_encrypt_recipients(
+    backend: BackendKind,
+    cli_recipients: &[String],
+    config: &Config,
+) -> Result<EncryptRecipients> {
+    let cli_recipients = clean_recipients(cli_recipients);
+    if !cli_recipients.is_empty() {
+        if backend == BackendKind::Gpg
+            && let Some(hint) = cli_recipients
+                .iter()
+                .find(|value| value.starts_with("age1"))
+        {
+            bail!("recipient \"{hint}\" looks like an age recipient; did you mean --backend age?");
+        }
+        return Ok(match backend {
+            BackendKind::Gpg => EncryptRecipients::Gpg(cli_recipients),
+            BackendKind::Age => EncryptRecipients::Age(cli_recipients),
+        });
+    }
+
+    match backend {
+        BackendKind::Gpg => {
+            let recipient = config
+                .gpg_key_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .context(
+                    "GPG recipient is required; pass -r/--recipient, set gpg_key_id, or set secret_backend/age_recipients for age",
+                )?;
+            Ok(EncryptRecipients::Gpg(vec![recipient.to_string()]))
+        }
+        BackendKind::Age => {
+            let recipients = clean_recipients(&config.age_recipients);
+            if recipients.is_empty() {
+                bail!(
+                    "age recipients are required; pass -r/--recipient or set age_recipients in config.toml"
+                );
+            }
+            Ok(EncryptRecipients::Age(recipients))
+        }
+    }
 }
 
 pub async fn handle_encrypt(
     config: &Config,
-    recipient: Option<&str>,
+    backend: Option<&str>,
+    recipients: &[String],
     set_key: Option<&str>,
     from_key: Option<&str>,
 ) -> Result<()> {
     use std::io::Read as _;
 
-    let recipient = resolve_env_encrypt_recipient(config, recipient)?;
+    let backend = resolve_encrypt_backend(config, backend)?;
+    let recipients = resolve_encrypt_recipients(backend, recipients, config)?;
     let plaintext = if let Some(key) = from_key {
         let env = EnvConfig::load_or_init(config).await?;
         let Some(value) = env.get(key) else {
@@ -298,9 +350,9 @@ pub async fn handle_encrypt(
             .context("reading secret from stdin")?;
         input
     };
-    let encoded = secret::encrypt_gpg_secret_to_base64(&plaintext, &recipient)
+    let encoded = secret::encrypt_secret(&plaintext, &recipients)
         .await
-        .with_context(|| format!("encrypting secret for {recipient}"))?;
+        .context("encrypting secret")?;
     match resolve_env_encrypt_output(set_key, from_key)? {
         EnvEncryptOutput::Set(key) => {
             let mut env = EnvConfig::load_or_init(config).await?;
@@ -550,59 +602,145 @@ mod tests {
     }
 
     #[test]
-    fn env_encrypt_recipient_cli_wins_over_config() {
+    fn encrypt_backend_cli_wins_over_config() {
+        let dir = std::env::temp_dir().join(format!("shine-env-backend-{}", uuid::Uuid::new_v4()));
+        let mut config = config_in(&dir);
+        config.secret_backend = Some("age".to_string());
+
+        assert_eq!(
+            resolve_encrypt_backend(&config, Some("gpg")).unwrap(),
+            BackendKind::Gpg
+        );
+    }
+
+    #[test]
+    fn encrypt_backend_falls_back_to_config() {
+        let dir = std::env::temp_dir().join(format!("shine-env-backend-{}", uuid::Uuid::new_v4()));
+        let mut config = config_in(&dir);
+        config.secret_backend = Some("age".to_string());
+
+        assert_eq!(
+            resolve_encrypt_backend(&config, None).unwrap(),
+            BackendKind::Age
+        );
+    }
+
+    #[test]
+    fn encrypt_backend_defaults_to_gpg() {
+        let dir = std::env::temp_dir().join(format!("shine-env-backend-{}", uuid::Uuid::new_v4()));
+        let config = config_in(&dir);
+
+        assert_eq!(
+            resolve_encrypt_backend(&config, None).unwrap(),
+            BackendKind::Gpg
+        );
+    }
+
+    #[test]
+    fn encrypt_recipients_cli_wins_over_config_for_gpg() {
         let dir =
             std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
         let mut config = config_in(&dir);
         config.gpg_key_id = Some("config@example.com".to_string());
 
-        assert_eq!(
-            resolve_env_encrypt_recipient(&config, Some("cli@example.com")).unwrap(),
-            "cli@example.com"
-        );
+        let recipients =
+            resolve_encrypt_recipients(BackendKind::Gpg, &["cli@example.com".to_string()], &config)
+                .unwrap();
+
+        match recipients {
+            EncryptRecipients::Gpg(values) => assert_eq!(values, vec!["cli@example.com"]),
+            EncryptRecipients::Age(_) => panic!("expected gpg recipients"),
+        }
     }
 
     #[test]
-    fn env_encrypt_recipient_falls_back_to_config() {
+    fn encrypt_recipients_gpg_falls_back_to_config() {
         let dir =
             std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
         let mut config = config_in(&dir);
         config.gpg_key_id = Some("config@example.com".to_string());
 
-        assert_eq!(
-            resolve_env_encrypt_recipient(&config, None).unwrap(),
-            "config@example.com"
-        );
+        let recipients = resolve_encrypt_recipients(BackendKind::Gpg, &[], &config).unwrap();
+
+        match recipients {
+            EncryptRecipients::Gpg(values) => assert_eq!(values, vec!["config@example.com"]),
+            EncryptRecipients::Age(_) => panic!("expected gpg recipients"),
+        }
     }
 
     #[test]
-    fn env_encrypt_recipient_treats_empty_config_as_missing() {
+    fn encrypt_recipients_gpg_treats_empty_config_as_missing() {
         let dir =
             std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
         let mut config = config_in(&dir);
         config.gpg_key_id = Some("  ".to_string());
 
-        let err = resolve_env_encrypt_recipient(&config, None).unwrap_err();
+        let err = resolve_encrypt_recipients(BackendKind::Gpg, &[], &config).unwrap_err();
 
         assert!(
             err.to_string()
-                .contains("pass -r/--recipient or set gpg_key_id"),
+                .contains("pass -r/--recipient, set gpg_key_id"),
             "error should explain how to set recipient: {err:#}"
         );
     }
 
     #[test]
-    fn env_encrypt_recipient_errors_when_missing() {
+    fn encrypt_recipients_gpg_errors_when_missing() {
         let dir =
             std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
         let config = config_in(&dir);
 
-        let err = resolve_env_encrypt_recipient(&config, None).unwrap_err();
+        let err = resolve_encrypt_recipients(BackendKind::Gpg, &[], &config).unwrap_err();
 
         assert!(
             err.to_string()
-                .contains("pass -r/--recipient or set gpg_key_id"),
+                .contains("pass -r/--recipient, set gpg_key_id"),
             "error should explain how to set recipient: {err:#}"
+        );
+    }
+
+    #[test]
+    fn encrypt_recipients_age_falls_back_to_config() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
+        let mut config = config_in(&dir);
+        config.age_recipients = vec!["age1qexample".to_string()];
+
+        let recipients = resolve_encrypt_recipients(BackendKind::Age, &[], &config).unwrap();
+
+        match recipients {
+            EncryptRecipients::Age(values) => assert_eq!(values, vec!["age1qexample"]),
+            EncryptRecipients::Gpg(_) => panic!("expected age recipients"),
+        }
+    }
+
+    #[test]
+    fn encrypt_recipients_age_errors_when_missing() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
+        let config = config_in(&dir);
+
+        let err = resolve_encrypt_recipients(BackendKind::Age, &[], &config).unwrap_err();
+
+        assert!(
+            err.to_string().contains("age recipients are required"),
+            "error should explain how to set age recipients: {err:#}"
+        );
+    }
+
+    #[test]
+    fn encrypt_recipients_hints_when_age_recipient_used_with_gpg_backend() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-env-recipient-{}", uuid::Uuid::new_v4()));
+        let config = config_in(&dir);
+
+        let err =
+            resolve_encrypt_recipients(BackendKind::Gpg, &["age1qexample".to_string()], &config)
+                .unwrap_err();
+
+        assert!(
+            err.to_string().contains("did you mean --backend age"),
+            "error should hint at the age backend: {err:#}"
         );
     }
 }

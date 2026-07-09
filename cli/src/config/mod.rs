@@ -111,11 +111,24 @@ pub struct Config {
     /// does not provide `-r/--recipient`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpg_key_id: Option<String>,
-    /// Selects the [`crate::secret::SecretBackend`] used for `shine env encrypt`/
-    /// `decrypt`. Absent (the default) means GPG; reserved for a future
-    /// Touch ID / keychain backend.
+    /// Selects the default [`crate::secret::BackendKind`] used by `shine env
+    /// encrypt`/`seal` when neither `-r/--recipient` nor a workspace backend
+    /// override is given. Absent means GPG. Decryption never consults this
+    /// field — it is resolved purely from the ciphertext's backend tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_backend: Option<String>,
+    /// Default age recipients (`age1...` / `age1se1...`) used by `shine env
+    /// encrypt`/`seal` when the age backend is active and no `-r/--recipient`
+    /// is given. Encrypting to every team member's recipient lets any of them
+    /// decrypt the resulting ciphertext with their own identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub age_recipients: Vec<String>,
+    /// Path to the age identity file used to decrypt `age:`-tagged secrets.
+    /// May contain multiple identities (e.g. a Secure Enclave identity plus a
+    /// plain fallback), one per line. Defaults to
+    /// `<shine_dir>/age/identity.txt` when unset and that file exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub age_identity: Option<String>,
     /// Environment variables substituted into template-enabled presets.
     #[serde(
         default = "default_env_map",
@@ -185,8 +198,30 @@ impl Config {
             self_install_dest: None,
             gpg_key_id: None,
             secret_backend: None,
+            age_recipients: Vec::new(),
+            age_identity: None,
             env: default_env_map(),
             env_descriptions: BTreeMap::new(),
+        }
+    }
+
+    /// Age identity file(s) used to decrypt `age:`-tagged secrets, resolved
+    /// from `age_identity` (tilde-expanded) or, when unset, the default path
+    /// under `shine_dir` if it exists.
+    pub fn age_identities(&self) -> Vec<PathBuf> {
+        if let Some(identity) = self
+            .age_identity
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return vec![PathBuf::from(tilde_expand(identity))];
+        }
+        let default_path = self.shine_dir.join("age").join("identity.txt");
+        if default_path.is_file() {
+            vec![default_path]
+        } else {
+            Vec::new()
         }
     }
 
@@ -270,6 +305,8 @@ impl Default for Config {
             self_install_dest: None,
             gpg_key_id: None,
             secret_backend: None,
+            age_recipients: Vec::new(),
+            age_identity: None,
             env: default_env_map(),
             env_descriptions: BTreeMap::new(),
         }
@@ -310,5 +347,55 @@ mod tests {
         let dir = std::env::temp_dir().join("shine-test-bin-dir");
         let config = Config::new_for_test(&dir);
         assert_eq!(config.bin_dir(), dir.join("bin"));
+    }
+
+    #[test]
+    fn age_identities_is_empty_without_configured_or_default_identity() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
+        let config = Config::new_for_test(&dir);
+
+        assert!(config.age_identities().is_empty());
+    }
+
+    #[test]
+    fn age_identities_uses_configured_path_when_set() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config.age_identity = Some("/tmp/my-identity.txt".to_string());
+
+        assert_eq!(
+            config.age_identities(),
+            vec![PathBuf::from("/tmp/my-identity.txt")]
+        );
+    }
+
+    #[test]
+    fn age_identities_treats_blank_configured_path_as_unset() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config.age_identity = Some("   ".to_string());
+
+        assert!(config.age_identities().is_empty());
+    }
+
+    #[tokio::test]
+    async fn age_identities_falls_back_to_default_path_when_it_exists() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-age-identities-{}", uuid::Uuid::new_v4()));
+        let config = Config::new_for_test(&dir);
+        let default_path = dir.join("age").join("identity.txt");
+        tokio::fs::create_dir_all(default_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&default_path, "AGE-SECRET-KEY-1EXAMPLE\n")
+            .await
+            .unwrap();
+
+        assert_eq!(config.age_identities(), vec![default_path]);
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 }

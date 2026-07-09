@@ -11,8 +11,9 @@ use cli::{
 };
 
 use commands::{
-    AppCommands, Cli, Commands, CompletionCommands, CompletionShell, EnvCommands, ExportCommand,
-    LinkCommand, LocalCommands, OverlayCommands, SelfCommands, ShellCommands, SysCommands,
+    AppCommands, Cli, Commands, CompletionCommands, CompletionShell, EnvCommands,
+    EnvIdentitySubcommand, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
+    SelfCommands, ShellCommands, SysCommands,
 };
 #[cfg(test)]
 use commands::{ClearCommand, InitCommand, UpdateCommand, UpgradeCommand};
@@ -249,7 +250,8 @@ async fn run(cli: Cli) -> Result<()> {
             EnvCommands::Encrypt(cmd) => {
                 env::commands::handle_encrypt(
                     &config,
-                    cmd.recipient.as_deref(),
+                    cmd.backend.as_deref(),
+                    &cmd.recipients,
                     cmd.set.as_deref(),
                     cmd.from.as_deref(),
                 )
@@ -260,7 +262,8 @@ async fn run(cli: Cli) -> Result<()> {
                     &config,
                     cmd.workspace.as_deref(),
                     cmd.file.as_deref(),
-                    cmd.recipient.as_deref(),
+                    cmd.backend.as_deref(),
+                    &cmd.recipients,
                 )
                 .await
             }
@@ -274,6 +277,24 @@ async fn run(cli: Cli) -> Result<()> {
                 )
                 .await
             }
+            EnvCommands::Identity(cmd) => match cmd.command {
+                EnvIdentitySubcommand::Init {
+                    touch_id,
+                    access_control,
+                    output,
+                    force,
+                } => {
+                    env::identity::handle_identity_init(
+                        &config,
+                        touch_id,
+                        access_control.as_deref(),
+                        output.as_deref(),
+                        force,
+                    )
+                    .await
+                }
+                EnvIdentitySubcommand::Show => env::identity::handle_identity_show(&config).await,
+            },
         },
         Commands::Sys { command } => match command {
             SysCommands::List { all } => Box::pin(sys::handle_list(&config, all)).await,
@@ -766,7 +787,7 @@ mod tests {
             cli.command,
             Commands::Env {
                 command: EnvCommands::Encrypt(cmd)
-            } if cmd.recipient.is_none() && cmd.from.as_deref() == Some("MY_TOKEN")
+            } if cmd.recipients.is_empty() && cmd.from.as_deref() == Some("MY_TOKEN")
         ));
     }
 
@@ -778,7 +799,7 @@ mod tests {
             cli.command,
             Commands::Env {
                 command: EnvCommands::Encrypt(cmd)
-            } if cmd.recipient.as_deref() == Some("alice@example.com")
+            } if cmd.recipients == ["alice@example.com"]
         ));
     }
 
@@ -798,7 +819,7 @@ mod tests {
             Commands::Env {
                 command: EnvCommands::Seal(cmd)
             } if cmd.file.as_deref() == Some(std::path::Path::new(".env.production.shine.toml"))
-                && cmd.recipient.as_deref() == Some("alice@example.com")
+                && cmd.recipients == ["alice@example.com"]
         ));
     }
 

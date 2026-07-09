@@ -43,6 +43,16 @@ bugs. Check this list before changing the modules named in each entry.
 - **Embedded templates are the fallback** when an external/overlay presets dir lacks a file
   (commit `5606438`). External presets mode must degrade to embedded content, not error.
 
+## Secrets
+
+- **Decrypt routing is tag-based only** (`secret::parse_tagged_ciphertext`). `decrypt_secret`
+  must never consult `Config::secret_backend` or any other config to pick a backend — only the
+  `age:` prefix (or its absence) decides. This lets `secret_backend`/`age_recipients` change
+  freely without breaking previously-encrypted secrets (see
+  [ADR 0008](decisions/0008-age-secret-backend-tagged-ciphertext.md)).
+- **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
+  prefix, breaks every secret encrypted before the change.
+
 ## Update check
 
 - **A failed or rate-limited version check must never fail the user's command** (`main.rs`,

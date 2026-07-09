@@ -634,6 +634,41 @@ shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
 ```
 
+#### age + Apple Touch ID（Secure Enclave）
+
+如果密文需要提交到仓库中共享，并让多个团队成员各自解密——而不仅限于使用 GPG 的人——`shine env
+encrypt`/`decrypt`/`seal` 还支持第二种后端 [age](https://github.com/FiloSottile/age)，并可通过
+[age-plugin-se](https://github.com/remko/age-plugin-se) 在 macOS 上启用 Touch ID：
+
+```bash
+brew install age age-plugin-se   # 或使用你偏好的包管理器
+
+# 生成一个绑定 Touch ID 的 Secure Enclave 身份，解密时会弹出系统 Touch ID 提示
+shine env identity init --touch-id
+
+# 或者生成一个在任意系统上都可用的普通身份
+shine env identity init
+```
+
+`identity init` 会打印该身份对应的 `age1...`/`age1se1...` recipient。把每位团队成员的
+recipient（各自的 age 或 Secure Enclave 身份）加入 `age_recipients`，这样任何一人都能解密你加密
+过的内容：
+
+```toml
+secret_backend = "age"
+age_recipients = ["age1se1qexample...", "age1qteammate..."]
+```
+
+```bash
+shine env encrypt --backend age --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_SECRET
+shine env decrypt DEEPSEEK_API_KEY_SECRET   # 如果身份是 Secure Enclave，会弹出 Touch ID 提示
+```
+
+age 后端产生的密文带有标签（`age:...`），因此 `shine` 始终能判断该用哪个后端解密——已有的、不带
+标签的 GPG 密文不受影响，照常可用。`-r/--recipient` 对两种后端都可重复传入，因此一次
+`encrypt`/`seal` 就能同时面向多个 recipient 加密。从 `age_recipients` 中移除某个 recipient，并
+不会追溯撤销其对已提交到 git 历史中的密文的访问权限——需要重新执行 `seal` 才能轮换。
+
 如果要把值导出到当前 shell，可直接生成 shell 代码，也可以通过 `--as` 改用另一个变量名：
 
 ```bash
@@ -776,6 +811,14 @@ app_default_dest_root = "~/.config"
 
 ```toml
 gpg_key_id = "<key-id>"
+```
+
+或者把 age 设为默认后端，并配置其 recipient / 身份文件（参见上文 age + Apple Touch ID）：
+
+```toml
+secret_backend = "age"
+age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_identity = "~/.shine/age/identity.txt"   # 可选；也是默认路径
 ```
 
 模板变量放在 `[env]` 表里：

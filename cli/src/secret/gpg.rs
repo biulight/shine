@@ -1,13 +1,16 @@
 //! GPG-backed secret storage: base64-encoded ciphertext round-tripped through
-//! the `gpg` and `base64` CLI tools. This is the only backend today; ciphertext
-//! carries no backend tag, so a future backend router must treat untagged
-//! base64 as GPG for backward compatibility.
+//! the `gpg` and `base64` CLI tools. Ciphertext carries no backend tag, so the
+//! router in `secret::mod` treats untagged base64 as GPG for backward
+//! compatibility with secrets encrypted before other backends existed.
 
 use anyhow::{Context, Result, bail};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::process::Command;
 
-use super::SecretBackend;
+use super::exec::{
+    TempFile, decode_base64_to_file, encode_base64_single_line, ensure_command,
+    write_stdin_and_wait,
+};
 
 pub async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<String> {
     if encoded_secret.trim().is_empty() {
@@ -29,94 +32,35 @@ pub async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<String> {
     decrypt_gpg_file(encrypted_file.path()).await
 }
 
-pub async fn encrypt_gpg_secret_to_base64(plaintext: &[u8], recipient: &str) -> Result<String> {
+pub async fn encrypt_gpg_secret_to_base64(
+    plaintext: &[u8],
+    recipients: &[String],
+) -> Result<String> {
     if plaintext.is_empty() {
         bail!("secret is empty");
     }
-    if recipient.trim().is_empty() {
-        bail!("recipient is empty");
-    }
+    let recipients = validate_recipients(recipients)?;
 
     ensure_command("base64")?;
     ensure_command("gpg")?;
 
-    let encrypted = encrypt_gpg(plaintext, recipient).await?;
+    let encrypted = encrypt_gpg(plaintext, &recipients).await?;
     encode_base64_single_line(&encrypted).await
 }
 
-/// [`SecretBackend`] wrapping the free functions above, bound to a fixed
-/// recipient. Encrypt/decrypt for the default (and currently only) backend.
-pub struct GpgBackend {
-    recipient: String,
-}
-
-impl GpgBackend {
-    pub fn new(recipient: impl Into<String>) -> Self {
-        Self {
-            recipient: recipient.into(),
+fn validate_recipients(recipients: &[String]) -> Result<Vec<&str>> {
+    if recipients.is_empty() {
+        bail!("recipients is empty");
+    }
+    let mut cleaned = Vec::with_capacity(recipients.len());
+    for recipient in recipients {
+        let trimmed = recipient.trim();
+        if trimmed.is_empty() {
+            bail!("recipient is empty");
         }
+        cleaned.push(trimmed);
     }
-}
-
-impl SecretBackend for GpgBackend {
-    async fn encrypt(&self, plaintext: &[u8]) -> Result<String> {
-        encrypt_gpg_secret_to_base64(plaintext, &self.recipient).await
-    }
-
-    async fn decrypt(&self, ciphertext: &str) -> Result<String> {
-        decrypt_base64_gpg_secret(ciphertext).await
-    }
-}
-
-fn ensure_command(name: &str) -> Result<()> {
-    let found = std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| {
-                if dir.join(name).is_file() {
-                    return true;
-                }
-                #[cfg(windows)]
-                if dir.join(format!("{name}.exe")).is_file() {
-                    return true;
-                }
-                false
-            })
-        })
-        .unwrap_or(false);
-    if !found {
-        bail!("{name} is not installed or not on PATH");
-    }
-    Ok(())
-}
-
-async fn decode_base64_to_file(encoded_secret: &str, output_path: &Path) -> Result<()> {
-    if run_base64_decode(encoded_secret, output_path, "--decode").await? {
-        return Ok(());
-    }
-    if run_base64_decode(encoded_secret, output_path, "-D").await? {
-        return Ok(());
-    }
-    bail!("secret is not valid base64");
-}
-
-async fn run_base64_decode(encoded_secret: &str, output_path: &Path, flag: &str) -> Result<bool> {
-    let output = Command::new("base64")
-        .arg(flag)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .with_context(|| format!("running base64 {flag}"))?;
-
-    let output = write_stdin_and_wait(output, encoded_secret.as_bytes()).await?;
-    if output.status.success() {
-        tokio::fs::write(output_path, output.stdout)
-            .await
-            .with_context(|| format!("writing {}", output_path.display()))?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    Ok(cleaned)
 }
 
 async fn decrypt_gpg_file(path: &Path) -> Result<String> {
@@ -140,11 +84,14 @@ async fn decrypt_gpg_file(path: &Path) -> Result<String> {
     String::from_utf8(output.stdout).context("decrypted secret is not valid UTF-8")
 }
 
-async fn encrypt_gpg(plaintext: &[u8], recipient: &str) -> Result<Vec<u8>> {
-    let output = Command::new("gpg")
-        .arg("--encrypt")
-        .arg("-r")
-        .arg(recipient)
+async fn encrypt_gpg(plaintext: &[u8], recipients: &[&str]) -> Result<Vec<u8>> {
+    let mut command = Command::new("gpg");
+    command.arg("--encrypt");
+    for recipient in recipients {
+        command.arg("-r").arg(recipient);
+    }
+
+    let output = command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
@@ -156,70 +103,6 @@ async fn encrypt_gpg(plaintext: &[u8], recipient: &str) -> Result<Vec<u8>> {
         bail!("gpg encrypt failed");
     }
     Ok(output.stdout)
-}
-
-async fn encode_base64_single_line(input: &[u8]) -> Result<String> {
-    let output = Command::new("base64")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .with_context(|| "running base64")?;
-
-    let output = write_stdin_and_wait(output, input).await?;
-    if !output.status.success() {
-        bail!("base64 encode failed");
-    }
-
-    let encoded = String::from_utf8(output.stdout).context("base64 output is not valid UTF-8")?;
-    Ok(encoded.split_whitespace().collect())
-}
-
-async fn write_stdin_and_wait(
-    mut child: tokio::process::Child,
-    input: &[u8],
-) -> Result<std::process::Output> {
-    use tokio::io::AsyncWriteExt;
-
-    let mut stdin = child.stdin.take().context("opening child stdin")?;
-    stdin
-        .write_all(input)
-        .await
-        .context("writing child stdin")?;
-    drop(stdin);
-
-    child
-        .wait_with_output()
-        .await
-        .context("waiting for child process")
-}
-
-struct TempFile {
-    path: PathBuf,
-}
-
-impl TempFile {
-    async fn new(prefix: &str) -> Result<Self> {
-        let mut path = std::env::temp_dir();
-        path.push(format!("{prefix}-{}", uuid::Uuid::new_v4()));
-        tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .await
-            .with_context(|| format!("creating {}", path.display()))?;
-        Ok(Self { path })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
 }
 
 #[cfg(test)]
@@ -234,15 +117,23 @@ mod tests {
 
     #[tokio::test]
     async fn empty_plaintext_fails_before_external_commands() {
-        let err = encrypt_gpg_secret_to_base64(b"", "test@example.com")
+        let err = encrypt_gpg_secret_to_base64(b"", &["test@example.com".to_string()])
             .await
             .unwrap_err();
         assert!(err.to_string().contains("secret is empty"), "{err:#}");
     }
 
     #[tokio::test]
-    async fn empty_recipient_fails_before_external_commands() {
-        let err = encrypt_gpg_secret_to_base64(b"secret", "")
+    async fn empty_recipients_fails_before_external_commands() {
+        let err = encrypt_gpg_secret_to_base64(b"secret", &[])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("recipients is empty"), "{err:#}");
+    }
+
+    #[tokio::test]
+    async fn blank_recipient_fails_before_external_commands() {
+        let err = encrypt_gpg_secret_to_base64(b"secret", &["  ".to_string()])
             .await
             .unwrap_err();
         assert!(err.to_string().contains("recipient is empty"), "{err:#}");
