@@ -40,6 +40,12 @@ use anyhow::{Context, Result, bail};
 
 use crate::config::Config;
 
+/// Grace period given to still-running per-connection transfer tasks to
+/// notice the (by now closed) `ssh` tunnel and finish their own cleanup
+/// before the session directory is removed. See
+/// `agent::drain_connection_tasks`.
+const CONNECTION_DRAIN_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[cfg(not(unix))]
 const WINDOWS_REMOTE_UNSUPPORTED: &str = "`shine local` commands require this machine to be the \
     remote (Linux/macOS) side of a `shine ssh` session; Windows is currently supported as the \
@@ -120,7 +126,12 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
     let (listener, local_forward_target) = bind_local_listener(&session_dir).await?;
     let session_local_dir = std::env::current_dir().context("reading current directory")?;
 
-    let agent_handle = tokio::spawn(listener.serve(token.clone(), session_local_dir.clone()));
+    let connection_tasks = agent::new_connection_tasks();
+    let agent_handle = tokio::spawn(listener.serve(
+        token.clone(),
+        session_local_dir.clone(),
+        connection_tasks.clone(),
+    ));
 
     let wrapped_command =
         build_wrapped_remote_command(&session_id, &token, &remote_sock, &remote_command);
@@ -147,7 +158,11 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
     }
     .context("failed to run ssh")?;
 
+    // Stop accepting new connections, then give any still-running transfer
+    // a bounded chance to notice the tunnel is gone and run its own
+    // cleanup before we remove the session directory out from under it.
     agent_handle.abort();
+    agent::drain_connection_tasks(&connection_tasks, CONNECTION_DRAIN_GRACE_PERIOD).await;
     let _ = tokio::fs::remove_dir_all(&session_dir).await;
 
     if status.success() {

@@ -39,7 +39,12 @@ async fn start_agent(token: &str, session_local_dir: PathBuf) -> PathBuf {
     let sock_dir = TempDir::new();
     let sock_path = sock_dir.path().join("local.sock");
     let listener = tokio::net::UnixListener::bind(&sock_path).unwrap();
-    tokio::spawn(agent::LocalListener::Unix(listener).serve(token.to_string(), session_local_dir));
+    let tasks = agent::new_connection_tasks();
+    tokio::spawn(agent::LocalListener::Unix(listener).serve(
+        token.to_string(),
+        session_local_dir,
+        tasks,
+    ));
     // Keep the temp dir alive for the socket file's lifetime by leaking it;
     // each test uses a fresh uuid-named path so leaked directories never
     // collide, and the OS temp dir is cleaned up independently.
@@ -384,6 +389,66 @@ async fn invalid_token_is_rejected() {
             token: "wrong-token".to_string(),
             dest_hint: None,
             filename: "result.log".to_string(),
+            is_dir: false,
+            size: 3,
+            force: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(response, ServerMessage::Error { .. }));
+}
+
+#[tokio::test]
+async fn put_file_with_parent_traversal_filename_is_rejected() {
+    let session_local_dir = TempDir::new();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::PutFile {
+            token: token.to_string(),
+            dest_hint: None,
+            filename: "../escaped.log".to_string(),
+            is_dir: false,
+            size: 3,
+            force: false,
+            dry_run: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let response: ServerMessage = protocol::read_message(&mut stream).await.unwrap();
+    assert!(matches!(response, ServerMessage::Error { .. }));
+    assert!(
+        !session_local_dir
+            .path()
+            .parent()
+            .unwrap()
+            .join("escaped.log")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn put_file_with_embedded_separator_filename_is_rejected() {
+    let session_local_dir = TempDir::new();
+    let token = "test-token";
+    let sock_path = start_agent(token, session_local_dir.path().to_path_buf()).await;
+
+    let mut stream = handshake(&sock_path).await;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::PutFile {
+            token: token.to_string(),
+            dest_hint: None,
+            filename: "subdir/result.log".to_string(),
             is_dir: false,
             size: 3,
             force: false,

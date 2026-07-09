@@ -371,9 +371,25 @@ fn split_dns_marker(item_id: &str) -> String {
 /// documents that in that case `/run/systemd/resolve/stub-resolv.conf` becomes an
 /// alias for the plain uplink `resolv.conf` (no `nameserver 127.0.0.53` line),
 /// which is what we check for here.
+const STUB_RESOLV_CONF: &str = "/run/systemd/resolve/stub-resolv.conf";
+
+/// Sync variant for `plan()`, which the `SystemDriver` trait constrains to a
+/// non-async fn.
 fn systemd_resolved_stub_active() -> bool {
-    const STUB_RESOLV_CONF: &str = "/run/systemd/resolve/stub-resolv.conf";
-    match std::fs::read_to_string(STUB_RESOLV_CONF) {
+    stub_active_from(std::fs::read_to_string(STUB_RESOLV_CONF))
+}
+
+/// Async variant for `apply_split_dns`, which otherwise does all of its I/O
+/// via `tokio::fs` -- avoids blocking the executor thread on this read.
+async fn systemd_resolved_stub_active_async() -> bool {
+    stub_active_from(tokio::fs::read_to_string(STUB_RESOLV_CONF).await)
+}
+
+/// Shared parsing logic for both variants above, factored out so the three
+/// outcomes (stub active / stub disabled / file unreadable) are unit-testable
+/// without touching the real filesystem.
+fn stub_active_from(read_result: std::io::Result<String>) -> bool {
+    match read_result {
         Ok(content) => content
             .lines()
             .any(|line| line.trim_start().starts_with("nameserver 127.0.0.53")),
@@ -430,7 +446,7 @@ async fn apply_split_dns(
     previous: Option<&SystemReceipt>,
 ) -> Result<ResourceOutcome> {
     let mut desired = split_dns_desired(context)?;
-    if desired.os_id == "ubuntu" && !systemd_resolved_stub_active() {
+    if desired.os_id == "ubuntu" && !systemd_resolved_stub_active_async().await {
         bail!(
             "systemd-resolved's DNS stub listener (127.0.0.53) appears to be disabled on this \
              host, likely because another service is bound to port 53 (e.g. a coredns/dnsmasq \
@@ -841,6 +857,26 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shine-resource-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         dir
+    }
+
+    #[test]
+    fn stub_active_from_detects_the_stub_nameserver_line() {
+        let content = "nameserver 127.0.0.53\noptions edns0\n".to_string();
+        assert!(stub_active_from(Ok(content)));
+    }
+
+    #[test]
+    fn stub_active_from_detects_a_disabled_stub() {
+        // When `DNSStubListener=no`, stub-resolv.conf becomes an alias for the
+        // plain uplink resolv.conf and has no 127.0.0.53 nameserver line.
+        let content = "nameserver 192.0.2.1\n".to_string();
+        assert!(!stub_active_from(Ok(content)));
+    }
+
+    #[test]
+    fn stub_active_from_fails_open_when_unreadable() {
+        let error = std::io::Error::new(std::io::ErrorKind::NotFound, "missing");
+        assert!(stub_active_from(Err(error)));
     }
 
     fn managed_file_item(source: &str, target: &Path) -> SysItem {

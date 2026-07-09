@@ -3,6 +3,64 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-09 — `agent_handle.abort()` didn't actually protect in-flight `shine ssh` transfers
+
+- **Symptom**: a follow-up review of the Ctrl-C cleanup path in `ssh/mod.rs` found that
+  `agent_handle.abort()` — called right before `remove_dir_all(&session_dir)` and (for a nonzero
+  `ssh` exit status) `std::process::exit(code)` — looked like it protected an in-flight `PutFile`/
+  `GetFile` transfer from being cut off mid-copy. It doesn't: `agent_handle` is the `JoinHandle`
+  for `LocalListener::serve`'s *accept loop* only. Each individual connection is handed off to its
+  own detached `tokio::spawn` inside `spawn_connection`, whose `JoinHandle` was discarded and never
+  tracked anywhere. So `abort()` only ever stopped new connections from being accepted — an
+  already-running transfer kept executing as an orphaned background task with nothing in
+  `handle_ssh` aware of it, and `std::process::exit(code)` (a hard process termination that skips
+  Rust's normal unwind/drop machinery entirely) could cut it off before its own error-path cleanup
+  (removing a partial temp file) ever ran.
+- **Root cause**: "spawn a task and drop the handle" is a common, usually-harmless Tokio pattern
+  for fire-and-forget work, but it silently breaks any later code that assumes it can wait for or
+  cancel that work — there was no data structure connecting `handle_ssh`'s shutdown sequence to the
+  connection tasks `spawn_connection` created.
+- **Fix**: added `agent::ConnectionTasks` (`Arc<tokio::sync::Mutex<tokio::task::JoinSet<()>>>`),
+  threaded through `LocalListener::serve` and `spawn_connection` so every connection task is
+  tracked instead of detached. `handle_ssh` now calls `agent::drain_connection_tasks(&connection_tasks,
+  CONNECTION_DRAIN_GRACE_PERIOD)` (a 5s bounded wait) after `ssh_run` resolves and before removing
+  the session directory — since the SSH tunnel is already gone by that point, any genuinely
+  in-flight transfer's next socket read/write fails almost immediately and its existing error-path
+  cleanup gets to run to completion inside that grace period, rather than being abandoned.
+- **Rule**: a bare `tokio::spawn(...)` with the `JoinHandle` immediately dropped is a red flag
+  during review whenever the surrounding code later does anything time-sensitive (shutdown,
+  cleanup, `process::exit`) — trace whether "this task is running" is ever visible to the code that
+  assumes it can wait for or interrupt it.
+
+## 2026-07-09 — `shine local` upload's `PutFile.filename` allowed a path-traversal write
+
+- **Symptom**: a Rust code review of the SSH transfer feature found that `agent::resolve_target_path`
+  (`ssh/agent.rs`) joined the wire-supplied `PutFile.filename` directly onto the resolved
+  destination directory with `candidate.join(filename)` and no validation. The only gate on a
+  `PutFile` request is a per-session token, but that token is exposed as plaintext in the wrapped
+  remote command's argv/environ (`env SHINE_SSH_TOKEN=<token> sh -c ...` in `ssh/mod.rs`), which
+  any other local user on the remote host can read via `ps eww`/`/proc/<pid>/environ`. A forged
+  client that reads the token could dial the forwarded socket directly and send
+  `filename: "../../.ssh/authorized_keys"`, writing outside `session_local_dir` on the machine
+  running `shine ssh` — an arbitrary local file write gated only by OS file permissions.
+- **Root cause**: `filename` is documented as "basename of the remote source path," and the
+  honest client (`remote_client.rs`) does derive it via `Path::file_name()` — but the server side
+  never re-validated that invariant on the wire. `dir_transfer.rs`'s tar-extraction path had an
+  equivalent, well-tested symlink/traversal check (`symlink_target_is_safe`); the newer
+  single-file `PutFile` path did not get the same treatment.
+- **Fix**: added `ensure_single_path_component` in `ssh/agent.rs`, called at the top of
+  `resolve_target_path`, that rejects any `filename` which isn't exactly one
+  `std::path::Component::Normal` — so an absolute path, a `..` component, or an embedded
+  separator is rejected with a clear error before it ever reaches `Path::join`. `dest_hint` is
+  intentionally left unrestricted (it's a legitimate explicit destination the caller chose), only
+  the auto-derived `filename` is constrained. Covered by unit tests in `ssh/agent.rs` and two new
+  integration tests in `ssh/integration_tests.rs` that send a raw forged `PutFile` (bypassing
+  `remote_client`) with a traversal/separator filename and assert it's rejected.
+- **Rule**: any field in a wire protocol that's *documented* as "always a basename" or similar
+  must be *enforced* as such at the point it's consumed, not just produced correctly by the one
+  trusted client implementation — a session token alone is not sufficient authorization once it
+  can leak through the host's own process table.
+
 ## 2026-07-07 — `shine ssh` could leak its local session directory on Ctrl-C
 
 - **Symptom**: a PRD audit of `docs/ssh-local-transfer-prd.md` against the implementation found

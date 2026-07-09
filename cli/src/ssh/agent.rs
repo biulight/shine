@@ -13,10 +13,14 @@
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::UnixListener;
+use tokio::sync::Mutex as AsyncMutex;
+use tokio::task::JoinSet;
 
 use super::dir_transfer;
 use super::protocol::{self, ClientMessage, PROTOCOL_VERSION, ServerMessage};
@@ -25,6 +29,32 @@ use crate::home;
 /// Any duplex byte stream the agent can serve a connection over.
 trait DuplexStream: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> DuplexStream for T {}
+
+/// Tracks in-flight per-connection tasks so a caller can wait for them to
+/// finish on their own (see [`drain_connection_tasks`]) instead of
+/// abandoning a still-running transfer mid-copy when the accept loop is
+/// aborted or the process is about to exit.
+pub type ConnectionTasks = Arc<AsyncMutex<JoinSet<()>>>;
+
+pub fn new_connection_tasks() -> ConnectionTasks {
+    Arc::new(AsyncMutex::new(JoinSet::new()))
+}
+
+/// Waits, up to `grace_period`, for every currently tracked connection task
+/// to finish. Once the local end of an `ssh` session's tunnel is gone, an
+/// in-flight transfer's next socket read/write fails almost immediately and
+/// its own error-path cleanup (e.g. removing a partial temp file) runs to
+/// completion here rather than being cut off by `agent_handle.abort()` or
+/// process exit. Not a hard guarantee — a connection that never notices the
+/// tunnel is gone is simply abandoned once the grace period elapses, rather
+/// than blocking shutdown forever.
+pub async fn drain_connection_tasks(tasks: &ConnectionTasks, grace_period: Duration) {
+    let mut set = tasks.lock().await;
+    let _ = tokio::time::timeout(grace_period, async {
+        while set.join_next().await.is_some() {}
+    })
+    .await;
+}
 
 /// The local end of the session's transfer channel: a Unix socket
 /// (macOS/Linux) or a loopback TCP socket (Windows). `tokio::net::UnixListener`
@@ -40,10 +70,10 @@ pub enum LocalListener {
 
 impl LocalListener {
     /// Runs the accept loop until the listener is closed (session
-    /// teardown). Each connection is handled on its own task; a failed
-    /// connection is logged and does not bring down the agent or the
-    /// session.
-    pub async fn serve(self, token: String, session_local_dir: PathBuf) {
+    /// teardown). Each connection is handled on its own task tracked in
+    /// `tasks` (see [`drain_connection_tasks`]); a failed connection is
+    /// logged and does not bring down the agent or the session.
+    pub async fn serve(self, token: String, session_local_dir: PathBuf, tasks: ConnectionTasks) {
         match self {
             #[cfg(unix)]
             LocalListener::Unix(listener) => loop {
@@ -51,21 +81,26 @@ impl LocalListener {
                     Ok((stream, _addr)) => stream,
                     Err(_) => return,
                 };
-                spawn_connection(stream, token.clone(), session_local_dir.clone());
+                spawn_connection(stream, token.clone(), session_local_dir.clone(), &tasks).await;
             },
             LocalListener::Tcp(listener) => loop {
                 let stream = match listener.accept().await {
                     Ok((stream, _addr)) => stream,
                     Err(_) => return,
                 };
-                spawn_connection(stream, token.clone(), session_local_dir.clone());
+                spawn_connection(stream, token.clone(), session_local_dir.clone(), &tasks).await;
             },
         }
     }
 }
 
-fn spawn_connection(stream: impl DuplexStream, token: String, session_local_dir: PathBuf) {
-    tokio::spawn(async move {
+async fn spawn_connection(
+    stream: impl DuplexStream,
+    token: String,
+    session_local_dir: PathBuf,
+    tasks: &ConnectionTasks,
+) {
+    tasks.lock().await.spawn(async move {
         if let Err(error) = handle_connection(stream, &token, &session_local_dir).await {
             eprintln!("shine ssh: transfer agent connection error: {error:#}");
         }
@@ -424,10 +459,16 @@ async fn handle_get_file(
 /// Resolves a destination path per docs/ssh-local-transfer-prd.md section 6.1:
 /// an omitted hint defaults to `base_dir`; an existing-directory candidate
 /// gets the source filename appended; anything else is used verbatim.
+///
+/// `filename` is meant to be a bare basename (the honest client derives it
+/// via `Path::file_name()`), never a caller-chosen destination — unlike
+/// `hint`, it must not be absolute or escape the resolved directory
+/// candidate via `..` or an embedded path separator.
 fn resolve_target_path(base_dir: &Path, hint: Option<&str>, filename: &str) -> Result<PathBuf> {
+    ensure_single_path_component(filename)?;
     let candidate = match hint {
         None => base_dir.to_path_buf(),
-        Some(raw) => expand_hint(base_dir, raw)?,
+        Some(raw) => expand_hint(base_dir, raw),
     };
     Ok(if candidate.is_dir() {
         candidate.join(filename)
@@ -436,20 +477,43 @@ fn resolve_target_path(base_dir: &Path, hint: Option<&str>, filename: &str) -> R
     })
 }
 
+/// Rejects anything but a single normal path component, so a `filename`
+/// (which should only ever be a basename) can't be used to escape the
+/// resolved destination directory via `..`, an absolute path, or an
+/// embedded separator.
+fn ensure_single_path_component(filename: &str) -> Result<()> {
+    use std::path::Component;
+    match Path::new(filename)
+        .components()
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [Component::Normal(_)] => Ok(()),
+        _ => bail!("invalid filename {filename:?}: must be a single path component"),
+    }
+}
+
 /// Resolves a source path: always relative to `base_dir` unless absolute
 /// (or `~`-prefixed, expanded against the local home directory).
 fn resolve_source_path(base_dir: &Path, hint: &str) -> Result<PathBuf> {
-    expand_hint(base_dir, hint)
+    Ok(expand_hint(base_dir, hint))
 }
 
-fn expand_hint(base_dir: &Path, raw: &str) -> Result<PathBuf> {
-    let expanded = home::full_expand(raw).with_context(|| format!("expanding path {raw:?}"))?;
+/// Expands a wire-supplied hint (`dest_hint`/`source_hint`) against `base_dir`.
+///
+/// Deliberately uses `tilde_expand` (leading `~` only) rather than
+/// `home::full_expand`: those hints come from the remote peer over the
+/// transfer protocol, and full shell-style `${VAR}` substitution would let a
+/// forged request pull arbitrary values out of the *local* agent process's
+/// own environment into a filesystem path.
+fn expand_hint(base_dir: &Path, raw: &str) -> PathBuf {
+    let expanded = home::tilde_expand(raw);
     let path = PathBuf::from(expanded);
-    Ok(if path.is_absolute() {
+    if path.is_absolute() {
         path
     } else {
         base_dir.join(path)
-    })
+    }
 }
 
 #[cfg(test)]
@@ -516,5 +580,46 @@ mod tests {
         let dir = TempDir::new();
         let resolved = resolve_source_path(dir.path(), "notes.txt").unwrap();
         assert_eq!(resolved, dir.path().join("notes.txt"));
+    }
+
+    #[test]
+    fn parent_traversal_filename_is_rejected() {
+        let dir = TempDir::new();
+        let error = resolve_target_path(dir.path(), None, "../../.ssh/authorized_keys")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("invalid filename"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn absolute_filename_is_rejected() {
+        let dir = TempDir::new();
+        let error = resolve_target_path(dir.path(), None, "/etc/passwd")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("invalid filename"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn embedded_separator_filename_is_rejected() {
+        let dir = TempDir::new();
+        let error = resolve_target_path(dir.path(), None, "subdir/result.log")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("invalid filename"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn bare_filename_is_accepted() {
+        assert!(ensure_single_path_component("result.log").is_ok());
     }
 }

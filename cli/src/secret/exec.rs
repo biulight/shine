@@ -98,12 +98,19 @@ pub(crate) struct TempFile {
 }
 
 impl TempFile {
+    /// Creates the temp file with owner-only (`0600`) permissions on Unix,
+    /// set atomically at open time rather than via a follow-up `chmod` — the
+    /// file briefly holds ciphertext, so it should never inherit the
+    /// process umask's default (typically world-readable `0644`) in a
+    /// shared `/tmp`.
     pub(crate) async fn new(prefix: &str) -> Result<Self> {
         let mut path = std::env::temp_dir();
         path.push(format!("{prefix}-{}", uuid::Uuid::new_v4()));
-        tokio::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        options
             .open(&path)
             .await
             .with_context(|| format!("creating {}", path.display()))?;
