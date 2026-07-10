@@ -262,7 +262,7 @@ pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
     };
 
     println!(
-        "{} {} {} {}",
+        "  {} {} {} {}",
         colors::symbol(symbol),
         colors::bold(&label),
         colors::status_label(&status, symbol),
@@ -270,7 +270,7 @@ pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
     );
 
     for line in &outcome.logs {
-        println!("  {}", colors::dim(line));
+        println!("    {}", colors::dim(line));
     }
 }
 

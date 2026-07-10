@@ -66,22 +66,33 @@ pub fn status_label(s: &str, sym: &str) -> String {
     }
 }
 
+/// Shared column width for the presets-note labels below, so their paths line up
+/// even though "◈ External Presets" and "◈ Presets Overlay" differ in length.
+const PRESETS_NOTE_LABEL_WIDTH: usize = 18; // "◈ External Presets".chars().count()
+
+fn presets_note(plain_label: &str, styled_label: &str, dir: &std::path::Path) -> String {
+    let pad = " ".repeat(PRESETS_NOTE_LABEL_WIDTH.saturating_sub(plain_label.chars().count()) + 2);
+    format!("{styled_label}{pad}{}", path_display::format(dir))
+}
+
 /// Returns a formatted note indicating the active external presets directory.
 pub fn external_presets_note(dir: &std::path::Path) -> String {
     use owo_colors::Style;
-    let label = "◈ External Presets"
+    let label = "◈ External Presets";
+    let styled = label
         .if_supports_color(Stream::Stdout, |t| t.style(Style::new().bold().cyan()))
         .to_string();
-    format!("{}  {}", label, path_display::format(dir))
+    presets_note(label, &styled, dir)
 }
 
 /// Returns a formatted note indicating the active presets overlay directory.
 pub fn presets_overlay_note(dir: &std::path::Path) -> String {
     use owo_colors::Style;
-    let label = "◈ Presets Overlay"
+    let label = "◈ Presets Overlay";
+    let styled = label
         .if_supports_color(Stream::Stdout, |t| t.style(Style::new().bold().yellow()))
         .to_string();
-    format!("{}  {}", label, path_display::format(dir))
+    presets_note(label, &styled, dir)
 }
 
 #[cfg(test)]
