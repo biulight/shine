@@ -15,7 +15,7 @@ pub struct AppCategory {
     pub destination_root: Option<String>,
     pub files: Vec<AppFile>,
     pub list_mode: AppListMode,
-    pub post_upgrade: Option<AppHook>,
+    pub post_upgrade: Vec<AppHook>,
     // Tracks whether the category came from an explicit metadata file vs. auto-collection;
     // reserved for future upgrade/list logic.
     #[allow(dead_code)]
@@ -55,8 +55,15 @@ struct CategoryToml {
     description: Option<String>,
     dest: DestToml,
     list_mode: Option<ListModeToml>,
-    post_upgrade: Option<HookToml>,
+    post_upgrade: Option<HookSpecToml>,
     files: Option<Vec<FileToml>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum HookSpecToml {
+    Single(HookToml),
+    Multiple(Vec<HookToml>),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -165,17 +172,28 @@ fn resolve_install_strategy(file: &FileToml, context: &str) -> Result<AppInstall
     }
 }
 
-fn resolve_hook(hook: Option<HookToml>, context: &str) -> Result<Option<AppHook>> {
+fn resolve_hooks(hook: Option<HookSpecToml>, context: &str) -> Result<Vec<AppHook>> {
     let Some(hook) = hook else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
-    if hook.command.trim().is_empty() {
-        bail!("{context}: post_upgrade.command must not be empty");
+    let hooks = match hook {
+        HookSpecToml::Single(hook) => vec![hook],
+        HookSpecToml::Multiple(hooks) => hooks,
+    };
+    if hooks.is_empty() {
+        bail!("{context}: post_upgrade must not be empty");
     }
-    Ok(Some(AppHook {
-        command: hook.command,
-        args: hook.args,
-    }))
+    let mut resolved = Vec::with_capacity(hooks.len());
+    for hook in hooks {
+        if hook.command.trim().is_empty() {
+            bail!("{context}: post_upgrade.command must not be empty");
+        }
+        resolved.push(AppHook {
+            command: hook.command,
+            args: hook.args,
+        });
+    }
+    Ok(resolved)
 }
 
 fn default_list_mode(has_explicit_files: bool) -> AppListMode {
@@ -233,7 +251,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
     if let Some(bytes) = presets::read_asset_bytes(&metadata_path) {
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
-        let post_upgrade = resolve_hook(parsed.post_upgrade, &metadata_path)?;
+        let post_upgrade = resolve_hooks(parsed.post_upgrade, &metadata_path)?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
         };
@@ -327,7 +345,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
             })
             .collect(),
         list_mode: AppListMode::Category,
-        post_upgrade: None,
+        post_upgrade: Vec::new(),
         uses_metadata: false,
         has_explicit_files: false,
     }))
@@ -343,7 +361,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
             .with_context(|| format!("reading metadata: {}", metadata_path.display()))?;
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
-        let post_upgrade = resolve_hook(parsed.post_upgrade, &metadata_path.display().to_string())?;
+        let post_upgrade =
+            resolve_hooks(parsed.post_upgrade, &metadata_path.display().to_string())?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
         };
@@ -450,7 +469,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         destination_root: None,
         files,
         list_mode: AppListMode::Category,
-        post_upgrade: None,
+        post_upgrade: Vec::new(),
         uses_metadata: false,
         has_explicit_files: false,
     }))
@@ -581,7 +600,7 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
             resolve_install_strategy(file, &context)?;
         }
     }
-    resolve_hook(
+    resolve_hooks(
         parsed.post_upgrade.clone(),
         &format!("app/{name}/shine.toml"),
     )?;
@@ -741,10 +760,20 @@ mod tests {
         );
         assert_eq!(
             surge.post_upgrade,
-            Some(AppHook {
-                command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
-                args: vec!["reload".to_string()],
-            })
+            vec![
+                AppHook {
+                    command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
+                    args: vec![
+                        "external-resource".to_string(),
+                        "update".to_string(),
+                        "all".to_string()
+                    ],
+                },
+                AppHook {
+                    command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
+                    args: vec!["reload".to_string()],
+                }
+            ]
         );
     }
 
@@ -761,11 +790,32 @@ source = "config.toml"
 "#,
         )
         .unwrap();
-        let hook = resolve_hook(parsed.post_upgrade, "sample")
-            .unwrap()
-            .unwrap();
-        assert_eq!(hook.command, "/bin/echo");
-        assert_eq!(hook.args, vec!["updated"]);
+        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0].command, "/bin/echo");
+        assert_eq!(hooks[0].args, vec!["updated"]);
+    }
+
+    #[test]
+    fn post_upgrade_hook_parses_multiple_commands() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_upgrade = [
+  { command = "/bin/echo", args = ["updated"] },
+  { command = "/bin/echo", args = ["reloaded"] },
+]
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks[0].args, vec!["updated"]);
+        assert_eq!(hooks[1].args, vec!["reloaded"]);
     }
 
     #[test]

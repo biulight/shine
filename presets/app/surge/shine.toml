@@ -1,7 +1,10 @@
 description = "Surge module rules managed by shine."
 dest = "~/.shine/http/app/surge"
 list_mode = "files"
-post_upgrade = { command = "/Applications/Surge.app/Contents/Applications/surge-cli", args = ["reload"] }
+post_upgrade = [
+  { command = "/Applications/Surge.app/Contents/Applications/surge-cli", args = ["external-resource", "update", "all"] },
+  { command = "/Applications/Surge.app/Contents/Applications/surge-cli", args = ["reload"] },
+]
 
 [[files]]
 source = "custom-rules.sgmodule"

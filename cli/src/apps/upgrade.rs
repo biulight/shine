@@ -197,40 +197,93 @@ async fn run_post_upgrade_hooks(
         let Some(cat) = categories_by_name.get(category) else {
             continue;
         };
-        let Some(hook) = &cat.post_upgrade else {
+        if cat.post_upgrade.is_empty() {
             continue;
-        };
+        }
         if config.is_external_presets && !config.allow_app_hooks {
             println!(
-                "  {} {category}: post-upgrade hook skipped (set allow_app_hooks = true to allow external app hooks)",
-                colors::symbol("!")
+                "  {} {category}: post-upgrade hook skipped (set allow_app_hooks = true to allow external app hooks; manual: {})",
+                colors::symbol("!"),
+                hook_sequence_display(&cat.post_upgrade)
             );
             continue;
         }
-        match Command::new(&hook.command).args(&hook.args).status().await {
-            Ok(status) if status.success() => {
-                println!(
-                    "  {} {category}: post-upgrade hook completed",
-                    colors::symbol("✓")
-                );
-            }
-            Ok(status) => {
-                eprintln!(
-                    "  {} {category}: post-upgrade hook failed: {} exited with {}",
-                    colors::symbol("!"),
-                    hook.command,
-                    status
-                );
-            }
-            Err(e) => {
-                eprintln!(
-                    "  {} {category}: post-upgrade hook failed: {}: {e}",
-                    colors::symbol("!"),
-                    hook.command
-                );
+        let mut completed = true;
+        for hook in &cat.post_upgrade {
+            match Command::new(&hook.command).args(&hook.args).output().await {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => {
+                    eprintln!(
+                        "  {} {category}: post-upgrade hook failed: {} exited with {}{}",
+                        colors::symbol("!"),
+                        hook.command,
+                        output.status,
+                        command_output_detail(&output)
+                    );
+                    completed = false;
+                    break;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  {} {category}: post-upgrade hook failed: {}: {e}",
+                        colors::symbol("!"),
+                        hook.command
+                    );
+                    completed = false;
+                    break;
+                }
             }
         }
+        if completed {
+            println!(
+                "  {} {category}: post-upgrade hook completed",
+                colors::symbol("✓")
+            );
+        }
     }
+}
+
+fn command_output_detail(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = stderr.trim();
+    let detail = if detail.is_empty() {
+        stdout.trim()
+    } else {
+        detail
+    };
+    if detail.is_empty() {
+        String::new()
+    } else {
+        format!(": {detail}")
+    }
+}
+
+fn hook_sequence_display(hooks: &[metadata::AppHook]) -> String {
+    hooks
+        .iter()
+        .map(hook_command_display)
+        .collect::<Vec<_>>()
+        .join(" && ")
+}
+
+fn hook_command_display(hook: &metadata::AppHook) -> String {
+    std::iter::once(hook.command.as_str())
+        .chain(hook.args.iter().map(String::as_str))
+        .map(shell_quote_for_display)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote_for_display(value: &str) -> String {
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-' | b':'))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 enum EntryUpgradeResult {
@@ -583,7 +636,7 @@ async fn upgrade_file_content(
 
 #[cfg(test)]
 mod tests {
-    use super::{metadata, run_post_upgrade_hooks};
+    use super::{hook_command_display, hook_sequence_display, metadata, run_post_upgrade_hooks};
     use crate::config::Config;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -613,6 +666,50 @@ mod tests {
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[test]
+    fn hook_command_display_is_copy_pasteable() {
+        let hook = metadata::AppHook {
+            command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
+            args: vec![
+                "external-resource".to_string(),
+                "update".to_string(),
+                "all".to_string(),
+            ],
+        };
+        assert_eq!(
+            hook_command_display(&hook),
+            "/Applications/Surge.app/Contents/Applications/surge-cli external-resource update all"
+        );
+
+        let hook = metadata::AppHook {
+            command: "/tmp/my hook".to_string(),
+            args: vec!["it's".to_string()],
+        };
+        assert_eq!(hook_command_display(&hook), "'/tmp/my hook' 'it'\\''s'");
+    }
+
+    #[test]
+    fn hook_sequence_display_joins_commands_in_order() {
+        let hooks = vec![
+            metadata::AppHook {
+                command: "surge-cli".to_string(),
+                args: vec![
+                    "external-resource".to_string(),
+                    "update".to_string(),
+                    "all".to_string(),
+                ],
+            },
+            metadata::AppHook {
+                command: "surge-cli".to_string(),
+                args: vec!["reload".to_string()],
+            },
+        ];
+        assert_eq!(
+            hook_sequence_display(&hooks),
+            "surge-cli external-resource update all && surge-cli reload"
+        );
+    }
+
     #[cfg(unix)]
     fn sample_hook_category(script: &str) -> metadata::AppCategory {
         metadata::AppCategory {
@@ -621,10 +718,10 @@ mod tests {
             destination_root: Some("~/.config/sample".to_string()),
             files: vec![],
             list_mode: metadata::AppListMode::Files,
-            post_upgrade: Some(metadata::AppHook {
+            post_upgrade: vec![metadata::AppHook {
                 command: "/bin/sh".to_string(),
                 args: vec!["-c".to_string(), script.to_string()],
-            }),
+            }],
             uses_metadata: true,
             has_explicit_files: true,
         }

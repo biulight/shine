@@ -226,7 +226,7 @@ shine/
 | `self install/upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
 | `update` / `upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
 | `clear` | `cli/src/clear.rs` |
-| `serve start/url` | `cli/src/serve.rs` |
+| `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
 | `ssh [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
 | `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
@@ -429,9 +429,11 @@ Config is saved via `utils::sync_table` which preserves existing TOML comments w
 ### Local HTTP resources
 
 `shine serve start` serves files from `~/.shine/http/` on a single loopback HTTP server
-(`127.0.0.1:6174` by default). App presets that need stable local URLs should install files under
-that tree (for example `~/.shine/http/app/surge/custom-rules.sgmodule`) and use
-`shine serve url <path>` to print the URL. Do not start one HTTP service per app preset.
+(`127.0.0.1:6174` by default). On macOS, `shine serve install` registers that same server as one
+user launchd service; it is intentionally global, with no per-app argument. App presets that need
+stable local URLs should install files under that tree (for example
+`~/.shine/http/app/surge/custom-rules.sgmodule`) and use `shine serve url <path>` to print the
+URL. Do not start one HTTP service per app preset.
 
 ### rust-embed and presets
 

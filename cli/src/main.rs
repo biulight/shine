@@ -222,7 +222,10 @@ async fn run(cli: Cli) -> Result<()> {
             SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
         },
         Commands::Serve { command } => match command {
+            ServeCommands::Install(cmd) => serve::handle_install(&config, cmd.port).await,
             ServeCommands::Start(cmd) => serve::handle_start(&config, cmd.port).await,
+            ServeCommands::Status => serve::handle_status(&config).await,
+            ServeCommands::Uninstall => serve::handle_uninstall(&config).await,
             ServeCommands::Url(cmd) => serve::handle_url(&cmd.path, cmd.port),
         },
         Commands::Shell { command } => match command {
@@ -1363,11 +1366,35 @@ mod tests {
 
     #[test]
     fn cli_accepts_unified_serve_commands() {
+        let cli = Cli::try_parse_from(["shine", "serve", "install"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Serve {
+                command: ServeCommands::Install(_)
+            }
+        ));
+
         let cli = Cli::try_parse_from(["shine", "serve", "start"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Serve {
                 command: ServeCommands::Start(_)
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "serve", "status"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Serve {
+                command: ServeCommands::Status
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "serve", "uninstall"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Serve {
+                command: ServeCommands::Uninstall
             }
         ));
 

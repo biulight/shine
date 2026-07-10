@@ -528,7 +528,7 @@ mod tests {
                 },
             ],
             list_mode: AppListMode::Category,
-            post_upgrade: None,
+            post_upgrade: Vec::new(),
             uses_metadata: true,
             has_explicit_files: true,
         };
@@ -579,7 +579,7 @@ mod tests {
                 },
             ],
             list_mode: AppListMode::Files,
-            post_upgrade: None,
+            post_upgrade: Vec::new(),
             uses_metadata: true,
             has_explicit_files: true,
         };

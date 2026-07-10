@@ -40,8 +40,8 @@ bugs. Check this list before changing the modules named in each entry.
   presets must be gated by `allow_app_hooks = true`; otherwise a user-controlled presets checkout
   would gain command execution on ordinary upgrades.
 - **Local HTTP resources share one loopback server.** Files that need stable local URLs live under
-  `<shine_dir>/http/` and are served by `shine serve start`; do not add per-app HTTP daemons,
-  ports, or launchd jobs.
+  `<shine_dir>/http/` and are served by `shine serve start`; `shine serve install` registers one
+  global user service for that server. Do not add per-app HTTP daemons, ports, or launchd jobs.
 
 ## Personal tasks
 

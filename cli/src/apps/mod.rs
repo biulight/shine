@@ -1016,7 +1016,7 @@ mod tests {
                 restart_hint: None,
             }],
             list_mode: AppListMode::Files,
-            post_upgrade: None,
+            post_upgrade: Vec::new(),
             uses_metadata: true,
             has_explicit_files: true,
         };
