@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use super::{
     AppCommands, EnvCommands, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
-    SelfCommands, ShellCommands, SysCommands,
+    SelfCommands, ShellCommands, SysCommands, TaskCommands, TaskRunCommand,
 };
 
 /// `Shine` - Quick config for sys
@@ -117,6 +117,13 @@ pub enum Commands {
         #[command(subcommand)]
         command: LocalCommands,
     },
+    /// Save, run, and manage personal shortcut commands
+    Task {
+        #[command(subcommand)]
+        command: TaskCommands,
+    },
+    /// Run a saved task (alias for `shine task run`)
+    Run(TaskRunCommand),
 }
 
 #[derive(Args, Debug)]

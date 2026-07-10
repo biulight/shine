@@ -7,13 +7,13 @@ use std::path::PathBuf;
 use cli::test_support;
 use cli::{
     apps, clear, colors, commands, completion, config, env, git_pull, list, shells, show, ssh, sys,
-    update_check, version,
+    task, update_check, version,
 };
 
 use commands::{
     AppCommands, Cli, Commands, CompletionCommands, CompletionShell, EnvCommands,
     EnvIdentitySubcommand, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
-    SelfCommands, ShellCommands, SysCommands,
+    SelfCommands, ShellCommands, SysCommands, TaskCommands,
 };
 #[cfg(test)]
 use commands::{ClearCommand, InitCommand, UpdateCommand, UpgradeCommand};
@@ -100,7 +100,14 @@ async fn run(cli: Cli) -> Result<()> {
             | Commands::Clear(..)
             | Commands::Self_ { .. }
             | Commands::Env { .. }
-    ) || matches!(&cli.command, Commands::Upgrade(cmd) if cmd.pull);
+            | Commands::Run(..)
+    ) || matches!(&cli.command, Commands::Upgrade(cmd) if cmd.pull)
+        || matches!(
+            &cli.command,
+            Commands::Task {
+                command: TaskCommands::Run(..)
+            }
+        );
     if !skip_background_update_check {
         match update_check::check_for_update(&config).await {
             Ok(UpdateStatus::UpToDate) => {}
@@ -342,6 +349,19 @@ async fn run(cli: Cli) -> Result<()> {
             }
             LocalCommands::Status => ssh::handle_local_status().await,
         },
+        Commands::Task { command } => match command {
+            TaskCommands::Save {
+                name,
+                force,
+                command,
+            } => task::handle_save(&config, &name, force, command).await,
+            TaskCommands::Run(cmd) => task::handle_run(&config, &cmd.name, &cmd.extra).await,
+            TaskCommands::List => task::handle_list(&config).await,
+            TaskCommands::Info { name } => task::handle_info(&config, &name).await,
+            TaskCommands::Delete { name } => task::handle_delete(&config, &name).await,
+        },
+        // Top-level alias for `shine task run`; no independent semantics.
+        Commands::Run(cmd) => task::handle_run(&config, &cmd.name, &cmd.extra).await,
     }
 }
 
@@ -869,6 +889,100 @@ mod tests {
                 command: EnvCommands::Run(cmd)
             } if cmd.with == ["TOKEN_A", "TOKEN_B=OTHER_TOKEN"]
                 && cmd.command == ["bun", "run", "build"]
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_task_save_with_trailing_command() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "task",
+            "save",
+            "port-3000",
+            "--",
+            "lsof",
+            "-i",
+            ":3000",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Task {
+                command: TaskCommands::Save {
+                    name,
+                    force: false,
+                    command,
+                }
+            } if name == "port-3000" && command == ["lsof", "-i", ":3000"]
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_task_save_force_flag() {
+        let cli = Cli::try_parse_from([
+            "shine", "task", "save", "deploy", "--force", "--", "rsync", "-avz", "dist/",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Task {
+                command: TaskCommands::Save {
+                    name,
+                    force: true,
+                    command,
+                }
+            } if name == "deploy" && command == ["rsync", "-avz", "dist/"]
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_task_run_with_extra_args() {
+        let cli =
+            Cli::try_parse_from(["shine", "task", "run", "lsof-port", "--", ":3000"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Task {
+                command: TaskCommands::Run(ref cmd)
+            } if cmd.name == "lsof-port" && cmd.extra == [":3000"]
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_top_level_run_alias_with_hyphen_args() {
+        let cli = Cli::try_parse_from(["shine", "run", "build", "--", "--flag"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Run(ref cmd) if cmd.name == "build" && cmd.extra == ["--flag"]
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "run", "build"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Run(ref cmd) if cmd.name == "build" && cmd.extra.is_empty()
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_task_list_info_delete() {
+        assert!(matches!(
+            Cli::try_parse_from(["shine", "task", "list"])
+                .unwrap()
+                .command,
+            Commands::Task {
+                command: TaskCommands::List
+            }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["shine", "task", "info", "deploy"]).unwrap().command,
+            Commands::Task {
+                command: TaskCommands::Info { name }
+            } if name == "deploy"
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["shine", "task", "delete", "deploy"]).unwrap().command,
+            Commands::Task {
+                command: TaskCommands::Delete { name }
+            } if name == "deploy"
         ));
     }
 

@@ -36,6 +36,14 @@ bugs. Check this list before changing the modules named in each entry.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and docs (AGENTS.md § Config) must agree.
 
+## Personal tasks
+
+- **`tasks.toml` lives under `Config::shine_dir()`**, so it follows `SHINE_CONFIG_DIR` for free.
+  Never resolve it against `presets_dir` or `$HOME` directly — that would break test isolation.
+- **`shine task run` propagates the child exit code verbatim** and never runs the saved argv
+  through a shell. Wrapping the failure in an anyhow error (or defaulting to exit 1) would corrupt
+  the task's own exit semantics. Shell syntax is opt-in via an explicit saved `sh -c '...'`.
+
 ## Embedded presets
 
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=../presets`.** Without it, preset edits

@@ -6,6 +6,7 @@ mod preset;
 mod self_install;
 mod shell;
 mod sys;
+mod task;
 
 pub use app::*;
 pub use cli::*;
@@ -15,3 +16,4 @@ pub use preset::*;
 pub use self_install::*;
 pub use shell::*;
 pub use sys::*;
+pub use task::*;

@@ -20,6 +20,7 @@ pub mod shells;
 pub mod show;
 pub mod ssh;
 pub mod sys;
+pub mod task;
 pub mod test_support;
 pub mod update_check;
 pub mod version;

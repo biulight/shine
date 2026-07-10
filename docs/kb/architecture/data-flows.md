@@ -102,6 +102,18 @@ both workspace values and inherited process variables. Without a discovered or e
 workspace, at least one `--with` is required. The merged environment is applied only to the
 spawned child process, whose exit status is propagated by Shine.
 
+## Personal task runner (`shine task run` / `shine run`)
+
+`task::handle_run` loads `<shine_dir>/tasks.toml` (`task::manifest::TaskManifest`), looks up the
+named task's saved argv, appends any `-- EXTRA...` args, and spawns it with
+`std::process::Command` — **directly, with no shell** — inheriting the caller's stdio and
+environment. The child's exit code is propagated verbatim (`std::process::exit(code)`; on Unix a
+terminating signal becomes `128 + signal`), never wrapped in an anyhow error, so the task's own
+exit semantics survive Shine in the middle. `shine run <NAME>` is a top-level alias routed to the
+same handler. `task::handle_save` validates the name (`[A-Za-z0-9._-]`, letter/digit start) and
+rejects an empty command or a duplicate without `--force`; `info`/`list` render the argv back to a
+copy-paste-safe line by shell-quoting shell-significant arguments.
+
 ## Secret backend routing (GPG / age)
 
 Every call site that decrypts a stored secret (`env decrypt`, `env export`, workspace

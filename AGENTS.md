@@ -172,6 +172,11 @@ shine/
 │       │   │                 # loopback TCP (Windows) via LocalListener
 │       │   ├── dir_transfer.rs # Directory tar build/extract, symlink-escape validation
 │       │   └── remote_client.rs # `shine local download/upload` handlers (run on remote host)
+│       ├── task/
+│       │   ├── mod.rs        # `shine task` save/run/list/info/delete handlers,
+│       │   │                 # direct (no-shell) argv exec + exit-code passthrough,
+│       │   │                 # shell-quoted command rendering, task-name validation
+│       │   └── manifest.rs   # TaskManifest: <shine_dir>/tasks.toml load/save/upsert
 │       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
 │       │                     # since #[cfg(test)] doesn't cross the lib/bin boundary)
 │       ├── update_check.rs   # GitHub release version check, 24h cache
@@ -222,6 +227,8 @@ shine/
 | `completions` | `main.rs` inline (clap_complete) |
 | `ssh [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
 | `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
+| `task save/run/list/info/delete` | `cli/src/task/` |
+| `run <NAME>` (alias for `task run`) | `cli/src/task/` |
 
 ### Key data flow
 
@@ -379,6 +386,32 @@ on top of the macOS/Linux implementation.
 5. Calls `bash <presets_dir>/sys/<os>/init.sh <item_id>` once per selected item, then calls `bash <presets_dir>/sys/<os>/init.sh __shine_finalize` so shared shell/profile integration runs once.
 
 `shine sys init --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing.
+
+### Personal tasks (`shine task` / `shine run`)
+
+`shine task` is a lightweight personal shortcut-command registry, kept separate
+from the preset/install machinery: it is **runtime/user state**, not an embedded
+preset. Tasks are stored in `<shine_dir>/tasks.toml` as an argv array per name:
+
+```toml
+[tasks.deploy-keystone]
+command = ["rsync", "-avz", "dist/", "marqueeio.develop:/var/www/keystone/alex/"]
+```
+
+- Because tasks live under `Config::shine_dir()`, the store follows
+  `SHINE_CONFIG_DIR` automatically (test isolation needs no extra plumbing).
+- `shine task run <NAME> [-- EXTRA...]` executes the saved argv **directly with
+  no shell** (`std::process::Command`), inheriting the caller's stdio/env, and
+  propagates the child's exit code verbatim (never wrapped in an anyhow error).
+  Extra args after `--` are appended to the saved argv.
+- `shine run <NAME>` is a top-level alias for `shine task run <NAME>` with no
+  independent semantics or storage.
+- `shine task info`/`list`/`run` render the saved argv back to a copy-paste-safe
+  command line by shell-quoting arguments that contain shell-significant
+  characters.
+- **Platform limit:** direct execution runs any real executable on every
+  platform, but the `sh -c '...'` escape hatch for pipes/redirects is Unix-only
+  (Windows has no `sh`).
 
 ### Config (`~/.shine/config.toml`)
 
