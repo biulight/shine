@@ -368,11 +368,7 @@ pub async fn handle_upload(
                 .await
                 .context("failed to sync written file to disk")?;
             drop(temp_file);
-            if let Err(error) = tokio::fs::rename(&temp_path, &resolved_dest).await {
-                let _ = tokio::fs::remove_file(&temp_path).await;
-                return Err(error)
-                    .with_context(|| format!("finalizing {}", resolved_dest.display()));
-            }
+            crate::persist::finalize_temp(&temp_path, &resolved_dest).await?;
             println!(
                 "Uploaded {}\n  local:  {resolved_path}\n  remote: {}",
                 human_bytes(size),

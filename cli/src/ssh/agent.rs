@@ -352,10 +352,7 @@ async fn handle_put_file(
         .context("failed to sync written file to disk")?;
     drop(temp_file);
 
-    if let Err(error) = tokio::fs::rename(&temp_path, &resolved).await {
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        return Err(error).with_context(|| format!("finalizing {}", resolved.display()));
-    }
+    crate::persist::finalize_temp(&temp_path, &resolved).await?;
 
     protocol::write_message(
         stream,

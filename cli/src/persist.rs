@@ -1,0 +1,121 @@
+//! Shared atomic-write primitives.
+//!
+//! Several modules (config, app/sys/task manifests, ssh transfer, workspace
+//! env files, self-install) each hand-rolled their own "write to a temp file,
+//! then rename over the destination" sequence. This module is the single
+//! place that logic lives.
+
+use anyhow::{Context, Result};
+use std::path::Path;
+use tokio::io::AsyncWriteExt;
+
+/// Durably writes `contents` to `path`.
+///
+/// Creates the parent directory if missing, writes to a uniquely-named temp
+/// file in the same directory, fsyncs it, then renames it over `path`. If
+/// anything fails after the temp file is created, the temp file is removed.
+pub async fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    tokio::fs::create_dir_all(parent)
+        .await
+        .with_context(|| format!("creating {}", parent.display()))?;
+    let temp = parent.join(format!(".shine-write-{}", uuid::Uuid::new_v4()));
+
+    if let Err(error) = write_temp(&temp, contents).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(error);
+    }
+
+    finalize_temp(&temp, path).await
+}
+
+async fn write_temp(temp: &Path, contents: &[u8]) -> Result<()> {
+    let mut file = tokio::fs::File::create(temp)
+        .await
+        .with_context(|| format!("creating {}", temp.display()))?;
+    file.write_all(contents)
+        .await
+        .with_context(|| format!("writing {}", temp.display()))?;
+    file.sync_all()
+        .await
+        .with_context(|| format!("syncing {}", temp.display()))?;
+    Ok(())
+}
+
+/// Renames `temp` over `dest`, for callers that already wrote/streamed their
+/// own temp file (e.g. large-file copies) and only need the finalize step.
+///
+/// On Windows, an existing `dest` is removed first (`rename` there doesn't
+/// replace an existing file). On any failure, `temp` is removed.
+pub async fn finalize_temp(temp: &Path, dest: &Path) -> Result<()> {
+    #[cfg(windows)]
+    if dest.exists() {
+        tokio::fs::remove_file(dest)
+            .await
+            .with_context(|| format!("removing {}", dest.display()))?;
+    }
+    if let Err(error) = tokio::fs::rename(temp, dest).await {
+        let _ = tokio::fs::remove_file(temp).await;
+        return Err(error).with_context(|| format!("replacing {}", dest.display()));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn atomic_write_creates_missing_parent_directories() {
+        let dir = crate::test_support::make_temp_dir("shine-persist").await;
+        let path = dir.join("nested/deep/file.txt");
+
+        atomic_write(&path, b"hello").await.unwrap();
+
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"hello");
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn atomic_write_replaces_existing_file() {
+        let dir = crate::test_support::make_temp_dir("shine-persist").await;
+        let path = dir.join("file.txt");
+        tokio::fs::write(&path, b"old").await.unwrap();
+
+        atomic_write(&path, b"new").await.unwrap();
+
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"new");
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn atomic_write_leaves_no_temp_file_behind_on_success() {
+        let dir = crate::test_support::make_temp_dir("shine-persist").await;
+        let path = dir.join("file.txt");
+
+        atomic_write(&path, b"content").await.unwrap();
+
+        let mut entries = tokio::fs::read_dir(&dir).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(entry) = entries.next_entry().await.unwrap() {
+            names.push(entry.file_name());
+        }
+        assert_eq!(names, vec![std::ffi::OsString::from("file.txt")]);
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn finalize_temp_removes_temp_on_rename_failure() {
+        let dir = crate::test_support::make_temp_dir("shine-persist").await;
+        let temp = dir.join(".shine-write-test");
+        tokio::fs::write(&temp, b"content").await.unwrap();
+        // A destination inside a nonexistent directory makes rename fail.
+        let dest = dir.join("missing-dir").join("dest.txt");
+
+        let result = finalize_temp(&temp, &dest).await;
+
+        assert!(result.is_err());
+        assert!(!temp.exists(), "temp file should be cleaned up on failure");
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+}

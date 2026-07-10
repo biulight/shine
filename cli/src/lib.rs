@@ -12,6 +12,7 @@ pub mod home;
 pub mod list;
 pub mod output;
 pub mod path_display;
+pub mod persist;
 pub mod platform;
 pub mod presets;
 pub mod privilege;

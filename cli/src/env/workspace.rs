@@ -1,3 +1,4 @@
+use crate::persist::atomic_write;
 use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{config::Config, secret};
 use anyhow::{Context, Result, bail};
@@ -711,24 +712,6 @@ fn absolute_from_current(path: &Path) -> Result<PathBuf> {
             .context("reading current directory")?
             .join(path))
     }
-}
-
-async fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    tokio::fs::create_dir_all(parent).await?;
-    let temp = parent.join(format!(".shine-write-{}", uuid::Uuid::new_v4()));
-    tokio::fs::write(&temp, contents)
-        .await
-        .with_context(|| format!("writing {}", temp.display()))?;
-    #[cfg(windows)]
-    if path.exists() {
-        tokio::fs::remove_file(path).await?;
-    }
-    if let Err(error) = tokio::fs::rename(&temp, path).await {
-        let _ = tokio::fs::remove_file(&temp).await;
-        return Err(error).with_context(|| format!("replacing {}", path.display()));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
