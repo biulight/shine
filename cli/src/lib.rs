@@ -17,6 +17,7 @@ pub mod presets;
 pub mod privilege;
 pub mod secret;
 pub mod serve;
+pub mod shell_quote;
 pub mod shells;
 pub mod show;
 pub mod ssh;

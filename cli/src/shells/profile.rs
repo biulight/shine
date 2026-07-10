@@ -143,7 +143,7 @@ pub(super) fn powershell_quote(path: &Path) -> String {
 }
 
 fn shell_quote_str(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+    crate::shell_quote::single_quote(value)
 }
 
 fn powershell_quote_str(value: &str) -> String {

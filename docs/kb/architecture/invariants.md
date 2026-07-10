@@ -85,6 +85,19 @@ bugs. Check this list before changing the modules named in each entry.
   must drain `ConnectionTasks` before removing the session directory or exiting, so a still-running
   transfer's own error-path cleanup gets to finish instead of being cut off by process exit.
 
+## Local HTTP server
+
+- **`serve::handle_start`/`handle_install` have no authentication of their own.** Binding
+  loopback-only (`127.0.0.1`) keeps the server off the network, but it does not stop other local
+  OS user accounts on a shared/multi-user machine from connecting and reading any file under
+  `serve::http_root()` (`~/.shine/http/`), bypassing the filesystem permissions that would
+  otherwise keep them out of this user's home directory. Preset authors must never route secrets
+  or other sensitive content through a `dest` that resolves under `~/.shine/http`.
+- **launchd log paths must stay under the user's own `shine_dir`, never a shared path like
+  `/tmp`.** `serve::launchd_log_dir` writes to `shine_dir/run/http/serve.{out,err}.log`, kept out
+  of `http_root()` itself so log contents are never servable over HTTP. Two OS user accounts each
+  running `shine serve install` would otherwise collide on the same fixed `/tmp/<label>.log` path.
+
 ## Update check
 
 - **A failed or rate-limited version check must never fail the user's command** (`main.rs`,

@@ -147,23 +147,7 @@ fn render_command(argv: &[String]) -> String {
 }
 
 fn shell_quote(arg: &str) -> String {
-    if arg.is_empty() {
-        return "''".to_string();
-    }
-    if arg.chars().all(is_shell_safe) {
-        return arg.to_string();
-    }
-    // Single-quote the whole argument; the only character a single-quoted string
-    // cannot contain is `'`, which is closed, escaped, and reopened as `'\''`.
-    format!("'{}'", arg.replace('\'', "'\\''"))
-}
-
-/// Characters that never need quoting: alphanumerics plus punctuation that is
-/// inert to POSIX shells and common in paths, URLs, and rsync targets
-/// (e.g. `host:/var/www/`).
-fn is_shell_safe(c: char) -> bool {
-    c.is_ascii_alphanumeric()
-        || matches!(c, '_' | '-' | '.' | '/' | ':' | ',' | '=' | '@' | '%' | '+')
+    crate::shell_quote::quote_if_needed(arg)
 }
 
 fn validate_task_name(name: &str) -> Result<()> {

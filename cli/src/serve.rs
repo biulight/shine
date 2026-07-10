@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -11,6 +12,19 @@ use crate::config::Config;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const LAUNCHD_LABEL: &str = "top.biulight.shine.http";
 const MAX_HEADER_BYTES: usize = 8192;
+/// Bounds how long a single connection may take end-to-end (read request + write
+/// response), so a slow-loris style local client can't hold a task open forever.
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+
+// --- Trust boundary ---------------------------------------------------------------------
+//
+// This server binds loopback-only (`DEFAULT_HOST` = 127.0.0.1) and is never reachable from
+// the network, but it has NO authentication of its own: any local OS user account on a
+// shared/multi-user machine can connect to `127.0.0.1:<port>` and read any file under
+// `http_root()`, bypassing the normal filesystem permissions that would otherwise keep
+// other accounts out of this user's home directory. Preset authors must never route secrets
+// or otherwise sensitive content through a `dest` that resolves under `~/.shine/http`.
+// See docs/kb/architecture/invariants.md § Local HTTP server.
 
 pub async fn handle_install(config: &Config, port: u16) -> Result<()> {
     ensure_macos_service_support()?;
@@ -28,8 +42,13 @@ pub async fn handle_install(config: &Config, port: u16) -> Result<()> {
         .await
         .with_context(|| format!("creating {}", parent.display()))?;
 
+    let log_dir = launchd_log_dir(config);
+    fs::create_dir_all(&log_dir)
+        .await
+        .with_context(|| format!("creating {}", log_dir.display()))?;
+
     let executable = service_executable(config)?;
-    let plist = launchd_plist(&executable, port);
+    let plist = launchd_plist(&executable, port, &log_dir);
     fs::write(&plist_path, plist)
         .await
         .with_context(|| format!("writing {}", plist_path.display()))?;
@@ -60,7 +79,13 @@ pub async fn handle_start(config: &Config, port: u16) -> Result<()> {
         let (stream, _) = listener.accept().await?;
         let root = root.clone();
         tokio::spawn(async move {
-            let _ = handle_connection(stream, root).await;
+            match tokio::time::timeout(CONNECTION_TIMEOUT, handle_connection(stream, root)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => eprintln!("shine serve: connection error: {e:#}"),
+                Err(_) => {
+                    eprintln!("shine serve: connection timed out after {CONNECTION_TIMEOUT:?}")
+                }
+            }
         });
     }
 }
@@ -116,6 +141,14 @@ pub fn http_root(config: &Config) -> PathBuf {
     config.shine_dir().join("http")
 }
 
+/// Directory for the launchd service's stdout/stderr logs. Deliberately kept out of
+/// `http_root()` (`shine_dir/http`) so log contents are never servable over HTTP, and kept
+/// under the user's own `shine_dir` (not a shared path like `/tmp`) so two OS user accounts
+/// running `shine serve install` never collide on the same log file.
+fn launchd_log_dir(config: &Config) -> PathBuf {
+    config.shine_dir().join("run").join("http")
+}
+
 fn ensure_macos_service_support() -> Result<()> {
     if !cfg!(target_os = "macos") {
         bail!("shine serve install is currently supported on macOS only");
@@ -138,8 +171,10 @@ fn launchd_plist_path(config: &Config) -> PathBuf {
         .join(format!("{LAUNCHD_LABEL}.plist"))
 }
 
-fn launchd_plist(executable: &Path, port: u16) -> String {
+fn launchd_plist(executable: &Path, port: u16, log_dir: &Path) -> String {
     let executable = xml_escape(&executable.display().to_string());
+    let out_log = xml_escape(&log_dir.join("serve.out.log").display().to_string());
+    let err_log = xml_escape(&log_dir.join("serve.err.log").display().to_string());
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -160,9 +195,9 @@ fn launchd_plist(executable: &Path, port: u16) -> String {
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>/tmp/{LAUNCHD_LABEL}.out.log</string>
+  <string>{out_log}</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/{LAUNCHD_LABEL}.err.log</string>
+  <string>{err_log}</string>
 </dict>
 </plist>
 "#
@@ -452,8 +487,8 @@ fn content_type(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_headers, entity_tag, etag_matches, launchd_plist, launchd_plist_path,
-        normalize_resource_path, public_url,
+        cache_headers, entity_tag, etag_matches, launchd_log_dir, launchd_plist,
+        launchd_plist_path, normalize_resource_path, public_url,
     };
     use crate::config::Config;
     use std::path::{Path, PathBuf};
@@ -491,13 +526,23 @@ mod tests {
 
     #[test]
     fn launchd_plist_runs_the_single_foreground_server() {
-        let plist = launchd_plist(Path::new("/opt/shine & tools/shine"), 6188);
+        let log_dir = Path::new("/Users/tester/.shine/run/http");
+        let plist = launchd_plist(Path::new("/opt/shine & tools/shine"), 6188, log_dir);
         assert!(plist.contains("<string>top.biulight.shine.http</string>"));
         assert!(plist.contains("<string>/opt/shine &amp; tools/shine</string>"));
         assert!(plist.contains("<string>serve</string>"));
         assert!(plist.contains("<string>start</string>"));
         assert!(plist.contains("<string>--port</string>"));
         assert!(plist.contains("<string>6188</string>"));
+    }
+
+    #[test]
+    fn launchd_plist_logs_are_scoped_under_the_user_shine_dir_not_shared_tmp() {
+        let log_dir = Path::new("/Users/tester/.shine/run/http");
+        let plist = launchd_plist(Path::new("/opt/shine/shine"), 6188, log_dir);
+        assert!(plist.contains("<string>/Users/tester/.shine/run/http/serve.out.log</string>"));
+        assert!(plist.contains("<string>/Users/tester/.shine/run/http/serve.err.log</string>"));
+        assert!(!plist.contains("/tmp/"));
     }
 
     #[test]
@@ -508,5 +553,12 @@ mod tests {
             launchd_plist_path(&config),
             root.join("Library/LaunchAgents/top.biulight.shine.http.plist")
         );
+    }
+
+    #[test]
+    fn launchd_log_dir_lives_under_shine_dir_run_not_shared_tmp() {
+        let root = PathBuf::from("/tmp/shine-home");
+        let config = Config::new_for_test(&root);
+        assert_eq!(launchd_log_dir(&config), root.join("run").join("http"));
     }
 }

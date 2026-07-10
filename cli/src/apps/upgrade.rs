@@ -276,14 +276,7 @@ fn hook_command_display(hook: &metadata::AppHook) -> String {
 }
 
 fn shell_quote_for_display(value: &str) -> String {
-    if !value.is_empty()
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'.' | b'_' | b'-' | b':'))
-    {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\\''"))
+    crate::shell_quote::quote_if_needed(value)
 }
 
 enum EntryUpgradeResult {
