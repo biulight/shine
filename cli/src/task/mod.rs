@@ -177,13 +177,11 @@ mod tests {
     use super::*;
 
     fn config_in(dir: &std::path::Path) -> Config {
-        Config::new_for_test(dir)
+        crate::test_support::test_config(dir)
     }
 
     async fn temp_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-task-test-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-task-test").await
     }
 
     #[test]

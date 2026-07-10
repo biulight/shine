@@ -879,9 +879,7 @@ mod tests {
     use tar::{Builder, Header};
 
     async fn make_temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-update-check-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-update-check").await
     }
 
     #[test]

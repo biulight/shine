@@ -782,9 +782,7 @@ mod tests {
     use tokio::fs;
 
     async fn make_temp_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-apps-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-apps").await
     }
 
     #[cfg(unix)]

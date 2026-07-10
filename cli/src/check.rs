@@ -317,9 +317,7 @@ mod tests {
     use tokio::fs;
 
     async fn make_temp_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-check-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-check").await
     }
 
     #[cfg(not(unix))]

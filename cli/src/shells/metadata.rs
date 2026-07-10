@@ -450,9 +450,7 @@ mod tests {
     use tokio::fs;
 
     async fn make_temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-shell-meta-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-shell-meta").await
     }
 
     #[test]

@@ -80,10 +80,7 @@ mod tests {
     use super::*;
 
     async fn temp_dir() -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("shine-task-manifest-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-task-manifest").await
     }
 
     #[tokio::test]

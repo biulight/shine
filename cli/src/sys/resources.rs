@@ -854,9 +854,7 @@ mod tests {
     use crate::sys::{SysDriverKind, SysItem, SysItemMode};
 
     async fn make_temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-resource-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-resource").await
     }
 
     #[test]

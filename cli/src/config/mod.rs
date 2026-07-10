@@ -325,7 +325,9 @@ pub(super) mod test_util {
     use std::path::{Path, PathBuf};
 
     /// Config rooted in `dir` with a separate `home` subdirectory, mirroring
-    /// the layout most config tests expect.
+    /// the layout most config tests expect. Distinct from
+    /// `crate::test_support::test_config`, which roots `home_dir` at `dir`
+    /// itself — do not merge the two.
     pub(crate) fn config_in(dir: &Path) -> Config {
         Config {
             home_dir: dir.join("home"),
@@ -334,13 +336,11 @@ pub(super) mod test_util {
     }
 
     pub(crate) async fn make_temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-test-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-test").await
     }
 
     pub(crate) fn restore_current_dir(dir: &Path) {
-        std::env::set_current_dir(dir).expect("restore current dir");
+        crate::test_support::restore_current_dir(dir)
     }
 }
 

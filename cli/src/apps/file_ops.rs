@@ -364,9 +364,7 @@ mod tests {
     use crate::apps::manifest::AppEntry;
 
     async fn make_temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-fileops-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-fileops").await
     }
 
     fn entry_for(dest: &Path, hash: u64) -> AppEntry {

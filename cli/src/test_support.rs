@@ -6,9 +6,34 @@
 //! tests in different modules don't race on the shared process environment
 //! when `cargo test` runs unit tests in parallel.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
+
+/// Creates and returns a uniquely-named temp directory under the OS temp dir.
+///
+/// `prefix` should identify the calling module (e.g. `"shine-fileops"`) so
+/// leftover directories from a failed test run are easy to trace back to
+/// their source.
+pub async fn make_temp_dir(prefix: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    dir
+}
+
+/// A `Config` rooted at `dir`, for tests that don't need a separate `home`
+/// subdirectory. `config::test_util::config_in` is a distinct homed variant
+/// (it additionally roots `home_dir` under `dir.join("home")`) and stays
+/// separate from this one.
+pub fn test_config(dir: &Path) -> crate::config::Config {
+    crate::config::Config::new_for_test(dir)
+}
+
+/// Restores the process's current directory, for tests that temporarily
+/// `set_current_dir` to exercise relative-path resolution.
+pub fn restore_current_dir(dir: &Path) {
+    std::env::set_current_dir(dir).expect("restore current dir");
+}
 
 pub fn env_lock() -> MutexGuard<'static, ()> {
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
