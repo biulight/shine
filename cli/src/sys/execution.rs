@@ -10,6 +10,14 @@ use super::{
     SysItemStatus, SysManifest, selection::format_item_ids,
 };
 
+/// The home directory to pass to sys scripts as `SHINE_TARGET_HOME`.
+///
+/// Uses the sudo-aware resolver so scripts see the invoking user's home under
+/// `sudo`, not root's.
+pub(super) fn target_home() -> std::ffi::OsString {
+    crate::home::effective_home_dir().into_os_string()
+}
+
 pub(super) fn sys_init_command(os_id: &str) -> SysInitCommand {
     match os_id {
         "windows" => SysInitCommand {
@@ -160,10 +168,7 @@ pub(super) async fn run_sys_item_action(
         .current_dir(script_dir)
         .env("SHINE_SYS_PRESET_ROOT", script_dir)
         .env("SHINE_SYS_SHELL", sys_shell)
-        .env(
-            "SHINE_TARGET_HOME",
-            std::env::var_os("HOME").unwrap_or_default(),
-        );
+        .env("SHINE_TARGET_HOME", target_home());
     for key in &item.required_env {
         if let Some(value) = env.get(key) {
             process.env(key, value);
@@ -320,4 +325,38 @@ pub(super) fn print_sys_summary(outcomes: &[SysItemOutcome]) {
     .collect::<Vec<_>>();
 
     println!("Summary: {}", parts.join(", "));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::env_lock;
+
+    #[test]
+    fn target_home_uses_effective_home_dir_not_raw_home_env() {
+        let _guard = env_lock();
+        let old_home = std::env::var_os("HOME");
+        let old_sudo_user = std::env::var_os("SUDO_USER");
+
+        unsafe {
+            std::env::set_var("HOME", "/tmp/shine-fake-home");
+            std::env::remove_var("SUDO_USER");
+        }
+
+        assert_eq!(
+            target_home(),
+            crate::home::effective_home_dir().into_os_string()
+        );
+
+        unsafe {
+            match old_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match old_sudo_user {
+                Some(value) => std::env::set_var("SUDO_USER", value),
+                None => std::env::remove_var("SUDO_USER"),
+            }
+        }
+    }
 }

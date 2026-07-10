@@ -224,12 +224,7 @@ fn presets_from_env() -> Option<PathBuf> {
 }
 
 fn default_shine_dir() -> PathBuf {
-    let home = std::env::var("HOME")
-        .ok()
-        .filter(|home| !home.trim().is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".shine")
+    crate::home::effective_home_dir().join(".shine")
 }
 
 fn shine_dir_from_env_or_default(default: &Path) -> PathBuf {
