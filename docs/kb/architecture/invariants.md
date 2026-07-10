@@ -18,6 +18,11 @@ bugs. Check this list before changing the modules named in each entry.
   (`apps/file_ops.rs::admin_lock`, `$TMPDIR/shine-admin.lock`). In-process mutexes are not
   enough: nextest runs each test in its own OS process, and real concurrent shine invocations
   exist too (commit `fbd9c55`).
+- **No code path should ask the user to manually type `sudo` on Unix.** Every Unix privileged
+  write auto-elevates through `privilege::ensure_admin` + `apps/file_ops.rs::sudo_command`
+  (app-config installs, `self_install.rs`'s binary copy via `install_binary_with_elevation`).
+  Windows has no `sudo` equivalent, so its privileged paths still surface a manual
+  "rerun elevated" hint instead.
 
 ## Shell profile editing
 

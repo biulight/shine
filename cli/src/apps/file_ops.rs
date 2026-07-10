@@ -14,7 +14,7 @@ use tokio::fs;
 /// in-process `Mutex` cannot prevent concurrent test processes from racing
 /// on a real, shared system path (e.g. `/etc/docker/daemon.json`); this
 /// lock closes that window for both tests and real concurrent invocations.
-struct AdminLockGuard {
+pub struct AdminLockGuard {
     path: PathBuf,
 }
 
@@ -24,7 +24,11 @@ impl Drop for AdminLockGuard {
     }
 }
 
-async fn admin_lock() -> Result<AdminLockGuard> {
+/// Acquires the cross-process advisory lock serializing privileged (sudo)
+/// filesystem mutations. Shared beyond this module by other privileged
+/// writes (e.g. the self-install binary copy in `self_install.rs`) that
+/// need to serialize against concurrent `sudo`-driven writes.
+pub async fn admin_lock() -> Result<AdminLockGuard> {
     let path = std::env::temp_dir().join("shine-admin.lock");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
@@ -179,7 +183,9 @@ pub async fn install_bytes_admin(
     })
 }
 
-fn sudo_command() -> tokio::process::Command {
+/// Builds a `sudo` command, passing `-n` (non-interactive) when stdin isn't
+/// a TTY so a scripted invocation fails fast instead of hanging on a prompt.
+pub fn sudo_command() -> tokio::process::Command {
     let mut command = tokio::process::Command::new("sudo");
     if !std::io::stdin().is_terminal() {
         command.arg("-n");

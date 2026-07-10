@@ -462,8 +462,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn sync_self_install_dest_creates_missing_parent() {
+    #[tokio::test]
+    async fn sync_self_install_dest_creates_missing_parent() {
         let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
         let src = dir.join("new-shine");
         let dest = dir.join("usr/local/bin/shine");
@@ -471,22 +471,22 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&src, b"new").unwrap();
 
-        let outcome = sync_self_install_dest_from(&src, &dest).unwrap();
+        let outcome = sync_self_install_dest_from(&src, &dest).await.unwrap();
 
         assert!(matches!(outcome, SelfInstallSync::Synced));
         assert_eq!(std::fs::read(&dest).unwrap(), b"new");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[test]
-    fn sync_self_install_dest_skips_current_exe_path() {
+    #[tokio::test]
+    async fn sync_self_install_dest_skips_current_exe_path() {
         let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
         let src = dir.join("shine");
 
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&src, b"new").unwrap();
 
-        let outcome = sync_self_install_dest_from(&src, &src).unwrap();
+        let outcome = sync_self_install_dest_from(&src, &src).await.unwrap();
 
         assert!(matches!(outcome, SelfInstallSync::AlreadyCurrent));
         assert_eq!(std::fs::read(&src).unwrap(), b"new");

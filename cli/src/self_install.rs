@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 
 use cli::config::{self, Config};
 use cli::update_check::{self, ReleaseChannel, UpdateStatus};
-use cli::{apps, colors, env, list, output, platform, shells, sys, version};
+use cli::{apps, colors, env, list, output, platform, privilege, shells, sys, version};
 
 pub(super) async fn handle_update(config: &Config, verbose: bool, refresh: bool) -> Result<()> {
     let mut printed_update = if verbose {
@@ -215,25 +215,20 @@ pub(super) async fn sync_self_install_dest(config: &Config, src: &std::path::Pat
         Some(d) => d,
         None => return,
     };
-    match sync_self_install_dest_from(src, dest) {
+    match sync_self_install_dest_from(src, dest).await {
         Ok(SelfInstallSync::Synced) => println!(
             "{}",
             colors::green(&format!("Synced system copy at {}", dest.display()))
         ),
         Ok(SelfInstallSync::AlreadyCurrent) => {}
-        Err(e) if has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied) => {
-            let hint = if cfg!(windows) {
-                format!(
-                    "Installed copy at {} needs manual sync; rerun from an elevated terminal if needed.",
-                    dest.display()
-                )
-            } else {
-                format!(
-                    "System copy at {} needs manual sync — run: sudo {} self install",
-                    dest.display(),
-                    src.display()
-                )
-            };
+        // Unix already tried `sudo` automatically inside `install_binary_with_elevation`;
+        // reaching here means it was declined or unavailable non-interactively. Windows has
+        // no such auto-elevation path, so it still needs the manual hint.
+        Err(e) if cfg!(windows) && has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied) => {
+            let hint = format!(
+                "Installed copy at {} needs manual sync; rerun from an elevated terminal if needed.",
+                dest.display()
+            );
             println!("{}", colors::yellow(&hint));
         }
         Err(e) => eprintln!(
@@ -248,7 +243,7 @@ pub(super) enum SelfInstallSync {
     AlreadyCurrent,
 }
 
-pub(super) fn sync_self_install_dest_from(
+pub(super) async fn sync_self_install_dest_from(
     src: &std::path::Path,
     dest: &std::path::Path,
 ) -> Result<SelfInstallSync> {
@@ -260,7 +255,9 @@ pub(super) fn sync_self_install_dest_from(
         }
     }
 
-    install_binary_atomically(src, dest).map(|()| SelfInstallSync::Synced)
+    install_binary_with_elevation(src, dest)
+        .await
+        .map(|()| SelfInstallSync::Synced)
 }
 
 pub(super) fn has_io_error_kind(err: &anyhow::Error, kind: std::io::ErrorKind) -> bool {
@@ -299,8 +296,9 @@ pub(super) async fn handle_self_install(
         }
     }
 
-    install_binary_atomically(&src, &dest)
-        .with_context(|| self_install_failure_hint(&src, &dest))?;
+    install_binary_with_elevation(&src, &dest)
+        .await
+        .with_context(|| self_install_failure_hint(&dest))?;
 
     // Remember where we installed so `shine self upgrade` can sync this copy automatically.
     config.self_install_dest = Some(dest.clone());
@@ -318,16 +316,8 @@ pub(super) async fn handle_self_install(
     Ok(())
 }
 
-pub(super) fn self_install_failure_hint(src: &std::path::Path, dest: &std::path::Path) -> String {
-    if cfg!(windows) {
-        format!("failed to copy to {}", dest.display())
-    } else {
-        format!(
-            "failed to copy to {} — try: sudo {} self install",
-            dest.display(),
-            src.display()
-        )
-    }
+pub(super) fn self_install_failure_hint(dest: &std::path::Path) -> String {
+    format!("failed to copy to {}", dest.display())
 }
 
 pub(super) fn print_self_install_activation_hint(dest: &std::path::Path) {
@@ -390,4 +380,76 @@ pub(super) fn install_binary_atomically(
                 .with_context(|| format!("failed to replace {} with staged binary", dest.display()))
         }
     }
+}
+
+/// Installs the binary, auto-elevating via `sudo` on Unix if the plain copy
+/// fails because the destination isn't user-writable (e.g. `/usr/local/bin`
+/// owned by root). Mirrors the auto-elevation already used for privileged
+/// app-config writes in `apps/file_ops.rs::install_bytes_admin`, so the user
+/// is prompted once instead of being told to manually re-run with `sudo`.
+pub(super) async fn install_binary_with_elevation(
+    src: &std::path::Path,
+    dest: &std::path::Path,
+) -> Result<()> {
+    match install_binary_atomically(src, dest) {
+        Ok(()) => Ok(()),
+        Err(e)
+            if !cfg!(windows)
+                && has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied)
+                && !std::env::var("USER").is_ok_and(|user| user == "root") =>
+        {
+            let _lock = apps::file_ops::admin_lock().await?;
+            install_binary_privileged(src, dest).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(unix)]
+async fn install_binary_privileged(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    use anyhow::Context as _;
+    use std::os::unix::fs::PermissionsExt;
+
+    if !privilege::ensure_admin(1).await? {
+        anyhow::bail!("administrator permission was not granted");
+    }
+
+    let parent = dest
+        .parent()
+        .with_context(|| format!("destination has no parent: {}", dest.display()))?;
+    let mode = std::fs::metadata(src)
+        .map(|m| m.permissions().mode())
+        .unwrap_or(0o755);
+
+    let status = apps::file_ops::sudo_command()
+        .arg("mkdir")
+        .arg("-p")
+        .arg(parent)
+        .status()
+        .await
+        .context("failed to create privileged destination directory")?;
+    if !status.success() {
+        anyhow::bail!("administrator permission was not granted");
+    }
+
+    let status = apps::file_ops::sudo_command()
+        .args(["install", "-m", &format!("{mode:o}"), "--"])
+        .arg(src)
+        .arg(dest)
+        .status()
+        .await
+        .context("failed to install shine binary with administrator privileges")?;
+    if !status.success() {
+        anyhow::bail!("failed to install shine binary with administrator privileges");
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn install_binary_privileged(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    // No auto-elevation path on Windows: privileged binary copies go through
+    // an elevated terminal instead. Fall back to the plain unprivileged copy
+    // so the caller's original error surfaces if it still fails.
+    install_binary_atomically(src, dest)
 }
