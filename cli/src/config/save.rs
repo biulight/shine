@@ -4,18 +4,13 @@
 
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
-use tokio::fs::{self, OpenOptions};
-use tokio::io::AsyncWriteExt;
+use tokio::fs;
 
 use super::Config;
 
 impl Config {
     pub async fn save(&self) -> Result<()> {
         let config_path = self.resolve_config_path_for_save().await?;
-
-        let shine_dir = config_path
-            .parent()
-            .context("Config path must have a parent directory")?;
 
         let new_table = self.serialize_table_for_save()?;
         let new_toml = toml::to_string_pretty(&new_table).context("Failed to serialize config")?;
@@ -36,32 +31,9 @@ impl Config {
             new_toml
         };
 
-        let file_name = config_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default();
-        let temp_path = shine_dir.join(format!(".{file_name}.tmp-{}", uuid::Uuid::new_v4()));
-
-        let mut temp_file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp_path)
+        crate::persist::atomic_write(&config_path, toml_str.as_bytes())
             .await
-            .with_context(|| format!("Failed to create temp file: {temp_path:?}"))?;
-
-        temp_file
-            .write_all(toml_str.as_bytes())
-            .await
-            .context("Failed to write temporary config contents")?;
-        temp_file
-            .sync_all()
-            .await
-            .context("Failed to sync temporary config contents")?;
-        drop(temp_file);
-
-        fs::rename(&temp_path, &config_path)
-            .await
-            .with_context(|| format!("Failed to rename temp file to {:?}", config_path))?;
+            .with_context(|| format!("Failed to write config to {config_path:?}"))?;
 
         Ok(())
     }

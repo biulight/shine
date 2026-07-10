@@ -3,11 +3,10 @@
 //! runtime state (not an embedded preset), so it follows `SHINE_CONFIG_DIR` via
 //! `Config::shine_dir()` and does not preserve user-authored comments.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
-use tokio::io::AsyncWriteExt;
 
 pub(crate) const TASKS_FILE: &str = "tasks.toml";
 
@@ -28,38 +27,11 @@ pub struct TaskEntry {
 
 impl TaskManifest {
     pub async fn load(shine_dir: &Path) -> Result<Self> {
-        let path = shine_dir.join(TASKS_FILE);
-        match tokio::fs::read_to_string(&path).await {
-            Ok(content) => toml::from_str(&content).context("failed to parse tasks.toml"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).context("failed to read tasks.toml"),
-        }
+        crate::persist::load_toml_or_default(&shine_dir.join(TASKS_FILE), "tasks.toml").await
     }
 
     pub async fn save(&self, shine_dir: &Path) -> Result<()> {
-        tokio::fs::create_dir_all(shine_dir)
-            .await
-            .with_context(|| format!("creating {}", shine_dir.display()))?;
-
-        let path = shine_dir.join(TASKS_FILE);
-        let content = toml::to_string_pretty(self).context("failed to serialize tasks.toml")?;
-        let temp = shine_dir.join(format!(".tasks-{}.tmp", uuid::Uuid::new_v4()));
-        let mut file = tokio::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)
-            .await
-            .context("failed to create temp tasks file")?;
-        file.write_all(content.as_bytes())
-            .await
-            .context("failed to write tasks.toml")?;
-        file.sync_all().await.context("failed to sync tasks.toml")?;
-        drop(file);
-
-        tokio::fs::rename(&temp, &path)
-            .await
-            .context("failed to finalize tasks.toml")?;
-        Ok(())
+        crate::persist::save_toml_atomic(self, &shine_dir.join(TASKS_FILE), "tasks.toml").await
     }
 
     pub fn get(&self, name: &str) -> Option<&TaskEntry> {

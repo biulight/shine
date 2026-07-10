@@ -61,6 +61,34 @@ pub async fn finalize_temp(temp: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Loads and parses a TOML file at `path`, or returns `T::default()` if it
+/// doesn't exist yet. `what` is a human-readable label used in error
+/// messages (e.g. `"app manifest"`).
+pub async fn load_toml_or_default<T>(path: &Path, what: &str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned + Default,
+{
+    match tokio::fs::read_to_string(path).await {
+        Ok(content) => toml::from_str(&content).with_context(|| format!("failed to parse {what}")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(e) => Err(e).with_context(|| format!("failed to read {what}")),
+    }
+}
+
+/// Serializes `value` as pretty TOML and atomically writes it to `path`.
+/// `what` is a human-readable label used in error messages.
+pub async fn save_toml_atomic<T: serde::Serialize>(
+    value: &T,
+    path: &Path,
+    what: &str,
+) -> Result<()> {
+    let content =
+        toml::to_string_pretty(value).with_context(|| format!("failed to serialize {what}"))?;
+    atomic_write(path, content.as_bytes())
+        .await
+        .with_context(|| format!("failed to write {what}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +144,53 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!temp.exists(), "temp file should be cleaned up on failure");
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct SampleToml {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        count: u32,
+    }
+
+    #[tokio::test]
+    async fn load_toml_or_default_returns_default_when_file_missing() {
+        let dir = crate::test_support::make_temp_dir("shine-persist").await;
+        let path = dir.join("sample.toml");
+
+        let value: SampleToml = load_toml_or_default(&path, "sample").await.unwrap();
+
+        assert_eq!(value, SampleToml::default());
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn save_then_load_toml_round_trips() {
+        let dir = crate::test_support::make_temp_dir("shine-persist").await;
+        let path = dir.join("sample.toml");
+        let value = SampleToml {
+            name: "hi".to_string(),
+            count: 3,
+        };
+
+        save_toml_atomic(&value, &path, "sample").await.unwrap();
+        let loaded: SampleToml = load_toml_or_default(&path, "sample").await.unwrap();
+
+        assert_eq!(loaded, value);
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn save_toml_atomic_creates_missing_parent_directory() {
+        let dir = crate::test_support::make_temp_dir("shine-persist").await;
+        let path = dir.join("nested/sample.toml");
+        let value = SampleToml::default();
+
+        save_toml_atomic(&value, &path, "sample").await.unwrap();
+
+        assert!(path.exists());
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 }

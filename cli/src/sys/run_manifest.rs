@@ -2,10 +2,9 @@
 //! by `(os_id, item_id)`. Read by `sys::handle_list`/`handle_info`/`handle_status`
 //! to show recorded status; written by the init/apply/uninstall execution paths.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tokio::io::AsyncWriteExt;
 
 use super::model::SysItemStatus;
 use super::resources::SystemReceipt;
@@ -35,40 +34,13 @@ pub(super) struct SysRunEntry {
 
 impl SysRunManifest {
     pub(super) async fn load(shine_dir: &Path) -> Result<Self> {
-        let path = shine_dir.join(SYS_MANIFEST_FILE);
-        match tokio::fs::read_to_string(&path).await {
-            Ok(content) => toml::from_str(&content).context("failed to parse sys manifest"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).context("failed to read sys manifest"),
-        }
+        crate::persist::load_toml_or_default(&shine_dir.join(SYS_MANIFEST_FILE), "sys manifest")
+            .await
     }
 
     pub(super) async fn save(&self, shine_dir: &Path) -> Result<()> {
-        tokio::fs::create_dir_all(shine_dir)
+        crate::persist::save_toml_atomic(self, &shine_dir.join(SYS_MANIFEST_FILE), "sys manifest")
             .await
-            .with_context(|| format!("creating {}", shine_dir.display()))?;
-
-        let path = shine_dir.join(SYS_MANIFEST_FILE);
-        let content = toml::to_string_pretty(self).context("failed to serialize sys manifest")?;
-        let temp = shine_dir.join(format!(".sys-manifest-{}.tmp", uuid::Uuid::new_v4()));
-        let mut file = tokio::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)
-            .await
-            .context("failed to create temp sys manifest file")?;
-        file.write_all(content.as_bytes())
-            .await
-            .context("failed to write sys manifest")?;
-        file.sync_all()
-            .await
-            .context("failed to sync sys manifest")?;
-        drop(file);
-
-        tokio::fs::rename(&temp, &path)
-            .await
-            .context("failed to finalize sys manifest")?;
-        Ok(())
     }
 
     pub(super) fn upsert(&mut self, entry: SysRunEntry) {
