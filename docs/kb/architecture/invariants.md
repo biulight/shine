@@ -35,6 +35,13 @@ bugs. Check this list before changing the modules named in each entry.
   Never serialize the whole file from a struct — that destroys comments.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and docs (AGENTS.md § Config) must agree.
+- **External app preset hooks are opt-in only.** `post_upgrade` runs commands from app preset
+  metadata after `shine upgrade` changes files. Embedded presets may run hooks, but external
+  presets must be gated by `allow_app_hooks = true`; otherwise a user-controlled presets checkout
+  would gain command execution on ordinary upgrades.
+- **Local HTTP resources share one loopback server.** Files that need stable local URLs live under
+  `<shine_dir>/http/` and are served by `shine serve start`; do not add per-app HTTP daemons,
+  ports, or launchd jobs.
 
 ## Personal tasks
 

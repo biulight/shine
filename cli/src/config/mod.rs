@@ -99,6 +99,10 @@ pub struct Config {
     /// embedded assets, and list commands enumerate the on-disk folder.
     #[serde(skip)]
     pub is_external_presets: bool,
+    /// Allows app presets loaded from external preset directories to run post-upgrade hooks.
+    /// Embedded presets may run hooks without this opt-in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_app_hooks: bool,
     /// Path where `shine self install` last copied the binary.
     /// When set, `shine self upgrade` will try to sync the new binary there automatically.
     #[serde(
@@ -195,6 +199,7 @@ impl Config {
             presets_overlay_dir_override: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
+            allow_app_hooks: false,
             self_install_dest: None,
             gpg_key_id: None,
             secret_backend: None,
@@ -302,6 +307,7 @@ impl Default for Config {
             presets_overlay_dir_override: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
+            allow_app_hooks: false,
             self_install_dest: None,
             gpg_key_id: None,
             secret_backend: None,

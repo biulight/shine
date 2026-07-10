@@ -336,6 +336,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn allow_app_hooks_round_trips_through_save() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.allow_app_hooks = true;
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert!(loaded.allow_app_hooks);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn presets_dir_absent_from_toml_when_override_is_none() {
         let dir = make_temp_dir().await;
         let config = config_in(&dir); // presets_dir_override: None

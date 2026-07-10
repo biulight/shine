@@ -15,6 +15,7 @@ pub struct AppCategory {
     pub destination_root: Option<String>,
     pub files: Vec<AppFile>,
     pub list_mode: AppListMode,
+    pub post_upgrade: Option<AppHook>,
     // Tracks whether the category came from an explicit metadata file vs. auto-collection;
     // reserved for future upgrade/list logic.
     #[allow(dead_code)]
@@ -28,6 +29,12 @@ pub struct AppCategory {
 pub enum AppListMode {
     Category,
     Files,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppHook {
+    pub command: String,
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +55,15 @@ struct CategoryToml {
     description: Option<String>,
     dest: DestToml,
     list_mode: Option<ListModeToml>,
+    post_upgrade: Option<HookToml>,
     files: Option<Vec<FileToml>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct HookToml {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,6 +165,19 @@ fn resolve_install_strategy(file: &FileToml, context: &str) -> Result<AppInstall
     }
 }
 
+fn resolve_hook(hook: Option<HookToml>, context: &str) -> Result<Option<AppHook>> {
+    let Some(hook) = hook else {
+        return Ok(None);
+    };
+    if hook.command.trim().is_empty() {
+        bail!("{context}: post_upgrade.command must not be empty");
+    }
+    Ok(Some(AppHook {
+        command: hook.command,
+        args: hook.args,
+    }))
+}
+
 fn default_list_mode(has_explicit_files: bool) -> AppListMode {
     if has_explicit_files {
         AppListMode::Files
@@ -205,6 +233,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
     if let Some(bytes) = presets::read_asset_bytes(&metadata_path) {
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
+        let post_upgrade = resolve_hook(parsed.post_upgrade, &metadata_path)?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
         };
@@ -269,6 +298,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                 .list_mode
                 .map(Into::into)
                 .unwrap_or_else(|| default_list_mode(has_explicit_files)),
+            post_upgrade,
             uses_metadata: true,
             has_explicit_files,
         }));
@@ -297,6 +327,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
             })
             .collect(),
         list_mode: AppListMode::Category,
+        post_upgrade: None,
         uses_metadata: false,
         has_explicit_files: false,
     }))
@@ -312,6 +343,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
             .with_context(|| format!("reading metadata: {}", metadata_path.display()))?;
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
+        let post_upgrade = resolve_hook(parsed.post_upgrade, &metadata_path.display().to_string())?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
         };
@@ -387,6 +419,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                 .list_mode
                 .map(Into::into)
                 .unwrap_or_else(|| default_list_mode(has_explicit_files)),
+            post_upgrade,
             uses_metadata: true,
             has_explicit_files,
         }));
@@ -417,6 +450,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         destination_root: None,
         files,
         list_mode: AppListMode::Category,
+        post_upgrade: None,
         uses_metadata: false,
         has_explicit_files: false,
     }))
@@ -547,6 +581,10 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
             resolve_install_strategy(file, &context)?;
         }
     }
+    resolve_hook(
+        parsed.post_upgrade.clone(),
+        &format!("app/{name}/shine.toml"),
+    )?;
     Ok(parsed)
 }
 
@@ -681,6 +719,53 @@ mod tests {
         assert!(vim.uses_metadata);
         assert_eq!(vim.destination_root.as_deref(), Some("~/.vim"));
         assert!(!vim.files.is_empty());
+    }
+
+    #[test]
+    fn embedded_surge_installs_custom_rules_module() {
+        let categories = load_embedded_categories(Some("surge")).unwrap();
+        let surge = categories.iter().find(|c| c.name == "surge").unwrap();
+        assert!(surge.uses_metadata);
+        assert_eq!(
+            surge.destination_root.as_deref(),
+            Some("~/.shine/http/app/surge")
+        );
+        assert_eq!(surge.files.len(), 1);
+        assert_eq!(
+            surge.files[0].source_rel,
+            std::path::Path::new("custom-rules.sgmodule")
+        );
+        assert_eq!(
+            surge.files[0].target_rel,
+            std::path::Path::new("custom-rules.sgmodule")
+        );
+        assert_eq!(
+            surge.post_upgrade,
+            Some(AppHook {
+                command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
+                args: vec!["reload".to_string()],
+            })
+        );
+    }
+
+    #[test]
+    fn post_upgrade_hook_parses_command_and_args() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_upgrade = { command = "/bin/echo", args = ["updated"] }
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let hook = resolve_hook(parsed.post_upgrade, "sample")
+            .unwrap()
+            .unwrap();
+        assert_eq!(hook.command, "/bin/echo");
+        assert_eq!(hook.args, vec!["updated"]);
     }
 
     #[test]

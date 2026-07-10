@@ -9,7 +9,7 @@ mod upgrade;
 
 pub use manifest::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
 pub use metadata::{
-    AppCategory, AppFile, AppListMode, load_embedded_categories, load_installed_categories,
+    AppCategory, AppFile, AppHook, AppListMode, load_embedded_categories, load_installed_categories,
 };
 use report::{
     print_already_managed, print_dry_run_install, print_force_removed,
@@ -817,6 +817,33 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    async fn write_external_sample_app_with_post_upgrade(
+        dir: &std::path::Path,
+        body: &[u8],
+        script_path: &std::path::Path,
+        marker_path: &std::path::Path,
+    ) {
+        let cat_dir = dir.join("presets/app/sample");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        let manifest = format!(
+            "description = \"Sample app\"\ndest = \"~/.config/sample\"\npost_upgrade = {{ command = \"/bin/sh\", args = [\"{}\", \"{}\"] }}\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n",
+            script_path.display(),
+            marker_path.display()
+        );
+        fs::write(cat_dir.join("shine.toml"), manifest)
+            .await
+            .unwrap();
+        fs::write(cat_dir.join("daemon.jsonc"), body).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    async fn write_hook_script(path: &std::path::Path) {
+        fs::write(path, "#!/bin/sh\nprintf x >> \"$1\"\n")
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn init_template_creates_parseable_app_metadata() {
         let dir = make_temp_dir().await;
@@ -989,6 +1016,7 @@ mod tests {
                 restart_hint: None,
             }],
             list_mode: AppListMode::Files,
+            post_upgrade: None,
             uses_metadata: true,
             has_explicit_files: true,
         };
@@ -1156,6 +1184,136 @@ mod tests {
         assert_ne!(fs::read(&dest).await.unwrap(), before);
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
+
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_runs_post_upgrade_hook_after_file_update_when_allowed() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        let script = dir.join("hook.sh");
+        let marker = dir.join("hook-ran");
+        write_hook_script(&script).await;
+        write_external_sample_app_with_post_upgrade(
+            &dir,
+            b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n",
+            &script,
+            &marker,
+        )
+        .await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.allow_app_hooks = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+        assert!(
+            !marker.exists(),
+            "post-upgrade hook must not run during install"
+        );
+        write_external_sample_app_with_post_upgrade(
+            &dir,
+            b"{\n  \"proxy\": \"@@PROXY_HOST@@\",\n  \"updated\": true\n}\n",
+            &script,
+            &marker,
+        )
+        .await;
+
+        let report = handle_upgrade_installed(&config, false).await.unwrap();
+
+        assert_eq!(report.updated, 1);
+        assert_eq!(fs::read_to_string(&marker).await.unwrap(), "x");
+
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn upgrade_does_not_run_post_upgrade_hook_when_unchanged() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        let script = dir.join("hook.sh");
+        let marker = dir.join("hook-ran");
+        write_hook_script(&script).await;
+        write_external_sample_app_with_post_upgrade(
+            &dir,
+            b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n",
+            &script,
+            &marker,
+        )
+        .await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.allow_app_hooks = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+        let report = handle_upgrade_installed(&config, false).await.unwrap();
+
+        assert_eq!(report.updated, 0);
+        assert!(!marker.exists(), "unchanged config must not run hook");
+
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn external_post_upgrade_hook_is_skipped_without_opt_in() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        let script = dir.join("hook.sh");
+        let marker = dir.join("hook-ran");
+        write_hook_script(&script).await;
+        write_external_sample_app_with_post_upgrade(
+            &dir,
+            b"{\n  \"proxy\": \"@@PROXY_HOST@@\"\n}\n",
+            &script,
+            &marker,
+        )
+        .await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_install(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+        write_external_sample_app_with_post_upgrade(
+            &dir,
+            b"{\n  \"proxy\": \"@@PROXY_HOST@@\",\n  \"updated\": true\n}\n",
+            &script,
+            &marker,
+        )
+        .await;
+
+        let report = handle_upgrade_installed(&config, false).await.unwrap();
+
+        assert_eq!(report.updated, 1);
+        assert!(
+            !marker.exists(),
+            "external hook must be skipped unless allow_app_hooks is enabled"
+        );
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };

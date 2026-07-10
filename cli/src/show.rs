@@ -875,6 +875,7 @@ mod tests {
                 destination_root: Some("~/.config".to_string()),
                 files: vec![],
                 list_mode: crate::apps::AppListMode::Files,
+                post_upgrade: None,
                 uses_metadata: true,
                 has_explicit_files: true,
             },

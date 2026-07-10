@@ -26,6 +26,8 @@ struct ProjectOverrides {
     #[serde(default)]
     app_default_dest_root: Option<PathBuf>,
     #[serde(default)]
+    allow_app_hooks: Option<bool>,
+    #[serde(default)]
     self_install_dest: Option<PathBuf>,
     #[serde(default)]
     gpg_key_id: Option<String>,
@@ -126,6 +128,9 @@ impl Config {
         if let Some(path) = overrides.app_default_dest_root {
             config.app_default_dest_root_override =
                 Some(resolve_config_presets_path(&path, &project_config.root));
+        }
+        if let Some(value) = overrides.allow_app_hooks {
+            config.allow_app_hooks = value;
         }
         if let Some(path) = overrides.self_install_dest {
             config.self_install_dest =

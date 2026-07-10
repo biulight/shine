@@ -153,6 +153,7 @@ shine/
 │       ├── check.rs          # Shared install-status row builders used by `list`/`info`
 │       ├── clear.rs          # Clear stale runtime state after schema changes
 │       ├── colors.rs         # Terminal color helpers
+│       ├── serve.rs          # Local HTTP server for shine-managed resources under ~/.shine/http/
 │       ├── list.rs           # Top-level `shine list` and status views
 │       ├── path_display.rs   # Home-relative path formatting for terminal output
 │       ├── secret/
@@ -198,6 +199,7 @@ shine/
     │   ├── ghostty/    config.ghostty, shine.toml
     │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig; no shine.toml, uses annotation instead)
     │   ├── JetBrains/  shine.toml
+    │   ├── surge/      custom-rules.sgmodule, shine.toml
     │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
@@ -224,6 +226,7 @@ shine/
 | `self install/upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
 | `update` / `upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
 | `clear` | `cli/src/clear.rs` |
+| `serve start/url` | `cli/src/serve.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
 | `ssh [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
 | `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
@@ -423,6 +426,13 @@ command = ["rsync", "-avz", "dist/", "marqueeio.develop:/var/www/keystone/alex/"
 
 Config is saved via `utils::sync_table` which preserves existing TOML comments while updating values.
 
+### Local HTTP resources
+
+`shine serve start` serves files from `~/.shine/http/` on a single loopback HTTP server
+(`127.0.0.1:6174` by default). App presets that need stable local URLs should install files under
+that tree (for example `~/.shine/http/app/surge/custom-rules.sgmodule`) and use
+`shine serve url <path>` to print the URL. Do not start one HTTP service per app preset.
+
 ### rust-embed and presets
 
 `PresetAssets` (in `presets.rs`) embeds everything under `presets/` at compile time. `build.rs` registers `cargo:rerun-if-changed=../presets` so cargo recompiles when preset files change — without this, new/modified scripts won't appear in the binary.
@@ -487,6 +497,8 @@ Hard rules (details and runbook: [`docs/kb/conventions.md`](docs/kb/conventions.
 ### App preset category
 
 Prefer `shine.toml` metadata over legacy `shine-dest:` annotations for new categories. Place `shine.toml` in `presets/app/<category>/` with at minimum `dest = "~/<path>"`. Add `transforms = ["jsonc-to-json"]` for JSONC files or `transforms = ["template"]` for files with `@@VAR_NAME@@` env placeholders.
+
+App categories may declare a `post_upgrade = { command = "...", args = ["..."] }` hook to run a direct argv command after `shine upgrade` actually updates or installs at least one file in that category. Hooks are not run during `app install`, and external presets require `allow_app_hooks = true` in config before hooks execute.
 
 ### Sys preset (OS init)
 

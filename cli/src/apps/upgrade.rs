@@ -3,6 +3,7 @@ use dialoguer::Confirm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use tokio::process::Command;
 
 use crate::colors;
 use crate::config::Config;
@@ -87,6 +88,7 @@ pub async fn handle_upgrade_installed(
     let mut pending_upserts: Vec<AppEntry> = Vec::new();
     let mut restart_hints = BTreeSet::new();
     let mut pending_removals: Vec<PathBuf> = Vec::new();
+    let mut updated_categories = BTreeSet::new();
 
     for entry in &manifest.entries {
         let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
@@ -138,6 +140,7 @@ pub async fn handle_upgrade_installed(
 
         match try_upgrade_entry(config, entry, cat, file, env_map).await {
             EntryUpgradeResult::Updated(new_entry) => {
+                updated_categories.insert(cat.name.clone());
                 pending_upserts.push(new_entry);
                 updated += 1;
                 if let Some(hint) = &file.restart_hint {
@@ -162,6 +165,11 @@ pub async fn handle_upgrade_installed(
         install_new_category_files(config, &categories_by_name, &manifest, env_map).await?;
     updated += new_updated;
     skipped += new_skipped;
+    for entry in &new_upserts {
+        if let Some(category) = app_category_from_source(&entry.source) {
+            updated_categories.insert(category.to_string());
+        }
+    }
     pending_upserts.extend(new_upserts);
     restart_hints.extend(new_restart_hints);
 
@@ -170,12 +178,59 @@ pub async fn handle_upgrade_installed(
     }
     manifest.save(config.shine_dir()).await?;
 
+    run_post_upgrade_hooks(config, &categories_by_name, &updated_categories).await;
+
     Ok(AppUpgradeReport {
         updated,
         skipped,
         user_modified,
         restart_hints,
     })
+}
+
+async fn run_post_upgrade_hooks(
+    config: &Config,
+    categories_by_name: &BTreeMap<String, metadata::AppCategory>,
+    updated_categories: &BTreeSet<String>,
+) {
+    for category in updated_categories {
+        let Some(cat) = categories_by_name.get(category) else {
+            continue;
+        };
+        let Some(hook) = &cat.post_upgrade else {
+            continue;
+        };
+        if config.is_external_presets && !config.allow_app_hooks {
+            println!(
+                "  {} {category}: post-upgrade hook skipped (set allow_app_hooks = true to allow external app hooks)",
+                colors::symbol("!")
+            );
+            continue;
+        }
+        match Command::new(&hook.command).args(&hook.args).status().await {
+            Ok(status) if status.success() => {
+                println!(
+                    "  {} {category}: post-upgrade hook completed",
+                    colors::symbol("✓")
+                );
+            }
+            Ok(status) => {
+                eprintln!(
+                    "  {} {category}: post-upgrade hook failed: {} exited with {}",
+                    colors::symbol("!"),
+                    hook.command,
+                    status
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "  {} {category}: post-upgrade hook failed: {}: {e}",
+                    colors::symbol("!"),
+                    hook.command
+                );
+            }
+        }
+    }
 }
 
 enum EntryUpgradeResult {
@@ -523,5 +578,55 @@ async fn upgrade_file_content(
     } else {
         transforms::apply(&file.transforms, &raw, env_map)
             .with_context(|| format!("transform failed: {}", file.transforms.join(", ")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{metadata, run_post_upgrade_hooks};
+    use crate::config::Config;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_post_upgrade_hook_requires_opt_in() {
+        let dir = std::env::temp_dir().join(format!("shine-hook-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let marker = dir.join("marker");
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let mut categories = BTreeMap::new();
+        categories.insert(
+            "sample".to_string(),
+            sample_hook_category(&format!("printf ran > {}", marker.display())),
+        );
+        let updated = BTreeSet::from(["sample".to_string()]);
+
+        run_post_upgrade_hooks(&config, &categories, &updated).await;
+        assert!(!marker.exists(), "external hook must be skipped by default");
+
+        config.allow_app_hooks = true;
+        run_post_upgrade_hooks(&config, &categories, &updated).await;
+        assert_eq!(tokio::fs::read_to_string(&marker).await.unwrap(), "ran");
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    fn sample_hook_category(script: &str) -> metadata::AppCategory {
+        metadata::AppCategory {
+            name: "sample".to_string(),
+            description: None,
+            destination_root: Some("~/.config/sample".to_string()),
+            files: vec![],
+            list_mode: metadata::AppListMode::Files,
+            post_upgrade: Some(metadata::AppHook {
+                command: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), script.to_string()],
+            }),
+            uses_metadata: true,
+            has_explicit_files: true,
+        }
     }
 }

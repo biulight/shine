@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use super::{
     AppCommands, EnvCommands, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
-    SelfCommands, ShellCommands, SysCommands, TaskCommands, TaskRunCommand,
+    SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands, TaskRunCommand,
 };
 
 /// `Shine` - Quick config for sys
@@ -94,6 +94,11 @@ pub enum Commands {
     Self_ {
         #[command(subcommand)]
         command: SelfCommands,
+    },
+    /// Serve shine-managed HTTP resources from ~/.shine/http
+    Serve {
+        #[command(subcommand)]
+        command: ServeCommands,
     },
     /// Manage preset variables and workspace command environments
     Env {

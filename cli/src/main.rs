@@ -6,14 +6,14 @@ use std::path::PathBuf;
 #[cfg(test)]
 use cli::test_support;
 use cli::{
-    apps, clear, colors, commands, completion, config, env, git_pull, list, shells, show, ssh, sys,
-    task, update_check, version,
+    apps, clear, colors, commands, completion, config, env, git_pull, list, serve, shells, show,
+    ssh, sys, task, update_check, version,
 };
 
 use commands::{
     AppCommands, Cli, Commands, CompletionCommands, CompletionShell, EnvCommands,
     EnvIdentitySubcommand, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
-    SelfCommands, ShellCommands, SysCommands, TaskCommands,
+    SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands,
 };
 #[cfg(test)]
 use commands::{ClearCommand, InitCommand, UpdateCommand, UpgradeCommand};
@@ -99,6 +99,7 @@ async fn run(cli: Cli) -> Result<()> {
             | Commands::Overlay { .. }
             | Commands::Clear(..)
             | Commands::Self_ { .. }
+            | Commands::Serve { .. }
             | Commands::Env { .. }
             | Commands::Run(..)
     ) || matches!(&cli.command, Commands::Upgrade(cmd) if cmd.pull)
@@ -219,6 +220,10 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
+        },
+        Commands::Serve { command } => match command {
+            ServeCommands::Start(cmd) => serve::handle_start(&config, cmd.port).await,
+            ServeCommands::Url(cmd) => serve::handle_url(&cmd.path, cmd.port),
         },
         Commands::Shell { command } => match command {
             ShellCommands::Init { force } => shells::handle_init_template(force).await,
@@ -1354,6 +1359,26 @@ mod tests {
         assert!(Cli::try_parse_from(["shine", "check"]).is_err());
         assert!(Cli::try_parse_from(["shine", "check", "app"]).is_err());
         assert!(Cli::try_parse_from(["shine", "check", "shell"]).is_err());
+    }
+
+    #[test]
+    fn cli_accepts_unified_serve_commands() {
+        let cli = Cli::try_parse_from(["shine", "serve", "start"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Serve {
+                command: ServeCommands::Start(_)
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "serve", "url", "app/surge/custom-rules.sgmodule"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Serve {
+                command: ServeCommands::Url(_)
+            }
+        ));
     }
 
     #[test]

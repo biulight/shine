@@ -16,6 +16,7 @@ pub mod platform;
 pub mod presets;
 pub mod privilege;
 pub mod secret;
+pub mod serve;
 pub mod shells;
 pub mod show;
 pub mod ssh;

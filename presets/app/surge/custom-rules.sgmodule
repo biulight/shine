@@ -1,0 +1,6 @@
+#!name=Shine Custom Rules
+#!desc=Surge module rules managed by shine
+
+[Rule]
+# local_demo
+DOMAIN,ipinfo.io,Proxies
