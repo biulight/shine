@@ -51,7 +51,15 @@ pub async fn handle_presets_export(
     Ok(())
 }
 
-pub async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
+/// Which override a `handle_link`-style command is pointing at. The two link
+/// commands share the same expand/create/stat/canonicalize prelude but differ
+/// in which config field they touch and what they print afterward.
+enum LinkKind {
+    Presets,
+    Overlay,
+}
+
+async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKind) -> Result<()> {
     use anyhow::Context as _;
 
     let raw = path.to_string_lossy();
@@ -81,46 +89,77 @@ pub async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -
 
     let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
 
-    if config
-        .presets_dir_override
-        .as_deref()
-        .is_some_and(|p| p == absolute)
-    {
-        println!(
-            "{}",
-            colors::dim(&format!("already linked: {}", absolute.display()))
-        );
+    if matches!(kind, LinkKind::Overlay) {
+        config::validate_env_override_file(&absolute.join("shine.env.toml")).await?;
+    }
+
+    let already_linked = match kind {
+        LinkKind::Presets => config
+            .presets_dir_override
+            .as_deref()
+            .is_some_and(|p| p == absolute),
+        LinkKind::Overlay => config
+            .presets_overlay_dir_override
+            .as_deref()
+            .is_some_and(|p| p == absolute),
+    };
+    if already_linked {
+        let message = match kind {
+            LinkKind::Presets => format!("already linked: {}", absolute.display()),
+            LinkKind::Overlay => format!("overlay already linked: {}", absolute.display()),
+        };
+        println!("{}", colors::dim(&message));
         return Ok(());
     }
 
-    let updated = config
-        .clone()
-        .with_presets_dir_override(Some(absolute.clone()));
+    let updated = match kind {
+        LinkKind::Presets => config
+            .clone()
+            .with_presets_dir_override(Some(absolute.clone())),
+        LinkKind::Overlay => config
+            .clone()
+            .with_presets_overlay_dir_override(Some(absolute.clone())),
+    };
     updated.save().await?;
 
-    if std::env::var("SHINE_CONFIG_DIR")
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false)
-        || std::env::var("SHINE_PRESETS")
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false)
-    {
-        println!(
-            "{}",
-            colors::yellow(
-                "Warning: SHINE_CONFIG_DIR or SHINE_PRESETS is set and takes priority over \
-                 the active config at runtime. Unset the env var for this setting to take effect."
-            )
-        );
+    match kind {
+        LinkKind::Presets => {
+            if std::env::var("SHINE_CONFIG_DIR")
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false)
+                || std::env::var("SHINE_PRESETS")
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false)
+            {
+                println!(
+                    "{}",
+                    colors::yellow(
+                        "Warning: SHINE_CONFIG_DIR or SHINE_PRESETS is set and takes priority over \
+                         the active config at runtime. Unset the env var for this setting to take effect."
+                    )
+                );
+            }
+
+            println!("{}", colors::external_presets_note(&absolute));
+            println!(
+                "{}",
+                colors::dim("Run `shine export` to populate the directory with built-in presets.")
+            );
+        }
+        LinkKind::Overlay => {
+            println!("{}", colors::presets_overlay_note(&absolute));
+            println!(
+                "{}",
+                colors::dim("Overlay files override the active presets source by matching path.")
+            );
+        }
     }
 
-    println!("{}", colors::external_presets_note(&absolute));
-    println!(
-        "{}",
-        colors::dim("Run `shine export` to populate the directory with built-in presets.")
-    );
-
     Ok(())
+}
+
+pub async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
+    handle_link(config, path, create, LinkKind::Presets).await
 }
 
 pub async fn handle_presets_unlink(config: &Config) -> Result<()> {
@@ -148,61 +187,7 @@ pub async fn handle_presets_unlink(config: &Config) -> Result<()> {
 }
 
 pub async fn handle_overlay_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
-    use anyhow::Context as _;
-
-    let raw = path.to_string_lossy();
-    let expanded = config::full_expand(&raw).with_context(|| format!("expanding path: {raw}"))?;
-    let expanded = PathBuf::from(expanded);
-
-    if create {
-        tokio::fs::create_dir_all(&expanded)
-            .await
-            .with_context(|| format!("creating directory: {}", expanded.display()))?;
-    }
-
-    let meta = tokio::fs::metadata(&expanded).await.with_context(|| {
-        if create {
-            format!("accessing directory: {}", expanded.display())
-        } else {
-            format!(
-                "path does not exist: {} (use --create to create it)",
-                expanded.display()
-            )
-        }
-    })?;
-
-    if !meta.is_dir() {
-        bail!("path is not a directory: {}", expanded.display());
-    }
-
-    let absolute = tokio::fs::canonicalize(&expanded).await.unwrap_or(expanded);
-
-    config::validate_env_override_file(&absolute.join("shine.env.toml")).await?;
-
-    if config
-        .presets_overlay_dir_override
-        .as_deref()
-        .is_some_and(|p| p == absolute)
-    {
-        println!(
-            "{}",
-            colors::dim(&format!("overlay already linked: {}", absolute.display()))
-        );
-        return Ok(());
-    }
-
-    let updated = config
-        .clone()
-        .with_presets_overlay_dir_override(Some(absolute.clone()));
-    updated.save().await?;
-
-    println!("{}", colors::presets_overlay_note(&absolute));
-    println!(
-        "{}",
-        colors::dim("Overlay files override the active presets source by matching path.")
-    );
-
-    Ok(())
+    handle_link(config, path, create, LinkKind::Overlay).await
 }
 
 pub async fn handle_overlay_unlink(config: &Config) -> Result<()> {
