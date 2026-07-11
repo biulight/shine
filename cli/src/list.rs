@@ -1,4 +1,4 @@
-use crate::apps::{load_embedded_categories, load_installed_categories};
+use crate::apps::load_active_categories;
 use crate::check::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_rows};
 use crate::colors;
 use crate::config::Config;
@@ -15,11 +15,7 @@ pub async fn handle_update_list(config: &Config) -> Result<bool> {
         .filter(|r| r.is_installed && r.status_sym == "↑")
         .collect();
 
-    let cats_result = if config.is_external_presets {
-        load_installed_categories(config, None).await
-    } else {
-        load_embedded_categories(None)
-    };
+    let cats_result = load_active_categories(config, None).await;
     let app_rows = match cats_result {
         Ok(cats) => build_app_rows(config, &cats).await?,
         Err(_) => Vec::new(),
@@ -115,11 +111,7 @@ pub async fn handle_status_list(config: &Config) -> Result<()> {
     let shell_rows = build_shell_rows(config).await?;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
 
-    let cats_result = if config.is_external_presets {
-        load_installed_categories(config, None).await
-    } else {
-        load_embedded_categories(None)
-    };
+    let cats_result = load_active_categories(config, None).await;
     let app_rows = match cats_result {
         Ok(cats) => build_app_rows(config, &cats).await?,
         Err(_) => Vec::new(),
@@ -272,11 +264,7 @@ pub async fn handle_list(config: &Config) -> Result<()> {
         .filter(|r| should_show_shell_in_simple_list(r))
         .collect();
 
-    let cats_result = if config.is_external_presets {
-        load_installed_categories(config, None).await
-    } else {
-        load_embedded_categories(None)
-    };
+    let cats_result = load_active_categories(config, None).await;
     let app_rows = match cats_result {
         Ok(cats) => build_app_rows(config, &cats).await?,
         Err(_) => Vec::new(),

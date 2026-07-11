@@ -52,11 +52,7 @@ pub struct AppRow {
 
 /// Build shell preset rows.  Does not include the PATH sentinel line.
 pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
-    let categories = if config.is_external_presets {
-        crate::shells::metadata::load_installed_categories(config, None).await?
-    } else {
-        crate::shells::metadata::load_embedded_categories(None)?
-    };
+    let categories = crate::shells::metadata::load_active_categories(config, None).await?;
     if categories.is_empty() {
         return Ok(Vec::new());
     }

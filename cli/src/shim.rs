@@ -111,6 +111,11 @@ pub(crate) async fn resolve_shim_category(
     config: &Config,
     category: &str,
 ) -> Result<ShimResolution> {
+    // Not migrated to metadata::load_active_categories: this guards with an
+    // existence check before calling load_installed_categories in external
+    // mode, deliberately returning 0 matches instead of propagating that
+    // function's `bail!` on an empty result — load_active_categories would
+    // change resolve_shim_category's error semantics here.
     let shell_matches = if config.is_external_presets {
         let shell_path = config.preset_path(std::path::Path::new("shell").join(category));
         if shell_path.exists() {

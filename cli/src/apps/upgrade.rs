@@ -64,11 +64,7 @@ pub async fn handle_upgrade_installed(
         {
             continue;
         }
-        let categories = if config.is_external_presets {
-            metadata::load_installed_categories(config, Some(cat_name)).await?
-        } else {
-            metadata::load_embedded_categories(Some(cat_name))?
-        };
+        let categories = metadata::load_active_categories(config, Some(cat_name)).await?;
         if let Some(cat) = categories.into_iter().find(|cat| cat.name == *cat_name) {
             categories_by_name.insert(cat_name.clone(), cat);
         }

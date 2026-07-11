@@ -70,6 +70,21 @@ pub async fn load_installed_categories(
     Ok(categories)
 }
 
+/// Loads categories from whichever source is active: installed (external
+/// presets mode) or embedded. Replaces the `if config.is_external_presets {
+/// load_installed_categories } else { load_embedded_categories }` branch
+/// repeated at every call site.
+pub async fn load_active_categories(
+    config: &Config,
+    filter: Option<&str>,
+) -> Result<Vec<ShellCategory>> {
+    if config.is_external_presets {
+        load_installed_categories(config, filter).await
+    } else {
+        load_embedded_categories(filter)
+    }
+}
+
 fn load_embedded_category(name: &str) -> Result<ShellCategory> {
     let metadata_path = format!("shell/{name}/shine.toml");
     if let Some(bytes) = presets::read_asset_bytes(&metadata_path) {

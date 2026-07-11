@@ -1,7 +1,6 @@
 use crate::apps::{
-    AppCategory, AppFile, installed_content_hash, load_embedded_categories,
-    load_installed_categories, resolve_install_destination, source_bytes_for_file,
-    source_hash_for_file,
+    AppCategory, AppFile, installed_content_hash, load_active_categories,
+    resolve_install_destination, source_bytes_for_file, source_hash_for_file,
 };
 use crate::check::{FileStatus, build_shell_rows};
 use crate::colors;
@@ -9,8 +8,8 @@ use crate::config::Config;
 use crate::env::EnvConfig;
 use crate::install_core::AppManifest;
 use crate::path_display;
-use crate::shells::metadata::load_installed_categories as load_installed_shells;
-use crate::shells::metadata::{ShellCategory, load_embedded_categories as load_embedded_shells};
+use crate::shells::metadata::ShellCategory;
+use crate::shells::metadata::load_active_categories as load_active_shells;
 use anyhow::{Context, Result, bail};
 use similar::TextDiff;
 use std::collections::{BTreeMap, BTreeSet};
@@ -119,11 +118,7 @@ pub async fn handle_show(config: &Config, target: &str, diff: bool, verbose: boo
 }
 
 async fn collect_app_files(config: &Config) -> Result<Vec<AppShowFile>> {
-    let categories = if config.is_external_presets {
-        load_installed_categories(config, None).await?
-    } else {
-        load_embedded_categories(None)?
-    };
+    let categories = load_active_categories(config, None).await?;
     let manifest = AppManifest::load(config.shine_dir()).await?;
     let env = EnvConfig::load_or_init(config).await.ok();
     let empty_map = BTreeMap::new();
@@ -168,11 +163,7 @@ async fn collect_app_files(config: &Config) -> Result<Vec<AppShowFile>> {
 }
 
 async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShowFile>> {
-    let categories = if config.is_external_presets {
-        load_installed_shells(config, None).await?
-    } else {
-        load_embedded_shells(None)?
-    };
+    let categories = load_active_shells(config, None).await?;
 
     let shell_rows = build_shell_rows(config).await?;
     let mut files = Vec::new();

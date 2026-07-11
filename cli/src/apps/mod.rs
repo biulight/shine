@@ -5,7 +5,8 @@ mod report;
 mod upgrade;
 
 pub use metadata::{
-    AppCategory, AppFile, AppHook, AppListMode, load_embedded_categories, load_installed_categories,
+    AppCategory, AppFile, AppHook, AppListMode, load_active_categories, load_embedded_categories,
+    load_installed_categories,
 };
 use report::{
     print_already_managed, print_dry_run_install, print_force_removed,
@@ -148,11 +149,7 @@ async fn uninstall_app_entry(
 
 pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
     crate::config::print_presets_note(config);
-    let categories = if config.is_external_presets {
-        metadata::load_installed_categories(config, Some(category)).await?
-    } else {
-        metadata::load_embedded_categories(Some(category))?
-    };
+    let categories = metadata::load_active_categories(config, Some(category)).await?;
     let cat = categories
         .iter()
         .find(|c| c.name == category)
@@ -259,11 +256,7 @@ pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
 
 pub async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
-    let categories = if config.is_external_presets {
-        metadata::load_installed_categories(config, None).await?
-    } else {
-        metadata::load_embedded_categories(None)?
-    };
+    let categories = metadata::load_active_categories(config, None).await?;
 
     if categories.is_empty() {
         println!("{}", colors::dim("No app preset categories found."));
@@ -345,11 +338,7 @@ pub async fn handle_install(
         let _extract_report =
             crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
     }
-    let categories = if config.is_external_presets {
-        metadata::load_installed_categories(config, category).await?
-    } else {
-        metadata::load_embedded_categories(category)?
-    };
+    let categories = metadata::load_active_categories(config, category).await?;
     if let Some(category) = category
         && categories.is_empty()
     {
@@ -694,11 +683,7 @@ async fn uninstall_entries_for_category(
         .map(|entry| (entry.destination.clone(), entry.clone()))
         .collect();
 
-    let categories = if config.is_external_presets {
-        metadata::load_installed_categories(config, Some(category)).await?
-    } else {
-        metadata::load_embedded_categories(Some(category))?
-    };
+    let categories = metadata::load_active_categories(config, Some(category)).await?;
 
     for cat in categories.iter().filter(|cat| cat.name == category) {
         append_manifest_entries_for_category_destinations(
