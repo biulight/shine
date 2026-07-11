@@ -192,35 +192,20 @@ pub(super) fn print_source_command_activation_hint(
     );
 }
 
+fn sentinel() -> crate::sentinel::Sentinel<'static> {
+    crate::sentinel::Sentinel {
+        start: SENTINEL_START,
+        end: SENTINEL_END,
+    }
+}
+
 /// Remove the shine sentinel block from `content`, including one preceding blank line.
 pub(super) fn remove_sentinel_block(content: &str) -> String {
-    let start = match content.find(SENTINEL_START) {
-        Some(i) => i,
-        None => return content.to_string(),
-    };
-    let end_marker = match content.find(SENTINEL_END) {
-        Some(i) => i + SENTINEL_END.len(),
-        None => return content.to_string(),
-    };
-    // Consume the newline that follows SENTINEL_END.
-    let end = if content[end_marker..].starts_with('\n') {
-        end_marker + 1
-    } else {
-        end_marker
-    };
-    // Also consume one preceding blank line (the separator we wrote).
-    let block_start = if start > 0 && content[..start].ends_with("\n\n") {
-        start - 1
-    } else {
-        start
-    };
-    format!("{}{}", &content[..block_start], &content[end..])
+    crate::sentinel::remove_block_bytewise(content, &sentinel())
 }
 
 fn sentinel_block(content: &str) -> Option<&str> {
-    let start = content.find(SENTINEL_START)?;
-    let end = content[start..].find(SENTINEL_END)? + start + SENTINEL_END.len();
-    Some(&content[start..end])
+    crate::sentinel::find_block(content, &sentinel())
 }
 
 pub(super) async fn append_path_to_shell_config(

@@ -161,11 +161,14 @@ shine/
 │       ├── serve.rs          # Local HTTP server for shine-managed resources under ~/.shine/http/
 │       ├── list.rs           # Top-level `shine list` and status views
 │       ├── path_display.rs   # Home-relative path formatting for terminal output
+│       ├── proc.rs           # Small subprocess helpers with no domain logic (ensure_command)
+│       ├── sentinel.rs       # Shared sentinel-block find/extract/remove/insert primitives used
+│       │                     # by shells/profile.rs and sys/profile.rs
 │       ├── secret/
 │       │   ├── mod.rs        # BackendKind/EncryptRecipients, tagged-ciphertext router
 │       │   │                 # (encrypt_secret/decrypt_secret); untagged = gpg, `age:` = age
-│       │   ├── exec.rs       # Shared subprocess helpers (ensure_command, TempFile, base64
-│       │   │                 # encode/decode) used by both backends below
+│       │   ├── exec.rs       # Shared subprocess helpers (TempFile, base64 encode/decode) used
+│       │   │                 # by both backends below
 │       │   ├── gpg.rs        # GPG-backed encrypt/decrypt, untagged base64 ciphertext
 │       │   └── age.rs        # age-backed encrypt/decrypt, multi-recipient + Secure Enclave
 │       │                     # (age-plugin-se) identity support, `age:`-tagged ciphertext

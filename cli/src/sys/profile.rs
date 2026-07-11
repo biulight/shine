@@ -909,36 +909,23 @@ fi
     }
 }
 
+fn to_shared_sentinel<'a>(sentinel: (&'a str, &'a str)) -> crate::sentinel::Sentinel<'a> {
+    crate::sentinel::Sentinel {
+        start: sentinel.0,
+        end: sentinel.1,
+    }
+}
+
 fn insert_shell_profile_block(
     content: &str,
     desired_block: &str,
     position: ShellProfileBlockPosition,
 ) -> String {
-    match position {
-        ShellProfileBlockPosition::Start => {
-            let mut updated = String::new();
-            updated.push_str(desired_block);
-            if !content.is_empty() {
-                if !desired_block.ends_with('\n') {
-                    updated.push('\n');
-                }
-                updated.push('\n');
-                updated.push_str(content);
-            }
-            updated
-        }
-        ShellProfileBlockPosition::End => {
-            let mut updated = content.to_string();
-            if !updated.ends_with('\n') && !updated.is_empty() {
-                updated.push('\n');
-            }
-            if !updated.is_empty() {
-                updated.push('\n');
-            }
-            updated.push_str(desired_block);
-            updated
-        }
-    }
+    let at = match position {
+        ShellProfileBlockPosition::Start => crate::sentinel::InsertAt::Start,
+        ShellProfileBlockPosition::End => crate::sentinel::InsertAt::End,
+    };
+    crate::sentinel::insert_block(content, desired_block, at)
 }
 
 fn sentinel_order_is_valid(content: &str, first: (&str, &str), second: (&str, &str)) -> bool {
@@ -949,7 +936,7 @@ fn sentinel_order_is_valid(content: &str, first: (&str, &str), second: (&str, &s
 }
 
 fn trim_outer_blank_lines(content: &str) -> String {
-    content.trim_matches('\n').to_string()
+    crate::sentinel::trim_outer_blank_lines(content)
 }
 
 async fn remove_shell_profile_block(path: &Path, sentinel: (&str, &str)) -> Result<bool> {
@@ -967,38 +954,11 @@ async fn remove_shell_profile_block(path: &Path, sentinel: (&str, &str)) -> Resu
 }
 
 fn extract_sentinel_block<'a>(content: &'a str, sentinel: (&str, &str)) -> Option<&'a str> {
-    let start = content.find(sentinel.0)?;
-    let after_start = &content[start..];
-    let end = after_start.find(sentinel.1)? + sentinel.1.len();
-    let end = if after_start[end..].starts_with('\n') {
-        end + 1
-    } else {
-        end
-    };
-    Some(&after_start[..end])
+    crate::sentinel::extract_block_with_newline(content, &to_shared_sentinel(sentinel))
 }
 
 fn remove_sentinel_block(content: &str, sentinel: (&str, &str)) -> String {
-    let mut output = Vec::new();
-    let mut skip = false;
-    for line in content.lines() {
-        if line == sentinel.0 {
-            skip = true;
-            continue;
-        }
-        if line == sentinel.1 {
-            skip = false;
-            continue;
-        }
-        if !skip {
-            output.push(line);
-        }
-    }
-    let mut result = output.join("\n");
-    if content.ends_with('\n') && !result.is_empty() {
-        result.push('\n');
-    }
-    result
+    crate::sentinel::remove_block_linewise(content, &to_shared_sentinel(sentinel))
 }
 
 fn sys_loader_display(os_id: &str) -> String {

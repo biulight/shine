@@ -18,6 +18,7 @@ pub mod presets;
 pub mod privilege;
 pub mod proc;
 pub mod secret;
+pub mod sentinel;
 pub mod serve;
 pub mod shell_quote;
 pub mod shells;
