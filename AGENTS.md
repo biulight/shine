@@ -110,7 +110,14 @@ shine/
 │       │   ├── shell.rs      # ShellCommands enum
 │       │   └── sys.rs        # SysCommands enum
 │       ├── apps/
-│       │   ├── mod.rs        # App install/uninstall/list orchestration
+│       │   ├── mod.rs        # Module root: mod declarations + re-exports (handle_*,
+│       │   │                 # handle_init_template); shared kernel used by install/uninstall/
+│       │   │                 # info/upgrade (resolve_install_destination, source_*_for_file,
+│       │   │                 # desired/installed_content_hash, install_prepared_content,
+│       │   │                 # uninstall_app_entry, app_category_from_source/app_source_parts)
+│       │   ├── install.rs    # handle_install
+│       │   ├── uninstall.rs  # handle_uninstall, category-scoped manifest-entry selection
+│       │   ├── info.rs       # handle_info, handle_list
 │       │   ├── report.rs     # Install/uninstall outcome print_* helpers
 │       │   ├── upgrade.rs    # handle_upgrade_installed, stale-entry cleanup
 │       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile)
