@@ -1,10 +1,10 @@
 use anyhow::{Result, bail};
 use std::path::PathBuf;
 
-use cli::config::{self, Config};
-use cli::{colors, presets};
+use crate::config::{self, Config};
+use crate::{colors, presets};
 
-pub(super) async fn handle_presets_export(
+pub async fn handle_presets_export(
     config: &Config,
     dir: Option<PathBuf>,
     force: bool,
@@ -51,11 +51,7 @@ pub(super) async fn handle_presets_export(
     Ok(())
 }
 
-pub(super) async fn handle_presets_link(
-    config: &Config,
-    path: PathBuf,
-    create: bool,
-) -> Result<()> {
+pub async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
     use anyhow::Context as _;
 
     let raw = path.to_string_lossy();
@@ -127,7 +123,7 @@ pub(super) async fn handle_presets_link(
     Ok(())
 }
 
-pub(super) async fn handle_presets_unlink(config: &Config) -> Result<()> {
+pub async fn handle_presets_unlink(config: &Config) -> Result<()> {
     if config.presets_dir_override.is_none() {
         println!(
             "{}",
@@ -151,11 +147,7 @@ pub(super) async fn handle_presets_unlink(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn handle_overlay_link(
-    config: &Config,
-    path: PathBuf,
-    create: bool,
-) -> Result<()> {
+pub async fn handle_overlay_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
     use anyhow::Context as _;
 
     let raw = path.to_string_lossy();
@@ -213,7 +205,7 @@ pub(super) async fn handle_overlay_link(
     Ok(())
 }
 
-pub(super) async fn handle_overlay_unlink(config: &Config) -> Result<()> {
+pub async fn handle_overlay_unlink(config: &Config) -> Result<()> {
     if config.presets_overlay_dir_override.is_none() {
         println!(
             "{}",
@@ -237,7 +229,7 @@ pub(super) async fn handle_overlay_unlink(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn handle_overlay_show(config: &Config) -> Result<()> {
+pub fn handle_overlay_show(config: &Config) -> Result<()> {
     if let Some(dir) = &config.presets_overlay_dir_override {
         println!("{}", colors::presets_overlay_note(dir));
         println!("{}", colors::green("Active"));
@@ -253,8 +245,17 @@ pub(super) fn handle_overlay_show(config: &Config) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cli::test_support::env_lock;
+    use crate::test_support::env_lock;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::fs;
+
+    async fn make_temp_dir() -> PathBuf {
+        crate::test_support::make_temp_dir("shine-presets-commands-test").await
+    }
+
+    fn config_in(dir: &std::path::Path) -> Config {
+        crate::test_support::test_config(dir)
+    }
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
@@ -294,5 +295,148 @@ mod tests {
         // SAFETY: env_lock serializes process-global environment changes in tests.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
         tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_writes_presets_dir_to_config() {
+        let dir = make_temp_dir().await;
+        let presets = make_temp_dir().await;
+        let config = config_in(&dir);
+
+        handle_presets_link(&config, presets.clone(), false)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
+        assert!(
+            content.contains(presets.to_str().unwrap()),
+            "config.toml should contain the linked path"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+        fs::remove_dir_all(&presets).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_creates_dir_when_create_flag_set() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+        let new_dir = dir.join("new-presets");
+
+        handle_presets_link(&config, new_dir.clone(), true)
+            .await
+            .unwrap();
+
+        assert!(new_dir.exists(), "directory should have been created");
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_fails_when_path_missing_and_no_create() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+        let missing = dir.join("does-not-exist");
+
+        let err = handle_presets_link(&config, missing, false).await;
+        assert!(err.is_err());
+        let msg = err.unwrap_err().to_string();
+        assert!(
+            msg.contains("--create") || msg.contains("does not exist"),
+            "error should mention --create: {msg}"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_fails_when_path_is_a_file() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+        let file = dir.join("not-a-dir.txt");
+        fs::write(&file, b"hello").await.unwrap();
+
+        let err = handle_presets_link(&config, file, false).await;
+        assert!(err.is_err());
+        assert!(
+            err.unwrap_err().to_string().contains("not a directory"),
+            "error should mention 'not a directory'"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn link_is_noop_when_already_linked_to_same_path() {
+        let dir = make_temp_dir().await;
+        let presets = make_temp_dir().await;
+        let abs = tokio::fs::canonicalize(&presets)
+            .await
+            .unwrap_or(presets.clone());
+        let config = config_in(&dir).with_presets_dir_override(Some(abs.clone()));
+
+        // Should return Ok without error
+        handle_presets_link(&config, presets.clone(), false)
+            .await
+            .unwrap();
+
+        // Config file should not be written (config_in has no pre-existing file)
+        assert!(!dir.join("config.toml").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+        fs::remove_dir_all(&presets).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn link_warns_when_env_var_overrides() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        let presets = make_temp_dir().await;
+        let config = config_in(&dir);
+
+        // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
+        unsafe { std::env::set_var("SHINE_PRESETS", "/some/override") };
+        // Should succeed even with env var set
+        handle_presets_link(&config, presets.clone(), false)
+            .await
+            .unwrap();
+        // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
+        unsafe { std::env::remove_var("SHINE_PRESETS") };
+
+        fs::remove_dir_all(&dir).await.unwrap();
+        fs::remove_dir_all(&presets).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unlink_removes_presets_dir_key() {
+        let dir = make_temp_dir().await;
+        let presets = make_temp_dir().await;
+        let config = config_in(&dir).with_presets_dir_override(Some(presets.clone()));
+        // Write initial config with presets_dir set
+        config.save().await.unwrap();
+
+        handle_presets_unlink(&config).await.unwrap();
+
+        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
+        let parsed: toml::Table = toml::from_str(&content).unwrap();
+        assert!(
+            !parsed.contains_key("presets_dir"),
+            "presets_dir key must be absent after unlink"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+        fs::remove_dir_all(&presets).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unlink_is_noop_when_no_override_set() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+
+        // Should return Ok, no file written
+        handle_presets_unlink(&config).await.unwrap();
+        assert!(!dir.join("config.toml").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 }

@@ -5,23 +5,23 @@
 use anyhow::{Result, bail};
 use dialoguer::Select;
 
-use cli::config::Config;
-use cli::{apps, shells};
+use crate::config::Config;
+use crate::{apps, shells};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum PresetKind {
+enum PresetKind {
     Shell,
     App,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ShimResolution {
+enum ShimResolution {
     Found(PresetKind),
     Conflict,
     Missing,
 }
 
-pub(crate) async fn handle_install_shim(config: &Config, category: &str) -> Result<()> {
+pub async fn handle_install_shim(config: &Config, category: &str) -> Result<()> {
     match resolve_shim_category(config, category).await? {
         ShimResolution::Found(PresetKind::Shell) => {
             Box::pin(shells::handle_install(config, Some(category), false)).await
@@ -41,7 +41,7 @@ pub(crate) async fn handle_install_shim(config: &Config, category: &str) -> Resu
     }
 }
 
-pub(crate) async fn handle_reinstall_shim(config: &Config, category: &str) -> Result<()> {
+pub async fn handle_reinstall_shim(config: &Config, category: &str) -> Result<()> {
     match resolve_shim_category(config, category).await? {
         ShimResolution::Found(PresetKind::Shell) => {
             Box::pin(shells::handle_install(config, Some(category), true)).await
@@ -61,7 +61,7 @@ pub(crate) async fn handle_reinstall_shim(config: &Config, category: &str) -> Re
     }
 }
 
-pub(crate) async fn handle_uninstall_shim(config: &Config, category: &str) -> Result<()> {
+pub async fn handle_uninstall_shim(config: &Config, category: &str) -> Result<()> {
     match resolve_shim_category(config, category).await? {
         ShimResolution::Found(PresetKind::Shell) => {
             Box::pin(shells::handle_uninstall(
@@ -107,10 +107,7 @@ pub(crate) async fn handle_uninstall_shim(config: &Config, category: &str) -> Re
     }
 }
 
-pub(crate) async fn resolve_shim_category(
-    config: &Config,
-    category: &str,
-) -> Result<ShimResolution> {
+async fn resolve_shim_category(config: &Config, category: &str) -> Result<ShimResolution> {
     // Not migrated to metadata::load_active_categories: this guards with an
     // existence check before calling load_installed_categories in external
     // mode, deliberately returning 0 matches instead of propagating that

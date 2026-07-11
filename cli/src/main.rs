@@ -1,10 +1,6 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-#[cfg(test)]
-use std::path::PathBuf;
 
-#[cfg(test)]
-use cli::test_support;
 use cli::{
     apps, clear, colors, commands, completion, config, env, git_pull, list, serve, shells, show,
     ssh, sys, task, update_check, version,
@@ -22,23 +18,14 @@ use config::Config;
 use update_check::ReleaseChannel;
 use update_check::UpdateStatus;
 
-mod presets_commands;
-mod self_install;
-mod shim;
-
-use presets_commands::{
+use cli::presets_commands::{
     handle_overlay_link, handle_overlay_show, handle_overlay_unlink, handle_presets_export,
     handle_presets_link, handle_presets_unlink,
 };
-#[cfg(test)]
-use self_install::{
-    SelfInstallSync, config_upgrade_summary_parts, format_self_upgrade_message,
-    format_update_check_failure_warning, install_binary_atomically, sync_self_install_dest_from,
-};
-use self_install::{
+use cli::self_install::{
     handle_config_upgrade, handle_self_install, handle_self_upgrade, handle_update,
 };
-use shim::{handle_install_shim, handle_reinstall_shim, handle_uninstall_shim};
+use cli::shim::{handle_install_shim, handle_reinstall_shim, handle_uninstall_shim};
 
 fn main() -> Result<()> {
     completion::complete_from_env();
@@ -433,81 +420,6 @@ fn confirm_init(dir: &std::path::Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test_support::env_lock;
-    use tokio::fs;
-
-    async fn make_temp_dir() -> PathBuf {
-        crate::test_support::make_temp_dir("shine-main-test").await
-    }
-
-    fn config_in(dir: &std::path::Path) -> Config {
-        crate::test_support::test_config(dir)
-    }
-
-    #[test]
-    fn install_binary_atomically_overwrites_existing_dest() {
-        let dir = std::env::temp_dir().join(format!("shine-self-install-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let src = dir.join("new-shine");
-        let dest = dir.join("shine");
-
-        std::fs::write(&src, b"new").unwrap();
-        std::fs::write(&dest, b"old").unwrap();
-
-        install_binary_atomically(&src, &dest).unwrap();
-
-        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn sync_self_install_dest_creates_missing_parent() {
-        let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
-        let src = dir.join("new-shine");
-        let dest = dir.join("usr/local/bin/shine");
-
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(&src, b"new").unwrap();
-
-        let outcome = sync_self_install_dest_from(&src, &dest).await.unwrap();
-
-        assert!(matches!(outcome, SelfInstallSync::Synced));
-        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn sync_self_install_dest_skips_current_exe_path() {
-        let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
-        let src = dir.join("shine");
-
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(&src, b"new").unwrap();
-
-        let outcome = sync_self_install_dest_from(&src, &src).await.unwrap();
-
-        assert!(matches!(outcome, SelfInstallSync::AlreadyCurrent));
-        assert_eq!(std::fs::read(&src).unwrap(), b"new");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn self_install_errors_when_source_is_destination() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-        let current = std::env::current_exe().unwrap();
-
-        let err = handle_self_install(config, Some(current))
-            .await
-            .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("source and destination are the same binary"),
-            "error should explain self-overwrite: {err:#}"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
 
     #[test]
     fn cli_accepts_refactored_update_commands() {
@@ -641,78 +553,6 @@ mod tests {
             cli.command,
             Commands::Clear(ClearCommand { dry_run: true })
         ));
-    }
-
-    #[test]
-    fn update_check_failure_warning_is_non_fatal_wording() {
-        let err = anyhow::anyhow!(
-            "GitHub stable release request failed: HTTP 403 Forbidden: API rate limit exceeded"
-        );
-        let warning = format_update_check_failure_warning(&err);
-
-        assert!(warning.contains("warning: skipped shine version check"));
-        assert!(warning.contains("HTTP 403 Forbidden"));
-        assert!(!warning.contains("Update check failed"));
-    }
-
-    #[test]
-    fn config_upgrade_summary_parts_includes_only_nonzero_counts() {
-        assert_eq!(
-            config_upgrade_summary_parts(2, 0, 0, 1),
-            vec!["2 updated".to_string(), "1 skipped".to_string()]
-        );
-    }
-
-    #[test]
-    fn config_upgrade_summary_parts_empty_when_all_zero() {
-        assert!(config_upgrade_summary_parts(0, 0, 0, 0).is_empty());
-    }
-
-    #[test]
-    fn config_upgrade_summary_parts_reports_all_four_counters() {
-        assert_eq!(
-            config_upgrade_summary_parts(1, 2, 3, 4),
-            vec![
-                "1 updated".to_string(),
-                "2 user-modified (kept)".to_string(),
-                "3 link conflicts".to_string(),
-                "4 skipped".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn format_self_upgrade_message_handles_stable_channel() {
-        assert_eq!(
-            format_self_upgrade_message(ReleaseChannel::Stable, "0.21.3", "0.21.4", "v0.21.4",),
-            "Upgraded shine from 0.21.3 to 0.21.4."
-        );
-    }
-
-    #[test]
-    fn format_self_upgrade_message_handles_stable_to_preview_install() {
-        assert_eq!(
-            format_self_upgrade_message(
-                ReleaseChannel::Preview,
-                "0.21.3",
-                "0.21.4+preview.237a8a0",
-                "preview",
-            ),
-            "Installed shine preview 0.21.4+preview.237a8a0 over stable 0.21.3 (preview)."
-        );
-    }
-
-    #[test]
-    fn format_self_upgrade_message_handles_preview_to_preview_update() {
-        assert_eq!(
-            format_self_upgrade_message(
-                ReleaseChannel::Preview,
-                "0.21.4+preview.1111111",
-                "0.21.4+preview.237a8a0",
-                "preview",
-            ),
-            "Updated shine preview from 0.21.4+preview.1111111 to 0.21.4+preview.237a8a0 (preview)."
-        );
     }
 
     #[test]
@@ -1438,148 +1278,5 @@ mod tests {
         assert!(Cli::try_parse_from(["shine", "presets", "export"]).is_err());
         assert!(Cli::try_parse_from(["shine", "presets", "link", "/tmp/presets"]).is_err());
         assert!(Cli::try_parse_from(["shine", "presets", "unlink"]).is_err());
-    }
-
-    #[tokio::test]
-    async fn link_writes_presets_dir_to_config() {
-        let dir = make_temp_dir().await;
-        let presets = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        handle_presets_link(&config, presets.clone(), false)
-            .await
-            .unwrap();
-
-        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
-        assert!(
-            content.contains(presets.to_str().unwrap()),
-            "config.toml should contain the linked path"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-        fs::remove_dir_all(&presets).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn link_creates_dir_when_create_flag_set() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-        let new_dir = dir.join("new-presets");
-
-        handle_presets_link(&config, new_dir.clone(), true)
-            .await
-            .unwrap();
-
-        assert!(new_dir.exists(), "directory should have been created");
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn link_fails_when_path_missing_and_no_create() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-        let missing = dir.join("does-not-exist");
-
-        let err = handle_presets_link(&config, missing, false).await;
-        assert!(err.is_err());
-        let msg = err.unwrap_err().to_string();
-        assert!(
-            msg.contains("--create") || msg.contains("does not exist"),
-            "error should mention --create: {msg}"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn link_fails_when_path_is_a_file() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-        let file = dir.join("not-a-dir.txt");
-        fs::write(&file, b"hello").await.unwrap();
-
-        let err = handle_presets_link(&config, file, false).await;
-        assert!(err.is_err());
-        assert!(
-            err.unwrap_err().to_string().contains("not a directory"),
-            "error should mention 'not a directory'"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn link_is_noop_when_already_linked_to_same_path() {
-        let dir = make_temp_dir().await;
-        let presets = make_temp_dir().await;
-        let abs = tokio::fs::canonicalize(&presets)
-            .await
-            .unwrap_or(presets.clone());
-        let config = config_in(&dir).with_presets_dir_override(Some(abs.clone()));
-
-        // Should return Ok without error
-        handle_presets_link(&config, presets.clone(), false)
-            .await
-            .unwrap();
-
-        // Config file should not be written (config_in has no pre-existing file)
-        assert!(!dir.join("config.toml").exists());
-
-        fs::remove_dir_all(&dir).await.unwrap();
-        fs::remove_dir_all(&presets).await.unwrap();
-    }
-
-    #[allow(clippy::await_holding_lock)]
-    #[tokio::test(flavor = "current_thread")]
-    async fn link_warns_when_env_var_overrides() {
-        let _guard = env_lock();
-        let dir = make_temp_dir().await;
-        let presets = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
-        unsafe { std::env::set_var("SHINE_PRESETS", "/some/override") };
-        // Should succeed even with env var set
-        handle_presets_link(&config, presets.clone(), false)
-            .await
-            .unwrap();
-        // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
-        unsafe { std::env::remove_var("SHINE_PRESETS") };
-
-        fs::remove_dir_all(&dir).await.unwrap();
-        fs::remove_dir_all(&presets).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn unlink_removes_presets_dir_key() {
-        let dir = make_temp_dir().await;
-        let presets = make_temp_dir().await;
-        let config = config_in(&dir).with_presets_dir_override(Some(presets.clone()));
-        // Write initial config with presets_dir set
-        config.save().await.unwrap();
-
-        handle_presets_unlink(&config).await.unwrap();
-
-        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
-        let parsed: toml::Table = toml::from_str(&content).unwrap();
-        assert!(
-            !parsed.contains_key("presets_dir"),
-            "presets_dir key must be absent after unlink"
-        );
-
-        fs::remove_dir_all(&dir).await.unwrap();
-        fs::remove_dir_all(&presets).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn unlink_is_noop_when_no_override_set() {
-        let dir = make_temp_dir().await;
-        let config = config_in(&dir);
-
-        // Should return Ok, no file written
-        handle_presets_unlink(&config).await.unwrap();
-        assert!(!dir.join("config.toml").exists());
-
-        fs::remove_dir_all(&dir).await.unwrap();
     }
 }

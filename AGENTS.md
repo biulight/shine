@@ -93,11 +93,15 @@ shine/
 │       ├── lib.rs            # Module tree root for the `cli` library crate
 │       ├── main.rs           # Bin crate root: `fn main`, `run()` dispatch, `init` handler
 │       ├── shim.rs           # Top-level install/reinstall/uninstall <category>:
-│       │                     # infers shell vs app preset, prompts on conflict
+│       │                     # infers shell vs app preset, prompts on conflict.
+│       │                     # `pub mod` in lib.rs (not bin-private), so its unit
+│       │                     # tests run under `cargo test --lib` too.
 │       ├── home.rs           # effective_home_dir (sudo-aware), tilde/full path expansion
-│       ├── presets_commands.rs # export/link/unlink, overlay link/unlink/show
+│       ├── presets_commands.rs # export/link/unlink, overlay link/unlink/show.
+│       │                     # `pub mod` in lib.rs, same lib-testability reasoning as shim.rs.
 │       ├── self_install.rs   # update/self-upgrade/upgrade-installed-configs,
-│       │                     # atomic self-install binary copy
+│       │                     # atomic self-install binary copy. `pub mod` in lib.rs,
+│       │                     # same lib-testability reasoning as shim.rs.
 │       ├── commands/
 │       │   ├── mod.rs        # Clap subcommand enums (ShellCommands, AppCommands, etc.)
 │       │   ├── cli.rs        # Cli, Commands, CompletionShell/Commands, and the

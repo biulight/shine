@@ -1,12 +1,12 @@
 use anyhow::{Result, bail};
 
-use cli::config::{self, Config};
-use cli::update_check::{self, ReleaseChannel, UpdateStatus};
-use cli::{
+use crate::config::{self, Config};
+use crate::update_check::{self, ReleaseChannel, UpdateStatus};
+use crate::{
     apps, colors, env, install_core, list, output, platform, privilege, shells, sys, version,
 };
 
-pub(super) async fn handle_update(config: &Config, verbose: bool, refresh: bool) -> Result<()> {
+pub async fn handle_update(config: &Config, verbose: bool, refresh: bool) -> Result<()> {
     let mut printed_update = if verbose {
         Box::pin(list::handle_status_list(config)).await?;
         println!();
@@ -73,14 +73,11 @@ pub(super) async fn handle_update(config: &Config, verbose: bool, refresh: bool)
     Ok(())
 }
 
-pub(super) fn format_update_check_failure_warning(err: &anyhow::Error) -> String {
+fn format_update_check_failure_warning(err: &anyhow::Error) -> String {
     colors::yellow_stderr(&format!("warning: skipped shine version check: {err}"))
 }
 
-pub(super) async fn handle_self_upgrade(
-    config: &Config,
-    channel: Option<ReleaseChannel>,
-) -> Result<()> {
+pub async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
     let current = version::display();
     let selected_channel = channel.unwrap_or(ReleaseChannel::Stable);
     let force_install = channel.is_some();
@@ -127,7 +124,7 @@ pub(super) async fn handle_self_upgrade(
     Ok(())
 }
 
-pub(super) fn format_self_upgrade_message(
+fn format_self_upgrade_message(
     channel: ReleaseChannel,
     previous_display: &str,
     installed_version: &str,
@@ -151,7 +148,7 @@ pub(super) fn format_self_upgrade_message(
     }
 }
 
-pub(super) async fn handle_config_upgrade(
+pub async fn handle_config_upgrade(
     config: &Config,
     verbose: bool,
     prune_stale: bool,
@@ -191,7 +188,7 @@ pub(super) async fn handle_config_upgrade(
     Ok(())
 }
 
-pub(super) fn config_upgrade_summary_parts(
+fn config_upgrade_summary_parts(
     updated: usize,
     user_modified: usize,
     link_conflicts: usize,
@@ -212,7 +209,7 @@ pub(super) fn config_upgrade_summary_parts(
 
 /// After a successful self-upgrade, try to sync the new binary to the self-install destination.
 /// If the copy fails due to permissions, print a targeted hint instead of failing.
-pub(super) async fn sync_self_install_dest(config: &Config, src: &std::path::Path) {
+async fn sync_self_install_dest(config: &Config, src: &std::path::Path) {
     let dest = match &config.self_install_dest {
         Some(d) => d,
         None => return,
@@ -240,12 +237,12 @@ pub(super) async fn sync_self_install_dest(config: &Config, src: &std::path::Pat
     }
 }
 
-pub(super) enum SelfInstallSync {
+enum SelfInstallSync {
     Synced,
     AlreadyCurrent,
 }
 
-pub(super) async fn sync_self_install_dest_from(
+async fn sync_self_install_dest_from(
     src: &std::path::Path,
     dest: &std::path::Path,
 ) -> Result<SelfInstallSync> {
@@ -262,7 +259,7 @@ pub(super) async fn sync_self_install_dest_from(
         .map(|()| SelfInstallSync::Synced)
 }
 
-pub(super) fn has_io_error_kind(err: &anyhow::Error, kind: std::io::ErrorKind) -> bool {
+fn has_io_error_kind(err: &anyhow::Error, kind: std::io::ErrorKind) -> bool {
     err.chain().any(|cause| {
         cause
             .downcast_ref::<std::io::Error>()
@@ -270,7 +267,7 @@ pub(super) fn has_io_error_kind(err: &anyhow::Error, kind: std::io::ErrorKind) -
     })
 }
 
-pub(super) async fn handle_self_install(
+pub async fn handle_self_install(
     mut config: Config,
     dest: Option<std::path::PathBuf>,
 ) -> Result<()> {
@@ -318,11 +315,11 @@ pub(super) async fn handle_self_install(
     Ok(())
 }
 
-pub(super) fn self_install_failure_hint(dest: &std::path::Path) -> String {
+fn self_install_failure_hint(dest: &std::path::Path) -> String {
     format!("failed to copy to {}", dest.display())
 }
 
-pub(super) fn print_self_install_activation_hint(dest: &std::path::Path) {
+fn print_self_install_activation_hint(dest: &std::path::Path) {
     let Some(dir) = dest.parent() else {
         return;
     };
@@ -343,10 +340,7 @@ pub(super) fn print_self_install_activation_hint(dest: &std::path::Path) {
     }
 }
 
-pub(super) fn install_binary_atomically(
-    src: &std::path::Path,
-    dest: &std::path::Path,
-) -> Result<()> {
+fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
     use anyhow::Context as _;
 
     let parent = dest
@@ -389,7 +383,7 @@ pub(super) fn install_binary_atomically(
 /// owned by root). Mirrors the auto-elevation already used for privileged
 /// app-config writes in `apps/file_ops.rs::install_bytes_admin`, so the user
 /// is prompted once instead of being told to manually re-run with `sudo`.
-pub(super) async fn install_binary_with_elevation(
+async fn install_binary_with_elevation(
     src: &std::path::Path,
     dest: &std::path::Path,
 ) -> Result<()> {
@@ -454,4 +448,154 @@ async fn install_binary_privileged(src: &std::path::Path, dest: &std::path::Path
     // an elevated terminal instead. Fall back to the plain unprivileged copy
     // so the caller's original error surfaces if it still fails.
     install_binary_atomically(src, dest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn make_temp_dir() -> std::path::PathBuf {
+        crate::test_support::make_temp_dir("shine-self-install-test").await
+    }
+
+    fn config_in(dir: &std::path::Path) -> Config {
+        crate::test_support::test_config(dir)
+    }
+
+    #[test]
+    fn install_binary_atomically_overwrites_existing_dest() {
+        let dir = std::env::temp_dir().join(format!("shine-self-install-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("new-shine");
+        let dest = dir.join("shine");
+
+        std::fs::write(&src, b"new").unwrap();
+        std::fs::write(&dest, b"old").unwrap();
+
+        install_binary_atomically(&src, &dest).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_self_install_dest_creates_missing_parent() {
+        let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
+        let src = dir.join("new-shine");
+        let dest = dir.join("usr/local/bin/shine");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&src, b"new").unwrap();
+
+        let outcome = sync_self_install_dest_from(&src, &dest).await.unwrap();
+
+        assert!(matches!(outcome, SelfInstallSync::Synced));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_self_install_dest_skips_current_exe_path() {
+        let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
+        let src = dir.join("shine");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&src, b"new").unwrap();
+
+        let outcome = sync_self_install_dest_from(&src, &src).await.unwrap();
+
+        assert!(matches!(outcome, SelfInstallSync::AlreadyCurrent));
+        assert_eq!(std::fs::read(&src).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn self_install_errors_when_source_is_destination() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+        let current = std::env::current_exe().unwrap();
+
+        let err = handle_self_install(config, Some(current))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("source and destination are the same binary"),
+            "error should explain self-overwrite: {err:#}"
+        );
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn update_check_failure_warning_is_non_fatal_wording() {
+        let err = anyhow::anyhow!(
+            "GitHub stable release request failed: HTTP 403 Forbidden: API rate limit exceeded"
+        );
+        let warning = format_update_check_failure_warning(&err);
+
+        assert!(warning.contains("warning: skipped shine version check"));
+        assert!(warning.contains("HTTP 403 Forbidden"));
+        assert!(!warning.contains("Update check failed"));
+    }
+
+    #[test]
+    fn config_upgrade_summary_parts_includes_only_nonzero_counts() {
+        assert_eq!(
+            config_upgrade_summary_parts(2, 0, 0, 1),
+            vec!["2 updated".to_string(), "1 skipped".to_string()]
+        );
+    }
+
+    #[test]
+    fn config_upgrade_summary_parts_empty_when_all_zero() {
+        assert!(config_upgrade_summary_parts(0, 0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn config_upgrade_summary_parts_reports_all_four_counters() {
+        assert_eq!(
+            config_upgrade_summary_parts(1, 2, 3, 4),
+            vec![
+                "1 updated".to_string(),
+                "2 user-modified (kept)".to_string(),
+                "3 link conflicts".to_string(),
+                "4 skipped".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn format_self_upgrade_message_handles_stable_channel() {
+        assert_eq!(
+            format_self_upgrade_message(ReleaseChannel::Stable, "0.21.3", "0.21.4", "v0.21.4",),
+            "Upgraded shine from 0.21.3 to 0.21.4."
+        );
+    }
+
+    #[test]
+    fn format_self_upgrade_message_handles_stable_to_preview_install() {
+        assert_eq!(
+            format_self_upgrade_message(
+                ReleaseChannel::Preview,
+                "0.21.3",
+                "0.21.4+preview.237a8a0",
+                "preview",
+            ),
+            "Installed shine preview 0.21.4+preview.237a8a0 over stable 0.21.3 (preview)."
+        );
+    }
+
+    #[test]
+    fn format_self_upgrade_message_handles_preview_to_preview_update() {
+        assert_eq!(
+            format_self_upgrade_message(
+                ReleaseChannel::Preview,
+                "0.21.4+preview.1111111",
+                "0.21.4+preview.237a8a0",
+                "preview",
+            ),
+            "Updated shine preview from 0.21.4+preview.1111111 to 0.21.4+preview.237a8a0 (preview)."
+        );
+    }
 }
