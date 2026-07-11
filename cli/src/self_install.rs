@@ -156,10 +156,18 @@ pub async fn handle_config_upgrade(
     println!("{}", colors::bold("Upgrading installed configs"));
     config::print_presets_note(config);
 
+    let mut sep = output::SectionSeparator::new();
+
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
-    let shell_report = Box::pin(shells::handle_upgrade_installed(config, verbose)).await?;
-    let app_report = Box::pin(apps::handle_upgrade_installed(config, prune_stale)).await?;
-    let sys_report = Box::pin(sys::handle_upgrade_managed(config)).await?;
+    let shell_report =
+        Box::pin(shells::handle_upgrade_installed(config, verbose, &mut sep)).await?;
+    let app_report = Box::pin(apps::handle_upgrade_installed(
+        config,
+        prune_stale,
+        &mut sep,
+    ))
+    .await?;
+    let sys_report = Box::pin(sys::handle_upgrade_managed(config, &mut sep)).await?;
 
     let updated = env_report.updated
         + shell_report.templates_updated

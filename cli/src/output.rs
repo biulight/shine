@@ -4,6 +4,32 @@ const SUMMARY_LABEL_WIDTH: usize = 15;
 const DETAIL_LABEL_WIDTH: usize = 15;
 const DETAIL_STATUS_WIDTH: usize = 13;
 
+/// Tracks whether any upgrade section has printed content yet, so a run
+/// covering several optional sections (shell presets, app configs, managed
+/// system configs) can emit exactly one blank-line separator between two
+/// sections that both printed something — never a leading separator before
+/// the first section, and never a stray blank line when a section had
+/// nothing to report.
+#[derive(Default)]
+pub struct SectionSeparator {
+    printed: bool,
+}
+
+impl SectionSeparator {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Call immediately before printing a section's header, only on the path
+    /// where the section is actually about to print something.
+    pub fn begin(&mut self) {
+        if self.printed {
+            println!();
+        }
+        self.printed = true;
+    }
+}
+
 fn join_summary(parts: &[String]) -> String {
     if parts.is_empty() {
         colors::dim("nothing changed")

@@ -108,6 +108,7 @@ pub async fn handle_install(config: &Config, category: Option<&str>, force: bool
 pub async fn handle_upgrade_installed(
     config: &Config,
     verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
 ) -> Result<ShellUpgradeReport> {
     let all_categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
@@ -140,6 +141,7 @@ pub async fn handle_upgrade_installed(
         .map(|(cat_name, _)| cat_name.clone())
         .collect();
 
+    sep.begin();
     output::summary_line(
         "Shell Presets",
         &[colors::dim(&format!(
@@ -169,7 +171,7 @@ pub async fn handle_upgrade_installed(
     let script_pairs = build_script_pairs(config, &categories);
     let template_report = apply_template_to_scripts(config, &script_pairs).await?;
     for name in &template_report.updated {
-        println!("  {}  {}", colors::symbol("✓"), name);
+        println!("  {} {}", colors::symbol("✓"), name);
     }
 
     let link_specs = build_link_specs(config, &categories);
@@ -1093,7 +1095,10 @@ mod tests {
         .unwrap();
         make_executable(&setproxy).await;
 
-        let report = handle_upgrade_installed(&config, false).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(
             report.templates_updated, 1,

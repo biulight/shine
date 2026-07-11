@@ -13,7 +13,7 @@ pub(super) fn print_install_success(
     config: &Config,
 ) {
     println!(
-        "  {}  {}{}  {}  {}",
+        "  {} {}{}  {}  {}",
         colors::symbol("✓"),
         label,
         transform_label,
@@ -76,7 +76,7 @@ pub(super) fn print_install_error(label: &str, err: &anyhow::Error) {
 
 pub(super) fn print_stale_removed(config: &Config, destination: &Path, note: impl AsRef<str>) {
     println!(
-        "  {}  {}  {}",
+        "  {} {}  {}",
         colors::symbol("✓"),
         colors::dim(&path_display::format_home(destination, &config.home_dir)),
         colors::dim(note.as_ref()),
@@ -85,7 +85,7 @@ pub(super) fn print_stale_removed(config: &Config, destination: &Path, note: imp
 
 pub(super) fn print_stale_not_found(config: &Config, destination: &Path) {
     println!(
-        "  {}  {}  {}",
+        "  {} {}  {}",
         colors::dim("-"),
         colors::dim(&path_display::format_home(destination, &config.home_dir)),
         colors::dim("stale destination missing, manifest cleaned"),

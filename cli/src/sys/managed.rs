@@ -32,7 +32,7 @@ impl SysAction {
 }
 
 pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) -> Result<()> {
-    let report = run_managed(config, item, SysAction::Apply, dry_run, true).await?;
+    let report = run_managed(config, item, SysAction::Apply, dry_run, true, None).await?;
     if report.failed > 0 {
         bail!(
             "{} managed system configuration item(s) failed",
@@ -43,15 +43,18 @@ pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) ->
 }
 
 pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Result<()> {
-    let report = run_managed(config, Some(item), SysAction::Remove, dry_run, true).await?;
+    let report = run_managed(config, Some(item), SysAction::Remove, dry_run, true, None).await?;
     if report.failed > 0 {
         bail!("failed to remove managed system configuration `{item}`");
     }
     Ok(())
 }
 
-pub async fn handle_upgrade_managed(config: &Config) -> Result<SysUpgradeReport> {
-    run_managed(config, None, SysAction::Apply, false, false).await
+pub async fn handle_upgrade_managed(
+    config: &Config,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<SysUpgradeReport> {
+    run_managed(config, None, SysAction::Apply, false, false, Some(sep)).await
 }
 
 pub async fn managed_updates(config: &Config) -> Result<Vec<SysUpdateRow>> {
@@ -114,9 +117,10 @@ async fn run_managed(
     action: SysAction,
     dry_run: bool,
     explicit: bool,
+    sep: Option<&mut crate::output::SectionSeparator>,
 ) -> Result<SysUpgradeReport> {
     let os_id = detect_os_id().await?;
-    run_managed_for_os(config, &os_id, requested, action, dry_run, explicit).await
+    run_managed_for_os(config, &os_id, requested, action, dry_run, explicit, sep).await
 }
 
 async fn run_managed_for_os(
@@ -126,6 +130,7 @@ async fn run_managed_for_os(
     action: SysAction,
     dry_run: bool,
     explicit: bool,
+    mut sep: Option<&mut crate::output::SectionSeparator>,
 ) -> Result<SysUpgradeReport> {
     let mut run_manifest = SysRunManifest::load(config.shine_dir()).await?;
 
@@ -141,6 +146,9 @@ async fn run_managed_for_os(
         && let Some(receipt) = entry.receipt.as_ref()
         && receipt.driver() != SysDriverKind::Script
     {
+        if let Some(sep) = &mut sep {
+            sep.begin();
+        }
         println!("{}", colors::bold("Remove Managed System Config"));
         println!("  {} {}", colors::symbol("•"), entry.label);
         if receipt.requires_admin() && !dry_run && !authorize_admin(1).await? {
@@ -242,6 +250,9 @@ async fn run_managed_for_os(
         return Ok(SysUpgradeReport::default());
     }
 
+    if let Some(sep) = &mut sep {
+        sep.begin();
+    }
     println!(
         "{}",
         colors::bold(match action {
@@ -565,6 +576,7 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
             SysAction::Apply,
             false,
             true,
+            None,
         )
         .await
         .unwrap();
@@ -576,9 +588,17 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
                 .any(|entry| { entry.item_id == "managed-test" && entry.managed })
         );
 
-        let report = run_managed_for_os(&config, "fakeos", None, SysAction::Apply, false, false)
-            .await
-            .unwrap();
+        let report = run_managed_for_os(
+            &config,
+            "fakeos",
+            None,
+            SysAction::Apply,
+            false,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(report.updated, 1);
         run_managed_for_os(
             &config,
@@ -587,6 +607,7 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
             SysAction::Remove,
             false,
             true,
+            None,
         )
         .await
         .unwrap();
@@ -716,6 +737,7 @@ target = {:?}
             SysAction::Apply,
             false,
             true,
+            None,
         )
         .await
         .unwrap();
@@ -730,6 +752,7 @@ target = {:?}
             SysAction::Remove,
             false,
             true,
+            None,
         )
         .await
         .unwrap();

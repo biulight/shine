@@ -386,7 +386,10 @@ mod tests {
         let dest = dir.join(".config/sample/daemon.json");
         let before = fs::read(&dest).await.unwrap();
 
-        let report = handle_upgrade_installed(&config, false).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(report.updated, 0, "up-to-date app config must not update");
         assert_eq!(report.skipped, 1, "up-to-date app config should be skipped");
@@ -423,7 +426,10 @@ mod tests {
             b"{\n  \"proxy\": \"@@PROXY_HOST@@\",\n  \"updated\": true\n}\n",
         )
         .await;
-        let report = handle_upgrade_installed(&config, false).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(report.updated, 1, "changed source should update");
         assert_eq!(report.skipped, 0);
@@ -474,7 +480,10 @@ mod tests {
         )
         .await;
 
-        let report = handle_upgrade_installed(&config, false).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(report.updated, 1);
         assert_eq!(fs::read_to_string(&marker).await.unwrap(), "x");
@@ -510,7 +519,10 @@ mod tests {
         handle_install(&config, Some("sample"), false, false)
             .await
             .unwrap();
-        let report = handle_upgrade_installed(&config, false).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(report.updated, 0);
         assert!(!marker.exists(), "unchanged config must not run hook");
@@ -553,7 +565,10 @@ mod tests {
         )
         .await;
 
-        let report = handle_upgrade_installed(&config, false).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(report.updated, 1);
         assert!(
@@ -589,7 +604,10 @@ mod tests {
         )
         .await;
 
-        let report = handle_upgrade_installed(&config, false).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap();
 
         let new_dest = dir.join(".config/sample/themes/theme.conf");
         assert_eq!(report.updated, 1, "new app file should be installed");
@@ -641,7 +659,10 @@ mod tests {
             .unwrap();
         fs::write(&new_dest, b"user-owned\n").await.unwrap();
 
-        let report = handle_upgrade_installed(&config, false).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(report.updated, 0, "unmanaged existing file must not update");
         assert_eq!(
@@ -681,7 +702,10 @@ mod tests {
             .await
             .unwrap();
 
-        let report = handle_upgrade_installed(&config, true).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, true, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(report.updated, 1, "stale cleanup should count as a change");
         assert_eq!(report.skipped, 0);
@@ -719,7 +743,10 @@ mod tests {
             .await
             .unwrap();
 
-        let report = handle_upgrade_installed(&config, true).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, true, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(report.updated, 1, "manifest cleanup should count as change");
         assert_eq!(report.skipped, 0);
@@ -755,7 +782,10 @@ mod tests {
             .await
             .unwrap();
 
-        let report = handle_upgrade_installed(&config, false).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
@@ -793,7 +823,10 @@ mod tests {
             .await
             .unwrap();
 
-        let report = handle_upgrade_installed(&config, true).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, true, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
@@ -840,7 +873,10 @@ mod tests {
         .await
         .unwrap();
 
-        let report = handle_upgrade_installed(&config, true).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, true, &mut sep)
+            .await
+            .unwrap();
 
         let dest = dir.join(".config/sample/daemon.json");
         assert_eq!(
@@ -880,7 +916,10 @@ mod tests {
         let dest = dir.join(".config/sample/daemon.json");
         fs::write(&dest, b"{\"user\":true}\n").await.unwrap();
 
-        let report = handle_upgrade_installed(&config, false).await.unwrap();
+        let mut sep = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut sep)
+            .await
+            .unwrap();
 
         assert_eq!(
             report.updated, 0,
