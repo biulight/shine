@@ -14,6 +14,7 @@ pub mod output;
 pub mod path_display;
 pub mod persist;
 pub mod platform;
+pub mod preset_meta;
 pub mod presets;
 pub mod privilege;
 pub mod proc;
