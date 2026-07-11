@@ -1,13 +1,9 @@
 mod annotation;
-pub mod file_ops;
 mod json_merge;
-mod manifest;
 mod metadata;
 mod report;
-mod transforms;
 mod upgrade;
 
-pub use manifest::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
 pub use metadata::{
     AppCategory, AppFile, AppHook, AppListMode, load_embedded_categories, load_installed_categories,
 };
@@ -18,12 +14,15 @@ use report::{
     print_uninstall_dry_run, print_uninstall_error, print_uninstall_not_found,
     print_user_modified_kept,
 };
-pub use transforms::apply as apply_transforms;
 pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
 
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::install_core::manifest::{
+    self, AppEntry, AppInstallStrategy, AppManifest, hash_content,
+};
+use crate::install_core::{file_ops, transforms};
 use crate::output;
 use crate::path_display;
 use crate::presets;

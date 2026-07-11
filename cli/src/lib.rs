@@ -9,6 +9,7 @@ pub mod config;
 pub mod env;
 pub mod git_pull;
 pub mod home;
+pub mod install_core;
 pub mod list;
 pub mod output;
 pub mod path_display;

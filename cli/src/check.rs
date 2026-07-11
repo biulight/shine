@@ -1,10 +1,11 @@
 use crate::apps::{
-    AppCategory, AppListMode, AppManifest, apply_transforms, installed_content_hash,
-    resolve_install_destination, source_hash_for_file,
+    AppCategory, AppListMode, installed_content_hash, resolve_install_destination,
+    source_hash_for_file,
 };
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::install_core::{AppManifest, apply_transforms};
 use crate::path_display;
 use anyhow::Result;
 use std::collections::BTreeMap;
@@ -309,8 +310,9 @@ async fn app_file_row_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::{AppFile, AppInstallStrategy};
+    use crate::apps::AppFile;
     use crate::config::Config;
+    use crate::install_core::AppInstallStrategy;
     #[cfg(windows)]
     use crate::test_support::env_lock;
     use std::path::PathBuf;

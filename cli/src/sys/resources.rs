@@ -1,10 +1,10 @@
 use super::{SysDriverKind, SysItem};
-use crate::apps::file_ops::{
+use crate::config::{Config, full_expand_with_home};
+use crate::install_core::file_ops::{
     InstallOutcome, UninstallOutcome, install_bytes, install_bytes_admin, uninstall_entry,
     uninstall_entry_admin,
 };
-use crate::apps::{AppEntry, AppInstallStrategy, apply_transforms, hash_content};
-use crate::config::{Config, full_expand_with_home};
+use crate::install_core::{AppEntry, AppInstallStrategy, apply_transforms, hash_content};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

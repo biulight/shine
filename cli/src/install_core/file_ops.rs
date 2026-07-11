@@ -360,8 +360,8 @@ fn backup_path(dest: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::AppInstallStrategy;
-    use crate::apps::manifest::AppEntry;
+    use crate::install_core::AppInstallStrategy;
+    use crate::install_core::manifest::AppEntry;
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-fileops").await

@@ -1,5 +1,5 @@
 use crate::apps::{
-    AppCategory, AppFile, AppManifest, installed_content_hash, load_embedded_categories,
+    AppCategory, AppFile, installed_content_hash, load_embedded_categories,
     load_installed_categories, resolve_install_destination, source_bytes_for_file,
     source_hash_for_file,
 };
@@ -7,6 +7,7 @@ use crate::check::{FileStatus, build_shell_rows};
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::install_core::AppManifest;
 use crate::path_display;
 use crate::shells::metadata::load_installed_categories as load_installed_shells;
 use crate::shells::metadata::{ShellCategory, load_embedded_categories as load_embedded_shells};
@@ -36,7 +37,7 @@ struct AppShowFile {
     file: AppFile,
     destination: PathBuf,
     status: FileStatus,
-    manifest_entry: Option<crate::apps::AppEntry>,
+    manifest_entry: Option<crate::install_core::AppEntry>,
 }
 
 #[derive(Clone)]
@@ -645,7 +646,7 @@ async fn app_file_status(
     config: &Config,
     category: &AppCategory,
     file: &AppFile,
-    entry: &crate::apps::AppEntry,
+    entry: &crate::install_core::AppEntry,
     env: &BTreeMap<String, String>,
 ) -> FileStatus {
     if !entry.destination.exists() {
@@ -817,8 +818,9 @@ async fn shell_expected_bytes(config: &Config, item: &ShellShowFile) -> Result<O
     }
 
     let env = EnvConfig::load_or_init(config).await?;
-    let rendered = crate::apps::apply_transforms(&["template".to_string()], &source, env.as_map())
-        .with_context(|| format!("rendering shell template: {}", item.source_path.display()))?;
+    let rendered =
+        crate::install_core::apply_transforms(&["template".to_string()], &source, env.as_map())
+            .with_context(|| format!("rendering shell template: {}", item.source_path.display()))?;
     Ok(Some(rendered))
 }
 
@@ -886,7 +888,7 @@ mod tests {
                 display_name: None,
                 legacy_dest_annotation: None,
                 transforms: vec![],
-                install_strategy: crate::apps::AppInstallStrategy::Copy,
+                install_strategy: crate::install_core::AppInstallStrategy::Copy,
                 requires_admin: false,
                 restart_hint: None,
             },

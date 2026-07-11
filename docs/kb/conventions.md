@@ -40,7 +40,7 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   locks do not serialize across tests).
 - Any test that mutates environment variables must hold `crate::test_support::env_lock()`.
 - Any test that performs privileged (sudo) file operations on real paths must hold the
-  cross-process admin lock for its full body (`apps/file_ops.rs`, commit `fbd9c55`).
+  cross-process admin lock for its full body (`install_core/file_ops.rs`, commit `fbd9c55`).
 - Verify CLI behavior against an isolated config dir:
   `SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine` (details in `AGENTS.md` § Verification Notes).
 - CI additionally runs `cargo audit`; a new dependency with a RUSTSEC advisory fails the build

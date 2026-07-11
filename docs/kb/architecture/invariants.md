@@ -8,18 +8,18 @@ bugs. Check this list before changing the modules named in each entry.
 - **Uninstall never touches user files.** `presets::remove_prefix` removes only embedded-asset
   files; `bin_links::unlink_managed` removes only symlinks pointing into the managed presets dir;
   app uninstall is driven by `~/.shine/app-manifest.toml` entries only.
-- **Backups use the `<name>.shine.bak` suffix** (`apps/file_ops.rs::backup_path`). Uninstall
-  restores from that exact name; changing the suffix orphans existing backups.
-- **`requires_admin` must persist on every manifest entry** (`apps/manifest.rs::AppEntry`).
+- **Backups use the `<name>.shine.bak` suffix** (`install_core/file_ops.rs::backup_path`).
+  Uninstall restores from that exact name; changing the suffix orphans existing backups.
+- **`requires_admin` must persist on every manifest entry** (`install_core/manifest.rs::AppEntry`).
   Uninstall routes to the sudo removal path based on the stored flag, not by re-checking the
   path. Dropping it during (de)serialization silently breaks privileged uninstall (commit
   `70ee910`).
 - **Privileged filesystem mutations must hold the cross-process admin lock**
-  (`apps/file_ops.rs::admin_lock`, `$TMPDIR/shine-admin.lock`). In-process mutexes are not
+  (`install_core/file_ops.rs::admin_lock`, `$TMPDIR/shine-admin.lock`). In-process mutexes are not
   enough: nextest runs each test in its own OS process, and real concurrent shine invocations
   exist too (commit `fbd9c55`).
 - **No code path should ask the user to manually type `sudo` on Unix.** Every Unix privileged
-  write auto-elevates through `privilege::ensure_admin` + `apps/file_ops.rs::sudo_command`
+  write auto-elevates through `privilege::ensure_admin` + `install_core/file_ops.rs::sudo_command`
   (app-config installs, `self_install.rs`'s binary copy via `install_binary_with_elevation`).
   Windows has no `sudo` equivalent, so its privileged paths still surface a manual
   "rerun elevated" hint instead.

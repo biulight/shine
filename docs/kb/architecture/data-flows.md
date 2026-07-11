@@ -11,13 +11,14 @@ records the cross-module sequences and their gotchas.
 1. **Metadata** — `apps/metadata.rs` parses `presets/app/<category>/shine.toml` (`dest`,
    `transforms`, `requires_admin`, …). Legacy categories without `shine.toml` (git, starship)
    use `apps/annotation.rs` to read a `shine-dest:` comment from the file itself.
-2. **Transforms** — `apps/transforms/` applies `jsonc-to-json` and/or `template` (`@@VAR@@`
-   substitution from the `[env]` config table) in declaration order, in memory, before writing.
-3. **File ops** — `apps/file_ops.rs` backs up any pre-existing user file to `<name>.shine.bak`,
-   then writes the (transformed) content to `dest`. Destinations with `requires_admin = true`
-   (e.g. `/etc/docker/daemon.json`) go through the sudo path, serialized by a cross-process
-   advisory lock (`$TMPDIR/shine-admin.lock`, `create_dir` as mutex).
-4. **Manifest** — `apps/manifest.rs` upserts an `AppEntry` into `~/.shine/app-manifest.toml`,
+2. **Transforms** — `install_core/transforms/` applies `jsonc-to-json` and/or `template`
+   (`@@VAR@@` substitution from the `[env]` config table) in declaration order, in memory, before
+   writing.
+3. **File ops** — `install_core/file_ops.rs` backs up any pre-existing user file to
+   `<name>.shine.bak`, then writes the (transformed) content to `dest`. Destinations with
+   `requires_admin = true` (e.g. `/etc/docker/daemon.json`) go through the sudo path, serialized
+   by a cross-process advisory lock (`$TMPDIR/shine-admin.lock`, `create_dir` as mutex).
+4. **Manifest** — `install_core/manifest.rs` upserts an `AppEntry` into `~/.shine/app-manifest.toml`,
    recording dest, content hash, strategy, and **`requires_admin`** (must persist — uninstall
    routes on it; see lessons entry 2026-07-04).
 5. **Report** — `apps/report.rs` prints the outcome.

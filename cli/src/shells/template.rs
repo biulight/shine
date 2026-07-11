@@ -36,7 +36,7 @@ pub(super) async fn apply_template_to_scripts(
         }
 
         let script_env_map = env_map_for_script(script, env_map);
-        let rendered = match crate::apps::apply_transforms(
+        let rendered = match crate::install_core::apply_transforms(
             &["template".to_string()],
             &content,
             &script_env_map,

@@ -114,9 +114,14 @@ shine/
 │       │   ├── report.rs     # Install/uninstall outcome print_* helpers
 │       │   ├── upgrade.rs    # handle_upgrade_installed, stale-entry cleanup
 │       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile)
-│       │   ├── annotation.rs # shine-dest: comment annotation parser
-│       │   ├── file_ops.rs   # File copy, backup (*.shine.bak), restore
-│       │   ├── manifest.rs   # ~/.shine/app-manifest.toml tracking
+│       │   ├── json_merge.rs # JsonMerge install strategy (managed-key merge)
+│       │   └── annotation.rs # shine-dest: comment annotation parser
+│       ├── install_core/     # Install primitives shared by apps/ and sys/ (no
+│       │   │                 # apps-specific logic; sys depends on this, not on apps)
+│       │   ├── mod.rs        # Re-exports: AppEntry, AppInstallStrategy, AppManifest,
+│       │   │                 # hash_content, apply_transforms
+│       │   ├── file_ops.rs   # File copy, backup (*.shine.bak), restore, admin_lock
+│       │   ├── manifest.rs   # ~/.shine/app-manifest.toml tracking (AppManifest, AppEntry)
 │       │   └── transforms/   # File content transforms: jsonc-to-json, template
 │       ├── env/
 │       │   ├── mod.rs        # EnvConfig: [env] table in config.toml, @@VAR@@ substitution
@@ -258,7 +263,7 @@ ciphertext's tag, never on config — see
 init/show` (`env/identity.rs`) manages the age identity file consulted via
 `Config::age_identities()`.
 
-### File transforms (`apps/transforms/`)
+### File transforms (`install_core/transforms/`)
 
 Two transforms can be applied to preset files at install time (declared in `shine.toml` as `transforms = [...]`):
 
