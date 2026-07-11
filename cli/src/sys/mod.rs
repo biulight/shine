@@ -784,7 +784,7 @@ async fn run_managed_for_os(
                     ),
                     Err(error) => {
                         failed += 1;
-                        eprintln!("  {} {}: {error:#}", colors::symbol("✗"), item.id);
+                        eprintln!("  {} {}: {error:#}", colors::symbol_stderr("✗"), item.id);
                     }
                 }
             }

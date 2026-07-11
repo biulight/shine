@@ -74,7 +74,7 @@ pub(super) async fn handle_update(config: &Config, verbose: bool, refresh: bool)
 }
 
 pub(super) fn format_update_check_failure_warning(err: &anyhow::Error) -> String {
-    colors::yellow(&format!("warning: skipped shine version check: {err}"))
+    colors::yellow_stderr(&format!("warning: skipped shine version check: {err}"))
 }
 
 pub(super) async fn handle_self_upgrade(

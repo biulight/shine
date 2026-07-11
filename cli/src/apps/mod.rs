@@ -389,7 +389,7 @@ pub async fn handle_install(
             let outcome = if !file.transforms.is_empty() {
                 match tokio::fs::read(&source_path).await {
                     Err(e) => {
-                        eprintln!("  {} {display_name}: {e:#}", colors::symbol("✗"));
+                        eprintln!("  {} {display_name}: {e:#}", colors::symbol_stderr("✗"));
                         continue;
                     }
                     Ok(raw) => match transforms::apply(&file.transforms, &raw, env_map) {
@@ -417,7 +417,7 @@ pub async fn handle_install(
                 let raw = match tokio::fs::read(&source_path).await {
                     Ok(raw) => raw,
                     Err(e) => {
-                        eprintln!("  {} {display_name}: {e:#}", colors::symbol("✗"));
+                        eprintln!("  {} {display_name}: {e:#}", colors::symbol_stderr("✗"));
                         continue;
                     }
                 };

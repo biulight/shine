@@ -381,7 +381,7 @@ async fn warn_if_runtime_schema_pending(command: &Commands) {
     if let Ok(schema_version) = Config::read_global_runtime_schema_version().await
         && let Some(warning) = clear::pending_schema_warning(schema_version)
     {
-        eprintln!("{}", colors::yellow(&warning));
+        eprintln!("{}", colors::yellow_stderr(&warning));
     }
 }
 

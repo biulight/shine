@@ -69,7 +69,7 @@ pub(super) fn print_dry_run_install(
 }
 
 pub(super) fn print_install_error(label: &str, err: &anyhow::Error) {
-    eprintln!("  {} {label}: {err:#}", colors::symbol("✗"));
+    eprintln!("  {} {label}: {err:#}", colors::symbol_stderr("✗"));
 }
 
 // --- Stale-entry cleanup reporting -------------------------------------------------------

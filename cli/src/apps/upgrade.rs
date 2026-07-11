@@ -473,7 +473,7 @@ async fn install_new_category_files(
             let content = match upgrade_file_content(config, cat, file, env_map).await {
                 Ok(content) => content,
                 Err(e) => {
-                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), source);
+                    eprintln!("  {} {}: {e:#}", colors::symbol_stderr("✗"), source);
                     skipped += 1;
                     continue;
                 }
@@ -517,7 +517,7 @@ async fn install_new_category_files(
                     skipped += 1;
                 }
                 Err(e) => {
-                    eprintln!("  {} {}: {e:#}", colors::symbol("✗"), source);
+                    eprintln!("  {} {}: {e:#}", colors::symbol_stderr("✗"), source);
                     skipped += 1;
                 }
             }
