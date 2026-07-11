@@ -38,6 +38,16 @@ bugs. Check this list before changing the modules named in each entry.
   the sentinel isn't present. Canonicalizing them without characterization tests proving neither
   caller depends on the difference risks a silent formatting regression in a file shine doesn't
   own.
+- **Line-ending differences must not register as changes on the sys path.** Preset templates are
+  pinned LF (repo `.gitattributes`: `presets/** text eol=lf`), so the rust-embed'd template is
+  byte-deterministic across build hosts. The sys reconciliation (`sys/profile.rs`) and the
+  sentinel idempotency check (`sys/profile_blocks.rs`) compare content line-ending-agnostically via
+  `install_core::eol_eq`/`normalize_eol`: a pure CRLF↔LF difference (e.g. a Windows editor
+  re-saving an installed loader file or profile) reports **no update** and leaves the user's file
+  bytes untouched. When on-disk endings differ, the three-way merge skips `git merge-file` (which
+  would see spurious per-line diffs) and uses the pure-Rust fallback over normalized bytes.
+  Genuine content changes still write LF. The two sentinel *removal* styles above are unchanged —
+  only the comparison layer normalizes.
 - **Paths under `$HOME` are written as `$HOME/...`**, not absolute, for portability.
 - **PowerShell profiles: preserve a leading BOM** when rewriting the file
   (`cli/src/sys/profile_blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and

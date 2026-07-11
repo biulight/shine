@@ -3,6 +3,35 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-11 — CRLF↔LF differences made `shine sys` re-install report spurious updates
+
+- **Symptom**: tracing a user question — *install via `shine sys init`, edit config on a Windows
+  host (CRLF-prone), edit the preset on macOS, re-install* — revealed that a pure line-ending
+  difference is detected as a real change on the whole sys path. A CRLF copy of a loader file
+  under `~/.shine/profile/` fails `active == template` (raw `&[u8]` compare in `sys/profile.rs`)
+  and drops into the three-way merge, where `split_profile_lines` keeps each trailing `\r`, so
+  every line "differs" → **updated / needs-action / conflict** every run. Separately the sentinel
+  idempotency check in `sys/profile_blocks.rs` compares the extracted block against an LF
+  `pre_block`, so a CRLF profile misses the short-circuit and gets rewritten (silently normalizing
+  the user-owned file to LF).
+- **Root cause**: every comparison on the sys path was byte-exact with **no** line-ending
+  normalization (and `hash_content` is FNV over raw bytes), so `\r` flips every `==`. Compounding
+  it, nothing pinned the embedded template's endings — a build host with `core.autocrlf=true`
+  could embed CRLF, making even a clean checkout diff against an installed LF copy.
+- **Fix**: (1) `.gitattributes` pins `presets/** text eol=lf` so the rust-embed'd template is
+  byte-deterministic. (2) new `install_core::normalize_eol`/`eol_eq`; the sys reconciliation
+  (`sys/profile.rs`) normalizes `active`/`base`/`template` at read and gates `git merge-file` off
+  when any on-disk input was non-LF (falling back to the pure-Rust merge over normalized bytes);
+  the sentinel idempotency check (`sys/profile_blocks.rs`) compares blocks ending-agnostically
+  (trimming the trailing break, since `extract_block_with_newline` only reattaches `\n`). When only
+  endings differ, both paths now report no change and leave the file's bytes untouched. The
+  invariant-protected `sentinel::remove_block_*` styles were left unchanged — only the comparison
+  layer normalizes.
+- **Rule**: when reconciling installed files that a user (or their editor) may re-save, byte-exact
+  `==`/content-hash compares silently conflate a formatting-only difference with a real edit —
+  normalize line endings before comparing, and pin embedded/template endings so the baseline is
+  deterministic across build and checkout environments.
+
 ## 2026-07-09 — `agent_handle.abort()` didn't actually protect in-flight `shine ssh` transfers
 
 - **Symptom**: a follow-up review of the Ctrl-C cleanup path in `ssh/mod.rs` found that

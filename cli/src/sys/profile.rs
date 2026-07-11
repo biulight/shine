@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use crate::config::Config;
+use crate::install_core::{eol_eq, normalize_eol};
 
 use super::profile_blocks::update_sys_shell_profiles;
 use super::{SYS_PROFILE_PHASES, SysItemOutcome, SysItemStatus, SysProfilePhase};
@@ -98,7 +99,13 @@ async fn install_sys_profile_phase(
     force_profile: bool,
 ) -> Result<SysProfileFileUpdate> {
     let template_path = script_dir.join(format!("profile.{}.{ext}", phase.as_str()));
-    let template = read_sys_profile_template(&template_path, os_id, phase, ext).await?;
+    let template_raw = read_sys_profile_template(&template_path, os_id, phase, ext).await?;
+    // Normalize line endings for all comparisons/merges so a pure CRLF↔LF
+    // difference (e.g. a Windows editor re-saving an installed file) is not
+    // treated as a real change. Files are only ever *written* as the LF
+    // template/merge output, never the raw bytes, so leaving a file "unchanged"
+    // preserves the user's on-disk endings.
+    let template = normalize_eol(&template_raw);
 
     let active_path = sys_profile_file_path(profile_dir, os_id, phase, ext);
     let base_path = sys_profile_base_path(profile_dir, os_id, phase, ext);
@@ -117,7 +124,7 @@ async fn install_sys_profile_phase(
         .await;
     }
 
-    let active = match tokio::fs::read(&active_path).await {
+    let active_raw = match tokio::fs::read(&active_path).await {
         Ok(active) => active,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return handle_fresh_install(
@@ -131,8 +138,9 @@ async fn install_sys_profile_phase(
         }
         Err(err) => return Err(err).with_context(|| format!("reading {}", active_path.display())),
     };
+    let active = normalize_eol(&active_raw);
 
-    let base = match tokio::fs::read(&base_path).await {
+    let base_raw = match tokio::fs::read(&base_path).await {
         Ok(base) => base,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return handle_missing_base(
@@ -147,6 +155,12 @@ async fn install_sys_profile_phase(
         }
         Err(err) => return Err(err).with_context(|| format!("reading {}", base_path.display())),
     };
+    let base = normalize_eol(&base_raw);
+
+    // If any on-disk input carried non-LF endings, `git merge-file` (which reads
+    // the raw files) would see spurious per-line differences, so fall back to the
+    // pure-Rust three-way merge over the already-normalized bytes instead.
+    let allow_git_merge = active == active_raw && base == base_raw && template == template_raw;
 
     apply_merge_result(MergeInputs {
         active_path: &active_path,
@@ -157,6 +171,7 @@ async fn install_sys_profile_phase(
         base: &base,
         active: &active,
         template: &template,
+        allow_git_merge,
     })
     .await
 }
@@ -189,6 +204,10 @@ struct MergeInputs<'a> {
     base: &'a [u8],
     active: &'a [u8],
     template: &'a [u8],
+    /// False when an on-disk input carried non-LF endings; the merge then avoids
+    /// `git merge-file` (which would see spurious per-line diffs) in favor of the
+    /// pure-Rust three-way merge over the normalized bytes.
+    allow_git_merge: bool,
 }
 
 async fn apply_force_profile(
@@ -200,7 +219,7 @@ async fn apply_force_profile(
     template: &[u8],
 ) -> Result<SysProfileFileUpdate> {
     let backup = if let Ok(active) = tokio::fs::read(active_path).await
-        && active != template
+        && !eol_eq(&active, template)
     {
         let backup_path = profile_backup_path(active_path, ext);
         tokio::fs::copy(active_path, &backup_path)
@@ -315,6 +334,7 @@ async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpd
         base,
         active,
         template,
+        allow_git_merge,
     } = inputs;
 
     if active == template {
@@ -358,6 +378,7 @@ async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpd
         base,
         active,
         template,
+        allow_git_merge,
     )
     .await?
     {
@@ -409,8 +430,11 @@ async fn merge_sys_profile(
     base: &[u8],
     active: &[u8],
     template: &[u8],
+    allow_git_merge: bool,
 ) -> Result<ProfileMerge> {
-    if let Some(result) = try_git_merge_file(active_path, base_path, template_path).await? {
+    if allow_git_merge
+        && let Some(result) = try_git_merge_file(active_path, base_path, template_path).await?
+    {
         return Ok(result);
     }
 
@@ -676,4 +700,103 @@ fn sys_profile_merge_path(
     ext: &str,
 ) -> PathBuf {
     profile_dir.join(format!("{os_id}-sys.{}.merge.{ext}", phase.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::fs;
+
+    /// Fresh-installs `template` into a temp profile dir and returns
+    /// `(profile_dir, script_dir, active_path)` for follow-up assertions.
+    async fn setup_phase(template: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let dir = crate::test_support::make_temp_dir("shine-sys-profile-eol").await;
+        let profile_dir = dir.join("profile");
+        let script_dir = dir.join("script");
+        fs::create_dir_all(&profile_dir).await.unwrap();
+        fs::create_dir_all(&script_dir).await.unwrap();
+        fs::write(script_dir.join("profile.pre.sh"), template)
+            .await
+            .unwrap();
+
+        let update = install_sys_profile_phase(
+            &profile_dir,
+            "ubuntu",
+            &script_dir,
+            SysProfilePhase::Pre,
+            "sh",
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(update.updated, "fresh install should write the loader file");
+
+        let active_path = sys_profile_file_path(&profile_dir, "ubuntu", SysProfilePhase::Pre, "sh");
+        (profile_dir, script_dir, active_path)
+    }
+
+    async fn run_phase(profile_dir: &Path, script_dir: &Path) -> SysProfileFileUpdate {
+        install_sys_profile_phase(
+            profile_dir,
+            "ubuntu",
+            script_dir,
+            SysProfilePhase::Pre,
+            "sh",
+            false,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn crlf_only_difference_is_not_reported_as_an_update_and_preserves_endings() {
+        let (profile_dir, script_dir, active_path) = setup_phase("line1\nline2\n").await;
+
+        // Simulate a Windows editor re-saving the same content with CRLF endings.
+        fs::write(&active_path, "line1\r\nline2\r\n").await.unwrap();
+
+        let update = run_phase(&profile_dir, &script_dir).await;
+        assert!(
+            !update.updated,
+            "a pure CRLF/LF difference must not count as an update"
+        );
+        assert!(!update.needs_action);
+
+        // The user's CRLF bytes are left untouched (no silent normalization).
+        let after = fs::read(&active_path).await.unwrap();
+        assert_eq!(after, b"line1\r\nline2\r\n");
+
+        fs::remove_dir_all(profile_dir.parent().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn crlf_active_with_real_user_edit_merges_cleanly_without_false_conflict() {
+        let (profile_dir, script_dir, active_path) = setup_phase("a\nb\nc\n").await;
+
+        // User appends a line and (as a Windows editor would) saves as CRLF.
+        fs::write(&active_path, "a\r\nb\r\nc\r\nuser\r\n")
+            .await
+            .unwrap();
+        // A new template changes a different, non-overlapping line.
+        fs::write(script_dir.join("profile.pre.sh"), "a2\nb\nc\n")
+            .await
+            .unwrap();
+
+        let update = run_phase(&profile_dir, &script_dir).await;
+        assert!(update.updated);
+        assert!(
+            !update.needs_action,
+            "CRLF endings must not fabricate a merge conflict"
+        );
+
+        // Non-overlapping template + user edits merge into LF output.
+        let merged = fs::read(&active_path).await.unwrap();
+        assert_eq!(merged, b"a2\nb\nc\nuser\n");
+
+        fs::remove_dir_all(profile_dir.parent().unwrap())
+            .await
+            .unwrap();
+    }
 }

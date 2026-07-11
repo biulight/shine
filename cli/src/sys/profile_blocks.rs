@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::config::Config;
+use crate::install_core::eol_eq;
 use crate::shells::ShellType;
 
 use super::profile::SysShellProfileUpdate;
@@ -122,9 +123,24 @@ pub(super) async fn update_sys_shell_profile_blocks(
     let pre_sentinel = sys_sentinel(os_id, SysProfilePhase::Pre);
     let post_sentinel = sys_sentinel(os_id, SysProfilePhase::Post);
 
+    // Compare the installed block against the expected one ignoring line-ending
+    // style, so a CRLF profile (e.g. one a Windows editor re-saved) whose block
+    // is otherwise up to date short-circuits here — leaving the user's file
+    // untouched instead of reporting a spurious update and rewriting it to LF.
+    // `extract_sentinel_block` only reattaches a trailing `\n` (never `\r\n`), so
+    // a CRLF block extracts without its terminator while `expected` ends in `\n`;
+    // trim the trailing line break on both sides before the ending-agnostic compare.
+    let block_matches = |extracted: Option<&str>, expected: &str| {
+        extracted.is_some_and(|block| {
+            eol_eq(
+                block.trim_end_matches(['\r', '\n']).as_bytes(),
+                expected.trim_end_matches(['\r', '\n']).as_bytes(),
+            )
+        })
+    };
     if extract_sentinel_block(&content, legacy_sys_sentinel(os_id)).is_none()
-        && extract_sentinel_block(&content, pre_sentinel) == Some(pre_block.as_str())
-        && extract_sentinel_block(&content, post_sentinel) == Some(post_block.as_str())
+        && block_matches(extract_sentinel_block(&content, pre_sentinel), &pre_block)
+        && block_matches(extract_sentinel_block(&content, post_sentinel), &post_block)
         && sentinel_order_is_valid(&content, pre_sentinel, post_sentinel)
         && (!had_utf8_bom || bom_was_at_start)
     {
@@ -455,6 +471,34 @@ mod tests {
                 .await
                 .unwrap()
         );
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profile_blocks_ignores_crlf_and_preserves_endings() {
+        let dir = crate::test_support::make_temp_dir("shine-sys-profile").await;
+        let path = dir.join("profile.sh");
+
+        // Install (writes the block LF).
+        update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+            .await
+            .unwrap();
+
+        // Simulate a Windows editor re-saving the whole file with CRLF endings.
+        let lf = tokio::fs::read_to_string(&path).await.unwrap();
+        let crlf = lf.replace('\n', "\r\n");
+        tokio::fs::write(&path, &crlf).await.unwrap();
+
+        // Only the endings differ, so this must report no change...
+        assert!(
+            !update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+                .await
+                .unwrap()
+        );
+        // ...and leave the user's CRLF file untouched (no silent LF rewrite).
+        let after = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(after, crlf);
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }

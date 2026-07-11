@@ -1,0 +1,6 @@
+# Presets are embedded verbatim into the binary at build time (rust-embed),
+# so their on-disk line endings become part of the compiled template that
+# `shine sys`/`app` reconciliation compares against. Pin them to LF so the
+# embedded template is byte-deterministic regardless of the build host or a
+# contributor's `core.autocrlf` setting.
+presets/** text eol=lf
