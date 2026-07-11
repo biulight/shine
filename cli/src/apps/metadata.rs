@@ -491,63 +491,21 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
 }
 
 async fn collect_merged_fs_files(config: &Config, category_rel: &Path) -> Result<Vec<PathBuf>> {
-    let base_category = config.presets_dir().join(category_rel);
-    let mut files: BTreeSet<PathBuf> = if base_category.is_dir() {
-        collect_fs_files(&base_category)
-            .await?
-            .into_iter()
-            .collect()
-    } else {
-        BTreeSet::new()
-    };
-    if let Some(overlay) = config.active_presets_overlay_dir() {
-        let overlay_category = overlay.join(category_rel);
-        if overlay_category.is_dir() {
-            files.extend(collect_fs_files(&overlay_category).await?);
+    crate::preset_meta::merge_fs_tree(config, category_rel, "preset category", |rel| {
+        if rel == Path::new("shine.toml") {
+            return Ok(None);
         }
-    }
-    Ok(files.into_iter().collect())
+        Ok(Some(normalize_relative(&rel.to_string_lossy())?))
+    })
+    .await
 }
 
 fn collect_embedded_category_names(filter: Option<&str>) -> Vec<String> {
-    let mut names = BTreeSet::new();
-    for asset_path in presets::asset_paths("app") {
-        let Some(rest) = asset_path.strip_prefix("app/") else {
-            continue;
-        };
-        let Some((category, _)) = rest.split_once('/') else {
-            continue;
-        };
-        if filter.is_none_or(|f| f == category) {
-            names.insert(category.to_string());
-        }
-    }
-    names.into_iter().collect()
+    crate::preset_meta::collect_embedded_category_names("app", filter)
 }
 
 async fn collect_fs_category_names(app_root: &Path, filter: Option<&str>) -> Result<Vec<String>> {
-    if let Some(filter) = filter {
-        let path = app_root.join(filter);
-        if path.exists() {
-            return Ok(vec![filter.to_string()]);
-        }
-        return Ok(Vec::new());
-    }
-
-    if !app_root.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut names = BTreeSet::new();
-    let mut entries = fs::read_dir(app_root)
-        .await
-        .with_context(|| format!("reading app presets dir: {}", app_root.display()))?;
-    while let Some(entry) = entries.next_entry().await? {
-        if entry.file_type().await?.is_dir() {
-            names.insert(entry.file_name().to_string_lossy().to_string());
-        }
-    }
-    Ok(names.into_iter().collect())
+    crate::preset_meta::collect_fs_category_names(app_root, filter, "app presets dir").await
 }
 
 fn collect_embedded_files(category: &str) -> Result<Vec<PathBuf>> {
@@ -562,38 +520,6 @@ fn collect_embedded_files(category: &str) -> Result<Vec<PathBuf>> {
             continue;
         }
         files.push(normalize_relative(rel)?);
-    }
-
-    files.sort();
-    Ok(files)
-}
-
-async fn collect_fs_files(category_root: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    let mut stack = vec![category_root.to_path_buf()];
-
-    while let Some(dir) = stack.pop() {
-        let mut entries = fs::read_dir(&dir)
-            .await
-            .with_context(|| format!("reading preset category: {}", dir.display()))?;
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            let file_type = entry.file_type().await?;
-            if file_type.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if file_type.is_file() {
-                let rel = path
-                    .strip_prefix(category_root)
-                    .with_context(|| format!("file outside category root: {}", path.display()))?;
-                let rel = normalize_relative(&rel.to_string_lossy())?;
-                if rel == std::path::Path::new("shine.toml") {
-                    continue;
-                }
-                files.push(rel);
-            }
-        }
     }
 
     files.sort();
@@ -663,21 +589,11 @@ fn file_matches_current_platform(category: &str, file: &FileToml) -> Result<bool
 }
 
 fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Result<bool> {
-    let Some(platforms) = &file.platforms else {
-        return Ok(true);
-    };
-
-    let mut matches = false;
-    for platform in platforms {
-        let normalized = platform.trim().to_ascii_lowercase();
-        match normalized.as_str() {
-            "windows" | "unix" => matches |= normalized == current,
-            _ => bail!(
-                "app/{category}/shine.toml has unsupported platform `{platform}`; expected `windows` or `unix`"
-            ),
-        }
-    }
-    Ok(matches)
+    crate::preset_meta::platform_matches(
+        file.platforms.as_deref(),
+        current,
+        &format!("app/{category}/shine.toml"),
+    )
 }
 
 fn normalize_relative(path: &str) -> Result<PathBuf> {
