@@ -465,10 +465,8 @@ mod tests {
         format_command_preview, parse_status_event, parse_sys_item_output,
     };
     use crate::sys::manifest::{parse_and_validate_manifest, sys_init_script_name};
-    use crate::sys::profile::{
-        fallback_three_way_merge, install_sys_profile_files, update_sys_shell_profile_blocks,
-        update_sys_shell_profiles,
-    };
+    use crate::sys::profile::{fallback_three_way_merge, install_sys_profile_files};
+    use crate::sys::profile_blocks::{update_sys_shell_profile_blocks, update_sys_shell_profiles};
     use crate::sys::run_manifest::SYS_MANIFEST_FILE;
     use crate::sys::selection::{format_interactive_item, format_item_ids};
     use std::path::PathBuf;

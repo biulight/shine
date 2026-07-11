@@ -28,7 +28,7 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **Sentinel blocks are the only thing shine writes to user shell configs**
   (`# >>> shine >>>` … `# <<< shine <<<`, `shells/profile.rs`; sys uses per-phase sentinels like
-  `# >>> shine <os> sys pre >>>`, `sys/profile.rs`). Both delegate to the shared primitives in
+  `# >>> shine <os> sys pre >>>`, `sys/profile_blocks.rs`). Both delegate to the shared primitives in
   `cli/src/sentinel.rs` (`find_block`/`extract_block_with_newline`/`remove_block_bytewise`/
   `remove_block_linewise`/`insert_block`/`trim_outer_blank_lines`).
 - **Two sentinel removal styles exist and must not be unified without golden-output proof.**
@@ -39,8 +39,8 @@ bugs. Check this list before changing the modules named in each entry.
   caller depends on the difference risks a silent formatting regression in a file shine doesn't
   own.
 - **Paths under `$HOME` are written as `$HOME/...`**, not absolute, for portability.
-- **PowerShell profiles: preserve a leading BOM** when rewriting the file (`cli/src/sys/profile.rs`,
-  commit `81244f8`), and update **both** `Documents/PowerShell/` and
+- **PowerShell profiles: preserve a leading BOM** when rewriting the file
+  (`cli/src/sys/profile_blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
   `Documents/WindowsPowerShell/` profile files so pwsh and Windows PowerShell stay in sync.
 
 ## Config files

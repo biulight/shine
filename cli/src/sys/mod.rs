@@ -6,6 +6,7 @@ mod managed;
 mod manifest;
 mod model;
 mod profile;
+mod profile_blocks;
 mod render;
 mod resources;
 mod run_manifest;

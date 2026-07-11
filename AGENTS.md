@@ -172,7 +172,10 @@ shine/
 │       │   ├── model.rs      # SysManifest/SysItem/SysItemStatus/SysItemOutcome/SelectionSource, etc.
 │       │   ├── run_manifest.rs # SysRunManifest/SysRunEntry: ~/.shine/sys-manifest.toml load/save
 │       │   ├── manifest.rs   # Preset loading, parsing, and validation
-│       │   ├── profile.rs    # Shell-profile install/merge/sentinel logic
+│       │   ├── profile.rs    # Sys-profile install: loader install, three-way merge
+│       │   │                 # (fallback + git merge-file), conflict markers
+│       │   ├── profile_blocks.rs # Shell-profile sentinel blocks: per-phase sentinel
+│       │   │                 # insert/remove, BOM preservation, legacy-sentinel migration
 │       │   ├── selection.rs  # Item-selection resolution (profile vs interactive)
 │       │   ├── execution.rs  # Running sys items, parsing script output, run reports
 │       │   ├── resources.rs  # SystemDriver trait, receipts, BuiltinDriver glue (dispatches
@@ -198,7 +201,7 @@ shine/
 │       ├── path_display.rs   # Home-relative path formatting for terminal output
 │       ├── proc.rs           # Small subprocess helpers with no domain logic (ensure_command)
 │       ├── sentinel.rs       # Shared sentinel-block find/extract/remove/insert primitives used
-│       │                     # by shells/profile.rs and sys/profile.rs
+│       │                     # by shells/profile.rs and sys/profile_blocks.rs
 │       ├── secret/
 │       │   ├── mod.rs        # BackendKind/EncryptRecipients, tagged-ciphertext router
 │       │   │                 # (encrypt_secret/decrypt_secret); untagged = gpg, `age:` = age
