@@ -1,6 +1,5 @@
 pub mod apps;
 pub mod bin_links;
-pub mod check;
 pub mod clear;
 pub mod colors;
 pub mod commands;
@@ -23,6 +22,7 @@ pub mod shell_quote;
 pub mod shells;
 pub mod show;
 pub mod ssh;
+pub mod status;
 pub mod sys;
 pub mod task;
 pub mod test_support;

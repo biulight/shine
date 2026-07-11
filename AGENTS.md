@@ -155,7 +155,7 @@ shine/
 │       │                     # SHINE_PRESETS priority chain
 │       ├── presets.rs        # rust-embed asset extraction, list_categories, parse_script_description
 │       ├── bin_links.rs      # Symlink management in ~/.shine/bin/
-│       ├── check.rs          # Shared install-status row builders used by `list`/`info`
+│       ├── status.rs         # Shared install-status row builders used by `list`/`info`
 │       ├── clear.rs          # Clear stale runtime state after schema changes
 │       ├── colors.rs         # Terminal color helpers
 │       ├── serve.rs          # Local HTTP server for shine-managed resources under ~/.shine/http/

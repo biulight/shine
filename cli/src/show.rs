@@ -2,7 +2,6 @@ use crate::apps::{
     AppCategory, AppFile, installed_content_hash, load_active_categories,
     resolve_install_destination, source_bytes_for_file, source_hash_for_file,
 };
-use crate::check::{FileStatus, build_shell_rows};
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
@@ -10,6 +9,7 @@ use crate::install_core::AppManifest;
 use crate::path_display;
 use crate::shells::metadata::ShellCategory;
 use crate::shells::metadata::load_active_categories as load_active_shells;
+use crate::status::{FileStatus, build_shell_rows};
 use anyhow::{Context, Result, bail};
 use similar::TextDiff;
 use std::collections::{BTreeMap, BTreeSet};

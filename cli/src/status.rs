@@ -1,3 +1,9 @@
+//! Shared install-status row builders consumed by `list` and `show`.
+//!
+//! Not a routed command itself (`shine check` was removed) — this is a
+//! status-row library: it computes per-file/per-category install status
+//! (`FileStatus`) and renders it into `AppRow`/`ShellRow` for display.
+
 use crate::apps::{
     AppCategory, AppListMode, installed_content_hash, resolve_install_destination,
     source_hash_for_file,

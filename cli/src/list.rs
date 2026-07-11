@@ -1,8 +1,8 @@
 use crate::apps::load_active_categories;
-use crate::check::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_rows};
 use crate::colors;
 use crate::config::Config;
 use crate::output;
+use crate::status::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_rows};
 use crate::sys;
 use anyhow::Result;
 
