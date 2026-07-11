@@ -1,6 +1,6 @@
 #!name=Shine Custom Rules
-#!desc=Surge module rules managed by shine
+#!desc=Custom Surge module served by shine
 
 [Rule]
-# local_demo
-DOMAIN,ipinfo.io,Proxies
+# Demo rule: verify this module is loaded without depending on a proxy group.
+DOMAIN,ipinfo.io,DIRECT
