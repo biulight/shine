@@ -188,7 +188,8 @@ async fn run_post_upgrade_hooks(
     config: &Config,
     categories_by_name: &BTreeMap<String, metadata::AppCategory>,
     updated_categories: &BTreeSet<String>,
-) {
+) -> Vec<String> {
+    let mut all_notes: Vec<String> = Vec::new();
     for category in updated_categories {
         let Some(cat) = categories_by_name.get(category) else {
             continue;
@@ -205,9 +206,18 @@ async fn run_post_upgrade_hooks(
             continue;
         }
         let mut completed = true;
+        let mut notes: Vec<String> = Vec::new();
         for hook in &cat.post_upgrade {
             match Command::new(&hook.command).args(&hook.args).output().await {
-                Ok(output) if output.status.success() => {}
+                Ok(output) if output.status.success() => {
+                    if hook.show_output {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let trimmed = stdout.trim();
+                        if !trimmed.is_empty() {
+                            notes.push(trimmed.to_string());
+                        }
+                    }
+                }
                 Ok(output) => {
                     eprintln!(
                         "  {}  {category}: post-upgrade hook failed: {} exited with {}{}",
@@ -236,7 +246,12 @@ async fn run_post_upgrade_hooks(
                 colors::symbol("✓")
             );
         }
+        for note in &notes {
+            println!("     {}", colors::dim(note));
+        }
+        all_notes.extend(notes);
     }
+    all_notes
 }
 
 fn command_output_detail(output: &std::process::Output) -> String {
@@ -641,7 +656,7 @@ mod tests {
         let mut categories = BTreeMap::new();
         categories.insert(
             "sample".to_string(),
-            sample_hook_category(&format!("printf ran > {}", marker.display())),
+            sample_hook_category(&format!("printf ran > {}", marker.display()), false),
         );
         let updated = BTreeSet::from(["sample".to_string()]);
 
@@ -655,6 +670,53 @@ mod tests {
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn post_upgrade_hook_prints_stdout_when_show_output_is_true() {
+        let dir = std::env::temp_dir().join(format!("shine-hook-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.allow_app_hooks = true;
+
+        let mut categories = BTreeMap::new();
+        categories.insert(
+            "sample".to_string(),
+            sample_hook_category("echo hello from hook", true),
+        );
+        let updated = BTreeSet::from(["sample".to_string()]);
+
+        let notes = run_post_upgrade_hooks(&config, &categories, &updated).await;
+        assert_eq!(notes, vec!["hello from hook".to_string()]);
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn post_upgrade_hook_stays_silent_without_show_output() {
+        let dir = std::env::temp_dir().join(format!("shine-hook-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.allow_app_hooks = true;
+
+        let mut categories = BTreeMap::new();
+        categories.insert(
+            "sample".to_string(),
+            sample_hook_category("echo hello from hook", false),
+        );
+        let updated = BTreeSet::from(["sample".to_string()]);
+
+        let notes = run_post_upgrade_hooks(&config, &categories, &updated).await;
+        assert!(
+            notes.is_empty(),
+            "hook stdout must stay silent by default: {notes:?}"
+        );
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[test]
     fn hook_command_display_is_copy_pasteable() {
         let hook = metadata::AppHook {
@@ -664,6 +726,7 @@ mod tests {
                 "update".to_string(),
                 "all".to_string(),
             ],
+            show_output: false,
         };
         assert_eq!(
             hook_command_display(&hook),
@@ -673,6 +736,7 @@ mod tests {
         let hook = metadata::AppHook {
             command: "/tmp/my hook".to_string(),
             args: vec!["it's".to_string()],
+            show_output: false,
         };
         assert_eq!(hook_command_display(&hook), "'/tmp/my hook' 'it'\\''s'");
     }
@@ -687,10 +751,12 @@ mod tests {
                     "update".to_string(),
                     "all".to_string(),
                 ],
+                show_output: false,
             },
             metadata::AppHook {
                 command: "surge-cli".to_string(),
                 args: vec!["reload".to_string()],
+                show_output: false,
             },
         ];
         assert_eq!(
@@ -700,7 +766,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn sample_hook_category(script: &str) -> metadata::AppCategory {
+    fn sample_hook_category(script: &str, show_output: bool) -> metadata::AppCategory {
         metadata::AppCategory {
             name: "sample".to_string(),
             description: None,
@@ -710,6 +776,7 @@ mod tests {
             post_upgrade: vec![metadata::AppHook {
                 command: "/bin/sh".to_string(),
                 args: vec!["-c".to_string(), script.to_string()],
+                show_output,
             }],
             uses_metadata: true,
             has_explicit_files: true,

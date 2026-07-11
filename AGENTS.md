@@ -557,7 +557,7 @@ Hard rules (details and runbook: [`docs/kb/conventions.md`](docs/kb/conventions.
 
 Prefer `shine.toml` metadata over legacy `shine-dest:` annotations for new categories. Place `shine.toml` in `presets/app/<category>/` with at minimum `dest = "~/<path>"`. Add `transforms = ["jsonc-to-json"]` for JSONC files or `transforms = ["template"]` for files with `@@VAR_NAME@@` env placeholders.
 
-App categories may declare a `post_upgrade = { command = "...", args = ["..."] }` hook to run a direct argv command after `shine upgrade` actually updates or installs at least one file in that category. Hooks are not run during `app install`, and external presets require `allow_app_hooks = true` in config before hooks execute.
+App categories may declare a `post_upgrade = { command = "...", args = ["..."] }` hook to run a direct argv command after `shine upgrade` actually updates or installs at least one file in that category. Hooks are not run during `app install`, and external presets require `allow_app_hooks = true` in config before hooks execute. Each hook may set `show_output = true` to print its stdout to the user when it succeeds (e.g. a deliberate `echo` note); this defaults to `false` (silent) so routine command output isn't surfaced as noise.
 
 ### Sys preset (OS init)
 

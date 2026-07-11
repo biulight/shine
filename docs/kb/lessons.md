@@ -3,6 +3,28 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-11 — Surge's `external-resource update` never covers URL-based Modules
+
+- **Symptom**: after `shine upgrade` correctly rewrote the installed `custom-rules.sgmodule`
+  (served via `shine serve` at `~/.shine/http/app/surge/`), Surge kept applying the old rules —
+  the `post_upgrade` hook (`surge-cli external-resource update all` + `surge-cli reload`) appeared
+  to run successfully but had no effect.
+- **Root cause**: `surge-cli external-resource list` only enumerates rule-sets and MITM hostname
+  lists (`type = ruleset`) fetched via `RULE-SET,https://...` — a Module added via URL is not
+  tracked as an "external resource" at all, so `external-resource update all` is a silent no-op
+  for it. `surge-cli reload` only re-parses the module content Surge already has cached from its
+  last fetch; there is no `surge-cli` command that forces a URL-based Module to re-fetch on
+  demand (confirmed against `surge-cli --help`).
+- **Fix**: dropped the ineffective `external-resource update all` step from
+  `presets/app/surge/shine.toml`'s `post_upgrade` (kept `reload`, which is still needed to apply
+  other profile changes). No shine-side workaround exists to force a Module URL re-fetch; on
+  macOS the practical fix is for the user to reference the module by local file path
+  (e.g. `~/.shine/http/app/surge/custom-rules.sgmodule`) in Surge's own profile instead of a
+  `shine serve` HTTP URL, since `reload` re-reads local files immediately with no caching layer.
+- **Rule**: a post-upgrade hook exiting 0 does not mean it had any effect — verify what a
+  third-party CLI's subcommand actually covers (e.g. via its own `list`/`--help` output) before
+  assuming it refreshes the specific resource an app preset just changed.
+
 ## 2026-07-11 — CRLF↔LF differences made `shine sys` re-install report spurious updates
 
 - **Symptom**: tracing a user question — *install via `shine sys init`, edit config on a Windows

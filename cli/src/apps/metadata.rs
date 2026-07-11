@@ -35,6 +35,10 @@ pub enum AppListMode {
 pub struct AppHook {
     pub command: String,
     pub args: Vec<String>,
+    /// Print this hook's stdout to the user when it succeeds. Defaults to
+    /// `false` (silent) — most hooks (e.g. `surge-cli reload`) have nothing
+    /// worth surfacing; opt in for hooks whose stdout is a deliberate note.
+    pub show_output: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +75,8 @@ struct HookToml {
     command: String,
     #[serde(default)]
     args: Vec<String>,
+    #[serde(default)]
+    show_output: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,6 +197,7 @@ fn resolve_hooks(hook: Option<HookSpecToml>, context: &str) -> Result<Vec<AppHoo
         resolved.push(AppHook {
             command: hook.command,
             args: hook.args,
+            show_output: hook.show_output,
         });
     }
     Ok(resolved)
@@ -694,15 +701,18 @@ mod tests {
             vec![
                 AppHook {
                     command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
-                    args: vec![
-                        "external-resource".to_string(),
-                        "update".to_string(),
-                        "all".to_string()
-                    ],
+                    args: vec!["reload".to_string()],
+                    show_output: false,
                 },
                 AppHook {
-                    command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
-                    args: vec!["reload".to_string()],
+                    command: "/bin/echo".to_string(),
+                    args: vec![
+                        "note: Surge caches Modules added by URL, so reload may not pick up the \
+                         change immediately. If the new rules don't take effect, manually \
+                         re-import/update the module in Surge."
+                            .to_string()
+                    ],
+                    show_output: true,
                 }
             ]
         );
@@ -725,6 +735,28 @@ source = "config.toml"
         assert_eq!(hooks.len(), 1);
         assert_eq!(hooks[0].command, "/bin/echo");
         assert_eq!(hooks[0].args, vec!["updated"]);
+        assert!(
+            !hooks[0].show_output,
+            "show_output must default to false when omitted"
+        );
+    }
+
+    #[test]
+    fn post_upgrade_hook_parses_show_output_flag() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_upgrade = { command = "/bin/echo", args = ["updated"], show_output = true }
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert!(hooks[0].show_output);
     }
 
     #[test]
