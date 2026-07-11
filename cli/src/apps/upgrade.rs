@@ -198,7 +198,7 @@ async fn run_post_upgrade_hooks(
         }
         if config.is_external_presets && !config.allow_app_hooks {
             println!(
-                "  {} {category}: post-upgrade hook skipped (set allow_app_hooks = true to allow external app hooks; manual: {})",
+                "  {}  {category}: post-upgrade hook skipped (set allow_app_hooks = true to allow external app hooks; manual: {})",
                 colors::symbol("!"),
                 hook_sequence_display(&cat.post_upgrade)
             );
@@ -210,7 +210,7 @@ async fn run_post_upgrade_hooks(
                 Ok(output) if output.status.success() => {}
                 Ok(output) => {
                     eprintln!(
-                        "  {} {category}: post-upgrade hook failed: {} exited with {}{}",
+                        "  {}  {category}: post-upgrade hook failed: {} exited with {}{}",
                         colors::symbol("!"),
                         hook.command,
                         output.status,
@@ -221,7 +221,7 @@ async fn run_post_upgrade_hooks(
                 }
                 Err(e) => {
                     eprintln!(
-                        "  {} {category}: post-upgrade hook failed: {}: {e}",
+                        "  {}  {category}: post-upgrade hook failed: {}: {e}",
                         colors::symbol("!"),
                         hook.command
                     );
@@ -232,7 +232,7 @@ async fn run_post_upgrade_hooks(
         }
         if completed {
             println!(
-                "  {} {category}: post-upgrade hook completed",
+                "  {}  {category}: post-upgrade hook completed",
                 colors::symbol("✓")
             );
         }
