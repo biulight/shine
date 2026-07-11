@@ -62,15 +62,15 @@ from script stdout into the run report; anything else is rendered as indented lo
 
 ## Update check (`shine update` / background check)
 
-`cli/src/update_check.rs`:
+`cli/src/update_check/` (`mod.rs` core + cache, `github.rs` API/auth, `upgrade.rs` install flow):
 
 1. Reads `~/.shine/` cache file; if fresh (24 h TTL, `UPDATE_CACHE_TTL`), no network call.
 2. Honors a **rate-limit cooldown**: when GitHub returns a rate-limit error, the
    `rate_limited_until_unix_secs` timestamp (per auth mode) is cached and later checks short-circuit
    until it passes.
 3. Otherwise fetches the latest release from GitHub and stores it in the cache.
-4. Version-check failures are tolerated in `main.rs` — a failed check must never break the
-   primary command the user actually ran.
+4. Version-check failures are tolerated in `update_check::maybe_notify` (called from `main.rs`) —
+   a failed check must never break the primary command the user actually ran.
 
 `shine self upgrade --channel preview` targets the moving `preview` tag instead of the latest
 stable `v*` release.

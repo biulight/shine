@@ -230,9 +230,14 @@ shine/
 │       │   └── manifest.rs   # TaskManifest: <shine_dir>/tasks.toml load/save/upsert
 │       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
 │       │                     # since #[cfg(test)] doesn't cross the lib/bin boundary)
-│       ├── update_check.rs   # GitHub release version check, 24h cache; `maybe_notify`
-│       │                     # gates the background check main.rs runs per-command
-│       │                     # (never fails the user's command on check failure)
+│       ├── update_check/
+│       │   ├── mod.rs        # ReleaseChannel/UpdateStatus/UpgradeResult, check_for_update(_forced),
+│       │   │                 # `maybe_notify` (gates the background check main.rs runs per-command,
+│       │   │                 # never fails the user's command on check failure), 24h disk cache
+│       │   ├── github.rs     # GitHub API types, release/asset fetch, auth-token resolution,
+│       │   │                 # rate-limit-aware error formatting
+│       │   └── upgrade.rs    # `upgrade_to_release`: asset selection, archive download/extract,
+│       │                     # staged-swap binary install with rollback on failure
 │       └── version.rs        # Version string formatting
 ├── utils/        # Library crate: shared helpers with no cli-crate dependencies
 │   └── src/
@@ -275,8 +280,8 @@ shine/
 | `export` / `link` / `unlink` / `overlay` | `cli/src/presets_commands.rs` |
 | `pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
 | `init` | `cli/src/init.rs` |
-| `self install/upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
-| `update` / `upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
+| `self install/upgrade` | `cli/src/self_install.rs` + `update_check/` |
+| `update` / `upgrade` | `cli/src/self_install.rs` + `update_check/` |
 | `clear` | `cli/src/clear.rs` |
 | `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
