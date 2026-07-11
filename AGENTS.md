@@ -133,7 +133,13 @@ shine/
 │       │   └── workspace.rs  # `shine env seal/run`: workspace env files, `--with` injection
 │       ├── git_pull.rs       # Safe FF-only pulls for Git-managed preset sources
 │       ├── shells/
-│       │   ├── mod.rs        # ShellType, handle_install/uninstall/list, link-conflict reporting
+│       │   ├── mod.rs        # Module root: ShellType, SENTINEL_*, get_shell/get_shell_config_path,
+│       │   │                 # mod declarations + re-exports (handle_*, ShellUpgradeReport)
+│       │   ├── install.rs    # handle_install/handle_upgrade_installed/handle_completion_install/
+│       │   │                 # handle_init_template, script/link-spec building
+│       │   ├── uninstall.rs  # handle_uninstall
+│       │   ├── links.rs      # Bin-symlink spec building, link-conflict detail/printing
+│       │   ├── report.rs     # handle_list, ShellUpgradeReport, install/uninstall summary formatting
 │       │   ├── profile.rs    # Managed profile file/PATH/sentinel-block install+removal
 │       │   ├── template.rs   # @@VAR@@ template rendering for installed scripts
 │       │   └── metadata.rs   # ShellCategory/ShellFile parsing from shine.toml or .sh files
