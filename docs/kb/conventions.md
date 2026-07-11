@@ -46,6 +46,19 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 - CI additionally runs `cargo audit`; a new dependency with a RUSTSEC advisory fails the build
   (see lessons entry on quinn-proto).
 
+## File size
+
+- The ~800-line file-size guideline is measured by **production code only** — everything before
+  the file's `#[cfg(test)] mod tests { ... }` block. Inline `#[cfg(test)]` unit tests (the Rust
+  convention, and this repo's own testing rules) do not count toward it; a file can have any
+  number of test lines below that boundary without needing a split on size grounds alone.
+- Files that are pure test modules (e.g. `cli/src/ssh/integration_tests.rs`) are exempt entirely.
+- Decided 2026-07-11 when auditing files over 800 total lines after the Phase 3 module-split
+  refactor (commits `63a8f180`..`1ebfbec9`, continued in `5a28dd67`/`9601f93a`/`5eb58d43`): most
+  of the remaining "oversized" files turned out to be well under 800 lines of actual production
+  code, with the excess being inline tests. Only `sys/commands.rs`, `sys/profile.rs`, and
+  `update_check.rs` had genuinely oversized production code, and those were split further.
+
 ## Preset authoring
 
 Follow `AGENTS.md` § "Adding a new preset category". Key rules: prefer `shine.toml` metadata over
