@@ -12,6 +12,15 @@ fn join_summary(parts: &[String]) -> String {
     }
 }
 
+/// Appends `"{count} {label}"` (styled with `color`) to `parts` when `count`
+/// is nonzero. Collapses the repeated `if count > 0 { parts.push(color(...))
+/// }` idiom used when building summary footers from several counters.
+pub fn push_count(parts: &mut Vec<String>, count: usize, color: fn(&str) -> String, label: &str) {
+    if count > 0 {
+        parts.push(color(&format!("{count} {label}")));
+    }
+}
+
 pub fn summary_line(label: &str, parts: &[String]) {
     println!(
         "{}{}{}",
@@ -87,6 +96,14 @@ mod tests {
     #[test]
     fn join_summary_uses_default_for_empty_parts() {
         assert_eq!(join_summary(&[]), "nothing changed");
+    }
+
+    #[test]
+    fn push_count_appends_only_for_nonzero_counts() {
+        let mut parts = Vec::new();
+        push_count(&mut parts, 0, colors::green, "up-to-date");
+        push_count(&mut parts, 3, colors::green, "up-to-date");
+        assert_eq!(parts, vec!["3 up-to-date".to_string()]);
     }
 
     #[test]

@@ -174,27 +174,8 @@ pub(super) async fn handle_config_upgrade(
     let skipped = env_report.skipped + app_report.skipped + sys_report.skipped;
     let user_modified = env_report.user_modified + app_report.user_modified;
 
-    let mut summary: Vec<String> = Vec::new();
-    if updated > 0 {
-        summary.push(colors::green(&format!("{updated} updated")));
-    }
-    if user_modified > 0 {
-        summary.push(colors::yellow(&format!(
-            "{user_modified} user-modified (kept)"
-        )));
-    }
-    if shell_report.link_conflicts > 0 {
-        summary.push(colors::yellow(&format!(
-            "{} link conflicts",
-            shell_report.link_conflicts
-        )));
-    }
-    if skipped > 0 {
-        summary.push(colors::dim(&format!("{skipped} skipped")));
-    }
-    if summary.is_empty() {
-        summary.push(colors::dim("nothing changed"));
-    }
+    let summary =
+        config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts, skipped);
     output::footer("Done", &summary);
     for hint in &app_report.restart_hints {
         println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
@@ -208,6 +189,25 @@ pub(super) async fn handle_config_upgrade(
     }
 
     Ok(())
+}
+
+pub(super) fn config_upgrade_summary_parts(
+    updated: usize,
+    user_modified: usize,
+    link_conflicts: usize,
+    skipped: usize,
+) -> Vec<String> {
+    let mut parts = Vec::new();
+    output::push_count(&mut parts, updated, colors::green, "updated");
+    output::push_count(
+        &mut parts,
+        user_modified,
+        colors::yellow,
+        "user-modified (kept)",
+    );
+    output::push_count(&mut parts, link_conflicts, colors::yellow, "link conflicts");
+    output::push_count(&mut parts, skipped, colors::dim, "skipped");
+    parts
 }
 
 /// After a successful self-upgrade, try to sync the new binary to the self-install destination.

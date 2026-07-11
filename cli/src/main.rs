@@ -32,8 +32,8 @@ use presets_commands::{
 };
 #[cfg(test)]
 use self_install::{
-    SelfInstallSync, format_self_upgrade_message, format_update_check_failure_warning,
-    install_binary_atomically, sync_self_install_dest_from,
+    SelfInstallSync, config_upgrade_summary_parts, format_self_upgrade_message,
+    format_update_check_failure_warning, install_binary_atomically, sync_self_install_dest_from,
 };
 use self_install::{
     handle_config_upgrade, handle_self_install, handle_self_upgrade, handle_update,
@@ -653,6 +653,32 @@ mod tests {
         assert!(warning.contains("warning: skipped shine version check"));
         assert!(warning.contains("HTTP 403 Forbidden"));
         assert!(!warning.contains("Update check failed"));
+    }
+
+    #[test]
+    fn config_upgrade_summary_parts_includes_only_nonzero_counts() {
+        assert_eq!(
+            config_upgrade_summary_parts(2, 0, 0, 1),
+            vec!["2 updated".to_string(), "1 skipped".to_string()]
+        );
+    }
+
+    #[test]
+    fn config_upgrade_summary_parts_empty_when_all_zero() {
+        assert!(config_upgrade_summary_parts(0, 0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn config_upgrade_summary_parts_reports_all_four_counters() {
+        assert_eq!(
+            config_upgrade_summary_parts(1, 2, 3, 4),
+            vec![
+                "1 updated".to_string(),
+                "2 user-modified (kept)".to_string(),
+                "3 link conflicts".to_string(),
+                "4 skipped".to_string(),
+            ]
+        );
     }
 
     #[test]

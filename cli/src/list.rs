@@ -211,23 +211,7 @@ pub async fn handle_status_list(config: &Config) -> Result<()> {
             }
         }
 
-        // Summary footer
-        let mut parts: Vec<String> = Vec::new();
-        if up_to_date > 0 {
-            parts.push(colors::green(&format!("{up_to_date} up-to-date")));
-        }
-        if update_available > 0 {
-            parts.push(colors::cyan(&format!(
-                "{update_available} update available"
-            )));
-        }
-        if user_modified > 0 {
-            parts.push(colors::yellow(&format!("{user_modified} user-modified")));
-        }
-        if missing > 0 {
-            parts.push(colors::yellow(&format!("{missing} destination missing")));
-        }
-
+        let parts = app_status_summary_parts(up_to_date, update_available, user_modified, missing);
         if !parts.is_empty() {
             output::footer("Summary", &parts);
         }
@@ -316,6 +300,25 @@ fn should_show_shell_in_simple_list(row: &ShellRow) -> bool {
     row.is_installed && row.status_text != SHELL_PRESET_PRESENT_LINK_MISSING
 }
 
+fn app_status_summary_parts(
+    up_to_date: usize,
+    update_available: usize,
+    user_modified: usize,
+    missing: usize,
+) -> Vec<String> {
+    let mut parts = Vec::new();
+    output::push_count(&mut parts, up_to_date, colors::green, "up-to-date");
+    output::push_count(
+        &mut parts,
+        update_available,
+        colors::cyan,
+        "update available",
+    );
+    output::push_count(&mut parts, user_modified, colors::yellow, "user-modified");
+    output::push_count(&mut parts, missing, colors::yellow, "destination missing");
+    parts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +361,31 @@ mod tests {
         let row = shell_row("not installed", false);
 
         assert!(!should_show_shell_in_simple_list(&row));
+    }
+
+    #[test]
+    fn app_status_summary_parts_includes_only_nonzero_counts() {
+        assert_eq!(
+            app_status_summary_parts(3, 1, 0, 0),
+            vec!["3 up-to-date".to_string(), "1 update available".to_string()]
+        );
+    }
+
+    #[test]
+    fn app_status_summary_parts_empty_when_all_zero() {
+        assert!(app_status_summary_parts(0, 0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn app_status_summary_parts_reports_all_four_counters() {
+        assert_eq!(
+            app_status_summary_parts(1, 2, 3, 4),
+            vec![
+                "1 up-to-date".to_string(),
+                "2 update available".to_string(),
+                "3 user-modified".to_string(),
+                "4 destination missing".to_string(),
+            ]
+        );
     }
 }
