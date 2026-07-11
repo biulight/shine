@@ -195,7 +195,11 @@ shine/
 │       │   ├── gpg.rs        # GPG-backed encrypt/decrypt, untagged base64 ciphertext
 │       │   └── age.rs        # age-backed encrypt/decrypt, multi-recipient + Secure Enclave
 │       │                     # (age-plugin-se) identity support, `age:`-tagged ciphertext
-│       ├── show.rs           # `shine info <TARGET>` content display
+│       ├── show/
+│       │   ├── mod.rs        # `shine info <TARGET>`: handle_show orchestration entry point
+│       │   ├── collect.rs    # Gathers installed AppShowFile/ShellShowFile data from manifests
+│       │   ├── resolve.rs    # Resolves a TARGET string to a ShowRef via canonical/alias matching
+│       │   └── render.rs     # println!/diff formatting for app and shell show output
 │       ├── ssh/
 │       │   ├── mod.rs        # `shine ssh`: wraps system ssh, arg splitting, session
 │       │   │                 # bootstrap, wrapped remote command (env vars + EXIT trap)
@@ -250,7 +254,7 @@ shine/
 | `sys list/init` | `cli/src/sys/` |
 | `env show/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
 | `list` | `cli/src/list.rs` |
-| `info <TARGET>` | `cli/src/show.rs` |
+| `info <TARGET>` | `cli/src/show/` |
 | `export` / `link` / `unlink` / `overlay` | `cli/src/presets_commands.rs` |
 | `pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
 | `init` | `main.rs` inline handler |
