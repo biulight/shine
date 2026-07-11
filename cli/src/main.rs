@@ -3,7 +3,7 @@ use clap::Parser;
 
 use cli::{
     apps, clear, colors, commands, completion, config, env, git_pull, list, serve, shells, show,
-    ssh, sys, task, update_check, version,
+    ssh, sys, task, update_check,
 };
 
 use commands::{
@@ -16,7 +16,6 @@ use commands::{ClearCommand, InitCommand, UpdateCommand, UpgradeCommand};
 use config::Config;
 #[cfg(test)]
 use update_check::ReleaseChannel;
-use update_check::UpdateStatus;
 
 use cli::presets_commands::{
     handle_overlay_link, handle_overlay_show, handle_overlay_unlink, handle_presets_export,
@@ -57,7 +56,7 @@ fn main() -> Result<()> {
 
 async fn run(cli: Cli) -> Result<()> {
     if let Commands::Init(cmd) = &cli.command {
-        return handle_init(cmd.yes).await;
+        return cli::init::handle_init(cmd.yes).await;
     }
 
     if let Commands::Clear(cmd) = &cli.command {
@@ -73,49 +72,7 @@ async fn run(cli: Cli) -> Result<()> {
 
     warn_if_runtime_schema_pending(&cli.command).await;
 
-    // Skip the background version check for update/self commands. `shine update`
-    // and `shine self upgrade` do their own forced fetch below; `shine self install`
-    // should remain available even when the current binary is version-gated.
-    let skip_background_update_check = matches!(
-        &cli.command,
-        Commands::Update(..)
-            | Commands::Pull
-            | Commands::Export(..)
-            | Commands::Link(..)
-            | Commands::Unlink
-            | Commands::Overlay { .. }
-            | Commands::Clear(..)
-            | Commands::Self_ { .. }
-            | Commands::Serve { .. }
-            | Commands::Env { .. }
-            | Commands::Run(..)
-    ) || matches!(&cli.command, Commands::Upgrade(cmd) if cmd.pull)
-        || matches!(
-            &cli.command,
-            Commands::Task {
-                command: TaskCommands::Run(..)
-            }
-        );
-    if !skip_background_update_check {
-        match update_check::check_for_update(&config).await {
-            Ok(UpdateStatus::UpToDate) => {}
-            Ok(UpdateStatus::UpdateAvailable { latest }) => {
-                eprintln!(
-                    "A newer version of shine is available: {} -> {}. Run `shine self upgrade` when convenient.",
-                    version::display(),
-                    latest
-                );
-            }
-            Ok(UpdateStatus::UpdateRequired { latest }) => {
-                bail!(
-                    "A newer patch release of shine is required: {} -> {}. Run `shine self upgrade` before continuing.",
-                    version::display(),
-                    latest
-                );
-            }
-            Err(_) => {}
-        }
-    }
+    update_check::maybe_notify(&config, &cli.command).await?;
 
     match cli.command {
         Commands::Init(_) => unreachable!(),
@@ -377,44 +334,6 @@ fn should_warn_runtime_schema(command: &Commands) -> bool {
         command,
         Commands::Init(_) | Commands::Completions { .. } | Commands::Clear(_)
     )
-}
-
-async fn handle_init(yes: bool) -> Result<()> {
-    let current_dir = std::env::current_dir()?;
-    let display_dir = tokio::fs::canonicalize(&current_dir)
-        .await
-        .unwrap_or(current_dir);
-
-    if !yes && !confirm_init(&display_dir)? {
-        println!("{}", colors::dim("Init cancelled."));
-        return Ok(());
-    }
-
-    let path = Config::init_current_dir_config().await?;
-    println!(
-        "{}",
-        colors::green(&format!("Initialized shine config at {}", path.display()))
-    );
-    println!(
-        "{}",
-        colors::dim(&format!("presets_dir = {}", display_dir.display()))
-    );
-    Ok(())
-}
-
-fn confirm_init(dir: &std::path::Path) -> Result<bool> {
-    use std::io::Write as _;
-
-    print!(
-        "Initialize {} as the shine presets directory? [y/N] ",
-        dir.display()
-    );
-    std::io::stdout().flush()?;
-
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    let answer = input.trim();
-    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 #[cfg(test)]

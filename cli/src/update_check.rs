@@ -1,3 +1,4 @@
+use crate::commands::{Commands, TaskCommands};
 use crate::{config::Config, platform, version};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueEnum;
@@ -163,6 +164,61 @@ pub async fn check_for_update(config: &Config) -> Result<UpdateStatus> {
     };
 
     Ok(compare_versions(&current, &latest))
+}
+
+/// Runs the background version check for `command`, unless `command` is one
+/// that already does its own forced fetch (`shine update`, `shine self
+/// upgrade`) or otherwise shouldn't be gated on it (`shine self install`
+/// should stay available even when the current binary is version-gated).
+///
+/// A check failure must never fail the user's command: network errors,
+/// GitHub API errors, and the like are swallowed silently here, same as
+/// before this was extracted from `main.rs`.
+pub async fn maybe_notify(config: &Config, command: &Commands) -> Result<()> {
+    // Skip the background version check for update/self commands. `shine update`
+    // and `shine self upgrade` do their own forced fetch below; `shine self install`
+    // should remain available even when the current binary is version-gated.
+    let skip_background_update_check = matches!(
+        command,
+        Commands::Update(..)
+            | Commands::Pull
+            | Commands::Export(..)
+            | Commands::Link(..)
+            | Commands::Unlink
+            | Commands::Overlay { .. }
+            | Commands::Clear(..)
+            | Commands::Self_ { .. }
+            | Commands::Serve { .. }
+            | Commands::Env { .. }
+            | Commands::Run(..)
+    ) || matches!(command, Commands::Upgrade(cmd) if cmd.pull)
+        || matches!(
+            command,
+            Commands::Task {
+                command: TaskCommands::Run(..)
+            }
+        );
+    if !skip_background_update_check {
+        match check_for_update(config).await {
+            Ok(UpdateStatus::UpToDate) => {}
+            Ok(UpdateStatus::UpdateAvailable { latest }) => {
+                eprintln!(
+                    "A newer version of shine is available: {} -> {}. Run `shine self upgrade` when convenient.",
+                    version::display(),
+                    latest
+                );
+            }
+            Ok(UpdateStatus::UpdateRequired { latest }) => {
+                bail!(
+                    "A newer patch release of shine is required: {} -> {}. Run `shine self upgrade` before continuing.",
+                    version::display(),
+                    latest
+                );
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(())
 }
 
 pub async fn upgrade_to_release(

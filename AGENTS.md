@@ -91,7 +91,12 @@ shine/
 │   ├── build.rs  # cargo:rerun-if-changed=../presets (rust-embed trigger)
 │   └── src/
 │       ├── lib.rs            # Module tree root for the `cli` library crate
-│       ├── main.rs           # Bin crate root: `fn main`, `run()` dispatch, `init` handler
+│       ├── main.rs           # Bin crate root: `fn main`, `run()` dispatch; delegates
+│       │                     # `init` to `cli::init::handle_init` and the background
+│       │                     # version check to `cli::update_check::maybe_notify`
+│       ├── init.rs           # `shine init`: confirm + write a project-local
+│       │                     # shine.config.toml. `pub mod` in lib.rs, same
+│       │                     # lib-testability reasoning as shim.rs.
 │       ├── shim.rs           # Top-level install/reinstall/uninstall <category>:
 │       │                     # infers shell vs app preset, prompts on conflict.
 │       │                     # `pub mod` in lib.rs (not bin-private), so its unit
@@ -219,7 +224,9 @@ shine/
 │       │   └── manifest.rs   # TaskManifest: <shine_dir>/tasks.toml load/save/upsert
 │       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
 │       │                     # since #[cfg(test)] doesn't cross the lib/bin boundary)
-│       ├── update_check.rs   # GitHub release version check, 24h cache
+│       ├── update_check.rs   # GitHub release version check, 24h cache; `maybe_notify`
+│       │                     # gates the background check main.rs runs per-command
+│       │                     # (never fails the user's command on check failure)
 │       └── version.rs        # Version string formatting
 ├── utils/        # Library crate: shared helpers with no cli-crate dependencies
 │   └── src/
@@ -261,7 +268,7 @@ shine/
 | `info <TARGET>` | `cli/src/show/` |
 | `export` / `link` / `unlink` / `overlay` | `cli/src/presets_commands.rs` |
 | `pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
-| `init` | `main.rs` inline handler |
+| `init` | `cli/src/init.rs` |
 | `self install/upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
 | `update` / `upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
 | `clear` | `cli/src/clear.rs` |
