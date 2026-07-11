@@ -1,6 +1,6 @@
 use crate::apps::{
-    AppCategory, AppFile, installed_content_hash, load_active_categories,
-    resolve_install_destination, source_bytes_for_file, source_hash_for_file,
+    AppCategory, AppFile, load_active_categories, resolve_install_destination,
+    source_bytes_for_file,
 };
 use crate::colors;
 use crate::config::Config;
@@ -148,7 +148,8 @@ async fn collect_app_files(config: &Config) -> Result<Vec<AppShowFile>> {
             let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
                 continue;
             };
-            let status = app_file_status(config, &category, file, &entry, env_map).await;
+            let status =
+                crate::status::app_entry_status(config, &category, file, &entry, env_map).await;
             files.push(AppShowFile {
                 category: category.clone(),
                 file: file.clone(),
@@ -631,33 +632,6 @@ fn fallback_app_label(category: &AppCategory, file: &AppFile) -> String {
     file.display_name
         .clone()
         .unwrap_or_else(|| format!("{}/{}", category.name, file.source_rel.display()))
-}
-
-async fn app_file_status(
-    config: &Config,
-    category: &AppCategory,
-    file: &AppFile,
-    entry: &crate::install_core::AppEntry,
-    env: &BTreeMap<String, String>,
-) -> FileStatus {
-    if !entry.destination.exists() {
-        return FileStatus::Missing;
-    }
-    match tokio::fs::read(&entry.destination).await {
-        Ok(bytes) => match installed_content_hash(file, &bytes) {
-            Ok(Some(installed_hash)) if installed_hash == entry.content_hash => {
-                match source_hash_for_file(config, category, file, env).await {
-                    Some(source_hash) if source_hash != entry.content_hash => {
-                        FileStatus::UpdateAvail
-                    }
-                    _ => FileStatus::UpToDate,
-                }
-            }
-            Ok(None) => FileStatus::Missing,
-            Ok(Some(_)) | Err(_) => FileStatus::UserModified,
-        },
-        Err(_) => FileStatus::Missing,
-    }
 }
 
 fn status_parts(status: FileStatus) -> (&'static str, &'static str) {

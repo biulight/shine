@@ -188,6 +188,14 @@ pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
         let source_name = file.source_rel.display().to_string();
         let padding = " ".repeat(col_width.saturating_sub(source_name.len()));
 
+        // Not migrated to status::app_entry_status: this inline computation
+        // distinguishes "missing on disk" (read error) from JsonMerge's
+        // "missing managed keys" (Ok(None)) with separate wording, and never
+        // checks source_hash_for_file for an available update — collapsing
+        // it onto the shared FileStatus enum (which conflates both missing
+        // cases into FileStatus::Missing and would newly report
+        // UpdateAvail here) would be a real behavior change, not a
+        // same-behavior extraction. Left as a known, documented duplicate.
         let dest_str = match resolve_install_destination(cat, file, config) {
             Ok(dest) => {
                 let status = match manifest.find_by_dest(&dest) {
