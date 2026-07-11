@@ -10,6 +10,7 @@ use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
 
+mod drivers;
 mod execution;
 mod manifest;
 mod model;

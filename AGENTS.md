@@ -145,7 +145,12 @@ shine/
 │       │   ├── profile.rs    # Shell-profile install/merge/sentinel logic
 │       │   ├── selection.rs  # Item-selection resolution (profile vs interactive)
 │       │   ├── execution.rs  # Running sys items, parsing script output, run reports
-│       │   └── resources.rs  # Built-in managed-resource drivers (split-dns, etc.)
+│       │   ├── resources.rs  # SystemDriver trait, receipts, BuiltinDriver glue (dispatches
+│       │   │                 # to sys/drivers/*)
+│       │   └── drivers/
+│       │       ├── mod.rs         # pub(super) mod declarations for the driver submodules
+│       │       ├── split_dns.rs   # Split-DNS driver: desired-state, apply/remove, Windows NRPT
+│       │       └── managed_file.rs # Managed-file driver: desired-state, apply/remove
 │       ├── config/
 │       │   ├── mod.rs        # Config struct + accessors, Default, new_for_test
 │       │   ├── load.rs       # load_or_init, global/project layering, schema version read

@@ -1,18 +1,12 @@
 use super::{SysDriverKind, SysItem};
-use crate::config::{Config, full_expand_with_home};
-use crate::install_core::file_ops::{
-    InstallOutcome, UninstallOutcome, install_bytes, install_bytes_admin, uninstall_entry,
-    uninstall_entry_admin,
-};
-use crate::install_core::{AppEntry, AppInstallStrategy, apply_transforms, hash_content};
+use crate::config::Config;
+use crate::sys::drivers::{managed_file, split_dns};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
-const RECEIPT_VERSION: u32 = 1;
-const DNS_MARKER_PREFIX: &str = "Managed by shine: split-dns:";
+pub(super) const RECEIPT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "driver", rename_all = "kebab-case")]
@@ -60,23 +54,23 @@ impl SystemReceipt {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct SplitDnsReceipt {
-    version: u32,
-    os_id: String,
-    item_id: String,
-    domain: String,
-    servers: Vec<String>,
-    resource: String,
-    content_hash: Option<u64>,
+    pub(super) version: u32,
+    pub(super) os_id: String,
+    pub(super) item_id: String,
+    pub(super) domain: String,
+    pub(super) servers: Vec<String>,
+    pub(super) resource: String,
+    pub(super) content_hash: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct ManagedFileReceipt {
-    version: u32,
-    destination: PathBuf,
-    backup: Option<PathBuf>,
-    content_hash: u64,
-    privileged: bool,
-    restart_hint: Option<String>,
+    pub(super) version: u32,
+    pub(super) destination: PathBuf,
+    pub(super) backup: Option<PathBuf>,
+    pub(super) content_hash: u64,
+    pub(super) privileged: bool,
+    pub(super) restart_hint: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -141,7 +135,7 @@ impl BuiltinDriver {
     ) -> Result<Vec<String>> {
         match self.kind {
             SysDriverKind::SplitDns => {
-                let desired = split_dns_desired(context)?;
+                let desired = split_dns::split_dns_desired(context)?;
                 let Some(SystemReceipt::SplitDns(previous)) = previous else {
                     return Ok(vec![
                         "Receipt: missing or incompatible -> desired split DNS state".to_string(),
@@ -181,7 +175,10 @@ impl SystemDriver for BuiltinDriver {
                 let domain = config_env(context, "domain_env")?;
                 let action = if removing { "remove" } else { "converge" };
                 let mut description = format!("{action} split DNS for {domain}");
-                if context.os_id == "ubuntu" && !removing && !systemd_resolved_stub_active() {
+                if context.os_id == "ubuntu"
+                    && !removing
+                    && !split_dns::systemd_resolved_stub_active()
+                {
                     description.push_str(
                         " [WARNING: systemd-resolved's DNS stub (127.0.0.53) looks disabled on \
                          this host, likely because another service holds port 53 (e.g. a \
@@ -220,8 +217,8 @@ impl SystemDriver for BuiltinDriver {
             previous.ensure_supported()?;
         }
         match self.kind {
-            SysDriverKind::SplitDns => apply_split_dns(context, previous).await,
-            SysDriverKind::ManagedFile => apply_managed_file(context, previous).await,
+            SysDriverKind::SplitDns => split_dns::apply_split_dns(context, previous).await,
+            SysDriverKind::ManagedFile => managed_file::apply_managed_file(context, previous).await,
             SysDriverKind::Script => bail!("script is not a built-in system resource driver"),
         }
     }
@@ -235,10 +232,10 @@ impl SystemDriver for BuiltinDriver {
         receipt.ensure_supported()?;
         match (self.kind, receipt) {
             (SysDriverKind::SplitDns, SystemReceipt::SplitDns(receipt)) => {
-                remove_split_dns(receipt, dry_run).await
+                split_dns::remove_split_dns(receipt, dry_run).await
             }
             (SysDriverKind::ManagedFile, SystemReceipt::ManagedFile(receipt)) => {
-                remove_managed_file(receipt, dry_run).await
+                managed_file::remove_managed_file(receipt, dry_run).await
             }
             (kind, receipt) => bail!(
                 "receipt driver mismatch: requested {kind:?}, found {:?}",
@@ -258,14 +255,16 @@ impl SystemDriver for BuiltinDriver {
         previous: Option<&SystemReceipt>,
     ) -> Result<bool> {
         match self.kind {
-            SysDriverKind::SplitDns => split_dns_up_to_date(context).await,
-            SysDriverKind::ManagedFile => managed_file_up_to_date(context, previous).await,
+            SysDriverKind::SplitDns => split_dns::split_dns_up_to_date(context).await,
+            SysDriverKind::ManagedFile => {
+                managed_file::managed_file_up_to_date(context, previous).await
+            }
             SysDriverKind::Script => Ok(false),
         }
     }
 }
 
-fn config_string(config: &toml::Table, key: &str) -> Result<String> {
+pub(super) fn config_string(config: &toml::Table, key: &str) -> Result<String> {
     config
         .get(key)
         .and_then(toml::Value::as_str)
@@ -274,7 +273,7 @@ fn config_string(config: &toml::Table, key: &str) -> Result<String> {
         .with_context(|| format!("driver config requires non-empty `{key}`"))
 }
 
-fn optional_config_string(config: &toml::Table, key: &str) -> Option<String> {
+pub(super) fn optional_config_string(config: &toml::Table, key: &str) -> Option<String> {
     config
         .get(key)
         .and_then(toml::Value::as_str)
@@ -282,7 +281,7 @@ fn optional_config_string(config: &toml::Table, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn config_env(context: &DriverContext<'_>, config_key: &str) -> Result<String> {
+pub(super) fn config_env(context: &DriverContext<'_>, config_key: &str) -> Result<String> {
     let env_key = config_string(&context.item.config, config_key)?;
     context
         .env
@@ -292,709 +291,9 @@ fn config_env(context: &DriverContext<'_>, config_key: &str) -> Result<String> {
         .with_context(|| format!("missing environment variable `{env_key}`"))
 }
 
-fn normalize_domain(domain: &str) -> Result<String> {
-    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    let valid = !domain.is_empty()
-        && domain.len() <= 253
-        && domain.split('.').all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && label
-                    .chars()
-                    .next()
-                    .is_some_and(|character| character.is_ascii_alphanumeric())
-                && label
-                    .chars()
-                    .last()
-                    .is_some_and(|character| character.is_ascii_alphanumeric())
-                && label
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
-        });
-    if !valid {
-        bail!("invalid private DNS domain `{domain}`");
-    }
-    Ok(domain)
-}
-
-fn normalize_servers(servers: &str) -> Result<Vec<String>> {
-    let servers = servers
-        .split([',', ' ', '\t', '\n'])
-        .map(str::trim)
-        .filter(|server| !server.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if servers.is_empty() {
-        bail!("PRIVATE_DNS_SERVERS must contain at least one server");
-    }
-    for server in &servers {
-        server
-            .parse::<std::net::IpAddr>()
-            .with_context(|| format!("invalid DNS server address `{server}`"))?;
-    }
-    Ok(servers)
-}
-
-fn split_dns_desired(context: &DriverContext<'_>) -> Result<SplitDnsReceipt> {
-    let domain = normalize_domain(&config_env(context, "domain_env")?)?;
-    let servers = normalize_servers(&config_env(context, "servers_env")?)?;
-    let resource = match context.os_id {
-        "macos" => format!("/etc/resolver/{domain}"),
-        "ubuntu" => format!(
-            "/etc/systemd/resolved.conf.d/shine-split-dns-{}.conf",
-            context.item.id
-        ),
-        "windows" => format!(".{domain}"),
-        other => bail!("split-dns is unsupported on `{other}`"),
-    };
-    Ok(SplitDnsReceipt {
-        version: RECEIPT_VERSION,
-        os_id: context.os_id.to_string(),
-        item_id: context.item.id.clone(),
-        domain,
-        servers,
-        resource,
-        content_hash: None,
-    })
-}
-
-fn split_dns_marker(item_id: &str) -> String {
-    format!("{DNS_MARKER_PREFIX}{item_id}")
-}
-
-/// Whether systemd-resolved's stub listener (127.0.0.53) is actually the thing
-/// answering DNS on this host. When `DNSStubListener=no` (e.g. because another
-/// service, like a coredns container, holds port 53 instead), the `Domains=`
-/// routing rules shine writes under `/etc/systemd/resolved.conf.d/` are never
-/// consulted by real lookups: glibc and most applications read `/etc/resolv.conf`
-/// directly rather than querying resolved's routing engine. systemd-resolved
-/// documents that in that case `/run/systemd/resolve/stub-resolv.conf` becomes an
-/// alias for the plain uplink `resolv.conf` (no `nameserver 127.0.0.53` line),
-/// which is what we check for here.
-const STUB_RESOLV_CONF: &str = "/run/systemd/resolve/stub-resolv.conf";
-
-/// Sync variant for `plan()`, which the `SystemDriver` trait constrains to a
-/// non-async fn.
-fn systemd_resolved_stub_active() -> bool {
-    stub_active_from(std::fs::read_to_string(STUB_RESOLV_CONF))
-}
-
-/// Async variant for `apply_split_dns`, which otherwise does all of its I/O
-/// via `tokio::fs` -- avoids blocking the executor thread on this read.
-async fn systemd_resolved_stub_active_async() -> bool {
-    stub_active_from(tokio::fs::read_to_string(STUB_RESOLV_CONF).await)
-}
-
-/// Shared parsing logic for both variants above, factored out so the three
-/// outcomes (stub active / stub disabled / file unreadable) are unit-testable
-/// without touching the real filesystem.
-fn stub_active_from(read_result: std::io::Result<String>) -> bool {
-    match read_result {
-        Ok(content) => content
-            .lines()
-            .any(|line| line.trim_start().starts_with("nameserver 127.0.0.53")),
-        // Can't verify (non-systemd host, resolved not running yet, etc.) --
-        // don't block on something we can't confirm is actually broken.
-        Err(_) => true,
-    }
-}
-
-fn split_dns_file_content(receipt: &SplitDnsReceipt) -> Vec<u8> {
-    let marker = split_dns_marker(&receipt.item_id);
-    let content = if receipt.os_id == "macos" {
-        let servers = receipt
-            .servers
-            .iter()
-            .map(|server| format!("nameserver {server}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!("# {marker}\n{servers}\n")
-    } else {
-        format!(
-            "# {marker}\n[Resolve]\nDNS={}\nDomains=~{}\n",
-            receipt.servers.join(" "),
-            receipt.domain
-        )
-    };
-    content.into_bytes()
-}
-
-async fn split_dns_up_to_date(context: &DriverContext<'_>) -> Result<bool> {
-    let desired = split_dns_desired(context)?;
-    if desired.os_id == "windows" {
-        return Ok(false);
-    }
-    let destination = PathBuf::from(&desired.resource);
-    if !destination.exists() {
-        return Ok(false);
-    }
-    let current = tokio::fs::read(&destination)
-        .await
-        .with_context(|| format!("reading {}", destination.display()))?;
-    let marker = format!("# {}", split_dns_marker(&desired.item_id));
-    if !String::from_utf8_lossy(&current)
-        .lines()
-        .any(|line| line == marker)
-    {
-        return Ok(false);
-    }
-    Ok(current == split_dns_file_content(&desired))
-}
-
-async fn apply_split_dns(
-    context: &DriverContext<'_>,
-    previous: Option<&SystemReceipt>,
-) -> Result<ResourceOutcome> {
-    let mut desired = split_dns_desired(context)?;
-    if desired.os_id == "ubuntu" && !systemd_resolved_stub_active_async().await {
-        bail!(
-            "systemd-resolved's DNS stub listener (127.0.0.53) appears to be disabled on this \
-             host, likely because another service is bound to port 53 (e.g. a coredns/dnsmasq \
-             container). Split DNS routing via /etc/systemd/resolved.conf.d only takes effect \
-             when applications query that stub -- with it disabled, this change would be \
-             written but silently ineffective. Re-enable `DNSStubListener` in systemd-resolved, \
-             or point /etc/resolv.conf at whatever is actually resolving DNS on this host, \
-             before retrying."
-        );
-    }
-    if context.dry_run {
-        return Ok(ResourceOutcome {
-            changed: true,
-            detail: format!("{} -> {}", desired.domain, desired.servers.join(", ")),
-            receipt: Some(SystemReceipt::SplitDns(desired)),
-            restart_hint: None,
-        });
-    }
-
-    let previous_to_remove = match previous {
-        Some(SystemReceipt::SplitDns(previous))
-            if previous.resource != desired.resource || previous.os_id != desired.os_id =>
-        {
-            Some(previous)
-        }
-        _ => None,
-    };
-
-    let changed = if desired.os_id == "windows" {
-        apply_windows_split_dns(&desired).await?;
-        true
-    } else {
-        let destination = PathBuf::from(&desired.resource);
-        let content = split_dns_file_content(&desired);
-        if destination.exists() {
-            let current = tokio::fs::read(&destination)
-                .await
-                .with_context(|| format!("reading {}", destination.display()))?;
-            let marker = format!("# {}", split_dns_marker(&desired.item_id));
-            if !String::from_utf8_lossy(&current)
-                .lines()
-                .any(|line| line == marker)
-            {
-                bail!(
-                    "split DNS destination {} exists but is not owned by shine",
-                    destination.display()
-                );
-            }
-            if current == content {
-                if desired.os_id == "ubuntu"
-                    && !matches!(previous, Some(SystemReceipt::SplitDns(_)))
-                {
-                    restart_systemd_resolved().await?;
-                }
-                if let Some(previous) = previous_to_remove {
-                    remove_split_dns(previous, false).await?;
-                }
-                desired.content_hash = Some(hash_content(&content));
-                return Ok(ResourceOutcome {
-                    changed: false,
-                    detail: desired.domain.clone(),
-                    receipt: Some(SystemReceipt::SplitDns(desired)),
-                    restart_hint: None,
-                });
-            }
-        }
-        install_bytes_admin(&content, &destination, destination.exists(), false, true).await?;
-        desired.content_hash = Some(hash_content(&content));
-        if desired.os_id == "ubuntu" {
-            restart_systemd_resolved().await?;
-        }
-        if let Some(previous) = previous_to_remove {
-            remove_split_dns(previous, false).await?;
-        }
-        true
-    };
-
-    Ok(ResourceOutcome {
-        changed,
-        detail: format!("{} -> {}", desired.domain, desired.servers.join(", ")),
-        receipt: Some(SystemReceipt::SplitDns(desired)),
-        restart_hint: None,
-    })
-}
-
-async fn remove_split_dns(receipt: &SplitDnsReceipt, dry_run: bool) -> Result<ResourceOutcome> {
-    if dry_run {
-        return Ok(ResourceOutcome {
-            changed: true,
-            detail: format!("remove split DNS for {}", receipt.domain),
-            receipt: None,
-            restart_hint: None,
-        });
-    }
-    let changed = if receipt.os_id == "windows" {
-        remove_windows_split_dns(receipt).await?
-    } else {
-        let destination = PathBuf::from(&receipt.resource);
-        if !destination.exists() {
-            false
-        } else {
-            let current = tokio::fs::read(&destination)
-                .await
-                .with_context(|| format!("reading {}", destination.display()))?;
-            let marker = format!("# {}", split_dns_marker(&receipt.item_id));
-            if !String::from_utf8_lossy(&current)
-                .lines()
-                .any(|line| line == marker)
-            {
-                bail!(
-                    "refusing to remove non-shine split DNS resource {}",
-                    destination.display()
-                );
-            }
-            let entry = AppEntry {
-                source: format!("sys/{}/split-dns", receipt.os_id),
-                destination: destination.clone(),
-                backup: None,
-                content_hash: hash_content(&current),
-                install_strategy: AppInstallStrategy::Copy,
-                uses_env: false,
-                requires_admin: true,
-            };
-            let outcome = uninstall_entry_admin(&entry, false, false).await?;
-            if receipt.os_id == "ubuntu" {
-                restart_systemd_resolved().await?;
-            }
-            !matches!(outcome, UninstallOutcome::NotFound)
-        }
-    };
-    Ok(ResourceOutcome {
-        changed,
-        detail: format!("split DNS for {} removed", receipt.domain),
-        receipt: None,
-        restart_hint: None,
-    })
-}
-
-async fn restart_systemd_resolved() -> Result<()> {
-    let mut command = if std::env::var("USER").is_ok_and(|user| user == "root") {
-        tokio::process::Command::new("systemctl")
-    } else {
-        let mut command = tokio::process::Command::new("sudo");
-        command.args(["-n", "systemctl"]);
-        command
-    };
-    let status = command
-        .args(["restart", "systemd-resolved"])
-        .status()
-        .await
-        .context("restarting systemd-resolved")?;
-    if !status.success() {
-        bail!("failed to restart systemd-resolved");
-    }
-    Ok(())
-}
-
-async fn apply_windows_split_dns(receipt: &SplitDnsReceipt) -> Result<()> {
-    let comment = split_dns_marker(&receipt.item_id);
-    let servers = receipt
-        .servers
-        .iter()
-        .map(|server| format!("'{}'", ps_quote(server)))
-        .collect::<Vec<_>>()
-        .join(",");
-    let script = format!(
-        "$rules=@(Get-DnsClientNrptRule | Where-Object {{$_.Comment -eq '{comment}'}}); \
-         foreach($rule in $rules){{Remove-DnsClientNrptRule -Name $rule.Name -Force}}; \
-         Add-DnsClientNrptRule -Namespace '{namespace}' -NameServers @({servers}) -Comment '{comment}' | Out-Null",
-        comment = ps_quote(&comment),
-        namespace = ps_quote(&receipt.resource),
-    );
-    run_elevated_powershell(&script).await
-}
-
-async fn remove_windows_split_dns(receipt: &SplitDnsReceipt) -> Result<bool> {
-    let comment = split_dns_marker(&receipt.item_id);
-    let script = format!(
-        "$rules=@(Get-DnsClientNrptRule | Where-Object {{$_.Comment -eq '{comment}'}}); \
-         foreach($rule in $rules){{Remove-DnsClientNrptRule -Name $rule.Name -Force}}",
-        comment = ps_quote(&comment),
-    );
-    run_elevated_powershell(&script).await?;
-    Ok(true)
-}
-
-fn ps_quote(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
-async fn run_elevated_powershell(script: &str) -> Result<()> {
-    let id = uuid::Uuid::new_v4();
-    let script_path = std::env::temp_dir().join(format!("shine-system-{id}.ps1"));
-    let result_path = std::env::temp_dir().join(format!("shine-system-{id}.result"));
-    let body = format!(
-        "$ErrorActionPreference='Stop'\ntry {{\n{script}\nSet-Content -LiteralPath '{result}' -Value 'ok'\nexit 0\n}} catch {{\nSet-Content -LiteralPath '{result}' -Value $_.Exception.Message\nexit 1\n}}\n",
-        result = ps_quote(&result_path.display().to_string())
-    );
-    tokio::fs::write(&script_path, body)
-        .await
-        .with_context(|| format!("writing {}", script_path.display()))?;
-    let arguments = format!(
-        "@('-NoProfile','-ExecutionPolicy','Bypass','-File','\"{}\"')",
-        ps_quote(&script_path.display().to_string())
-    );
-    let wrapper = format!(
-        "$p=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList {arguments}; exit $p.ExitCode"
-    );
-    let status = tokio::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command", &wrapper])
-        .stdin(Stdio::inherit())
-        .status()
-        .await
-        .context("running elevated PowerShell")?;
-    let result = tokio::fs::read_to_string(&result_path)
-        .await
-        .unwrap_or_else(|_| "elevated process did not return a result".to_string());
-    let _ = tokio::fs::remove_file(&script_path).await;
-    let _ = tokio::fs::remove_file(&result_path).await;
-    if !status.success() {
-        bail!("elevated PowerShell operation failed: {}", result.trim());
-    }
-    Ok(())
-}
-
-fn managed_file_desired(context: &DriverContext<'_>) -> Result<(PathBuf, Vec<u8>, Option<String>)> {
-    let source = config_string(&context.item.config, "source")?;
-    let target = config_string(&context.item.config, "target")?;
-    let source = PathBuf::from(source);
-    if source.is_absolute()
-        || source
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        bail!("managed-file source must stay within its preset directory");
-    }
-    let source = context.preset_root.join(source);
-    let canonical_root = std::fs::canonicalize(context.preset_root)
-        .with_context(|| format!("reading preset root {}", context.preset_root.display()))?;
-    let canonical_source =
-        std::fs::canonicalize(&source).with_context(|| format!("reading {}", source.display()))?;
-    if !canonical_source.starts_with(&canonical_root) {
-        bail!("managed-file source must stay within its preset directory");
-    }
-    let target = PathBuf::from(
-        full_expand_with_home(&target, &context.config.home_dir)
-            .with_context(|| format!("expanding managed-file target `{target}`"))?,
-    );
-    if !target.is_absolute() {
-        bail!("managed-file target must resolve to an absolute path");
-    }
-    let raw = std::fs::read(&canonical_source)
-        .with_context(|| format!("reading {}", canonical_source.display()))?;
-    let transforms = context
-        .item
-        .config
-        .get("transforms")
-        .and_then(toml::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_string)
-                        .context("managed-file transforms must be strings")
-                })
-                .collect::<Result<Vec<_>>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
-    let content = if transforms.is_empty() {
-        raw
-    } else {
-        apply_transforms(&transforms, &raw, context.env)?
-    };
-    Ok((
-        target,
-        content,
-        optional_config_string(&context.item.config, "restart_hint"),
-    ))
-}
-
-async fn managed_file_up_to_date(
-    context: &DriverContext<'_>,
-    previous: Option<&SystemReceipt>,
-) -> Result<bool> {
-    let Some(SystemReceipt::ManagedFile(previous)) = previous else {
-        return Ok(false);
-    };
-    let (destination, content, _restart_hint) = managed_file_desired(context)?;
-    if previous.destination != destination || !destination.exists() {
-        return Ok(false);
-    }
-    let current = tokio::fs::read(&destination)
-        .await
-        .with_context(|| format!("reading {}", destination.display()))?;
-    if hash_content(&current) != previous.content_hash {
-        return Ok(false);
-    }
-    Ok(current == content)
-}
-
-async fn apply_managed_file(
-    context: &DriverContext<'_>,
-    previous: Option<&SystemReceipt>,
-) -> Result<ResourceOutcome> {
-    let (destination, content, restart_hint) = managed_file_desired(context)?;
-    let previous = match previous {
-        Some(SystemReceipt::ManagedFile(receipt)) => Some(receipt),
-        Some(other) => bail!("managed-file received {:?} receipt", other.driver()),
-        None => None,
-    };
-    if context.dry_run {
-        return Ok(ResourceOutcome {
-            changed: true,
-            detail: destination.display().to_string(),
-            receipt: None,
-            restart_hint,
-        });
-    }
-    if let Some(previous) = previous {
-        if previous.destination != destination {
-            remove_managed_file(previous, false).await?;
-        } else if destination.exists() {
-            let current = tokio::fs::read(&destination).await?;
-            if hash_content(&current) != previous.content_hash {
-                bail!(
-                    "managed file {} was modified; keeping user content",
-                    destination.display()
-                );
-            }
-            if current == content {
-                return Ok(ResourceOutcome {
-                    changed: false,
-                    detail: destination.display().to_string(),
-                    receipt: Some(SystemReceipt::ManagedFile(previous.clone())),
-                    restart_hint: None,
-                });
-            }
-        }
-    }
-    let is_managed = previous.is_some_and(|receipt| receipt.destination == destination);
-    let outcome = if context.item.requires_admin {
-        install_bytes_admin(&content, &destination, is_managed, false, true).await?
-    } else {
-        install_bytes(&content, &destination, is_managed, false, true).await?
-    };
-    let changed = !matches!(outcome, InstallOutcome::AlreadyManaged);
-    let backup = match outcome {
-        InstallOutcome::BackedUpAndInstalled { backup, .. } => Some(backup),
-        _ => previous.and_then(|receipt| receipt.backup.clone()),
-    };
-    let receipt = ManagedFileReceipt {
-        version: RECEIPT_VERSION,
-        destination: destination.clone(),
-        backup,
-        content_hash: hash_content(&content),
-        privileged: context.item.requires_admin,
-        restart_hint: restart_hint.clone(),
-    };
-    Ok(ResourceOutcome {
-        changed,
-        detail: destination.display().to_string(),
-        receipt: Some(SystemReceipt::ManagedFile(receipt)),
-        restart_hint,
-    })
-}
-
-async fn remove_managed_file(
-    receipt: &ManagedFileReceipt,
-    dry_run: bool,
-) -> Result<ResourceOutcome> {
-    let entry = AppEntry {
-        source: "sys/managed-file".to_string(),
-        destination: receipt.destination.clone(),
-        backup: receipt.backup.clone(),
-        content_hash: receipt.content_hash,
-        install_strategy: AppInstallStrategy::Copy,
-        uses_env: false,
-        requires_admin: receipt.privileged,
-    };
-    let outcome = if receipt.privileged {
-        uninstall_entry_admin(&entry, dry_run, false).await?
-    } else {
-        uninstall_entry(&entry, dry_run, false).await?
-    };
-    if matches!(outcome, UninstallOutcome::UserModified) {
-        bail!(
-            "managed file {} was modified; keeping user content",
-            receipt.destination.display()
-        );
-    }
-    Ok(ResourceOutcome {
-        changed: !matches!(outcome, UninstallOutcome::NotFound),
-        detail: receipt.destination.display().to_string(),
-        receipt: None,
-        restart_hint: receipt.restart_hint.clone(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sys::{SysDriverKind, SysItem, SysItemMode};
-
-    async fn make_temp_dir() -> PathBuf {
-        crate::test_support::make_temp_dir("shine-resource").await
-    }
-
-    #[test]
-    fn stub_active_from_detects_the_stub_nameserver_line() {
-        let content = "nameserver 127.0.0.53\noptions edns0\n".to_string();
-        assert!(stub_active_from(Ok(content)));
-    }
-
-    #[test]
-    fn stub_active_from_detects_a_disabled_stub() {
-        // When `DNSStubListener=no`, stub-resolv.conf becomes an alias for the
-        // plain uplink resolv.conf and has no 127.0.0.53 nameserver line.
-        let content = "nameserver 192.0.2.1\n".to_string();
-        assert!(!stub_active_from(Ok(content)));
-    }
-
-    #[test]
-    fn stub_active_from_fails_open_when_unreadable() {
-        let error = std::io::Error::new(std::io::ErrorKind::NotFound, "missing");
-        assert!(stub_active_from(Err(error)));
-    }
-
-    fn managed_file_item(source: &str, target: &Path) -> SysItem {
-        let mut config = toml::Table::new();
-        config.insert(
-            "source".to_string(),
-            toml::Value::String(source.to_string()),
-        );
-        config.insert(
-            "target".to_string(),
-            toml::Value::String(target.display().to_string()),
-        );
-        config.insert(
-            "restart_hint".to_string(),
-            toml::Value::String("Restart sample".to_string()),
-        );
-        SysItem {
-            id: "sample-file".to_string(),
-            label: "Sample file".to_string(),
-            description: String::new(),
-            default: false,
-            mode: SysItemMode::Managed,
-            requires_admin: false,
-            required_env: Vec::new(),
-            driver: SysDriverKind::ManagedFile,
-            config,
-        }
-    }
-
-    #[tokio::test]
-    async fn managed_file_backs_up_converges_and_restores() {
-        let dir = make_temp_dir().await;
-        let source = dir.join("source.txt");
-        let destination = dir.join("destination.txt");
-        tokio::fs::write(&source, "desired").await.unwrap();
-        tokio::fs::write(&destination, "original").await.unwrap();
-        let config = Config::new_for_test(&dir);
-        let item = managed_file_item("source.txt", &destination);
-        let env = BTreeMap::new();
-        let context = DriverContext {
-            config: &config,
-            os_id: "fakeos",
-            item: &item,
-            preset_root: &dir,
-            env: &env,
-            dry_run: false,
-        };
-        let driver = BuiltinDriver::new(SysDriverKind::ManagedFile);
-
-        let installed = driver.apply(&context, None).await.unwrap();
-        assert!(installed.changed);
-        assert_eq!(
-            tokio::fs::read_to_string(&destination).await.unwrap(),
-            "desired"
-        );
-        assert_eq!(installed.restart_hint.as_deref(), Some("Restart sample"));
-        let receipt = installed.receipt.unwrap();
-
-        let unchanged = driver.apply(&context, Some(&receipt)).await.unwrap();
-        assert!(!unchanged.changed);
-        assert!(unchanged.restart_hint.is_none());
-
-        tokio::fs::write(&destination, "user edit").await.unwrap();
-        let error = driver.apply(&context, Some(&receipt)).await.unwrap_err();
-        assert!(error.to_string().contains("modified"));
-
-        tokio::fs::write(&destination, "desired").await.unwrap();
-        let removed = driver
-            .remove(Some(&context), &receipt, false)
-            .await
-            .unwrap();
-        assert!(removed.changed);
-        assert_eq!(
-            tokio::fs::read_to_string(&destination).await.unwrap(),
-            "original"
-        );
-
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn managed_file_is_up_to_date_matches_apply_convergence() {
-        let dir = make_temp_dir().await;
-        let source = dir.join("source.txt");
-        let destination = dir.join("destination.txt");
-        tokio::fs::write(&source, "desired").await.unwrap();
-        let config = Config::new_for_test(&dir);
-        let item = managed_file_item("source.txt", &destination);
-        let env = BTreeMap::new();
-        let context = DriverContext {
-            config: &config,
-            os_id: "fakeos",
-            item: &item,
-            preset_root: &dir,
-            env: &env,
-            dry_run: false,
-        };
-        let driver = BuiltinDriver::new(SysDriverKind::ManagedFile);
-
-        assert!(!driver.is_up_to_date(&context, None).await.unwrap());
-
-        let installed = driver.apply(&context, None).await.unwrap();
-        let receipt = installed.receipt.unwrap();
-        assert!(
-            driver
-                .is_up_to_date(&context, Some(&receipt))
-                .await
-                .unwrap()
-        );
-
-        tokio::fs::write(&source, "changed").await.unwrap();
-        assert!(
-            !driver
-                .is_up_to_date(&context, Some(&receipt))
-                .await
-                .unwrap()
-        );
-
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
 
     #[test]
     fn receipt_roundtrips_with_version_and_driver() {
@@ -1018,186 +317,5 @@ mod tests {
         assert!(encoded.contains("version = 1"));
         let decoded: Wrapper = toml::from_str(&encoded).unwrap();
         assert_eq!(decoded.receipt, receipt);
-    }
-
-    #[test]
-    fn split_dns_plans_platform_owned_resources() {
-        let dir = std::env::temp_dir();
-        let config = Config::new_for_test(&dir);
-        let mut driver_config = toml::Table::new();
-        driver_config.insert(
-            "domain_env".to_string(),
-            toml::Value::String("DOMAIN".to_string()),
-        );
-        driver_config.insert(
-            "servers_env".to_string(),
-            toml::Value::String("SERVERS".to_string()),
-        );
-        let item = SysItem {
-            id: "private-dns".to_string(),
-            label: "Private DNS".to_string(),
-            description: String::new(),
-            default: false,
-            mode: SysItemMode::Managed,
-            requires_admin: true,
-            required_env: vec!["DOMAIN".to_string(), "SERVERS".to_string()],
-            driver: SysDriverKind::SplitDns,
-            config: driver_config,
-        };
-        let env = BTreeMap::from([
-            ("DOMAIN".to_string(), "Home.Example.COM.".to_string()),
-            ("SERVERS".to_string(), "10.0.0.2, 10.0.0.3".to_string()),
-        ]);
-        for (os_id, expected) in [
-            ("macos", "/etc/resolver/home.example.com"),
-            (
-                "ubuntu",
-                "/etc/systemd/resolved.conf.d/shine-split-dns-private-dns.conf",
-            ),
-            ("windows", ".home.example.com"),
-        ] {
-            let context = DriverContext {
-                config: &config,
-                os_id,
-                item: &item,
-                preset_root: &dir,
-                env: &env,
-                dry_run: true,
-            };
-            let receipt = split_dns_desired(&context).unwrap();
-            assert_eq!(receipt.resource, expected);
-            assert_eq!(receipt.servers, ["10.0.0.2", "10.0.0.3"]);
-            if os_id != "windows" {
-                let content = String::from_utf8(split_dns_file_content(&receipt)).unwrap();
-                assert!(content.contains("Managed by shine: split-dns:private-dns"));
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn split_dns_up_to_date_is_false_for_windows_and_missing_destination() {
-        let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
-        let mut driver_config = toml::Table::new();
-        driver_config.insert(
-            "domain_env".to_string(),
-            toml::Value::String("DOMAIN".to_string()),
-        );
-        driver_config.insert(
-            "servers_env".to_string(),
-            toml::Value::String("SERVERS".to_string()),
-        );
-        let item = SysItem {
-            id: format!("private-dns-{}", uuid::Uuid::new_v4()),
-            label: "Private DNS".to_string(),
-            description: String::new(),
-            default: false,
-            mode: SysItemMode::Managed,
-            requires_admin: true,
-            required_env: vec!["DOMAIN".to_string(), "SERVERS".to_string()],
-            driver: SysDriverKind::SplitDns,
-            config: driver_config,
-        };
-        let env = BTreeMap::from([
-            ("DOMAIN".to_string(), "home.example.com".to_string()),
-            ("SERVERS".to_string(), "10.0.0.2".to_string()),
-        ]);
-
-        // Windows always reports not-up-to-date: there is no cheap read-only
-        // check available, so the caller falls back to requesting admin.
-        let windows_context = DriverContext {
-            config: &config,
-            os_id: "windows",
-            item: &item,
-            preset_root: &dir,
-            env: &env,
-            dry_run: false,
-        };
-        assert!(!split_dns_up_to_date(&windows_context).await.unwrap());
-
-        // A fresh item id has never had its resource file written, so it must
-        // never be reported as up-to-date (that would skip the admin prompt
-        // for a change that hasn't actually been applied yet).
-        let ubuntu_context = DriverContext {
-            config: &config,
-            os_id: "ubuntu",
-            item: &item,
-            preset_root: &dir,
-            env: &env,
-            dry_run: false,
-        };
-        assert!(!split_dns_up_to_date(&ubuntu_context).await.unwrap());
-
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[test]
-    fn split_dns_rejects_invalid_domains_and_servers() {
-        for domain in ["", ".example.com", "bad..example", "-bad.example"] {
-            assert!(normalize_domain(domain).is_err(), "accepted {domain:?}");
-        }
-        assert!(normalize_servers("not-an-ip").is_err());
-        assert!(normalize_servers(" ").is_err());
-    }
-
-    #[test]
-    fn split_dns_env_change_requires_update() {
-        let dir = std::env::temp_dir();
-        let config = Config::new_for_test(&dir);
-        let mut driver_config = toml::Table::new();
-        driver_config.insert(
-            "domain_env".to_string(),
-            toml::Value::String("DOMAIN".to_string()),
-        );
-        driver_config.insert(
-            "servers_env".to_string(),
-            toml::Value::String("SERVERS".to_string()),
-        );
-        let item = SysItem {
-            id: "split-dns".to_string(),
-            label: "Private DNS".to_string(),
-            description: String::new(),
-            default: false,
-            mode: SysItemMode::Managed,
-            requires_admin: true,
-            required_env: vec!["DOMAIN".to_string(), "SERVERS".to_string()],
-            driver: SysDriverKind::SplitDns,
-            config: driver_config,
-        };
-        let original_env = BTreeMap::from([
-            ("DOMAIN".to_string(), "private.example".to_string()),
-            ("SERVERS".to_string(), "10.0.0.2".to_string()),
-        ]);
-        let original_context = DriverContext {
-            config: &config,
-            os_id: "macos",
-            item: &item,
-            preset_root: &dir,
-            env: &original_env,
-            dry_run: true,
-        };
-        let receipt = SystemReceipt::SplitDns(split_dns_desired(&original_context).unwrap());
-        let driver = BuiltinDriver::new(SysDriverKind::SplitDns);
-        assert!(
-            driver
-                .update_details(&original_context, Some(&receipt))
-                .unwrap()
-                .is_empty()
-        );
-        let changed_env = BTreeMap::from([
-            ("DOMAIN".to_string(), "private.example".to_string()),
-            ("SERVERS".to_string(), "10.0.0.3".to_string()),
-        ]);
-        let changed_context = DriverContext {
-            env: &changed_env,
-            ..original_context
-        };
-
-        assert_eq!(
-            driver
-                .update_details(&changed_context, Some(&receipt))
-                .unwrap(),
-            ["Servers: 10.0.0.2 -> 10.0.0.3"]
-        );
     }
 }
