@@ -14,8 +14,6 @@ mod age;
 mod exec;
 mod gpg;
 
-pub(crate) use exec::ensure_command;
-
 use anyhow::{Result, bail};
 use std::path::PathBuf;
 use std::str::FromStr;

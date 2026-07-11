@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 use super::exec::{
-    TempFile, decode_base64_to_file, encode_base64_single_line, ensure_command,
-    write_stdin_and_wait,
+    TempFile, decode_base64_to_file, encode_base64_single_line, write_stdin_and_wait,
 };
+use crate::proc::ensure_command;
 
 pub async fn encrypt_age_secret_to_base64(
     plaintext: &[u8],

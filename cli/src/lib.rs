@@ -16,6 +16,7 @@ pub mod persist;
 pub mod platform;
 pub mod presets;
 pub mod privilege;
+pub mod proc;
 pub mod secret;
 pub mod serve;
 pub mod shell_quote;

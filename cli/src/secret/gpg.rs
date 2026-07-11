@@ -8,9 +8,9 @@ use std::path::Path;
 use tokio::process::Command;
 
 use super::exec::{
-    TempFile, decode_base64_to_file, encode_base64_single_line, ensure_command,
-    write_stdin_and_wait,
+    TempFile, decode_base64_to_file, encode_base64_single_line, write_stdin_and_wait,
 };
+use crate::proc::ensure_command;
 
 pub async fn decrypt_base64_gpg_secret(encoded_secret: &str) -> Result<String> {
     if encoded_secret.trim().is_empty() {

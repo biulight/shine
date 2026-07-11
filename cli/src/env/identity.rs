@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 use crate::config::Config;
-use crate::secret::ensure_command;
+use crate::proc::ensure_command;
 use crate::{colors, path_display};
 
 const DEFAULT_ACCESS_CONTROL: &str = "any-biometry";

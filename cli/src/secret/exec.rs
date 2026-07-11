@@ -6,27 +6,6 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
-pub(crate) fn ensure_command(name: &str) -> Result<()> {
-    let found = std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| {
-                if dir.join(name).is_file() {
-                    return true;
-                }
-                #[cfg(windows)]
-                if dir.join(format!("{name}.exe")).is_file() {
-                    return true;
-                }
-                false
-            })
-        })
-        .unwrap_or(false);
-    if !found {
-        bail!("{name} is not installed or not on PATH");
-    }
-    Ok(())
-}
-
 pub(crate) async fn decode_base64_to_file(encoded_secret: &str, output_path: &Path) -> Result<()> {
     if run_base64_decode(encoded_secret, output_path, "--decode").await? {
         return Ok(());
