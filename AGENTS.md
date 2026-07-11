@@ -138,7 +138,12 @@ shine/
 │       │   ├── template.rs   # @@VAR@@ template rendering for installed scripts
 │       │   └── metadata.rs   # ShellCategory/ShellFile parsing from shine.toml or .sh files
 │       ├── sys/
-│       │   ├── mod.rs        # sys handle_* entry points, OS detection, init/apply orchestration
+│       │   ├── mod.rs        # Module root: mod declarations + re-exports (handle_*, detect_os_id)
+│       │   ├── commands.rs   # handle_* orchestration: list/info/status/init/apply/uninstall,
+│       │   │                 # managed_updates, run_managed, preset-manifest loading
+│       │   ├── render.rs     # Presentation helpers: sys_init_theme, print_available_item,
+│       │   │                 # item/driver name labels, print_dry_run
+│       │   ├── detect.rs     # detect_os_id / detect_os_id_from (OS + Linux distro detection)
 │       │   ├── model.rs      # SysManifest/SysItem/SysItemStatus/SysItemOutcome/SelectionSource, etc.
 │       │   ├── run_manifest.rs # SysRunManifest/SysRunEntry: ~/.shine/sys-manifest.toml load/save
 │       │   ├── manifest.rs   # Preset loading, parsing, and validation
