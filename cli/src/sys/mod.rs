@@ -2,6 +2,7 @@ mod commands;
 mod detect;
 mod drivers;
 mod execution;
+mod managed;
 mod manifest;
 mod model;
 mod profile;
@@ -10,7 +11,8 @@ mod resources;
 mod run_manifest;
 mod selection;
 
-use commands::{SYS_STATUS_PREFIX, SysAction};
+use commands::SYS_STATUS_PREFIX;
+use managed::SysAction;
 use model::{
     LoadedSysPreset, ResolvedSelection, SYS_PROFILE_PHASES, SelectionSource,
     ShellProfileBlockPosition, SysDriverKind, SysInitCommand, SysItem, SysItemMode, SysItemOutcome,
@@ -18,8 +20,6 @@ use model::{
 };
 use render::sys_init_theme;
 
-pub use commands::{
-    handle_apply, handle_info, handle_init, handle_list, handle_status, handle_uninstall,
-    handle_upgrade_managed, managed_updates,
-};
+pub use commands::{handle_info, handle_init, handle_list, handle_status};
 pub use detect::detect_os_id;
+pub use managed::{handle_apply, handle_uninstall, handle_upgrade_managed, managed_updates};

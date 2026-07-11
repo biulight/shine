@@ -161,8 +161,11 @@ shine/
 │       │   └── metadata.rs   # ShellCategory/ShellFile parsing from shine.toml or .sh files
 │       ├── sys/
 │       │   ├── mod.rs        # Module root: mod declarations + re-exports (handle_*, detect_os_id)
-│       │   ├── commands.rs   # handle_* orchestration: list/info/status/init/apply/uninstall,
-│       │   │                 # managed_updates, run_managed, preset-manifest loading
+│       │   ├── commands.rs   # handle_list/handle_info/handle_status/handle_init orchestration,
+│       │   │                 # preset-manifest loading
+│       │   ├── managed.rs    # Managed-item command family: SysAction, handle_apply/
+│       │   │                 # handle_uninstall/handle_upgrade_managed, managed_updates,
+│       │   │                 # run_managed (converge/remove a managed sys resource)
 │       │   ├── render.rs     # Presentation helpers: sys_init_theme, print_available_item,
 │       │   │                 # item/driver name labels, print_dry_run
 │       │   ├── detect.rs     # detect_os_id / detect_os_id_from (OS + Linux distro detection)
