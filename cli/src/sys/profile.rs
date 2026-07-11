@@ -1007,3 +1007,219 @@ fn sys_loader_display(os_id: &str) -> String {
         if os_id == "windows" { "ps1" } else { "sh" }
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SENTINEL: (&str, &str) = ("START", "END");
+
+    #[test]
+    fn remove_sentinel_block_returns_unchanged_when_sentinel_absent() {
+        let content = "no sentinel here\n";
+        assert_eq!(remove_sentinel_block(content, SENTINEL), content);
+    }
+
+    #[test]
+    fn remove_sentinel_block_removes_bounded_lines_but_keeps_preceding_blank_line() {
+        // Unlike shells/profile.rs's byte-offset version, this line-based
+        // implementation never consumes a preceding blank line separator —
+        // it only drops the sentinel lines themselves.
+        let content = "before\n\nSTART\nbody\nEND\nafter\n";
+        assert_eq!(
+            remove_sentinel_block(content, SENTINEL),
+            "before\n\nafter\n"
+        );
+    }
+
+    #[test]
+    fn remove_sentinel_block_normalizes_crlf_to_lf_even_without_sentinel() {
+        // content.lines() strips '\r' unconditionally, so any CRLF input is
+        // normalized to LF by this function, whether or not it contains the
+        // sentinel — a side effect shells/profile.rs's byte-offset version
+        // does not have.
+        let content = "before\r\nafter\r\n";
+        assert_eq!(remove_sentinel_block(content, SENTINEL), "before\nafter\n");
+    }
+
+    #[test]
+    fn remove_sentinel_block_preserves_trailing_newline_presence() {
+        let with_newline = "before\nSTART\nbody\nEND\nafter\n";
+        let without_newline = "before\nSTART\nbody\nEND\nafter";
+        assert!(remove_sentinel_block(with_newline, SENTINEL).ends_with('\n'));
+        assert!(!remove_sentinel_block(without_newline, SENTINEL).ends_with('\n'));
+    }
+
+    #[test]
+    fn extract_sentinel_block_returns_none_when_start_missing() {
+        assert_eq!(extract_sentinel_block("no markers here", SENTINEL), None);
+    }
+
+    #[test]
+    fn extract_sentinel_block_returns_none_when_end_missing_after_start() {
+        assert_eq!(extract_sentinel_block("STARTonly, no end", SENTINEL), None);
+    }
+
+    #[test]
+    fn extract_sentinel_block_includes_one_trailing_newline_when_present() {
+        let content = "pre\nSTART\nbody\nEND\npost";
+        assert_eq!(
+            extract_sentinel_block(content, SENTINEL),
+            Some("START\nbody\nEND\n")
+        );
+    }
+
+    #[test]
+    fn extract_sentinel_block_omits_trailing_newline_when_absent() {
+        let content = "pre\nSTART\nbody\nEND";
+        assert_eq!(
+            extract_sentinel_block(content, SENTINEL),
+            Some("START\nbody\nEND")
+        );
+    }
+
+    #[test]
+    fn insert_start_adds_exactly_one_blank_line_before_nonempty_content() {
+        let updated =
+            insert_shell_profile_block("rest", "BLOCK\n", ShellProfileBlockPosition::Start);
+        assert_eq!(updated, "BLOCK\n\nrest");
+    }
+
+    #[test]
+    fn insert_start_into_empty_content_has_no_trailing_blank_line() {
+        let updated = insert_shell_profile_block("", "BLOCK\n", ShellProfileBlockPosition::Start);
+        assert_eq!(updated, "BLOCK\n");
+    }
+
+    #[test]
+    fn insert_end_adds_exactly_one_blank_line_regardless_of_existing_trailing_newline() {
+        let with_newline =
+            insert_shell_profile_block("rest\n", "BLOCK\n", ShellProfileBlockPosition::End);
+        let without_newline =
+            insert_shell_profile_block("rest", "BLOCK\n", ShellProfileBlockPosition::End);
+        assert_eq!(with_newline, "rest\n\nBLOCK\n");
+        assert_eq!(without_newline, "rest\n\nBLOCK\n");
+    }
+
+    #[test]
+    fn insert_end_into_empty_content_has_no_leading_blank_line() {
+        let updated = insert_shell_profile_block("", "BLOCK\n", ShellProfileBlockPosition::End);
+        assert_eq!(updated, "BLOCK\n");
+    }
+
+    #[test]
+    fn trim_outer_blank_lines_removes_all_leading_and_trailing_newlines() {
+        assert_eq!(trim_outer_blank_lines("\n\n\nfoo\nbar\n\n"), "foo\nbar");
+    }
+
+    #[test]
+    fn sentinel_order_is_valid_requires_first_before_second() {
+        let first = ("FIRST_START", "FIRST_END");
+        let second = ("SECOND_START", "SECOND_END");
+        assert!(sentinel_order_is_valid(
+            "x FIRST_START y SECOND_START z",
+            first,
+            second
+        ));
+        assert!(!sentinel_order_is_valid(
+            "x SECOND_START y FIRST_START z",
+            first,
+            second
+        ));
+        assert!(!sentinel_order_is_valid(
+            "neither marker present",
+            first,
+            second
+        ));
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profile_blocks_inserts_pre_and_post_on_empty_file() {
+        let dir = crate::test_support::make_temp_dir("shine-sys-profile").await;
+        let path = dir.join("profile.sh");
+
+        let updated = update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+            .await
+            .unwrap();
+
+        assert!(updated);
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(content.contains("shine ubuntu sys pre"));
+        assert!(content.contains("shine ubuntu sys post"));
+        // Pre block must come before the post block.
+        assert!(content.find("sys pre").unwrap() < content.find("sys post").unwrap());
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profile_blocks_is_idempotent_when_already_up_to_date() {
+        let dir = crate::test_support::make_temp_dir("shine-sys-profile").await;
+        let path = dir.join("profile.sh");
+
+        assert!(
+            update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+                .await
+                .unwrap()
+        );
+        // Second call against the now-converged file must report no change.
+        assert!(
+            !update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+                .await
+                .unwrap()
+        );
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profile_blocks_preserves_leading_bom() {
+        let dir = crate::test_support::make_temp_dir("shine-sys-profile").await;
+        let path = dir.join("profile.ps1");
+        tokio::fs::write(&path, "\u{feff}# existing content\n")
+            .await
+            .unwrap();
+
+        update_sys_shell_profile_blocks(&path, "windows", None)
+            .await
+            .unwrap();
+
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(
+            content.starts_with('\u{feff}'),
+            "BOM must be preserved at the start of the file"
+        );
+        assert_eq!(
+            content.matches('\u{feff}').count(),
+            1,
+            "exactly one BOM must remain, not re-duplicated"
+        );
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_sys_shell_profile_blocks_migrates_legacy_sentinel() {
+        let dir = crate::test_support::make_temp_dir("shine-sys-profile").await;
+        let path = dir.join("profile.sh");
+        let (legacy_start, legacy_end) = legacy_sys_sentinel("ubuntu");
+        tokio::fs::write(&path, format!("{legacy_start}\nold body\n{legacy_end}\n"))
+            .await
+            .unwrap();
+
+        let updated = update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
+            .await
+            .unwrap();
+
+        assert!(updated);
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(
+            !content.contains(legacy_start),
+            "legacy sentinel must be removed"
+        );
+        assert!(content.contains("shine ubuntu sys pre"));
+        assert!(content.contains("shine ubuntu sys post"));
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+}

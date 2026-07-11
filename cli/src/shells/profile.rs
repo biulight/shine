@@ -370,3 +370,54 @@ pub(super) async fn remove_managed_shell_profile(config: &Config) -> Result<()> 
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remove_sentinel_block_returns_unchanged_when_no_start_marker() {
+        let content = "before\nafter\n";
+        assert_eq!(remove_sentinel_block(content), content);
+    }
+
+    #[test]
+    fn remove_sentinel_block_returns_unchanged_when_end_marker_missing() {
+        let content = format!("before\n\n{SENTINEL_START}\nbody\nafter");
+        assert_eq!(remove_sentinel_block(&content), content);
+    }
+
+    #[test]
+    fn remove_sentinel_block_consumes_one_preceding_blank_line() {
+        let content = format!("before\n\n{SENTINEL_START}\nbody\n{SENTINEL_END}\nafter");
+        assert_eq!(remove_sentinel_block(&content), "before\nafter");
+    }
+
+    #[test]
+    fn remove_sentinel_block_at_start_of_file_has_no_blank_line_to_consume() {
+        let content = format!("{SENTINEL_START}\nbody\n{SENTINEL_END}\nafter");
+        assert_eq!(remove_sentinel_block(&content), "after");
+    }
+
+    #[test]
+    fn remove_sentinel_block_with_no_trailing_newline_after_end_marker() {
+        let content = format!("before\n\n{SENTINEL_START}\nbody\n{SENTINEL_END}");
+        assert_eq!(remove_sentinel_block(&content), "before\n");
+    }
+
+    #[test]
+    fn remove_sentinel_block_on_crlf_content_does_not_consume_blank_line_or_trailing_newline() {
+        // Byte-offset implementation: the preceding-blank-line check looks for
+        // a literal "\n\n" tail and the trailing-newline check looks for a
+        // leading '\n' — CRLF's "\r\n" satisfies neither, so both the blank
+        // line before the block and the newline after it are left in place
+        // (with their '\r' bytes untouched), unlike sys/profile.rs's
+        // line-based version which normalizes CRLF to LF unconditionally.
+        let content = format!("before\r\n\r\n{SENTINEL_START}\r\nbody\r\n{SENTINEL_END}\r\nafter");
+        assert_eq!(
+            remove_sentinel_block(&content),
+            "before\r\n\r\n\r\nafter",
+            "CRLF bytes around the block must survive unmodified"
+        );
+    }
+}
