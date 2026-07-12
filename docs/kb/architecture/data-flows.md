@@ -46,6 +46,39 @@ the receipt comparison includes the normalized domain, DNS servers, and platform
 Update and sys-info output render those receipt differences field by field (`old -> new`) so the
 user can inspect the pending system change before granting administrator access to upgrade.
 
+## App artifact build (`shine app build <app-id>`)
+
+`apps/build.rs::handle_build` is fully separate from install/upgrade — it never runs
+automatically; see [ADR 0009](../decisions/0009-app-artifact-build-explicit-command.md). Given an
+app preset's `[artifact].script`:
+
+1. Resolves the category the same way `app info`/`app install` do
+   (`metadata::load_active_categories`), force-extracting embedded assets first when not in
+   external-presets mode (the same `extract_prefix` call `app install` makes).
+2. Resolves the script's location: the overlay's `app/<name>/<script>` wins over the source
+   (built-in or external) copy *if the overlay's copy of that category exists at all* — decided
+   once for the whole category directory, not per file (unlike `Config::preset_path`'s per-file
+   overlay precedence used for installed content), since a build script's sibling files (e.g. a
+   `provider-url` file the script reads directly) are one package with the script.
+3. Creates (idempotently, before spawning) `SHINE_APP_HTTP_DIR` (`<shine_dir>/http/app/<name>`),
+   `SHINE_STATE_DIR` (`<shine_dir>/state/app/<name>`), and `SHINE_CACHE_DIR` (the OS cache dir via
+   the `directories` crate — `<os-cache>/shine/app/<name>`, the same crate/pattern
+   `env/workspace.rs::cache_path` already uses for its own per-project cache).
+4. Injects the active `[env]` table into the child **as stored** (`EnvConfig::as_map` — no
+   decryption, same as the `template` transform), so a script can read user-configured values such
+   as `SURGE_PROFILE`; `_SECRET` keys pass through as ciphertext and no build ever triggers a
+   secret-decryption prompt. The `SHINE_APP_*` contract vars are set *after* the `[env]` values, so
+   they win on any name collision.
+5. Runs the script with `current_dir` set to the resolved app directory and inherited stdio (not
+   captured like `post_upgrade` hooks), so build output streams live; a nonzero exit becomes a
+   real `Result::Err` instead of being swallowed.
+
+For Surge specifically: `shine app install surge` is a plain `Copy` install of `local-proxies.conf`
+/ `local-rules.conf` into the Surge Profiles dir (`dest`), and `shine app build surge` runs the
+overlay `build.sh`, which reads `$SURGE_PROFILE` and appends `, local-proxies.conf` /
+`, local-rules.conf` to the `[Proxy]` / `[Rule]` `#!include` lines of the user's active profile.
+Surge itself owns the subscription (`#!MANAGED-CONFIG`); shine no longer fetches or serves it.
+
 ## Shell install / uninstall
 
 Documented in `AGENTS.md` § "Key data flow". Summary: extract embedded assets →

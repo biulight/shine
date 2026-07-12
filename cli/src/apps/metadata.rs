@@ -23,6 +23,7 @@ pub struct AppCategory {
     /// `true` when shine.toml has an explicit `[[files]]` section;
     /// `false` for auto-collected files and legacy categories.
     pub has_explicit_files: bool,
+    pub artifact: Option<AppArtifact>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,11 @@ pub struct AppHook {
     /// `false` (silent) — most hooks (e.g. `surge-cli reload`) have nothing
     /// worth surfacing; opt in for hooks whose stdout is a deliberate note.
     pub show_output: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppArtifact {
+    pub script: String,
 }
 
 #[derive(Debug, Clone)]
@@ -60,7 +66,13 @@ struct CategoryToml {
     dest: DestToml,
     list_mode: Option<ListModeToml>,
     post_upgrade: Option<HookSpecToml>,
+    artifact: Option<ArtifactToml>,
     files: Option<Vec<FileToml>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ArtifactToml {
+    script: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -203,6 +215,18 @@ fn resolve_hooks(hook: Option<HookSpecToml>, context: &str) -> Result<Vec<AppHoo
     Ok(resolved)
 }
 
+fn resolve_artifact(artifact: Option<ArtifactToml>, context: &str) -> Result<Option<AppArtifact>> {
+    let Some(artifact) = artifact else {
+        return Ok(None);
+    };
+    if artifact.script.trim().is_empty() {
+        bail!("{context}: artifact.script must not be empty");
+    }
+    Ok(Some(AppArtifact {
+        script: artifact.script,
+    }))
+}
+
 fn default_list_mode(has_explicit_files: bool) -> AppListMode {
     if has_explicit_files {
         AppListMode::Files
@@ -274,6 +298,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
         let post_upgrade = resolve_hooks(parsed.post_upgrade, &metadata_path)?;
+        let artifact = resolve_artifact(parsed.artifact, &metadata_path)?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
         };
@@ -341,6 +366,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
             post_upgrade,
             uses_metadata: true,
             has_explicit_files,
+            artifact,
         }));
     }
 
@@ -370,6 +396,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
         post_upgrade: Vec::new(),
         uses_metadata: false,
         has_explicit_files: false,
+        artifact: None,
     }))
 }
 
@@ -385,6 +412,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         let has_explicit_files = parsed.files.is_some();
         let post_upgrade =
             resolve_hooks(parsed.post_upgrade, &metadata_path.display().to_string())?;
+        let artifact = resolve_artifact(parsed.artifact, &metadata_path.display().to_string())?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
         };
@@ -463,6 +491,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
             post_upgrade,
             uses_metadata: true,
             has_explicit_files,
+            artifact,
         }));
     }
 
@@ -494,6 +523,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         post_upgrade: Vec::new(),
         uses_metadata: false,
         has_explicit_files: false,
+        artifact: None,
     }))
 }
 
@@ -552,6 +582,7 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
         parsed.post_upgrade.clone(),
         &format!("app/{name}/shine.toml"),
     )?;
+    resolve_artifact(parsed.artifact.clone(), &format!("app/{name}/shine.toml"))?;
     Ok(parsed)
 }
 
@@ -679,42 +710,44 @@ mod tests {
     }
 
     #[test]
-    fn embedded_surge_installs_custom_rules_module() {
+    fn embedded_surge_installs_local_profile_resources() {
         let categories = load_embedded_categories(Some("surge")).unwrap();
         let surge = categories.iter().find(|c| c.name == "surge").unwrap();
         assert!(surge.uses_metadata);
         assert_eq!(
             surge.destination_root.as_deref(),
-            Some("~/.shine/http/app/surge")
+            Some("~/Library/Application Support/Surge/Profiles")
         );
-        assert_eq!(surge.files.len(), 1);
+        let files: Vec<_> = surge
+            .files
+            .iter()
+            .map(|file| {
+                (
+                    file.source_rel.display().to_string(),
+                    file.target_rel.display().to_string(),
+                )
+            })
+            .collect();
         assert_eq!(
-            surge.files[0].source_rel,
-            std::path::Path::new("custom-rules.sgmodule")
-        );
-        assert_eq!(
-            surge.files[0].target_rel,
-            std::path::Path::new("custom-rules.sgmodule")
+            files,
+            vec![
+                (
+                    "local-proxies.conf".to_string(),
+                    "local-proxies.conf".to_string()
+                ),
+                (
+                    "local-rules.conf".to_string(),
+                    "local-rules.conf".to_string()
+                ),
+            ]
         );
         assert_eq!(
             surge.post_upgrade,
-            vec![
-                AppHook {
-                    command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
-                    args: vec!["reload".to_string()],
-                    show_output: false,
-                },
-                AppHook {
-                    command: "/bin/echo".to_string(),
-                    args: vec![
-                        "note: Surge caches Modules added by URL, so reload may not pick up the \
-                         change immediately. If the new rules don't take effect, manually \
-                         re-import/update the module in Surge."
-                            .to_string()
-                    ],
-                    show_output: true,
-                }
-            ]
+            vec![AppHook {
+                command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
+                args: vec!["reload".to_string()],
+                show_output: false,
+            }]
         );
     }
 
@@ -779,6 +812,79 @@ source = "config.toml"
         assert_eq!(hooks.len(), 2);
         assert_eq!(hooks[0].args, vec!["updated"]);
         assert_eq!(hooks[1].args, vec!["reloaded"]);
+    }
+
+    #[test]
+    fn artifact_script_parses() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[artifact]
+script = "build.sh"
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let artifact = resolve_artifact(parsed.artifact, "sample").unwrap();
+        assert_eq!(
+            artifact,
+            Some(AppArtifact {
+                script: "build.sh".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn artifact_section_absent_is_none() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        assert!(
+            resolve_artifact(parsed.artifact, "sample")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn artifact_empty_script_is_rejected() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[artifact]
+script = ""
+
+[[files]]
+source = "config.toml"
+"#,
+        );
+        let err = parsed.unwrap_err();
+        assert!(err.to_string().contains("artifact.script"));
+    }
+
+    #[test]
+    fn embedded_surge_declares_artifact_script() {
+        let categories = load_embedded_categories(Some("surge")).unwrap();
+        let surge = categories.iter().find(|c| c.name == "surge").unwrap();
+        assert_eq!(
+            surge.artifact,
+            Some(AppArtifact {
+                script: "build.sh".to_string()
+            })
+        );
     }
 
     #[test]

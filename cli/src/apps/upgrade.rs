@@ -782,6 +782,7 @@ mod tests {
             }],
             uses_metadata: true,
             has_explicit_files: true,
+            artifact: None,
         }
     }
 }

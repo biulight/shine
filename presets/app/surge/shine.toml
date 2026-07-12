@@ -1,12 +1,22 @@
-description = "Surge module rules managed by shine."
-dest = "~/.shine/http/app/surge"
+description = "Surge local proxy/rule files, installed beside the active profile."
+dest = "~/Library/Application Support/Surge/Profiles"
 list_mode = "files"
 post_upgrade = [
   { command = "/Applications/Surge.app/Contents/Applications/surge-cli", args = ["reload"] },
-  { command = "/bin/echo", args = ["note: Surge caches Modules added by URL, so reload may not pick up the change immediately. If the new rules don't take effect, manually re-import/update the module in Surge."], show_output = true },
 ]
 
+# `shine app build surge` runs the artifact script to patch the active profile's
+# per-section `#!include` lines so they also include the local files installed
+# here. Provider-specific patch logic lives in the overlay's build.sh, not here.
+[artifact]
+script = "build.sh"
+
 [[files]]
-source = "custom-rules.sgmodule"
-target = "custom-rules.sgmodule"
-description = "Custom Surge rules module."
+source = "local-proxies.conf"
+target = "local-proxies.conf"
+description = "Local proxy definitions (e.g. a LAN SOCKS exit) merged into [Proxy]."
+
+[[files]]
+source = "local-rules.conf"
+target = "local-rules.conf"
+description = "Local priority rules merged into [Rule] ahead of provider rules."

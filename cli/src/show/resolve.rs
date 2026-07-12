@@ -274,6 +274,7 @@ mod tests {
                 post_upgrade: Vec::new(),
                 uses_metadata: true,
                 has_explicit_files: true,
+                artifact: None,
             },
             file: crate::apps::AppFile {
                 source_rel: PathBuf::from(source),

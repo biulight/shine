@@ -361,6 +361,7 @@ mod tests {
             post_upgrade: Vec::new(),
             uses_metadata: true,
             has_explicit_files: true,
+            artifact: None,
         }
     }
 
@@ -705,6 +706,7 @@ mod tests {
             post_upgrade: Vec::new(),
             uses_metadata: true,
             has_explicit_files: true,
+            artifact: None,
         };
 
         let rows = build_app_rows(&config, &[category]).await.unwrap();
@@ -756,6 +758,7 @@ mod tests {
             post_upgrade: Vec::new(),
             uses_metadata: true,
             has_explicit_files: true,
+            artifact: None,
         };
 
         let rows = build_app_rows(&config, &[category]).await.unwrap();

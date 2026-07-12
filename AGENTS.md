@@ -129,7 +129,10 @@ shine/
 │       │   ├── info.rs       # handle_info, handle_list
 │       │   ├── report.rs     # Install/uninstall outcome print_* helpers
 │       │   ├── upgrade.rs    # handle_upgrade_installed, stale-entry cleanup
-│       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile)
+│       │   ├── build.rs      # handle_build: runs an app preset's [artifact].script
+│       │   │                 # (`shine app build <app-id>`), never run implicitly by
+│       │   │                 # install/upgrade — see ADR 0009
+│       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile, AppArtifact)
 │       │   ├── json_merge.rs # JsonMerge install strategy (managed-key merge)
 │       │   └── annotation.rs # shine-dest: comment annotation parser
 │       ├── install_core/     # Install primitives shared by apps/ and sys/ (no
@@ -256,7 +259,7 @@ shine/
     │   ├── ghostty/    config.ghostty, shine.toml
     │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig; no shine.toml, uses annotation instead)
     │   ├── JetBrains/  shine.toml
-    │   ├── surge/      custom-rules.sgmodule, shine.toml
+    │   ├── surge/      local-proxies.conf, local-rules.conf, build.sh (placeholder), shine.toml  (dest = Surge Profiles dir; overlay build.sh patches the active profile's #!include lines)
     │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
@@ -273,6 +276,7 @@ shine/
 |---|---|
 | `shell list/install/uninstall` | `cli/src/shells/` |
 | `app list/install/uninstall` | `cli/src/apps/` |
+| `app build <app-id>` | `cli/src/apps/build.rs` |
 | `sys list/init` | `cli/src/sys/` |
 | `env show/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
 | `list` | `cli/src/list.rs` |
@@ -489,8 +493,9 @@ Config is saved via `utils::sync_table` which preserves existing TOML comments w
 (`127.0.0.1:6174` by default). On macOS, `shine serve install` registers that same server as one
 user launchd service; it is intentionally global, with no per-app argument. App presets that need
 stable local URLs should install files under that tree (for example
-`~/.shine/http/app/surge/custom-rules.sgmodule`) and use `shine serve url <path>` to print the
-URL. Do not start one HTTP service per app preset.
+`~/.shine/http/app/<name>/<file>`) and use `shine serve url <path>` to print the URL. Do not start
+one HTTP service per app preset. (The `surge` preset no longer uses this — it installs local files
+into the Surge Profiles dir and patches the profile's `#!include` lines instead.)
 
 ### rust-embed and presets
 
@@ -558,6 +563,8 @@ Hard rules (details and runbook: [`docs/kb/conventions.md`](docs/kb/conventions.
 Prefer `shine.toml` metadata over legacy `shine-dest:` annotations for new categories. Place `shine.toml` in `presets/app/<category>/` with at minimum `dest = "~/<path>"`. Add `transforms = ["jsonc-to-json"]` for JSONC files or `transforms = ["template"]` for files with `@@VAR_NAME@@` env placeholders.
 
 App categories may declare a `post_upgrade = { command = "...", args = ["..."] }` hook to run a direct argv command after `shine upgrade` actually updates or installs at least one file in that category. Hooks are not run during `app install`, and external presets require `allow_app_hooks = true` in config before hooks execute. Each hook may set `show_output = true` to print its stdout to the user when it succeeds (e.g. a deliberate `echo` note); this defaults to `false` (silent) so routine command output isn't surfaced as noise.
+
+App categories may also declare `[artifact]\nscript = "build.sh"` to expose a `shine app build <app-id>` entry point. Unlike `post_upgrade`, this never runs implicitly (not during `install` or `upgrade`) — the script only runs when a user explicitly types `shine app build <app-id>`. The build child receives the fixed `SHINE_APP_*` env contract **plus the active `[env]` table passed as stored** (no decryption — `_SECRET` keys arrive as ciphertext, same as the `template` transform), so scripts can read user-configured values like `SURGE_PROFILE` without any build triggering a secret-decryption prompt. Keep provider-specific logic (which sections to patch, how to talk to an external app) out of this repo's own preset scripts; that belongs in an external overlay's script, which takes priority over the built-in one when both exist. For the built-in `surge` preset this is how the split works: `shine app install surge` is a plain `Copy` of `local-proxies.conf`/`local-rules.conf` into the Surge Profiles dir (`dest`), and the overlay's `build.sh` (via `shine app build surge`) patches the active profile's `[Proxy]`/`[Rule]` `#!include` lines to also include those files. See [ADR 0009](docs/kb/decisions/0009-app-artifact-build-explicit-command.md) and [`architecture/data-flows.md`](docs/kb/architecture/data-flows.md) for the full env-var contract and resolution rule.
 
 ### Sys preset (OS init)
 

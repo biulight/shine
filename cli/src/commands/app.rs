@@ -49,4 +49,10 @@ pub enum AppCommands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Run the artifact build script declared by an app preset
+    Build {
+        /// App preset category whose artifact script should run (e.g. surge)
+        #[arg(value_name = "APP_ID")]
+        app_id: String,
+    },
 }
