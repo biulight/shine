@@ -1,10 +1,17 @@
+//! Shared install-status row builders consumed by `list` and `show`.
+//!
+//! Not a routed command itself (`shine check` was removed) — this is a
+//! status-row library: it computes per-file/per-category install status
+//! (`FileStatus`) and renders it into `AppRow`/`ShellRow` for display.
+
 use crate::apps::{
-    AppCategory, AppListMode, AppManifest, apply_transforms, installed_content_hash,
-    resolve_install_destination, source_hash_for_file,
+    AppCategory, AppListMode, installed_content_hash, resolve_install_destination,
+    source_hash_for_file,
 };
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::install_core::{AppEntry, AppManifest, apply_transforms};
 use crate::path_display;
 use anyhow::Result;
 use std::collections::BTreeMap;
@@ -51,11 +58,7 @@ pub struct AppRow {
 
 /// Build shell preset rows.  Does not include the PATH sentinel line.
 pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
-    let categories = if config.is_external_presets {
-        crate::shells::metadata::load_installed_categories(config, None).await?
-    } else {
-        crate::shells::metadata::load_embedded_categories(None)?
-    };
+    let categories = crate::shells::metadata::load_active_categories(config, None).await?;
     if categories.is_empty() {
         return Ok(Vec::new());
     }
@@ -276,32 +279,45 @@ async fn app_file_row_status(
         Ok(dest) => {
             let status = match manifest.find_by_dest(&dest) {
                 None => FileStatus::NotInstalled,
-                Some(entry) => {
-                    if !dest.exists() {
-                        FileStatus::Missing
-                    } else {
-                        match tokio::fs::read(&dest).await {
-                            Err(_) => FileStatus::Missing,
-                            Ok(dest_bytes) => {
-                                let manifest_hash = entry.content_hash;
-                                match installed_content_hash(file, &dest_bytes) {
-                                    Ok(Some(dest_hash)) if dest_hash == manifest_hash => {
-                                        match source_hash_for_file(config, cat, file, env).await {
-                                            Some(src) if src != manifest_hash => {
-                                                FileStatus::UpdateAvail
-                                            }
-                                            _ => FileStatus::UpToDate,
-                                        }
-                                    }
-                                    Ok(None) => FileStatus::Missing,
-                                    Ok(Some(_)) | Err(_) => FileStatus::UserModified,
-                                }
-                            }
-                        }
-                    }
-                }
+                Some(entry) => app_entry_status(config, cat, file, entry, env).await,
             };
             (Some(dest), status)
+        }
+    }
+}
+
+/// Computes the status of an already-resolved manifest entry: compares its
+/// recorded content hash against what's currently on disk at
+/// `entry.destination`, and (if unchanged) against the current preset
+/// source to detect an available update.
+///
+/// Shared by `app_file_row_status` (used by `list`/`app info`) and `show`'s
+/// `collect_app_files` — both need this exact computation once an `AppEntry`
+/// has been resolved.
+pub(crate) async fn app_entry_status(
+    config: &Config,
+    cat: &AppCategory,
+    file: &crate::apps::AppFile,
+    entry: &AppEntry,
+    env: &BTreeMap<String, String>,
+) -> FileStatus {
+    if !entry.destination.exists() {
+        return FileStatus::Missing;
+    }
+    match tokio::fs::read(&entry.destination).await {
+        Err(_) => FileStatus::Missing,
+        Ok(dest_bytes) => {
+            let manifest_hash = entry.content_hash;
+            match installed_content_hash(file, &dest_bytes) {
+                Ok(Some(dest_hash)) if dest_hash == manifest_hash => {
+                    match source_hash_for_file(config, cat, file, env).await {
+                        Some(src) if src != manifest_hash => FileStatus::UpdateAvail,
+                        _ => FileStatus::UpToDate,
+                    }
+                }
+                Ok(None) => FileStatus::Missing,
+                Ok(Some(_)) | Err(_) => FileStatus::UserModified,
+            }
         }
     }
 }
@@ -309,17 +325,176 @@ async fn app_file_row_status(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::{AppFile, AppInstallStrategy};
+    use crate::apps::AppFile;
     use crate::config::Config;
+    use crate::install_core::AppInstallStrategy;
     #[cfg(windows)]
     use crate::test_support::env_lock;
     use std::path::PathBuf;
     use tokio::fs;
 
     async fn make_temp_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-check-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-check").await
+    }
+
+    fn sample_app_file() -> AppFile {
+        AppFile {
+            source_rel: PathBuf::from("dest.txt"),
+            target_rel: PathBuf::from("dest.txt"),
+            description: None,
+            display_name: None,
+            legacy_dest_annotation: None,
+            transforms: vec![],
+            install_strategy: AppInstallStrategy::Copy,
+            requires_admin: false,
+            restart_hint: None,
+        }
+    }
+
+    fn sample_app_category() -> AppCategory {
+        AppCategory {
+            name: "sample".to_string(),
+            description: None,
+            destination_root: None,
+            files: vec![sample_app_file()],
+            list_mode: AppListMode::Files,
+            post_upgrade: Vec::new(),
+            uses_metadata: true,
+            has_explicit_files: true,
+            artifact: None,
+        }
+    }
+
+    fn sample_app_entry(destination: PathBuf, content_hash: u64) -> AppEntry {
+        AppEntry {
+            source: "app/sample/dest.txt".to_string(),
+            destination,
+            backup: None,
+            content_hash,
+            install_strategy: AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn app_entry_status_reports_missing_when_destination_absent() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let dest = dir.join("dest.txt");
+        let entry = sample_app_entry(dest, crate::install_core::hash_content(b"hello"));
+
+        let status = app_entry_status(
+            &config,
+            &sample_app_category(),
+            &sample_app_file(),
+            &entry,
+            &BTreeMap::new(),
+        )
+        .await;
+
+        assert_eq!(status, FileStatus::Missing);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn app_entry_status_reports_user_modified_when_dest_hash_differs() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let dest = dir.join("dest.txt");
+        fs::write(&dest, b"locally edited").await.unwrap();
+        let entry = sample_app_entry(dest, crate::install_core::hash_content(b"original"));
+
+        let status = app_entry_status(
+            &config,
+            &sample_app_category(),
+            &sample_app_file(),
+            &entry,
+            &BTreeMap::new(),
+        )
+        .await;
+
+        assert_eq!(status, FileStatus::UserModified);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn app_entry_status_reports_up_to_date_when_source_unreadable() {
+        // No embedded/external source exists for the synthetic "sample"
+        // category, so source_hash_for_file returns None and the status
+        // falls back to UpToDate once the dest hash matches the manifest.
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let dest = dir.join("dest.txt");
+        fs::write(&dest, b"hello").await.unwrap();
+        let entry = sample_app_entry(dest, crate::install_core::hash_content(b"hello"));
+
+        let status = app_entry_status(
+            &config,
+            &sample_app_category(),
+            &sample_app_file(),
+            &entry,
+            &BTreeMap::new(),
+        )
+        .await;
+
+        assert_eq!(status, FileStatus::UpToDate);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn app_entry_status_reports_update_available_when_source_changed() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let source_path = config.preset_path(Path::new("app").join("sample").join("dest.txt"));
+        fs::create_dir_all(source_path.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(&source_path, b"new upstream content")
+            .await
+            .unwrap();
+
+        let dest = dir.join("dest.txt");
+        fs::write(&dest, b"hello").await.unwrap();
+        let entry = sample_app_entry(dest, crate::install_core::hash_content(b"hello"));
+
+        let status = app_entry_status(
+            &config,
+            &sample_app_category(),
+            &sample_app_file(),
+            &entry,
+            &BTreeMap::new(),
+        )
+        .await;
+
+        assert_eq!(status, FileStatus::UpdateAvail);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn app_file_row_status_reports_not_installed_without_manifest_entry() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let manifest = AppManifest::default();
+        let category = AppCategory {
+            destination_root: Some(dir.display().to_string()),
+            ..sample_app_category()
+        };
+
+        let (dest, status) = app_file_row_status(
+            &config,
+            &category,
+            &sample_app_file(),
+            &manifest,
+            &BTreeMap::new(),
+        )
+        .await;
+
+        assert!(dest.is_some());
+        assert_eq!(status, FileStatus::NotInstalled);
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[cfg(not(unix))]
@@ -528,8 +703,10 @@ mod tests {
                 },
             ],
             list_mode: AppListMode::Category,
+            post_upgrade: Vec::new(),
             uses_metadata: true,
             has_explicit_files: true,
+            artifact: None,
         };
 
         let rows = build_app_rows(&config, &[category]).await.unwrap();
@@ -578,8 +755,10 @@ mod tests {
                 },
             ],
             list_mode: AppListMode::Files,
+            post_upgrade: Vec::new(),
             uses_metadata: true,
             has_explicit_files: true,
+            artifact: None,
         };
 
         let rows = build_app_rows(&config, &[category]).await.unwrap();

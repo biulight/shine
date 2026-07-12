@@ -40,11 +40,24 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   locks do not serialize across tests).
 - Any test that mutates environment variables must hold `crate::test_support::env_lock()`.
 - Any test that performs privileged (sudo) file operations on real paths must hold the
-  cross-process admin lock for its full body (`apps/file_ops.rs`, commit `fbd9c55`).
+  cross-process admin lock for its full body (`install_core/file_ops.rs`, commit `fbd9c55`).
 - Verify CLI behavior against an isolated config dir:
   `SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine` (details in `AGENTS.md` § Verification Notes).
 - CI additionally runs `cargo audit`; a new dependency with a RUSTSEC advisory fails the build
   (see lessons entry on quinn-proto).
+
+## File size
+
+- The ~800-line file-size guideline is measured by **production code only** — everything before
+  the file's `#[cfg(test)] mod tests { ... }` block. Inline `#[cfg(test)]` unit tests (the Rust
+  convention, and this repo's own testing rules) do not count toward it; a file can have any
+  number of test lines below that boundary without needing a split on size grounds alone.
+- Files that are pure test modules (e.g. `cli/src/ssh/integration_tests.rs`) are exempt entirely.
+- Decided 2026-07-11 when auditing files over 800 total lines after the Phase 3 module-split
+  refactor (commits `63a8f180`..`1ebfbec9`, continued in `5a28dd67`/`9601f93a`/`5eb58d43`): most
+  of the remaining "oversized" files turned out to be well under 800 lines of actual production
+  code, with the excess being inline tests. Only `sys/commands.rs`, `sys/profile.rs`, and
+  `update_check.rs` had genuinely oversized production code, and those were split further.
 
 ## Preset authoring
 

@@ -3,6 +3,222 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-11 — Surge's `external-resource update` never covers URL-based Modules
+
+- **Symptom**: after `shine upgrade` correctly rewrote the installed `custom-rules.sgmodule`
+  (served via `shine serve` at `~/.shine/http/app/surge/`), Surge kept applying the old rules —
+  the `post_upgrade` hook (`surge-cli external-resource update all` + `surge-cli reload`) appeared
+  to run successfully but had no effect.
+- **Root cause**: `surge-cli external-resource list` only enumerates rule-sets and MITM hostname
+  lists (`type = ruleset`) fetched via `RULE-SET,https://...` — a Module added via URL is not
+  tracked as an "external resource" at all, so `external-resource update all` is a silent no-op
+  for it. `surge-cli reload` only re-parses the module content Surge already has cached from its
+  last fetch; there is no `surge-cli` command that forces a URL-based Module to re-fetch on
+  demand (confirmed against `surge-cli --help`).
+- **Fix**: dropped the ineffective `external-resource update all` step from
+  `presets/app/surge/shine.toml`'s `post_upgrade` (kept `reload`, which is still needed to apply
+  other profile changes). No shine-side workaround exists to force a Module URL re-fetch; on
+  macOS the practical fix is for the user to reference the module by local file path
+  (e.g. `~/.shine/http/app/surge/custom-rules.sgmodule`) in Surge's own profile instead of a
+  `shine serve` HTTP URL, since `reload` re-reads local files immediately with no caching layer.
+- **Rule**: a post-upgrade hook exiting 0 does not mean it had any effect — verify what a
+  third-party CLI's subcommand actually covers (e.g. via its own `list`/`--help` output) before
+  assuming it refreshes the specific resource an app preset just changed.
+
+## 2026-07-11 — CRLF↔LF differences made `shine sys` re-install report spurious updates
+
+- **Symptom**: tracing a user question — *install via `shine sys init`, edit config on a Windows
+  host (CRLF-prone), edit the preset on macOS, re-install* — revealed that a pure line-ending
+  difference is detected as a real change on the whole sys path. A CRLF copy of a loader file
+  under `~/.shine/profile/` fails `active == template` (raw `&[u8]` compare in `sys/profile.rs`)
+  and drops into the three-way merge, where `split_profile_lines` keeps each trailing `\r`, so
+  every line "differs" → **updated / needs-action / conflict** every run. Separately the sentinel
+  idempotency check in `sys/profile_blocks.rs` compares the extracted block against an LF
+  `pre_block`, so a CRLF profile misses the short-circuit and gets rewritten (silently normalizing
+  the user-owned file to LF).
+- **Root cause**: every comparison on the sys path was byte-exact with **no** line-ending
+  normalization (and `hash_content` is FNV over raw bytes), so `\r` flips every `==`. Compounding
+  it, nothing pinned the embedded template's endings — a build host with `core.autocrlf=true`
+  could embed CRLF, making even a clean checkout diff against an installed LF copy.
+- **Fix**: (1) `.gitattributes` pins `presets/** text eol=lf` so the rust-embed'd template is
+  byte-deterministic. (2) new `install_core::normalize_eol`/`eol_eq`; the sys reconciliation
+  (`sys/profile.rs`) normalizes `active`/`base`/`template` at read and gates `git merge-file` off
+  when any on-disk input was non-LF (falling back to the pure-Rust merge over normalized bytes);
+  the sentinel idempotency check (`sys/profile_blocks.rs`) compares blocks ending-agnostically
+  (trimming the trailing break, since `extract_block_with_newline` only reattaches `\n`). When only
+  endings differ, both paths now report no change and leave the file's bytes untouched. The
+  invariant-protected `sentinel::remove_block_*` styles were left unchanged — only the comparison
+  layer normalizes.
+- **Rule**: when reconciling installed files that a user (or their editor) may re-save, byte-exact
+  `==`/content-hash compares silently conflate a formatting-only difference with a real edit —
+  normalize line endings before comparing, and pin embedded/template endings so the baseline is
+  deterministic across build and checkout environments.
+
+## 2026-07-09 — `agent_handle.abort()` didn't actually protect in-flight `shine ssh` transfers
+
+- **Symptom**: a follow-up review of the Ctrl-C cleanup path in `ssh/mod.rs` found that
+  `agent_handle.abort()` — called right before `remove_dir_all(&session_dir)` and (for a nonzero
+  `ssh` exit status) `std::process::exit(code)` — looked like it protected an in-flight `PutFile`/
+  `GetFile` transfer from being cut off mid-copy. It doesn't: `agent_handle` is the `JoinHandle`
+  for `LocalListener::serve`'s *accept loop* only. Each individual connection is handed off to its
+  own detached `tokio::spawn` inside `spawn_connection`, whose `JoinHandle` was discarded and never
+  tracked anywhere. So `abort()` only ever stopped new connections from being accepted — an
+  already-running transfer kept executing as an orphaned background task with nothing in
+  `handle_ssh` aware of it, and `std::process::exit(code)` (a hard process termination that skips
+  Rust's normal unwind/drop machinery entirely) could cut it off before its own error-path cleanup
+  (removing a partial temp file) ever ran.
+- **Root cause**: "spawn a task and drop the handle" is a common, usually-harmless Tokio pattern
+  for fire-and-forget work, but it silently breaks any later code that assumes it can wait for or
+  cancel that work — there was no data structure connecting `handle_ssh`'s shutdown sequence to the
+  connection tasks `spawn_connection` created.
+- **Fix**: added `agent::ConnectionTasks` (`Arc<tokio::sync::Mutex<tokio::task::JoinSet<()>>>`),
+  threaded through `LocalListener::serve` and `spawn_connection` so every connection task is
+  tracked instead of detached. `handle_ssh` now calls `agent::drain_connection_tasks(&connection_tasks,
+  CONNECTION_DRAIN_GRACE_PERIOD)` (a 5s bounded wait) after `ssh_run` resolves and before removing
+  the session directory — since the SSH tunnel is already gone by that point, any genuinely
+  in-flight transfer's next socket read/write fails almost immediately and its existing error-path
+  cleanup gets to run to completion inside that grace period, rather than being abandoned.
+- **Rule**: a bare `tokio::spawn(...)` with the `JoinHandle` immediately dropped is a red flag
+  during review whenever the surrounding code later does anything time-sensitive (shutdown,
+  cleanup, `process::exit`) — trace whether "this task is running" is ever visible to the code that
+  assumes it can wait for or interrupt it.
+
+## 2026-07-09 — `shine local` upload's `PutFile.filename` allowed a path-traversal write
+
+- **Symptom**: a Rust code review of the SSH transfer feature found that `agent::resolve_target_path`
+  (`ssh/agent.rs`) joined the wire-supplied `PutFile.filename` directly onto the resolved
+  destination directory with `candidate.join(filename)` and no validation. The only gate on a
+  `PutFile` request is a per-session token, but that token is exposed as plaintext in the wrapped
+  remote command's argv/environ (`env SHINE_SSH_TOKEN=<token> sh -c ...` in `ssh/mod.rs`), which
+  any other local user on the remote host can read via `ps eww`/`/proc/<pid>/environ`. A forged
+  client that reads the token could dial the forwarded socket directly and send
+  `filename: "../../.ssh/authorized_keys"`, writing outside `session_local_dir` on the machine
+  running `shine ssh` — an arbitrary local file write gated only by OS file permissions.
+- **Root cause**: `filename` is documented as "basename of the remote source path," and the
+  honest client (`remote_client.rs`) does derive it via `Path::file_name()` — but the server side
+  never re-validated that invariant on the wire. `dir_transfer.rs`'s tar-extraction path had an
+  equivalent, well-tested symlink/traversal check (`symlink_target_is_safe`); the newer
+  single-file `PutFile` path did not get the same treatment.
+- **Fix**: added `ensure_single_path_component` in `ssh/agent.rs`, called at the top of
+  `resolve_target_path`, that rejects any `filename` which isn't exactly one
+  `std::path::Component::Normal` — so an absolute path, a `..` component, or an embedded
+  separator is rejected with a clear error before it ever reaches `Path::join`. `dest_hint` is
+  intentionally left unrestricted (it's a legitimate explicit destination the caller chose), only
+  the auto-derived `filename` is constrained. Covered by unit tests in `ssh/agent.rs` and two new
+  integration tests in `ssh/integration_tests.rs` that send a raw forged `PutFile` (bypassing
+  `remote_client`) with a traversal/separator filename and assert it's rejected.
+- **Rule**: any field in a wire protocol that's *documented* as "always a basename" or similar
+  must be *enforced* as such at the point it's consumed, not just produced correctly by the one
+  trusted client implementation — a session token alone is not sufficient authorization once it
+  can leak through the host's own process table.
+
+## 2026-07-07 — `shine ssh` could leak its local session directory on Ctrl-C
+
+- **Symptom**: a PRD audit of `docs/ssh-local-transfer-prd.md` against the implementation found
+  that `handle_ssh` (`ssh/mod.rs`) only ran its cleanup (`agent_handle.abort()` +
+  `remove_dir_all(session_dir)`) after `cmd.status().await` on the spawned `ssh` child resolved.
+  No `tokio::signal` handler existed anywhere in the crate, so a local Ctrl-C during an active
+  session was delivered under SIGINT's default disposition and could terminate the `shine`
+  process before that cleanup line ever ran, leaking `~/.shine/run/ssh/<session-id>` (containing
+  the local transfer socket). The remote side was unaffected — its `trap ... EXIT` in the wrapped
+  remote command is robust — only the local side was at risk.
+- **Root cause**: nothing in the process intercepted SIGINT, so the OS's default disposition
+  (immediate termination, no unwinding) applied. Cleanup code placed *after* an `.await` only runs
+  if that `.await` resolves normally; it is never reached if the process is killed while still
+  awaiting.
+- **Fix**: raced `cmd.status()` against `tokio::signal::ctrl_c()` via `tokio::select!`. Installing
+  the `ctrl_c()` listener itself overrides SIGINT's default disposition for the process, so once
+  polled, a Ctrl-C resolves the listener future instead of killing the process outright; the `ssh`
+  child (same foreground process group) receives SIGINT independently and exits on its own, and
+  the parent awaits that exit before falling through to the existing cleanup. Verified against a
+  stub `ssh` child (no real remote host available in this sandbox): sending `SIGINT` to the whole
+  process group (`kill -INT -$pgid`, mirroring what a terminal does on real Ctrl-C) left the
+  session directory removed and the process log clean, versus leaking it before the fix.
+- **Rule**: any cleanup that must run "no matter how this async command exits" needs an explicit
+  signal listener raced against the awaited operation — placing cleanup code after a bare
+  `.await` only covers the success path, not process-level interrupts.
+
+## 2026-07-07 — Windows CI failed on a module that "obviously" only runs on the remote host
+
+- **Symptom**: the `build-preview-assets` Windows job failed with
+  `error[E0432]: unresolved import tokio::net::UnixStream` in `ssh/remote_client.rs`, even though
+  the preceding commit had already added `#[cfg(unix)]`/`#[cfg(windows)]` gating for the *local*
+  agent side (`ssh::bind_local_listener`, `agent::LocalListener`) and passed local verification.
+- **Root cause**: `remote_client.rs` implements the *remote* side of a session (it dials the
+  forwarded socket via `UnixStream`), and the remote host is always assumed Linux/macOS by design
+  — so it seemed safe to leave unconditional. But the `shine` binary is one cross-compiled artifact
+  that must *compile* for every target it ships on, regardless of which side of a session that
+  particular binary instance will ever actually play. A Windows build still needs
+  `shine local download/upload/status` to type-check even though nothing will call it as a remote
+  in practice yet. This repo's sandboxed dev environment cannot run `cargo check --target
+  x86_64-pc-windows-msvc` to completion at all (an unrelated transitive dependency, `aws-lc-sys` via
+  `reqwest`, needs the real MSVC/Windows SDK), so this gap wasn't caught before pushing — only real
+  Windows CI surfaced it.
+- **Fix**: gated `mod remote_client;` itself behind `#[cfg(unix)]`, and gave
+  `handle_local_download`/`handle_local_upload`/`handle_local_status` in `ssh/mod.rs` a
+  `#[cfg(not(unix))]` stub returning a clear "Windows is local-side only" error, so the binary
+  still compiles (and fails loudly at runtime, not compile time) on Windows.
+- **Rule**: when adding platform-specific code to a binary that ships cross-platform, gate by
+  *what the code assumes about the runtime host*, not by *which conceptual role the current
+  feature work is scoped to* — and treat any target you cannot locally `cargo check` end-to-end
+  as unverified until real CI confirms it, even after careful manual reasoning.
+
+## 2026-07-06 — `shine upgrade` prompted for sudo even when nothing needed root
+
+- **Symptom**: every `shine upgrade` run asked for the sudo password for the managed split-DNS
+  item, even when the resolved.conf.d file already matched the desired content and the item
+  reported `already installed` immediately after.
+- **Root cause**: the admin-authorization gate in `run_managed_for_os` decided whether to prompt
+  purely from each item's static `requires_admin` manifest flag, before the driver's `apply` ever
+  checked whether a write was actually needed. The read-only "already converged" comparison
+  already existed inside `apply_split_dns`/`apply_managed_file`, but only ran *after* the prompt.
+- **Fix**: added `SystemDriver::is_up_to_date` (read-only, no privilege required) that reuses the
+  same desired-vs-current comparison, and call it per admin-required item before `authorize_admin`
+  so the prompt is skipped when every such item is already converged.
+- **Rule**: a privilege-escalation prompt must be gated on "will this action actually change
+  anything," not on "is this category of action normally privileged" — compute the cheap
+  read-only diff first.
+
+## 2026-07-06 — Embedded Git progress overwhelms command-level results
+
+- **Symptom**: `shine update --pull` printed Git transfer plumbing, fetch refs, fast-forward
+  details, skipped directories, and Shine's update report as one visually noisy stream.
+- **Fix**: capture successful pulls and summarize commit range plus short file stats; retain raw
+  progress for verbose mode and always surface captured diagnostics on failure.
+- **Rule**: wrapped tools should expose task-level outcomes by default and reserve transport-level
+  progress for verbose output, without hiding failure diagnostics.
+
+## 2026-07-05 — Managed update detection should explain the pending change
+
+- **Symptom**: split-DNS changes were detected, but update output only said `converge` and did
+  not show which recorded values would change.
+- **Fix**: derive structured field differences from the recorded and desired receipts and show
+  them in both `shine update` and `shine sys info`.
+- **Rule**: desired-state checks should return actionable differences, not only a boolean, when
+  the manifest already contains enough safe metadata to explain the change.
+
+## 2026-07-05 — Info diff and update must resolve the same effective preset
+
+- **Symptom**: `shine update` reported an embedded shell preset update while
+  `shine info proxy/setproxy --diff` said there were no content differences.
+- **Root cause**: update rendered the newly embedded template, but info rendered the stale
+  extracted copy under `~/.shine/presets/`; info status also omitted template comparison.
+- **Fix**: resolve expected shell bytes from embedded assets unless external presets mode is
+  active, and reuse update's shell rows for info status.
+- **Rule**: status and diff surfaces must share effective-source selection with the operation
+  that will apply the update.
+
+## 2026-07-05 — Managed sys resources need desired-state update detection
+
+- **Symptom**: changing split-DNS variables in an overlay `shine.env.toml` was invisible to
+  `shine update`, leaving no reliable path from the configuration change to `shine upgrade`.
+- **Root cause**: update listing only inspected shell and app content; sys receipts already held
+  the applied domain and servers but were never compared with current desired values.
+- **Fix**: compare the desired built-in resource receipt with `sys-manifest.toml`, report stale
+  managed resources, and let the existing upgrade convergence replace the receipt.
+- **Rule**: every manifest-tracked subsystem included in global upgrade must expose an equivalent
+  read-only desired-state check to global update.
+
 ## 2026-07-05 — Template update checks only see variables used by the template
 
 - **Symptom**: changing `PROXY_NO_PROXY` in an overlay `shine.env.toml` did not make

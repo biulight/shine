@@ -26,9 +26,9 @@ pub enum EnvCommands {
         /// Variable name
         key: String,
     },
-    /// Decode and decrypt a base64-encoded GPG secret from [env]
+    /// Decode and decrypt an encrypted secret from [env] (GPG or age)
     Decrypt {
-        /// Variable name containing base64-encoded GPG ciphertext
+        /// Variable name containing encrypted ciphertext
         key: String,
     },
     /// Decrypt KEY_SECRET and print shell code that exports KEY
@@ -39,20 +39,25 @@ pub enum EnvCommands {
         #[arg(long = "as", value_name = "ALIAS")]
         alias: Option<String>,
     },
-    /// Encrypt stdin with GPG and print base64 ciphertext
+    /// Encrypt stdin and print ciphertext (GPG by default, or age with --backend age)
     Encrypt(EnvEncryptCommand),
     /// Seal pending secrets in workspace environment files
     Seal(EnvSealCommand),
     /// Run a command with the workspace environment
     Run(EnvRunCommand),
+    /// Manage age identities used to decrypt age-backed secrets
+    Identity(EnvIdentityCommand),
 }
 
 #[derive(Args, Debug)]
 pub struct EnvEncryptCommand {
-    /// GPG recipient key ID, fingerprint, or email
-    #[arg(short = 'r', long)]
-    pub recipient: Option<String>,
-    /// Store the encrypted base64 value in config.toml [env] instead of printing it
+    /// Secret backend to use: "gpg" (default) or "age"
+    #[arg(long)]
+    pub backend: Option<String>,
+    /// Recipient (repeatable): GPG key ID/fingerprint/email, or age recipient
+    #[arg(short = 'r', long = "recipient")]
+    pub recipients: Vec<String>,
+    /// Store the encrypted ciphertext in config.toml [env] instead of printing it
     #[arg(long)]
     pub set: Option<String>,
     /// Read plaintext from an existing config.toml [env] variable instead of stdin
@@ -68,9 +73,40 @@ pub struct EnvSealCommand {
     /// Workspace definition (defaults to the nearest shine.workspace.toml)
     #[arg(long, value_name = "FILE")]
     pub workspace: Option<PathBuf>,
-    /// GPG recipient key ID, fingerprint, or email
-    #[arg(short = 'r', long)]
-    pub recipient: Option<String>,
+    /// Secret backend to use: "gpg" (default) or "age"
+    #[arg(long)]
+    pub backend: Option<String>,
+    /// Recipient (repeatable): GPG key ID/fingerprint/email, or age recipient
+    #[arg(short = 'r', long = "recipient")]
+    pub recipients: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct EnvIdentityCommand {
+    #[command(subcommand)]
+    pub command: EnvIdentitySubcommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum EnvIdentitySubcommand {
+    /// Generate a new age identity, optionally backed by Touch ID (Secure Enclave)
+    Init {
+        /// Generate a Secure Enclave identity requiring Touch ID (macOS only)
+        #[arg(long)]
+        touch_id: bool,
+        /// Secure Enclave access control policy (only with --touch-id): any-biometry
+        /// (default), any-biometry-or-passcode, current-biometry, or passcode
+        #[arg(long, value_name = "POLICY")]
+        access_control: Option<String>,
+        /// Output path (defaults to <shine_dir>/age/identity.txt)
+        #[arg(short = 'o', long, value_name = "PATH")]
+        output: Option<PathBuf>,
+        /// Overwrite an existing identity file
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the recipient(s) for the configured identity file(s)
+    Show,
 }
 
 #[derive(Args, Debug)]

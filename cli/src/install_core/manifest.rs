@@ -1,8 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
 
 const MANIFEST_FILE: &str = "app-manifest.toml";
 
@@ -57,35 +55,11 @@ pub fn hash_content(bytes: &[u8]) -> u64 {
 
 impl AppManifest {
     pub async fn load(shine_dir: &Path) -> Result<Self> {
-        let path = shine_dir.join(MANIFEST_FILE);
-        match fs::read_to_string(&path).await {
-            Ok(content) => toml::from_str(&content).context("failed to parse app manifest"),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e).context("failed to read app manifest"),
-        }
+        crate::persist::load_toml_or_default(&shine_dir.join(MANIFEST_FILE), "app manifest").await
     }
 
     pub async fn save(&self, shine_dir: &Path) -> Result<()> {
-        let path = shine_dir.join(MANIFEST_FILE);
-        let content = toml::to_string_pretty(self).context("failed to serialize app manifest")?;
-
-        let temp = shine_dir.join(format!(".app-manifest-{}.tmp", uuid::Uuid::new_v4()));
-        let mut file = tokio::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)
-            .await
-            .context("failed to create temp manifest file")?;
-        file.write_all(content.as_bytes())
-            .await
-            .context("failed to write manifest")?;
-        file.sync_all().await.context("failed to sync manifest")?;
-        drop(file);
-
-        fs::rename(&temp, &path)
-            .await
-            .context("failed to finalize manifest")?;
-        Ok(())
+        crate::persist::save_toml_atomic(self, &shine_dir.join(MANIFEST_FILE), "app manifest").await
     }
 
     pub fn upsert(&mut self, entry: AppEntry) {
@@ -116,11 +90,10 @@ impl AppManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::fs;
 
     async fn make_temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-manifest-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-manifest").await
     }
 
     fn sample_entry(dest: &str) -> AppEntry {

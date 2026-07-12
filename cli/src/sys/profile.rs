@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use crate::config::Config;
-use crate::shells::ShellType;
+use crate::install_core::{eol_eq, normalize_eol};
 
-use super::{
-    SYS_PROFILE_PHASES, ShellProfileBlockPosition, SysItemOutcome, SysItemStatus, SysProfilePhase,
-};
+use super::profile_blocks::update_sys_shell_profiles;
+use super::{SYS_PROFILE_PHASES, SysItemOutcome, SysItemStatus, SysProfilePhase};
 
 pub(super) async fn install_sys_profile_loader(
     config: &Config,
@@ -54,8 +53,8 @@ pub(super) struct SysProfileFileUpdate {
 #[derive(Debug)]
 pub(super) struct SysShellProfileUpdate {
     pub(super) updated: bool,
-    unsupported_shell: bool,
-    detail: String,
+    pub(super) unsupported_shell: bool,
+    pub(super) detail: String,
 }
 
 pub(super) async fn install_sys_profile_files(
@@ -100,7 +99,13 @@ async fn install_sys_profile_phase(
     force_profile: bool,
 ) -> Result<SysProfileFileUpdate> {
     let template_path = script_dir.join(format!("profile.{}.{ext}", phase.as_str()));
-    let template = read_sys_profile_template(&template_path, os_id, phase, ext).await?;
+    let template_raw = read_sys_profile_template(&template_path, os_id, phase, ext).await?;
+    // Normalize line endings for all comparisons/merges so a pure CRLF↔LF
+    // difference (e.g. a Windows editor re-saving an installed file) is not
+    // treated as a real change. Files are only ever *written* as the LF
+    // template/merge output, never the raw bytes, so leaving a file "unchanged"
+    // preserves the user's on-disk endings.
+    let template = normalize_eol(&template_raw);
 
     let active_path = sys_profile_file_path(profile_dir, os_id, phase, ext);
     let base_path = sys_profile_base_path(profile_dir, os_id, phase, ext);
@@ -119,7 +124,7 @@ async fn install_sys_profile_phase(
         .await;
     }
 
-    let active = match tokio::fs::read(&active_path).await {
+    let active_raw = match tokio::fs::read(&active_path).await {
         Ok(active) => active,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return handle_fresh_install(
@@ -133,8 +138,9 @@ async fn install_sys_profile_phase(
         }
         Err(err) => return Err(err).with_context(|| format!("reading {}", active_path.display())),
     };
+    let active = normalize_eol(&active_raw);
 
-    let base = match tokio::fs::read(&base_path).await {
+    let base_raw = match tokio::fs::read(&base_path).await {
         Ok(base) => base,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return handle_missing_base(
@@ -149,6 +155,12 @@ async fn install_sys_profile_phase(
         }
         Err(err) => return Err(err).with_context(|| format!("reading {}", base_path.display())),
     };
+    let base = normalize_eol(&base_raw);
+
+    // If any on-disk input carried non-LF endings, `git merge-file` (which reads
+    // the raw files) would see spurious per-line differences, so fall back to the
+    // pure-Rust three-way merge over the already-normalized bytes instead.
+    let allow_git_merge = active == active_raw && base == base_raw && template == template_raw;
 
     apply_merge_result(MergeInputs {
         active_path: &active_path,
@@ -159,6 +171,7 @@ async fn install_sys_profile_phase(
         base: &base,
         active: &active,
         template: &template,
+        allow_git_merge,
     })
     .await
 }
@@ -191,6 +204,10 @@ struct MergeInputs<'a> {
     base: &'a [u8],
     active: &'a [u8],
     template: &'a [u8],
+    /// False when an on-disk input carried non-LF endings; the merge then avoids
+    /// `git merge-file` (which would see spurious per-line diffs) in favor of the
+    /// pure-Rust three-way merge over the normalized bytes.
+    allow_git_merge: bool,
 }
 
 async fn apply_force_profile(
@@ -202,7 +219,7 @@ async fn apply_force_profile(
     template: &[u8],
 ) -> Result<SysProfileFileUpdate> {
     let backup = if let Ok(active) = tokio::fs::read(active_path).await
-        && active != template
+        && !eol_eq(&active, template)
     {
         let backup_path = profile_backup_path(active_path, ext);
         tokio::fs::copy(active_path, &backup_path)
@@ -317,6 +334,7 @@ async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpd
         base,
         active,
         template,
+        allow_git_merge,
     } = inputs;
 
     if active == template {
@@ -360,6 +378,7 @@ async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpd
         base,
         active,
         template,
+        allow_git_merge,
     )
     .await?
     {
@@ -411,8 +430,11 @@ async fn merge_sys_profile(
     base: &[u8],
     active: &[u8],
     template: &[u8],
+    allow_git_merge: bool,
 ) -> Result<ProfileMerge> {
-    if let Some(result) = try_git_merge_file(active_path, base_path, template_path).await? {
+    if allow_git_merge
+        && let Some(result) = try_git_merge_file(active_path, base_path, template_path).await?
+    {
         return Ok(result);
     }
 
@@ -680,330 +702,101 @@ fn sys_profile_merge_path(
     profile_dir.join(format!("{os_id}-sys.{}.merge.{ext}", phase.as_str()))
 }
 
-pub(super) async fn update_sys_shell_profiles(
-    config: &Config,
-    os_id: &str,
-    sys_shell: &str,
-) -> Result<SysShellProfileUpdate> {
-    match os_id {
-        "macos" => update_macos_shell_profile(config, os_id).await,
-        "ubuntu" => update_ubuntu_shell_profile(config, os_id, sys_shell).await,
-        "windows" => update_windows_shell_profile(config, os_id).await,
-        _ => Ok(SysShellProfileUpdate {
-            updated: false,
-            unsupported_shell: true,
-            detail: format!("unsupported OS for sys profile: {os_id}"),
-        }),
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::fs;
 
-async fn update_macos_shell_profile(config: &Config, os_id: &str) -> Result<SysShellProfileUpdate> {
-    let path = config.home_dir.join(".zshrc");
-    let updated = update_sys_shell_profile_blocks(&path, os_id, None).await?;
-    Ok(SysShellProfileUpdate {
-        updated,
-        unsupported_shell: false,
-        detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
-    })
-}
-
-async fn update_ubuntu_shell_profile(
-    config: &Config,
-    os_id: &str,
-    sys_shell: &str,
-) -> Result<SysShellProfileUpdate> {
-    match config.shell_type {
-        ShellType::Bash => {
-            let updated = update_sys_shell_profile_blocks(
-                &config.home_dir.join(".bashrc"),
-                os_id,
-                Some("bash"),
-            )
-            .await?;
-            remove_sys_shell_profile_blocks(&config.home_dir.join(".zshrc"), os_id).await?;
-            Ok(SysShellProfileUpdate {
-                updated,
-                unsupported_shell: false,
-                detail: format!("~/.bashrc -> {}", sys_loader_display(os_id)),
-            })
-        }
-        ShellType::Zsh => {
-            let updated = update_sys_shell_profile_blocks(
-                &config.home_dir.join(".zshrc"),
-                os_id,
-                Some("zsh"),
-            )
-            .await?;
-            remove_sys_shell_profile_blocks(&config.home_dir.join(".bashrc"), os_id).await?;
-            Ok(SysShellProfileUpdate {
-                updated,
-                unsupported_shell: false,
-                detail: format!("~/.zshrc -> {}", sys_loader_display(os_id)),
-            })
-        }
-        _ => Ok(SysShellProfileUpdate {
-            updated: false,
-            unsupported_shell: true,
-            detail: format!("unsupported shell for sys profile: {sys_shell}"),
-        }),
-    }
-}
-
-async fn update_windows_shell_profile(
-    config: &Config,
-    os_id: &str,
-) -> Result<SysShellProfileUpdate> {
-    let mut updated = false;
-    for path in [
-        config
-            .home_dir
-            .join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
-        config
-            .home_dir
-            .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
-    ] {
-        updated |= update_sys_shell_profile_blocks(&path, os_id, None).await?;
-    }
-    Ok(SysShellProfileUpdate {
-        updated,
-        unsupported_shell: false,
-        detail: "PowerShell profiles".to_string(),
-    })
-}
-
-pub(super) async fn update_sys_shell_profile_blocks(
-    path: &Path,
-    os_id: &str,
-    shell_name: Option<&str>,
-) -> Result<bool> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
+    /// Fresh-installs `template` into a temp profile dir and returns
+    /// `(profile_dir, script_dir, active_path)` for follow-up assertions.
+    async fn setup_phase(template: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let dir = crate::test_support::make_temp_dir("shine-sys-profile-eol").await;
+        let profile_dir = dir.join("profile");
+        let script_dir = dir.join("script");
+        fs::create_dir_all(&profile_dir).await.unwrap();
+        fs::create_dir_all(&script_dir).await.unwrap();
+        fs::write(script_dir.join("profile.pre.sh"), template)
             .await
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
+            .unwrap();
 
-    let content = match tokio::fs::read_to_string(path).await {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-    };
-    let had_utf8_bom = content.contains('\u{feff}');
-    let bom_was_at_start = content.starts_with('\u{feff}');
-    let content = content.replace('\u{feff}', "");
-    let pre_block = sys_shell_profile_block(os_id, SysProfilePhase::Pre, shell_name);
-    let post_block = sys_shell_profile_block(os_id, SysProfilePhase::Post, shell_name);
-    let pre_sentinel = sys_sentinel(os_id, SysProfilePhase::Pre);
-    let post_sentinel = sys_sentinel(os_id, SysProfilePhase::Post);
-
-    if extract_sentinel_block(&content, legacy_sys_sentinel(os_id)).is_none()
-        && extract_sentinel_block(&content, pre_sentinel) == Some(pre_block.as_str())
-        && extract_sentinel_block(&content, post_sentinel) == Some(post_block.as_str())
-        && sentinel_order_is_valid(&content, pre_sentinel, post_sentinel)
-        && (!had_utf8_bom || bom_was_at_start)
-    {
-        return Ok(false);
-    }
-
-    let mut updated = remove_sentinel_block(&content, legacy_sys_sentinel(os_id));
-    updated = remove_sentinel_block(&updated, pre_sentinel);
-    updated = remove_sentinel_block(&updated, post_sentinel);
-    updated = trim_outer_blank_lines(&updated);
-    updated = insert_shell_profile_block(&updated, &pre_block, ShellProfileBlockPosition::Start);
-    updated = insert_shell_profile_block(&updated, &post_block, ShellProfileBlockPosition::End);
-    if had_utf8_bom {
-        updated.insert(0, '\u{feff}');
-    }
-
-    tokio::fs::write(path, updated)
+        let update = install_sys_profile_phase(
+            &profile_dir,
+            "ubuntu",
+            &script_dir,
+            SysProfilePhase::Pre,
+            "sh",
+            false,
+        )
         .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(true)
-}
+        .unwrap();
+        assert!(update.updated, "fresh install should write the loader file");
 
-async fn remove_sys_shell_profile_blocks(path: &Path, os_id: &str) -> Result<bool> {
-    let mut updated = remove_shell_profile_block(path, legacy_sys_sentinel(os_id)).await?;
-    for phase in SYS_PROFILE_PHASES {
-        updated |= remove_shell_profile_block(path, sys_sentinel(os_id, phase)).await?;
+        let active_path = sys_profile_file_path(&profile_dir, "ubuntu", SysProfilePhase::Pre, "sh");
+        (profile_dir, script_dir, active_path)
     }
-    Ok(updated)
-}
 
-fn legacy_sys_sentinel(os_id: &str) -> (&'static str, &'static str) {
-    match os_id {
-        "macos" => ("# >>> shine macos sys >>>", "# <<< shine macos sys <<<"),
-        "windows" => ("# >>> shine windows sys >>>", "# <<< shine windows sys <<<"),
-        _ => ("# >>> shine ubuntu sys >>>", "# <<< shine ubuntu sys <<<"),
-    }
-}
-
-fn sys_sentinel(os_id: &str, phase: SysProfilePhase) -> (&'static str, &'static str) {
-    match (os_id, phase) {
-        ("macos", SysProfilePhase::Pre) => (
-            "# >>> shine macos sys pre >>>",
-            "# <<< shine macos sys pre <<<",
-        ),
-        ("macos", SysProfilePhase::Post) => (
-            "# >>> shine macos sys post >>>",
-            "# <<< shine macos sys post <<<",
-        ),
-        ("windows", SysProfilePhase::Pre) => (
-            "# >>> shine windows sys pre >>>",
-            "# <<< shine windows sys pre <<<",
-        ),
-        ("windows", SysProfilePhase::Post) => (
-            "# >>> shine windows sys post >>>",
-            "# <<< shine windows sys post <<<",
-        ),
-        (_, SysProfilePhase::Pre) => (
-            "# >>> shine ubuntu sys pre >>>",
-            "# <<< shine ubuntu sys pre <<<",
-        ),
-        (_, SysProfilePhase::Post) => (
-            "# >>> shine ubuntu sys post >>>",
-            "# <<< shine ubuntu sys post <<<",
-        ),
-    }
-}
-
-fn sys_shell_profile_block(
-    os_id: &str,
-    phase: SysProfilePhase,
-    shell_name: Option<&str>,
-) -> String {
-    let (start, end) = sys_sentinel(os_id, phase);
-    match os_id {
-        "windows" => format!(
-            r#"{start}
-$shineWindowsSysProfile = Join-Path $HOME ".shine\profile\windows-sys.{phase}.ps1"
-if (Test-Path -LiteralPath $shineWindowsSysProfile) {{
-    . $shineWindowsSysProfile
-}}
-{end}
-"#,
-            phase = phase.as_str()
-        ),
-        "macos" => format!(
-            r#"{start}
-shine_macos_sys_profile="$HOME/.shine/profile/macos-sys.{phase}.sh"
-if [[ -f "$shine_macos_sys_profile" ]]; then
-  source "$shine_macos_sys_profile"
-fi
-{end}
-"#,
-            phase = phase.as_str()
-        ),
-        _ => {
-            let shell_name = shell_name.unwrap_or("bash");
-            format!(
-                r#"{start}
-shine_ubuntu_sys_profile="$HOME/.shine/profile/ubuntu-sys.{phase}.sh"
-if [[ -f "$shine_ubuntu_sys_profile" ]]; then
-  SHINE_UBUNTU_SYS_SHELL="{shell_name}"
-  source "$shine_ubuntu_sys_profile"
-fi
-{end}
-"#,
-                phase = phase.as_str()
-            )
-        }
-    }
-}
-
-fn insert_shell_profile_block(
-    content: &str,
-    desired_block: &str,
-    position: ShellProfileBlockPosition,
-) -> String {
-    match position {
-        ShellProfileBlockPosition::Start => {
-            let mut updated = String::new();
-            updated.push_str(desired_block);
-            if !content.is_empty() {
-                if !desired_block.ends_with('\n') {
-                    updated.push('\n');
-                }
-                updated.push('\n');
-                updated.push_str(content);
-            }
-            updated
-        }
-        ShellProfileBlockPosition::End => {
-            let mut updated = content.to_string();
-            if !updated.ends_with('\n') && !updated.is_empty() {
-                updated.push('\n');
-            }
-            if !updated.is_empty() {
-                updated.push('\n');
-            }
-            updated.push_str(desired_block);
-            updated
-        }
-    }
-}
-
-fn sentinel_order_is_valid(content: &str, first: (&str, &str), second: (&str, &str)) -> bool {
-    match (content.find(first.0), content.find(second.0)) {
-        (Some(first), Some(second)) => first < second,
-        _ => false,
-    }
-}
-
-fn trim_outer_blank_lines(content: &str) -> String {
-    content.trim_matches('\n').to_string()
-}
-
-async fn remove_shell_profile_block(path: &Path, sentinel: (&str, &str)) -> Result<bool> {
-    let Ok(content) = tokio::fs::read_to_string(path).await else {
-        return Ok(false);
-    };
-    let updated = remove_sentinel_block(&content, sentinel);
-    if updated == content {
-        return Ok(false);
-    }
-    tokio::fs::write(path, updated)
+    async fn run_phase(profile_dir: &Path, script_dir: &Path) -> SysProfileFileUpdate {
+        install_sys_profile_phase(
+            profile_dir,
+            "ubuntu",
+            script_dir,
+            SysProfilePhase::Pre,
+            "sh",
+            false,
+        )
         .await
-        .with_context(|| format!("writing {}", path.display()))?;
-    Ok(true)
-}
-
-fn extract_sentinel_block<'a>(content: &'a str, sentinel: (&str, &str)) -> Option<&'a str> {
-    let start = content.find(sentinel.0)?;
-    let after_start = &content[start..];
-    let end = after_start.find(sentinel.1)? + sentinel.1.len();
-    let end = if after_start[end..].starts_with('\n') {
-        end + 1
-    } else {
-        end
-    };
-    Some(&after_start[..end])
-}
-
-fn remove_sentinel_block(content: &str, sentinel: (&str, &str)) -> String {
-    let mut output = Vec::new();
-    let mut skip = false;
-    for line in content.lines() {
-        if line == sentinel.0 {
-            skip = true;
-            continue;
-        }
-        if line == sentinel.1 {
-            skip = false;
-            continue;
-        }
-        if !skip {
-            output.push(line);
-        }
+        .unwrap()
     }
-    let mut result = output.join("\n");
-    if content.ends_with('\n') && !result.is_empty() {
-        result.push('\n');
-    }
-    result
-}
 
-fn sys_loader_display(os_id: &str) -> String {
-    format!(
-        "~/.shine/profile/{os_id}-sys.{{pre,post}}.{}",
-        if os_id == "windows" { "ps1" } else { "sh" }
-    )
+    #[tokio::test]
+    async fn crlf_only_difference_is_not_reported_as_an_update_and_preserves_endings() {
+        let (profile_dir, script_dir, active_path) = setup_phase("line1\nline2\n").await;
+
+        // Simulate a Windows editor re-saving the same content with CRLF endings.
+        fs::write(&active_path, "line1\r\nline2\r\n").await.unwrap();
+
+        let update = run_phase(&profile_dir, &script_dir).await;
+        assert!(
+            !update.updated,
+            "a pure CRLF/LF difference must not count as an update"
+        );
+        assert!(!update.needs_action);
+
+        // The user's CRLF bytes are left untouched (no silent normalization).
+        let after = fs::read(&active_path).await.unwrap();
+        assert_eq!(after, b"line1\r\nline2\r\n");
+
+        fs::remove_dir_all(profile_dir.parent().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn crlf_active_with_real_user_edit_merges_cleanly_without_false_conflict() {
+        let (profile_dir, script_dir, active_path) = setup_phase("a\nb\nc\n").await;
+
+        // User appends a line and (as a Windows editor would) saves as CRLF.
+        fs::write(&active_path, "a\r\nb\r\nc\r\nuser\r\n")
+            .await
+            .unwrap();
+        // A new template changes a different, non-overlapping line.
+        fs::write(script_dir.join("profile.pre.sh"), "a2\nb\nc\n")
+            .await
+            .unwrap();
+
+        let update = run_phase(&profile_dir, &script_dir).await;
+        assert!(update.updated);
+        assert!(
+            !update.needs_action,
+            "CRLF endings must not fabricate a merge conflict"
+        );
+
+        // Non-overlapping template + user edits merge into LF output.
+        let merged = fs::read(&active_path).await.unwrap();
+        assert_eq!(merged, b"a2\nb\nc\nuser\n");
+
+        fs::remove_dir_all(profile_dir.parent().unwrap())
+            .await
+            .unwrap();
+    }
 }

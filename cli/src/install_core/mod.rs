@@ -1,0 +1,15 @@
+//! Install/uninstall primitives shared by the `apps` and `sys` preset
+//! domains: manifest tracking (`manifest`), file write/backup/admin-lock
+//! logic (`file_ops`), and content transforms (`transforms`).
+//!
+//! This module is domain-neutral so `sys` doesn't need to reach into `apps`
+//! for these primitives — both depend on `install_core` instead.
+
+pub mod file_ops;
+pub mod line_endings;
+pub mod manifest;
+pub mod transforms;
+
+pub use line_endings::{eol_eq, normalize_eol};
+pub use manifest::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
+pub use transforms::apply as apply_transforms;

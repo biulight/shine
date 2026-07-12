@@ -70,6 +70,21 @@ pub async fn load_installed_categories(
     Ok(categories)
 }
 
+/// Loads categories from whichever source is active: installed (external
+/// presets mode) or embedded. Replaces the `if config.is_external_presets {
+/// load_installed_categories } else { load_embedded_categories }` branch
+/// repeated at every call site.
+pub async fn load_active_categories(
+    config: &Config,
+    filter: Option<&str>,
+) -> Result<Vec<ShellCategory>> {
+    if config.is_external_presets {
+        load_installed_categories(config, filter).await
+    } else {
+        load_embedded_categories(filter)
+    }
+}
+
 fn load_embedded_category(name: &str) -> Result<ShellCategory> {
     let metadata_path = format!("shell/{name}/shine.toml");
     if let Some(bytes) = presets::read_asset_bytes(&metadata_path) {
@@ -236,22 +251,13 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
 }
 
 async fn collect_merged_fs_scripts(config: &Config, category_rel: &Path) -> Result<Vec<PathBuf>> {
-    let base_category = config.presets_dir().join(category_rel);
-    let mut scripts: BTreeSet<PathBuf> = if base_category.is_dir() {
-        collect_fs_scripts(&base_category)
-            .await?
-            .into_iter()
-            .collect()
-    } else {
-        BTreeSet::new()
-    };
-    if let Some(overlay) = config.active_presets_overlay_dir() {
-        let overlay_category = overlay.join(category_rel);
-        if overlay_category.is_dir() {
-            scripts.extend(collect_fs_scripts(&overlay_category).await?);
+    crate::preset_meta::merge_fs_tree(config, category_rel, "directory", |rel| {
+        if !is_shell_script(rel) {
+            return Ok(None);
         }
-    }
-    Ok(scripts.into_iter().collect())
+        Ok(Some(normalize_shell_source(rel)?))
+    })
+    .await
 }
 
 fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
@@ -263,64 +269,20 @@ fn file_matches_current_platform(category: &str, file: &FileToml) -> Result<bool
 }
 
 fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Result<bool> {
-    let Some(platforms) = &file.platforms else {
-        return Ok(true);
-    };
-
-    let mut matches = false;
-    for platform in platforms {
-        let normalized = platform.trim().to_ascii_lowercase();
-        match normalized.as_str() {
-            "windows" | "unix" => {
-                matches |= normalized == current;
-            }
-            _ => bail!(
-                "shell/{category}/shine.toml has unsupported platform `{platform}`; expected `windows` or `unix`"
-            ),
-        }
-    }
-    Ok(matches)
+    crate::preset_meta::platform_matches(
+        file.platforms.as_deref(),
+        current,
+        &format!("shell/{category}/shine.toml"),
+    )
 }
 
 fn collect_embedded_category_names(filter: Option<&str>) -> Vec<String> {
-    let mut names = BTreeSet::new();
-    for asset_path in presets::asset_paths("shell") {
-        let Some(rest) = asset_path.strip_prefix("shell/") else {
-            continue;
-        };
-        let Some((category, _)) = rest.split_once('/') else {
-            continue;
-        };
-        if filter.is_none_or(|f| f == category) {
-            names.insert(category.to_string());
-        }
-    }
-    names.into_iter().collect()
+    crate::preset_meta::collect_embedded_category_names("shell", filter)
 }
 
 async fn collect_fs_category_names(shell_root: &Path, filter: Option<&str>) -> Result<Vec<String>> {
-    if let Some(filter) = filter {
-        let path = shell_root.join(filter);
-        if path.exists() {
-            return Ok(vec![filter.to_string()]);
-        }
-        return Ok(Vec::new());
-    }
-
-    if !shell_root.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut names = BTreeSet::new();
-    let mut entries = fs::read_dir(shell_root)
+    crate::preset_meta::collect_fs_category_names(shell_root, filter, "shell presets directory")
         .await
-        .with_context(|| format!("reading shell presets directory: {}", shell_root.display()))?;
-    while let Some(entry) = entries.next_entry().await? {
-        if entry.file_type().await?.is_dir() {
-            names.insert(entry.file_name().to_string_lossy().to_string());
-        }
-    }
-    Ok(names.into_iter().collect())
 }
 
 fn collect_embedded_scripts(name: &str) -> Result<Vec<PathBuf>> {
@@ -338,40 +300,6 @@ fn collect_embedded_scripts(name: &str) -> Result<Vec<PathBuf>> {
             continue;
         }
         scripts.insert(normalize_shell_source(rest)?);
-    }
-    Ok(scripts.into_iter().collect())
-}
-
-async fn collect_fs_scripts(category_root: &Path) -> Result<Vec<PathBuf>> {
-    if !category_root.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut scripts = BTreeSet::new();
-    let mut stack = vec![category_root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let mut entries = fs::read_dir(&dir)
-            .await
-            .with_context(|| format!("reading directory: {}", dir.display()))?;
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            let ft = entry.file_type().await?;
-            if ft.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if !ft.is_file() || !is_shell_script(&path) {
-                continue;
-            }
-            let rel = path.strip_prefix(category_root).with_context(|| {
-                format!(
-                    "failed to strip category root {} from {}",
-                    category_root.display(),
-                    path.display()
-                )
-            })?;
-            scripts.insert(normalize_shell_source(rel)?);
-        }
     }
     Ok(scripts.into_iter().collect())
 }
@@ -450,9 +378,7 @@ mod tests {
     use tokio::fs;
 
     async fn make_temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shine-shell-meta-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).await.unwrap();
-        dir
+        crate::test_support::make_temp_dir("shine-shell-meta").await
     }
 
     #[test]

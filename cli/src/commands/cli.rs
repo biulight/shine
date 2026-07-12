@@ -3,8 +3,8 @@ use crate::version;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use super::{
-    AppCommands, EnvCommands, ExportCommand, LinkCommand, OverlayCommands, SelfCommands,
-    ShellCommands, SysCommands,
+    AppCommands, EnvCommands, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
+    SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands, TaskRunCommand,
 };
 
 /// `Shine` - Quick config for sys
@@ -95,6 +95,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: SelfCommands,
     },
+    /// Serve shine-managed HTTP resources from ~/.shine/http
+    Serve {
+        #[command(subcommand)]
+        command: ServeCommands,
+    },
     /// Manage preset variables and workspace command environments
     Env {
         #[command(subcommand)]
@@ -105,6 +110,25 @@ pub enum Commands {
         #[command(subcommand)]
         command: SysCommands,
     },
+    /// Open an interactive SSH session with a session-scoped file transfer channel
+    Ssh {
+        /// ssh options, the destination, and an optional remote command
+        /// (passed through to the system `ssh` binary; see `ssh(1)`)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Transfer files between this machine and the other end of a `shine ssh` session
+    Local {
+        #[command(subcommand)]
+        command: LocalCommands,
+    },
+    /// Save, run, and manage personal shortcut commands
+    Task {
+        #[command(subcommand)]
+        command: TaskCommands,
+    },
+    /// Run a saved task (alias for `shine task run`)
+    Run(TaskRunCommand),
 }
 
 #[derive(Args, Debug)]

@@ -91,12 +91,22 @@ shine/
 │   ├── build.rs  # cargo:rerun-if-changed=../presets (rust-embed trigger)
 │   └── src/
 │       ├── lib.rs            # Module tree root for the `cli` library crate
-│       ├── main.rs           # Bin crate root: `fn main`, `run()` dispatch, shim
-│       │                     # resolution, `init`, `env show/set/get/decrypt/
-│       │                     # export/encrypt` handlers
-│       ├── presets_commands.rs # export/link/unlink, overlay link/unlink/show
+│       ├── main.rs           # Bin crate root: `fn main`, `run()` dispatch; delegates
+│       │                     # `init` to `cli::init::handle_init` and the background
+│       │                     # version check to `cli::update_check::maybe_notify`
+│       ├── init.rs           # `shine init`: confirm + write a project-local
+│       │                     # shine.config.toml. `pub mod` in lib.rs, same
+│       │                     # lib-testability reasoning as shim.rs.
+│       ├── shim.rs           # Top-level install/reinstall/uninstall <category>:
+│       │                     # infers shell vs app preset, prompts on conflict.
+│       │                     # `pub mod` in lib.rs (not bin-private), so its unit
+│       │                     # tests run under `cargo test --lib` too.
+│       ├── home.rs           # effective_home_dir (sudo-aware), tilde/full path expansion
+│       ├── presets_commands.rs # export/link/unlink, overlay link/unlink/show.
+│       │                     # `pub mod` in lib.rs, same lib-testability reasoning as shim.rs.
 │       ├── self_install.rs   # update/self-upgrade/upgrade-installed-configs,
-│       │                     # atomic self-install binary copy
+│       │                     # atomic self-install binary copy. `pub mod` in lib.rs,
+│       │                     # same lib-testability reasoning as shim.rs.
 │       ├── commands/
 │       │   ├── mod.rs        # Clap subcommand enums (ShellCommands, AppCommands, etc.)
 │       │   ├── cli.rs        # Cli, Commands, CompletionShell/Commands, and the
@@ -109,44 +119,128 @@ shine/
 │       │   ├── shell.rs      # ShellCommands enum
 │       │   └── sys.rs        # SysCommands enum
 │       ├── apps/
-│       │   ├── mod.rs        # App install/uninstall/list orchestration
+│       │   ├── mod.rs        # Module root: mod declarations + re-exports (handle_*,
+│       │   │                 # handle_init_template); shared kernel used by install/uninstall/
+│       │   │                 # info/upgrade (resolve_install_destination, source_*_for_file,
+│       │   │                 # desired/installed_content_hash, install_prepared_content,
+│       │   │                 # uninstall_app_entry, app_category_from_source/app_source_parts)
+│       │   ├── install.rs    # handle_install
+│       │   ├── uninstall.rs  # handle_uninstall, category-scoped manifest-entry selection
+│       │   ├── info.rs       # handle_info, handle_list
 │       │   ├── report.rs     # Install/uninstall outcome print_* helpers
 │       │   ├── upgrade.rs    # handle_upgrade_installed, stale-entry cleanup
-│       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile)
-│       │   ├── annotation.rs # shine-dest: comment annotation parser
-│       │   ├── file_ops.rs   # File copy, backup (*.shine.bak), restore
-│       │   ├── manifest.rs   # ~/.shine/app-manifest.toml tracking
+│       │   ├── build.rs      # handle_build: runs an app preset's [artifact].script
+│       │   │                 # (`shine app build <app-id>`), never run implicitly by
+│       │   │                 # install/upgrade — see ADR 0009
+│       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile, AppArtifact)
+│       │   ├── json_merge.rs # JsonMerge install strategy (managed-key merge)
+│       │   └── annotation.rs # shine-dest: comment annotation parser
+│       ├── install_core/     # Install primitives shared by apps/ and sys/ (no
+│       │   │                 # apps-specific logic; sys depends on this, not on apps)
+│       │   ├── mod.rs        # Re-exports: AppEntry, AppInstallStrategy, AppManifest,
+│       │   │                 # hash_content, apply_transforms
+│       │   ├── file_ops.rs   # File copy, backup (*.shine.bak), restore, admin_lock
+│       │   ├── manifest.rs   # ~/.shine/app-manifest.toml tracking (AppManifest, AppEntry)
 │       │   └── transforms/   # File content transforms: jsonc-to-json, template
 │       ├── env/
 │       │   ├── mod.rs        # EnvConfig: [env] table in config.toml, @@VAR@@ substitution
-│       │   └── upgrade.rs    # Re-apply env template transforms to installed presets
+│       │   ├── commands.rs   # `shine env show/set/delete/get/decrypt/export/encrypt` handlers
+│       │   ├── catalog.rs    # Known env-var metadata (description, sensitive) for `env show`
+│       │   ├── identity.rs   # `shine env identity init/show`: age identity generation
+│       │   │                 # (age-keygen / age-plugin-se --touch-id) and recipient inspection
+│       │   ├── upgrade.rs    # Re-apply env template transforms to installed presets
+│       │   └── workspace.rs  # `shine env seal/run`: workspace env files, `--with` injection
 │       ├── git_pull.rs       # Safe FF-only pulls for Git-managed preset sources
 │       ├── shells/
-│       │   ├── mod.rs        # ShellType, handle_install/uninstall/list, link-conflict reporting
+│       │   ├── mod.rs        # Module root: ShellType, SENTINEL_*, get_shell/get_shell_config_path,
+│       │   │                 # mod declarations + re-exports (handle_*, ShellUpgradeReport)
+│       │   ├── install.rs    # handle_install/handle_upgrade_installed/handle_completion_install/
+│       │   │                 # handle_init_template, script/link-spec building
+│       │   ├── uninstall.rs  # handle_uninstall
+│       │   ├── links.rs      # Bin-symlink spec building, link-conflict detail/printing
+│       │   ├── report.rs     # handle_list, ShellUpgradeReport, install/uninstall summary formatting
 │       │   ├── profile.rs    # Managed profile file/PATH/sentinel-block install+removal
 │       │   ├── template.rs   # @@VAR@@ template rendering for installed scripts
 │       │   └── metadata.rs   # ShellCategory/ShellFile parsing from shine.toml or .sh files
 │       ├── sys/
-│       │   ├── mod.rs        # sys handle_* entry points, shared data model types
+│       │   ├── mod.rs        # Module root: mod declarations + re-exports (handle_*, detect_os_id)
+│       │   ├── commands.rs   # handle_list/handle_info/handle_status/handle_init orchestration,
+│       │   │                 # preset-manifest loading
+│       │   ├── managed.rs    # Managed-item command family: SysAction, handle_apply/
+│       │   │                 # handle_uninstall/handle_upgrade_managed, managed_updates,
+│       │   │                 # run_managed (converge/remove a managed sys resource)
+│       │   ├── render.rs     # Presentation helpers: sys_init_theme, print_available_item,
+│       │   │                 # item/driver name labels, print_dry_run
+│       │   ├── detect.rs     # detect_os_id / detect_os_id_from (OS + Linux distro detection)
+│       │   ├── model.rs      # SysManifest/SysItem/SysItemStatus/SysItemOutcome/SelectionSource, etc.
+│       │   ├── run_manifest.rs # SysRunManifest/SysRunEntry: ~/.shine/sys-manifest.toml load/save
 │       │   ├── manifest.rs   # Preset loading, parsing, and validation
-│       │   ├── profile.rs    # Shell-profile install/merge/sentinel logic
+│       │   ├── profile.rs    # Sys-profile install: loader install, three-way merge
+│       │   │                 # (fallback + git merge-file), conflict markers
+│       │   ├── profile_blocks.rs # Shell-profile sentinel blocks: per-phase sentinel
+│       │   │                 # insert/remove, BOM preservation, legacy-sentinel migration
 │       │   ├── selection.rs  # Item-selection resolution (profile vs interactive)
 │       │   ├── execution.rs  # Running sys items, parsing script output, run reports
-│       │   └── resources.rs  # Built-in managed-resource drivers (split-dns, etc.)
+│       │   ├── resources.rs  # SystemDriver trait, receipts, BuiltinDriver glue (dispatches
+│       │   │                 # to sys/drivers/*)
+│       │   └── drivers/
+│       │       ├── mod.rs         # pub(super) mod declarations for the driver submodules
+│       │       ├── split_dns.rs   # Split-DNS driver: desired-state, apply/remove, Windows NRPT
+│       │       └── managed_file.rs # Managed-file driver: desired-state, apply/remove
 │       ├── config/
-│       │   ├── mod.rs        # Config struct, load/save
+│       │   ├── mod.rs        # Config struct + accessors, Default, new_for_test
+│       │   ├── load.rs       # load_or_init, global/project layering, schema version read
+│       │   ├── save.rs       # Atomic save, comment-preserving merge, sparse project diff
+│       │   ├── env_layer.rs  # [env] table parsing, legacy env.toml migration, override files
 │       │   └── discovery.rs  # Project-config discovery, SHINE_CONFIG_DIR/
 │       │                     # SHINE_PRESETS priority chain
 │       ├── presets.rs        # rust-embed asset extraction, list_categories, parse_script_description
 │       ├── bin_links.rs      # Symlink management in ~/.shine/bin/
+│       ├── status.rs         # Shared install-status row builders used by `list`/`info`
 │       ├── clear.rs          # Clear stale runtime state after schema changes
 │       ├── colors.rs         # Terminal color helpers
+│       ├── serve.rs          # Local HTTP server for shine-managed resources under ~/.shine/http/
 │       ├── list.rs           # Top-level `shine list` and status views
-│       ├── secret.rs         # GPG encrypt/decrypt for env secrets
-│       ├── show.rs           # `shine info <TARGET>` content display
+│       ├── path_display.rs   # Home-relative path formatting for terminal output
+│       ├── proc.rs           # Small subprocess helpers with no domain logic (ensure_command)
+│       ├── sentinel.rs       # Shared sentinel-block find/extract/remove/insert primitives used
+│       │                     # by shells/profile.rs and sys/profile_blocks.rs
+│       ├── secret/
+│       │   ├── mod.rs        # BackendKind/EncryptRecipients, tagged-ciphertext router
+│       │   │                 # (encrypt_secret/decrypt_secret); untagged = gpg, `age:` = age
+│       │   ├── exec.rs       # Shared subprocess helpers (TempFile, base64 encode/decode) used
+│       │   │                 # by both backends below
+│       │   ├── gpg.rs        # GPG-backed encrypt/decrypt, untagged base64 ciphertext
+│       │   └── age.rs        # age-backed encrypt/decrypt, multi-recipient + Secure Enclave
+│       │                     # (age-plugin-se) identity support, `age:`-tagged ciphertext
+│       ├── show/
+│       │   ├── mod.rs        # `shine info <TARGET>`: handle_show orchestration entry point
+│       │   ├── collect.rs    # Gathers installed AppShowFile/ShellShowFile data from manifests
+│       │   ├── resolve.rs    # Resolves a TARGET string to a ShowRef via canonical/alias matching
+│       │   └── render.rs     # println!/diff formatting for app and shell show output
+│       ├── ssh/
+│       │   ├── mod.rs        # `shine ssh`: wraps system ssh, arg splitting, session
+│       │   │                 # bootstrap, wrapped remote command (env vars + EXIT trap)
+│       │   ├── protocol.rs   # Wire format shared by agent.rs and remote_client.rs
+│       │   ├── agent.rs      # Local transfer server (PutFile/GetFile), Unix socket or
+│       │   │                 # loopback TCP (Windows) via LocalListener
+│       │   ├── dir_transfer.rs # Directory tar build/extract, symlink-escape validation
+│       │   └── remote_client.rs # `shine local download/upload` handlers (run on remote host)
+│       ├── task/
+│       │   ├── mod.rs        # `shine task` save/run/list/info/delete handlers,
+│       │   │                 # direct (no-shell) argv exec + exit-code passthrough,
+│       │   │                 # shell-quoted command rendering, task-name validation
+│       │   └── manifest.rs   # TaskManifest: <shine_dir>/tasks.toml load/save/upsert
 │       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
 │       │                     # since #[cfg(test)] doesn't cross the lib/bin boundary)
-│       ├── update_check.rs   # GitHub release version check, 24h cache
+│       ├── update_check/
+│       │   ├── mod.rs        # ReleaseChannel/UpdateStatus/UpgradeResult, check_for_update(_forced),
+│       │   │                 # `maybe_notify` (gates the background check main.rs runs per-command,
+│       │   │                 # never fails the user's command on check failure), 24h disk cache
+│       │   ├── github.rs     # GitHub API types, release/asset fetch, auth-token resolution,
+│       │   │                 # rate-limit-aware error formatting
+│       │   └── upgrade.rs    # `upgrade_to_release`: asset selection, archive download/extract,
+│       │                     # staged-swap binary install with rollback on failure
 │       └── version.rs        # Version string formatting
 ├── utils/        # Library crate: shared helpers with no cli-crate dependencies
 │   └── src/
@@ -165,6 +259,7 @@ shine/
     │   ├── ghostty/    config.ghostty, shine.toml
     │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig; no shine.toml, uses annotation instead)
     │   ├── JetBrains/  shine.toml
+    │   ├── surge/      local-proxies.conf, local-rules.conf, build.sh (placeholder), shine.toml  (dest = Surge Profiles dir; overlay build.sh patches the active profile's #!include lines)
     │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
@@ -181,17 +276,23 @@ shine/
 |---|---|
 | `shell list/install/uninstall` | `cli/src/shells/` |
 | `app list/install/uninstall` | `cli/src/apps/` |
+| `app build <app-id>` | `cli/src/apps/build.rs` |
 | `sys list/init` | `cli/src/sys/` |
-| `env show/set/get/decrypt/encrypt` | `cli/src/env/` |
+| `env show/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
 | `list` | `cli/src/list.rs` |
-| `info <TARGET>` | `cli/src/show.rs` |
+| `info <TARGET>` | `cli/src/show/` |
 | `export` / `link` / `unlink` / `overlay` | `cli/src/presets_commands.rs` |
 | `pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
-| `init` | `main.rs` inline handler |
-| `self install/upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
-| `update` / `upgrade` | `cli/src/self_install.rs` + `update_check.rs` |
+| `init` | `cli/src/init.rs` |
+| `self install/upgrade` | `cli/src/self_install.rs` + `update_check/` |
+| `update` / `upgrade` | `cli/src/self_install.rs` + `update_check/` |
 | `clear` | `cli/src/clear.rs` |
+| `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
+| `ssh [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
+| `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
+| `task save/run/list/info/delete` | `cli/src/task/` |
+| `run <NAME>` (alias for `task run`) | `cli/src/task/` |
 
 ### Key data flow
 
@@ -209,9 +310,16 @@ shine/
 
 `shine env set KEY VALUE` writes to the `[env]` table in `config.toml`. App (and shell) preset files that declare `transforms = ["template"]` in their `shine.toml` have `@@KEY@@` placeholders replaced at install/upgrade time. Run `shine upgrade` after changing env vars to re-apply to installed presets.
 
-`shine env encrypt`/`shine env decrypt` use GPG (`secret.rs`) to store secrets as base64-encoded ciphertext in the `[env]` table.
+`shine env encrypt`/`shine env decrypt` store secrets as base64 ciphertext in the `[env]` table,
+routed through `secret::encrypt_secret`/`decrypt_secret` (`secret/mod.rs`) to either the GPG
+(`secret/gpg.rs`, untagged ciphertext) or age (`secret/age.rs`, `age:`-tagged ciphertext, with
+optional Apple Touch ID via `age-plugin-se`) backend. Decryption always routes purely on the
+ciphertext's tag, never on config — see
+[ADR 0008](docs/kb/decisions/0008-age-secret-backend-tagged-ciphertext.md). `shine env identity
+init/show` (`env/identity.rs`) manages the age identity file consulted via
+`Config::age_identities()`.
 
-### File transforms (`apps/transforms/`)
+### File transforms (`install_core/transforms/`)
 
 Two transforms can be applied to preset files at install time (declared in `shine.toml` as `transforms = [...]`):
 
@@ -219,6 +327,119 @@ Two transforms can be applied to preset files at install time (declared in `shin
 - **`template`** — substitutes `@@VAR_NAME@@` placeholders from the active `[env]` config table.
 
 Transforms compose in declaration order: `transforms = ["jsonc-to-json", "template"]`.
+
+### SSH session transfer flow (`shine ssh` / `shine local`)
+
+See [`docs/ssh-local-transfer-prd.md`](docs/ssh-local-transfer-prd.md) for the full design.
+Phases 1-3 implemented: file/directory transfers, progress output, and
+`shine local status`. Windows support (local side only — see step 8) added
+on top of the macOS/Linux implementation.
+
+1. `shine ssh [SSH_ARGS]... <HOST> [COMMAND]` generates a session id + token
+   and spawns `ssh` with `-t -R <remote-sock>:<local-forward-target>`
+   prepended to the user's own args (`ssh::split_ssh_args` locates the
+   destination/command boundary without reinterpreting ssh's own option
+   semantics). `<remote-sock>` is always a Unix socket path under `/tmp` on
+   the remote host (assumed Linux/macOS); `<local-forward-target>` is
+   platform-dependent — see step 8.
+2. The remote command is replaced with a wrapper that sets
+   `SHINE_SSH_SESSION`/`SHINE_SSH_TOKEN`/`SHINE_SSH_REMOTE_SOCK` via `env`
+   (not `SetEnv`/`SendEnv`, which most `sshd_config`s reject), then `exec`s
+   the user's original remote command or their login shell.
+3. sshd does **not** clean up the forwarded remote socket file on
+   disconnect (verified against a real host via `scripts/spike-ssh-forward.sh`
+   before implementation) — the wrapper registers its own `trap ... EXIT`.
+4. `shine local download/upload` (run on the remote host) reads those env
+   vars, dials the forwarded socket, and speaks the framed protocol in
+   `ssh::protocol` (`PutFile`/`GetFile`/`Preview` for `--dry-run`) against
+   the local agent in `ssh::agent`, which resolves destinations against the
+   session's local working directory per the PRD's default-target rules.
+   The only authorization on a request is the session token, which travels
+   to the remote host as plain argv/environ (`env SHINE_SSH_TOKEN=...`) and
+   is therefore readable by other local users there via `ps eww` — so the
+   agent does not otherwise trust wire-supplied fields: `PutFile.filename`
+   (meant to always be a bare basename) is rejected unless it is exactly
+   one normal path component (`agent::ensure_single_path_component`),
+   preventing a forged request from writing outside the session directory
+   via `..` or an absolute path, and `dest_hint`/`source_hint` are expanded
+   with `~`-only substitution (`home::tilde_expand`), not the full
+   `${VAR}`-style expansion used for locally-typed paths elsewhere in the
+   crate, since that would let a forged hint pull values out of the local
+   agent process's own environment.
+5. Directories are staged as an uncompressed tar archive in a local temp
+   file (`ssh::dir_transfer::build_tar_to_temp_file`/`extract_tar_from_file`,
+   run on `spawn_blocking` since the `tar` crate is synchronous) and sent
+   through the same `PutFile`/`GetFile` byte-streaming path with an
+   `is_dir` flag — never buffered fully in memory, and never assembled
+   in-memory as a whole archive. `tar::Entry::unpack_in` already rejects
+   absolute paths and `..` traversal in an entry's own path, but does
+   **not** validate a *symlink's target*, so `dir_transfer` adds its own
+   check enforcing the PRD's chosen policy: relative symlinks that resolve
+   inside the transferred tree are kept, absolute or escaping ones reject
+   the whole transfer. Non-file/dir/symlink entry types (hard links,
+   device nodes, FIFOs) are rejected outright. An existing destination
+   directory is rejected without `--force`; with `--force` the archive is
+   merged into it (existing files not present in the archive are kept,
+   matching the PRD's stated `--force` semantics for directories).
+6. `protocol::copy_exact_with_progress` reports cumulative bytes copied
+   after each chunk; `remote_client::ProgressPrinter` (throttled to ~150ms)
+   renders a single overwritten stderr line only when
+   `console::user_attended_stderr()` is true, per the PRD's requirement
+   that non-TTY environments get a stable single-line result with no live
+   redraw. `agent`'s side of transfers has no progress output — the
+   command always runs (and its stdout/stderr are visible) on the remote
+   host, not locally.
+7. `shine local status` sends a `Status` request over the same forwarded
+   socket; the agent replies with the session's local working directory,
+   and the client also reports the session id (from `SHINE_SSH_SESSION`)
+   and negotiated protocol version. If the agent is unreachable, it
+   reports that instead of erroring, so the command doubles as a
+   liveness check without needing a live session.
+8. Windows support is local-side only (the remote host is always assumed
+   Linux/macOS; steps 1-3 above never change). `tokio::net::UnixListener`
+   doesn't exist on non-unix targets, so `ssh::bind_local_listener` is
+   `#[cfg(unix)]`/`#[cfg(windows)]`-gated: unix binds a Unix socket as
+   before, Windows binds a loopback TCP listener (`127.0.0.1:0`, OS-picked
+   port) and the `-R` argument becomes a *mixed* forward
+   (`<remote-unix-sock>:127.0.0.1:<port>`) — verified against a real
+   Windows OpenSSH client (`OpenSSH_for_Windows_9.5p2`) via
+   `scripts/spike-ssh-forward-windows.ps1`. `agent::LocalListener` is an
+   enum over `Unix`/`Tcp` variants (the `Unix` variant itself is
+   `#[cfg(unix)]`-gated); `agent::DuplexStream` is a blanket-impl marker
+   trait (`AsyncRead + AsyncWrite + Unpin + Send + 'static`) so the
+   per-connection protocol logic (`handle_connection`, `handle_put_file`,
+   `handle_get_file`) stays transport-agnostic and unchanged for both
+   platforms.
+9. `ssh::remote_client` (the *remote*-side of a session — it dials the
+   forwarded socket via `UnixStream`, so it only makes sense on
+   Linux/macOS, per step 8's scoping) is itself `#[cfg(unix)]`-gated;
+   `ssh::handle_local_download`/`handle_local_upload`/`handle_local_status`
+   have `#[cfg(not(unix))]` stub implementations that return a clear
+   "Windows is local-side only" error, so the binary still compiles for
+   Windows. Missing this the first time around broke the real
+   `build-preview-assets` Windows CI job
+   (`error[E0432]: unresolved import tokio::net::UnixStream` in
+   `remote_client.rs`) — this repo's sandboxed dev environment cannot
+   fully verify Windows builds (an unrelated transitive C dependency,
+   `aws-lc-sys` via `reqwest`, needs the real MSVC toolchain even for
+   `cargo check --target x86_64-pc-windows-msvc`), so a cross-check that
+   gets past `cli`/`utils` compilation and only fails in `aws-lc-sys`'s
+   own build script is the strongest confirmation available without a
+   real Windows CI run.
+10. `handle_ssh` races the spawned `ssh` child (`cmd.status()`) against
+    `tokio::signal::ctrl_c()` so a local Ctrl-C doesn't kill the process
+    before cleanup runs — installing the listener overrides SIGINT's
+    default disposition, and the `ssh` child (same foreground process
+    group) still receives and handles its own SIGINT independently. Each
+    accepted connection is handled on its own task tracked in a shared
+    `agent::ConnectionTasks` (a `JoinSet`), not a bare detached
+    `tokio::spawn` — `agent_handle.abort()` only ever stops the *accept
+    loop*, so before removing the session directory (or exiting on a
+    nonzero `ssh` status via `std::process::exit`, which skips Rust's
+    unwind/drop machinery entirely), `handle_ssh` calls
+    `agent::drain_connection_tasks` to wait, up to a bounded grace period,
+    for any still-running transfer to notice the now-closed tunnel and
+    finish its own cleanup rather than being abandoned mid-copy.
 
 ### Sys preset flow (`shine sys init`)
 
@@ -230,6 +451,32 @@ Transforms compose in declaration order: `transforms = ["jsonc-to-json", "templa
 
 `shine sys init --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing.
 
+### Personal tasks (`shine task` / `shine run`)
+
+`shine task` is a lightweight personal shortcut-command registry, kept separate
+from the preset/install machinery: it is **runtime/user state**, not an embedded
+preset. Tasks are stored in `<shine_dir>/tasks.toml` as an argv array per name:
+
+```toml
+[tasks.deploy-keystone]
+command = ["rsync", "-avz", "dist/", "marqueeio.develop:/var/www/keystone/alex/"]
+```
+
+- Because tasks live under `Config::shine_dir()`, the store follows
+  `SHINE_CONFIG_DIR` automatically (test isolation needs no extra plumbing).
+- `shine task run <NAME> [-- EXTRA...]` executes the saved argv **directly with
+  no shell** (`std::process::Command`), inheriting the caller's stdio/env, and
+  propagates the child's exit code verbatim (never wrapped in an anyhow error).
+  Extra args after `--` are appended to the saved argv.
+- `shine run <NAME>` is a top-level alias for `shine task run <NAME>` with no
+  independent semantics or storage.
+- `shine task info`/`list`/`run` render the saved argv back to a copy-paste-safe
+  command line by shell-quoting arguments that contain shell-significant
+  characters.
+- **Platform limit:** direct execution runs any real executable on every
+  platform, but the `sh -c '...'` escape hatch for pipes/redirects is Unix-only
+  (Windows has no `sh`).
+
 ### Config (`~/.shine/config.toml`)
 
 `Config::load_or_init()` resolves directories with this priority:
@@ -239,6 +486,16 @@ Transforms compose in declaration order: `transforms = ["jsonc-to-json", "templa
 4. Default: `~/.shine/` (shine dir), `~/.shine/presets/` (presets dir)
 
 Config is saved via `utils::sync_table` which preserves existing TOML comments while updating values.
+
+### Local HTTP resources
+
+`shine serve start` serves files from `~/.shine/http/` on a single loopback HTTP server
+(`127.0.0.1:6174` by default). On macOS, `shine serve install` registers that same server as one
+user launchd service; it is intentionally global, with no per-app argument. App presets that need
+stable local URLs should install files under that tree (for example
+`~/.shine/http/app/<name>/<file>`) and use `shine serve url <path>` to print the URL. Do not start
+one HTTP service per app preset. (The `surge` preset no longer uses this — it installs local files
+into the Surge Profiles dir and patches the profile's `#!include` lines instead.)
 
 ### rust-embed and presets
 
@@ -304,6 +561,10 @@ Hard rules (details and runbook: [`docs/kb/conventions.md`](docs/kb/conventions.
 ### App preset category
 
 Prefer `shine.toml` metadata over legacy `shine-dest:` annotations for new categories. Place `shine.toml` in `presets/app/<category>/` with at minimum `dest = "~/<path>"`. Add `transforms = ["jsonc-to-json"]` for JSONC files or `transforms = ["template"]` for files with `@@VAR_NAME@@` env placeholders.
+
+App categories may declare a `post_upgrade = { command = "...", args = ["..."] }` hook to run a direct argv command after `shine upgrade` actually updates or installs at least one file in that category. Hooks are not run during `app install`, and external presets require `allow_app_hooks = true` in config before hooks execute. Each hook may set `show_output = true` to print its stdout to the user when it succeeds (e.g. a deliberate `echo` note); this defaults to `false` (silent) so routine command output isn't surfaced as noise.
+
+App categories may also declare `[artifact]\nscript = "build.sh"` to expose a `shine app build <app-id>` entry point. Unlike `post_upgrade`, this never runs implicitly (not during `install` or `upgrade`) — the script only runs when a user explicitly types `shine app build <app-id>`. The build child receives the fixed `SHINE_APP_*` env contract **plus the active `[env]` table passed as stored** (no decryption — `_SECRET` keys arrive as ciphertext, same as the `template` transform), so scripts can read user-configured values like `SURGE_PROFILE` without any build triggering a secret-decryption prompt. Keep provider-specific logic (which sections to patch, how to talk to an external app) out of this repo's own preset scripts; that belongs in an external overlay's script, which takes priority over the built-in one when both exist. For the built-in `surge` preset this is how the split works: `shine app install surge` is a plain `Copy` of `local-proxies.conf`/`local-rules.conf` into the Surge Profiles dir (`dest`), and the overlay's `build.sh` (via `shine app build surge`) patches the active profile's `[Proxy]`/`[Rule]` `#!include` lines to also include those files. See [ADR 0009](docs/kb/decisions/0009-app-artifact-build-explicit-command.md) and [`architecture/data-flows.md`](docs/kb/architecture/data-flows.md) for the full env-var contract and resolution rule.
 
 ### Sys preset (OS init)
 

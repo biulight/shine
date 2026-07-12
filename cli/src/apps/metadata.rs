@@ -15,6 +15,7 @@ pub struct AppCategory {
     pub destination_root: Option<String>,
     pub files: Vec<AppFile>,
     pub list_mode: AppListMode,
+    pub post_upgrade: Vec<AppHook>,
     // Tracks whether the category came from an explicit metadata file vs. auto-collection;
     // reserved for future upgrade/list logic.
     #[allow(dead_code)]
@@ -22,12 +23,28 @@ pub struct AppCategory {
     /// `true` when shine.toml has an explicit `[[files]]` section;
     /// `false` for auto-collected files and legacy categories.
     pub has_explicit_files: bool,
+    pub artifact: Option<AppArtifact>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppListMode {
     Category,
     Files,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppHook {
+    pub command: String,
+    pub args: Vec<String>,
+    /// Print this hook's stdout to the user when it succeeds. Defaults to
+    /// `false` (silent) — most hooks (e.g. `surge-cli reload`) have nothing
+    /// worth surfacing; opt in for hooks whose stdout is a deliberate note.
+    pub show_output: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppArtifact {
+    pub script: String,
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +65,30 @@ struct CategoryToml {
     description: Option<String>,
     dest: DestToml,
     list_mode: Option<ListModeToml>,
+    post_upgrade: Option<HookSpecToml>,
+    artifact: Option<ArtifactToml>,
     files: Option<Vec<FileToml>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ArtifactToml {
+    script: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum HookSpecToml {
+    Single(HookToml),
+    Multiple(Vec<HookToml>),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct HookToml {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    show_output: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,6 +190,43 @@ fn resolve_install_strategy(file: &FileToml, context: &str) -> Result<AppInstall
     }
 }
 
+fn resolve_hooks(hook: Option<HookSpecToml>, context: &str) -> Result<Vec<AppHook>> {
+    let Some(hook) = hook else {
+        return Ok(Vec::new());
+    };
+    let hooks = match hook {
+        HookSpecToml::Single(hook) => vec![hook],
+        HookSpecToml::Multiple(hooks) => hooks,
+    };
+    if hooks.is_empty() {
+        bail!("{context}: post_upgrade must not be empty");
+    }
+    let mut resolved = Vec::with_capacity(hooks.len());
+    for hook in hooks {
+        if hook.command.trim().is_empty() {
+            bail!("{context}: post_upgrade.command must not be empty");
+        }
+        resolved.push(AppHook {
+            command: hook.command,
+            args: hook.args,
+            show_output: hook.show_output,
+        });
+    }
+    Ok(resolved)
+}
+
+fn resolve_artifact(artifact: Option<ArtifactToml>, context: &str) -> Result<Option<AppArtifact>> {
+    let Some(artifact) = artifact else {
+        return Ok(None);
+    };
+    if artifact.script.trim().is_empty() {
+        bail!("{context}: artifact.script must not be empty");
+    }
+    Ok(Some(AppArtifact {
+        script: artifact.script,
+    }))
+}
+
 fn default_list_mode(has_explicit_files: bool) -> AppListMode {
     if has_explicit_files {
         AppListMode::Files
@@ -200,11 +277,28 @@ pub async fn load_installed_categories(
     Ok(categories)
 }
 
+/// Loads categories from whichever source is active: installed (external
+/// presets mode) or embedded. Replaces the `if config.is_external_presets {
+/// load_installed_categories } else { load_embedded_categories }` branch
+/// repeated at every call site.
+pub async fn load_active_categories(
+    config: &Config,
+    filter: Option<&str>,
+) -> Result<Vec<AppCategory>> {
+    if config.is_external_presets {
+        load_installed_categories(config, filter).await
+    } else {
+        load_embedded_categories(filter)
+    }
+}
+
 fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
     let metadata_path = format!("app/{name}/shine.toml");
     if let Some(bytes) = presets::read_asset_bytes(&metadata_path) {
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
+        let post_upgrade = resolve_hooks(parsed.post_upgrade, &metadata_path)?;
+        let artifact = resolve_artifact(parsed.artifact, &metadata_path)?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
         };
@@ -269,8 +363,10 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                 .list_mode
                 .map(Into::into)
                 .unwrap_or_else(|| default_list_mode(has_explicit_files)),
+            post_upgrade,
             uses_metadata: true,
             has_explicit_files,
+            artifact,
         }));
     }
 
@@ -297,8 +393,10 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
             })
             .collect(),
         list_mode: AppListMode::Category,
+        post_upgrade: Vec::new(),
         uses_metadata: false,
         has_explicit_files: false,
+        artifact: None,
     }))
 }
 
@@ -312,6 +410,9 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
             .with_context(|| format!("reading metadata: {}", metadata_path.display()))?;
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
+        let post_upgrade =
+            resolve_hooks(parsed.post_upgrade, &metadata_path.display().to_string())?;
+        let artifact = resolve_artifact(parsed.artifact, &metadata_path.display().to_string())?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
         };
@@ -387,8 +488,10 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                 .list_mode
                 .map(Into::into)
                 .unwrap_or_else(|| default_list_mode(has_explicit_files)),
+            post_upgrade,
             uses_metadata: true,
             has_explicit_files,
+            artifact,
         }));
     }
 
@@ -417,69 +520,29 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         destination_root: None,
         files,
         list_mode: AppListMode::Category,
+        post_upgrade: Vec::new(),
         uses_metadata: false,
         has_explicit_files: false,
+        artifact: None,
     }))
 }
 
 async fn collect_merged_fs_files(config: &Config, category_rel: &Path) -> Result<Vec<PathBuf>> {
-    let base_category = config.presets_dir().join(category_rel);
-    let mut files: BTreeSet<PathBuf> = if base_category.is_dir() {
-        collect_fs_files(&base_category)
-            .await?
-            .into_iter()
-            .collect()
-    } else {
-        BTreeSet::new()
-    };
-    if let Some(overlay) = config.active_presets_overlay_dir() {
-        let overlay_category = overlay.join(category_rel);
-        if overlay_category.is_dir() {
-            files.extend(collect_fs_files(&overlay_category).await?);
+    crate::preset_meta::merge_fs_tree(config, category_rel, "preset category", |rel| {
+        if rel == Path::new("shine.toml") {
+            return Ok(None);
         }
-    }
-    Ok(files.into_iter().collect())
+        Ok(Some(normalize_relative(&rel.to_string_lossy())?))
+    })
+    .await
 }
 
 fn collect_embedded_category_names(filter: Option<&str>) -> Vec<String> {
-    let mut names = BTreeSet::new();
-    for asset_path in presets::asset_paths("app") {
-        let Some(rest) = asset_path.strip_prefix("app/") else {
-            continue;
-        };
-        let Some((category, _)) = rest.split_once('/') else {
-            continue;
-        };
-        if filter.is_none_or(|f| f == category) {
-            names.insert(category.to_string());
-        }
-    }
-    names.into_iter().collect()
+    crate::preset_meta::collect_embedded_category_names("app", filter)
 }
 
 async fn collect_fs_category_names(app_root: &Path, filter: Option<&str>) -> Result<Vec<String>> {
-    if let Some(filter) = filter {
-        let path = app_root.join(filter);
-        if path.exists() {
-            return Ok(vec![filter.to_string()]);
-        }
-        return Ok(Vec::new());
-    }
-
-    if !app_root.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut names = BTreeSet::new();
-    let mut entries = fs::read_dir(app_root)
-        .await
-        .with_context(|| format!("reading app presets dir: {}", app_root.display()))?;
-    while let Some(entry) = entries.next_entry().await? {
-        if entry.file_type().await?.is_dir() {
-            names.insert(entry.file_name().to_string_lossy().to_string());
-        }
-    }
-    Ok(names.into_iter().collect())
+    crate::preset_meta::collect_fs_category_names(app_root, filter, "app presets dir").await
 }
 
 fn collect_embedded_files(category: &str) -> Result<Vec<PathBuf>> {
@@ -494,38 +557,6 @@ fn collect_embedded_files(category: &str) -> Result<Vec<PathBuf>> {
             continue;
         }
         files.push(normalize_relative(rel)?);
-    }
-
-    files.sort();
-    Ok(files)
-}
-
-async fn collect_fs_files(category_root: &Path) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    let mut stack = vec![category_root.to_path_buf()];
-
-    while let Some(dir) = stack.pop() {
-        let mut entries = fs::read_dir(&dir)
-            .await
-            .with_context(|| format!("reading preset category: {}", dir.display()))?;
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            let file_type = entry.file_type().await?;
-            if file_type.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if file_type.is_file() {
-                let rel = path
-                    .strip_prefix(category_root)
-                    .with_context(|| format!("file outside category root: {}", path.display()))?;
-                let rel = normalize_relative(&rel.to_string_lossy())?;
-                if rel == std::path::Path::new("shine.toml") {
-                    continue;
-                }
-                files.push(rel);
-            }
-        }
     }
 
     files.sort();
@@ -547,6 +578,11 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
             resolve_install_strategy(file, &context)?;
         }
     }
+    resolve_hooks(
+        parsed.post_upgrade.clone(),
+        &format!("app/{name}/shine.toml"),
+    )?;
+    resolve_artifact(parsed.artifact.clone(), &format!("app/{name}/shine.toml"))?;
     Ok(parsed)
 }
 
@@ -591,21 +627,11 @@ fn file_matches_current_platform(category: &str, file: &FileToml) -> Result<bool
 }
 
 fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Result<bool> {
-    let Some(platforms) = &file.platforms else {
-        return Ok(true);
-    };
-
-    let mut matches = false;
-    for platform in platforms {
-        let normalized = platform.trim().to_ascii_lowercase();
-        match normalized.as_str() {
-            "windows" | "unix" => matches |= normalized == current,
-            _ => bail!(
-                "app/{category}/shine.toml has unsupported platform `{platform}`; expected `windows` or `unix`"
-            ),
-        }
-    }
-    Ok(matches)
+    crate::preset_meta::platform_matches(
+        file.platforms.as_deref(),
+        current,
+        &format!("app/{category}/shine.toml"),
+    )
 }
 
 fn normalize_relative(path: &str) -> Result<PathBuf> {
@@ -681,6 +707,184 @@ mod tests {
         assert!(vim.uses_metadata);
         assert_eq!(vim.destination_root.as_deref(), Some("~/.vim"));
         assert!(!vim.files.is_empty());
+    }
+
+    #[test]
+    fn embedded_surge_installs_local_profile_resources() {
+        let categories = load_embedded_categories(Some("surge")).unwrap();
+        let surge = categories.iter().find(|c| c.name == "surge").unwrap();
+        assert!(surge.uses_metadata);
+        assert_eq!(
+            surge.destination_root.as_deref(),
+            Some("~/Library/Application Support/Surge/Profiles")
+        );
+        let files: Vec<_> = surge
+            .files
+            .iter()
+            .map(|file| {
+                (
+                    file.source_rel.display().to_string(),
+                    file.target_rel.display().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            files,
+            vec![
+                (
+                    "local-proxies.conf".to_string(),
+                    "local-proxies.conf".to_string()
+                ),
+                (
+                    "local-rules.conf".to_string(),
+                    "local-rules.conf".to_string()
+                ),
+            ]
+        );
+        assert_eq!(
+            surge.post_upgrade,
+            vec![AppHook {
+                command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
+                args: vec!["reload".to_string()],
+                show_output: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn post_upgrade_hook_parses_command_and_args() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_upgrade = { command = "/bin/echo", args = ["updated"] }
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0].command, "/bin/echo");
+        assert_eq!(hooks[0].args, vec!["updated"]);
+        assert!(
+            !hooks[0].show_output,
+            "show_output must default to false when omitted"
+        );
+    }
+
+    #[test]
+    fn post_upgrade_hook_parses_show_output_flag() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_upgrade = { command = "/bin/echo", args = ["updated"], show_output = true }
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert!(hooks[0].show_output);
+    }
+
+    #[test]
+    fn post_upgrade_hook_parses_multiple_commands() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_upgrade = [
+  { command = "/bin/echo", args = ["updated"] },
+  { command = "/bin/echo", args = ["reloaded"] },
+]
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks[0].args, vec!["updated"]);
+        assert_eq!(hooks[1].args, vec!["reloaded"]);
+    }
+
+    #[test]
+    fn artifact_script_parses() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[artifact]
+script = "build.sh"
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let artifact = resolve_artifact(parsed.artifact, "sample").unwrap();
+        assert_eq!(
+            artifact,
+            Some(AppArtifact {
+                script: "build.sh".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn artifact_section_absent_is_none() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        assert!(
+            resolve_artifact(parsed.artifact, "sample")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn artifact_empty_script_is_rejected() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[artifact]
+script = ""
+
+[[files]]
+source = "config.toml"
+"#,
+        );
+        let err = parsed.unwrap_err();
+        assert!(err.to_string().contains("artifact.script"));
+    }
+
+    #[test]
+    fn embedded_surge_declares_artifact_script() {
+        let categories = load_embedded_categories(Some("surge")).unwrap();
+        let surge = categories.iter().find(|c| c.name == "surge").unwrap();
+        assert_eq!(
+            surge.artifact,
+            Some(AppArtifact {
+                script: "build.sh".to_string()
+            })
+        );
     }
 
     #[test]

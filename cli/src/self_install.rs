@@ -1,10 +1,12 @@
 use anyhow::{Result, bail};
 
-use cli::config::{self, Config};
-use cli::update_check::{self, ReleaseChannel, UpdateStatus};
-use cli::{apps, colors, env, list, output, platform, shells, sys, version};
+use crate::config::{self, Config};
+use crate::update_check::{self, ReleaseChannel, UpdateStatus};
+use crate::{
+    apps, colors, env, install_core, list, output, platform, privilege, shells, sys, version,
+};
 
-pub(super) async fn handle_update(config: &Config, verbose: bool, refresh: bool) -> Result<()> {
+pub async fn handle_update(config: &Config, verbose: bool, refresh: bool) -> Result<()> {
     let mut printed_update = if verbose {
         Box::pin(list::handle_status_list(config)).await?;
         println!();
@@ -71,14 +73,11 @@ pub(super) async fn handle_update(config: &Config, verbose: bool, refresh: bool)
     Ok(())
 }
 
-pub(super) fn format_update_check_failure_warning(err: &anyhow::Error) -> String {
-    colors::yellow(&format!("warning: skipped shine version check: {err}"))
+fn format_update_check_failure_warning(err: &anyhow::Error) -> String {
+    colors::yellow_stderr(&format!("warning: skipped shine version check: {err}"))
 }
 
-pub(super) async fn handle_self_upgrade(
-    config: &Config,
-    channel: Option<ReleaseChannel>,
-) -> Result<()> {
+pub async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
     let current = version::display();
     let selected_channel = channel.unwrap_or(ReleaseChannel::Stable);
     let force_install = channel.is_some();
@@ -125,7 +124,7 @@ pub(super) async fn handle_self_upgrade(
     Ok(())
 }
 
-pub(super) fn format_self_upgrade_message(
+fn format_self_upgrade_message(
     channel: ReleaseChannel,
     previous_display: &str,
     installed_version: &str,
@@ -149,7 +148,7 @@ pub(super) fn format_self_upgrade_message(
     }
 }
 
-pub(super) async fn handle_config_upgrade(
+pub async fn handle_config_upgrade(
     config: &Config,
     verbose: bool,
     prune_stale: bool,
@@ -157,10 +156,18 @@ pub(super) async fn handle_config_upgrade(
     println!("{}", colors::bold("Upgrading installed configs"));
     config::print_presets_note(config);
 
+    let mut sep = output::SectionSeparator::new();
+
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
-    let shell_report = Box::pin(shells::handle_upgrade_installed(config, verbose)).await?;
-    let app_report = Box::pin(apps::handle_upgrade_installed(config, prune_stale)).await?;
-    let sys_report = Box::pin(sys::handle_upgrade_managed(config)).await?;
+    let shell_report =
+        Box::pin(shells::handle_upgrade_installed(config, verbose, &mut sep)).await?;
+    let app_report = Box::pin(apps::handle_upgrade_installed(
+        config,
+        prune_stale,
+        &mut sep,
+    ))
+    .await?;
+    let sys_report = Box::pin(sys::handle_upgrade_managed(config, &mut sep)).await?;
 
     let updated = env_report.updated
         + shell_report.templates_updated
@@ -172,27 +179,8 @@ pub(super) async fn handle_config_upgrade(
     let skipped = env_report.skipped + app_report.skipped + sys_report.skipped;
     let user_modified = env_report.user_modified + app_report.user_modified;
 
-    let mut summary: Vec<String> = Vec::new();
-    if updated > 0 {
-        summary.push(colors::green(&format!("{updated} updated")));
-    }
-    if user_modified > 0 {
-        summary.push(colors::yellow(&format!(
-            "{user_modified} user-modified (kept)"
-        )));
-    }
-    if shell_report.link_conflicts > 0 {
-        summary.push(colors::yellow(&format!(
-            "{} link conflicts",
-            shell_report.link_conflicts
-        )));
-    }
-    if skipped > 0 {
-        summary.push(colors::dim(&format!("{skipped} skipped")));
-    }
-    if summary.is_empty() {
-        summary.push(colors::dim("nothing changed"));
-    }
+    let summary =
+        config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts, skipped);
     output::footer("Done", &summary);
     for hint in &app_report.restart_hints {
         println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
@@ -208,32 +196,46 @@ pub(super) async fn handle_config_upgrade(
     Ok(())
 }
 
+fn config_upgrade_summary_parts(
+    updated: usize,
+    user_modified: usize,
+    link_conflicts: usize,
+    skipped: usize,
+) -> Vec<String> {
+    let mut parts = Vec::new();
+    output::push_count(&mut parts, updated, colors::green, "updated");
+    output::push_count(
+        &mut parts,
+        user_modified,
+        colors::yellow,
+        "user-modified (kept)",
+    );
+    output::push_count(&mut parts, link_conflicts, colors::yellow, "link conflicts");
+    output::push_count(&mut parts, skipped, colors::dim, "skipped");
+    parts
+}
+
 /// After a successful self-upgrade, try to sync the new binary to the self-install destination.
 /// If the copy fails due to permissions, print a targeted hint instead of failing.
-pub(super) async fn sync_self_install_dest(config: &Config, src: &std::path::Path) {
+async fn sync_self_install_dest(config: &Config, src: &std::path::Path) {
     let dest = match &config.self_install_dest {
         Some(d) => d,
         None => return,
     };
-    match sync_self_install_dest_from(src, dest) {
+    match sync_self_install_dest_from(src, dest).await {
         Ok(SelfInstallSync::Synced) => println!(
             "{}",
             colors::green(&format!("Synced system copy at {}", dest.display()))
         ),
         Ok(SelfInstallSync::AlreadyCurrent) => {}
-        Err(e) if has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied) => {
-            let hint = if cfg!(windows) {
-                format!(
-                    "Installed copy at {} needs manual sync; rerun from an elevated terminal if needed.",
-                    dest.display()
-                )
-            } else {
-                format!(
-                    "System copy at {} needs manual sync — run: sudo {} self install",
-                    dest.display(),
-                    src.display()
-                )
-            };
+        // Unix already tried `sudo` automatically inside `install_binary_with_elevation`;
+        // reaching here means it was declined or unavailable non-interactively. Windows has
+        // no such auto-elevation path, so it still needs the manual hint.
+        Err(e) if cfg!(windows) && has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied) => {
+            let hint = format!(
+                "Installed copy at {} needs manual sync; rerun from an elevated terminal if needed.",
+                dest.display()
+            );
             println!("{}", colors::yellow(&hint));
         }
         Err(e) => eprintln!(
@@ -243,12 +245,12 @@ pub(super) async fn sync_self_install_dest(config: &Config, src: &std::path::Pat
     }
 }
 
-pub(super) enum SelfInstallSync {
+enum SelfInstallSync {
     Synced,
     AlreadyCurrent,
 }
 
-pub(super) fn sync_self_install_dest_from(
+async fn sync_self_install_dest_from(
     src: &std::path::Path,
     dest: &std::path::Path,
 ) -> Result<SelfInstallSync> {
@@ -260,10 +262,12 @@ pub(super) fn sync_self_install_dest_from(
         }
     }
 
-    install_binary_atomically(src, dest).map(|()| SelfInstallSync::Synced)
+    install_binary_with_elevation(src, dest)
+        .await
+        .map(|()| SelfInstallSync::Synced)
 }
 
-pub(super) fn has_io_error_kind(err: &anyhow::Error, kind: std::io::ErrorKind) -> bool {
+fn has_io_error_kind(err: &anyhow::Error, kind: std::io::ErrorKind) -> bool {
     err.chain().any(|cause| {
         cause
             .downcast_ref::<std::io::Error>()
@@ -271,7 +275,7 @@ pub(super) fn has_io_error_kind(err: &anyhow::Error, kind: std::io::ErrorKind) -
     })
 }
 
-pub(super) async fn handle_self_install(
+pub async fn handle_self_install(
     mut config: Config,
     dest: Option<std::path::PathBuf>,
 ) -> Result<()> {
@@ -299,8 +303,9 @@ pub(super) async fn handle_self_install(
         }
     }
 
-    install_binary_atomically(&src, &dest)
-        .with_context(|| self_install_failure_hint(&src, &dest))?;
+    install_binary_with_elevation(&src, &dest)
+        .await
+        .with_context(|| self_install_failure_hint(&dest))?;
 
     // Remember where we installed so `shine self upgrade` can sync this copy automatically.
     config.self_install_dest = Some(dest.clone());
@@ -318,19 +323,11 @@ pub(super) async fn handle_self_install(
     Ok(())
 }
 
-pub(super) fn self_install_failure_hint(src: &std::path::Path, dest: &std::path::Path) -> String {
-    if cfg!(windows) {
-        format!("failed to copy to {}", dest.display())
-    } else {
-        format!(
-            "failed to copy to {} — try: sudo {} self install",
-            dest.display(),
-            src.display()
-        )
-    }
+fn self_install_failure_hint(dest: &std::path::Path) -> String {
+    format!("failed to copy to {}", dest.display())
 }
 
-pub(super) fn print_self_install_activation_hint(dest: &std::path::Path) {
+fn print_self_install_activation_hint(dest: &std::path::Path) {
     let Some(dir) = dest.parent() else {
         return;
     };
@@ -351,10 +348,7 @@ pub(super) fn print_self_install_activation_hint(dest: &std::path::Path) {
     }
 }
 
-pub(super) fn install_binary_atomically(
-    src: &std::path::Path,
-    dest: &std::path::Path,
-) -> Result<()> {
+fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
     use anyhow::Context as _;
 
     let parent = dest
@@ -389,5 +383,227 @@ pub(super) fn install_binary_atomically(
             Err(err)
                 .with_context(|| format!("failed to replace {} with staged binary", dest.display()))
         }
+    }
+}
+
+/// Installs the binary, auto-elevating via `sudo` on Unix if the plain copy
+/// fails because the destination isn't user-writable (e.g. `/usr/local/bin`
+/// owned by root). Mirrors the auto-elevation already used for privileged
+/// app-config writes in `apps/file_ops.rs::install_bytes_admin`, so the user
+/// is prompted once instead of being told to manually re-run with `sudo`.
+async fn install_binary_with_elevation(
+    src: &std::path::Path,
+    dest: &std::path::Path,
+) -> Result<()> {
+    match install_binary_atomically(src, dest) {
+        Ok(()) => Ok(()),
+        Err(e)
+            if !cfg!(windows)
+                && has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied)
+                && !std::env::var("USER").is_ok_and(|user| user == "root") =>
+        {
+            let _lock = install_core::file_ops::admin_lock().await?;
+            install_binary_privileged(src, dest).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(unix)]
+async fn install_binary_privileged(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    use anyhow::Context as _;
+    use std::os::unix::fs::PermissionsExt;
+
+    if !privilege::ensure_admin(1).await? {
+        anyhow::bail!("administrator permission was not granted");
+    }
+
+    let parent = dest
+        .parent()
+        .with_context(|| format!("destination has no parent: {}", dest.display()))?;
+    let mode = std::fs::metadata(src)
+        .map(|m| m.permissions().mode())
+        .unwrap_or(0o755);
+
+    let status = install_core::file_ops::sudo_command()
+        .arg("mkdir")
+        .arg("-p")
+        .arg(parent)
+        .status()
+        .await
+        .context("failed to create privileged destination directory")?;
+    if !status.success() {
+        anyhow::bail!("administrator permission was not granted");
+    }
+
+    let status = install_core::file_ops::sudo_command()
+        .args(["install", "-m", &format!("{mode:o}"), "--"])
+        .arg(src)
+        .arg(dest)
+        .status()
+        .await
+        .context("failed to install shine binary with administrator privileges")?;
+    if !status.success() {
+        anyhow::bail!("failed to install shine binary with administrator privileges");
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn install_binary_privileged(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
+    // No auto-elevation path on Windows: privileged binary copies go through
+    // an elevated terminal instead. Fall back to the plain unprivileged copy
+    // so the caller's original error surfaces if it still fails.
+    install_binary_atomically(src, dest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn make_temp_dir() -> std::path::PathBuf {
+        crate::test_support::make_temp_dir("shine-self-install-test").await
+    }
+
+    fn config_in(dir: &std::path::Path) -> Config {
+        crate::test_support::test_config(dir)
+    }
+
+    #[test]
+    fn install_binary_atomically_overwrites_existing_dest() {
+        let dir = std::env::temp_dir().join(format!("shine-self-install-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("new-shine");
+        let dest = dir.join("shine");
+
+        std::fs::write(&src, b"new").unwrap();
+        std::fs::write(&dest, b"old").unwrap();
+
+        install_binary_atomically(&src, &dest).unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_self_install_dest_creates_missing_parent() {
+        let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
+        let src = dir.join("new-shine");
+        let dest = dir.join("usr/local/bin/shine");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&src, b"new").unwrap();
+
+        let outcome = sync_self_install_dest_from(&src, &dest).await.unwrap();
+
+        assert!(matches!(outcome, SelfInstallSync::Synced));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_self_install_dest_skips_current_exe_path() {
+        let dir = std::env::temp_dir().join(format!("shine-self-sync-{}", uuid::Uuid::new_v4()));
+        let src = dir.join("shine");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&src, b"new").unwrap();
+
+        let outcome = sync_self_install_dest_from(&src, &src).await.unwrap();
+
+        assert!(matches!(outcome, SelfInstallSync::AlreadyCurrent));
+        assert_eq!(std::fs::read(&src).unwrap(), b"new");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn self_install_errors_when_source_is_destination() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+        let current = std::env::current_exe().unwrap();
+
+        let err = handle_self_install(config, Some(current))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("source and destination are the same binary"),
+            "error should explain self-overwrite: {err:#}"
+        );
+
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn update_check_failure_warning_is_non_fatal_wording() {
+        let err = anyhow::anyhow!(
+            "GitHub stable release request failed: HTTP 403 Forbidden: API rate limit exceeded"
+        );
+        let warning = format_update_check_failure_warning(&err);
+
+        assert!(warning.contains("warning: skipped shine version check"));
+        assert!(warning.contains("HTTP 403 Forbidden"));
+        assert!(!warning.contains("Update check failed"));
+    }
+
+    #[test]
+    fn config_upgrade_summary_parts_includes_only_nonzero_counts() {
+        assert_eq!(
+            config_upgrade_summary_parts(2, 0, 0, 1),
+            vec!["2 updated".to_string(), "1 skipped".to_string()]
+        );
+    }
+
+    #[test]
+    fn config_upgrade_summary_parts_empty_when_all_zero() {
+        assert!(config_upgrade_summary_parts(0, 0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn config_upgrade_summary_parts_reports_all_four_counters() {
+        assert_eq!(
+            config_upgrade_summary_parts(1, 2, 3, 4),
+            vec![
+                "1 updated".to_string(),
+                "2 user-modified (kept)".to_string(),
+                "3 link conflicts".to_string(),
+                "4 skipped".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn format_self_upgrade_message_handles_stable_channel() {
+        assert_eq!(
+            format_self_upgrade_message(ReleaseChannel::Stable, "0.21.3", "0.21.4", "v0.21.4",),
+            "Upgraded shine from 0.21.3 to 0.21.4."
+        );
+    }
+
+    #[test]
+    fn format_self_upgrade_message_handles_stable_to_preview_install() {
+        assert_eq!(
+            format_self_upgrade_message(
+                ReleaseChannel::Preview,
+                "0.21.3",
+                "0.21.4+preview.237a8a0",
+                "preview",
+            ),
+            "Installed shine preview 0.21.4+preview.237a8a0 over stable 0.21.3 (preview)."
+        );
+    }
+
+    #[test]
+    fn format_self_upgrade_message_handles_preview_to_preview_update() {
+        assert_eq!(
+            format_self_upgrade_message(
+                ReleaseChannel::Preview,
+                "0.21.4+preview.1111111",
+                "0.21.4+preview.237a8a0",
+                "preview",
+            ),
+            "Updated shine preview from 0.21.4+preview.1111111 to 0.21.4+preview.237a8a0 (preview)."
+        );
     }
 }

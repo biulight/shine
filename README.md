@@ -531,7 +531,7 @@ shine upgrade --verbose  # include env-template check details
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.36.0+preview.abc1234`, while stable binaries continue to report `0.36.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.38.0+preview.abc1234`, while stable binaries continue to report `0.38.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -541,7 +541,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.36.0 sh install.sh
+SHINE_VERSION=0.38.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -549,9 +549,32 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.36.0"; .\install.ps1
+$env:SHINE_VERSION = "0.38.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
+
+### SSH session file transfer
+
+`shine ssh` opens a normal interactive SSH session (it wraps the system `ssh` binary and reuses your `~/.ssh/config`) while also establishing a session-scoped transfer channel back to the machine you launched it from. `shine local download`/`upload`/`status` then use that channel from inside the session — no separate `scp`/`rsync` invocation needed.
+
+```bash
+cd ~/work/frontend
+shine ssh dev                     # opens the session; ~/work/frontend becomes this
+                                   # session's "local directory" for the commands below
+
+# once connected, on the remote host:
+shine local download result.log              # remote ./result.log -> local ~/work/frontend/result.log
+shine local download output/ '~/Downloads/build/'  # directories transfer too (tar-streamed)
+shine local upload notes.txt                  # local ~/work/frontend/notes.txt -> remote .
+shine local upload assets/ ./public/assets/
+shine local status                            # session id, connection state, local directory
+```
+
+Source/destination arguments are resolved by whichever side owns them: the first `download` argument and the second `upload` argument are always remote paths, resolved against the remote shell's current directory; the other side is always resolved against the session's local directory (the directory `shine ssh` was launched from, regardless of any `cd` after connecting). Quote a path (e.g. `'~/Downloads/'`) when you want the *other* side to expand `~`, since your local shell would otherwise expand it before `shine` sees it.
+
+Both commands default to writing into the destination side's working directory under the source's file name, refuse to overwrite an existing destination unless `--force` is passed, and support `--dry-run` to preview the transfer without copying data. Progress is printed as a single overwritten line when attached to a terminal; piped/non-interactive runs get one final line instead. `shine local status` also works as a liveness check for the session when nothing is transferring.
+
+The local side of `shine local` (the machine you ran `shine ssh` from) also works on Windows; the remote host is always assumed to be Linux or macOS.
 
 ## Bundled Presets
 
@@ -642,6 +665,43 @@ You can also decrypt any base64 GPG secret from the active env config directly:
 ```bash
 shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
 ```
+
+#### age + Apple Touch ID (Secure Enclave)
+
+For secrets that need to be shared through a repo and decrypted by every teammate — not just
+GPG users — `shine env encrypt`/`decrypt`/`seal` also support
+[age](https://github.com/FiloSottile/age) as a second backend, with optional Touch ID support on
+macOS via [age-plugin-se](https://github.com/remko/age-plugin-se):
+
+```bash
+brew install age age-plugin-se   # or your package manager of choice
+
+# Generate a Secure Enclave identity that prompts Touch ID on decrypt
+shine env identity init --touch-id
+
+# Or a plain identity that works on any OS
+shine env identity init
+```
+
+`identity init` prints the identity's `age1...`/`age1se1...` recipient. Add every teammate's
+recipient (their own age or Secure Enclave identity) to `age_recipients` so any of them can
+decrypt what you seal:
+
+```toml
+secret_backend = "age"
+age_recipients = ["age1se1qexample...", "age1qteammate..."]
+```
+
+```bash
+shine env encrypt --backend age --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_SECRET
+shine env decrypt DEEPSEEK_API_KEY_SECRET   # prompts Touch ID if the identity is Secure Enclave
+```
+
+Ciphertext produced by the age backend is tagged (`age:...`) so `shine` always knows which
+backend to decrypt with — existing untagged GPG secrets keep working unmodified. `-r/--recipient`
+is repeatable for both backends, so a single `encrypt`/`seal` can target several recipients at
+once. Removing a recipient from `age_recipients` does not retroactively revoke access to secrets
+already committed to git history — re-seal to rotate.
 
 For a value that should become an environment variable in the current shell,
 store it as `<KEY>_SECRET` for encrypted storage or `<KEY>` for plaintext
@@ -802,6 +862,15 @@ Set a default GPG recipient for `shine env encrypt`:
 
 ```toml
 gpg_key_id = "<key-id>"
+```
+
+Or make age the default backend and configure its recipients/identity (see
+[age + Apple Touch ID](#age--apple-touch-id-secure-enclave) above):
+
+```toml
+secret_backend = "age"
+age_recipients = ["age1se1qexample...", "age1qteammate..."]
+age_identity = "~/.shine/age/identity.txt"   # optional; this is also the default path
 ```
 
 Template variables live in the `[env]` table:

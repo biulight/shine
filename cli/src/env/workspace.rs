@@ -1,3 +1,5 @@
+use crate::persist::atomic_write;
+use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{config::Config, secret};
 use anyhow::{Context, Result, bail};
 use dialoguer::Password;
@@ -38,6 +40,10 @@ pub struct WorkspaceEnv {
 #[derive(Clone, Debug, Default, Deserialize)]
 struct Encryption {
     recipient: Option<String>,
+    #[serde(default)]
+    backend: Option<String>,
+    #[serde(default)]
+    age_recipients: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -93,20 +99,22 @@ pub async fn handle_seal(
     config: &Config,
     workspace_arg: Option<&Path>,
     file: Option<&Path>,
-    recipient_arg: Option<&str>,
+    backend_arg: Option<&str>,
+    recipients_arg: &[String],
 ) -> Result<()> {
     let workspace_path = find_workspace_optional(workspace_arg).await?;
     let workspace = match &workspace_path {
         Some(path) => Some(load_workspace(path).await?),
         None => None,
     };
-    let recipient = resolve_seal_recipient(
-        recipient_arg,
+    let encryption = resolve_seal_encryption(
+        backend_arg,
+        recipients_arg,
         workspace
             .as_ref()
-            .and_then(|workspace| workspace.env.encryption.recipient.as_deref()),
-        config.gpg_key_id.as_deref(),
-    );
+            .map(|workspace| &workspace.env.encryption),
+        config,
+    )?;
 
     let files = if let Some(file) = file {
         vec![absolute_from_current(file)?]
@@ -122,7 +130,7 @@ pub async fn handle_seal(
     }
 
     for path in &files {
-        seal_file(path, recipient).await?;
+        seal_file(path, config, encryption.as_ref()).await?;
         println!("sealed {}", path.display());
     }
     Ok(())
@@ -145,23 +153,21 @@ pub async fn handle_run(
         validate_mode(mode)?;
         let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
         let input_hash = calculate_input_hash(&workspace_path, mode, &sources).await?;
-        let recipient = resolve_recipient_optional(
-            workspace.env.encryption.recipient.as_deref(),
-            config.gpg_key_id.as_deref(),
-        );
+        let encryption =
+            resolve_seal_encryption(None, &[], Some(&workspace.env.encryption), config)?;
         let cache_path = cache_path(&workspace_path, mode)?;
-        let values = match read_valid_cache(&cache_path, mode, &input_hash).await {
+        let values = match read_valid_cache(&cache_path, mode, &input_hash, config).await {
             Ok(Some(values)) => values,
             Ok(None) => {
-                let values = compile_sources(&sources).await?;
-                if let Some(recipient) = recipient
+                let values = compile_sources(&sources, config).await?;
+                if let Some(encryption) = &encryption
                     && let Err(error) = write_cache(
                         &cache_path,
                         &workspace_path,
                         mode,
                         &input_hash,
                         &values,
-                        recipient,
+                        encryption,
                     )
                     .await
                 {
@@ -171,7 +177,7 @@ pub async fn handle_run(
             }
             Err(error) => {
                 eprintln!("Warning: ignoring unreadable environment cache: {error:#}");
-                compile_sources(&sources).await?
+                compile_sources(&sources, config).await?
             }
         };
         (values, workspace.env.override_process_env)
@@ -211,7 +217,7 @@ async fn resolve_explicit_values(
             super::StoredValue::Secret {
                 key: secret_key,
                 value: ciphertext,
-            } => secret::decrypt_base64_gpg_secret(ciphertext)
+            } => secret::decrypt_secret(ciphertext, &config.age_identities())
                 .await
                 .with_context(|| format!("decrypting {secret_key}"))?,
             super::StoredValue::Plaintext(value) => value.to_string(),
@@ -251,12 +257,71 @@ async fn load_workspace(path: &Path) -> Result<Workspace> {
     Ok(workspace)
 }
 
-fn resolve_seal_recipient<'a>(
-    cli: Option<&'a str>,
-    workspace: Option<&'a str>,
-    global: Option<&'a str>,
-) -> Option<&'a str> {
-    resolve_recipient_optional(cli, workspace).or_else(|| resolve_recipient_optional(global, None))
+/// Resolve the backend + recipients to encrypt with for `seal`/`run`, in
+/// CLI > workspace `env.encryption` > config precedence. Returns `None` when
+/// nothing is configured anywhere, so sealing secretless files never
+/// requires a recipient.
+fn resolve_seal_encryption(
+    cli_backend: Option<&str>,
+    cli_recipients: &[String],
+    workspace_encryption: Option<&Encryption>,
+    config: &Config,
+) -> Result<Option<EncryptRecipients>> {
+    let backend = resolve_backend(
+        cli_backend,
+        workspace_encryption.and_then(|encryption| encryption.backend.as_deref()),
+        config.secret_backend.as_deref(),
+    )?;
+
+    let cli_recipients = clean_recipients(cli_recipients);
+    if !cli_recipients.is_empty() {
+        return Ok(Some(match backend {
+            BackendKind::Gpg => EncryptRecipients::Gpg(cli_recipients),
+            BackendKind::Age => EncryptRecipients::Age(cli_recipients),
+        }));
+    }
+
+    match backend {
+        BackendKind::Gpg => {
+            let recipient = resolve_recipient_optional(
+                workspace_encryption.and_then(|encryption| encryption.recipient.as_deref()),
+                config.gpg_key_id.as_deref(),
+            );
+            Ok(recipient.map(|value| EncryptRecipients::Gpg(vec![value.to_string()])))
+        }
+        BackendKind::Age => {
+            let workspace_recipients = workspace_encryption
+                .map(|encryption| clean_recipients(&encryption.age_recipients))
+                .unwrap_or_default();
+            let recipients = if !workspace_recipients.is_empty() {
+                workspace_recipients
+            } else {
+                clean_recipients(&config.age_recipients)
+            };
+            Ok((!recipients.is_empty()).then_some(EncryptRecipients::Age(recipients)))
+        }
+    }
+}
+
+fn resolve_backend(
+    cli_backend: Option<&str>,
+    workspace_backend: Option<&str>,
+    config_backend: Option<&str>,
+) -> Result<BackendKind> {
+    for candidate in [cli_backend, workspace_backend, config_backend] {
+        if let Some(value) = candidate.map(str::trim).filter(|value| !value.is_empty()) {
+            return value.parse();
+        }
+    }
+    Ok(BackendKind::default())
+}
+
+fn clean_recipients(recipients: &[String]) -> Vec<String> {
+    recipients
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 fn resolve_recipient_optional<'a>(
@@ -332,12 +397,16 @@ fn validate_mode(mode: &str) -> Result<()> {
     Ok(())
 }
 
-async fn seal_file(path: &Path, recipient: Option<&str>) -> Result<()> {
+async fn seal_file(
+    path: &Path,
+    config: &Config,
+    encryption: Option<&EncryptRecipients>,
+) -> Result<()> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
     let source = parse_source(path, &contents)?;
-    let mut old_values = decrypt_source_payload(path, &source).await?;
+    let mut old_values = decrypt_source_payload(path, &source, config).await?;
     let mut new_values = BTreeMap::new();
 
     for (key, state) in &source.secret {
@@ -359,14 +428,14 @@ async fn seal_file(path: &Path, recipient: Option<&str>) -> Result<()> {
     let encoded = if new_values.is_empty() {
         String::new()
     } else {
-        let recipient = recipient.context(
-            "GPG recipient is required; pass --recipient, set env.encryption.recipient in shine.workspace.toml, or set gpg_key_id",
+        let encryption = encryption.context(
+            "recipients are required; pass --recipient/--backend, set env.encryption in shine.workspace.toml, or set gpg_key_id/age_recipients",
         )?;
         let plaintext = toml::to_string(&SecretPayload {
             version: FORMAT_VERSION,
             values: new_values,
         })?;
-        secret::encrypt_gpg_secret_to_base64(plaintext.as_bytes(), recipient).await?
+        secret::encrypt_secret(plaintext.as_bytes(), encryption).await?
     };
 
     let mut document = contents
@@ -416,11 +485,12 @@ fn parse_source(path: &Path, contents: &str) -> Result<SourceFile> {
 async fn decrypt_source_payload(
     path: &Path,
     source: &SourceFile,
+    config: &Config,
 ) -> Result<BTreeMap<String, String>> {
     if source.payload.data.trim().is_empty() {
         return Ok(BTreeMap::new());
     }
-    let plaintext = secret::decrypt_base64_gpg_secret(&source.payload.data)
+    let plaintext = secret::decrypt_secret(&source.payload.data, &config.age_identities())
         .await
         .with_context(|| format!("decrypting {}", path.display()))?;
     let payload: SecretPayload = toml::from_str(&plaintext)
@@ -431,7 +501,7 @@ async fn decrypt_source_payload(
     Ok(payload.values)
 }
 
-async fn load_sealed_source(path: &Path) -> Result<BTreeMap<String, String>> {
+async fn load_sealed_source(path: &Path, config: &Config) -> Result<BTreeMap<String, String>> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
@@ -444,7 +514,7 @@ async fn load_sealed_source(path: &Path) -> Result<BTreeMap<String, String>> {
             );
         }
     }
-    let secrets = decrypt_source_payload(path, &source).await?;
+    let secrets = decrypt_source_payload(path, &source, config).await?;
     let expected: BTreeSet<_> = source.secret.keys().cloned().collect();
     let actual: BTreeSet<_> = secrets.keys().cloned().collect();
     if expected != actual {
@@ -458,14 +528,14 @@ async fn load_sealed_source(path: &Path) -> Result<BTreeMap<String, String>> {
     Ok(values)
 }
 
-async fn compile_sources(sources: &[PathBuf]) -> Result<BTreeMap<String, String>> {
+async fn compile_sources(sources: &[PathBuf], config: &Config) -> Result<BTreeMap<String, String>> {
     let mut merged = BTreeMap::new();
     let mut loaded = 0usize;
     for path in sources {
         if !path.is_file() {
             continue;
         }
-        merged.extend(load_sealed_source(path).await?);
+        merged.extend(load_sealed_source(path, config).await?);
         loaded += 1;
     }
     if loaded == 0 {
@@ -521,6 +591,7 @@ async fn read_valid_cache(
     path: &Path,
     mode: &str,
     input_hash: &str,
+    config: &Config,
 ) -> Result<Option<BTreeMap<String, String>>> {
     let contents = match tokio::fs::read_to_string(path).await {
         Ok(contents) => contents,
@@ -535,7 +606,7 @@ async fn read_valid_cache(
     if cache.version != FORMAT_VERSION || cached.input_hash != input_hash {
         return Ok(None);
     }
-    let plaintext = secret::decrypt_base64_gpg_secret(&cached.data).await?;
+    let plaintext = secret::decrypt_secret(&cached.data, &config.age_identities()).await?;
     let payload: SecretPayload = toml::from_str(&plaintext)?;
     let keys: Vec<_> = payload.values.keys().cloned().collect();
     if payload.version != FORMAT_VERSION || keys != cached.keys {
@@ -550,13 +621,13 @@ async fn write_cache(
     mode: &str,
     input_hash: &str,
     values: &BTreeMap<String, String>,
-    recipient: &str,
+    recipients: &EncryptRecipients,
 ) -> Result<()> {
     let plaintext = toml::to_string(&SecretPayload {
         version: FORMAT_VERSION,
         values: values.clone(),
     })?;
-    let data = secret::encrypt_gpg_secret_to_base64(plaintext.as_bytes(), recipient).await?;
+    let data = secret::encrypt_secret(plaintext.as_bytes(), recipients).await?;
     let mut modes = BTreeMap::new();
     modes.insert(
         mode.to_string(),
@@ -643,24 +714,6 @@ fn absolute_from_current(path: &Path) -> Result<PathBuf> {
     }
 }
 
-async fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    tokio::fs::create_dir_all(parent).await?;
-    let temp = parent.join(format!(".shine-write-{}", uuid::Uuid::new_v4()));
-    tokio::fs::write(&temp, contents)
-        .await
-        .with_context(|| format!("writing {}", temp.display()))?;
-    #[cfg(windows)]
-    if path.exists() {
-        tokio::fs::remove_file(path).await?;
-    }
-    if let Err(error) = tokio::fs::rename(&temp, path).await {
-        let _ = tokio::fs::remove_file(&temp).await;
-        return Err(error).with_context(|| format!("replacing {}", path.display()));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,18 +749,101 @@ mod tests {
     }
 
     #[test]
-    fn recipient_priority_is_cli_workspace_global() {
-        assert_eq!(
-            resolve_seal_recipient(Some("cli"), Some("workspace"), Some("global")),
-            Some("cli")
+    fn seal_encryption_gpg_recipient_priority_is_cli_workspace_config() {
+        let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config.gpg_key_id = Some("global".to_string());
+        let workspace_encryption = Encryption {
+            recipient: Some("workspace".to_string()),
+            backend: None,
+            age_recipients: Vec::new(),
+        };
+
+        let cli = resolve_seal_encryption(
+            None,
+            &["cli".to_string()],
+            Some(&workspace_encryption),
+            &config,
+        )
+        .unwrap();
+        assert!(matches!(cli, Some(EncryptRecipients::Gpg(values)) if values == ["cli"]));
+
+        let workspace =
+            resolve_seal_encryption(None, &[], Some(&workspace_encryption), &config).unwrap();
+        assert!(
+            matches!(workspace, Some(EncryptRecipients::Gpg(values)) if values == ["workspace"])
         );
-        assert_eq!(
-            resolve_seal_recipient(None, Some("workspace"), Some("global")),
-            Some("workspace")
+
+        let global = resolve_seal_encryption(None, &[], None, &config).unwrap();
+        assert!(matches!(global, Some(EncryptRecipients::Gpg(values)) if values == ["global"]));
+    }
+
+    #[test]
+    fn seal_encryption_returns_none_when_nothing_configured() {
+        let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
+        let config = Config::new_for_test(&dir);
+
+        assert!(
+            resolve_seal_encryption(None, &[], None, &config)
+                .unwrap()
+                .is_none()
         );
-        assert_eq!(
-            resolve_seal_recipient(None, None, Some("global")),
-            Some("global")
+    }
+
+    #[test]
+    fn seal_encryption_age_recipients_prefer_workspace_over_config() {
+        let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config.secret_backend = Some("age".to_string());
+        config.age_recipients = vec!["age1config".to_string()];
+        let workspace_encryption = Encryption {
+            recipient: None,
+            backend: None,
+            age_recipients: vec!["age1workspace".to_string()],
+        };
+
+        let resolved =
+            resolve_seal_encryption(None, &[], Some(&workspace_encryption), &config).unwrap();
+        assert!(
+            matches!(resolved, Some(EncryptRecipients::Age(values)) if values == ["age1workspace"])
+        );
+
+        let fallback = resolve_seal_encryption(
+            None,
+            &[],
+            Some(&Encryption {
+                recipient: None,
+                backend: None,
+                age_recipients: Vec::new(),
+            }),
+            &config,
+        )
+        .unwrap();
+        assert!(
+            matches!(fallback, Some(EncryptRecipients::Age(values)) if values == ["age1config"])
+        );
+    }
+
+    #[test]
+    fn seal_encryption_backend_priority_is_cli_workspace_config() {
+        let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config.secret_backend = Some("age".to_string());
+        config.gpg_key_id = Some("global".to_string());
+        let workspace_encryption = Encryption {
+            recipient: Some("workspace".to_string()),
+            backend: Some("gpg".to_string()),
+            age_recipients: Vec::new(),
+        };
+
+        let resolved =
+            resolve_seal_encryption(None, &[], Some(&workspace_encryption), &config).unwrap();
+        assert!(matches!(resolved, Some(EncryptRecipients::Gpg(_))));
+
+        let resolved_age = resolve_seal_encryption(None, &[], None, &config).unwrap();
+        assert!(
+            resolved_age.is_none(),
+            "age backend with no age_recipients should be lazily None: {resolved_age:?}"
         );
     }
 
@@ -725,7 +861,8 @@ mod tests {
             .await
             .unwrap();
 
-        let values = compile_sources(&[base, local]).await.unwrap();
+        let config = Config::new_for_test(&directory);
+        let values = compile_sources(&[base, local], &config).await.unwrap();
         assert_eq!(values.get("A").map(String::as_str), Some("base"));
         assert_eq!(values.get("B").map(String::as_str), Some("local"));
         tokio::fs::remove_dir_all(directory).await.unwrap();
@@ -740,7 +877,8 @@ mod tests {
             .await
             .unwrap();
 
-        seal_file(&path, None).await.unwrap();
+        let config = Config::new_for_test(&directory);
+        seal_file(&path, &config, None).await.unwrap();
         let source = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(source.contains("[payload]"));
         tokio::fs::remove_dir_all(directory).await.unwrap();

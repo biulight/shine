@@ -15,7 +15,7 @@ struct PullTarget {
 }
 
 /// Pull each Git repository that contributes to the effective preset namespace.
-pub async fn handle_pull(config: &Config) -> Result<()> {
+pub async fn handle_pull(config: &Config, verbose: bool) -> Result<()> {
     let targets = configured_targets(config);
     let mut repositories = Vec::new();
     let mut seen = HashSet::new();
@@ -23,18 +23,20 @@ pub async fn handle_pull(config: &Config) -> Result<()> {
     for target in targets {
         match repository_root(&target.path).await? {
             Some(root) if seen.insert(root.clone()) => repositories.push((target.label, root)),
-            Some(root) => println!(
+            Some(root) if verbose => println!(
                 "  {} {} ({})",
                 colors::dim("skipped"),
                 target.label,
                 colors::dim(&format!("same repository: {}", root.display()))
             ),
-            None => println!(
+            Some(_) => {}
+            None if verbose => println!(
                 "  {} {} ({})",
                 colors::dim("skipped"),
                 target.label,
                 colors::dim(&format!("not a Git repository: {}", target.path.display()))
             ),
+            None => {}
         }
     }
 
@@ -49,10 +51,13 @@ pub async fn handle_pull(config: &Config) -> Result<()> {
         ensure_tracking_branch(label, root).await?;
     }
 
+    println!("{}", colors::bold("Preset Sources"));
     for (label, root) in repositories {
-        println!("Pulling {label} from {} ...", root.display());
-        pull_ff_only(&root).await?;
-        println!("{}", colors::green(&format!("  {label} updated")));
+        if verbose {
+            println!("Pulling {label} from {} ...", root.display());
+        }
+        let summary = pull_ff_only(&root, verbose).await?;
+        print_pull_summary(label, &summary);
     }
 
     Ok(())
@@ -153,24 +158,114 @@ async fn ensure_tracking_branch(label: &str, root: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn pull_ff_only(root: &Path) -> Result<()> {
-    let status = Command::new("git")
+#[derive(Debug, PartialEq, Eq)]
+struct PullSummary {
+    before: String,
+    after: String,
+    shortstat: Option<String>,
+}
+
+impl PullSummary {
+    fn updated(&self) -> bool {
+        self.before != self.after
+    }
+}
+
+async fn pull_ff_only(root: &Path, verbose: bool) -> Result<PullSummary> {
+    let before = head_short(root).await?;
+    let mut command = Command::new("git");
+    command
         .args(["pull", "--ff-only"])
         .current_dir(root)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .await
-        .with_context(|| "failed to run git; install Git and ensure it is available in PATH")?;
-    if !status.success() {
+        .stdin(Stdio::inherit());
+    let failure_detail = if verbose {
+        let status = command
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .await
+            .with_context(|| "failed to run git; install Git and ensure it is available in PATH")?;
+        if status.success() {
+            None
+        } else {
+            Some(format!("status {status}"))
+        }
+    } else {
+        let output = command
+            .output()
+            .await
+            .with_context(|| "failed to run git; install Git and ensure it is available in PATH")?;
+        if output.status.success() {
+            None
+        } else {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Some(
+                [stdout.trim(), stderr.trim()]
+                    .into_iter()
+                    .filter(|part| !part.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        }
+    };
+    if let Some(detail) = failure_detail {
         bail!(
-            "Git pull failed in {} (status {}). Resolve the Git error, then run 'shine pull' again.",
+            "Git pull failed in {}: {}\nResolve the Git error, then run 'shine pull' again.",
             root.display(),
-            status
+            detail
         );
     }
-    Ok(())
+
+    let after = head_short(root).await?;
+    let shortstat = if before == after {
+        None
+    } else {
+        let output = git_output(root, &["diff", "--shortstat", &before, &after]).await?;
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+    .filter(|stat| !stat.is_empty());
+    Ok(PullSummary {
+        before,
+        after,
+        shortstat,
+    })
+}
+
+async fn head_short(root: &Path) -> Result<String> {
+    let output = git_output(root, &["rev-parse", "--short=7", "HEAD"]).await?;
+    if !output.status.success() {
+        bail!("failed to resolve Git HEAD in {}", root.display());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn print_pull_summary(label: &str, summary: &PullSummary) {
+    if summary.updated() {
+        let stat = summary
+            .shortstat
+            .as_deref()
+            .map(|value| format!("  {}", colors::dim(value)))
+            .unwrap_or_default();
+        println!(
+            "  {}  {} updated  {} → {}{}",
+            colors::symbol("✓"),
+            label,
+            summary.before,
+            summary.after,
+            stat
+        );
+    } else {
+        println!(
+            "  {}  {} {}",
+            colors::symbol("✓"),
+            label,
+            colors::dim("up-to-date")
+        );
+    }
 }
 
 async fn git_output(root: &Path, args: &[&str]) -> Result<std::process::Output> {
@@ -240,7 +335,7 @@ mod tests {
         std::fs::create_dir_all(root.join("presets")).unwrap();
         let config = Config::new_for_test(&root);
 
-        handle_pull(&config).await.unwrap();
+        handle_pull(&config, false).await.unwrap();
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -253,7 +348,7 @@ mod tests {
         std::fs::write(presets.join("local.txt"), "dirty\n").unwrap();
         let config = Config::new_for_test(&root);
 
-        let error = handle_pull(&config).await.unwrap_err();
+        let error = handle_pull(&config, false).await.unwrap_err();
 
         assert!(error.to_string().contains("uncommitted changes"));
         std::fs::remove_dir_all(root).unwrap();
@@ -266,7 +361,7 @@ mod tests {
         init_repo(&presets);
         let config = Config::new_for_test(&root);
 
-        let error = handle_pull(&config).await.unwrap_err();
+        let error = handle_pull(&config, false).await.unwrap_err();
 
         assert!(error.to_string().contains("has no upstream"));
         std::fs::remove_dir_all(root).unwrap();
@@ -300,7 +395,7 @@ mod tests {
         git(&seed, &["push"]);
         let config = Config::new_for_test(&root);
 
-        handle_pull(&config).await.unwrap();
+        handle_pull(&config, false).await.unwrap();
 
         assert_eq!(
             std::fs::read_to_string(presets.join("preset.txt")).unwrap(),
@@ -317,7 +412,7 @@ mod tests {
         git(&presets, &["checkout", "--detach"]);
         let config = Config::new_for_test(&root);
 
-        let error = handle_pull(&config).await.unwrap_err();
+        let error = handle_pull(&config, false).await.unwrap_err();
 
         assert!(error.to_string().contains("detached HEAD"));
         std::fs::remove_dir_all(root).unwrap();
