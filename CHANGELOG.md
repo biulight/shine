@@ -7,6 +7,31 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [0.38.0] — 2026-07-12
+
+### Features
+
+- Added `shine app build <app-id>`, which runs an app preset's `[artifact].script` with a fixed `SHINE_APP_*` env contract plus the active `[env]` table passed as stored (no decryption). It never runs implicitly during `install`/`upgrade`, and script failures propagate as errors. The built-in `surge` preset was repurposed around this: `app install surge` copies `local-proxies.conf`/`local-rules.conf` into the Surge Profiles dir, and `app build surge` (via an overlay `build.sh`) patches the active profile's `[Proxy]`/`[Rule]` `#!include` lines.
+- App categories can now declare a `post_upgrade` hook that runs after `shine upgrade` actually installs or updates at least one file in that category, plus a local HTTP server (`shine serve install/start/status/uninstall/url`) for serving app-managed resources under `~/.shine/http/`, including revalidation of previously served content.
+- Added `shine task save/run/list/info/delete` and a top-level `shine run` alias for saving and directly executing personal shortcut commands (argv-based, no shell, exit code passed through verbatim).
+- `shine self install`/`self upgrade` now auto-elevate via sudo when the destination isn't user-writable, instead of asking the user to manually re-run with sudo.
+
+### Bug Fixes
+
+- Fixed `shine sys` profile reconciliation (three-way merge and sentinel-block matching) to be CRLF/LF-agnostic, so a Windows-edited profile file no longer gets silently rewritten to LF on every run.
+- Fixed `shine upgrade` section spacing (blank lines only between sections that actually printed something) and normalized checkmark-line indentation across Shell Presets/App Configs/Managed System Configs output.
+- Fixed post_upgrade hook stdout to be opt-in (`show_output`) instead of an implicit "last hook in the sequence" heuristic, so unrelated hook success output no longer surfaces as a note.
+- Fixed `shine info`'s app-file Source line to resolve through an active overlay, matching the shell-file equivalent.
+- Fixed `shine sys`/self-install/completion to resolve the target home directory through the sudo-aware resolver instead of raw `HOME`, fixing the wrong home directory being used under sudo.
+- Fixed color detection for warnings printed to stderr (e.g. during `shine update`) to check stderr support instead of stdout's.
+- Fixed misaligned presets-note labels and managed system config item indentation in various status output.
+
+### Internal
+
+- Extracted a shared `install_core` module and a `preset_meta` core shared by app and shell metadata parsing; added a generic TOML manifest persistence module and a shared sentinel-block module used by both shell and sys profile handling.
+- Split several large modules for cohesion: `update_check.rs`, `sys/commands.rs`, `sys/profile.rs`, `apps/mod.rs`, `shells/mod.rs`, and `show.rs`.
+- Consolidated duplicated shell-quoting logic and test-helper setup, and documented that the ~800-line file-size guideline counts production code only (inline `#[cfg(test)]` modules are exempt).
+
 ## [0.37.0] — 2026-07-09
 
 ### Features
