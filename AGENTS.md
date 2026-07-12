@@ -487,6 +487,22 @@ command = ["rsync", "-avz", "dist/", "marqueeio.develop:/var/www/keystone/alex/"
 
 Config is saved via `utils::sync_table` which preserves existing TOML comments while updating values.
 
+### Presets overlay
+
+An overlay merges over the active presets source by matching relative paths (`Config::preset_path`,
+`presets::read_asset_bytes`/`asset_paths`, `apps/build.rs`). There are two mutually exclusive ways to
+configure it, both resolved by `Config::active_presets_overlay_dir()`:
+
+- **Manual** — `presets_overlay_dir` in `config.toml` points at a user-owned directory
+  (`shine overlay link <path>`). Fast-forward-pulled by `shine pull` like any Git preset source.
+- **shine-managed Git** — `presets_overlay_git` (+ optional `presets_overlay_git_branch`) records a
+  Git URL (`shine overlay link --git <url>`). shine owns the checkout at `<shine_dir>/overlay`
+  (`managed_overlay_dir`, resolved by `Config::resolve_managed_overlay_dir` from `shine_dir`, so it
+  follows `SHINE_CONFIG_DIR`). It is cloned `--depth 1` on first `shine pull` and **force-mirrored**
+  (`git fetch --depth 1` + `reset --hard`) to the remote tip afterward — a read-only mirror, never
+  fast-forward-pulled. See `git_pull::sync_managed_overlay`. A managed overlay is only "active" once
+  its checkout exists on disk; setting one via the CLI clears any manual `presets_overlay_dir`.
+
 ### Local HTTP resources
 
 `shine serve start` serves files from `~/.shine/http/` on a single loopback HTTP server

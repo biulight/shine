@@ -481,10 +481,32 @@ shine overlay show
 shine overlay unlink
 ```
 
-When the active preset source or overlay is managed by Git, Shine can safely fast-forward it:
+If you keep your overlay in a Git repository, you can let Shine manage the checkout for you instead of cloning it on every machine. Point the overlay at a Git URL and Shine clones it (`--depth 1`, no history) under `~/.shine/overlay` and keeps it mirrored to the remote tip:
 
 ```bash
-shine pull             # pull preset and overlay repositories
+shine overlay link --git https://github.com/you/shine-overlay.git   # optionally: --branch main
+shine overlay show      # shows the URL, branch, managed path, and clone status
+shine pull              # clones on first run, then force-mirrors to the latest commit
+```
+
+You can also just add the URL directly to `~/.shine/config.toml` and run `shine pull`:
+
+```toml
+presets_overlay_git = "https://github.com/you/shine-overlay.git"
+# presets_overlay_git_branch = "main"   # optional; defaults to the remote's default branch
+```
+
+This is ideal when one machine maintains the overlay and the rest only consume it: each device
+just needs the URL, never a manual `git clone`. Because the managed checkout is a read-only mirror,
+`shine pull` always resets it to match the remote (surviving rebases and force-pushes) and discards
+any local edits. If a pull fails (e.g. the remote is unreachable), the previous checkout is left
+intact and stays in use. A manually linked `overlay link <path>` takes precedence over a Git URL;
+the two are mutually exclusive.
+
+When the active preset source or a manually linked overlay is managed by Git, Shine also safely fast-forwards it:
+
+```bash
+shine pull             # sync managed overlay + fast-forward preset/overlay repositories
 shine update --pull    # pull first, then reload configuration and check status
 shine upgrade --pull   # pull first, then reload configuration and apply presets
 ```

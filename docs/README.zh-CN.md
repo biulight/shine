@@ -481,10 +481,30 @@ shine overlay show
 shine overlay unlink
 ```
 
-如果当前 preset 来源或 overlay 由 Git 管理，可以让 Shine 安全地快进拉取：
+如果你的 overlay 保存在 Git 仓库中，可以让 Shine 自动维护这份检出，而不必在每台机器上手动克隆。为 overlay 指定一个 Git 地址，Shine 会以 `--depth 1`（不含历史）克隆到 `~/.shine/overlay`，并始终镜像到远端最新提交：
 
 ```bash
-shine pull             # 拉取 preset 与 overlay 仓库
+shine overlay link --git https://github.com/you/shine-overlay.git   # 可选：--branch main
+shine overlay show      # 显示 URL、分支、托管路径与克隆状态
+shine pull              # 首次运行时克隆，之后强制镜像到最新提交
+```
+
+也可以直接在 `~/.shine/config.toml` 中写入地址，再执行 `shine pull`：
+
+```toml
+presets_overlay_git = "https://github.com/you/shine-overlay.git"
+# presets_overlay_git_branch = "main"   # 可选；默认使用远端默认分支
+```
+
+这特别适合「一台机器维护 overlay、其余设备只消费」的场景：每台设备只需要这个地址，
+无需手动 `git clone`。由于托管检出是只读镜像，`shine pull` 始终会将其重置为与远端一致
+（可安全应对 rebase、force-push），并丢弃任何本地改动。如果拉取失败（例如远端不可达），
+之前的检出会保持不变并继续使用。手动 `overlay link <path>` 优先于 Git 地址，两者互斥。
+
+如果当前 preset 来源或手动关联的 overlay 由 Git 管理，Shine 也会安全地快进拉取：
+
+```bash
+shine pull             # 同步托管 overlay，并快进 preset / overlay 仓库
 shine update --pull    # 先拉取并重新加载配置，再检查状态
 shine upgrade --pull   # 先拉取并重新加载配置，再应用 preset
 ```

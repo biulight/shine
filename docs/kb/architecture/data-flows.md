@@ -110,14 +110,26 @@ stable `v*` release.
 
 ## Git-managed preset pull
 
-`git_pull.rs::handle_pull` resolves the effective `presets_dir` and overlay to their Git roots,
-de-duplicates shared repositories, and validates every worktree before running
-`git pull --ff-only`. Dirty worktrees, detached HEADs, missing upstreams, and pull failures stop
-the operation. `update --pull` and `upgrade --pull` pull first, reload `Config`, then check or
-apply presets so updated project and environment configuration takes effect immediately.
-Successful pulls are summarized as one line per repository (commit range plus short file stats),
-while raw Git progress is hidden unless the parent update/upgrade command is verbose. Failed pulls
-always include captured Git diagnostics; non-Git and duplicate sources are only shown verbosely.
+`git_pull.rs::handle_pull` resolves the effective `presets_dir` and any *manually linked* overlay
+(`presets_overlay_dir`) to their Git roots, de-duplicates shared repositories, and validates every
+worktree before running `git pull --ff-only`. Dirty worktrees, detached HEADs, missing upstreams,
+and pull failures stop the operation. `update --pull` and `upgrade --pull` pull first, reload
+`Config`, then check or apply presets so updated project and environment configuration takes effect
+immediately. Successful pulls are summarized as one line per repository (commit range plus short
+file stats), while raw Git progress is hidden unless the parent update/upgrade command is verbose.
+Failed pulls always include captured Git diagnostics; non-Git and duplicate sources are only shown
+verbosely.
+
+A **shine-managed Git overlay** (`presets_overlay_git`) is handled separately, *before* the
+fast-forward loop, by `git_pull::sync_managed_overlay` against `<shine_dir>/overlay`. On first use
+it clones `--depth 1` via a temp sibling dir + atomic rename (a failed clone never leaves a
+half-populated overlay). On subsequent runs it **force-mirrors**: `git fetch --depth 1 origin
+<branch>` then `git reset --hard FETCH_HEAD`, so the checkout always equals the remote tip even
+across rebases/force-pushes, discarding local edits (the managed overlay is read-only by design).
+The fetch runs before the reset, so an unreachable remote leaves the previous checkout intact and
+usable. `shine overlay link --git <url>` writes the config and clones immediately;
+`configured_targets` deliberately excludes the managed dir from the fast-forward path. See
+[ADR 0010](../decisions/0010-git-managed-overlay.md).
 
 ## Config discovery
 

@@ -265,6 +265,7 @@ impl Config {
             config.home_dir = home_dir;
             config.is_external_presets = is_external_presets;
             config.resolve_presets_overlay_dir(&config_dir);
+            config.resolve_managed_overlay_dir();
             if let Some(path) = config.app_default_dest_root_override.as_deref() {
                 config.app_default_dest_root_override =
                     Some(resolve_config_presets_path(path, &config_dir));

@@ -12,7 +12,7 @@ use commands::{
     SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands,
 };
 #[cfg(test)]
-use commands::{ClearCommand, InitCommand, UpdateCommand, UpgradeCommand};
+use commands::{ClearCommand, InitCommand, OverlayLinkCommand, UpdateCommand, UpgradeCommand};
 use config::Config;
 #[cfg(test)]
 use update_check::ReleaseChannel;
@@ -150,9 +150,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
         Commands::Overlay { command } => match command {
-            OverlayCommands::Link(LinkCommand { path, create }) => {
-                Box::pin(handle_overlay_link(&config, path, create)).await
-            }
+            OverlayCommands::Link(cmd) => Box::pin(handle_overlay_link(&config, cmd)).await,
             OverlayCommands::Unlink => Box::pin(handle_overlay_unlink(&config)).await,
             OverlayCommands::Show => handle_overlay_show(&config),
         },
@@ -502,11 +500,13 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Overlay {
-                command: OverlayCommands::Link(LinkCommand {
+                command: OverlayCommands::Link(OverlayLinkCommand {
                     ref path,
-                    create: false
+                    git: None,
+                    create: false,
+                    ..
                 })
-            } if path.as_path() == std::path::Path::new("/tmp/presets")
+            } if path.as_deref() == Some(std::path::Path::new("/tmp/presets"))
         ));
 
         let cli =
@@ -514,12 +514,38 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Overlay {
-                command: OverlayCommands::Link(LinkCommand {
+                command: OverlayCommands::Link(OverlayLinkCommand {
                     ref path,
-                    create: true
+                    create: true,
+                    ..
                 })
-            } if path.as_path() == std::path::Path::new("/tmp/presets")
+            } if path.as_deref() == Some(std::path::Path::new("/tmp/presets"))
         ));
+
+        let cli = Cli::try_parse_from([
+            "shine",
+            "overlay",
+            "link",
+            "--git",
+            "https://example.com/overlay.git",
+            "--branch",
+            "main",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Overlay {
+                command: OverlayCommands::Link(OverlayLinkCommand {
+                    path: None,
+                    git: Some(ref url),
+                    branch: Some(ref branch),
+                    ..
+                })
+            } if url == "https://example.com/overlay.git" && branch == "main"
+        ));
+
+        // A local PATH and --git are mutually exclusive.
+        assert!(Cli::try_parse_from(["shine", "overlay", "link", "/tmp/x", "--git", "u"]).is_err());
 
         assert!(Cli::try_parse_from(["shine", "overlay", "unlink"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "overlay", "show"]).is_ok());

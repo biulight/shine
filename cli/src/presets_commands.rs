@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use std::path::PathBuf;
 
+use crate::commands::OverlayLinkCommand;
 use crate::config::{self, Config};
 use crate::{colors, presets};
 
@@ -118,6 +119,9 @@ async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKin
             .with_presets_dir_override(Some(absolute.clone())),
         LinkKind::Overlay => config
             .clone()
+            // Linking a local path clears any shine-managed Git overlay so the
+            // two overlay modes never coexist.
+            .with_presets_overlay_git(None, None)
             .with_presets_overlay_dir_override(Some(absolute.clone())),
     };
     updated.save().await?;
@@ -186,43 +190,112 @@ pub async fn handle_presets_unlink(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_overlay_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
-    handle_link(config, path, create, LinkKind::Overlay).await
+pub async fn handle_overlay_link(config: &Config, cmd: OverlayLinkCommand) -> Result<()> {
+    if let Some(url) = cmd.git {
+        return handle_overlay_link_git(config, url, cmd.branch).await;
+    }
+    match cmd.path {
+        Some(path) => handle_link(config, path, cmd.create, LinkKind::Overlay).await,
+        None => bail!("provide a local PATH or --git <URL> for the overlay"),
+    }
+}
+
+/// Point the overlay at a shine-managed Git source: record the URL (clearing any
+/// manual overlay path) and clone/mirror it immediately so it's ready to use.
+async fn handle_overlay_link_git(
+    config: &Config,
+    url: String,
+    branch: Option<String>,
+) -> Result<()> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        bail!("overlay Git URL must not be empty");
+    }
+    let branch = branch
+        .map(|b| b.trim().to_string())
+        .filter(|b| !b.is_empty());
+
+    let updated = config.clone().with_presets_overlay_git(Some(url), branch);
+    updated.save().await?;
+
+    let (url, branch, dir) = updated
+        .overlay_git_source()
+        .expect("overlay Git source was just set");
+    println!(
+        "{}",
+        colors::green(&format!("Overlay Git source set: {url}"))
+    );
+    if let Some(branch) = branch {
+        println!("  {} {branch}", colors::dim("branch:"));
+    }
+    println!("  {} {}", colors::dim("managed dir:"), dir.display());
+
+    // Clone (or mirror, if already present) now so the overlay is usable right
+    // away instead of waiting for the next `shine pull`.
+    crate::git_pull::sync_managed_overlay(url, branch, dir, false).await?;
+    Ok(())
 }
 
 pub async fn handle_overlay_unlink(config: &Config) -> Result<()> {
-    if config.presets_overlay_dir_override.is_none() {
-        println!(
-            "{}",
-            colors::dim("No presets overlay directory is configured.")
-        );
+    if config.presets_overlay_dir_override.is_none() && config.presets_overlay_git.is_none() {
+        println!("{}", colors::dim("No presets overlay is configured."));
         return Ok(());
     }
 
-    let updated = config.clone().with_presets_overlay_dir_override(None);
+    let managed_dir = config
+        .overlay_git_source()
+        .map(|(_, _, dir)| dir.to_path_buf());
+
+    let updated = config
+        .clone()
+        .with_presets_overlay_git(None, None)
+        .with_presets_overlay_dir_override(None);
     updated.save().await?;
 
     println!(
         "{}",
-        colors::green("Presets overlay directory removed from the active config.")
+        colors::green("Presets overlay removed from the active config.")
     );
     println!(
         "{}",
         colors::dim("Built-in embedded presets will be used without overlay on the next run.")
     );
+    if let Some(dir) = managed_dir.filter(|dir| dir.exists()) {
+        println!(
+            "{}",
+            colors::dim(&format!(
+                "The managed overlay checkout remains at {}. Remove it manually if unwanted.",
+                dir.display()
+            ))
+        );
+    }
 
     Ok(())
 }
 
 pub fn handle_overlay_show(config: &Config) -> Result<()> {
+    if let Some((url, branch, dir)) = config.overlay_git_source() {
+        println!("{}", colors::green(&format!("Overlay Git source: {url}")));
+        if let Some(branch) = branch {
+            println!("  {} {branch}", colors::dim("branch:"));
+        }
+        println!("  {} {}", colors::dim("managed dir:"), dir.display());
+        if dir.exists() {
+            println!("{}", colors::green("Cloned"));
+        } else {
+            println!(
+                "{}",
+                colors::dim("Not cloned yet — run `shine pull` to fetch it.")
+            );
+        }
+        return Ok(());
+    }
+
     if let Some(dir) = &config.presets_overlay_dir_override {
         println!("{}", colors::presets_overlay_note(dir));
         println!("{}", colors::green("Active"));
     } else {
-        println!(
-            "{}",
-            colors::dim("No presets overlay directory is configured.")
-        );
+        println!("{}", colors::dim("No presets overlay is configured."));
     }
     Ok(())
 }
@@ -267,9 +340,17 @@ mod tests {
             std::env::remove_var("SHINE_PRESETS");
         }
         let config = Config::load_or_init().await.unwrap();
-        let error = handle_overlay_link(&config, overlay_dir.clone(), false)
-            .await
-            .unwrap_err();
+        let error = handle_overlay_link(
+            &config,
+            OverlayLinkCommand {
+                path: Some(overlay_dir.clone()),
+                git: None,
+                branch: None,
+                create: false,
+            },
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("shine.env.toml"));
 
         let saved = tokio::fs::read_to_string(state_dir.join("config.toml"))

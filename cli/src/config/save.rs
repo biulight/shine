@@ -293,6 +293,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn presets_overlay_git_round_trips_through_save() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.presets_overlay_git = Some("https://example.com/overlay.git".to_string());
+        config.presets_overlay_git_branch = Some("main".to_string());
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        assert!(content.contains("presets_overlay_git"));
+
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert_eq!(
+            loaded.presets_overlay_git.as_deref(),
+            Some("https://example.com/overlay.git")
+        );
+        assert_eq!(loaded.presets_overlay_git_branch.as_deref(), Some("main"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn gpg_key_id_round_trips_through_save() {
         let dir = make_temp_dir().await;
         let mut config = config_in(&dir);
