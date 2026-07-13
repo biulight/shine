@@ -221,10 +221,13 @@ shine/
 │       ├── ssh/
 │       │   ├── mod.rs        # `shine ssh`: wraps system ssh, arg splitting, session
 │       │   │                 # bootstrap, wrapped remote command (env vars + EXIT trap)
-│       │   ├── protocol.rs   # Wire format shared by agent.rs and remote_client.rs
-│       │   ├── agent.rs      # Local transfer server (PutFile/GetFile), Unix socket or
+│       │   ├── protocol.rs   # Wire format (control + log relay): Transfer request,
+│       │   │                 # Starting/Log/Done frames. Shared by agent.rs and remote_client.rs
+│       │   ├── agent.rs      # Local transfer server: spawns rsync/scp (build_transfer_argv,
+│       │   │                 # choose_tool) and relays their output. Unix socket or
 │       │   │                 # loopback TCP (Windows) via LocalListener
-│       │   ├── dir_transfer.rs # Directory tar build/extract, symlink-escape validation
+│       │   ├── session_context.rs # SessionContext (host/ssh_options/local_dir/control_path)
+│       │   │                 # captured at `shine ssh` time; source of the rsync/scp reconnect args
 │       │   └── remote_client.rs # `shine local download/upload` handlers (run on remote host)
 │       ├── task/
 │       │   ├── mod.rs        # `shine task` save/run/list/info/delete handlers,
@@ -330,10 +333,11 @@ Transforms compose in declaration order: `transforms = ["jsonc-to-json", "templa
 
 ### SSH session transfer flow (`shine ssh` / `shine local`)
 
-See [`docs/ssh-local-transfer-prd.md`](docs/ssh-local-transfer-prd.md) for the full design.
-Phases 1-3 implemented: file/directory transfers, progress output, and
-`shine local status`. Windows support (local side only — see step 8) added
-on top of the macOS/Linux implementation.
+See [`docs/ssh-local-transfer-prd.md`](docs/ssh-local-transfer-prd.md) for the full design and
+[ADR 0011](docs/kb/decisions/0011-ssh-local-transfer-rsync-scp.md) for the current transport.
+The tunnel carries a **control + log-relay** channel: the remote sends one `Transfer` request and
+the local agent runs `rsync` (default) / `scp` and streams its output back. Windows support (local
+side only — see step 8) rides on top of the macOS/Linux implementation.
 
 1. `shine ssh [SSH_ARGS]... <HOST> [COMMAND]` generates a session id + token
    and spawns `ssh` with `-t -R <remote-sock>:<local-forward-target>`
@@ -341,7 +345,14 @@ on top of the macOS/Linux implementation.
    destination/command boundary without reinterpreting ssh's own option
    semantics). `<remote-sock>` is always a Unix socket path under `/tmp` on
    the remote host (assumed Linux/macOS); `<local-forward-target>` is
-   platform-dependent — see step 8.
+   platform-dependent — see step 8. Unless the user already set their own
+   multiplexing, shine also injects `-o ControlMaster=auto -o
+   ControlPath=<session_dir>/ctl.sock -o ControlPersist=60` so the later
+   rsync/scp child reconnects over this authenticated master with no second
+   auth prompt (ADR 0011). The captured `host`/`ssh_options`/cwd/`control_path`
+   are stored as `ssh::session_context::SessionContext` (in-memory `Arc`, also
+   written to `<session_dir>/context.toml`) — the sole, local-trusted source of
+   the rsync/scp reconnect args.
 2. The remote command is replaced with a wrapper that sets
    `SHINE_SSH_SESSION`/`SHINE_SSH_TOKEN`/`SHINE_SSH_REMOTE_SOCK` via `env`
    (not `SetEnv`/`SendEnv`, which most `sshd_config`s reject), then `exec`s
@@ -350,51 +361,42 @@ on top of the macOS/Linux implementation.
    disconnect (verified against a real host via `scripts/spike-ssh-forward.sh`
    before implementation) — the wrapper registers its own `trap ... EXIT`.
 4. `shine local download/upload` (run on the remote host) reads those env
-   vars, dials the forwarded socket, and speaks the framed protocol in
-   `ssh::protocol` (`PutFile`/`GetFile`/`Preview` for `--dry-run`) against
-   the local agent in `ssh::agent`, which resolves destinations against the
-   session's local working directory per the PRD's default-target rules.
-   The only authorization on a request is the session token, which travels
-   to the remote host as plain argv/environ (`env SHINE_SSH_TOKEN=...`) and
-   is therefore readable by other local users there via `ps eww` — so the
-   agent does not otherwise trust wire-supplied fields: `PutFile.filename`
-   (meant to always be a bare basename) is rejected unless it is exactly
-   one normal path component (`agent::ensure_single_path_component`),
-   preventing a forged request from writing outside the session directory
-   via `..` or an absolute path, and `dest_hint`/`source_hint` are expanded
-   with `~`-only substitution (`home::tilde_expand`), not the full
-   `${VAR}`-style expansion used for locally-typed paths elsewhere in the
-   crate, since that would let a forged hint pull values out of the local
-   agent process's own environment.
-5. Directories are staged as an uncompressed tar archive in a local temp
-   file (`ssh::dir_transfer::build_tar_to_temp_file`/`extract_tar_from_file`,
-   run on `spawn_blocking` since the `tar` crate is synchronous) and sent
-   through the same `PutFile`/`GetFile` byte-streaming path with an
-   `is_dir` flag — never buffered fully in memory, and never assembled
-   in-memory as a whole archive. `tar::Entry::unpack_in` already rejects
-   absolute paths and `..` traversal in an entry's own path, but does
-   **not** validate a *symlink's target*, so `dir_transfer` adds its own
-   check enforcing the PRD's chosen policy: relative symlinks that resolve
-   inside the transferred tree are kept, absolute or escaping ones reject
-   the whole transfer. Non-file/dir/symlink entry types (hard links,
-   device nodes, FIFOs) are rejected outright. An existing destination
-   directory is rejected without `--force`; with `--force` the archive is
-   merged into it (existing files not present in the archive are kept,
-   matching the PRD's stated `--force` semantics for directories).
-6. `protocol::copy_exact_with_progress` reports cumulative bytes copied
-   after each chunk; `remote_client::ProgressPrinter` (throttled to ~150ms)
-   renders a single overwritten stderr line only when
-   `console::user_attended_stderr()` is true, per the PRD's requirement
-   that non-TTY environments get a stable single-line result with no live
-   redraw. `agent`'s side of transfers has no progress output — the
-   command always runs (and its stdout/stderr are visible) on the remote
-   host, not locally.
+   vars and sends one `ClientMessage::Transfer { direction, remote_spec,
+   local_spec, force, dry_run, use_scp }` over the forwarded socket. The
+   remote-owned spec is absolutized against the remote cwd
+   (`remote_client::absolutize_remote_spec`) with glob metacharacters
+   preserved (string join, never canonicalized), so `download '<dir>/*.log'`
+   is expanded by rsync/scp's remote shell for free. The only authorization is
+   the session token, which travels to the remote as plain argv/environ and is
+   readable by other local users there via `ps eww`, so wire fields
+   (`remote_spec`/`local_spec`) are **untrusted** — see step 5.
+5. The local agent (`ssh::agent`) validates the token, resolves the local side
+   against the session directory (tilde-only expansion via `home::tilde_expand`,
+   never `${VAR}`; upload-source globs expanded with the `glob` crate), picks the
+   tool (`choose_tool`: rsync by default, scp on `--scp` or as an auto-fallback
+   with a printed notice when rsync is missing locally or — probed over the
+   control master — on the remote), and spawns it via `build_transfer_argv`.
+   **Security (ADR 0011, `docs/kb/lessons.md`):** argv only, never a shell; the
+   remote path is emitted only as the single token `<host>:<remote_spec>` after
+   a `--` separator (so a hostile `-oProxyCommand=…` becomes an inert
+   `host:-…`); local operands are anchored to the session dir and `./`-prefixed
+   if dash-leading; the `-e`/`-o` reconnect string comes solely from
+   `SessionContext`, never the wire. rsync directories/symlinks/perms are
+   handled natively; no-`--force` maps to rsync `--ignore-existing` (scp can't
+   gate overwrite, so it warns instead).
+6. The child's stdout/stderr are read in bounded chunks and relayed verbatim as
+   `ServerMessage::Log { stream, chunk }` frames (preserving `\r` progress
+   redraws), followed by `Done { code }`; `remote_client::relay_until_done`
+   prints the chunks and propagates the child's exit code as its own. rsync's
+   own `--info=progress2` provides progress. `--dry-run` uses rsync `-n`; scp
+   has no dry-run, so the agent synthesizes a preview `Log` line and never
+   spawns.
 7. `shine local status` sends a `Status` request over the same forwarded
-   socket; the agent replies with the session's local working directory,
-   and the client also reports the session id (from `SHINE_SSH_SESSION`)
-   and negotiated protocol version. If the agent is unreachable, it
-   reports that instead of erroring, so the command doubles as a
-   liveness check without needing a live session.
+   socket; the agent replies with the session's local working directory and
+   `host`, and the client also reports the session id (from `SHINE_SSH_SESSION`)
+   and negotiated protocol version. If the agent is unreachable, it reports that
+   instead of erroring, so the command doubles as a liveness check without
+   needing a live session.
 8. Windows support is local-side only (the remote host is always assumed
    Linux/macOS; steps 1-3 above never change). `tokio::net::UnixListener`
    doesn't exist on non-unix targets, so `ssh::bind_local_listener` is
@@ -407,9 +409,8 @@ on top of the macOS/Linux implementation.
    enum over `Unix`/`Tcp` variants (the `Unix` variant itself is
    `#[cfg(unix)]`-gated); `agent::DuplexStream` is a blanket-impl marker
    trait (`AsyncRead + AsyncWrite + Unpin + Send + 'static`) so the
-   per-connection protocol logic (`handle_connection`, `handle_put_file`,
-   `handle_get_file`) stays transport-agnostic and unchanged for both
-   platforms.
+   per-connection protocol logic (`handle_connection`, `handle_transfer`)
+   stays transport-agnostic and unchanged for both platforms.
 9. `ssh::remote_client` (the *remote*-side of a session — it dials the
    forwarded socket via `UnixStream`, so it only makes sense on
    Linux/macOS, per step 8's scoping) is itself `#[cfg(unix)]`-gated;

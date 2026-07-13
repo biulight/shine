@@ -24,4 +24,7 @@ pub struct LocalTransferCommand {
     /// Show what would happen without transferring any data
     #[arg(long)]
     pub dry_run: bool,
+    /// Use scp instead of the default rsync
+    #[arg(long)]
+    pub scp: bool,
 }

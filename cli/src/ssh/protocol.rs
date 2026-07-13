@@ -2,10 +2,15 @@
 //! `shine local download/upload` process (client) and the local `shine ssh`
 //! transfer agent (server). See docs/ssh-local-transfer-prd.md section 9.
 //!
-//! Framing: every control message is JSON, prefixed by a `u32` little-endian
-//! byte length. File content that follows a `PutFile`/`GetHeader` message is
-//! raw bytes of the declared `size`, with no additional framing, streamed in
-//! fixed-size chunks so memory use stays bounded regardless of file size.
+//! The socket carries a **control + log-relay** channel, not file bytes: the
+//! remote sends one `Transfer` request, the local agent runs `rsync`/`scp`
+//! (which moves the bytes over its own ssh connection), and the child's
+//! stdout/stderr are relayed back as `Log` frames followed by a terminal
+//! `Done`. See ADR 0011.
+//!
+//! Framing: every message is JSON, prefixed by a `u32` little-endian byte
+//! length. There is no separate raw-byte stream — `Log` chunks travel inside
+//! ordinary control frames, so the frame-size cap bounds them too.
 
 use anyhow::{Context, Result, bail};
 use serde::{Serialize, de::DeserializeOwned};
@@ -13,13 +18,25 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Bumped whenever `ClientMessage`/`ServerMessage` change in an
 /// incompatible way. Local agent and remote client must match exactly.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// v2: switched from custom byte-streaming (`PutFile`/`GetFile` + raw bodies)
+/// to a control channel driving a local `rsync`/`scp` (ADR 0011).
+pub const PROTOCOL_VERSION: u32 = 2;
 
-/// Control frames are metadata only; file bodies are streamed separately.
-/// This bounds accidental memory blowup from a malformed/hostile peer.
+/// Every message is metadata only now (no separate file-body stream), so this
+/// cap bounds memory use against a malformed/hostile peer. A `Log` chunk is
+/// read from the child in bounded pieces well under this size (see `agent`).
 const MAX_CONTROL_FRAME_BYTES: u32 = 1024 * 1024;
 
-const COPY_CHUNK_SIZE: usize = 64 * 1024;
+/// Which way a transfer moves relative to the machine that owns each path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    /// Remote → local (`shine local download`): the remote spec is the source.
+    Download,
+    /// Local → remote (`shine local upload`): the remote spec is the destination.
+    Upload,
+}
 
 #[derive(Debug, Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
@@ -27,42 +44,49 @@ pub enum ClientMessage {
     Hello {
         protocol_version: u32,
     },
-    /// "shine local download": remote already read its own source file and
-    /// is pushing the bytes to be written on the local machine.
-    PutFile {
+    /// A single transfer request. The local agent validates `token`, resolves
+    /// the local side against the session directory, and spawns `rsync`/`scp`.
+    Transfer {
         token: String,
-        /// Raw local-destination argument as typed by the user, resolved
-        /// by the local agent against the session's local directory.
-        dest_hint: Option<String>,
-        /// Basename of the remote source path, used when `dest_hint` is
-        /// absent or resolves to an existing directory.
-        filename: String,
-        /// If true, `size` bytes are an uncompressed tar stream to be
-        /// extracted into the resolved destination directory rather than
-        /// written verbatim as a single file.
-        is_dir: bool,
-        size: u64,
+        direction: Direction,
+        /// The remote-owned spec, already absolutized against the remote cwd
+        /// by `remote_client` with glob metacharacters preserved. UNTRUSTED:
+        /// the agent only ever emits it as the single argv token
+        /// `<host>:<remote_spec>` after a `--` separator, never as a bare
+        /// option and never near `-e`/`-o`/`--rsh`/`--rsync-path`.
+        remote_spec: String,
+        /// The local-owned path/hint (download destination, upload source) as
+        /// typed by the user. UNTRUSTED: resolved by the agent against the
+        /// session directory with tilde-only expansion; an upload source is
+        /// glob-expanded locally.
+        local_spec: Option<String>,
+        /// Overwrite semantics: for rsync, `false` maps to `--ignore-existing`.
         force: bool,
-        /// If true, only resolve the destination and report what would
-        /// happen; no file bytes are sent and none should be read back.
+        /// Preview only — no bytes are moved.
         dry_run: bool,
+        /// Force `scp` instead of the default `rsync`.
+        use_scp: bool,
     },
-    /// "shine local upload": remote wants to read a file that lives on the
-    /// local machine so it can write it to the remote destination itself.
-    GetFile {
-        token: String,
-        /// Raw local-source argument as typed by the user, resolved by the
-        /// local agent against the session's local directory.
-        source_hint: String,
-        /// If true, only resolve/stat the source and report it; no file
-        /// bytes are sent.
-        dry_run: bool,
-    },
-    /// "shine local status": report session/connection info without
-    /// transferring anything.
+    /// Report session/connection info without transferring anything.
     Status {
         token: String,
     },
+}
+
+/// The external tool the local agent ran for a transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tool {
+    Rsync,
+    Scp,
+}
+
+/// Which of the child's output streams a `Log` chunk came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogStream {
+    Stdout,
+    Stderr,
 }
 
 #[derive(Debug, Serialize, serde::Deserialize)]
@@ -71,30 +95,29 @@ pub enum ServerMessage {
     HelloAck {
         protocol_version: u32,
     },
-    /// Sent after validating a `PutFile` header (token, overwrite policy)
-    /// and before the client starts streaming bytes.
-    Proceed,
-    PutAck {
-        resolved_path: String,
-        bytes_written: u64,
+    /// Sent once before the first `Log` frame: which tool ran and whether we
+    /// auto-fell-back from rsync to scp (with a human note to print).
+    Starting {
+        tool: Tool,
+        fell_back: bool,
+        note: Option<String>,
     },
-    GetHeader {
-        resolved_path: String,
-        /// If true, `size` bytes are an uncompressed tar stream of the
-        /// resolved local directory rather than a single file's content.
-        is_dir: bool,
-        size: u64,
+    /// A raw fragment of the child's stdout/stderr, forwarded verbatim (it may
+    /// contain `\r` and no trailing newline, preserving rsync/scp progress
+    /// redraws — the remote writes it without adding a newline).
+    Log {
+        stream: LogStream,
+        chunk: String,
     },
-    /// Response to a `dry_run` request: no bytes were or will be sent.
-    Preview {
-        resolved_path: String,
-        is_dir: bool,
-        size: Option<u64>,
-        would_overwrite: bool,
+    /// Terminal frame of a transfer: the child's exit code, propagated to the
+    /// remote `shine local` process's own exit status.
+    Done {
+        code: i32,
     },
     /// Response to a `Status` request.
     StatusResponse {
         session_local_dir: String,
+        host: String,
     },
     Error {
         message: String,
@@ -145,55 +168,6 @@ where
     serde_json::from_slice(&payload).context("failed to parse protocol message")
 }
 
-/// Streams exactly `len` bytes from `reader` to `writer` in bounded-size
-/// chunks, so transferring a large file never buffers it all in memory.
-pub async fn copy_exact<R, W>(reader: &mut R, writer: &mut W, len: u64) -> Result<()>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    copy_exact_with_progress(reader, writer, len, |_copied| {}).await
-}
-
-/// Like [`copy_exact`], but invokes `on_progress(bytes_copied_so_far)` after
-/// each chunk — used to drive the user-facing progress display in
-/// `remote_client`. Internal callers that don't need progress (`agent`,
-/// `dir_transfer`) use `copy_exact` instead.
-pub async fn copy_exact_with_progress<R, W, F>(
-    reader: &mut R,
-    writer: &mut W,
-    len: u64,
-    mut on_progress: F,
-) -> Result<()>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-    F: FnMut(u64),
-{
-    let mut remaining = len;
-    let mut copied = 0u64;
-    let mut buf = vec![0u8; COPY_CHUNK_SIZE];
-    while remaining > 0 {
-        let want = remaining.min(buf.len() as u64) as usize;
-        reader
-            .read_exact(&mut buf[..want])
-            .await
-            .context("failed to read file content from peer")?;
-        writer
-            .write_all(&buf[..want])
-            .await
-            .context("failed to write file content")?;
-        remaining -= want as u64;
-        copied += want as u64;
-        on_progress(copied);
-    }
-    writer
-        .flush()
-        .await
-        .context("failed to flush file content")?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,62 +195,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn round_trips_a_transfer_request() {
+        let mut buf = Vec::new();
+        write_message(
+            &mut buf,
+            &ClientMessage::Transfer {
+                token: "tok".to_string(),
+                direction: Direction::Download,
+                remote_spec: "/abs/logs/*.log".to_string(),
+                local_spec: Some("dest".to_string()),
+                force: true,
+                dry_run: false,
+                use_scp: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        let mut cursor = std::io::Cursor::new(buf);
+        let decoded: ClientMessage = read_message(&mut cursor).await.unwrap();
+        match decoded {
+            ClientMessage::Transfer {
+                direction,
+                remote_spec,
+                force,
+                ..
+            } => {
+                assert_eq!(direction, Direction::Download);
+                assert_eq!(remote_spec, "/abs/logs/*.log");
+                assert!(force);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn round_trips_server_log_and_done() {
+        for message in [
+            ServerMessage::Starting {
+                tool: Tool::Scp,
+                fell_back: true,
+                note: Some("rsync not found; using scp".to_string()),
+            },
+            ServerMessage::Log {
+                stream: LogStream::Stderr,
+                chunk: "progress\r".to_string(),
+            },
+            ServerMessage::Done { code: 23 },
+            ServerMessage::StatusResponse {
+                session_local_dir: "/home/u".to_string(),
+                host: "dev".to_string(),
+            },
+        ] {
+            let mut buf = Vec::new();
+            write_message(&mut buf, &message).await.unwrap();
+            let mut cursor = std::io::Cursor::new(buf);
+            let _decoded: ServerMessage = read_message(&mut cursor).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn rejects_oversized_control_frame() {
         let mut buf = Vec::new();
         buf.extend_from_slice(&(MAX_CONTROL_FRAME_BYTES + 1).to_le_bytes());
         let mut cursor = std::io::Cursor::new(buf);
         let result: Result<ClientMessage> = read_message(&mut cursor).await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn copy_exact_streams_the_declared_length() {
-        let source = b"hello world, this is streamed content".to_vec();
-        let mut reader = std::io::Cursor::new(source.clone());
-        let mut dest = Vec::new();
-        copy_exact(&mut reader, &mut dest, source.len() as u64)
-            .await
-            .unwrap();
-        assert_eq!(dest, source);
-    }
-
-    #[tokio::test]
-    async fn copy_exact_with_progress_reports_cumulative_bytes() {
-        let source = vec![0u8; COPY_CHUNK_SIZE * 2 + 10];
-        let mut reader = std::io::Cursor::new(source.clone());
-        let mut dest = Vec::new();
-        let mut reported = Vec::new();
-        copy_exact_with_progress(&mut reader, &mut dest, source.len() as u64, |copied| {
-            reported.push(copied);
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(dest.len(), source.len());
-        assert_eq!(
-            reported,
-            vec![
-                COPY_CHUNK_SIZE as u64,
-                (COPY_CHUNK_SIZE * 2) as u64,
-                source.len() as u64,
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn copy_exact_preserves_content_byte_for_byte_across_chunk_boundaries() {
-        // A repeating, non-uniform byte pattern (rather than all-zero data)
-        // so a misaligned or dropped chunk at a boundary would corrupt the
-        // output in a way length-only or all-same-byte assertions can't
-        // catch. Sized at more than two full chunks plus an uneven
-        // remainder to exercise both full-chunk and partial-chunk reads.
-        let len = COPY_CHUNK_SIZE * 2 + 37;
-        let source: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
-        let mut reader = std::io::Cursor::new(source.clone());
-        let mut dest = Vec::new();
-        copy_exact(&mut reader, &mut dest, source.len() as u64)
-            .await
-            .unwrap();
-        assert_eq!(dest, source);
     }
 }

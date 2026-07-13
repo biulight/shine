@@ -286,6 +286,7 @@ async fn run(cli: Cli) -> Result<()> {
                     cmd.destination.as_deref(),
                     cmd.force,
                     cmd.dry_run,
+                    cmd.scp,
                 )
                 .await
             }
@@ -295,6 +296,7 @@ async fn run(cli: Cli) -> Result<()> {
                     cmd.destination.as_deref(),
                     cmd.force,
                     cmd.dry_run,
+                    cmd.scp,
                 )
                 .await
             }

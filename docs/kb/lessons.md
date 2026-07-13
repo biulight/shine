@@ -3,6 +3,30 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-13 — `shine local` now runs external tools with wire-derived argv
+
+- **Symptom / risk**: rewriting `shine local` to spawn `rsync`/`scp` locally (ADR 0011) moved a
+  process-execution boundary into the transfer agent. The two path strings in a `Transfer` frame
+  (`remote_spec`, `local_spec`) come from the remote over the tunnel and are **untrusted** — the
+  session token that gates them leaks via `ps eww`/`/proc/<pid>/environ` on the remote (see the
+  2026-07-09 token-leak lesson), so a co-tenant on the remote can forge a `Transfer`. A naive
+  implementation lets a `remote_spec` of `-oProxyCommand=evil` or an rsync `-e …`/`--rsync-path=…`
+  reach an *option* position and achieve arbitrary command execution on the **local** machine.
+- **Root cause**: rsync/scp interpret leading-`-` operands as options, and rsync's `-e`/`--rsh`
+  (and `-o ProxyCommand`) are command-execution vectors. Any wire string that lands in an option
+  slot — or is word-split by a shell — is a local RCE.
+- **Fix** (`cli/src/ssh/agent.rs`): spawn argv-only, never `sh -c`; emit the remote path only as
+  the single token `<host>:<remote_spec>` after a `--` separator (a `-`-leading spec becomes an
+  inert `host:-…`); anchor local operands to the session dir and `./`-prefix any dash-leading one;
+  build the ssh reconnection `-e`/`-o` string **solely** from the local `SessionContext` (never the
+  wire); reject control chars in `remote_spec`; expand wire paths tilde-only (not `${VAR}`); expand
+  local globs with the `glob` crate, not a shell. ControlMaster reuse also avoids an *invisible*
+  local password prompt (a second connection prompting on the local terminal while the user watches
+  the remote one). Covered by `build_transfer_argv` injection unit tests.
+- **Rule**: when an agent shells out with any wire-supplied value, keep that value out of every
+  option position — argv only, `--` before operands, protocol prefixes (`host:`) that can't be read
+  as flags, and connection/transport options sourced only from local, trusted state.
+
 ## 2026-07-11 — Surge's `external-resource update` never covers URL-based Modules
 
 - **Symptom**: after `shine upgrade` correctly rewrote the installed `custom-rules.sgmodule`

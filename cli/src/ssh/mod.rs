@@ -24,10 +24,12 @@
 //! `agent::LocalListener`).
 
 mod agent;
-mod dir_transfer;
-#[cfg(test)]
+// Drives the real agent over an in-process Unix socket pair, so it is
+// unix-only (Windows is the local side only and has no `UnixListener`).
+#[cfg(all(test, unix))]
 mod integration_tests;
 mod protocol;
+mod session_context;
 // `remote_client` dials the forwarded socket via a Unix stream: it only
 // ever runs on the *remote* end of a session, which is always assumed
 // Linux/macOS (see module docs), so it is unconditionally unix-only —
@@ -57,8 +59,9 @@ pub async fn handle_local_download(
     local_destination: Option<&str>,
     force: bool,
     dry_run: bool,
+    use_scp: bool,
 ) -> Result<()> {
-    remote_client::handle_download(remote_source, local_destination, force, dry_run).await
+    remote_client::handle_download(remote_source, local_destination, force, dry_run, use_scp).await
 }
 
 #[cfg(not(unix))]
@@ -67,6 +70,7 @@ pub async fn handle_local_download(
     _local_destination: Option<&str>,
     _force: bool,
     _dry_run: bool,
+    _use_scp: bool,
 ) -> Result<()> {
     bail!(WINDOWS_REMOTE_UNSUPPORTED)
 }
@@ -77,8 +81,9 @@ pub async fn handle_local_upload(
     remote_destination: Option<&str>,
     force: bool,
     dry_run: bool,
+    use_scp: bool,
 ) -> Result<()> {
-    remote_client::handle_upload(local_source, remote_destination, force, dry_run).await
+    remote_client::handle_upload(local_source, remote_destination, force, dry_run, use_scp).await
 }
 
 #[cfg(not(unix))]
@@ -87,6 +92,7 @@ pub async fn handle_local_upload(
     _remote_destination: Option<&str>,
     _force: bool,
     _dry_run: bool,
+    _use_scp: bool,
 ) -> Result<()> {
     bail!(WINDOWS_REMOTE_UNSUPPORTED)
 }
@@ -126,12 +132,27 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
     let (listener, local_forward_target) = bind_local_listener(&session_dir).await?;
     let session_local_dir = std::env::current_dir().context("reading current directory")?;
 
+    // Reuse the interactive connection as a control master so the rsync/scp
+    // child reconnects over it with no second authentication (ADR 0011). Skip
+    // if the user already configured their own multiplexing, so we don't fight
+    // their settings.
+    let control_options = if session_context::user_set_control_options(&ssh_options) {
+        None
+    } else {
+        Some(session_dir.join("ctl.sock"))
+    };
+
+    let context = std::sync::Arc::new(session_context::SessionContext {
+        host: host.clone(),
+        ssh_options: ssh_options.clone(),
+        local_dir: session_local_dir.clone(),
+        control_path: control_options.clone(),
+    });
+    context.save(&session_dir).await?;
+
     let connection_tasks = agent::new_connection_tasks();
-    let agent_handle = tokio::spawn(listener.serve(
-        token.clone(),
-        session_local_dir.clone(),
-        connection_tasks.clone(),
-    ));
+    let agent_handle =
+        tokio::spawn(listener.serve(token.clone(), context.clone(), connection_tasks.clone()));
 
     let wrapped_command =
         build_wrapped_remote_command(&session_id, &token, &remote_sock, &remote_command);
@@ -141,6 +162,7 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
         &ssh_options,
         &remote_sock,
         &local_forward_target,
+        control_options.as_deref(),
         &host,
         &wrapped_command,
     ));
@@ -271,10 +293,22 @@ fn build_ssh_invocation_args(
     ssh_options: &[String],
     remote_sock: &str,
     local_forward_target: &str,
+    control_path: Option<&std::path::Path>,
     host: &str,
     wrapped_command: &str,
 ) -> Vec<String> {
     let mut args = ssh_options.to_vec();
+    // Enable connection multiplexing so a later `rsync`/`scp` child can reuse
+    // this authenticated master connection (ADR 0011). Only injected when the
+    // user didn't set their own ControlMaster/ControlPath.
+    if let Some(control_path) = control_path {
+        args.push("-o".to_string());
+        args.push("ControlMaster=auto".to_string());
+        args.push("-o".to_string());
+        args.push(format!("ControlPath={}", control_path.display()));
+        args.push("-o".to_string());
+        args.push("ControlPersist=60".to_string());
+    }
     args.push("-t".to_string());
     args.push("-R".to_string());
     args.push(format!("{remote_sock}:{local_forward_target}"));
@@ -429,6 +463,7 @@ mod tests {
             &parsed_options,
             "/tmp/.shine-ssh-sid.sock",
             "/tmp/shine-ssh-sid/local.sock",
+            None,
             &host,
             "wrapped-command",
         );
@@ -438,6 +473,36 @@ mod tests {
             vec![
                 "-J",
                 "bastion",
+                "-t",
+                "-R",
+                "/tmp/.shine-ssh-sid.sock:/tmp/shine-ssh-sid/local.sock",
+                "dev",
+                "wrapped-command",
+            ]
+        );
+    }
+
+    #[test]
+    fn ssh_invocation_args_inject_control_master_when_control_path_given() {
+        let (parsed_options, host, _command) = split_ssh_args(&["dev".to_string()]).unwrap();
+        let invocation = build_ssh_invocation_args(
+            &parsed_options,
+            "/tmp/.shine-ssh-sid.sock",
+            "/tmp/shine-ssh-sid/local.sock",
+            Some(std::path::Path::new("/tmp/shine-ssh-sid/ctl.sock")),
+            &host,
+            "wrapped-command",
+        );
+
+        assert_eq!(
+            invocation,
+            vec![
+                "-o",
+                "ControlMaster=auto",
+                "-o",
+                "ControlPath=/tmp/shine-ssh-sid/ctl.sock",
+                "-o",
+                "ControlPersist=60",
                 "-t",
                 "-R",
                 "/tmp/.shine-ssh-sid.sock:/tmp/shine-ssh-sid/local.sock",
@@ -465,6 +530,7 @@ mod tests {
             &parsed_options,
             "/tmp/.shine-ssh-sid.sock",
             "/tmp/shine-ssh-sid/local.sock",
+            None,
             &host,
             "wrapped-command",
         );
