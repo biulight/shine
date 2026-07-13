@@ -4,12 +4,20 @@ list_mode = "files"
 post_upgrade = [
   { command = "/Applications/Surge.app/Contents/Applications/surge-cli", args = ["reload"] },
 ]
+# Mirror post_upgrade so the very first `shine app install surge` also reloads
+# Surge (post_upgrade only fires on `shine upgrade`).
+post_install = [
+  { command = "/Applications/Surge.app/Contents/Applications/surge-cli", args = ["reload"] },
+]
 
 # `shine app build surge` runs the artifact script to patch the active profile's
 # per-section `#!include` lines so they also include the local files installed
-# here. Provider-specific patch logic lives in the overlay's build.sh, not here.
+# here. `teardown` (via `shine app unbuild surge`, and best-effort on
+# `shine app uninstall surge`) reverses that patch. Provider-specific logic lives
+# in the overlay's build.sh/unbuild.sh, not here.
 [artifact]
 script = "build.sh"
+teardown = "unbuild.sh"
 
 [[files]]
 source = "local-proxies.conf"

@@ -272,6 +272,7 @@ mod tests {
                 files: vec![],
                 list_mode: crate::apps::AppListMode::Files,
                 post_upgrade: Vec::new(),
+                post_install: Vec::new(),
                 uses_metadata: true,
                 has_explicit_files: true,
                 artifact: None,

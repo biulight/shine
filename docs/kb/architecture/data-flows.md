@@ -79,6 +79,20 @@ overlay `build.sh`, which reads `$SURGE_PROFILE` and appends `, local-proxies.co
 `, local-rules.conf` to the `[Proxy]` / `[Rule]` `#!include` lines of the user's active profile.
 Surge itself owns the subscription (`#!MANAGED-CONFIG`); shine no longer fetches or serves it.
 
+**Teardown (`shine app unbuild <app-id>`, ADR 0012).** An `[artifact].teardown` script reverses
+`build`, sharing the *identical* resolution and env contract above (steps 1–4). It has two entry
+points: `handle_unbuild` (explicit, ungated, errors propagate — symmetric to `build`) and
+`run_teardown_for_uninstall`, called best-effort from `apps/uninstall.rs` *before* the file-removal
+loop (implicit, so gated by `allow_app_hooks` for external presets and non-fatal, and a no-op under
+`--dry-run`). Reversal logic stays in the overlay's `unbuild.sh`; shine core never learns what the
+patch was.
+
+**Lifecycle command hooks (`apps/hooks.rs`).** `post_install` (fired by `install`/`reinstall`) and
+`post_upgrade` (fired by `upgrade`) share one runner, `run_app_hooks(config, get_category, changed,
+HookPhase)` — run once per *changed* category, gated by `allow_app_hooks` for external presets,
+failures non-fatal. These are plain argv commands with only the inherited parent env — distinct from
+the richer `SHINE_APP_*` + `[env]` artifact contract used by `build`/`teardown`.
+
 ## Shell install / uninstall
 
 Documented in `AGENTS.md` § "Key data flow". Summary: extract embedded assets →

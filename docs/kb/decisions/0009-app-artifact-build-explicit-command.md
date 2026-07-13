@@ -1,6 +1,8 @@
 # 0009 — App artifact build scripts run only via an explicit `shine app build` command
 
-- **Status**: accepted
+- **Status**: accepted (the "not auto-reversed" consequence is superseded by
+  [ADR 0012](0012-app-lifecycle-post-install-and-teardown.md), which adds an optional
+  `[artifact].teardown` script; the build-is-explicit-only stance still holds)
 - **Evidence**: `cli/src/apps/build.rs`, `cli/src/apps/metadata.rs` (`[artifact]`/`AppArtifact`),
   `shine app build <app-id>`, `presets/app/surge/build.sh`
 

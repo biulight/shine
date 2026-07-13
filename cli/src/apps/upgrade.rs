@@ -3,7 +3,6 @@ use dialoguer::Confirm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 
 use crate::colors;
 use crate::config::Config;
@@ -176,7 +175,13 @@ pub async fn handle_upgrade_installed(
     }
     manifest.save(config.shine_dir()).await?;
 
-    run_post_upgrade_hooks(config, &categories_by_name, &updated_categories).await;
+    super::hooks::run_app_hooks(
+        config,
+        |name| categories_by_name.get(name),
+        &updated_categories,
+        super::hooks::HookPhase::PostUpgrade,
+    )
+    .await;
 
     Ok(AppUpgradeReport {
         updated,
@@ -184,112 +189,6 @@ pub async fn handle_upgrade_installed(
         user_modified,
         restart_hints,
     })
-}
-
-async fn run_post_upgrade_hooks(
-    config: &Config,
-    categories_by_name: &BTreeMap<String, metadata::AppCategory>,
-    updated_categories: &BTreeSet<String>,
-) -> Vec<String> {
-    let mut all_notes: Vec<String> = Vec::new();
-    for category in updated_categories {
-        let Some(cat) = categories_by_name.get(category) else {
-            continue;
-        };
-        if cat.post_upgrade.is_empty() {
-            continue;
-        }
-        if config.is_external_presets && !config.allow_app_hooks {
-            println!(
-                "  {} {category}: post-upgrade hook skipped (set allow_app_hooks = true to allow external app hooks; manual: {})",
-                colors::symbol("!"),
-                hook_sequence_display(&cat.post_upgrade)
-            );
-            continue;
-        }
-        let mut completed = true;
-        let mut notes: Vec<String> = Vec::new();
-        for hook in &cat.post_upgrade {
-            match Command::new(&hook.command).args(&hook.args).output().await {
-                Ok(output) if output.status.success() => {
-                    if hook.show_output {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let trimmed = stdout.trim();
-                        if !trimmed.is_empty() {
-                            notes.push(trimmed.to_string());
-                        }
-                    }
-                }
-                Ok(output) => {
-                    eprintln!(
-                        "  {} {category}: post-upgrade hook failed: {} exited with {}{}",
-                        colors::symbol("!"),
-                        hook.command,
-                        output.status,
-                        command_output_detail(&output)
-                    );
-                    completed = false;
-                    break;
-                }
-                Err(e) => {
-                    eprintln!(
-                        "  {} {category}: post-upgrade hook failed: {}: {e}",
-                        colors::symbol("!"),
-                        hook.command
-                    );
-                    completed = false;
-                    break;
-                }
-            }
-        }
-        if completed {
-            println!(
-                "  {} {category}: post-upgrade hook completed",
-                colors::symbol("✓")
-            );
-        }
-        for note in &notes {
-            println!("     {}", colors::dim(note));
-        }
-        all_notes.extend(notes);
-    }
-    all_notes
-}
-
-fn command_output_detail(output: &std::process::Output) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let detail = stderr.trim();
-    let detail = if detail.is_empty() {
-        stdout.trim()
-    } else {
-        detail
-    };
-    if detail.is_empty() {
-        String::new()
-    } else {
-        format!(": {detail}")
-    }
-}
-
-fn hook_sequence_display(hooks: &[metadata::AppHook]) -> String {
-    hooks
-        .iter()
-        .map(hook_command_display)
-        .collect::<Vec<_>>()
-        .join(" && ")
-}
-
-fn hook_command_display(hook: &metadata::AppHook) -> String {
-    std::iter::once(hook.command.as_str())
-        .chain(hook.args.iter().map(String::as_str))
-        .map(shell_quote_for_display)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn shell_quote_for_display(value: &str) -> String {
-    crate::shell_quote::quote_if_needed(value)
 }
 
 enum EntryUpgradeResult {
@@ -637,152 +536,5 @@ async fn upgrade_file_content(
     } else {
         transforms::apply(&file.transforms, &raw, env_map)
             .with_context(|| format!("transform failed: {}", file.transforms.join(", ")))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{hook_command_display, hook_sequence_display, metadata, run_post_upgrade_hooks};
-    use crate::config::Config;
-    use std::collections::{BTreeMap, BTreeSet};
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn external_post_upgrade_hook_requires_opt_in() {
-        let dir = std::env::temp_dir().join(format!("shine-hook-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        let marker = dir.join("marker");
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-
-        let mut categories = BTreeMap::new();
-        categories.insert(
-            "sample".to_string(),
-            sample_hook_category(&format!("printf ran > {}", marker.display()), false),
-        );
-        let updated = BTreeSet::from(["sample".to_string()]);
-
-        run_post_upgrade_hooks(&config, &categories, &updated).await;
-        assert!(!marker.exists(), "external hook must be skipped by default");
-
-        config.allow_app_hooks = true;
-        run_post_upgrade_hooks(&config, &categories, &updated).await;
-        assert_eq!(tokio::fs::read_to_string(&marker).await.unwrap(), "ran");
-
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn post_upgrade_hook_prints_stdout_when_show_output_is_true() {
-        let dir = std::env::temp_dir().join(format!("shine-hook-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        config.allow_app_hooks = true;
-
-        let mut categories = BTreeMap::new();
-        categories.insert(
-            "sample".to_string(),
-            sample_hook_category("echo hello from hook", true),
-        );
-        let updated = BTreeSet::from(["sample".to_string()]);
-
-        let notes = run_post_upgrade_hooks(&config, &categories, &updated).await;
-        assert_eq!(notes, vec!["hello from hook".to_string()]);
-
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn post_upgrade_hook_stays_silent_without_show_output() {
-        let dir = std::env::temp_dir().join(format!("shine-hook-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir_all(&dir).await.unwrap();
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
-        config.allow_app_hooks = true;
-
-        let mut categories = BTreeMap::new();
-        categories.insert(
-            "sample".to_string(),
-            sample_hook_category("echo hello from hook", false),
-        );
-        let updated = BTreeSet::from(["sample".to_string()]);
-
-        let notes = run_post_upgrade_hooks(&config, &categories, &updated).await;
-        assert!(
-            notes.is_empty(),
-            "hook stdout must stay silent by default: {notes:?}"
-        );
-
-        tokio::fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[test]
-    fn hook_command_display_is_copy_pasteable() {
-        let hook = metadata::AppHook {
-            command: "/Applications/Surge.app/Contents/Applications/surge-cli".to_string(),
-            args: vec![
-                "external-resource".to_string(),
-                "update".to_string(),
-                "all".to_string(),
-            ],
-            show_output: false,
-        };
-        assert_eq!(
-            hook_command_display(&hook),
-            "/Applications/Surge.app/Contents/Applications/surge-cli external-resource update all"
-        );
-
-        let hook = metadata::AppHook {
-            command: "/tmp/my hook".to_string(),
-            args: vec!["it's".to_string()],
-            show_output: false,
-        };
-        assert_eq!(hook_command_display(&hook), "'/tmp/my hook' 'it'\\''s'");
-    }
-
-    #[test]
-    fn hook_sequence_display_joins_commands_in_order() {
-        let hooks = vec![
-            metadata::AppHook {
-                command: "surge-cli".to_string(),
-                args: vec![
-                    "external-resource".to_string(),
-                    "update".to_string(),
-                    "all".to_string(),
-                ],
-                show_output: false,
-            },
-            metadata::AppHook {
-                command: "surge-cli".to_string(),
-                args: vec!["reload".to_string()],
-                show_output: false,
-            },
-        ];
-        assert_eq!(
-            hook_sequence_display(&hooks),
-            "surge-cli external-resource update all && surge-cli reload"
-        );
-    }
-
-    #[cfg(unix)]
-    fn sample_hook_category(script: &str, show_output: bool) -> metadata::AppCategory {
-        metadata::AppCategory {
-            name: "sample".to_string(),
-            description: None,
-            destination_root: Some("~/.config/sample".to_string()),
-            files: vec![],
-            list_mode: metadata::AppListMode::Files,
-            post_upgrade: vec![metadata::AppHook {
-                command: "/bin/sh".to_string(),
-                args: vec!["-c".to_string(), script.to_string()],
-                show_output,
-            }],
-            uses_metadata: true,
-            has_explicit_files: true,
-            artifact: None,
-        }
     }
 }

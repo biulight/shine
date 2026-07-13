@@ -62,6 +62,9 @@ pub async fn handle_install(
     let mut skipped = 0usize;
     let mut backed_up = 0usize;
     let mut restart_hints = BTreeSet::new();
+    // Categories with at least one file actually written this run — the trigger
+    // set for `post_install` hooks (mirrors `post_upgrade`'s changed-only rule).
+    let mut changed_categories: BTreeSet<String> = BTreeSet::new();
 
     for cat in &categories {
         for file in &cat.files {
@@ -146,6 +149,7 @@ pub async fn handle_install(
                         requires_admin: file.requires_admin,
                     });
                     installed += 1;
+                    changed_categories.insert(cat.name.clone());
                     if let Some(hint) = &file.restart_hint {
                         restart_hints.insert(hint.clone());
                     }
@@ -173,6 +177,7 @@ pub async fn handle_install(
                     });
                     installed += 1;
                     backed_up += 1;
+                    changed_categories.insert(cat.name.clone());
                     if let Some(hint) = &file.restart_hint {
                         restart_hints.insert(hint.clone());
                     }
@@ -190,6 +195,13 @@ pub async fn handle_install(
 
     if !dry_run {
         manifest.save(config.shine_dir()).await?;
+        super::hooks::run_app_hooks(
+            config,
+            |name| categories.iter().find(|c| c.name == name),
+            &changed_categories,
+            super::hooks::HookPhase::PostInstall,
+        )
+        .await;
     }
 
     let mut summary_parts: Vec<String> = Vec::new();
@@ -307,6 +319,61 @@ mod tests {
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn post_install_hook_runs_only_when_a_file_changes() {
+        let dir = make_temp_dir().await;
+        let dest_root = dir.join("dest").to_string_lossy().replace('\\', "/");
+        let marker = dir.join("post-install-ran");
+        let category_dir = dir.join("presets/app/hooktest");
+        fs::create_dir_all(&category_dir).await.unwrap();
+        fs::write(
+            category_dir.join("shine.toml"),
+            format!(
+                "description = \"hook test\"\n\
+dest = \"{dest_root}\"\n\
+post_install = {{ command = \"/bin/sh\", args = [\"-c\", \"touch {marker}\"] }}\n\n\
+[[files]]\n\
+source = \"file.conf\"\n",
+                marker = marker.display()
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(category_dir.join("file.conf"), b"hello\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.allow_app_hooks = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        // First install writes the file → post_install fires.
+        handle_install(&config, Some("hooktest"), false, false)
+            .await
+            .unwrap();
+        assert!(marker.exists(), "post_install must run on first install");
+
+        // Second install changes nothing → hook must not fire again.
+        fs::remove_file(&marker).await.unwrap();
+        handle_install(&config, Some("hooktest"), false, false)
+            .await
+            .unwrap();
+        assert!(
+            !marker.exists(),
+            "post_install must not run when no file changed"
+        );
+
+        // Reinstall (force) rewrites the file → post_install fires again.
+        handle_install(&config, Some("hooktest"), false, true)
+            .await
+            .unwrap();
+        assert!(marker.exists(), "post_install must run on reinstall");
+
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

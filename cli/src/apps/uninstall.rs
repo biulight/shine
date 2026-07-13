@@ -10,7 +10,7 @@ use crate::install_core::manifest::{AppEntry, AppManifest};
 use crate::output;
 use anyhow::{Context, Result};
 use file_ops::UninstallOutcome;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::install_core::file_ops;
@@ -41,6 +41,25 @@ pub async fn handle_uninstall(
     } else {
         manifest.entries.clone()
     };
+
+    // Run each involved category's artifact teardown (best-effort) *before*
+    // removing its files, so a teardown script sees the same on-disk state
+    // `build` saw. Loaded from metadata (still present until `remove_prefix`
+    // below); a metadata-load failure just skips teardown, never blocks removal.
+    let involved_categories: BTreeSet<String> = entries
+        .iter()
+        .filter_map(|entry| super::app_category_from_source(&entry.source))
+        .collect();
+    if !involved_categories.is_empty() {
+        let categories = metadata::load_active_categories(config, category)
+            .await
+            .unwrap_or_default();
+        for cat in &categories {
+            if involved_categories.contains(&cat.name) {
+                super::build::run_teardown_for_uninstall(config, cat, dry_run).await;
+            }
+        }
+    }
 
     let mut removed = 0usize;
     let mut restored = 0usize;
@@ -299,6 +318,7 @@ mod tests {
             }],
             list_mode: AppListMode::Files,
             post_upgrade: Vec::new(),
+            post_install: Vec::new(),
             uses_metadata: true,
             has_explicit_files: true,
             artifact: None,

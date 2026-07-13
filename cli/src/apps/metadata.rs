@@ -16,6 +16,10 @@ pub struct AppCategory {
     pub files: Vec<AppFile>,
     pub list_mode: AppListMode,
     pub post_upgrade: Vec<AppHook>,
+    /// Hooks run after `shine app install`/`reinstall` when at least one file in
+    /// this category actually changed — the install-time counterpart to
+    /// `post_upgrade` (which only fires on `shine upgrade`).
+    pub post_install: Vec<AppHook>,
     // Tracks whether the category came from an explicit metadata file vs. auto-collection;
     // reserved for future upgrade/list logic.
     #[allow(dead_code)]
@@ -45,6 +49,10 @@ pub struct AppHook {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppArtifact {
     pub script: String,
+    /// Optional companion script that reverses `script`'s side-effects. Run
+    /// explicitly via `shine app unbuild <id>` and implicitly (best-effort)
+    /// during `shine app uninstall`. Shares `build`'s full env contract.
+    pub teardown: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +74,7 @@ struct CategoryToml {
     dest: DestToml,
     list_mode: Option<ListModeToml>,
     post_upgrade: Option<HookSpecToml>,
+    post_install: Option<HookSpecToml>,
     artifact: Option<ArtifactToml>,
     files: Option<Vec<FileToml>>,
 }
@@ -73,6 +82,8 @@ struct CategoryToml {
 #[derive(Debug, Clone, Deserialize)]
 struct ArtifactToml {
     script: String,
+    #[serde(default)]
+    teardown: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -190,7 +201,7 @@ fn resolve_install_strategy(file: &FileToml, context: &str) -> Result<AppInstall
     }
 }
 
-fn resolve_hooks(hook: Option<HookSpecToml>, context: &str) -> Result<Vec<AppHook>> {
+fn resolve_hooks(hook: Option<HookSpecToml>, field: &str, context: &str) -> Result<Vec<AppHook>> {
     let Some(hook) = hook else {
         return Ok(Vec::new());
     };
@@ -199,12 +210,12 @@ fn resolve_hooks(hook: Option<HookSpecToml>, context: &str) -> Result<Vec<AppHoo
         HookSpecToml::Multiple(hooks) => hooks,
     };
     if hooks.is_empty() {
-        bail!("{context}: post_upgrade must not be empty");
+        bail!("{context}: {field} must not be empty");
     }
     let mut resolved = Vec::with_capacity(hooks.len());
     for hook in hooks {
         if hook.command.trim().is_empty() {
-            bail!("{context}: post_upgrade.command must not be empty");
+            bail!("{context}: {field}.command must not be empty");
         }
         resolved.push(AppHook {
             command: hook.command,
@@ -222,8 +233,14 @@ fn resolve_artifact(artifact: Option<ArtifactToml>, context: &str) -> Result<Opt
     if artifact.script.trim().is_empty() {
         bail!("{context}: artifact.script must not be empty");
     }
+    if let Some(teardown) = &artifact.teardown
+        && teardown.trim().is_empty()
+    {
+        bail!("{context}: artifact.teardown must not be empty");
+    }
     Ok(Some(AppArtifact {
         script: artifact.script,
+        teardown: artifact.teardown,
     }))
 }
 
@@ -297,7 +314,8 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
     if let Some(bytes) = presets::read_asset_bytes(&metadata_path) {
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
-        let post_upgrade = resolve_hooks(parsed.post_upgrade, &metadata_path)?;
+        let post_upgrade = resolve_hooks(parsed.post_upgrade, "post_upgrade", &metadata_path)?;
+        let post_install = resolve_hooks(parsed.post_install, "post_install", &metadata_path)?;
         let artifact = resolve_artifact(parsed.artifact, &metadata_path)?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
@@ -364,6 +382,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                 .map(Into::into)
                 .unwrap_or_else(|| default_list_mode(has_explicit_files)),
             post_upgrade,
+            post_install,
             uses_metadata: true,
             has_explicit_files,
             artifact,
@@ -394,6 +413,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
             .collect(),
         list_mode: AppListMode::Category,
         post_upgrade: Vec::new(),
+        post_install: Vec::new(),
         uses_metadata: false,
         has_explicit_files: false,
         artifact: None,
@@ -410,8 +430,16 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
             .with_context(|| format!("reading metadata: {}", metadata_path.display()))?;
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
-        let post_upgrade =
-            resolve_hooks(parsed.post_upgrade, &metadata_path.display().to_string())?;
+        let post_upgrade = resolve_hooks(
+            parsed.post_upgrade,
+            "post_upgrade",
+            &metadata_path.display().to_string(),
+        )?;
+        let post_install = resolve_hooks(
+            parsed.post_install,
+            "post_install",
+            &metadata_path.display().to_string(),
+        )?;
         let artifact = resolve_artifact(parsed.artifact, &metadata_path.display().to_string())?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
@@ -489,6 +517,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                 .map(Into::into)
                 .unwrap_or_else(|| default_list_mode(has_explicit_files)),
             post_upgrade,
+            post_install,
             uses_metadata: true,
             has_explicit_files,
             artifact,
@@ -521,6 +550,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         files,
         list_mode: AppListMode::Category,
         post_upgrade: Vec::new(),
+        post_install: Vec::new(),
         uses_metadata: false,
         has_explicit_files: false,
         artifact: None,
@@ -580,6 +610,12 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
     }
     resolve_hooks(
         parsed.post_upgrade.clone(),
+        "post_upgrade",
+        &format!("app/{name}/shine.toml"),
+    )?;
+    resolve_hooks(
+        parsed.post_install.clone(),
+        "post_install",
         &format!("app/{name}/shine.toml"),
     )?;
     resolve_artifact(parsed.artifact.clone(), &format!("app/{name}/shine.toml"))?;
@@ -764,7 +800,7 @@ source = "config.toml"
 "#,
         )
         .unwrap();
-        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "post_upgrade", "sample").unwrap();
         assert_eq!(hooks.len(), 1);
         assert_eq!(hooks[0].command, "/bin/echo");
         assert_eq!(hooks[0].args, vec!["updated"]);
@@ -787,7 +823,7 @@ source = "config.toml"
 "#,
         )
         .unwrap();
-        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "post_upgrade", "sample").unwrap();
         assert_eq!(hooks.len(), 1);
         assert!(hooks[0].show_output);
     }
@@ -808,7 +844,7 @@ source = "config.toml"
 "#,
         )
         .unwrap();
-        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "post_upgrade", "sample").unwrap();
         assert_eq!(hooks.len(), 2);
         assert_eq!(hooks[0].args, vec!["updated"]);
         assert_eq!(hooks[1].args, vec!["reloaded"]);
@@ -833,8 +869,112 @@ source = "config.toml"
         assert_eq!(
             artifact,
             Some(AppArtifact {
-                script: "build.sh".to_string()
+                script: "build.sh".to_string(),
+                teardown: None,
             })
+        );
+    }
+
+    #[test]
+    fn artifact_teardown_parses() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[artifact]
+script = "build.sh"
+teardown = "unbuild.sh"
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let artifact = resolve_artifact(parsed.artifact, "sample").unwrap();
+        assert_eq!(
+            artifact,
+            Some(AppArtifact {
+                script: "build.sh".to_string(),
+                teardown: Some("unbuild.sh".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn artifact_empty_teardown_is_rejected() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[artifact]
+script = "build.sh"
+teardown = "  "
+
+[[files]]
+source = "config.toml"
+"#,
+        );
+        let err = parsed.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("artifact.teardown must not be empty")
+        );
+    }
+
+    #[test]
+    fn post_install_hook_parses_single_and_array() {
+        let single = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_install = { command = "/bin/echo", args = ["installed"] }
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let hooks = resolve_hooks(single.post_install, "post_install", "sample").unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0].command, "/bin/echo");
+        assert_eq!(hooks[0].args, vec!["installed"]);
+
+        let multiple = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_install = [
+  { command = "/bin/echo", args = ["a"] },
+  { command = "/bin/echo", args = ["b"] },
+]
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let hooks = resolve_hooks(multiple.post_install, "post_install", "sample").unwrap();
+        assert_eq!(hooks.len(), 2);
+    }
+
+    #[test]
+    fn post_install_empty_command_is_rejected() {
+        let err = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_install = { command = "  " }
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("post_install.command must not be empty")
         );
     }
 
@@ -882,7 +1022,8 @@ source = "config.toml"
         assert_eq!(
             surge.artifact,
             Some(AppArtifact {
-                script: "build.sh".to_string()
+                script: "build.sh".to_string(),
+                teardown: Some("unbuild.sh".to_string()),
             })
         );
     }

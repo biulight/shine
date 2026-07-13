@@ -129,9 +129,12 @@ shine/
 │       │   ├── info.rs       # handle_info, handle_list
 │       │   ├── report.rs     # Install/uninstall outcome print_* helpers
 │       │   ├── upgrade.rs    # handle_upgrade_installed, stale-entry cleanup
-│       │   ├── build.rs      # handle_build: runs an app preset's [artifact].script
-│       │   │                 # (`shine app build <app-id>`), never run implicitly by
-│       │   │                 # install/upgrade — see ADR 0009
+│       │   ├── hooks.rs      # run_app_hooks: shared post_install/post_upgrade command-hook
+│       │   │                 # runner (HookPhase), gated by allow_app_hooks for external presets
+│       │   ├── build.rs      # handle_build/handle_unbuild: run an app preset's [artifact].script
+│       │   │                 # (`shine app build`) / [artifact].teardown (`shine app unbuild`),
+│       │   │                 # never run implicitly by install/upgrade. run_teardown_for_uninstall
+│       │   │                 # runs teardown best-effort on uninstall — see ADR 0009 + 0012
 │       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile, AppArtifact)
 │       │   ├── json_merge.rs # JsonMerge install strategy (managed-key merge)
 │       │   └── annotation.rs # shine-dest: comment annotation parser
@@ -262,7 +265,7 @@ shine/
     │   ├── ghostty/    config.ghostty, shine.toml
     │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig; no shine.toml, uses annotation instead)
     │   ├── JetBrains/  shine.toml
-    │   ├── surge/      local-proxies.conf, local-rules.conf, build.sh (placeholder + inert commented reference example, since the real overlay is private), shine.toml  (dest = Surge Profiles dir; overlay build.sh patches the active profile's #!include lines)
+    │   ├── surge/      local-proxies.conf, local-rules.conf, build.sh + unbuild.sh (placeholders + inert commented reference examples, since the real overlay is private), shine.toml  (dest = Surge Profiles dir; overlay build.sh patches the active profile's #!include lines, unbuild.sh reverses them)
     │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
@@ -279,7 +282,7 @@ shine/
 |---|---|
 | `shell list/install/uninstall` | `cli/src/shells/` |
 | `app list/install/uninstall` | `cli/src/apps/` |
-| `app build <app-id>` | `cli/src/apps/build.rs` |
+| `app build <app-id>` / `app unbuild <app-id>` | `cli/src/apps/build.rs` |
 | `sys list/init` | `cli/src/sys/` |
 | `env show/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
 | `list` | `cli/src/list.rs` |
@@ -579,9 +582,9 @@ Hard rules (details and runbook: [`docs/kb/conventions.md`](docs/kb/conventions.
 
 Prefer `shine.toml` metadata over legacy `shine-dest:` annotations for new categories. Place `shine.toml` in `presets/app/<category>/` with at minimum `dest = "~/<path>"`. Add `transforms = ["jsonc-to-json"]` for JSONC files or `transforms = ["template"]` for files with `@@VAR_NAME@@` env placeholders.
 
-App categories may declare a `post_upgrade = { command = "...", args = ["..."] }` hook to run a direct argv command after `shine upgrade` actually updates or installs at least one file in that category. Hooks are not run during `app install`, and external presets require `allow_app_hooks = true` in config before hooks execute. Each hook may set `show_output = true` to print its stdout to the user when it succeeds (e.g. a deliberate `echo` note); this defaults to `false` (silent) so routine command output isn't surfaced as noise.
+App categories may declare `post_upgrade` and/or `post_install` hooks (each a `{ command = "...", args = ["..."] }` table or an array of them) to run a direct argv command after a category actually changes. `post_upgrade` fires when `shine upgrade` updates/installs ≥1 file in the category; `post_install` fires when `shine app install`/`reinstall` writes ≥1 file (a plain re-install with no change runs nothing, mirroring `post_upgrade`). Both share one runner (`apps/hooks.rs::run_app_hooks`): external presets require `allow_app_hooks = true` before hooks execute, and each hook may set `show_output = true` to print its stdout on success (defaults to `false`/silent). Hooks inherit only the parent env — no `SHINE_APP_*`/`[env]` injection (that is the artifact contract below). Declare `post_install` when the very first install must run a setup/reload that `post_upgrade` would otherwise only do on a later upgrade.
 
-App categories may also declare `[artifact]\nscript = "build.sh"` to expose a `shine app build <app-id>` entry point. Unlike `post_upgrade`, this never runs implicitly (not during `install` or `upgrade`) — the script only runs when a user explicitly types `shine app build <app-id>`. The build child receives the fixed `SHINE_APP_*` env contract **plus the active `[env]` table passed as stored** (no decryption — `_SECRET` keys arrive as ciphertext, same as the `template` transform), so scripts can read user-configured values like `SURGE_PROFILE` without any build triggering a secret-decryption prompt. Keep provider-specific logic (which sections to patch, how to talk to an external app) out of this repo's own preset scripts; that belongs in an external overlay's script, which takes priority over the built-in one when both exist. For the built-in `surge` preset this is how the split works: `shine app install surge` is a plain `Copy` of `local-proxies.conf`/`local-rules.conf` into the Surge Profiles dir (`dest`), and the overlay's `build.sh` (via `shine app build surge`) patches the active profile's `[Proxy]`/`[Rule]` `#!include` lines to also include those files. See [ADR 0009](docs/kb/decisions/0009-app-artifact-build-explicit-command.md) and [`architecture/data-flows.md`](docs/kb/architecture/data-flows.md) for the full env-var contract and resolution rule.
+App categories may also declare `[artifact]\nscript = "build.sh"` (optionally `teardown = "unbuild.sh"`) to expose `shine app build <app-id>` / `shine app unbuild <app-id>` entry points. Unlike the hooks above, these never run implicitly from `install`/`upgrade` — `build` runs only on explicit `shine app build`, and `teardown` runs on explicit `shine app unbuild` **and** best-effort during `shine app uninstall` (the reverse of `build`). Both scripts receive the fixed `SHINE_APP_*` env contract **plus the active `[env]` table passed as stored** (no decryption — `_SECRET` keys arrive as ciphertext, same as the `template` transform), so scripts can read user-configured values like `SURGE_PROFILE` without triggering a secret-decryption prompt. The explicit `build`/`unbuild` commands are not gated by `allow_app_hooks` and propagate a nonzero exit as a real error; the implicit teardown during `uninstall` **is** gated (external presets) and is non-fatal (a broken teardown never blocks file removal). Keep provider-specific logic out of this repo's own preset scripts; it belongs in an external overlay's script, which takes priority over the built-in one when both exist. For the built-in `surge` preset: `shine app install surge` is a plain `Copy` of `local-proxies.conf`/`local-rules.conf` into the Surge Profiles dir (`dest`), the overlay's `build.sh` (via `shine app build surge`) patches the active profile's `[Proxy]`/`[Rule]` `#!include` lines, and its `unbuild.sh` (via `shine app unbuild surge`, or automatically on uninstall) reverses that patch. See [ADR 0009](docs/kb/decisions/0009-app-artifact-build-explicit-command.md), [ADR 0012](docs/kb/decisions/0012-app-lifecycle-post-install-and-teardown.md), and [`architecture/data-flows.md`](docs/kb/architecture/data-flows.md) for the full env-var contract and resolution rule.
 
 ### Sys preset (OS init)
 

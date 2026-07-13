@@ -122,6 +122,9 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
             }
             AppCommands::Build { app_id } => Box::pin(apps::handle_build(&config, &app_id)).await,
+            AppCommands::Unbuild { app_id } => {
+                Box::pin(apps::handle_unbuild(&config, &app_id)).await
+            }
         },
         Commands::Pull => git_pull::handle_pull(&config, false).await,
         Commands::Update(cmd) => {
@@ -941,6 +944,17 @@ mod tests {
             cli.command,
             Commands::App {
                 command: AppCommands::Build { app_id }
+            } if app_id == "surge"
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_app_unbuild_command() {
+        let cli = Cli::try_parse_from(["shine", "app", "unbuild", "surge"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Unbuild { app_id }
             } if app_id == "surge"
         ));
     }
