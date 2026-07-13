@@ -262,7 +262,7 @@ shine/
     │   ├── ghostty/    config.ghostty, shine.toml
     │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig; no shine.toml, uses annotation instead)
     │   ├── JetBrains/  shine.toml
-    │   ├── surge/      local-proxies.conf, local-rules.conf, build.sh (placeholder), shine.toml  (dest = Surge Profiles dir; overlay build.sh patches the active profile's #!include lines)
+    │   ├── surge/      local-proxies.conf, local-rules.conf, build.sh (placeholder + inert commented reference example, since the real overlay is private), shine.toml  (dest = Surge Profiles dir; overlay build.sh patches the active profile's #!include lines)
     │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
