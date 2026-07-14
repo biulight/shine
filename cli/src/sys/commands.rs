@@ -1264,6 +1264,27 @@ required_env = ["NOT-AN-ENV"]
     }
 
     #[test]
+    fn embedded_ubuntu_minimal_profile_is_headless_core_only() {
+        let entries = load_embedded_sys_manifests().unwrap();
+        let ubuntu = entries
+            .iter()
+            .find(|(id, _)| id == "ubuntu")
+            .map(|(_, manifest)| manifest)
+            .expect("missing ubuntu manifest");
+        let minimal = ubuntu
+            .profiles
+            .get("minimal")
+            .expect("ubuntu missing `minimal` profile");
+        assert_eq!(
+            minimal.items,
+            vec!["neovim", "fzf", "bat", "eza", "zoxide"],
+            "minimal profile should be the lean headless CLI core only"
+        );
+        // The default stays the fuller `recommended` set; `minimal` is opt-in.
+        assert_eq!(ubuntu.default_profile.as_deref(), Some("recommended"));
+    }
+
+    #[test]
     fn embedded_current_platforms_expose_split_dns() {
         let entries = load_embedded_sys_manifests().unwrap();
         for os_id in ["macos", "ubuntu", "windows"] {
