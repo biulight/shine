@@ -455,6 +455,12 @@ side only — see step 8) rides on top of the macOS/Linux implementation.
 
 `shine sys init --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing.
 
+Ubuntu ships three profiles (`presets/sys/ubuntu/shine.toml`): `recommended` (default,
+full interactive dev setup), `all` (recommended + zerotier/pnpm/mise/homebrew), and
+`minimal` — a lean headless CLI core (`neovim`, `fzf`, `bat`, `eza`, `zoxide`) intended for
+production-server bootstrapping via `shine sys init --preset minimal`. The `minimal` profile
+reuses existing items only, so adding it needed no `init.sh` change.
+
 ### Personal tasks (`shine task` / `shine run`)
 
 `shine task` is a lightweight personal shortcut-command registry, kept separate
