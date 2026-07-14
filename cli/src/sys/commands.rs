@@ -1538,6 +1538,9 @@ required_env = ["NOT-AN-ENV"]
             assert!(content.contains("case \"$-\" in"));
             assert!(content.contains("${SHINE_SYNC_TERMINAL_THEME:-1}"));
             assert!(content.contains("\\033]11;?\\033\\\\"));
+            assert!(content.contains("tty_state=$(stty -g < /dev/tty"));
+            assert!(content.contains("stty -echo < /dev/tty"));
+            assert!(content.contains("stty \"$tty_state\" < /dev/tty"));
             assert!(content.contains("read_timeout=\"0.15\""));
             assert!(content.contains("export SHINE_TERMINAL_THEME=\"light\""));
             assert!(content.contains("export SHINE_TERMINAL_THEME=\"dark\""));

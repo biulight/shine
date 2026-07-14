@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-13 — OSC 11 terminal responses were echoed as SSH input
+
+- **Symptom**: after `shine sys init` on Ubuntu, opening an SSH session displayed a string such
+  as `11;rgb:0f0f/1616/1010` as though it had been typed at the prompt.
+- **Root cause**: the managed Unix profile asks the terminal for its background color with an OSC
+  11 query. The terminal response is delivered through the remote pty as input; while the profile
+  was reading it, tty echo remained enabled, so the response payload was echoed back to the user.
+- **Fix**: save the tty settings and disable `echo` around the OSC query/read, then restore the
+  settings before applying the theme. Apply the same fix to the macOS profile because it shares the
+  query implementation.
+- **Rule**: terminal-control responses read from a pty must be consumed with echo disabled, and
+  the original tty settings must always be restored.
+
 ## 2026-07-13 — `shine local` now runs external tools with wire-derived argv
 
 - **Symptom / risk**: rewriting `shine local` to spawn `rsync`/`scp` locally (ADR 0011) moved a

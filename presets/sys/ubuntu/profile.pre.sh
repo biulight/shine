@@ -43,9 +43,19 @@ shine_sync_terminal_theme() {
   [[ -r /dev/tty && -w /dev/tty ]] || return
   [[ -n "${BASH_VERSION:-}" || -n "${ZSH_VERSION:-}" ]] || return
 
-  local response="" char="" read_timeout="0.15" count=0
+  local response="" char="" read_timeout="0.15" count=0 tty_state=""
 
-  printf '\033]11;?\033\\' > /dev/tty 2>/dev/null || return
+  # Terminal responses to OSC queries arrive as input bytes.  Disable tty echo
+  # while reading them, otherwise SSH echoes the response payload as if the
+  # user had typed it (for example: `11;rgb:0f0f/1616/1010`).
+  tty_state=$(stty -g < /dev/tty 2>/dev/null) || return
+  [[ -n "$tty_state" ]] || return
+  stty -echo < /dev/tty 2>/dev/null || return
+
+  if ! printf '\033]11;?\033\\' > /dev/tty 2>/dev/null; then
+    stty "$tty_state" < /dev/tty 2>/dev/null || true
+    return
+  fi
   while (( count < 64 )); do
     char=""
     if [[ -n "${BASH_VERSION:-}" ]]; then
@@ -58,6 +68,7 @@ shine_sync_terminal_theme() {
     [[ "$response" == *$'\033\\' ]] && break
     read_timeout="0.01"
   done
+  stty "$tty_state" < /dev/tty 2>/dev/null || true
   shine_apply_terminal_theme "$response"
 }
 
