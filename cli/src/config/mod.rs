@@ -12,7 +12,7 @@ use discovery::resolve_config_presets_path;
 use env_layer::deserialize_env_values;
 
 pub use crate::home::{full_expand, full_expand_with_home, tilde_expand};
-pub use env_layer::validate_env_override_file;
+pub use env_layer::{validate_env_override_file, write_env_override_entry};
 
 const LEGACY_ENV_FILE: &str = "env.toml";
 const GLOBAL_CONFIG_FILE: &str = "config.toml";
@@ -176,6 +176,24 @@ pub struct Config {
     /// Per-variable descriptions read from detailed `[env]` entries.
     #[serde(skip)]
     pub env_descriptions: BTreeMap<String, String>,
+    /// Which env override file (if any) currently supplies each key's effective
+    /// value. Only override files populate this — `config.toml [env]` layers
+    /// never do, since a plain write there is always effective unless shadowed
+    /// by one of these. Used to detect when `env set`/`encrypt`/`delete` would
+    /// otherwise silently write a value that an override file keeps shadowing.
+    #[serde(skip)]
+    pub env_override_sources: BTreeMap<String, EnvOverrideSource>,
+}
+
+/// Identifies the override file (global/overlay/project `shine.env.toml`) that
+/// currently supplies a given env key's effective value, if any.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnvOverrideSource {
+    pub path: PathBuf,
+    /// `true` when `path` is inside the shine-managed Git overlay checkout
+    /// (force-mirrored, read-only per ADR 0010) rather than the global/project
+    /// override file or a manual overlay directory.
+    pub is_managed_overlay: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -245,6 +263,7 @@ impl Config {
             age_identity: None,
             env: default_env_map(),
             env_descriptions: BTreeMap::new(),
+            env_override_sources: BTreeMap::new(),
         }
     }
 
@@ -301,6 +320,13 @@ impl Config {
             presets_overlay_dir_override: value,
             ..self
         }
+    }
+
+    /// Which override file (if any) currently supplies `key`'s effective value.
+    /// `None` means the key resolves purely from `config.toml [env]` (global or
+    /// project), so writing there via `env set`/`encrypt`/`delete` is effective.
+    pub fn env_override_source(&self, key: &str) -> Option<&EnvOverrideSource> {
+        self.env_override_sources.get(key)
     }
 
     pub fn active_presets_overlay_dir(&self) -> Option<&Path> {
@@ -403,6 +429,7 @@ impl Default for Config {
             age_identity: None,
             env: default_env_map(),
             env_descriptions: BTreeMap::new(),
+            env_override_sources: BTreeMap::new(),
         }
     }
 }

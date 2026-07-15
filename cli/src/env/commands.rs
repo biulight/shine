@@ -117,11 +117,72 @@ fn truncate_text(value: &str, max_width: usize) -> String {
     result
 }
 
-pub async fn handle_set(config: &Config, key: &str, value: &str) -> Result<()> {
-    let mut env = EnvConfig::load_or_init(config).await?;
-    env.set(key, value);
-    env.save(config).await?;
-    println!("{}", colors::green(&format!("set {key} = \"{value}\"")));
+/// Where an `env set`/`encrypt`/`delete` write should land: `config.toml [env]`
+/// (the default, unshadowed case), or a specific override file that already
+/// supplies the key's effective value.
+#[derive(Debug)]
+enum EnvWriteTarget<'a> {
+    ConfigToml,
+    OverrideFile(&'a crate::config::EnvOverrideSource),
+}
+
+/// Decide where a write to `key` should go. Refuses (unless `force`) when an
+/// override file already shadows `config.toml [env]` for this key, since a
+/// plain write there would silently have no effect on the resolved value. With
+/// `force`, warns loudly when the winning file is the shine-managed overlay
+/// mirror, since that write will be discarded on the next `shine pull`.
+fn resolve_env_write_target<'a>(
+    config: &'a Config,
+    key: &str,
+    force: bool,
+) -> Result<EnvWriteTarget<'a>> {
+    let Some(source) = config.env_override_source(key) else {
+        return Ok(EnvWriteTarget::ConfigToml);
+    };
+    if !force {
+        bail!(
+            "{key} currently resolves from {} (an env override file), which takes precedence over {}; this write would have no effect.\nRe-run with --force to write directly into that file instead.",
+            path_display::format(&source.path),
+            path_display::format(config.config_path()),
+        );
+    }
+    if source.is_managed_overlay {
+        eprintln!(
+            "{}",
+            colors::yellow(&format!(
+                "Warning: {} is the shine-managed overlay mirror; this change will be discarded on the next `shine pull`/`shine update`. Edit it upstream on the maintaining device instead.",
+                path_display::format(&source.path)
+            ))
+        );
+    }
+    Ok(EnvWriteTarget::OverrideFile(source))
+}
+
+pub async fn handle_set(config: &Config, key: &str, value: &str, force: bool) -> Result<()> {
+    match resolve_env_write_target(config, key, force)? {
+        EnvWriteTarget::ConfigToml => {
+            let mut env = EnvConfig::load_or_init(config).await?;
+            env.set(key, value);
+            env.save(config).await?;
+            println!(
+                "{}",
+                colors::green(&format!(
+                    "set {key} = \"{value}\" in {}",
+                    path_display::format(config.config_path())
+                ))
+            );
+        }
+        EnvWriteTarget::OverrideFile(source) => {
+            crate::config::write_env_override_entry(&source.path, key, Some(value)).await?;
+            println!(
+                "{}",
+                colors::green(&format!(
+                    "set {key} = \"{value}\" in {}",
+                    path_display::format(&source.path)
+                ))
+            );
+        }
+    }
     println!(
         "{}",
         colors::dim("Run `shine upgrade` to apply to already-installed presets.")
@@ -129,13 +190,34 @@ pub async fn handle_set(config: &Config, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_delete(config: &Config, key: &str) -> Result<()> {
-    let mut env = EnvConfig::load_or_init(config).await?;
-    if env.remove(key).is_none() {
+pub async fn handle_delete(config: &Config, key: &str, force: bool) -> Result<()> {
+    if !config.env.contains_key(key) && config.env_override_source(key).is_none() {
         bail!("{key} is not set in the active config [env]");
     }
-    env.save(config).await?;
-    println!("{}", colors::green(&format!("deleted {key}")));
+    match resolve_env_write_target(config, key, force)? {
+        EnvWriteTarget::ConfigToml => {
+            let mut env = EnvConfig::load_or_init(config).await?;
+            env.remove(key);
+            env.save(config).await?;
+            println!(
+                "{}",
+                colors::green(&format!(
+                    "deleted {key} from {}",
+                    path_display::format(config.config_path())
+                ))
+            );
+        }
+        EnvWriteTarget::OverrideFile(source) => {
+            crate::config::write_env_override_entry(&source.path, key, None).await?;
+            println!(
+                "{}",
+                colors::green(&format!(
+                    "deleted {key} from {}",
+                    path_display::format(&source.path)
+                ))
+            );
+        }
+    }
     println!(
         "{}",
         colors::dim("Run `shine upgrade` to apply to already-installed presets.")
@@ -335,6 +417,7 @@ pub async fn handle_encrypt(
     recipients: &[String],
     set_key: Option<&str>,
     from_key: Option<&str>,
+    force: bool,
 ) -> Result<()> {
     use std::io::Read as _;
 
@@ -357,12 +440,30 @@ pub async fn handle_encrypt(
         .await
         .context("encrypting secret")?;
     match resolve_env_encrypt_output(set_key, from_key)? {
-        EnvEncryptOutput::Set(key) => {
-            let mut env = EnvConfig::load_or_init(config).await?;
-            env.set(&key, &encoded);
-            env.save(config).await?;
-            println!("{}", colors::green(&format!("set {key} = \"{encoded}\"")));
-        }
+        EnvEncryptOutput::Set(key) => match resolve_env_write_target(config, &key, force)? {
+            EnvWriteTarget::ConfigToml => {
+                let mut env = EnvConfig::load_or_init(config).await?;
+                env.set(&key, &encoded);
+                env.save(config).await?;
+                println!(
+                    "{}",
+                    colors::green(&format!(
+                        "set {key} = \"{encoded}\" in {}",
+                        path_display::format(config.config_path())
+                    ))
+                );
+            }
+            EnvWriteTarget::OverrideFile(source) => {
+                crate::config::write_env_override_entry(&source.path, &key, Some(&encoded)).await?;
+                println!(
+                    "{}",
+                    colors::green(&format!(
+                        "set {key} = \"{encoded}\" in {}",
+                        path_display::format(&source.path)
+                    ))
+                );
+            }
+        },
         EnvEncryptOutput::Print => println!("{encoded}"),
     }
     Ok(())
@@ -430,7 +531,7 @@ mod tests {
         config.env.insert("MY_TOKEN".into(), "secret".into());
         config.save().await.unwrap();
 
-        handle_delete(&config, "MY_TOKEN").await.unwrap();
+        handle_delete(&config, "MY_TOKEN", false).await.unwrap();
 
         let contents = fs::read_to_string(config.config_path()).await.unwrap();
         let parsed: toml::Table = toml::from_str(&contents).unwrap();
@@ -451,7 +552,7 @@ mod tests {
         let dir = make_temp_dir().await;
         let config = config_in(&dir);
 
-        let err = handle_delete(&config, "MY_TOKEN").await.unwrap_err();
+        let err = handle_delete(&config, "MY_TOKEN", false).await.unwrap_err();
 
         assert!(
             err.to_string()
@@ -743,5 +844,178 @@ mod tests {
             err.to_string().contains("did you mean --backend age"),
             "error should hint at the age backend: {err:#}"
         );
+    }
+
+    fn shadow_key(
+        config: &mut Config,
+        key: &str,
+        path: std::path::PathBuf,
+        is_managed_overlay: bool,
+    ) {
+        config.env_override_sources.insert(
+            key.to_string(),
+            crate::config::EnvOverrideSource {
+                path,
+                is_managed_overlay,
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_env_write_target_returns_config_toml_when_unshadowed() {
+        let dir = std::env::temp_dir().join(format!("shine-env-write-{}", uuid::Uuid::new_v4()));
+        let config = config_in(&dir);
+
+        let target = resolve_env_write_target(&config, "MY_TOKEN", false).unwrap();
+
+        assert!(matches!(target, EnvWriteTarget::ConfigToml));
+    }
+
+    #[test]
+    fn resolve_env_write_target_refuses_without_force_when_shadowed() {
+        let dir = std::env::temp_dir().join(format!("shine-env-write-{}", uuid::Uuid::new_v4()));
+        let mut config = config_in(&dir);
+        let override_path = dir.join("shine.env.toml");
+        shadow_key(&mut config, "MY_TOKEN", override_path.clone(), false);
+
+        let err = resolve_env_write_target(&config, "MY_TOKEN", false).unwrap_err();
+
+        assert!(
+            err.to_string().contains(override_path.to_str().unwrap()),
+            "error should name the winning override file: {err:#}"
+        );
+        assert!(
+            err.to_string().contains("--force"),
+            "error should hint at --force: {err:#}"
+        );
+    }
+
+    #[test]
+    fn resolve_env_write_target_returns_override_file_with_force() {
+        let dir = std::env::temp_dir().join(format!("shine-env-write-{}", uuid::Uuid::new_v4()));
+        let mut config = config_in(&dir);
+        let override_path = dir.join("shine.env.toml");
+        shadow_key(&mut config, "MY_TOKEN", override_path.clone(), false);
+
+        let target = resolve_env_write_target(&config, "MY_TOKEN", true).unwrap();
+
+        match target {
+            EnvWriteTarget::OverrideFile(source) => assert_eq!(source.path, override_path),
+            EnvWriteTarget::ConfigToml => panic!("expected the shadowing override file"),
+        }
+    }
+
+    #[test]
+    fn resolve_env_write_target_allows_managed_overlay_with_force() {
+        let dir = std::env::temp_dir().join(format!("shine-env-write-{}", uuid::Uuid::new_v4()));
+        let mut config = config_in(&dir);
+        let overlay_path = dir.join("overlay").join("shine.env.toml");
+        shadow_key(&mut config, "MY_TOKEN", overlay_path.clone(), true);
+
+        let target = resolve_env_write_target(&config, "MY_TOKEN", true).unwrap();
+
+        match target {
+            EnvWriteTarget::OverrideFile(source) => {
+                assert_eq!(source.path, overlay_path);
+                assert!(source.is_managed_overlay);
+            }
+            EnvWriteTarget::ConfigToml => panic!("expected the managed overlay override file"),
+        }
+    }
+
+    #[tokio::test]
+    async fn env_set_refuses_when_shadowed_without_force() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        let override_path = dir.join("shine.env.toml");
+        shadow_key(&mut config, "MY_TOKEN", override_path.clone(), false);
+
+        let err = handle_set(&config, "MY_TOKEN", "newval", false)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains(override_path.to_str().unwrap()));
+        assert!(
+            !fs::try_exists(&override_path).await.unwrap(),
+            "refused write must not touch the override file"
+        );
+        assert!(
+            !fs::read_to_string(config.config_path())
+                .await
+                .unwrap_or_default()
+                .contains("MY_TOKEN"),
+            "refused write must not touch config.toml either"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn env_set_writes_into_override_file_when_forced() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        let override_path = dir.join("shine.env.toml");
+        fs::write(&override_path, "MY_TOKEN = \"old\"\n")
+            .await
+            .unwrap();
+        shadow_key(&mut config, "MY_TOKEN", override_path.clone(), false);
+
+        handle_set(&config, "MY_TOKEN", "newval", true)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&override_path).await.unwrap();
+        assert!(content.contains("MY_TOKEN = \"newval\""));
+        assert!(
+            !fs::read_to_string(config.config_path())
+                .await
+                .unwrap_or_default()
+                .contains("MY_TOKEN"),
+            "forced write must go into the override file, not config.toml"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn env_delete_refuses_when_shadowed_without_force() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        let override_path = dir.join("shine.env.toml");
+        fs::write(&override_path, "MY_TOKEN = \"secret\"\n")
+            .await
+            .unwrap();
+        shadow_key(&mut config, "MY_TOKEN", override_path.clone(), false);
+
+        let err = handle_delete(&config, "MY_TOKEN", false).await.unwrap_err();
+
+        assert!(err.to_string().contains(override_path.to_str().unwrap()));
+        let content = fs::read_to_string(&override_path).await.unwrap();
+        assert!(
+            content.contains("MY_TOKEN"),
+            "refused delete must leave the override file untouched"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn env_delete_removes_from_override_file_when_forced() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        let override_path = dir.join("shine.env.toml");
+        fs::write(&override_path, "MY_TOKEN = \"secret\"\nOTHER = \"kept\"\n")
+            .await
+            .unwrap();
+        shadow_key(&mut config, "MY_TOKEN", override_path.clone(), false);
+
+        handle_delete(&config, "MY_TOKEN", true).await.unwrap();
+
+        let content = fs::read_to_string(&override_path).await.unwrap();
+        let table: toml::Table = toml::from_str(&content).unwrap();
+        assert!(!table.contains_key("MY_TOKEN"));
+        assert!(table.contains_key("OTHER"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 }

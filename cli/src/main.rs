@@ -212,10 +212,12 @@ async fn run(cli: Cli) -> Result<()> {
         },
         Commands::Env { command } => match command {
             EnvCommands::Show { reveal } => env::commands::handle_show(&config, reveal).await,
-            EnvCommands::Set { key, value } => {
-                env::commands::handle_set(&config, &key, &value).await
+            EnvCommands::Set { key, value, force } => {
+                env::commands::handle_set(&config, &key, &value, force).await
             }
-            EnvCommands::Delete { key } => env::commands::handle_delete(&config, &key).await,
+            EnvCommands::Delete { key, force } => {
+                env::commands::handle_delete(&config, &key, force).await
+            }
             EnvCommands::Get { key } => env::commands::handle_get(&config, &key).await,
             EnvCommands::Decrypt { key } => env::commands::handle_decrypt(&config, &key).await,
             EnvCommands::Export { key, alias } => {
@@ -228,6 +230,7 @@ async fn run(cli: Cli) -> Result<()> {
                     &cmd.recipients,
                     cmd.set.as_deref(),
                     cmd.from.as_deref(),
+                    cmd.force,
                 )
                 .await
             }
@@ -631,7 +634,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Env {
-                command: EnvCommands::Delete { key }
+                command: EnvCommands::Delete { key, .. }
             } if key == "MY_TOKEN"
         ));
     }

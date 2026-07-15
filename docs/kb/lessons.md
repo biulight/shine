@@ -3,6 +3,34 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-15 — `env set`/`encrypt` silently wrote a value an override file kept shadowing
+
+- **Symptom**: `shine env encrypt --from KEY` (or `env set KEY value`) reported success and
+  wrote into `config.toml [env]`, but the effective value of `KEY` never changed when an
+  env override file (`shine.env.toml` — global, active overlay, or project) already defined
+  it.
+- **Root cause**: override files are merged strictly above **both** `config.toml [env]`
+  layers by design (`config/load.rs`: *"Environment override files deliberately sit above
+  both TOML layers"*), but `env set`/`encrypt`/`delete` had no awareness of that and always
+  wrote into whichever `config.toml` was active for the cwd. The write succeeded but was
+  dead on arrival — the override file kept winning at read time.
+- **Why precedence itself was not changed**: per
+  [ADR 0010](decisions/0010-git-managed-overlay.md), a shine-managed Git overlay exists
+  specifically so a value authored once on the maintaining device reliably wins on every
+  consuming machine, overriding whatever stale value a local `config.toml` holds. Flipping
+  overlay-vs-config.toml precedence would defeat that guarantee for every other key.
+- **Fix**: `Config` now tracks, per env key, which override file (if any) currently supplies
+  its effective value (`Config::env_override_sources` / `env_override_source()`, populated
+  in `apply_*_env_override`). `env set`/`encrypt`/`delete` consult it before writing: refuse
+  with a clear "this write would have no effect, X currently wins" error by default; `--force`
+  writes directly into that override file instead (`write_env_override_entry`, comment- and
+  description-preserving via the same `utils::migration::sync_table` `Config::save()` uses),
+  and warns loudly when the winning file is the shine-managed overlay mirror, since that
+  write is discarded on the next `shine pull`.
+- **Rule**: a `set`/`delete`-shaped command must never report success for a write that a
+  higher-precedence layer will keep shadowing — either make the write land where it's
+  actually effective, or refuse and say why.
+
 ## 2026-07-14 — OSC 11 response tail leaks when the reply arrives fragmented
 
 Supersedes the 2026-07-13 entry that blamed tty echo. That diagnosis was wrong and its fix
