@@ -40,6 +40,14 @@ pub fn default_env_map() -> BTreeMap<String, String> {
         .collect()
 }
 
+fn default_sync_terminal_theme() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     /// Presets directory - computed at runtime, not serialized
@@ -118,6 +126,17 @@ pub struct Config {
     /// Embedded presets may run hooks without this opt-in.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_app_hooks: bool,
+    /// Whether the managed sys `pre` profile auto-syncs the terminal theme
+    /// (`shine theme sync --auto`) on interactive shell startup. Defaults to
+    /// `true`. The `SHINE_SYNC_TERMINAL_THEME` env var overrides this at
+    /// runtime regardless of value (docs/terminal-theme-sync-prd.md §5).
+    /// Deliberately not project-overridable: this is a terminal/session-level
+    /// toggle, not something that varies per project.
+    #[serde(
+        default = "default_sync_terminal_theme",
+        skip_serializing_if = "is_true"
+    )]
+    pub sync_terminal_theme: bool,
     /// Path where `shine self install` last copied the binary.
     /// When set, `shine self upgrade` will try to sync the new binary there automatically.
     #[serde(
@@ -218,6 +237,7 @@ impl Config {
             app_default_dest_root_override: None,
             is_external_presets: false,
             allow_app_hooks: false,
+            sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_key_id: None,
             secret_backend: None,
@@ -375,6 +395,7 @@ impl Default for Config {
             app_default_dest_root_override: None,
             is_external_presets: false,
             allow_app_hooks: false,
+            sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_key_id: None,
             secret_backend: None,

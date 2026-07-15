@@ -237,6 +237,17 @@ shine/
 │       │   │                 # direct (no-shell) argv exec + exit-code passthrough,
 │       │   │                 # shell-quoted command rendering, task-name validation
 │       │   └── manifest.rs   # TaskManifest: <shine_dir>/tasks.toml load/save/upsert
+│       ├── theme/
+│       │   ├── mod.rs        # `shine theme sync`: priority chain (already-exported
+│       │   │                 # SHINE_TERMINAL_THEME -> COLORFGBG -> OSC 11), BAT_THEME
+│       │   │                 # resolution/preservation, read-only config load, also exposes
+│       │   │                 # resolve_local_terminal_theme_for_injection for `shine ssh`
+│       │   ├── color.rs      # Pure parsing: OSC 11 rgb: body, luma light/dark threshold,
+│       │   │                 # COLORFGBG — no I/O, cross-platform
+│       │   └── osc.rs        # #[cfg(unix)]: OSC 11 query over /dev/tty. Deadline-based
+│       │                     # poll(2) read loop (total deadline, never per-byte — see
+│       │                     # docs/kb/lessons.md 2026-07-14) + termios EchoGuard (RAII
+│       │                     # restore, unlike the superseded shell script's manual restore)
 │       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
 │       │                     # since #[cfg(test)] doesn't cross the lib/bin boundary)
 │       ├── update_check/
@@ -284,6 +295,7 @@ shine/
 | `app list/install/uninstall` | `cli/src/apps/` |
 | `app build <app-id>` / `app unbuild <app-id>` | `cli/src/apps/build.rs` |
 | `sys list/init` | `cli/src/sys/` |
+| `theme sync` | `cli/src/theme/` (bypasses `Config::load_or_init()`, like `init`/`clear`) |
 | `env show/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
 | `list` | `cli/src/list.rs` |
 | `info <TARGET>` | `cli/src/show/` |

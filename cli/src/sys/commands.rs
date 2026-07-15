@@ -1550,27 +1550,32 @@ required_env = ["NOT-AN-ENV"]
     }
 
     #[test]
-    fn embedded_unix_profiles_sync_terminal_theme_from_osc_11() {
+    fn embedded_unix_profiles_delegate_terminal_theme_sync_to_the_shine_binary() {
+        // Supersedes embedded_unix_profiles_sync_terminal_theme_from_osc_11
+        // (removed): that test asserted the *implementation details* of the
+        // old shell-only OSC read loop, including the `stty -echo` fix from
+        // 6f23c6b9 that turned out not to work (docs/kb/lessons.md,
+        // 2026-07-14). Per docs/terminal-theme-sync-prd.md §8/§11/§12.2, the
+        // profile must now be a thin call into `shine theme sync`, and this
+        // test doubles as the migration gate: it fails if the old OSC
+        // implementation (or its known-broken inter-byte timeout) ever
+        // reappears in the embedded template.
         for path in ["sys/ubuntu/profile.pre.sh", "sys/macos/profile.pre.sh"] {
             let content = crate::presets::read_asset_bytes(path)
                 .and_then(|bytes| String::from_utf8(bytes).ok())
                 .unwrap_or_else(|| panic!("missing embedded sys profile: {path}"));
 
-            assert!(content.contains("case \"$-\" in"));
             assert!(content.contains("${SHINE_SYNC_TERMINAL_THEME:-1}"));
-            assert!(content.contains("\\033]11;?\\033\\\\"));
-            assert!(content.contains("tty_state=$(stty -g < /dev/tty"));
-            assert!(content.contains("stty -echo < /dev/tty"));
-            assert!(content.contains("stty \"$tty_state\" < /dev/tty"));
-            assert!(content.contains("read_timeout=\"0.15\""));
-            assert!(content.contains("export SHINE_TERMINAL_THEME=\"light\""));
-            assert!(content.contains("export SHINE_TERMINAL_THEME=\"dark\""));
-            assert!(content.contains("${SHINE_BAT_LIGHT_THEME:-GitHub}"));
-            assert!(content.contains("${SHINE_BAT_DARK_THEME:-OneHalfDark}"));
-            assert!(content.contains("shine_apply_terminal_theme \"$response\""));
-            assert!(
-                content.contains("unset -f shine_apply_terminal_theme shine_sync_terminal_theme")
-            );
+            assert!(content.contains("command -v shine"));
+            assert!(content.contains("shine theme sync --auto --quiet"));
+
+            // The old implementation must not come back into the profile:
+            // OSC/PTY/RGB parsing belongs solely in the shine binary now.
+            assert!(!content.contains("shine_apply_terminal_theme"));
+            assert!(!content.contains("shine_sync_terminal_theme"));
+            assert!(!content.contains("\\033]11;?\\033\\\\"));
+            assert!(!content.contains("stty -echo"));
+            assert!(!content.contains("read_timeout"));
         }
     }
 

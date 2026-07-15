@@ -3,18 +3,53 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
-## 2026-07-13 — OSC 11 terminal responses were echoed as SSH input
+## 2026-07-14 — OSC 11 response tail leaks when the reply arrives fragmented
 
-- **Symptom**: after `shine sys init` on Ubuntu, opening an SSH session displayed a string such
-  as `11;rgb:0f0f/1616/1010` as though it had been typed at the prompt.
-- **Root cause**: the managed Unix profile asks the terminal for its background color with an OSC
-  11 query. The terminal response is delivered through the remote pty as input; while the profile
-  was reading it, tty echo remained enabled, so the response payload was echoed back to the user.
-- **Fix**: save the tty settings and disable `echo` around the OSC query/read, then restore the
-  settings before applying the theme. Apply the same fix to the macOS profile because it shares the
-  query implementation.
-- **Rule**: terminal-control responses read from a pty must be consumed with echo disabled, and
-  the original tty settings must always be restored.
+Supersedes the 2026-07-13 entry that blamed tty echo. That diagnosis was wrong and its fix
+(`6f23c6b9`) does not work — the bug still reproduces on the latest build. The cause below is
+measured, not inferred.
+
+- **Symptom**: after `shine sys init` on Ubuntu, opening an SSH session displays a string such as
+  `11;rgb:0f0f/1616/1010` at the prompt. Note the missing leading `\033]` — that omission is the
+  clue, not a typo.
+- **Root cause**: the managed Unix profile's OSC 11 read loop
+  (`presets/sys/{ubuntu,macos}/profile.pre.sh`) gives the first byte 150 ms but drops the
+  **inter-byte** timeout to 10 ms (`read_timeout="0.01"`). When the reply arrives fragmented — a
+  normal outcome over SSH — the loop times out mid-response, `break`s holding only the 2 bytes it
+  read (`\033]`), and restores the tty. The remaining bytes land **after** echo is back on and are
+  echoed verbatim. The visible text is the response's *tail*, which is exactly why `\033]` is
+  absent: the loop consumed it.
+- **Why the 2026-07-13 fix failed**: `stty -echo` only covers the loop's *duration*, but the leak
+  happens *after* the loop restores the tty. (Bash's `read -s` already disabled echo per-read, so
+  that patch's delta was near zero to begin with.)
+- **Measured** with `pty.fork()` driving the real loop against synthetic OSC replies, on **both**
+  affected platforms — Ubuntu/bash 5.3.9 (the `read -n` branch) and macOS/zsh 5.9 (the `read -k`
+  branch). Both reproduce identically; the only difference is the timeout return code
+  (bash `142` = 128+SIGALRM, zsh `1`):
+
+  | reply arrival | consumed | elapsed | tail leaked |
+  |---|---|---|---|
+  | whole packet | 25 B (full) | 1 ms | no |
+  | fragmented, 50 ms gap | **2 B = `\033]`** | 10 ms | **yes** |
+  | fragmented, 5 ms gap | 25 B | 6 ms | no |
+  | no reply at all | 0 | 150 ms | no (silent skip — correct) |
+
+  Only the fragmented-beyond-10 ms case is broken; the no-reply path is healthy. `read -k -t`
+  (zsh) and `read -n -t` (bash) show no semantic difference here — this is the loop's timeout
+  policy, not a shell quirk.
+- **Fix**: landed per [`docs/terminal-theme-sync-prd.md`](../terminal-theme-sync-prd.md) §6.2 — the
+  shell-only OSC read loop was replaced entirely by `shine theme sync` (`cli/src/theme/osc.rs`),
+  which reads against a single total deadline via `poll(2)` with no inter-byte timeout to violate.
+  `presets/sys/{ubuntu,macos}/profile.pre.sh` now only decides whether to call the binary; it
+  contains no OSC/PTY/RGB parsing of its own.
+- **Rule**: read terminal-control responses against a **total deadline until the terminator**,
+  never with a tight inter-byte timeout — a partial read that then restores the tty converts the
+  remainder into user input. Disabling echo is necessary but nowhere near sufficient. The only way
+  to remove the race entirely is to not query from the remote at all (pass the value in over the
+  session instead).
+- **Meta-rule**: this entry was wrong for a day because the cause was *inferred from a plausible
+  story* rather than measured. When a terminal/pty bug's cause is not obvious, reproduce it in a
+  pty on the affected platform before writing the lesson down.
 
 ## 2026-07-13 — `shine local` now runs external tools with wire-derived argv
 

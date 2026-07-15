@@ -217,7 +217,10 @@ fn validate_env_export_key(key: &str) -> Result<()> {
     Ok(())
 }
 
-fn format_env_export(shell: &shells::ShellType, key: &str, value: &str) -> String {
+/// `pub(crate)` so `theme::handle_sync` can reuse the same per-shell quoting
+/// instead of adding a fourth `single_quote` implementation to the codebase
+/// (see docs/terminal-theme-sync-prd.md §7/§10).
+pub(crate) fn format_env_export(shell: &shells::ShellType, key: &str, value: &str) -> String {
     match shell {
         shells::ShellType::Fish => format!("set -gx {key} {}", fish_quote(value)),
         shells::ShellType::PowerShell => {

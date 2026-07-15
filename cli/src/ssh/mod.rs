@@ -41,6 +41,7 @@ mod remote_client;
 use anyhow::{Context, Result, bail};
 
 use crate::config::Config;
+use crate::theme;
 
 /// Grace period given to still-running per-connection transfer tasks to
 /// notice the (by now closed) `ssh` tunnel and finish their own cleanup
@@ -154,8 +155,17 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
     let agent_handle =
         tokio::spawn(listener.serve(token.clone(), context.clone(), connection_tasks.clone()));
 
-    let wrapped_command =
-        build_wrapped_remote_command(&session_id, &token, &remote_sock, &remote_command);
+    // Query the *local* terminal — same-host, sub-millisecond round trip,
+    // no fragmentation risk unlike a remote OSC query (PRD §2.2/§6.1) — so
+    // the remote login shell never has to guess at its own theme.
+    let local_theme = theme::resolve_local_terminal_theme_for_injection();
+    let wrapped_command = build_wrapped_remote_command(
+        &session_id,
+        &token,
+        &remote_sock,
+        local_theme.map(theme::Theme::as_str),
+        &remote_command,
+    );
 
     let mut cmd = tokio::process::Command::new("ssh");
     cmd.args(build_ssh_invocation_args(
@@ -321,6 +331,7 @@ fn build_wrapped_remote_command(
     session_id: &str,
     token: &str,
     remote_sock: &str,
+    local_theme: Option<&str>,
     remote_command: &[String],
 ) -> String {
     let inner_exec = if remote_command.is_empty() {
@@ -339,10 +350,18 @@ fn build_wrapped_remote_command(
     // is interpreted until the inner `sh -c` re-parses it.
     let inner_script = format!(r#"trap "rm -f $SHINE_SSH_REMOTE_SOCK" EXIT; {inner_exec}"#);
 
-    format!(
-        "env SHINE_SSH_SESSION={session_id} SHINE_SSH_TOKEN={token} SHINE_SSH_REMOTE_SOCK={remote_sock} sh -c {}",
-        single_quote(&inner_script)
-    )
+    let mut env_prefix = format!(
+        "SHINE_SSH_SESSION={session_id} SHINE_SSH_TOKEN={token} SHINE_SSH_REMOTE_SOCK={remote_sock}"
+    );
+    // Unlike the three values above (internally generated UUIDs/hex/paths,
+    // never user input), this one is quoted defensively per
+    // docs/terminal-theme-sync-prd.md §6.1/§10 even though its source
+    // (`Theme::as_str`) only ever produces the literal `light` or `dark`.
+    if let Some(theme) = local_theme {
+        env_prefix.push_str(&format!(" SHINE_TERMINAL_THEME={}", single_quote(theme)));
+    }
+
+    format!("env {env_prefix} sh -c {}", single_quote(&inner_script))
 }
 
 /// POSIX single-quotes `s` for safe embedding as one shell word, escaping
@@ -439,6 +458,7 @@ mod tests {
             "sid",
             "tok",
             "/tmp/shine-ssh-mod-test-sid.sock",
+            None,
             &["echo".to_string(), "it's a test".to_string()],
         );
         let output = std::process::Command::new("sh")
@@ -555,8 +575,54 @@ mod tests {
 
     #[test]
     fn wrapped_command_defaults_to_login_shell() {
-        let wrapped = build_wrapped_remote_command("sid", "tok", "/tmp/.shine-ssh-sid.sock", &[]);
+        let wrapped =
+            build_wrapped_remote_command("sid", "tok", "/tmp/.shine-ssh-sid.sock", None, &[]);
         assert!(wrapped.contains(r#"exec "$SHELL" -l"#));
         assert!(wrapped.contains("trap \"rm -f $SHINE_SSH_REMOTE_SOCK\" EXIT"));
+    }
+
+    #[test]
+    fn wrapped_command_omits_theme_var_when_none() {
+        let wrapped =
+            build_wrapped_remote_command("sid", "tok", "/tmp/.shine-ssh-sid.sock", None, &[]);
+        assert!(!wrapped.contains("SHINE_TERMINAL_THEME"));
+    }
+
+    #[test]
+    fn wrapped_command_injects_quoted_theme_var_when_present() {
+        let wrapped = build_wrapped_remote_command(
+            "sid",
+            "tok",
+            "/tmp/.shine-ssh-sid.sock",
+            Some("dark"),
+            &[],
+        );
+        assert!(wrapped.contains("SHINE_TERMINAL_THEME='dark'"));
+        // Must appear inside the `env ...` prefix, before the `sh -c` handoff.
+        assert!(
+            wrapped.find("SHINE_TERMINAL_THEME").unwrap() < wrapped.find("sh -c").unwrap(),
+            "theme var must be part of the env prefix: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn wrapped_command_theme_injection_round_trips_through_a_real_shell() {
+        // Same rationale as wrapped_command_round_trips_through_a_real_shell:
+        // verify the quoting composition by actually running it, rather than
+        // reasoning about escaping by hand.
+        let wrapped = build_wrapped_remote_command(
+            "sid",
+            "tok",
+            "/tmp/shine-ssh-mod-test-theme-sid.sock",
+            Some("dark"),
+            &["printenv".to_string(), "SHINE_TERMINAL_THEME".to_string()],
+        );
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&wrapped)
+            .output()
+            .expect("failed to run sh");
+        assert!(output.status.success(), "stderr: {:?}", output.stderr);
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), "dark");
     }
 }

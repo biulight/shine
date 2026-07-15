@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use super::{
     AppCommands, EnvCommands, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
     SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands, TaskRunCommand,
+    ThemeCommands,
 };
 
 /// `Shine` - Quick config for sys
@@ -109,6 +110,11 @@ pub enum Commands {
     Sys {
         #[command(subcommand)]
         command: SysCommands,
+    },
+    /// Resolve and sync the terminal's light/dark theme (see `shine theme sync`)
+    Theme {
+        #[command(subcommand)]
+        command: ThemeCommands,
     },
     /// Open an interactive SSH session with a session-scoped file transfer channel
     Ssh {

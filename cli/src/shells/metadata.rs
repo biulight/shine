@@ -480,11 +480,23 @@ mod tests {
         let utils = categories.iter().find(|cat| cat.name == "utils").unwrap();
 
         if cfg!(windows) {
-            assert_eq!(utils.files.len(), 1);
-            assert_eq!(utils.files[0].command_name, "shine-env-export");
-            assert!(utils.files[0].needs_source);
-        } else {
             assert_eq!(utils.files.len(), 2);
+            let env_export = utils
+                .files
+                .iter()
+                .find(|f| f.command_name == "shine-env-export")
+                .expect("shine-env-export should be present");
+            assert!(env_export.needs_source);
+
+            let theme_sync = utils
+                .files
+                .iter()
+                .find(|f| f.command_name == "shine-theme-sync")
+                .expect("shine-theme-sync should be present");
+            assert_eq!(theme_sync.source_rel, PathBuf::from("shine-theme-sync.ps1"));
+            assert!(theme_sync.needs_source);
+        } else {
+            assert_eq!(utils.files.len(), 3);
             let copyfile = utils
                 .files
                 .iter()
@@ -505,6 +517,14 @@ mod tests {
                 .expect("shine-env-export should be present");
             assert_eq!(env_export.source_rel, PathBuf::from("shine-env-export.sh"));
             assert!(env_export.needs_source);
+
+            let theme_sync = utils
+                .files
+                .iter()
+                .find(|f| f.command_name == "shine-theme-sync")
+                .expect("shine-theme-sync should be present");
+            assert_eq!(theme_sync.source_rel, PathBuf::from("shine-theme-sync.sh"));
+            assert!(theme_sync.needs_source);
         }
     }
 

@@ -8,6 +8,7 @@ mod serve;
 mod shell;
 mod sys;
 mod task;
+mod theme;
 
 pub use app::*;
 pub use cli::*;
@@ -19,3 +20,4 @@ pub use serve::*;
 pub use shell::*;
 pub use sys::*;
 pub use task::*;
+pub use theme::*;

@@ -16,3 +16,15 @@ source = "shine-env-export.ps1"
 target = "shine-env-export"
 needs_source = true
 platforms = ["windows"]
+
+[[files]]
+source = "shine-theme-sync.sh"
+target = "shine-theme-sync"
+needs_source = true
+platforms = ["unix"]
+
+[[files]]
+source = "shine-theme-sync.ps1"
+target = "shine-theme-sync"
+needs_source = true
+platforms = ["windows"]

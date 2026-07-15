@@ -3,13 +3,13 @@ use clap::Parser;
 
 use cli::{
     apps, clear, colors, commands, completion, config, env, git_pull, list, serve, shells, show,
-    ssh, sys, task, update_check,
+    ssh, sys, task, theme, update_check,
 };
 
 use commands::{
     AppCommands, Cli, Commands, CompletionCommands, CompletionShell, EnvCommands,
     EnvIdentitySubcommand, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
-    SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands,
+    SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands, ThemeCommands,
 };
 #[cfg(test)]
 use commands::{ClearCommand, InitCommand, OverlayLinkCommand, UpdateCommand, UpgradeCommand};
@@ -68,6 +68,18 @@ async fn run(cli: Cli) -> Result<()> {
         return Box::pin(clear::handle_clear(&config, cmd.dry_run)).await;
     }
 
+    // Bypassed like Init/Clear above: this runs on every interactive shell
+    // start (from the managed profile), so it must skip Config::load_or_init()
+    // (which writes to disk), the runtime-schema warning, and the background
+    // update check entirely — not just opt out of them individually.
+    // theme::handle_sync does its own read-only config load.
+    if let Commands::Theme {
+        command: ThemeCommands::Sync { auto, quiet },
+    } = &cli.command
+    {
+        return theme::handle_sync(*auto, *quiet).await;
+    }
+
     let config = Box::pin(Config::load_or_init()).await?;
 
     warn_if_runtime_schema_pending(&cli.command).await;
@@ -81,6 +93,7 @@ async fn run(cli: Cli) -> Result<()> {
         } => Box::pin(shells::handle_completion_install(&config)).await,
         Commands::Completions { .. } => unreachable!(),
         Commands::Clear(_) => unreachable!(),
+        Commands::Theme { .. } => unreachable!(),
         Commands::Install { category } => handle_install_shim(&config, &category).await,
         Commands::Reinstall { category } => handle_reinstall_shim(&config, &category).await,
         Commands::Uninstall { category } => handle_uninstall_shim(&config, &category).await,

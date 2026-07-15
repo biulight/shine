@@ -224,6 +224,7 @@ dependencies = [
  "flate2",
  "glob",
  "jsonc-parser",
+ "libc",
  "owo-colors",
  "reqwest",
  "rust-embed",
