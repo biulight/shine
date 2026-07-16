@@ -39,22 +39,25 @@ exit 0
 #
 #   # Only patch a section when its local file exists beside the profile
 #   # (installed by `shine app install surge`).
-#   proxies=""; rules=""
-#   [[ -f "$dir/local-proxies.conf" ]] && proxies="local-proxies.conf"
-#   [[ -f "$dir/local-rules.conf"   ]] && rules="local-rules.conf"
-#   [[ -n "$proxies$rules" ]] || { echo "error: run: shine app install surge" >&2; exit 1; }
+#   proxies=""; groups=""; rules=""
+#   [[ -f "$dir/local-proxies.conf"       ]] && proxies="local-proxies.conf"
+#   [[ -f "$dir/local-proxy-groups.conf"  ]] && groups="local-proxy-groups.conf"
+#   [[ -f "$dir/local-rules.conf"         ]] && rules="local-rules.conf"
+#   [[ -n "$proxies$groups$rules" ]] || { echo "error: run: shine app install surge" >&2; exit 1; }
 #
 #   tmp=$(mktemp "$dir/.surge-patch.XXXXXX"); trap 'rm -f "$tmp"' EXIT
 #
-#   # Patch the first `#!include` in each of [Proxy]/[Rule] to also load the local
-#   # file, unless already present. [Proxy] appends (proxy defs are order-free);
-#   # [Rule] prepends so local rules win (Surge matches top-to-bottom, first match
-#   # wins). Tracks the current section header; every other line is untouched.
-#   awk -v proxies="$proxies" -v rules="$rules" '
+#   # Patch the first `#!include` in each of [Proxy]/[Proxy Group]/[Rule] to also
+#   # load the local file, unless already present. [Proxy]/[Proxy Group] append
+#   # (definitions are order-free); [Rule] prepends so local rules win (Surge
+#   # matches top-to-bottom, first match wins). Tracks the current section header;
+#   # every other line is untouched.
+#   awk -v proxies="$proxies" -v groups="$groups" -v rules="$rules" '
 #     /^\[/            { section=$0; sub(/[ \t]+$/,"",section); print; next }
 #     /^#!include[ \t]/{
 #       want=""; prepend=0
 #       if (section=="[Proxy]") want=proxies
+#       else if (section=="[Proxy Group]") want=groups
 #       else if (section=="[Rule]") { want=rules; prepend=1 }
 #       if (want!="" && !(want in done)) {
 #         match($0,/^#!include[ \t]+/); pre=substr($0,1,RLENGTH); pay=substr($0,RLENGTH+1)

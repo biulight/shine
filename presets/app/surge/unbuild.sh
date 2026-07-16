@@ -37,14 +37,16 @@ exit 0
 #
 #   tmp=$(mktemp "$(dirname "$SURGE_PROFILE")/.surge-unpatch.XXXXXX"); trap 'rm -f "$tmp"' EXIT
 #
-#   # Drop `local-proxies.conf` from [Proxy] and `local-rules.conf` from [Rule],
-#   # tracking the current section header; leave every other line untouched. If a
-#   # section's `#!include` list becomes empty, keep the (now bare) directive.
+#   # Drop `local-proxies.conf` from [Proxy], `local-proxy-groups.conf` from
+#   # [Proxy Group], and `local-rules.conf` from [Rule], tracking the current
+#   # section header; leave every other line untouched. If a section's `#!include`
+#   # list becomes empty, keep the (now bare) directive.
 #   awk '
 #     /^\[/            { section=$0; sub(/[ \t]+$/,"",section); print; next }
 #     /^#!include[ \t]/{
 #       want=""
 #       if (section=="[Proxy]") want="local-proxies.conf"
+#       else if (section=="[Proxy Group]") want="local-proxy-groups.conf"
 #       else if (section=="[Rule]") want="local-rules.conf"
 #       if (want!="") {
 #         match($0,/^#!include[ \t]+/); pre=substr($0,1,RLENGTH); pay=substr($0,RLENGTH+1)
