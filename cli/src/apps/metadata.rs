@@ -775,6 +775,10 @@ mod tests {
                     "local-rules.conf".to_string(),
                     "local-rules.conf".to_string()
                 ),
+                (
+                    "local-proxy-groups.conf".to_string(),
+                    "local-proxy-groups.conf".to_string()
+                ),
             ]
         );
         assert_eq!(

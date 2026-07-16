@@ -28,3 +28,8 @@ description = "Local proxy definitions (e.g. a LAN SOCKS exit) merged into [Prox
 source = "local-rules.conf"
 target = "local-rules.conf"
 description = "Local priority rules merged into [Rule] ahead of provider rules."
+
+[[files]]
+source = "local-proxy-groups.conf"
+target = "local-proxy-groups.conf"
+description = "Local proxy groups merged into [Proxy Group] after provider groups."
