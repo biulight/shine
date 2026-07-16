@@ -190,10 +190,27 @@ pub struct Config {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnvOverrideSource {
     pub path: PathBuf,
+    /// Which override layer `path` belongs to. Drives the source labels in
+    /// `shine env show`; `is_managed_overlay` further distinguishes the two
+    /// `Overlay` variants.
+    pub kind: EnvOverrideKind,
     /// `true` when `path` is inside the shine-managed Git overlay checkout
     /// (force-mirrored, read-only per ADR 0010) rather than the global/project
     /// override file or a manual overlay directory.
     pub is_managed_overlay: bool,
+}
+
+/// Which override-file layer supplied an env key's effective value. Ordered
+/// low-to-high by precedence (a later layer shadows an earlier one), matching
+/// the apply order in `Config::load_or_init`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnvOverrideKind {
+    /// Global `<shine_dir>/shine.env.toml`.
+    Global,
+    /// Overlay `<overlay_dir>/shine.env.toml` (managed-git or manual overlay).
+    Overlay,
+    /// Project `<project_root>/shine.env.toml` (or legacy `.env.toml`).
+    Project,
 }
 
 #[derive(Clone, Debug)]

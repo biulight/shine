@@ -3,9 +3,80 @@
 use anyhow::{Context, Result, bail};
 
 use super::{EnvConfig, StoredValue, resolve_stored_value, secret_key};
-use crate::config::Config;
+use crate::config::{Config, EnvOverrideKind, EnvOverrideSource};
 use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{colors, path_display, secret, shells};
+
+/// Which layer supplied a variable's effective value, used to group the
+/// `env show` output. `Config` is the `config.toml [env]` table (global or
+/// project, deliberately not distinguished); the rest are `shine.env.toml`
+/// override files. Ordering matches display order (`config.toml` first, then
+/// override layers low-to-high by precedence).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EnvSourceGroup {
+    Config,
+    Global,
+    Overlay { managed: bool },
+    Project,
+}
+
+impl EnvSourceGroup {
+    /// Fixed display order. Lower sorts first.
+    fn order(self) -> u8 {
+        match self {
+            EnvSourceGroup::Config => 0,
+            EnvSourceGroup::Global => 1,
+            EnvSourceGroup::Overlay { .. } => 2,
+            EnvSourceGroup::Project => 3,
+        }
+    }
+
+    /// The bold header label for this section.
+    fn label(self) -> &'static str {
+        match self {
+            EnvSourceGroup::Config => "config.toml",
+            EnvSourceGroup::Global => "global env file",
+            EnvSourceGroup::Overlay { managed: false } => "overlay",
+            EnvSourceGroup::Overlay { managed: true } => "overlay (managed)",
+            EnvSourceGroup::Project => "project env file",
+        }
+    }
+}
+
+/// Classify a key by its override source: no override → `config.toml [env]`,
+/// otherwise the override file's layer (folding `is_managed_overlay` into the
+/// `Overlay` variant).
+fn env_source_group(source: Option<&EnvOverrideSource>) -> EnvSourceGroup {
+    match source {
+        None => EnvSourceGroup::Config,
+        Some(source) => match source.kind {
+            EnvOverrideKind::Global => EnvSourceGroup::Global,
+            EnvOverrideKind::Overlay => EnvSourceGroup::Overlay {
+                managed: source.is_managed_overlay,
+            },
+            EnvOverrideKind::Project => EnvSourceGroup::Project,
+        },
+    }
+}
+
+/// Partition `keys` into ordered, non-empty sections by source group,
+/// preserving each key's relative order within its group. Pure over a
+/// `source_of` lookup so it can be unit-tested without terminal/config I/O.
+fn group_env_keys<'a>(
+    keys: impl Iterator<Item = &'a str>,
+    source_of: impl Fn(&str) -> Option<&'a EnvOverrideSource>,
+) -> Vec<(EnvSourceGroup, Vec<&'a str>)> {
+    let mut groups: Vec<(EnvSourceGroup, Vec<&'a str>)> = Vec::new();
+    for key in keys {
+        let group = env_source_group(source_of(key));
+        match groups.iter_mut().find(|(g, _)| *g == group) {
+            Some((_, members)) => members.push(key),
+            None => groups.push((group, vec![key])),
+        }
+    }
+    groups.sort_by_key(|(group, _)| group.order());
+    groups
+}
 
 pub async fn handle_show(config: &Config, reveal: bool) -> Result<()> {
     let env = EnvConfig::load_or_init(config).await?;
@@ -21,32 +92,50 @@ pub async fn handle_show(config: &Config, reveal: bool) -> Result<()> {
     println!();
     if env.as_map().is_empty() {
         println!("  {}", colors::dim("No variables configured."));
+        println!();
     }
-    for (k, v) in env.iter() {
-        let metadata = catalog.get(k);
-        let description = env
-            .description(k)
-            .or_else(|| metadata.map(|item| item.description.as_str()))
-            .unwrap_or_default();
-        let sensitive = metadata.is_some_and(|item| item.sensitive) || is_sensitive_env_key(k);
-        let display_value = display_env_value(v, sensitive, reveal);
-        let (display_value, description) =
-            fit_env_row(&display_value, description, key_width, terminal_width);
-        let key_padding = " ".repeat(key_width.saturating_sub(k.chars().count()));
-        if description.is_empty() {
-            println!("  {}{}  {}", colors::cyan(k), key_padding, display_value);
-        } else {
-            println!(
-                "  {}{}  {:<value_width$}  {}",
-                colors::cyan(k),
-                key_padding,
-                display_value,
-                colors::dim(&description),
-                value_width = env_value_width(key_width, terminal_width),
-            );
+
+    let groups = group_env_keys(env.iter().map(|(k, _)| k), |key| {
+        config.env_override_source(key)
+    });
+    for (group, keys) in groups {
+        // Header: bold label, plus the override file's path for non-config groups.
+        match keys.first().and_then(|key| config.env_override_source(key)) {
+            Some(source) => println!(
+                "{}  {}",
+                colors::bold(group.label()),
+                colors::dim(&path_display::format(&source.path))
+            ),
+            None => println!("{}", colors::bold(group.label())),
         }
+        for k in keys {
+            let v = env.get(k).unwrap_or_default();
+            let metadata = catalog.get(k);
+            let description = env
+                .description(k)
+                .or_else(|| metadata.map(|item| item.description.as_str()))
+                .unwrap_or_default();
+            let sensitive = metadata.is_some_and(|item| item.sensitive) || is_sensitive_env_key(k);
+            let display_value = display_env_value(v, sensitive, reveal);
+            let (display_value, description) =
+                fit_env_row(&display_value, description, key_width, terminal_width);
+            let key_padding = " ".repeat(key_width.saturating_sub(k.chars().count()));
+            if description.is_empty() {
+                println!("  {}{}  {}", colors::cyan(k), key_padding, display_value);
+            } else {
+                println!(
+                    "  {}{}  {:<value_width$}  {}",
+                    colors::cyan(k),
+                    key_padding,
+                    display_value,
+                    colors::dim(&description),
+                    value_width = env_value_width(key_width, terminal_width),
+                );
+            }
+        }
+        println!();
     }
-    println!();
+
     println!(
         "  {}  {}",
         colors::dim("Config"),
@@ -493,6 +582,85 @@ mod tests {
         assert!(!is_sensitive_env_key("MONKEY"));
     }
 
+    fn source(kind: EnvOverrideKind, managed: bool) -> EnvOverrideSource {
+        EnvOverrideSource {
+            path: std::path::PathBuf::from("/tmp/shine.env.toml"),
+            kind,
+            is_managed_overlay: managed,
+        }
+    }
+
+    #[test]
+    fn env_source_group_maps_each_layer() {
+        assert_eq!(env_source_group(None), EnvSourceGroup::Config);
+        assert_eq!(
+            env_source_group(Some(&source(EnvOverrideKind::Global, false))),
+            EnvSourceGroup::Global
+        );
+        assert_eq!(
+            env_source_group(Some(&source(EnvOverrideKind::Overlay, false))),
+            EnvSourceGroup::Overlay { managed: false }
+        );
+        assert_eq!(
+            env_source_group(Some(&source(EnvOverrideKind::Overlay, true))),
+            EnvSourceGroup::Overlay { managed: true }
+        );
+        assert_eq!(
+            env_source_group(Some(&source(EnvOverrideKind::Project, false))),
+            EnvSourceGroup::Project
+        );
+    }
+
+    #[test]
+    fn group_env_keys_orders_sections_and_skips_empty() {
+        let global = source(EnvOverrideKind::Global, false);
+        let overlay = source(EnvOverrideKind::Overlay, true);
+        // Keys deliberately out of source order; config keys have no override.
+        let keys = ["PROJECT_LESS", "FROM_OVERLAY", "FROM_CONFIG", "FROM_GLOBAL"];
+        let groups = group_env_keys(keys.iter().copied(), |key| match key {
+            "FROM_GLOBAL" => Some(&global),
+            "FROM_OVERLAY" => Some(&overlay),
+            _ => None,
+        });
+
+        // Only Config, Global, Overlay are present (Project skipped), in order.
+        assert_eq!(
+            groups.iter().map(|(g, _)| *g).collect::<Vec<_>>(),
+            vec![
+                EnvSourceGroup::Config,
+                EnvSourceGroup::Global,
+                EnvSourceGroup::Overlay { managed: true },
+            ]
+        );
+        assert_eq!(groups[0].1, vec!["PROJECT_LESS", "FROM_CONFIG"]);
+        assert_eq!(groups[1].1, vec!["FROM_GLOBAL"]);
+        assert_eq!(groups[2].1, vec!["FROM_OVERLAY"]);
+    }
+
+    #[test]
+    fn group_env_keys_all_config_yields_single_group() {
+        let keys = ["A", "B", "C"];
+        let groups = group_env_keys(keys.iter().copied(), |_| None);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, EnvSourceGroup::Config);
+        assert_eq!(groups[0].1, vec!["A", "B", "C"]);
+    }
+
+    #[test]
+    fn env_source_group_labels_are_stable() {
+        assert_eq!(EnvSourceGroup::Config.label(), "config.toml");
+        assert_eq!(EnvSourceGroup::Global.label(), "global env file");
+        assert_eq!(
+            EnvSourceGroup::Overlay { managed: false }.label(),
+            "overlay"
+        );
+        assert_eq!(
+            EnvSourceGroup::Overlay { managed: true }.label(),
+            "overlay (managed)"
+        );
+        assert_eq!(EnvSourceGroup::Project.label(), "project env file");
+    }
+
     #[test]
     fn env_show_truncates_long_values_to_requested_width() {
         assert_eq!(truncate_text("abcdefgh", 5), "abcd…");
@@ -852,10 +1020,16 @@ mod tests {
         path: std::path::PathBuf,
         is_managed_overlay: bool,
     ) {
+        let kind = if is_managed_overlay {
+            crate::config::EnvOverrideKind::Overlay
+        } else {
+            crate::config::EnvOverrideKind::Global
+        };
         config.env_override_sources.insert(
             key.to_string(),
             crate::config::EnvOverrideSource {
                 path,
+                kind,
                 is_managed_overlay,
             },
         );

@@ -8,8 +8,8 @@ use tokio::fs;
 
 use super::discovery::ProjectConfig;
 use super::{
-    Config, DEFAULT_ENV_VARS, EnvOverrideSource, LEGACY_ENV_FILE, LEGACY_PROJECT_ENV_FILE,
-    LEGACY_PROJECT_FILES_REMOVAL_VERSION, PROJECT_ENV_FILE,
+    Config, DEFAULT_ENV_VARS, EnvOverrideKind, EnvOverrideSource, LEGACY_ENV_FILE,
+    LEGACY_PROJECT_ENV_FILE, LEGACY_PROJECT_FILES_REMOVAL_VERSION, PROJECT_ENV_FILE,
 };
 
 #[derive(serde::Deserialize)]
@@ -120,7 +120,7 @@ impl Config {
         let Some(overrides) = read_env_file(&env_path).await? else {
             return Ok(());
         };
-        self.apply_env_overrides(env_path, false, overrides);
+        self.apply_env_overrides(env_path, EnvOverrideKind::Global, false, overrides);
         Ok(())
     }
 
@@ -135,7 +135,12 @@ impl Config {
         // If no manual overlay dir is configured, `active_presets_overlay_dir()`
         // can only have resolved to the shine-managed Git checkout.
         let is_managed_overlay = self.presets_overlay_dir_override.is_none();
-        self.apply_env_overrides(env_path, is_managed_overlay, overrides);
+        self.apply_env_overrides(
+            env_path,
+            EnvOverrideKind::Overlay,
+            is_managed_overlay,
+            overrides,
+        );
         Ok(())
     }
 
@@ -163,13 +168,14 @@ impl Config {
             );
         }
 
-        self.apply_env_overrides(env_path, false, overrides);
+        self.apply_env_overrides(env_path, EnvOverrideKind::Project, false, overrides);
         Ok(())
     }
 
     fn apply_env_overrides(
         &mut self,
         path: std::path::PathBuf,
+        kind: EnvOverrideKind,
         is_managed_overlay: bool,
         overrides: EnvOverrides,
     ) {
@@ -178,6 +184,7 @@ impl Config {
                 key.clone(),
                 EnvOverrideSource {
                     path: path.clone(),
+                    kind,
                     is_managed_overlay,
                 },
             );
@@ -636,6 +643,7 @@ mod tests {
 
         let source = config.env_override_source("TOKEN").unwrap();
         assert_eq!(source.path, dir.join(PROJECT_ENV_FILE));
+        assert_eq!(source.kind, EnvOverrideKind::Global);
         assert!(!source.is_managed_overlay);
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -656,6 +664,7 @@ mod tests {
 
         let source = config.env_override_source("TOKEN").unwrap();
         assert_eq!(source.path, overlay_dir.join(PROJECT_ENV_FILE));
+        assert_eq!(source.kind, EnvOverrideKind::Overlay);
         assert!(
             !source.is_managed_overlay,
             "a manual overlay dir must not be reported as the managed mirror"
@@ -681,6 +690,7 @@ mod tests {
 
         let source = config.env_override_source("TOKEN").unwrap();
         assert_eq!(source.path, overlay_dir.join(PROJECT_ENV_FILE));
+        assert_eq!(source.kind, EnvOverrideKind::Overlay);
         assert!(
             source.is_managed_overlay,
             "the shine-managed Git overlay mirror must be flagged as managed"
