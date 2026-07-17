@@ -610,6 +610,11 @@ shim), a bun command installs a **shine-managed regular launcher file** — see 
 invariants in [`architecture/invariants.md`](docs/kb/architecture/invariants.md) and the PRD
 [`docs/bun-shell-presets-prd.md`](docs/bun-shell-presets-prd.md).
 
+Describe a bun entry with a `//` comment header at the top of the source (the JS/TS mirror of the
+`.sh`/`.ps1` `#` block, parsed by `presets::parse_bun_description`), or set `description = "…"` in
+the `[[files]]` entry (works for any runtime, mirrors app presets) — an explicit `description` wins
+over the header. `shine shell list` shows the full block; `shine info` shows its first line.
+
 A bun `[[files]]` entry may also declare `env = ["KEY", "SOURCE=TARGET"]` (same grammar as `shine
 env run --with`, ordered, duplicate targets rejected, names validated at metadata-load time; valid
 only when `runtime = "bun"`). At launch the generated launcher runs the child through `shine env run

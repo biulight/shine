@@ -34,6 +34,7 @@ needs_source = false
 # target = "mytool"
 # runtime = "bun"
 # platforms = ["unix", "windows"]
+# description = "What mytool does."  # or a `// ...` header at the top of my_tool.ts
 # transforms = ["template"] # opt into @@VAR@@ env substitution (static, needs `shine upgrade`)
 # env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]  # inject shine values at launch; read via Bun.env
 "#;

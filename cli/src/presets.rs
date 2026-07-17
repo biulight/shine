@@ -218,6 +218,38 @@ pub fn parse_script_description(content: &[u8]) -> Vec<String> {
     desc
 }
 
+/// Parse a leading `//` comment block from a bun source (`.ts`/`.js`/`.mts`/`.mjs`)
+/// as its description — the JS/TS-comment mirror of `parse_script_description`'s
+/// `#` handling for `.sh`/`.ps1`. An optional `#!` shebang is skipped; `// ` lines
+/// are collected (a bare `//` is a blank line); the first non-comment line ends the
+/// block; trailing blank lines are trimmed. There are no `shine-dest`/`shine-template`
+/// annotations to skip here — those are `#`/`.sh`-only.
+pub fn parse_bun_description(content: &[u8]) -> Vec<String> {
+    let Ok(text) = std::str::from_utf8(content) else {
+        return vec![];
+    };
+    let mut desc = Vec::new();
+
+    for line in text.lines() {
+        if line.starts_with("#!") {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("// ") {
+            desc.push(rest.to_string());
+        } else if line.trim_end() == "//" {
+            desc.push(String::new());
+        } else {
+            break;
+        }
+    }
+
+    while desc.last().is_some_and(|l: &String| l.is_empty()) {
+        desc.pop();
+    }
+
+    desc
+}
+
 /// List all preset categories under `prefix/` and their scripts with descriptions.
 ///
 /// Categories are the immediate subdirectories of `prefix/`. Scripts within each
@@ -587,6 +619,34 @@ mod tests {
         let script = b"#!/bin/bash\n# First.\n#\n#\n";
         let desc = parse_script_description(script);
         assert_eq!(desc, vec!["First."]);
+    }
+
+    #[test]
+    fn parse_bun_description_extracts_slash_comment_block() {
+        let script = b"// First line.\n// Second line.\nconsole.log('hi')\n";
+        let desc = parse_bun_description(script);
+        assert_eq!(desc, vec!["First line.", "Second line."]);
+    }
+
+    #[test]
+    fn parse_bun_description_skips_shebang_and_stops_at_code() {
+        let script = b"#!/usr/bin/env bun\n// Only line.\nexport const x = 1\n";
+        let desc = parse_bun_description(script);
+        assert_eq!(desc, vec!["Only line."]);
+    }
+
+    #[test]
+    fn parse_bun_description_handles_bare_slash_as_empty_line() {
+        let script = b"// First.\n//\n// Third.\n";
+        let desc = parse_bun_description(script);
+        assert_eq!(desc, vec!["First.", "", "Third."]);
+    }
+
+    #[test]
+    fn parse_bun_description_empty_when_starts_with_code() {
+        let script = b"import { foo } from './foo'\n// not a header\n";
+        let desc = parse_bun_description(script);
+        assert!(desc.is_empty());
     }
 
     #[test]

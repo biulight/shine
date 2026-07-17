@@ -48,6 +48,7 @@ struct CategoryToml {
 struct FileToml {
     source: String,
     target: Option<String>,
+    description: Option<String>,
     needs_source: Option<bool>,
     platforms: Option<Vec<String>>,
     runtime: Option<String>,
@@ -121,7 +122,8 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
                             resolved.source_rel
                         )
                     })?;
-                    Ok(resolved.into_shell_file(presets::parse_script_description(&bytes)))
+                    let description = resolved.describe(&bytes);
+                    Ok(resolved.into_shell_file(description))
                 })
                 .collect::<Result<Vec<_>>>()?,
             None => collect_embedded_scripts(name)?
@@ -219,7 +221,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
             let bytes = fs::read(&source_path)
                 .await
                 .with_context(|| format!("reading preset file: {}", source_path.display()))?;
-            shell_files.push(resolved.into_shell_file(presets::parse_script_description(&bytes)));
+            let description = resolved.describe(&bytes);
+            shell_files.push(resolved.into_shell_file(description));
         }
 
         return Ok(ShellCategory {
@@ -396,6 +399,9 @@ fn parse_runtime(value: Option<&str>) -> Result<crate::bin_links::LinkRuntime> {
 struct ResolvedFile {
     source_rel: PathBuf,
     command_name: String,
+    /// Optional `description = "..."` from `[[files]]`; when set it overrides the
+    /// description parsed from the source's leading comment block.
+    description: Option<String>,
     needs_source: bool,
     runtime: crate::bin_links::LinkRuntime,
     transforms: Vec<String>,
@@ -407,10 +413,24 @@ impl ResolvedFile {
         Self {
             source_rel,
             command_name,
+            description: None,
             needs_source: false,
             runtime: crate::bin_links::LinkRuntime::Native,
             transforms: Vec::new(),
             env: Vec::new(),
+        }
+    }
+
+    /// Resolve the command description from the source `bytes`: an explicit
+    /// metadata `description` wins; otherwise parse the source's leading comment
+    /// block with the runtime-correct leader (`//` for bun, `#` for native).
+    fn describe(&self, bytes: &[u8]) -> Vec<String> {
+        if let Some(description) = &self.description {
+            return vec![description.clone()];
+        }
+        match self.runtime {
+            crate::bin_links::LinkRuntime::Bun => presets::parse_bun_description(bytes),
+            crate::bin_links::LinkRuntime::Native => presets::parse_script_description(bytes),
         }
     }
 
@@ -447,6 +467,7 @@ fn resolve_metadata_file(file: &FileToml, ctx: &str) -> Result<ResolvedFile> {
     Ok(ResolvedFile {
         source_rel,
         command_name,
+        description: file.description.clone(),
         needs_source,
         runtime,
         transforms,
@@ -535,6 +556,7 @@ mod tests {
         let file = FileToml {
             source: "set_proxy.ps1".to_string(),
             target: Some("setproxy".to_string()),
+            description: None,
             needs_source: Some(true),
             platforms: Some(vec!["windows".to_string()]),
             runtime: None,
@@ -551,6 +573,7 @@ mod tests {
         let file = FileToml {
             source: "set_proxy.sh".to_string(),
             target: Some("setproxy".to_string()),
+            description: None,
             needs_source: Some(true),
             platforms: None,
             runtime: None,
@@ -567,6 +590,7 @@ mod tests {
         let file = FileToml {
             source: "set_proxy.sh".to_string(),
             target: Some("setproxy".to_string()),
+            description: None,
             needs_source: Some(true),
             platforms: Some(vec!["plan9".to_string()]),
             runtime: None,
@@ -1001,6 +1025,96 @@ mod tests {
             err.contains("duplicate target variable"),
             "unexpected error: {err}"
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_bun_description_from_slash_header() {
+        let dir = make_temp_dir().await;
+        let category_root = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category_root).await.unwrap();
+        fs::write(
+            category_root.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            category_root.join("tool.ts"),
+            b"// Fetch and print status.\n// Reads Bun.env.API_URL.\nconsole.log('hi')\n",
+        )
+        .await
+        .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let categories = load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap();
+        assert_eq!(
+            categories[0].files[0].description,
+            vec!["Fetch and print status.", "Reads Bun.env.API_URL."]
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_file_description_overrides_bun_header() {
+        let dir = make_temp_dir().await;
+        let category_root = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category_root).await.unwrap();
+        fs::write(
+            category_root.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ndescription = \"Explicit metadata description.\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            category_root.join("tool.ts"),
+            b"// header that should be overridden\nconsole.log('hi')\n",
+        )
+        .await
+        .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let categories = load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap();
+        assert_eq!(
+            categories[0].files[0].description,
+            vec!["Explicit metadata description."]
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_file_description_overrides_native_hash_header() {
+        let dir = make_temp_dir().await;
+        let category_root = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category_root).await.unwrap();
+        fs::write(
+            category_root.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\ndescription = \"From metadata.\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            category_root.join("tool.sh"),
+            b"#!/bin/bash\n# hash header that should be overridden\necho hi\n",
+        )
+        .await
+        .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let categories = load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap();
+        assert_eq!(categories[0].files[0].description, vec!["From metadata."]);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
