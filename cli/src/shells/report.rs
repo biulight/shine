@@ -155,6 +155,8 @@ pub async fn handle_list(config: &crate::config::Config) -> anyhow::Result<()> {
 
     println!("{}\n", colors::bold("Shell Preset Categories"));
 
+    let bun_available = crate::platform::command_exists_on_path("bun");
+
     for cat in &categories {
         let word = if cat.files.len() == 1 {
             "script"
@@ -187,6 +189,17 @@ pub async fn handle_list(config: &crate::config::Config) -> anyhow::Result<()> {
                         }
                     }
                 }
+            }
+            if script.runtime == crate::bin_links::LinkRuntime::Bun {
+                let status = if bun_available {
+                    colors::green("available")
+                } else {
+                    colors::yellow("not found on PATH")
+                };
+                println!(
+                    "{continuation_indent}{} {status}",
+                    colors::dim("runtime: bun ·")
+                );
             }
             println!();
         }

@@ -307,6 +307,8 @@ mod tests {
                 command_name: command.to_string(),
                 description: vec![],
                 needs_source: false,
+                runtime: crate::bin_links::LinkRuntime::Native,
+                transforms: vec![],
             },
             source_path: PathBuf::from(format!("/tmp/{source}")),
             rendered_path: PathBuf::from(format!("/tmp/rendered/{source}")),

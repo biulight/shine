@@ -198,7 +198,8 @@ shine/
 │       │   └── discovery.rs  # Project-config discovery, SHINE_CONFIG_DIR/
 │       │                     # SHINE_PRESETS priority chain
 │       ├── presets.rs        # rust-embed asset extraction, list_categories, parse_script_description
-│       ├── bin_links.rs      # Symlink management in ~/.shine/bin/
+│       ├── bin_links.rs      # ~/.shine/bin/ command management: LinkRuntime (Native symlink/shim
+│       │                     # vs Bun launcher), marker-based launcher ownership + current-ness
 │       ├── status.rs         # Shared install-status row builders used by `list`/`info`
 │       ├── clear.rs          # Clear stale runtime state after schema changes
 │       ├── colors.rs         # Terminal color helpers
@@ -595,6 +596,19 @@ Hard rules (details and runbook: [`docs/kb/conventions.md`](docs/kb/conventions.
    ```
 3. `cargo build` will re-embed automatically (tracked by `build.rs`).
 4. `shine shell list` will display the new category; `shine shell install <category>` will install it.
+
+Bun entries: a `[[files]]` entry may set `runtime = "bun"` with a `.ts`/`.js`/`.mts`/`.mjs`
+`source` to expose a cross-platform command run via `bun <script> "$@"`. Bun is an explicit
+external prerequisite — shine never installs it and only *checks* for it (a missing `bun` makes the
+generated launcher exit `127` with an install hint). Rules: `runtime = "bun"` cannot combine with
+`needs_source = true` (a subprocess can't mutate the parent shell — keep the thin `.sh`/`.ps1`
+wrapper for env mutation); the source must be a bun extension; only `[[files]]`-listed entries
+become commands (helper `.ts` modules are ignored by auto-collection). Env templating for bun (and
+any) entries is opt-in via `transforms = ["template"]` (the `# shine-template: true` annotation is
+`.sh`/`.ps1`-only, since `#` is not a JS/TS comment). Unlike native commands (Unix symlink / Windows
+shim), a bun command installs a **shine-managed regular launcher file** — see the launcher ownership
+invariants in [`architecture/invariants.md`](docs/kb/architecture/invariants.md) and the PRD
+[`docs/bun-shell-presets-prd.md`](docs/bun-shell-presets-prd.md).
 
 ### App preset category
 

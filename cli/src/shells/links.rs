@@ -25,6 +25,7 @@ pub(super) fn build_link_specs(
                 crate::bin_links::LinkSpec {
                     source: effective,
                     link_name: OsString::from(&file.command_name),
+                    runtime: file.runtime,
                 }
             })
         })

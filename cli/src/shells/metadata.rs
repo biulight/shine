@@ -26,6 +26,12 @@ pub struct ShellFile {
     pub command_name: String,
     pub description: Vec<String>,
     pub needs_source: bool,
+    /// How the command is invoked: native (symlink/shim) or via the `bun` runtime.
+    pub runtime: crate::bin_links::LinkRuntime,
+    /// Declared install-time transforms (e.g. `["template"]`) applied to the source
+    /// before linking. Empty means "no metadata-declared transform" — native scripts
+    /// may still opt into templating via the `# shine-template: true` annotation.
+    pub transforms: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +46,8 @@ struct FileToml {
     target: Option<String>,
     needs_source: Option<bool>,
     platforms: Option<Vec<String>>,
+    runtime: Option<String>,
+    transforms: Option<Vec<String>>,
 }
 
 pub fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<ShellCategory>> {
@@ -99,21 +107,16 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
                 })
                 .map(|file| {
                     let file = file?;
-                    let needs_source = file.needs_source.unwrap_or(false);
-                    let source_rel = normalize_shell_source(&file.source)
-                        .with_context(|| format!("invalid source in shell/{name}/shine.toml"))?;
-                    let command_name = resolve_command_name(&source_rel, file.target.as_deref())
-                        .with_context(|| format!("invalid target in shell/{name}/shine.toml"))?;
-                    let asset_path = format!("shell/{name}/{}", source_rel.display());
+                    let ctx = format!("shell/{name}/shine.toml");
+                    let resolved = resolve_metadata_file(&file, &ctx)?;
+                    let asset_path = format!("shell/{name}/{}", resolved.source_rel.display());
                     let bytes = presets::read_asset_bytes(&asset_path).with_context(|| {
-                        format!("shell/{name}/shine.toml references missing file: {source_rel:?}")
+                        format!(
+                            "shell/{name}/shine.toml references missing file: {:?}",
+                            resolved.source_rel
+                        )
                     })?;
-                    Ok(ShellFile {
-                        source_rel,
-                        command_name,
-                        description: presets::parse_script_description(&bytes),
-                        needs_source,
-                    })
+                    Ok(resolved.into_shell_file(presets::parse_script_description(&bytes)))
                 })
                 .collect::<Result<Vec<_>>>()?,
             None => collect_embedded_scripts(name)?
@@ -127,6 +130,8 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
                         command_name,
                         description: presets::parse_script_description(&bytes),
                         needs_source: false,
+                        runtime: crate::bin_links::LinkRuntime::Native,
+                        transforms: Vec::new(),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -152,6 +157,8 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
                     command_name: default_command_name(&source_rel)?,
                     description: presets::parse_script_description(&bytes),
                     needs_source: false,
+                    runtime: crate::bin_links::LinkRuntime::Native,
+                    transforms: Vec::new(),
                     source_rel,
                 })
             })
@@ -179,15 +186,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
                 })
                 .map(|file| {
                     let file = file?;
-                    let needs_source = file.needs_source.unwrap_or(false);
-                    let source_rel = normalize_shell_source(&file.source).with_context(|| {
-                        format!("invalid source in {}", metadata_path.display())
-                    })?;
-                    let command_name = resolve_command_name(&source_rel, file.target.as_deref())
-                        .with_context(|| {
-                            format!("invalid target in {}", metadata_path.display())
-                        })?;
-                    Ok((source_rel, command_name, needs_source))
+                    let ctx = metadata_path.display().to_string();
+                    resolve_metadata_file(&file, &ctx)
                 })
                 .collect::<Result<Vec<_>>>()?,
             None => collect_merged_fs_scripts(config, &category_rel)
@@ -195,29 +195,24 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
                 .into_iter()
                 .map(|source_rel| {
                     let command_name = default_command_name(&source_rel)?;
-                    Ok((source_rel, command_name, false))
+                    Ok(ResolvedFile::native(source_rel, command_name))
                 })
                 .collect::<Result<Vec<_>>>()?,
         };
 
         let mut shell_files = Vec::new();
-        for (source_rel, command_name, needs_source) in files {
-            let source_path = config.preset_path(category_rel.join(&source_rel));
+        for resolved in files {
+            let source_path = config.preset_path(category_rel.join(&resolved.source_rel));
             if !source_path.exists() {
                 bail!(
                     "shell/{name}/shine.toml references missing file: {}",
-                    source_rel.display()
+                    resolved.source_rel.display()
                 );
             }
             let bytes = fs::read(&source_path)
                 .await
                 .with_context(|| format!("reading preset file: {}", source_path.display()))?;
-            shell_files.push(ShellFile {
-                source_rel,
-                command_name,
-                description: presets::parse_script_description(&bytes),
-                needs_source,
-            });
+            shell_files.push(resolved.into_shell_file(presets::parse_script_description(&bytes)));
         }
 
         return Ok(ShellCategory {
@@ -238,6 +233,8 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
             command_name: default_command_name(&source_rel)?,
             description: presets::parse_script_description(&bytes),
             needs_source: false,
+            runtime: crate::bin_links::LinkRuntime::Native,
+            transforms: Vec::new(),
             source_rel,
         });
     }
@@ -304,7 +301,9 @@ fn collect_embedded_scripts(name: &str) -> Result<Vec<PathBuf>> {
     Ok(scripts.into_iter().collect())
 }
 
-fn normalize_shell_source(path: impl AsRef<Path>) -> Result<PathBuf> {
+/// Validate a `[[files]]` `source` as a safe relative path (no absolute, no `..`,
+/// not `shine.toml`) without checking its extension.
+fn normalize_relative_source(path: impl AsRef<Path>) -> Result<PathBuf> {
     let path = path.as_ref();
     if path.as_os_str().is_empty() {
         bail!("source path must not be empty");
@@ -329,8 +328,35 @@ fn normalize_shell_source(path: impl AsRef<Path>) -> Result<PathBuf> {
     if normalized.file_name().and_then(|name| name.to_str()) == Some("shine.toml") {
         bail!("source path must not point to shine.toml");
     }
+    Ok(normalized)
+}
+
+/// Native (auto-collected or `runtime = "native"`) source: relative + `.sh`/`.ps1`.
+fn normalize_shell_source(path: impl AsRef<Path>) -> Result<PathBuf> {
+    let normalized = normalize_relative_source(path)?;
     if !is_shell_script(&normalized) {
         bail!("source path must end with .sh or .ps1");
+    }
+    Ok(normalized)
+}
+
+/// Metadata source validated against the declared runtime's allowed extensions.
+fn normalize_source(
+    path: impl AsRef<Path>,
+    runtime: crate::bin_links::LinkRuntime,
+) -> Result<PathBuf> {
+    let normalized = normalize_relative_source(path)?;
+    match runtime {
+        crate::bin_links::LinkRuntime::Native => {
+            if !is_shell_script(&normalized) {
+                bail!("source path must end with .sh or .ps1");
+            }
+        }
+        crate::bin_links::LinkRuntime::Bun => {
+            if !is_bun_script(&normalized) {
+                bail!("bun source path must end with .ts, .js, .mts, or .mjs");
+            }
+        }
     }
     Ok(normalized)
 }
@@ -340,6 +366,75 @@ fn is_shell_script(path: &Path) -> bool {
         path.extension().and_then(|ext| ext.to_str()),
         Some("sh" | "ps1")
     )
+}
+
+fn is_bun_script(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("ts" | "js" | "mts" | "mjs")
+    )
+}
+
+fn parse_runtime(value: Option<&str>) -> Result<crate::bin_links::LinkRuntime> {
+    match value {
+        None | Some("native") => Ok(crate::bin_links::LinkRuntime::Native),
+        Some("bun") => Ok(crate::bin_links::LinkRuntime::Bun),
+        Some(other) => bail!("unsupported runtime `{other}` (expected `bun`)"),
+    }
+}
+
+/// A validated `[[files]]` entry, before its script bytes are read for the
+/// description. Shared by the embedded and installed metadata loaders.
+struct ResolvedFile {
+    source_rel: PathBuf,
+    command_name: String,
+    needs_source: bool,
+    runtime: crate::bin_links::LinkRuntime,
+    transforms: Vec<String>,
+}
+
+impl ResolvedFile {
+    fn native(source_rel: PathBuf, command_name: String) -> Self {
+        Self {
+            source_rel,
+            command_name,
+            needs_source: false,
+            runtime: crate::bin_links::LinkRuntime::Native,
+            transforms: Vec::new(),
+        }
+    }
+
+    fn into_shell_file(self, description: Vec<String>) -> ShellFile {
+        ShellFile {
+            source_rel: self.source_rel,
+            command_name: self.command_name,
+            description,
+            needs_source: self.needs_source,
+            runtime: self.runtime,
+            transforms: self.transforms,
+        }
+    }
+}
+
+fn resolve_metadata_file(file: &FileToml, ctx: &str) -> Result<ResolvedFile> {
+    let runtime = parse_runtime(file.runtime.as_deref())
+        .with_context(|| format!("invalid runtime in {ctx}"))?;
+    let needs_source = file.needs_source.unwrap_or(false);
+    if runtime == crate::bin_links::LinkRuntime::Bun && needs_source {
+        bail!("{ctx}: `runtime = \"bun\"` cannot be combined with `needs_source = true`");
+    }
+    let source_rel = normalize_source(&file.source, runtime)
+        .with_context(|| format!("invalid source in {ctx}"))?;
+    let command_name = resolve_command_name(&source_rel, file.target.as_deref())
+        .with_context(|| format!("invalid target in {ctx}"))?;
+    let transforms = file.transforms.clone().unwrap_or_default();
+    Ok(ResolvedFile {
+        source_rel,
+        command_name,
+        needs_source,
+        runtime,
+        transforms,
+    })
 }
 
 fn resolve_command_name(source_rel: &Path, target: Option<&str>) -> Result<String> {
@@ -425,6 +520,8 @@ mod tests {
             target: Some("setproxy".to_string()),
             needs_source: Some(true),
             platforms: Some(vec!["windows".to_string()]),
+            runtime: None,
+            transforms: None,
         };
 
         assert!(file_matches_platform("proxy", &file, "windows").unwrap());
@@ -438,6 +535,8 @@ mod tests {
             target: Some("setproxy".to_string()),
             needs_source: Some(true),
             platforms: None,
+            runtime: None,
+            transforms: None,
         };
 
         assert!(file_matches_platform("proxy", &file, "windows").unwrap());
@@ -451,6 +550,8 @@ mod tests {
             target: Some("setproxy".to_string()),
             needs_source: Some(true),
             platforms: Some(vec!["plan9".to_string()]),
+            runtime: None,
+            transforms: None,
         };
 
         let err = file_matches_platform("proxy", &file, "unix")
@@ -665,5 +766,153 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("plain filename"));
+    }
+
+    #[test]
+    fn parse_runtime_accepts_native_and_bun_rejects_others() {
+        use crate::bin_links::LinkRuntime;
+        assert_eq!(parse_runtime(None).unwrap(), LinkRuntime::Native);
+        assert_eq!(parse_runtime(Some("native")).unwrap(), LinkRuntime::Native);
+        assert_eq!(parse_runtime(Some("bun")).unwrap(), LinkRuntime::Bun);
+        let err = parse_runtime(Some("deno")).unwrap_err().to_string();
+        assert!(err.contains("unsupported runtime"));
+    }
+
+    #[test]
+    fn normalize_source_enforces_extension_per_runtime() {
+        use crate::bin_links::LinkRuntime;
+        for ext in ["ts", "js", "mts", "mjs"] {
+            assert!(
+                normalize_source(format!("tool.{ext}"), LinkRuntime::Bun).is_ok(),
+                ".{ext} should be a valid bun source"
+            );
+        }
+        assert!(normalize_source("tool.sh", LinkRuntime::Bun).is_err());
+        assert!(normalize_source("tool.ts", LinkRuntime::Native).is_err());
+        assert!(normalize_source("tool.sh", LinkRuntime::Native).is_ok());
+        // Path traversal is rejected regardless of runtime.
+        assert!(normalize_source("../evil.ts", LinkRuntime::Bun).is_err());
+    }
+
+    async fn write_bun_category(dir: &Path, shine_toml: &[u8]) -> Config {
+        let category_root = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category_root).await.unwrap();
+        fs::write(category_root.join("shine.toml"), shine_toml)
+            .await
+            .unwrap();
+        fs::write(category_root.join("tool.ts"), b"// tool\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(dir);
+        config.is_external_presets = true;
+        config
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_accepts_bun_runtime_with_transforms() {
+        let dir = make_temp_dir().await;
+        let config = write_bun_category(
+            &dir,
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n",
+        )
+        .await;
+
+        let categories = load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap();
+        let file = &categories[0].files[0];
+        assert_eq!(file.command_name, "mytool");
+        assert_eq!(file.source_rel, PathBuf::from("tool.ts"));
+        assert_eq!(file.runtime, crate::bin_links::LinkRuntime::Bun);
+        assert_eq!(file.transforms, vec!["template".to_string()]);
+        assert!(!file.needs_source);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_defaults_bun_command_name_to_stem() {
+        let dir = make_temp_dir().await;
+        let config = write_bun_category(
+            &dir,
+            b"[[files]]\nsource = \"tool.ts\"\nruntime = \"bun\"\n",
+        )
+        .await;
+
+        let categories = load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap();
+        assert_eq!(categories[0].files[0].command_name, "tool");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_rejects_bun_with_needs_source() {
+        let dir = make_temp_dir().await;
+        let config = write_bun_category(
+            &dir,
+            b"[[files]]\nsource = \"tool.ts\"\nruntime = \"bun\"\nneeds_source = true\n",
+        )
+        .await;
+
+        let err = load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("needs_source"), "unexpected error: {err}");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_rejects_unknown_runtime() {
+        let dir = make_temp_dir().await;
+        let config = write_bun_category(
+            &dir,
+            b"[[files]]\nsource = \"tool.ts\"\nruntime = \"deno\"\n",
+        )
+        .await;
+
+        let err = format!(
+            "{:#}",
+            load_installed_categories(&config, Some("custom"))
+                .await
+                .unwrap_err()
+        );
+        assert!(
+            err.contains("unsupported runtime"),
+            "unexpected error: {err}"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_rejects_bun_source_with_shell_extension() {
+        let dir = make_temp_dir().await;
+        let category_root = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category_root).await.unwrap();
+        fs::write(
+            category_root.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\nruntime = \"bun\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category_root.join("tool.sh"), b"#!/bin/bash\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let err = format!(
+            "{:#}",
+            load_installed_categories(&config, Some("custom"))
+                .await
+                .unwrap_err()
+        );
+        assert!(err.contains("bun source path"), "unexpected error: {err}");
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 }
