@@ -28,20 +28,29 @@ const TERMINATOR: &[u8] = b"\x1b\\";
 /// headroom without letting a misbehaving terminal grow the buffer unbounded.
 const MAX_RESPONSE_LEN: usize = 64;
 
-/// RAII guard: disables tty `ECHO` on `fd` for the guard's lifetime and
-/// restores the original termios settings on drop — including on an early
-/// return or panic-unwind, unlike a shell script's manual restore-before-
-/// every-`return`, which is exactly the class of bug this replaces (PRD §10:
-/// "tty 状态必须使用 guard/清理路径恢复").
-struct EchoGuard {
+/// RAII guard: puts the tty on `fd` into a minimal query mode — `ECHO` **and**
+/// `ICANON` (canonical/line mode) disabled — for the guard's lifetime, and
+/// restores the original termios settings on drop, including on an early return
+/// or panic-unwind (PRD §10: "tty 状态必须使用 guard/清理路径恢复").
+///
+/// Clearing `ICANON` is essential, not cosmetic: an OSC 11 reply
+/// (`ESC ] 11 ; rgb:… ESC \`) carries **no newline**, and in canonical mode the
+/// line discipline withholds a newline-less line from `read`/`poll` until a
+/// newline arrives — so the reply is never delivered to the read loop, which
+/// then times out having read nothing, restores the tty, and lets the buffered
+/// reply leak into the next prompt. Disabling `ECHO` alone (the prior behavior)
+/// does not help: the reply is withheld regardless of echo. Reproduced against a
+/// real pty in `read_loop_reads_newline_free_response_through_pty`; observed in
+/// production on Ghostty, whose OSC 11 reply never surfaced under canonical mode.
+struct TtyQueryGuard {
     fd: RawFd,
     original: libc::termios,
 }
 
-impl EchoGuard {
+impl TtyQueryGuard {
     /// Returns `None` if `fd` is not a tty or termios can't be read/set;
     /// callers treat that as "can't query, skip OSC" (PRD §6.2).
-    fn disable(fd: RawFd) -> Option<Self> {
+    fn enter(fd: RawFd) -> Option<Self> {
         // SAFETY: `original` is a plain-old-data struct; zero-initializing it
         // is valid before `tcgetattr` fully populates it.
         let mut original: libc::termios = unsafe { std::mem::zeroed() };
@@ -51,7 +60,15 @@ impl EchoGuard {
             return None;
         }
         let mut raw = original;
-        raw.c_lflag &= !libc::ECHO;
+        raw.c_lflag &= !(libc::ECHO | libc::ICANON);
+        // In non-canonical mode `c_cc[VMIN]`/`[VTIME]` alias the same array
+        // indices as the canonical `VEOF`/`VEOL` control chars, so they hold
+        // meaningless values unless set explicitly. VMIN=1, VTIME=0 = "return as
+        // soon as ≥1 byte is available", matching the poll-then-read(1) loop;
+        // leaving them would inherit VEOF (0x04 = 4) as VMIN and stall a
+        // fragmented reply until 4 bytes accrued.
+        raw.c_cc[libc::VMIN] = 1;
+        raw.c_cc[libc::VTIME] = 0;
         // SAFETY: `fd` is open; `raw` is a valid in-pointer sized for `termios`.
         if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
             return None;
@@ -60,7 +77,7 @@ impl EchoGuard {
     }
 }
 
-impl Drop for EchoGuard {
+impl Drop for TtyQueryGuard {
     fn drop(&mut self) {
         // SAFETY: `fd` was validated open when this guard was constructed in
         // `disable`. Best-effort restore: a failure here is unrecoverable and
@@ -158,7 +175,7 @@ pub fn query_terminal_theme(budget: Duration) -> Option<Theme> {
         .open("/dev/tty")
         .ok()?;
     let fd = tty.as_raw_fd();
-    let _echo_guard = EchoGuard::disable(fd)?;
+    let _tty_guard = TtyQueryGuard::enter(fd)?;
 
     let deadline = Instant::now() + budget;
     tty.write_all(OSC_QUERY).ok()?;
@@ -285,11 +302,81 @@ mod tests {
     }
 
     #[test]
-    fn echo_guard_fails_closed_on_a_non_tty_fd() {
+    fn tty_query_guard_fails_closed_on_a_non_tty_fd() {
         let (a, _b) = UnixStream::pair().expect("unix socket pair");
         let fd = a.as_raw_fd();
-        // A UnixStream is not a tty, so EchoGuard::disable must fail closed
+        // A UnixStream is not a tty, so TtyQueryGuard::enter must fail closed
         // (tcgetattr returns ENOTTY) rather than silently doing nothing.
-        assert!(EchoGuard::disable(fd).is_none());
+        assert!(TtyQueryGuard::enter(fd).is_none());
+    }
+
+    /// Regression test for the Ghostty leak: opens a *real* pty (which — unlike
+    /// a `UnixStream` — has a line discipline, so canonical mode actually
+    /// applies) in its default canonical+echo state, then verifies the guard
+    /// puts it in a mode where a newline-free OSC 11 reply written to the master
+    /// is delivered to the read loop in full. Before the ICANON fix this read
+    /// nothing and returned empty at the deadline — the exact production leak.
+    #[test]
+    fn read_loop_reads_newline_free_response_through_pty() {
+        let mut master: RawFd = -1;
+        let mut slave: RawFd = -1;
+        // SAFETY: `openpty` writes two valid fds into the out-params; the
+        // termios/winsize in-params are null, so the kernel picks its defaults
+        // (canonical mode + echo — the state that caused the leak).
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
+
+        // Confirm the fixture reproduces the buggy precondition.
+        let mut before: libc::termios = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::tcgetattr(slave, &mut before) }, 0);
+        assert!(
+            before.c_lflag & libc::ICANON != 0,
+            "a fresh pty slave must start in canonical mode"
+        );
+
+        let reply = b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\";
+        let got = {
+            let _guard = TtyQueryGuard::enter(slave).expect("guard on a real tty");
+
+            let mut during: libc::termios = unsafe { std::mem::zeroed() };
+            assert_eq!(unsafe { libc::tcgetattr(slave, &mut during) }, 0);
+            assert_eq!(during.c_lflag & libc::ICANON, 0, "ICANON must be cleared");
+            assert_eq!(during.c_lflag & libc::ECHO, 0, "ECHO must be cleared");
+
+            // Deliver the newline-free reply to the slave via the master.
+            // SAFETY: `master` is an open fd; `reply` is a valid byte buffer.
+            let n = unsafe { libc::write(master, reply.as_ptr().cast(), reply.len()) };
+            assert_eq!(n, reply.len() as isize, "short write to pty master");
+
+            let deadline = Instant::now() + Duration::from_millis(500);
+            read_until_terminator_or_deadline(slave, deadline)
+        };
+
+        assert_eq!(
+            got, reply,
+            "newline-free OSC reply must be read in full once ICANON is cleared"
+        );
+
+        // The guard restored canonical mode on drop.
+        let mut after: libc::termios = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::tcgetattr(slave, &mut after) }, 0);
+        assert!(
+            after.c_lflag & libc::ICANON != 0,
+            "ICANON must be restored after the guard drops"
+        );
+
+        // SAFETY: both fds were opened by `openpty` above and not yet closed.
+        unsafe {
+            libc::close(master);
+            libc::close(slave);
+        }
     }
 }

@@ -3,6 +3,38 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-16 — OSC 11 reply leaks in full because the tty stayed in canonical mode
+
+Follow-up to the 2026-07-14 entry. That fix (total-deadline `poll(2)` read in
+`cli/src/theme/osc.rs`) cured the *fragmented-tail* leak but left a second, distinct one that
+reproduces on Ghostty: the **whole** reply leaks — `\033]11;rgb:ffff/ffff/ffff\033\\` with the
+leading `\033]` intact, not just the tail.
+
+- **Symptom**: every fresh Ghostty login shell prints `^[]11;rgb:ffff/ffff/ffff^[\` before the
+  first prompt. The full sequence (leading `\033]` present) means the read loop consumed **zero**
+  bytes of it, unlike 2026-07-14 where the consumed head made `\033]` absent.
+- **Root cause**: `EchoGuard::disable` cleared `ECHO` but **not `ICANON`**, so the tty stayed in
+  canonical (line) mode during the query. An OSC 11 reply contains **no newline**, and in
+  canonical mode the line discipline withholds a newline-less line from `read`/`poll` until a
+  newline arrives — so `poll` never signals readable, the loop times out at 200 ms having read
+  nothing, restores the tty, and the buffered reply flushes into the next prompt. Disabling echo
+  is irrelevant to *this* leak: the bytes are withheld regardless of echo.
+- **Why it wasn't caught**: the `matrix_*` tests drive the read loop over a `UnixStream` socket
+  pair, which has **no line discipline**, so canonical mode never applied in test. Measured with a
+  real terminal: a cbreak probe (`tty.setcbreak`) returned the full 25-byte reply in-window with
+  no leak; the same probe leaving `ICANON` on returned 0 bytes and leaked. Slower terminals (Apple
+  Terminal/iTerm2) happened to mask it during the PRD's manual check — the reply raced in before
+  the timeout on those, but Ghostty's timing exposed it every time.
+- **Fix**: `EchoGuard` → `TtyQueryGuard`, which clears `ECHO | ICANON` and sets `VMIN=1`/`VTIME=0`
+  (required because in non-canonical mode those `c_cc` slots alias `VEOF`/`VEOL`; leaving them
+  inherits `VEOF`=4 as `VMIN` and stalls fragmented reads until 4 bytes accrue). Regression test
+  `read_loop_reads_newline_free_response_through_pty` uses a real `openpty` pair (which *does* have
+  a line discipline) so canonical mode is exercised — the exact gap the socket-pair tests had.
+- **Rule**: to read a terminal-control reply you must put the tty in **non-canonical** mode
+  (`ICANON` off), not merely turn echo off — control replies carry no newline, and canonical mode
+  will hold them hostage until one appears. And a fixture without a line discipline (socket pair,
+  pipe) cannot test tty-mode behavior; use a real pty (`openpty`).
+
 ## 2026-07-15 — `env set`/`encrypt` silently wrote a value an override file kept shadowing
 
 - **Symptom**: `shine env encrypt --from KEY` (or `env set KEY value`) reported success and
