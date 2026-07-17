@@ -17,6 +17,11 @@ bugs. Check this list before changing the modules named in each entry.
   managed root. An unreadable/non-UTF-8/unmarked file is always `NotManaged` — treated as a user
   conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
   format change re-detects installed launchers as stale on upgrade; changing it is a format bump.
+  The content embeds the entry's ordered `env` spec (the `--with` tokens of the
+  `shine env run --no-workspace … -- bun <script>` wrapper), so adding/removing/reordering an `env`
+  declaration changes the bytes and refreshes the launcher; an entry with no `env` produces the v1
+  bytes and stays current. Ownership/removal still key only on the marker + target, independent of
+  `env`.
 - **Backups use the `<name>.shine.bak` suffix** (`install_core/file_ops.rs::backup_path`).
   Uninstall restores from that exact name; changing the suffix orphans existing backups.
 - **`requires_admin` must persist on every manifest entry** (`install_core/manifest.rs::AppEntry`).

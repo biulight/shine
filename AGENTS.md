@@ -610,6 +610,17 @@ shim), a bun command installs a **shine-managed regular launcher file** — see 
 invariants in [`architecture/invariants.md`](docs/kb/architecture/invariants.md) and the PRD
 [`docs/bun-shell-presets-prd.md`](docs/bun-shell-presets-prd.md).
 
+A bun `[[files]]` entry may also declare `env = ["KEY", "SOURCE=TARGET"]` (same grammar as `shine
+env run --with`, ordered, duplicate targets rejected, names validated at metadata-load time; valid
+only when `runtime = "bun"`). At launch the generated launcher runs the child through `shine env run
+--no-workspace --with … -- bun <script>` so the resolved values reach the script via `Bun.env`;
+`<KEY>_SECRET` is decrypted per invocation (no cache — a Touch ID / pinentry backend prompts every
+run). This adds a runtime dependency on `shine` being on `PATH` (missing `shine` → exit `127`, like
+missing `bun`); entries with no `env` keep the v1 `bun <script>` launcher unchanged. `env`
+(runtime, no upgrade needed) and `transforms = ["template"]` (static `@@VAR@@`, needs `shine
+upgrade`) are independent and may combine. Full design:
+[`docs/bun-shell-preset-env-injection-prd.md`](docs/bun-shell-preset-env-injection-prd.md).
+
 ### App preset category
 
 Prefer `shine.toml` metadata over legacy `shine-dest:` annotations for new categories. Place `shine.toml` in `presets/app/<category>/` with at minimum `dest = "~/<path>"`. Add `transforms = ["jsonc-to-json"]` for JSONC files or `transforms = ["template"]` for files with `@@VAR_NAME@@` env placeholders.

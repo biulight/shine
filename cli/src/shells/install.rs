@@ -34,7 +34,8 @@ needs_source = false
 # target = "mytool"
 # runtime = "bun"
 # platforms = ["unix", "windows"]
-# transforms = ["template"] # opt into @@VAR@@ env substitution
+# transforms = ["template"] # opt into @@VAR@@ env substitution (static, needs `shine upgrade`)
+# env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]  # inject shine values at launch; read via Bun.env
 "#;
 
 pub async fn handle_init_template(force: bool) -> Result<()> {
@@ -1169,6 +1170,41 @@ mod tests {
             cat_dir.join("tool.ts").exists(),
             "external source must be preserved"
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_bun_preset_with_env_wraps_launcher_in_shine_env_run() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\nenv = [\"API_URL\", \"SERVICE_TOKEN=API_TOKEN\"]\n",
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join("tool.ts"), b"console.log(Bun.env.API_URL)\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        let launcher = fs::read_to_string(config.bin_dir().join("mytool"))
+            .await
+            .unwrap();
+        assert!(launcher.contains("command -v shine"));
+        assert!(launcher.contains(
+            "exec shine env run --no-workspace --with 'API_URL' --with 'SERVICE_TOKEN=API_TOKEN' -- bun "
+        ));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

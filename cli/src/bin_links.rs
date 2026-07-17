@@ -71,6 +71,11 @@ pub struct LinkSpec {
     pub source: PathBuf,
     pub link_name: OsString,
     pub runtime: LinkRuntime,
+    /// For `LinkRuntime::Bun`: ordered `--with` argument tokens (`KEY` or
+    /// `SOURCE=TARGET`) injected at launch through `shine env run`. Empty keeps
+    /// the v1 behavior — a plain `bun <script>` launcher with no `shine`
+    /// dependency — and produces byte-identical launcher content.
+    pub env: Vec<String>,
 }
 
 /// Remove symlinks in `bin_dir` whose link target starts with `managed_root`.
@@ -165,6 +170,7 @@ pub async fn link_executables(
             source: source.clone(),
             link_name: link_stem(source),
             runtime: LinkRuntime::Native,
+            env: Vec::new(),
         })
         .collect();
     link_executables_with_names(bin_dir, &specs, overwrite).await
@@ -218,7 +224,7 @@ pub async fn link_executables_with_names(
                             tokio::fs::remove_file(&link_path).await.with_context(|| {
                                 format!("removing stale symlink: {link_path:?}")
                             })?;
-                            create_link(&spec.source, &link_path, spec.runtime).await?;
+                            create_link(&spec.source, &link_path, spec.runtime, &spec.env).await?;
                             report.overwritten.push(link_path);
                         } else {
                             report.conflicts.push(LinkConflict {
@@ -231,14 +237,14 @@ pub async fn link_executables_with_names(
                 }
             }
             Ok(_) => {
-                match launcher_status(&link_path, &spec.source, spec.runtime).await? {
+                match launcher_status(&link_path, &spec.source, spec.runtime, &spec.env).await? {
                     LauncherStatus::Current => {
                         report.skipped.push(link_path);
                         continue;
                     }
                     LauncherStatus::Stale => {
                         remove_link(&link_path).await?;
-                        create_link(&spec.source, &link_path, spec.runtime).await?;
+                        create_link(&spec.source, &link_path, spec.runtime, &spec.env).await?;
                         report.overwritten.push(link_path);
                         continue;
                     }
@@ -247,7 +253,7 @@ pub async fn link_executables_with_names(
 
                 if overwrite {
                     remove_link(&link_path).await?;
-                    create_link(&spec.source, &link_path, spec.runtime).await?;
+                    create_link(&spec.source, &link_path, spec.runtime, &spec.env).await?;
                     report.overwritten.push(link_path);
                 } else {
                     report.conflicts.push(LinkConflict {
@@ -258,7 +264,7 @@ pub async fn link_executables_with_names(
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                create_link(&spec.source, &link_path, spec.runtime).await?;
+                create_link(&spec.source, &link_path, spec.runtime, &spec.env).await?;
                 report.created.push(link_path);
             }
             Err(e) => {
@@ -367,19 +373,24 @@ fn shim_target_from_content(content: &str) -> Option<PathBuf> {
     })
 }
 
-async fn create_link(source: &Path, link_path: &Path, runtime: LinkRuntime) -> Result<()> {
+async fn create_link(
+    source: &Path,
+    link_path: &Path,
+    runtime: LinkRuntime,
+    env: &[String],
+) -> Result<()> {
     #[cfg(unix)]
     {
         match runtime {
             LinkRuntime::Native => tokio::fs::symlink(source, link_path)
                 .await
                 .with_context(|| format!("creating symlink {link_path:?} -> {source:?}")),
-            LinkRuntime::Bun => write_unix_bun_launcher(source, link_path).await,
+            LinkRuntime::Bun => write_unix_bun_launcher(source, link_path, env).await,
         }
     }
     #[cfg(not(unix))]
     {
-        create_windows_shims(source, link_path, runtime).await
+        create_windows_shims(source, link_path, runtime, env).await
     }
 }
 
@@ -404,17 +415,18 @@ async fn launcher_status(
     link_path: &Path,
     source: &Path,
     runtime: LinkRuntime,
+    env: &[String],
 ) -> Result<LauncherStatus> {
     #[cfg(unix)]
     {
         match runtime {
-            LinkRuntime::Bun => unix_launcher_status(link_path, source).await,
+            LinkRuntime::Bun => unix_launcher_status(link_path, source, env).await,
             LinkRuntime::Native => Ok(LauncherStatus::NotManaged),
         }
     }
     #[cfg(not(unix))]
     {
-        windows_shim_status(link_path, source, runtime).await
+        windows_shim_status(link_path, source, runtime, env).await
     }
 }
 
@@ -427,10 +439,32 @@ fn shell_single_quote(value: &str) -> String {
 /// `unix_launcher_status` to detect staleness, so any change here is a format
 /// change that will refresh installed launchers on upgrade.
 #[cfg(unix)]
-fn unix_bun_launcher_content(source: &Path, name: &str) -> String {
+fn unix_bun_launcher_content(source: &Path, name: &str, env: &[String]) -> String {
     let target = source.display().to_string();
     let quoted_target = shell_single_quote(&target);
     let quoted_name = shell_single_quote(name);
+    // Empty `env` reproduces the v1 launcher byte-for-byte (no `shine` dependency);
+    // a declared `env` adds a `shine` presence check and runs the child through
+    // `shine env run --no-workspace` so values reach Bun via `Bun.env`.
+    let (shine_check, runner) = if env.is_empty() {
+        (String::new(), format!("exec bun {quoted_target} \"$@\"\n"))
+    } else {
+        let with_args = env
+            .iter()
+            .map(|token| format!("--with {}", shell_single_quote(token)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        (
+            format!(
+                "if ! command -v shine >/dev/null 2>&1; then\n  \
+                 printf 'shine: %s requires the shine command, which was not found on PATH.\\n' {quoted_name} >&2\n  \
+                 exit 127\nfi\n"
+            ),
+            format!(
+                "exec shine env run --no-workspace {with_args} -- bun {quoted_target} \"$@\"\n"
+            ),
+        )
+    };
     format!(
         "#!/usr/bin/env bash\n\
          {SHIM_MANAGED_MARKER}\n\
@@ -439,12 +473,12 @@ fn unix_bun_launcher_content(source: &Path, name: &str) -> String {
          printf 'shine: %s requires Bun, which was not found on PATH.\\n' {quoted_name} >&2\n  \
          printf 'shine: install Bun from https://bun.sh, then re-run %s.\\n' {quoted_name} >&2\n  \
          exit 127\nfi\n\
-         exec bun {quoted_target} \"$@\"\n"
+         {shine_check}{runner}"
     )
 }
 
 #[cfg(unix)]
-async fn write_unix_bun_launcher(source: &Path, link_path: &Path) -> Result<()> {
+async fn write_unix_bun_launcher(source: &Path, link_path: &Path, env: &[String]) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     if let Some(parent) = link_path.parent() {
         tokio::fs::create_dir_all(parent)
@@ -452,7 +486,7 @@ async fn write_unix_bun_launcher(source: &Path, link_path: &Path) -> Result<()> 
             .with_context(|| format!("creating bin dir: {parent:?}"))?;
     }
     let name = launcher_command_name(link_path);
-    tokio::fs::write(link_path, unix_bun_launcher_content(source, &name))
+    tokio::fs::write(link_path, unix_bun_launcher_content(source, &name, env))
         .await
         .with_context(|| format!("writing bun launcher: {link_path:?}"))?;
     tokio::fs::set_permissions(link_path, std::fs::Permissions::from_mode(0o755))
@@ -462,7 +496,11 @@ async fn write_unix_bun_launcher(source: &Path, link_path: &Path) -> Result<()> 
 }
 
 #[cfg(unix)]
-async fn unix_launcher_status(link_path: &Path, source: &Path) -> Result<LauncherStatus> {
+async fn unix_launcher_status(
+    link_path: &Path,
+    source: &Path,
+    env: &[String],
+) -> Result<LauncherStatus> {
     let content = match tokio::fs::read_to_string(link_path).await {
         Ok(content) => content,
         // Missing, non-UTF-8, or otherwise unreadable → treat as a user file.
@@ -478,7 +516,9 @@ async fn unix_launcher_status(link_path: &Path, source: &Path) -> Result<Launche
         return Ok(LauncherStatus::NotManaged);
     }
     let name = launcher_command_name(link_path);
-    if content == unix_bun_launcher_content(source, &name) {
+    // Byte comparison against the regenerated content — which embeds the ordered
+    // `env` spec — so an added/removed/reordered declaration is detected as stale.
+    if content == unix_bun_launcher_content(source, &name, env) {
         Ok(LauncherStatus::Current)
     } else {
         Ok(LauncherStatus::Stale)
@@ -486,7 +526,12 @@ async fn unix_launcher_status(link_path: &Path, source: &Path) -> Result<Launche
 }
 
 #[cfg(not(unix))]
-async fn create_windows_shims(source: &Path, ps1_path: &Path, runtime: LinkRuntime) -> Result<()> {
+async fn create_windows_shims(
+    source: &Path,
+    ps1_path: &Path,
+    runtime: LinkRuntime,
+    env: &[String],
+) -> Result<()> {
     let cmd_path = ps1_path.with_extension("cmd");
     if let Some(parent) = ps1_path.parent() {
         tokio::fs::create_dir_all(parent)
@@ -494,25 +539,47 @@ async fn create_windows_shims(source: &Path, ps1_path: &Path, runtime: LinkRunti
             .with_context(|| format!("creating bin dir: {parent:?}"))?;
     }
     let name = launcher_command_name(ps1_path);
-    tokio::fs::write(ps1_path, powershell_shim_content(source, runtime, &name))
-        .await
-        .with_context(|| format!("writing PowerShell shim: {ps1_path:?}"))?;
-    tokio::fs::write(&cmd_path, cmd_shim_content(source, runtime, &name))
+    tokio::fs::write(
+        ps1_path,
+        powershell_shim_content(source, runtime, &name, env),
+    )
+    .await
+    .with_context(|| format!("writing PowerShell shim: {ps1_path:?}"))?;
+    tokio::fs::write(&cmd_path, cmd_shim_content(source, runtime, &name, env))
         .await
         .with_context(|| format!("writing cmd shim: {cmd_path:?}"))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn powershell_shim_content(source: &Path, runtime: LinkRuntime, name: &str) -> String {
+fn powershell_shim_content(
+    source: &Path,
+    runtime: LinkRuntime,
+    name: &str,
+    env: &[String],
+) -> String {
     let target = windows_native_path(source);
     let escaped = target.replace('\'', "''");
     match runtime {
         LinkRuntime::Bun => {
             let name_escaped = name.replace('\'', "''");
-            format!(
-                "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\nif (-not (Get-Command bun -ErrorAction SilentlyContinue)) {{\n  [Console]::Error.WriteLine('shine: {name_escaped} requires Bun, which was not found on PATH. Install from https://bun.sh')\n  exit 127\n}}\n& bun '{escaped}' @args\nexit $LASTEXITCODE\n"
-            )
+            let bun_check = format!(
+                "if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {{\n  [Console]::Error.WriteLine('shine: {name_escaped} requires Bun, which was not found on PATH. Install from https://bun.sh')\n  exit 127\n}}\n"
+            );
+            if env.is_empty() {
+                format!(
+                    "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\n{bun_check}& bun '{escaped}' @args\nexit $LASTEXITCODE\n"
+                )
+            } else {
+                let with_args = env
+                    .iter()
+                    .map(|token| format!("--with '{}'", token.replace('\'', "''")))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(
+                    "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\n{bun_check}if (-not (Get-Command shine -ErrorAction SilentlyContinue)) {{\n  [Console]::Error.WriteLine('shine: {name_escaped} requires the shine command, which was not found on PATH.')\n  exit 127\n}}\n& shine env run --no-workspace {with_args} -- bun '{escaped}' @args\nexit $LASTEXITCODE\n"
+                )
+            }
         }
         LinkRuntime::Native => {
             let bash_target = bash_compatible_path(source);
@@ -530,12 +597,28 @@ fn powershell_shim_content(source: &Path, runtime: LinkRuntime, name: &str) -> S
 }
 
 #[cfg(not(unix))]
-fn cmd_shim_content(source: &Path, runtime: LinkRuntime, name: &str) -> String {
+fn cmd_shim_content(source: &Path, runtime: LinkRuntime, name: &str, env: &[String]) -> String {
     let target = windows_native_path(source);
     match runtime {
-        LinkRuntime::Bun => format!(
-            "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\nwhere bun >nul 2>nul\r\nif errorlevel 1 (\r\n  echo shine: {name} requires Bun, which was not found on PATH. Install from https://bun.sh 1>&2\r\n  exit /b 127\r\n)\r\nbun \"{target}\" %*\r\n"
-        ),
+        LinkRuntime::Bun => {
+            let bun_check = format!(
+                "where bun >nul 2>nul\r\nif errorlevel 1 (\r\n  echo shine: {name} requires Bun, which was not found on PATH. Install from https://bun.sh 1>&2\r\n  exit /b 127\r\n)\r\n"
+            );
+            if env.is_empty() {
+                format!(
+                    "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\n{bun_check}bun \"{target}\" %*\r\n"
+                )
+            } else {
+                let with_args = env
+                    .iter()
+                    .map(|token| format!("--with {token}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(
+                    "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\n{bun_check}where shine >nul 2>nul\r\nif errorlevel 1 (\r\n  echo shine: {name} requires the shine command, which was not found on PATH. 1>&2\r\n  exit /b 127\r\n)\r\nshine env run --no-workspace {with_args} -- bun \"{target}\" %*\r\n"
+                )
+            }
+        }
         LinkRuntime::Native => {
             let escaped = target.replace('\'', "''");
             let bash_target = bash_compatible_path(source);
@@ -566,6 +649,7 @@ async fn windows_shim_status(
     link_path: &Path,
     source: &Path,
     runtime: LinkRuntime,
+    env: &[String],
 ) -> Result<LauncherStatus> {
     let content = match tokio::fs::read_to_string(link_path).await {
         Ok(content) => content,
@@ -584,8 +668,8 @@ async fn windows_shim_status(
     }
 
     let name = launcher_command_name(link_path);
-    let expected_ps1 = powershell_shim_content(source, runtime, &name);
-    let expected_cmd = cmd_shim_content(source, runtime, &name);
+    let expected_ps1 = powershell_shim_content(source, runtime, &name, env);
+    let expected_cmd = cmd_shim_content(source, runtime, &name, env);
     let cmd_path = link_path.with_extension("cmd");
     let cmd_content = tokio::fs::read_to_string(&cmd_path).await.ok();
     if content == expected_ps1 && cmd_content.as_deref() == Some(expected_cmd.as_str()) {
@@ -803,6 +887,7 @@ mod tests {
             source: exe.clone(),
             link_name: OsString::from("setproxy"),
             runtime: LinkRuntime::Native,
+            env: Vec::new(),
         }];
 
         let report = link_executables_with_names(&bin, &specs, false)
@@ -828,6 +913,7 @@ mod tests {
             source: script.clone(),
             link_name: OsString::from("setproxy"),
             runtime: LinkRuntime::Native,
+            env: Vec::new(),
         }];
 
         let report = link_executables_with_names(&bin, &specs, false)
@@ -851,6 +937,7 @@ mod tests {
             source: plain,
             link_name: OsString::from("setproxy"),
             runtime: LinkRuntime::Native,
+            env: Vec::new(),
         }];
 
         let report = link_executables_with_names(&bin, &specs, false)
@@ -969,10 +1056,16 @@ mod tests {
 
     #[cfg(unix)]
     fn bun_spec(source: &Path, name: &str) -> LinkSpec {
+        bun_spec_with_env(source, name, Vec::new())
+    }
+
+    #[cfg(unix)]
+    fn bun_spec_with_env(source: &Path, name: &str, env: Vec<String>) -> LinkSpec {
         LinkSpec {
             source: source.to_path_buf(),
             link_name: OsString::from(name),
             runtime: LinkRuntime::Bun,
+            env,
         }
     }
 
@@ -1119,13 +1212,112 @@ mod tests {
         fs::remove_dir_all(&bin).await.unwrap();
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bun_launcher_without_env_has_no_shine_dependency() {
+        let (src, bin) = make_dirs().await;
+        let script = src.join("tool.ts");
+        fs::write(&script, b"console.log('hi')\n").await.unwrap();
+
+        link_executables_with_names(&bin, &[bun_spec(&script, "tool")], false)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(bin.join("tool")).await.unwrap();
+        assert!(
+            content.contains(&format!("exec bun '{}' \"$@\"", script.display())),
+            "no-env launcher must run bun directly: {content}"
+        );
+        assert!(
+            !content.contains("shine env run"),
+            "no-env launcher must not depend on shine: {content}"
+        );
+
+        fs::remove_dir_all(&src).await.unwrap();
+        fs::remove_dir_all(&bin).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bun_launcher_with_env_wraps_shine_env_run() {
+        let (src, bin) = make_dirs().await;
+        let script = src.join("tool.ts");
+        fs::write(&script, b"console.log('hi')\n").await.unwrap();
+
+        let env = vec!["API_URL".to_string(), "SERVICE_TOKEN=API_TOKEN".to_string()];
+        link_executables_with_names(&bin, &[bun_spec_with_env(&script, "tool", env)], false)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(bin.join("tool")).await.unwrap();
+        // Both prerequisites are checked with a 127 exit.
+        assert!(content.contains("command -v bun"));
+        assert!(content.contains("command -v shine"));
+        assert_eq!(content.matches("exit 127").count(), 2);
+        // The child runs through shine env run with the declared, ordered specs.
+        assert!(content.contains(&format!(
+            "exec shine env run --no-workspace --with 'API_URL' --with 'SERVICE_TOKEN=API_TOKEN' -- bun '{}' \"$@\"",
+            script.display()
+        )));
+
+        fs::remove_dir_all(&src).await.unwrap();
+        fs::remove_dir_all(&bin).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bun_launcher_refreshes_when_env_declaration_changes() {
+        let (src, bin) = make_dirs().await;
+        let script = src.join("tool.ts");
+        fs::write(&script, b"console.log('hi')\n").await.unwrap();
+
+        // Install with no env, then reinstall the same source with a declaration.
+        link_executables_with_names(&bin, &[bun_spec(&script, "tool")], false)
+            .await
+            .unwrap();
+        let changed = link_executables_with_names(
+            &bin,
+            &[bun_spec_with_env(
+                &script,
+                "tool",
+                vec!["API_URL".to_string()],
+            )],
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            changed.overwritten.len(),
+            1,
+            "adding an env declaration must refresh the launcher without --force"
+        );
+
+        // Re-running with the same declaration is a no-op (byte-identical).
+        let again = link_executables_with_names(
+            &bin,
+            &[bun_spec_with_env(
+                &script,
+                "tool",
+                vec!["API_URL".to_string()],
+            )],
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(again.skipped.len(), 1);
+        assert!(again.overwritten.is_empty());
+
+        fs::remove_dir_all(&src).await.unwrap();
+        fs::remove_dir_all(&bin).await.unwrap();
+    }
+
     #[cfg(not(unix))]
     #[test]
     fn shell_shims_pass_bash_compatible_paths_on_windows() {
         let source = PathBuf::from(r"C:\Users\me\.shine\rendered\shell\utils\copyfile.sh");
 
-        let ps1 = powershell_shim_content(&source);
-        let cmd = cmd_shim_content(&source);
+        let ps1 = powershell_shim_content(&source, LinkRuntime::Native, "copyfile", &[]);
+        let cmd = cmd_shim_content(&source, LinkRuntime::Native, "copyfile", &[]);
 
         assert!(ps1.contains("C:/Users/me/.shine/rendered/shell/utils/copyfile.sh"));
         assert!(cmd.contains("C:/Users/me/.shine/rendered/shell/utils/copyfile.sh"));

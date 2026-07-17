@@ -32,6 +32,10 @@ pub struct ShellFile {
     /// before linking. Empty means "no metadata-declared transform" — native scripts
     /// may still opt into templating via the `# shine-template: true` annotation.
     pub transforms: Vec<String>,
+    /// Runtime environment values injected into a Bun launcher via `Bun.env`,
+    /// using the `env run --with` grammar (ordered). Empty for native entries;
+    /// only `runtime = "bun"` entries may declare it (enforced at metadata load).
+    pub env: Vec<crate::env::EnvVarSpec>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +52,7 @@ struct FileToml {
     platforms: Option<Vec<String>>,
     runtime: Option<String>,
     transforms: Option<Vec<String>>,
+    env: Option<Vec<String>>,
 }
 
 pub fn load_embedded_categories(filter: Option<&str>) -> Result<Vec<ShellCategory>> {
@@ -132,6 +137,7 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
                         needs_source: false,
                         runtime: crate::bin_links::LinkRuntime::Native,
                         transforms: Vec::new(),
+                        env: Vec::new(),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?,
@@ -159,6 +165,7 @@ fn load_embedded_category(name: &str) -> Result<ShellCategory> {
                     needs_source: false,
                     runtime: crate::bin_links::LinkRuntime::Native,
                     transforms: Vec::new(),
+                    env: Vec::new(),
                     source_rel,
                 })
             })
@@ -235,6 +242,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<ShellCat
             needs_source: false,
             runtime: crate::bin_links::LinkRuntime::Native,
             transforms: Vec::new(),
+            env: Vec::new(),
             source_rel,
         });
     }
@@ -391,6 +399,7 @@ struct ResolvedFile {
     needs_source: bool,
     runtime: crate::bin_links::LinkRuntime,
     transforms: Vec<String>,
+    env: Vec<crate::env::EnvVarSpec>,
 }
 
 impl ResolvedFile {
@@ -401,6 +410,7 @@ impl ResolvedFile {
             needs_source: false,
             runtime: crate::bin_links::LinkRuntime::Native,
             transforms: Vec::new(),
+            env: Vec::new(),
         }
     }
 
@@ -412,6 +422,7 @@ impl ResolvedFile {
             needs_source: self.needs_source,
             runtime: self.runtime,
             transforms: self.transforms,
+            env: self.env,
         }
     }
 }
@@ -428,12 +439,18 @@ fn resolve_metadata_file(file: &FileToml, ctx: &str) -> Result<ResolvedFile> {
     let command_name = resolve_command_name(&source_rel, file.target.as_deref())
         .with_context(|| format!("invalid target in {ctx}"))?;
     let transforms = file.transforms.clone().unwrap_or_default();
+    let env = crate::env::parse_env_specs(file.env.as_deref().unwrap_or_default())
+        .with_context(|| format!("invalid env in {ctx}"))?;
+    if runtime != crate::bin_links::LinkRuntime::Bun && !env.is_empty() {
+        bail!("{ctx}: `env` is only valid when `runtime = \"bun\"`");
+    }
     Ok(ResolvedFile {
         source_rel,
         command_name,
         needs_source,
         runtime,
         transforms,
+        env,
     })
 }
 
@@ -522,6 +539,7 @@ mod tests {
             platforms: Some(vec!["windows".to_string()]),
             runtime: None,
             transforms: None,
+            env: None,
         };
 
         assert!(file_matches_platform("proxy", &file, "windows").unwrap());
@@ -537,6 +555,7 @@ mod tests {
             platforms: None,
             runtime: None,
             transforms: None,
+            env: None,
         };
 
         assert!(file_matches_platform("proxy", &file, "windows").unwrap());
@@ -552,6 +571,7 @@ mod tests {
             platforms: Some(vec!["plan9".to_string()]),
             runtime: None,
             transforms: None,
+            env: None,
         };
 
         let err = file_matches_platform("proxy", &file, "unix")
@@ -882,6 +902,103 @@ mod tests {
         );
         assert!(
             err.contains("unsupported runtime"),
+            "unexpected error: {err}"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_parses_bun_env_declarations_in_order() {
+        let dir = make_temp_dir().await;
+        let config = write_bun_category(
+            &dir,
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\nenv = [\"API_URL\", \"SERVICE_TOKEN=API_TOKEN\"]\n",
+        )
+        .await;
+
+        let categories = load_installed_categories(&config, Some("custom"))
+            .await
+            .unwrap();
+        let env = &categories[0].files[0].env;
+        assert_eq!(env.len(), 2);
+        assert_eq!(env[0].to_with_arg(), "API_URL");
+        assert_eq!(env[1].to_with_arg(), "SERVICE_TOKEN=API_TOKEN");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_rejects_env_on_native_entry() {
+        let dir = make_temp_dir().await;
+        let category_root = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category_root).await.unwrap();
+        fs::write(
+            category_root.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\nenv = [\"API_URL\"]\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category_root.join("tool.sh"), b"#!/bin/bash\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let err = format!(
+            "{:#}",
+            load_installed_categories(&config, Some("custom"))
+                .await
+                .unwrap_err()
+        );
+        assert!(
+            err.contains("`env` is only valid when `runtime = \"bun\"`"),
+            "unexpected error: {err}"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_rejects_bun_env_invalid_name() {
+        let dir = make_temp_dir().await;
+        let config = write_bun_category(
+            &dir,
+            b"[[files]]\nsource = \"tool.ts\"\nruntime = \"bun\"\nenv = [\"BAD-NAME\"]\n",
+        )
+        .await;
+
+        let err = format!(
+            "{:#}",
+            load_installed_categories(&config, Some("custom"))
+                .await
+                .unwrap_err()
+        );
+        assert!(
+            err.contains("invalid environment variable name"),
+            "unexpected error: {err}"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn installed_metadata_rejects_bun_env_duplicate_target() {
+        let dir = make_temp_dir().await;
+        let config = write_bun_category(
+            &dir,
+            b"[[files]]\nsource = \"tool.ts\"\nruntime = \"bun\"\nenv = [\"A=TOKEN\", \"B=TOKEN\"]\n",
+        )
+        .await;
+
+        let err = format!(
+            "{:#}",
+            load_installed_categories(&config, Some("custom"))
+                .await
+                .unwrap_err()
+        );
+        assert!(
+            err.contains("duplicate target variable"),
             "unexpected error: {err}"
         );
 

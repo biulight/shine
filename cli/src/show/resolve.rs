@@ -309,6 +309,7 @@ mod tests {
                 needs_source: false,
                 runtime: crate::bin_links::LinkRuntime::Native,
                 transforms: vec![],
+                env: vec![],
             },
             source_path: PathBuf::from(format!("/tmp/{source}")),
             rendered_path: PathBuf::from(format!("/tmp/rendered/{source}")),

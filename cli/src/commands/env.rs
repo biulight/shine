@@ -129,6 +129,9 @@ pub struct EnvRunCommand {
     /// Environment mode used to expand {mode} paths
     #[arg(long)]
     pub mode: Option<String>,
+    /// Skip workspace discovery entirely; use only --with values and inherited env
+    #[arg(long, conflicts_with_all = ["workspace", "mode"])]
+    pub no_workspace: bool,
     /// Inject a config [env] value as KEY or KEY=ALIAS (repeatable)
     #[arg(long = "with", value_name = "KEY[=ALIAS]")]
     pub with: Vec<String>,

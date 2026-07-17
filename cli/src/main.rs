@@ -249,6 +249,7 @@ async fn run(cli: Cli) -> Result<()> {
                     &config,
                     cmd.workspace.as_deref(),
                     cmd.mode.as_deref(),
+                    cmd.no_workspace,
                     &cmd.with,
                     &cmd.command,
                 )
@@ -729,6 +730,51 @@ mod tests {
             } if cmd.with == ["TOKEN_A", "TOKEN_B=OTHER_TOKEN"]
                 && cmd.command == ["bun", "run", "build"]
         ));
+    }
+
+    #[test]
+    fn cli_accepts_env_run_no_workspace_with_explicit_values() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "run",
+            "--no-workspace",
+            "--with",
+            "API_URL",
+            "--",
+            "bun",
+            "tool.ts",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Run(cmd)
+            } if cmd.no_workspace
+                && cmd.with == ["API_URL"]
+                && cmd.command == ["bun", "tool.ts"]
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_env_run_no_workspace_with_mode() {
+        let error = Cli::try_parse_from([
+            "shine",
+            "env",
+            "run",
+            "--no-workspace",
+            "--mode",
+            "production",
+            "--",
+            "bun",
+            "tool.ts",
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "--no-workspace must conflict with --mode"
+        );
     }
 
     #[test]
