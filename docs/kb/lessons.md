@@ -3,37 +3,45 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
-## 2026-07-16 — OSC 11 reply leaks in full because the tty stayed in canonical mode
+## 2026-07-16 — OSC 11 reply leaks in full: macOS `poll` returns `POLLNVAL` on `/dev/tty`
 
-Follow-up to the 2026-07-14 entry. That fix (total-deadline `poll(2)` read in
-`cli/src/theme/osc.rs`) cured the *fragmented-tail* leak but left a second, distinct one that
-reproduces on Ghostty: the **whole** reply leaks — `\033]11;rgb:ffff/ffff/ffff\033\\` with the
-leading `\033]` intact, not just the tail.
+Follow-up to the 2026-07-14 entry. That fix (total-deadline read in `cli/src/theme/osc.rs`) cured
+the *fragmented-tail* leak but left a second, distinct one that reproduces on Ghostty (macOS): the
+**whole** reply leaks — `\033]11;rgb:ffff/ffff/ffff\033\\` with the leading `\033]` intact, not
+just the tail. It took **two** independent fixes; the first was necessary but not sufficient, and
+the second was the real blocker.
 
-- **Symptom**: every fresh Ghostty login shell prints `^[]11;rgb:ffff/ffff/ffff^[\` before the
-  first prompt. The full sequence (leading `\033]` present) means the read loop consumed **zero**
-  bytes of it, unlike 2026-07-14 where the consumed head made `\033]` absent.
-- **Root cause**: `EchoGuard::disable` cleared `ECHO` but **not `ICANON`**, so the tty stayed in
-  canonical (line) mode during the query. An OSC 11 reply contains **no newline**, and in
-  canonical mode the line discipline withholds a newline-less line from `read`/`poll` until a
-  newline arrives — so `poll` never signals readable, the loop times out at 200 ms having read
-  nothing, restores the tty, and the buffered reply flushes into the next prompt. Disabling echo
-  is irrelevant to *this* leak: the bytes are withheld regardless of echo.
-- **Why it wasn't caught**: the `matrix_*` tests drive the read loop over a `UnixStream` socket
-  pair, which has **no line discipline**, so canonical mode never applied in test. Measured with a
-  real terminal: a cbreak probe (`tty.setcbreak`) returned the full 25-byte reply in-window with
-  no leak; the same probe leaving `ICANON` on returned 0 bytes and leaked. Slower terminals (Apple
-  Terminal/iTerm2) happened to mask it during the PRD's manual check — the reply raced in before
-  the timeout on those, but Ghostty's timing exposed it every time.
-- **Fix**: `EchoGuard` → `TtyQueryGuard`, which clears `ECHO | ICANON` and sets `VMIN=1`/`VTIME=0`
-  (required because in non-canonical mode those `c_cc` slots alias `VEOF`/`VEOL`; leaving them
-  inherits `VEOF`=4 as `VMIN` and stalls fragmented reads until 4 bytes accrue). Regression test
-  `read_loop_reads_newline_free_response_through_pty` uses a real `openpty` pair (which *does* have
-  a line discipline) so canonical mode is exercised — the exact gap the socket-pair tests had.
-- **Rule**: to read a terminal-control reply you must put the tty in **non-canonical** mode
-  (`ICANON` off), not merely turn echo off — control replies carry no newline, and canonical mode
-  will hold them hostage until one appears. And a fixture without a line discipline (socket pair,
-  pipe) cannot test tty-mode behavior; use a real pty (`openpty`).
+- **Symptom**: every fresh Ghostty login shell prints `^[]11;rgb:…^[\` before the first prompt;
+  `shine theme sync` also reports "could not determine terminal theme". The full sequence (leading
+  `\033]` present) means the read loop consumed **zero** bytes — unlike 2026-07-14, where the
+  consumed head made `\033]` absent.
+- **Cause 1 (necessary): canonical mode.** `EchoGuard::disable` cleared `ECHO` but not `ICANON`,
+  so the tty stayed in canonical (line) mode. An OSC 11 reply has **no newline**, and the
+  canonical line discipline never marks a newline-less line readable — so `select`/`poll`/`read`
+  can't see it. Fixed by `EchoGuard` → `TtyQueryGuard`, which clears `ECHO | ICANON` and sets
+  `VMIN=1`/`VTIME=0` (in non-canonical mode those `c_cc` slots alias `VEOF`/`VEOL`; leaving them
+  inherits `VEOF`=4 as `VMIN` and stalls fragmented reads until 4 bytes accrue).
+- **Cause 2 (the real blocker): macOS `poll(2)` on `/dev/tty`.** Even with `ICANON` off the leak
+  persisted, because the read loop waited for readability with `poll(2)` and required
+  `revents & POLLIN`. On macOS, `poll` on `/dev/tty` returns **`POLLNVAL`** (revents `= 32`,
+  `POLLIN` unset) *even though the fd is readable* — a long-standing Darwin bug. So the loop broke
+  on its first iteration and read nothing. Fixed by waiting with `select(2)` instead
+  (`wait_readable`), which reports tty readability correctly on both macOS and Linux.
+- **How it was measured** (not inferred — cf. the 2026-07-14 meta-rule): a `tty.setcbreak` probe
+  against the live Ghostty tty read the full 25-byte reply in ~0.3 ms with `select`; a `poll` probe
+  that *checked revents* showed `revents=POLLNVAL, POLLIN=False`. The mistake that cost a round:
+  an earlier `poll` probe read the fd whenever poll returned *any* event and so "passed",
+  masking the missing `POLLIN`. Always inspect `revents`, don't just test "poll returned".
+- **Why the tests missed both**: the `matrix_*` tests drive the loop over a `UnixStream` socket
+  pair — no line discipline (so canonical mode never applied) and no tty (so the macOS
+  `poll`/`POLLNVAL` behavior never applied). The `openpty` regression test
+  (`read_loop_reads_newline_free_response_through_pty`) exercises canonical mode on a real pty, but
+  even a pty **slave** does not reproduce the `/dev/tty`-specific `POLLNVAL`; that path is only
+  observable against a real controlling terminal, so it stays covered by this lesson, not a test.
+- **Rule**: reading a terminal-control reply needs **both** (a) non-canonical mode (`ICANON` off —
+  control replies carry no newline) and (b) `select(2)`, not `poll(2)`, to wait for readability —
+  macOS `poll` is unreliable on `/dev/tty`. And when probing a syscall's behavior, assert on its
+  actual output flags (`revents`), never on "the call returned something".
 
 ## 2026-07-15 — `env set`/`encrypt` silently wrote a value an override file kept shadowing
 

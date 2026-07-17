@@ -8,9 +8,15 @@
 //! gave the first byte 150ms but the *inter-byte* gap only 10ms, so a
 //! response split across two network reads (common over SSH) was abandoned
 //! mid-read, echo was restored, and the tail arrived at the now-echoing tty.
-//! This implementation tracks a single **total deadline** with `poll(2)`,
+//! This implementation tracks a single **total deadline** with `select(2)`,
 //! recomputing the remaining time on every iteration — there is no
 //! per-byte timeout to violate.
+//!
+//! Readability is waited on with `select(2)`, **not** `poll(2)`: macOS `poll`
+//! returns `POLLNVAL` for `/dev/tty` even when it is readable (measured on
+//! Ghostty — `revents=POLLNVAL`, so a `revents & POLLIN` check reads nothing and
+//! the reply leaks). `select` reports tty readability correctly on both macOS and
+//! Linux. See `docs/kb/lessons.md` (2026-07-16).
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -89,22 +95,45 @@ impl Drop for TtyQueryGuard {
     }
 }
 
-/// Blocks up to `timeout` for `fd` to become readable. Returns `Ok(false)`
-/// on timeout (not an error — the deadline loop treats it as "stop here").
-fn poll_readable(fd: RawFd, timeout: Duration) -> std::io::Result<bool> {
-    let mut fds = [libc::pollfd {
-        fd,
-        events: libc::POLLIN,
-        revents: 0,
-    }];
-    let timeout_ms = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
-    // SAFETY: `fds` points to a valid one-element array for the duration of
-    // this call; `poll` does not retain the pointer afterward.
-    let ret = unsafe { libc::poll(fds.as_mut_ptr(), 1, timeout_ms) };
+/// Blocks up to `timeout` for `fd` to become readable via `select(2)`. Returns
+/// `Ok(false)` on timeout (not an error — the deadline loop treats it as "stop
+/// here"). `select`, not `poll`: macOS `poll(2)` returns `POLLNVAL` for
+/// `/dev/tty` even when readable, which made the prior `revents & POLLIN` check
+/// read nothing and leak the reply (see the module docs).
+fn wait_readable(fd: RawFd, timeout: Duration) -> std::io::Result<bool> {
+    // `select`'s fd_set is a fixed-size bitset; a fd at/above FD_SETSIZE would be
+    // out of range (UB to FD_SET). At shell startup /dev/tty is always a low fd;
+    // guard defensively and degrade to "not readable" rather than risk UB.
+    if fd < 0 || (fd as usize) >= libc::FD_SETSIZE {
+        return Ok(false);
+    }
+    // SAFETY: `fd_set` is a plain bitset; zero-initializing then `FD_SET` is the
+    // documented initialization sequence.
+    let mut read_fds: libc::fd_set = unsafe { std::mem::zeroed() };
+    // SAFETY: `fd` is in range (checked above) and `read_fds` is a valid, live
+    // out-pointer for the duration of this call.
+    unsafe { libc::FD_SET(fd, &mut read_fds) };
+    let mut tv = libc::timeval {
+        tv_sec: timeout.as_secs() as libc::time_t,
+        tv_usec: timeout.subsec_micros() as libc::suseconds_t,
+    };
+    // SAFETY: `nfds = fd + 1`; the read set and `tv` are valid live pointers;
+    // the write/except sets are intentionally null. `select` does not retain
+    // any pointer past the call.
+    let ret = unsafe {
+        libc::select(
+            fd + 1,
+            &mut read_fds,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut tv,
+        )
+    };
     if ret < 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok(ret > 0 && fds[0].revents & libc::POLLIN != 0)
+    // SAFETY: `read_fds` is valid and `fd` is in range; `FD_ISSET` only reads it.
+    Ok(ret > 0 && unsafe { libc::FD_ISSET(fd, &read_fds) })
 }
 
 /// Reads bytes from `fd` until the OSC terminator (`ESC \`) is seen or
@@ -121,7 +150,7 @@ pub(super) fn read_until_terminator_or_deadline(fd: RawFd, deadline: Instant) ->
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             break;
         };
-        match poll_readable(fd, remaining) {
+        match wait_readable(fd, remaining) {
             Ok(true) => {}
             Ok(false) | Err(_) => break,
         }
