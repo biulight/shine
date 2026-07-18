@@ -13,8 +13,21 @@ list_mode = "files"
 # macOS-only bash artifact — clash-verge's artifact works on macOS/Windows/Linux
 # (CVR is cross-platform). bun is an external prerequisite (https://bun.sh).
 #
-# Reload lives in the artifact (not post_install/post_upgrade) because only the
-# artifact receives the `[env]` table, and the reload needs CLASH_CONTROLLER_*.
+# The real logic (writing CVR's Merge.yaml + refreshing rule-providers) lives in
+# the artifact because only the artifact receives the `[env]` table and
+# SHINE_APP_OVERLAY_DIR. The hooks below do NOT run that logic directly — they
+# re-invoke `shine app build clash-verge` so it runs automatically after
+# `shine app install`/`shine upgrade` changes merge.yaml. (No recursion: build
+# fires neither install nor upgrade hooks.) Requires `shine` on PATH; external
+# presets need allow_app_hooks = true. Note this only fires when merge.yaml
+# changes — rule edits go through `upload_surge`, not this preset's files.
+post_install = [
+  { command = "shine", args = ["app", "build", "clash-verge"], show_output = true },
+]
+post_upgrade = [
+  { command = "shine", args = ["app", "build", "clash-verge"], show_output = true },
+]
+
 [artifact]
 script = "build.ts"
 teardown = "unbuild.ts"

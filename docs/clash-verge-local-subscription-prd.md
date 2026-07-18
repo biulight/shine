@@ -30,10 +30,12 @@ LAN 规则服务器**，使本地规则可版本控制、可通过 presets overl
 ## 3. 非目标
 
 - 不实现 Clash/mihomo 内核、订阅下载器或订阅格式转换。
-- 不自动猜测用户要绑定的订阅；Merge 配置绑定到哪个 CVR Profile 必须由用户在 CVR 内显式完成。
-- **不代替用户在 CVR 内完成 Merge 配置的一次性导入/绑定**——该绑定由 CVR 在其私有存储中拥有，
-  `shine` 从不写 CVR 的 `profiles.yaml`、增强绑定或订阅缓存（这些是应用内部状态，格式和存储位置
-  可能随 CVR 版本变化）。这是本方案唯一无法自动化的手工步，等价于 Surge 需要一次性布线 `#!include`。
+- 不自动创建/登记 CVR 的增强槽：用户需**一次性**在 CVR 里建一个空的 Global Extend Config，以登记
+  `profiles/Merge.yaml` 这个槽。
+- **`shine` 只写用户内容的 `Merge.yaml`（Global Extend Config 文件），从不写 CVR 的 `profiles.yaml`、
+  增强绑定登记或订阅缓存**（这些是应用内部状态，格式/位置可能随版本变化）。写 `Merge.yaml` 与 Surge
+  写 `SURGE_PROFILE` 同理——都是应用暴露给用户编辑的内容文件。唯一无法自动化的手工步是上面那次「建空
+  Global Extend Config」（等价于 Surge 一次性布线 `#!include`）。
 - 不在 MVP 合并多个远端订阅为一个新的订阅。
 - 不引入 `shine serve` / 本地监听端口；规则统一走 Surge 已有的远端 HTTPS 服务器。
 - 不承诺将任意 YAML 数组做「智能合并」。规则、代理和代理组的顺序语义必须被保留。
@@ -84,14 +86,30 @@ shine env set CLASH_CONTROLLER_URL   http://127.0.0.1:9097
 shine env set CLASH_CONTROLLER_TOKEN <CVR 的外部控制器 secret>
 ```
 
-安装把 `merge.yaml` 逐字写入 `~/.shine/clash-verge/merge.yaml`（`dest`，纯 Copy）。CLI 打印该
-绝对路径与在 CVR 中导入为 Merge 配置的步骤。
+安装把 `merge.yaml` 逐字写入 `~/.shine/clash-verge/merge.yaml`（`dest`，纯 Copy）。
 
-### 5.2 在 CVR 中一次性绑定
+**自动跑 build**：`clash-verge` 声明了 `post_install`/`post_upgrade` = `shine app build clash-verge`，
+所以 `shine app install`/`shine upgrade` 在 `merge.yaml` 变化时会**自动**写 CVR 的 `Merge.yaml` +
+刷新 providers，无需另跑 `shine app build`（需 `shine` 在 PATH；外部预设需 `allow_app_hooks = true`）。
+首装时若还没建 Global Extend Config，会打印无害指引并跳过写入。**注意**：hook 只在本预设文件
+（`merge.yaml`/骨架）变化时触发；高频的**改规则**走 `upload_surge`、不改 `merge.yaml`，故不触发 hook——
+仍靠 provider `interval` 自动刷新或手动 `shine app build clash-verge`。
 
-打开 Clash Verge Rev → Profiles → 目标订阅 → 增强链 → 添加/导入 `~/.shine/clash-verge/merge.yaml`
-为 Merge 配置并保存。此后本地代理、策略组、规则会在订阅每次合成时叠加，且规则内容按 provider
+### 5.2 在 CVR 中一次性登记 Global Extend Config（无需手动粘贴）
+
+在 CVR 里创建一个**空的** Global Extend Config（Clash Verge Rev → Profiles → 底部 **Global Extend
+Config** 卡片，或右键订阅 → **Extend Config**）。这一步只是让 CVR **登记**它的文件槽
+`<CVR 数据目录>/profiles/Merge.yaml`（`shine` 不写 CVR 的 `profiles.yaml`，故这步必须手工做一次）。
+
+此后 **`shine app build clash-verge` 会把 `merge.yaml` 内容自动写入该文件**（幂等，与 surge 写
+`SURGE_PROFILE` 同理），**不再需要手动粘贴**；文件路径按平台自动探测（`APPDATA`/`HOME` 推导，
+可用 `CLASH_MERGE_FILE` 覆盖）。本地代理、策略组、规则从此在订阅每次合成时叠加，规则内容按 provider
 `interval` 自动刷新。
+
+> **归属与重载**：`clash-verge` 独占 Global Extend Config（整文件覆盖，带 `# Managed by shine` 头）；
+> 另有全局 merge 内容请并入 `merge.yaml` 或改用按订阅的 Extend Config。改**规则**无需碰 CVR（providers
+> 自动/即时刷新）；改**骨架**（proxies/组/provider 定义）后重跑 `shine app build`，CVR 可能需在应用内
+> 重选一次该配置才重新合成（见 §8 尖刺）。
 
 ### 5.3 配置本地规则
 
@@ -158,20 +176,30 @@ presets/app/clash-verge/                      # 本仓 base：仅示例
 
 ### 6.2 env 契约
 
-merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 需要以下两个键（放 overlay 的 `shine.env.toml`，
-与 `SURGE_PROFILE` 等并列，由 build.ts 经 `[env]` 注入读取）：
+merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 用以下键（由 build.ts 经 `[env]` 注入读取）：
 
 | env | 用途 | 示例 |
 | --- | --- | --- |
-| `CLASH_CONTROLLER_URL` | mihomo 外部控制器 | `http://127.0.0.1:9097` |
-| `CLASH_CONTROLLER_TOKEN` | 控制器令牌（明文，供 `build.ts`；无鉴权可留空；勿用 `_SECRET`/加密键） | （用户填） |
+| `CLASH_CONTROLLER_URL` | mihomo 外部控制器（仅即时刷新用；不填则跳过刷新） | `http://127.0.0.1:9097` |
+| `CLASH_CONTROLLER_TOKEN` | 控制器令牌（明文；无鉴权可留空；勿用 `_SECRET`/加密键） | （用户填） |
+| `CLASH_MERGE_FILE` | **可选**，覆盖自动探测的 CVR `Merge.yaml` 路径 | 默认自动探测 |
+
+> `CLASH_CONTROLLER_*` 放共享 overlay 的 `shine.env.toml`（与 `SURGE_PROFILE` 并列）皆可；
+> `CLASH_MERGE_FILE` 是**每机**路径，只在自动探测不适用时设，且应放**每机的全局** `shine.env.toml`，
+> **不要**放共享 overlay（否则 Windows 路径会破坏 macOS）。
 
 ### 6.3 `build.ts` 行为
 
-`shine app build clash-verge` 对 `merge.yaml` 中每个 `rule-providers` 键
-（`lan` / `lan-socks` / `other-direct`）向 `CLASH_CONTROLLER_URL` 发
-`PUT /providers/rules/<name>`，令 mihomo 立即重新拉取 LAN 服务器上的最新列表。幂等、非破坏，
-从不写 CVR 配置或私有存储；任一调用失败以非零退出，由 `shine app build` 作为真错误上抛。
+`shine app build clash-verge` 依次做两件事：
+
+1. **写 CVR 的 Merge.yaml**：解析出**生效的** `merge.yaml`（overlay 覆盖 base，经
+   `SHINE_APP_OVERLAY_DIR` 判定），幂等写入 `<CVR 数据目录>/profiles/Merge.yaml`（带
+   `# Managed by shine` 头，内容不变则跳过）。目标目录不存在（未建 Global Extend Config）→ 打印指引、
+   非致命跳过。这是**唯一**写入的 CVR 文件（用户内容的 merge 文件），从不写 `profiles.yaml`/绑定/缓存。
+2. **刷新 rule-providers**：对每个 provider 键（`lan` / `lan-socks` / `other-direct`）向
+   `CLASH_CONTROLLER_URL` 发 `PUT /providers/rules/<name>`，令 mihomo 立即重拉最新列表。`CLASH_CONTROLLER_URL`
+   未设则跳过刷新（规则仍按 interval 自动更新）；已设但不可达则以非零退出，由 `shine app build` 作为真错误上抛。
+   注意：第 1 步的写入先于第 2 步，故即使控制器不可达，Merge.yaml 也已写好。
 
 ## 7. 配置语义与约束
 

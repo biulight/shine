@@ -1152,9 +1152,20 @@ source = "config.toml"
         assert!(file.transforms.is_empty());
         assert_eq!(file.install_strategy, AppInstallStrategy::Copy);
 
-        // Reload lives in the artifact (needs the `[env]` table), not post_* hooks.
-        assert!(clash.post_install.is_empty());
-        assert!(clash.post_upgrade.is_empty());
+        // post_install/post_upgrade re-invoke `shine app build clash-verge` so the
+        // artifact (write CVR Merge.yaml + refresh) runs automatically after an
+        // install/upgrade that changes merge.yaml.
+        let build_hook = vec![AppHook {
+            command: "shine".to_string(),
+            args: vec![
+                "app".to_string(),
+                "build".to_string(),
+                "clash-verge".to_string(),
+            ],
+            show_output: true,
+        }];
+        assert_eq!(clash.post_install, build_hook);
+        assert_eq!(clash.post_upgrade, build_hook);
         assert_eq!(
             clash.artifact,
             Some(AppArtifact {

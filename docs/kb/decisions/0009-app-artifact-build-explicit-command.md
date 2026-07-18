@@ -84,3 +84,29 @@ metadata-load time). The `native` path is unchanged.
 external-controller `PUT /providers/rules/<name>`) is generic and secret-free, so — unlike surge's
 provider-specific patch — it can ship in shine core; the user-specific pieces (real `merge.yaml`
 values, `CLASH_CONTROLLER_URL/TOKEN`) still live in the overlay, preserving this ADR's principle.
+
+`clash-verge`'s `build.ts` also **writes CVR's Global Extend Config file** (`<CVR data
+dir>/profiles/Merge.yaml`, fixed name, path auto-detected per platform or `CLASH_MERGE_FILE`
+override) with the resolved `merge.yaml` — the direct analog of surge's overlay `build.sh` writing
+the Surge profile. This is the same principle as surge: shine writes the app's **user-content**
+file (which CVR exposes via Open File / Edit File), never `profiles.yaml` / the enhancement-binding
+registration / subscription cache. The user still creates an empty Global Extend Config once so CVR
+registers the slot; after that the paste is gone (build.ts writes it idempotently, overlay copy
+resolved via `SHINE_APP_OVERLAY_DIR`). Whether CVR hot-reloads an externally written `Merge.yaml`
+or needs an in-app re-select is left to a real-device spike (rule-*content* changes flow through the
+rule-providers and never need CVR to regenerate).
+
+**Opt-in auto-run via hooks.** The core principle above — Shine's install/upgrade machinery never
+runs an artifact implicitly — is unchanged: there is still no `run_on_upgrade` field and the runner
+never invokes the artifact on its own. But a preset MAY *opt in* to auto-running its build by
+declaring a `post_install`/`post_upgrade` hook that re-invokes `shine app build <id>` (a fresh shine
+process that re-enters the artifact with the full `[env]` + `SHINE_APP_*` contract that hooks
+themselves don't get). `clash-verge` does this so `shine app install`/`shine upgrade` write CVR's
+`Merge.yaml` + refresh automatically when `merge.yaml` changes. This is only appropriate because
+clash-verge's artifact is **idempotent and safe** (write-if-changed + provider refresh); surge does
+NOT do this — its artifact patches a live profile (provider-specific, order-sensitive), which is
+exactly the kind of side effect this ADR keeps behind an explicit command. Constraints: the hook
+needs `shine` on PATH; external presets need `allow_app_hooks = true`; it fires only when the
+preset's own files change (not on unrelated `shine upgrade` runs, and not on rule-list edits, which
+never touch `merge.yaml`); no recursion, since `shine app build` fires neither install nor upgrade
+hooks.
