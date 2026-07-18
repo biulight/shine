@@ -66,3 +66,21 @@ anything else is entirely the script's own responsibility.
   but does not un-patch the profile's `#!include` lines; the overlay `build.sh` is idempotent
   (add-only) and un-patching is a documented manual step. This is an accepted tradeoff for keeping
   the patch logic in the overlay rather than teaching Shine core a reversible profile-edit strategy.
+
+## Update (2026-07-18): cross-platform `runtime = "bun"`
+
+The original artifact runner execs the script directly (`Command::new(script)`), which relies on a
+shebang and is therefore **Unix-only**. That is fine for surge (macOS-only), but not for a
+cross-platform preset like `clash-verge` (Clash Verge Rev runs on Windows/macOS/Linux).
+
+`[artifact]` now accepts an optional `runtime` field (`native` default, or `bun`). `runtime = "bun"`
+launches the script via `bun <script>` — the same cross-platform runtime the bun **shell** presets
+use — so a `.ts` artifact works on all three platforms. `bun` is an external prerequisite; a missing
+`bun` fails with a clear "not installed" error (via `proc::ensure_command`) instead of a raw spawn
+error. A `bun` artifact's `script`/`teardown` must be a `.ts`/`.js`/`.mts`/`.mjs` file (validated at
+metadata-load time). The `native` path is unchanged.
+
+`clash-verge` uses `runtime = "bun"` with `build.ts`/`unbuild.ts`. Its refresh logic (a mihomo
+external-controller `PUT /providers/rules/<name>`) is generic and secret-free, so — unlike surge's
+provider-specific patch — it can ship in shine core; the user-specific pieces (real `merge.yaml`
+values, `CLASH_CONTROLLER_URL/TOKEN`) still live in the overlay, preserving this ADR's principle.

@@ -3,6 +3,24 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-17 — `app list` leaked a whole comment block as a category description
+
+- **Symptom**: `shine app list` on a machine whose base binary predates the `clash-verge` preset
+  showed the *entire* multi-paragraph `#` header of the overlay's `merge.yaml` as the category
+  description (a one-line wall), while a machine whose presets include `clash-verge/shine.toml`
+  showed the clean `description`.
+- **Root cause**: with no `shine.toml` for the category, the legacy auto-collect path derives the
+  description from each file's leading comment block via `parse_script_description`, and
+  `parse_legacy_description` joined the *whole* block with spaces (no first-line truncation, no
+  extension filter). A data file like `merge.yaml` uses `#` comments, so its long header was parsed
+  and dumped verbatim by `apps/info.rs handle_list`.
+- **Fix**: `parse_legacy_description` now returns only the first non-empty comment line (the
+  summary), matching how single-line legacy presets (`git`, `starship`) already read.
+- **Rule**: an auto-derived one-line description must take only the first comment line — never join
+  a whole `#` block. A preset's real description belongs in `shine.toml`; the comment-header
+  fallback is a last resort and must stay one line. (The cross-platform *difference* was really a
+  stale binary: a machine missing the embedded `clash-verge/shine.toml` falls to this fallback.)
+
 ## 2026-07-16 — OSC 11 reply leaks in full: macOS `poll` returns `POLLNVAL` on `/dev/tty`
 
 Follow-up to the 2026-07-14 entry. That fix (total-deadline read in `cli/src/theme/osc.rs`) cured

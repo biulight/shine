@@ -23,7 +23,7 @@ pub async fn handle_build(config: &Config, app_id: &str) -> Result<()> {
         bail!("app '{app_id}' does not define an artifact script");
     };
 
-    let mut command = artifact_command(config, app_id, &artifact.script).await?;
+    let mut command = artifact_command(config, app_id, &artifact.script, artifact.runtime).await?;
     run_artifact_command(&mut command, app_id).await
 }
 
@@ -38,11 +38,15 @@ pub async fn handle_unbuild(config: &Config, app_id: &str) -> Result<()> {
         .find(|c| c.name == app_id)
         .ok_or_else(|| anyhow::anyhow!("app preset category not found: {app_id}"))?;
 
-    let Some(teardown) = cat.artifact.as_ref().and_then(|a| a.teardown.as_deref()) else {
+    let Some((teardown, runtime)) = cat
+        .artifact
+        .as_ref()
+        .and_then(|a| a.teardown.as_deref().map(|t| (t, a.runtime)))
+    else {
         bail!("app '{app_id}' does not define an artifact teardown script");
     };
 
-    let mut command = artifact_command(config, app_id, teardown).await?;
+    let mut command = artifact_command(config, app_id, teardown, runtime).await?;
     run_artifact_command(&mut command, app_id).await
 }
 
@@ -53,7 +57,11 @@ pub async fn handle_unbuild(config: &Config, app_id: &str) -> Result<()> {
 /// non-fatal (a broken teardown must not block file removal). `dry_run` prints
 /// the intended script without running it.
 pub(crate) async fn run_teardown_for_uninstall(config: &Config, cat: &AppCategory, dry_run: bool) {
-    let Some(teardown) = cat.artifact.as_ref().and_then(|a| a.teardown.as_deref()) else {
+    let Some((teardown, runtime)) = cat
+        .artifact
+        .as_ref()
+        .and_then(|a| a.teardown.as_deref().map(|t| (t, a.runtime)))
+    else {
         return;
     };
     let app_id = &cat.name;
@@ -74,7 +82,7 @@ pub(crate) async fn run_teardown_for_uninstall(config: &Config, cat: &AppCategor
         return;
     }
 
-    let mut command = match artifact_command(config, app_id, teardown).await {
+    let mut command = match artifact_command(config, app_id, teardown, runtime).await {
         Ok(command) => command,
         Err(e) => {
             eprintln!(
@@ -110,7 +118,12 @@ pub(crate) async fn run_teardown_for_uninstall(config: &Config, cat: &AppCategor
 /// builds a `Command` carrying the full `SHINE_APP_*` env contract plus the
 /// active `[env]` table. Shared by `build` (`script`) and the teardown paths
 /// (`teardown`) so both get identical inputs.
-async fn artifact_command(config: &Config, app_id: &str, script_name: &str) -> Result<Command> {
+async fn artifact_command(
+    config: &Config,
+    app_id: &str,
+    script_name: &str,
+    runtime: metadata::ArtifactRuntime,
+) -> Result<Command> {
     if !config.is_external_presets {
         crate::presets::extract_prefix(&format!("app/{app_id}"), config.presets_dir(), true)
             .await?;
@@ -156,7 +169,20 @@ async fn artifact_command(config: &Config, app_id: &str, script_name: &str) -> R
     // win on any (unexpected) name collision with a user `[env]` key.
     let env_config = crate::env::EnvConfig::load_or_init(config).await?;
 
-    let mut command = Command::new(&script_path);
+    let mut command = match runtime {
+        metadata::ArtifactRuntime::Bun => {
+            // Cross-platform: run the script via `bun <script>` (like shine's bun
+            // shell presets). bun is an external prerequisite — fail clearly if
+            // it is missing rather than emitting a raw spawn error.
+            crate::proc::ensure_command("bun").with_context(|| {
+                format!("app '{app_id}' artifact requires Bun (https://bun.sh)")
+            })?;
+            let mut command = Command::new("bun");
+            command.arg(&script_path);
+            command
+        }
+        metadata::ArtifactRuntime::Native => Command::new(&script_path),
+    };
     command
         .current_dir(&resolved_app_dir)
         .envs(env_config.as_map())

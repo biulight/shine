@@ -46,6 +46,17 @@ pub struct AppHook {
     pub show_output: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ArtifactRuntime {
+    /// The script is executed directly (`Command::new(script)`), relying on its
+    /// shebang. Unix-only in practice — fine for macOS-only presets (e.g. surge).
+    #[default]
+    Native,
+    /// The script is run via `bun <script>`, so it works on macOS/Windows/Linux
+    /// (like shine's bun shell presets). `bun` is an external prerequisite.
+    Bun,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppArtifact {
     pub script: String,
@@ -53,6 +64,9 @@ pub struct AppArtifact {
     /// explicitly via `shine app unbuild <id>` and implicitly (best-effort)
     /// during `shine app uninstall`. Shares `build`'s full env contract.
     pub teardown: Option<String>,
+    /// How `script`/`teardown` are launched. `Bun` makes the artifact
+    /// cross-platform; `Native` execs the file directly (Unix-only).
+    pub runtime: ArtifactRuntime,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +98,15 @@ struct ArtifactToml {
     script: String,
     #[serde(default)]
     teardown: Option<String>,
+    #[serde(default)]
+    runtime: Option<ArtifactRuntimeToml>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ArtifactRuntimeToml {
+    Native,
+    Bun,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -238,10 +261,35 @@ fn resolve_artifact(artifact: Option<ArtifactToml>, context: &str) -> Result<Opt
     {
         bail!("{context}: artifact.teardown must not be empty");
     }
+    let runtime = match artifact.runtime.unwrap_or(ArtifactRuntimeToml::Native) {
+        ArtifactRuntimeToml::Native => ArtifactRuntime::Native,
+        ArtifactRuntimeToml::Bun => {
+            // A bun artifact is run via `bun <script>`, so the script (and any
+            // teardown) must be a bun source file.
+            for name in
+                std::iter::once(artifact.script.as_str()).chain(artifact.teardown.as_deref())
+            {
+                if !has_bun_extension(name) {
+                    bail!(
+                        "{context}: artifact runtime = \"bun\" requires a .ts/.js/.mts/.mjs script, got '{name}'"
+                    );
+                }
+            }
+            ArtifactRuntime::Bun
+        }
+    };
     Ok(Some(AppArtifact {
         script: artifact.script,
         teardown: artifact.teardown,
+        runtime,
     }))
+}
+
+fn has_bun_extension(name: &str) -> bool {
+    matches!(
+        Path::new(name).extension().and_then(|e| e.to_str()),
+        Some("ts" | "js" | "mts" | "mjs")
+    )
 }
 
 fn default_list_mode(has_explicit_files: bool) -> AppListMode {
@@ -685,12 +733,15 @@ fn normalize_relative(path: &str) -> Result<PathBuf> {
 }
 
 fn parse_legacy_description(content: &[u8]) -> Option<String> {
-    let description = presets::parse_script_description(content);
-    if description.is_empty() {
-        None
-    } else {
-        Some(description.join(" "))
-    }
+    // Only the first comment line is the one-line summary. A collected data file
+    // (e.g. an overlay's merge.yaml) can carry a long multi-paragraph `#` header;
+    // joining the whole block used to leak it as the listed category description
+    // when the base ships no shine.toml (see docs/kb/lessons.md 2026-07-17).
+    // parse_script_description keeps blank comment lines as empty strings, so the
+    // first non-empty entry is the summary line.
+    presets::parse_script_description(content)
+        .into_iter()
+        .find(|line| !line.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -875,6 +926,7 @@ source = "config.toml"
             Some(AppArtifact {
                 script: "build.sh".to_string(),
                 teardown: None,
+                runtime: ArtifactRuntime::Native,
             })
         );
     }
@@ -901,6 +953,7 @@ source = "config.toml"
             Some(AppArtifact {
                 script: "build.sh".to_string(),
                 teardown: Some("unbuild.sh".to_string()),
+                runtime: ArtifactRuntime::Native,
             })
         );
     }
@@ -1020,6 +1073,53 @@ source = "config.toml"
     }
 
     #[test]
+    fn artifact_runtime_defaults_native_and_bun_requires_bun_extension() {
+        let parse = |body: &str| -> CategoryToml {
+            toml::from_str(&format!(
+                "description = \"S\"\ndest = \"~/x\"\n\n{body}\n\n[[files]]\nsource = \"c\"\n"
+            ))
+            .unwrap()
+        };
+
+        // Default (no runtime) is Native.
+        let native = resolve_artifact(parse("[artifact]\nscript = \"build.sh\"").artifact, "s")
+            .unwrap()
+            .unwrap();
+        assert_eq!(native.runtime, ArtifactRuntime::Native);
+
+        // runtime = "bun" with a .ts script parses to Bun.
+        let bun = resolve_artifact(
+            parse(
+                "[artifact]\nscript = \"build.ts\"\nteardown = \"unbuild.ts\"\nruntime = \"bun\"",
+            )
+            .artifact,
+            "s",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(bun.runtime, ArtifactRuntime::Bun);
+
+        // runtime = "bun" with a non-bun script (or teardown) is rejected.
+        assert!(
+            resolve_artifact(
+                parse("[artifact]\nscript = \"build.sh\"\nruntime = \"bun\"").artifact,
+                "s"
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_artifact(
+                parse(
+                    "[artifact]\nscript = \"build.ts\"\nteardown = \"unbuild.sh\"\nruntime = \"bun\""
+                )
+                .artifact,
+                "s"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn embedded_surge_declares_artifact_script() {
         let categories = load_embedded_categories(Some("surge")).unwrap();
         let surge = categories.iter().find(|c| c.name == "surge").unwrap();
@@ -1028,8 +1128,60 @@ source = "config.toml"
             Some(AppArtifact {
                 script: "build.sh".to_string(),
                 teardown: Some("unbuild.sh".to_string()),
+                runtime: ArtifactRuntime::Native,
             })
         );
+    }
+
+    #[test]
+    fn embedded_clash_verge_installs_plain_merge_profile() {
+        let categories = load_embedded_categories(Some("clash-verge")).unwrap();
+        let clash = categories.iter().find(|c| c.name == "clash-verge").unwrap();
+        assert!(clash.uses_metadata);
+        assert_eq!(
+            clash.destination_root.as_deref(),
+            Some("~/.shine/clash-verge")
+        );
+
+        assert_eq!(clash.files.len(), 1);
+        let file = &clash.files[0];
+        assert_eq!(file.source_rel, std::path::Path::new("merge.yaml"));
+        assert_eq!(file.target_rel, std::path::Path::new("merge.yaml"));
+        // No templating: merge.yaml is installed verbatim (plain Copy) so the file
+        // stays valid YAML. Real values are hardcoded in the overlay copy.
+        assert!(file.transforms.is_empty());
+        assert_eq!(file.install_strategy, AppInstallStrategy::Copy);
+
+        // Reload lives in the artifact (needs the `[env]` table), not post_* hooks.
+        assert!(clash.post_install.is_empty());
+        assert!(clash.post_upgrade.is_empty());
+        assert_eq!(
+            clash.artifact,
+            Some(AppArtifact {
+                script: "build.ts".to_string(),
+                teardown: Some("unbuild.ts".to_string()),
+                runtime: ArtifactRuntime::Bun,
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_description_is_first_comment_line_only() {
+        // A long multi-paragraph header (like an overlay's merge.yaml) must not
+        // leak as the listed description — only the first comment line is used.
+        let yaml = b"# Clash Verge Rev merge profile. Summary line.\n#\n# A second paragraph\n# that keeps going and going.\nproxies:\n  - name: X\n";
+        assert_eq!(
+            parse_legacy_description(yaml).as_deref(),
+            Some("Clash Verge Rev merge profile. Summary line.")
+        );
+        // The `# shine-dest:` annotation is skipped; a single-line summary is unchanged.
+        let gitconfig = b"# shine-dest: ~/.gitconfig\n# Personal git configuration.\n\n[pull]\n";
+        assert_eq!(
+            parse_legacy_description(gitconfig).as_deref(),
+            Some("Personal git configuration.")
+        );
+        // No comment header -> no description.
+        assert_eq!(parse_legacy_description(b"proxies: []\n"), None);
     }
 
     #[test]

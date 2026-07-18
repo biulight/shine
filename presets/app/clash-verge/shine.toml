@@ -1,0 +1,32 @@
+description = "Clash Verge Rev local Merge profile: layers a LAN proxy, policy groups, and remote rule-providers onto the remote subscription without touching it."
+dest = "~/.shine/clash-verge"
+list_mode = "files"
+
+# `shine app build clash-verge` runs the artifact script to refresh the mihomo
+# rule-providers (and thus re-pull the LAN-served rule lists) via the external
+# controller — the analog of `surge-cli reload`. `teardown` (via
+# `shine app unbuild clash-verge`, and best-effort on `shine app uninstall`)
+# just prints how to remove the Merge profile in CVR, since CVR owns that binding
+# in its private store and shine never writes it.
+#
+# runtime = "bun" runs the scripts via `bun <script>`, so — unlike surge's
+# macOS-only bash artifact — clash-verge's artifact works on macOS/Windows/Linux
+# (CVR is cross-platform). bun is an external prerequisite (https://bun.sh).
+#
+# Reload lives in the artifact (not post_install/post_upgrade) because only the
+# artifact receives the `[env]` table, and the reload needs CLASH_CONTROLLER_*.
+[artifact]
+script = "build.ts"
+teardown = "unbuild.ts"
+runtime = "bun"
+
+# The single Merge payload, installed verbatim (plain Copy — no templating, so the
+# file is always valid YAML). The copy shipped here is an inert, commented EXAMPLE
+# (empty by default) — put your real values in a presets overlay under the same
+# name (`app/clash-verge/merge.yaml`), hardcoded directly, exactly like the Surge
+# preset's `local-*.conf`. Import the file once into CVR's enhancement chain; rule
+# content thereafter auto-refreshes via the rule-providers.
+[[files]]
+source = "merge.yaml"
+target = "merge.yaml"
+description = "CVR Merge profile (proxies + proxy-groups + rule-providers + prepend-rules); base is an example, real values live hardcoded in your overlay."
