@@ -21,8 +21,9 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   | `fix(ci): ...` | CI pipeline fix |
   | `fix(internal): ...` | any other non-user-facing cleanup |
 - Pre-commit runs `cargo fmt --check`, `clippy -D warnings`, `cargo deny check`, `typos`, and
-  `cargo nextest run`; changes to Bun tooling or TypeScript sources additionally run
-  `bun run check:ts` (strict type-check + Bun tests). All must pass locally before a commit lands.
+  `cargo nextest run`; it validates `mise.toml`, and changes to Bun tooling or TypeScript sources
+  additionally run `mise exec -- bun run check:ts` (strict type-check + Bun tests). All must pass
+  locally before a commit lands.
 - **Never `git push` without explicit user approval** (`AGENTS.md` § Git Push Policy).
 
 ## Versioning
@@ -46,9 +47,11 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   `SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine` (details in `AGENTS.md` § Verification Notes).
 - CI additionally runs `cargo audit`; a new dependency with a RUSTSEC advisory fails the build
   (see lessons entry on quinn-proto).
-- Root-level Bun development dependencies are locked by `bun.lock`; CI installs them with
-  `bun install --frozen-lockfile` before running `bun run check:ts`. Runtime preset scripts remain
-  self-contained and must not import packages from `node_modules`.
+- Rust and Bun versions have a single source of truth in root `mise.toml`; local development and CI
+  must use those mise-managed tools. Root-level Bun development dependencies are locked by
+  `bun.lock`; CI installs them with `bun install --frozen-lockfile` before running
+  `bun run check:ts`. Runtime preset scripts remain self-contained and must not import packages
+  from `node_modules`.
 
 ## File size
 

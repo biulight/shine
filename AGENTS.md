@@ -29,6 +29,10 @@ file. Full protocol: [`docs/kb/README.md`](docs/kb/README.md).
 ## Commands
 
 ```bash
+# Toolchain setup (versions pinned in mise.toml)
+mise install
+bun install --frozen-lockfile
+
 # Build
 cargo build
 cargo build --release          # binary at target/release/shine
@@ -61,10 +65,12 @@ bun run typecheck              # strict TypeScript check
 bun run check:ts               # type-check + Bun tests
 ```
 
-Run `bun install --frozen-lockfile` once before editing the Bun TypeScript presets. Pre-commit runs
-`bun run check:ts` when Bun tooling or TypeScript sources change, alongside `cargo fmt --check`,
-`cargo clippy -D warnings`, `cargo deny check`, `typos`, and `cargo nextest run`. All must pass
-before committing.
+Rust and Bun versions are pinned in `mise.toml`; run `mise install` once and activate mise in your
+shell before using the commands above. Then run `bun install --frozen-lockfile` before editing the
+Bun TypeScript presets. Pre-commit validates `mise.toml` and runs
+`mise exec -- bun run check:ts` when Bun tooling or TypeScript sources change, alongside
+`cargo fmt --check`, `cargo clippy -D warnings`, `cargo deny check`, `typos`, and
+`cargo nextest run`. All must pass before committing.
 
 ## Verification Notes
 

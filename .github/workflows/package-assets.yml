@@ -35,8 +35,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
+      - name: Install Rust with mise
+        uses: jdx/mise-action@v3
+        with:
+          version: 2026.7.7
+          install_args: rust
       - name: Install Rust target
-        run: rustup target add ${{ matrix.target }}
+        run: mise exec -- rustup target add ${{ matrix.target }}
       - name: Install Linux cross toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
