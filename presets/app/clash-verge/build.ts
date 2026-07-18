@@ -1,123 +1,215 @@
 // Artifact build script for the `clash-verge` app preset (runtime = "bun").
 //
-// `shine app build clash-verge` runs this via `bun` on macOS/Windows/Linux and:
-//   1. Writes this preset's merge.yaml into Clash Verge Rev's Global Extend Config
-//      file (`<CVR data dir>/profiles/Merge.yaml`) — so you never paste it by hand.
-//      The analog of surge's build.sh writing the Surge profile. shine writes only
-//      this user-content merge file, never CVR's profiles.yaml / binding DB / cache.
-//   2. Refreshes the mihomo rule-providers via the external controller (the analog
-//      of `surge-cli reload`), so edited LAN rule lists apply immediately instead
-//      of waiting for their `interval`.
-//
-// One-time setup in CVR: create an (empty) Global Extend Config so CVR registers
-// the Merge slot; then this script owns its content. The Merge.yaml path is
-// auto-detected per platform; override with `shine env set CLASH_MERGE_FILE <path>`
-// (a per-machine value — do NOT put it in a shared overlay's shine.env.toml).
-//
-// Controller env (only needed for the immediate refresh; read verbatim/plaintext):
-//   shine env set CLASH_CONTROLLER_URL   http://127.0.0.1:9097
-//   shine env set CLASH_CONTROLLER_TOKEN <secret from CVR → Settings → Clash Core>
+// CVR 2.x stores subscription enhancements in four separate bound files:
+// merge (ordinary mapping keys), rules, proxies, and groups. The latter three
+// use { prepend, append, delete } documents. This script treats merge.yaml as a
+// composite shine-owned source and renders it into those CVR-native files.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const CVR_ID = "io.github.clash-verge-rev.clash-verge-rev";
+const PROVIDERS = ["lan", "lan-socks", "other-direct"];
+const BINDING_KINDS = ["merge", "rules", "proxies", "groups"] as const;
 
-function expandTilde(p: string): string {
-  const home = Bun.env.HOME ?? "";
-  if (p === "~") return home;
-  if (p.startsWith("~/")) return `${home}/${p.slice(2)}`;
-  return p;
+type BindingKind = (typeof BINDING_KINDS)[number];
+type ProfileItem = {
+  uid?: unknown;
+  type?: unknown;
+  file?: unknown;
+  option?: Partial<Record<BindingKind, unknown>> | unknown;
+};
+type ProfilesConfig = { current?: unknown; items?: unknown };
+export type BoundFiles = Record<BindingKind, string>;
+export type RenderedPayload = Record<BindingKind, string>;
+
+function expandTilde(path: string): string {
+  const home = Bun.env.HOME ?? Bun.env.USERPROFILE ?? "";
+  if (path === "~") return home;
+  if (path.startsWith("~/") || path.startsWith("~\\")) return join(home, path.slice(2));
+  return path;
 }
 
-// Default CVR Global Extend Config path (`Merge.yaml`) per platform.
-function defaultMergePath(): string | null {
+export function defaultCvrDataDir(): string | null {
   if (process.platform === "win32") {
-    const appData = Bun.env.APPDATA;
-    return appData ? `${appData}\\${CVR_ID}\\profiles\\Merge.yaml` : null;
+    return Bun.env.APPDATA ? join(Bun.env.APPDATA, CVR_ID) : null;
   }
   if (process.platform === "darwin") {
-    const home = Bun.env.HOME;
-    return home ? `${home}/Library/Application Support/${CVR_ID}/profiles/Merge.yaml` : null;
+    return Bun.env.HOME ? join(Bun.env.HOME, "Library", "Application Support", CVR_ID) : null;
   }
-  const data = Bun.env.XDG_DATA_HOME ?? (Bun.env.HOME ? `${Bun.env.HOME}/.local/share` : null);
-  return data ? `${data}/${CVR_ID}/profiles/Merge.yaml` : null;
+  const data = Bun.env.XDG_DATA_HOME ?? (Bun.env.HOME ? join(Bun.env.HOME, ".local", "share") : null);
+  return data ? join(data, CVR_ID) : null;
 }
 
-// Write merge.yaml into CVR's Merge.yaml, idempotently. Non-fatal: a missing
-// target dir just means the user hasn't created the Global Extend Config yet.
-function writeMergeFile(): void {
-  const raw = Bun.env.CLASH_MERGE_FILE;
-  const target = raw ? expandTilde(raw) : defaultMergePath();
-  if (!target) {
-    console.log("clash-verge: could not resolve CVR's Merge.yaml path — set CLASH_MERGE_FILE to enable auto-write.");
-    return;
-  }
+function profileItems(config: ProfilesConfig): ProfileItem[] {
+  return Array.isArray(config.items)
+    ? config.items.filter((item): item is ProfileItem => typeof item === "object" && item !== null)
+    : [];
+}
 
-  const dir = dirname(target);
-  if (!existsSync(dir)) {
-    console.log(`clash-verge: ${dir} not found.`);
-    console.log("clash-verge: create an (empty) Global Extend Config in CVR first (or set CLASH_MERGE_FILE),");
-    console.log("clash-verge: then re-run `shine app build clash-verge`. Skipping Merge.yaml write.");
-    return;
-  }
+export function resolveBoundFiles(profilesPath: string): BoundFiles | null {
+  if (!existsSync(profilesPath)) return null;
 
-  // Read the RESOLVED merge.yaml: the overlay's real copy wins over the base
-  // example. build.ts itself lives in base (the overlay ships no build.ts), so
-  // import.meta.dir points at base — mirror shine's per-file overlay resolution
-  // via SHINE_APP_OVERLAY_DIR (`<overlay>/app/clash-verge`, set only when present).
+  const parsed = Bun.YAML.parse(readFileSync(profilesPath, "utf8")) as ProfilesConfig | null;
+  if (!parsed || typeof parsed !== "object" || typeof parsed.current !== "string") return null;
+
+  const items = profileItems(parsed);
+  const current = items.find((item) => item.uid === parsed.current);
+  const option = current?.option;
+  if (!option || typeof option !== "object") return null;
+
+  const profilesDir = join(dirname(profilesPath), "profiles");
+  const result = {} as BoundFiles;
+  for (const kind of BINDING_KINDS) {
+    const uid = option[kind];
+    if (typeof uid !== "string") return null;
+    const item = items.find((candidate) => candidate.uid === uid && candidate.type === kind);
+    if (!item || typeof item.file !== "string") return null;
+    if (item.file === "." || item.file === ".." || basename(item.file) !== item.file) return null;
+    result[kind] = join(profilesDir, item.file);
+  }
+  return result;
+}
+
+function resolveProfilesPath(): string | null {
+  const override = Bun.env.CLASH_PROFILES_FILE?.trim();
+  if (override) return expandTilde(override);
+  const dataDir = defaultCvrDataDir();
+  return dataDir ? join(dataDir, "profiles.yaml") : null;
+}
+
+function resolvedPayloadSource(): string {
   const overlayDir = Bun.env.SHINE_APP_OVERLAY_DIR;
-  const overlayMerge = overlayDir ? `${overlayDir}/merge.yaml` : "";
-  const source = overlayMerge && existsSync(overlayMerge) ? overlayMerge : `${import.meta.dir}/merge.yaml`;
+  const overlayMerge = overlayDir ? join(overlayDir, "merge.yaml") : "";
+  return overlayMerge && existsSync(overlayMerge) ? overlayMerge : join(import.meta.dir, "merge.yaml");
+}
 
-  const header = "# Managed by shine (app/clash-verge). Edit your overlay's merge.yaml, not this file.\n";
-  const content = header + readFileSync(source, "utf8");
-  if (existsSync(target) && readFileSync(target, "utf8") === content) {
-    console.log(`clash-verge: Merge.yaml already up to date (${target})`);
+function takeArray(mapping: Record<string, unknown>, key: string): unknown[] {
+  const value = mapping[key];
+  delete mapping[key];
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error(`clash-verge: '${key}' must be a YAML array`);
+  return value;
+}
+
+function renderEditorFile(values: unknown[]): string {
+  return Bun.YAML.stringify({ prepend: values, append: [], delete: [] });
+}
+
+export function renderPayload(source: string): RenderedPayload {
+  const parsed = Bun.YAML.parse(readFileSync(source, "utf8"));
+  if (parsed !== null && (typeof parsed !== "object" || Array.isArray(parsed))) {
+    throw new Error("clash-verge: merge.yaml must contain a YAML mapping");
+  }
+  const merge = { ...((parsed ?? {}) as Record<string, unknown>) };
+  const proxies = takeArray(merge, "proxies");
+  const groups = takeArray(merge, "proxy-groups");
+  const rules = takeArray(merge, "prepend-rules");
+
+  return {
+    merge: Bun.YAML.stringify(merge),
+    rules: renderEditorFile(rules),
+    proxies: renderEditorFile(proxies),
+    groups: renderEditorFile(groups),
+  };
+}
+
+function managedContent(kind: BindingKind, content: string): string {
+  return `# Managed by shine (app/clash-verge, ${kind}). Edit your overlay's merge.yaml, not this file.\n${content}`;
+}
+
+function canonicalYaml(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalYaml);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, child]) => [key, canonicalYaml(child)]),
+    );
+  }
+  return value;
+}
+
+function yamlEquivalent(left: string, right: string): boolean {
+  try {
+    return JSON.stringify(canonicalYaml(Bun.YAML.parse(left))) === JSON.stringify(canonicalYaml(Bun.YAML.parse(right)));
+  } catch {
+    return false;
+  }
+}
+
+export function installPayload(payload: RenderedPayload, targets: BoundFiles): "changed" | "current" {
+  let changed = false;
+  for (const kind of BINDING_KINDS) {
+    const content = managedContent(kind, payload[kind]);
+    if (!existsSync(targets[kind]) || !yamlEquivalent(readFileSync(targets[kind], "utf8"), content)) {
+      writeFileSync(targets[kind], content);
+      changed = true;
+    }
+  }
+  return changed ? "changed" : "current";
+}
+
+async function refreshProviders(): Promise<boolean> {
+  const url = (Bun.env.CLASH_CONTROLLER_URL ?? "").replace(/\/+$/, "");
+  if (!url) {
+    console.log("clash-verge: CLASH_CONTROLLER_URL not set — skipping the immediate rule-provider refresh");
+    console.log("clash-verge: (rules still refresh on their interval).");
+    return true;
+  }
+
+  const token = Bun.env.CLASH_CONTROLLER_TOKEN ?? "";
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  let succeeded = true;
+  for (const name of PROVIDERS) {
+    try {
+      const response = await fetch(`${url}/providers/rules/${name}`, { method: "PUT", headers });
+      if (response.ok) {
+        console.log(`clash-verge: refreshed rule-provider '${name}'`);
+      } else {
+        console.error(`clash-verge: failed to refresh '${name}' (HTTP ${response.status}) via ${url}`);
+        succeeded = false;
+      }
+    } catch (error) {
+      console.error(`clash-verge: could not reach the controller for '${name}' via ${url}: ${error}`);
+      succeeded = false;
+    }
+  }
+  return succeeded;
+}
+
+async function main(): Promise<void> {
+  const profilesPath = resolveProfilesPath();
+  const targets = profilesPath ? resolveBoundFiles(profilesPath) : null;
+  if (!targets) {
+    console.log("clash-verge: the active subscription does not have all enhancement editors bound.");
+    console.log("clash-verge: open its Extend Config, Edit Rules, Edit Proxies, and Edit Groups once,");
+    console.log("clash-verge: then re-run `shine app build clash-verge`.");
     return;
   }
-  writeFileSync(target, content);
-  console.log(`clash-verge: wrote CVR Merge.yaml (${target})`);
-}
 
-writeMergeFile();
+  if (Object.values(targets).some((target) => !existsSync(dirname(target)))) {
+    console.log("clash-verge: CVR's profiles directory was not found; skipping enhancement writes.");
+    return;
+  }
 
-// Immediate rule-provider refresh via the mihomo external controller (optional).
-const url = (Bun.env.CLASH_CONTROLLER_URL ?? "").replace(/\/+$/, "");
-if (!url) {
-  console.log("clash-verge: CLASH_CONTROLLER_URL not set — skipping the immediate rule-provider refresh");
-  console.log("clash-verge: (rules still refresh on their interval).");
-  process.exit(0);
-}
+  const state = installPayload(renderPayload(resolvedPayloadSource()), targets);
+  if (state === "changed") {
+    console.log("clash-verge: wrote the active subscription's Merge, Rules, Proxies, and Groups enhancements");
+    console.log("clash-verge: reselect the subscription in CVR once to apply the changed files;");
+    console.log("clash-verge: then re-run `shine app build clash-verge` to refresh its rule-providers.");
+    return;
+  }
+  console.log("clash-verge: active subscription enhancements already up to date");
 
-const token = Bun.env.CLASH_CONTROLLER_TOKEN ?? "";
-const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-
-// Provider names must match the `rule-providers:` keys in merge.yaml.
-const providers = ["lan", "lan-socks", "other-direct"];
-
-let failed = false;
-for (const name of providers) {
-  try {
-    // mihomo returns 204 on a successful provider refresh.
-    const res = await fetch(`${url}/providers/rules/${name}`, { method: "PUT", headers });
-    if (res.ok) {
-      console.log(`clash-verge: refreshed rule-provider '${name}'`);
-    } else {
-      console.error(`clash-verge: failed to refresh '${name}' (HTTP ${res.status}) via ${url}`);
-      failed = true;
-    }
-  } catch (err) {
-    console.error(`clash-verge: could not reach the controller for '${name}' via ${url}: ${err}`);
-    failed = true;
+  if (!(await refreshProviders())) {
+    console.error(
+      "clash-verge: is Clash Verge Rev running, the subscription enhancements applied, and CLASH_CONTROLLER_URL/TOKEN correct?",
+    );
+    process.exitCode = 1;
+  } else {
+    console.log("clash-verge: all rule-providers refreshed.");
   }
 }
 
-if (failed) {
-  console.error(
-    "clash-verge: is Clash Verge Rev running, the Merge profile imported, and CLASH_CONTROLLER_URL/TOKEN correct?",
-  );
-  process.exit(1);
-}
-
-console.log("clash-verge: all rule-providers refreshed.");
+if (import.meta.main) await main();

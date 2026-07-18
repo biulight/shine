@@ -9,5 +9,5 @@
 
 console.log("clash-verge: shine does not manage the CVR enhancement binding, so there is");
 console.log("clash-verge: nothing to reverse locally.");
-console.log("clash-verge: to fully remove it, open Clash Verge Rev → Profiles → the");
-console.log("clash-verge: subscription's enhancement chain → remove the shine Merge profile.");
+console.log("clash-verge: to fully remove it, open Clash Verge Rev → Profiles → the active");
+console.log("clash-verge: subscription and clear its Extend Config, Rules, Proxies, and Groups editors.");

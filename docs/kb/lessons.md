@@ -3,6 +3,30 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-18 — CVR Global Extend Config replaced subscription arrays and broke its own rules
+
+- **Symptom**: `shine app reinstall clash-verge` wrote all three rule-providers but their refreshes
+  returned HTTP 404. Saving Global Extend Config then failed validation because an original
+  subscription rule targeted `Proxies`, which no longer existed.
+- **Root cause**: CVR 2.5.1 treats global `proxies` / `proxy-groups` as whole-key replacements and
+  removed global prepend/append support. The preset wrote fixed `profiles/Merge.yaml`, erasing the
+  subscription groups at synthesis time; CVR also did not hot-reload that externally written file,
+  so the earlier provider refresh ran against stale runtime config.
+- **Fix**: split the composite source across the active subscription's bound Merge/Rules/Proxies/
+  Groups files; render arrays into the editor-native `{ prepend, append, delete }` shape; never fall
+  back to Global Extend Config; after a changed write, wait for profile reselection before refresh.
+- **Rule**: third-party "merge" scopes are not interchangeable. Verify array semantics and reload
+  behavior on the supported app version; resolve opaque per-profile filenames through the app's
+  binding index, but never mutate that index or guess a global filename. Compare app-reformatted
+  YAML semantically, not byte-for-byte, or every in-app save looks like a new change. Providers
+  fetching an internal URL must declare `proxy: DIRECT`; otherwise a valid direct URL can fail as
+  EOF when fetched through the subscription proxy. If that hostname relies on split DNS, mirror
+  the suffix either in Merge's `dns.nameserver-policy` with CVR DNS Override disabled, or in
+  Override's own Advanced Nameserver Policy when it remains enabled. Mihomo does not consume
+  Windows NRPT, and CVR applies its generated `dns_config.yaml` after Merge, replacing the entire
+  `dns` map. A Windows-side HTTP 200 does not prove mihomo resolves the same address; verify with
+  the controller's `/dns/query` endpoint.
+
 ## 2026-07-18 — `sys init --proxy` had no effect on Windows (winget ignores proxy env vars)
 
 - **Symptom**: `shine sys init --proxy` routed macOS/Ubuntu downloads through the local proxy but

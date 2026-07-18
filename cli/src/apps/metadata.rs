@@ -1152,9 +1152,14 @@ source = "config.toml"
         assert!(file.transforms.is_empty());
         assert_eq!(file.install_strategy, AppInstallStrategy::Copy);
 
+        let merge = include_str!("../../../presets/app/clash-verge/merge.yaml");
+        assert!(merge.contains("# proxies:"));
+        assert!(merge.contains("# proxy-groups:"));
+        assert!(merge.contains("# prepend-rules:"));
+
         // post_install/post_upgrade re-invoke `shine app build clash-verge` so the
-        // artifact (write CVR Merge.yaml + refresh) runs automatically after an
-        // install/upgrade that changes merge.yaml.
+        // artifact writes the bound CVR subscription Extend Config after an
+        // install/upgrade that changes merge.yaml, then refreshes once applied.
         let build_hook = vec![AppHook {
             command: "shine".to_string(),
             args: vec![

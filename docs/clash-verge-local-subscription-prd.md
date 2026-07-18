@@ -7,7 +7,7 @@
 
 直接修改 Clash Verge Rev（以下简称 CVR）下载的订阅 YAML 不可行：订阅更新会覆盖该文件。CVR
 提供 **Merge（扩展配置）/ Script** 两类 Profile Enhancement，能把本地的代理、策略组和规则与订阅
-在运行前合成。本功能让 `shine` 管理一个 **env 渲染的 Merge 配置**，并**复用 Surge 已有的
+在运行前合成。本功能让 `shine` 管理一个**订阅级 Extend Config**，并**复用 Surge 已有的
 LAN 规则服务器**，使本地规则可版本控制、可通过 presets overlay 个性化、可跨订阅长期保留，且对
 远端订阅零侵入。
 
@@ -17,7 +17,7 @@ LAN 规则服务器**，使本地规则可版本控制、可通过 presets overl
 
 ## 2. 产品目标
 
-- 新增 `clash-verge` app preset，安装一个 env 渲染的 Merge 配置（`proxies` + `proxy-groups` +
+- 新增 `clash-verge` app preset，安装一个组合增强源（`proxies` + `proxy-groups` +
   `rule-providers` + `prepend-rules`）。
 - **规则改动零 CVR 交互**：规则真源与 Surge 共用同一份 `rules/`，改规则后只需
   `shine task run upload_surge`，mihomo 依 `rule-providers` 的 `interval` 自动刷新；
@@ -30,12 +30,10 @@ LAN 规则服务器**，使本地规则可版本控制、可通过 presets overl
 ## 3. 非目标
 
 - 不实现 Clash/mihomo 内核、订阅下载器或订阅格式转换。
-- 不自动创建/登记 CVR 的增强槽：用户需**一次性**在 CVR 里建一个空的 Global Extend Config，以登记
-  `profiles/Merge.yaml` 这个槽。
-- **`shine` 只写用户内容的 `Merge.yaml`（Global Extend Config 文件），从不写 CVR 的 `profiles.yaml`、
-  增强绑定登记或订阅缓存**（这些是应用内部状态，格式/位置可能随版本变化）。写 `Merge.yaml` 与 Surge
-  写 `SURGE_PROFILE` 同理——都是应用暴露给用户编辑的内容文件。唯一无法自动化的手工步是上面那次「建空
-  Global Extend Config」（等价于 Surge 一次性布线 `#!include`）。
+- 不自动创建/登记 CVR 的增强槽：用户需**一次性**打开目标订阅的 Extend Config、Edit Rules、
+  Edit Proxies 和 Edit Groups，让 CVR 创建四个绑定。
+- **`shine` 只读 `profiles.yaml` 来解析当前订阅的 merge/rules/proxies/groups 绑定，只写这些绑定指向的
+  用户内容文件，从不修改 `profiles.yaml`、绑定或订阅缓存**。绑定不全时绝不回退写全局文件。
 - 不在 MVP 合并多个远端订阅为一个新的订阅。
 - 不引入 `shine serve` / 本地监听端口；规则统一走 Surge 已有的远端 HTTPS 服务器。
 - 不承诺将任意 YAML 数组做「智能合并」。规则、代理和代理组的顺序语义必须被保留。
@@ -49,17 +47,17 @@ LAN 规则服务器**，使本地规则可版本控制、可通过 presets overl
 
 ### 4.2 本地 Merge 配置（`merge.yaml`）
 
-`shine` 安装的**单个** YAML，作为 CVR 的 Merge（扩展配置）增强，内容分四部分：
+`shine` 安装的**单个组合源 YAML**，由 `build.ts` 渲染到 CVR 的四类订阅增强文件：
 
 | 片段 | 用途 | 顺序语义 |
 | --- | --- | --- |
-| `proxies` | LAN SOCKS/HTTP 等本地代理节点 | 与订阅代理并列 |
-| `proxy-groups` | 个人策略组（`type: select`, `include-all: true`） | 与订阅组并列，`include-all` 保持与订阅节点同步 |
-| `rule-providers` | 远程规则源（`type: http`, `behavior: classical`, `format: text`, `interval`） | 指向 Surge 同一 LAN 服务器 |
-| `prepend-rules` | 引用上述 provider 的规则，前插于订阅规则之前 | **prepend**，本地优先 |
+| `proxies` | 渲染到 Proxies editor 的 `prepend` | 前插且保留订阅代理 |
+| `proxy-groups` | 渲染到 Groups editor 的 `prepend` | 前插且保留订阅组 |
+| `rule-providers` | 留在订阅 Extend Config（merge） | 映射键合并，不替换订阅数组 |
+| `prepend-rules` | 渲染到 Rules editor 的 `prepend` | 前插，本地优先 |
 
-> **CVR 键名注意**：使用 CVR/mihomo 的真实键 `prepend-rules` / `append-rules` /
-> `prepend-proxies` 等，**不要**用泛化的 `prepend:` 列表。
+> **CVR 2.x 注意**：`prepend-rules` 等不再由 Extend Config 文件解释；真正的文件格式是独立的
+> `{ prepend, append, delete }` editor 文档。上表键名是 shine 的组合源格式，由 build.ts 转换。
 
 ### 4.3 规则真源（与 Surge 共用 `rules/`）
 
@@ -71,9 +69,9 @@ LAN 规则服务器**，使本地规则可版本控制、可通过 presets overl
 
 ### 4.4 绑定
 
-在 CVR 的「Profiles → 订阅 → 增强链」里，将 `merge.yaml` 作为一个 Merge 配置加入并保存。绑定关系
-由 CVR 维护，`shine` 不通过修改内部数据库或配置文件创建。**这是一次性动作**：绑定后，改规则只需
-`upload_surge` + 自动/手动刷新，改 `merge.yaml` 的骨架（proxies/组/provider 定义）时才需重新导入。
+在 CVR 的目标订阅上分别打开 Extend Config、Edit Rules、Edit Proxies、Edit Groups，使其创建并绑定
+四个增强项。`shine` 从 `profiles.yaml` 的 `current` → `option.<kind>` → item `file` 解析四个随机 UID
+文件。**这是一次性动作**；改配置骨架后重新选择订阅一次，让 CVR 重新合成运行配置。
 
 ## 5. 用户流程
 
@@ -89,27 +87,22 @@ shine env set CLASH_CONTROLLER_TOKEN <CVR 的外部控制器 secret>
 安装把 `merge.yaml` 逐字写入 `~/.shine/clash-verge/merge.yaml`（`dest`，纯 Copy）。
 
 **自动跑 build**：`clash-verge` 声明了 `post_install`/`post_upgrade` = `shine app build clash-verge`，
-所以 `shine app install`/`shine upgrade` 在 `merge.yaml` 变化时会**自动**写 CVR 的 `Merge.yaml` +
-刷新 providers，无需另跑 `shine app build`（需 `shine` 在 PATH；外部预设需 `allow_app_hooks = true`）。
-首装时若还没建 Global Extend Config，会打印无害指引并跳过写入。**注意**：hook 只在本预设文件
+所以 `shine app install`/`shine upgrade` 在 `merge.yaml` 变化时会**自动**渲染并写当前订阅绑定的
+四个增强文件。首次写入后会提示用户重新选择订阅，且不会对尚未进入运行态的 provider 发起必然 404。
+首装时若绑定不全，会打印无害指引并跳过写入。**注意**：hook 只在本预设文件
 （`merge.yaml`/骨架）变化时触发；高频的**改规则**走 `upload_surge`、不改 `merge.yaml`，故不触发 hook——
 仍靠 provider `interval` 自动刷新或手动 `shine app build clash-verge`。
 
-### 5.2 在 CVR 中一次性登记 Global Extend Config（无需手动粘贴）
+### 5.2 在 CVR 中一次性登记订阅增强 editors（无需手动粘贴）
 
-在 CVR 里创建一个**空的** Global Extend Config（Clash Verge Rev → Profiles → 底部 **Global Extend
-Config** 卡片，或右键订阅 → **Extend Config**）。这一步只是让 CVR **登记**它的文件槽
-`<CVR 数据目录>/profiles/Merge.yaml`（`shine` 不写 CVR 的 `profiles.yaml`，故这步必须手工做一次）。
+在 CVR 的 Profiles 中，对目标订阅依次打开并保存空的 **Extend Config / Edit Rules / Edit Proxies /
+Edit Groups**。不要使用底部的 Global Extend Config：其数组字段是覆盖语义，会删除订阅已有代理/组。
 
-此后 **`shine app build clash-verge` 会把 `merge.yaml` 内容自动写入该文件**（幂等，与 surge 写
-`SURGE_PROFILE` 同理），**不再需要手动粘贴**；文件路径按平台自动探测（`APPDATA`/`HOME` 推导，
-可用 `CLASH_MERGE_FILE` 覆盖）。本地代理、策略组、规则从此在订阅每次合成时叠加，规则内容按 provider
-`interval` 自动刷新。
+此后 build 只读 `profiles.yaml`，找到四个随机 UID 文件，将 overlay 组合源拆分写入。首次写入后重新
+选择一次订阅；再次运行 build 即可立即刷新 providers。
 
-> **归属与重载**：`clash-verge` 独占 Global Extend Config（整文件覆盖，带 `# Managed by shine` 头）；
-> 另有全局 merge 内容请并入 `merge.yaml` 或改用按订阅的 Extend Config。改**规则**无需碰 CVR（providers
-> 自动/即时刷新）；改**骨架**（proxies/组/provider 定义）后重跑 `shine app build`，CVR 可能需在应用内
-> 重选一次该配置才重新合成（见 §8 尖刺）。
+> **归属与重载**：`clash-verge` 独占这四个绑定内容文件（整文件覆盖，带 managed 头），但不拥有绑定。
+> CVR 不可靠监听外部写入，因此配置骨架变化后必须重新选择订阅才重新合成。
 
 ### 5.3 配置本地规则
 
@@ -136,7 +129,7 @@ shine app uninstall clash-verge   # 仅删 manifest 记录的文件；best-effor
 ```
 
 `uninstall` 仅删除 manifest 中记录的 `merge.yaml` 或恢复安装前备份；不删除 CVR 的订阅、节点、Profile
-或增强绑定。`unbuild.ts` 提示用户在 CVR 增强链中手动移除该 Merge 配置，避免残留失效引用。
+或增强绑定。`unbuild.ts` 提示用户在 CVR 中手动清理这些订阅增强内容。
 
 ## 6. 命令与预设设计
 
@@ -145,8 +138,9 @@ shine app uninstall clash-verge   # 仅删 manifest 记录的文件；best-effor
 ```text
 presets/app/clash-verge/                      # 本仓 base：仅示例
 ├── shine.toml
-├── merge.yaml        # 唯一 payload：CVR Merge 配置的**惰性注释示例**（默认空、纯 Copy 安装、无模板）
-├── build.ts          # bun 脚本（runtime="bun"，跨平台）：经 mihomo 外部控制器 API 刷新 rule-providers
+├── merge.yaml        # 唯一组合源：惰性注释示例（默认空、纯 Copy 安装、无模板）
+├── build.ts          # bun：解析四个绑定、渲染 editor 文件、刷新 rule-providers
+├── build.test.ts     # 组合源拆分、绑定解析、越界防护与幂等写入测试
 └── unbuild.ts        # bun 脚本：打印在 CVR 解绑的指引（best-effort，卸载时非致命）
 ```
 
@@ -182,44 +176,52 @@ merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 用以下键（�
 | --- | --- | --- |
 | `CLASH_CONTROLLER_URL` | mihomo 外部控制器（仅即时刷新用；不填则跳过刷新） | `http://127.0.0.1:9097` |
 | `CLASH_CONTROLLER_TOKEN` | 控制器令牌（明文；无鉴权可留空；勿用 `_SECRET`/加密键） | （用户填） |
-| `CLASH_MERGE_FILE` | **可选**，覆盖自动探测的 CVR `Merge.yaml` 路径 | 默认自动探测 |
+| `CLASH_PROFILES_FILE` | **可选**，覆盖 CVR `profiles.yaml` 索引路径 | 默认按平台探测 |
 
 > `CLASH_CONTROLLER_*` 放共享 overlay 的 `shine.env.toml`（与 `SURGE_PROFILE` 并列）皆可；
-> `CLASH_MERGE_FILE` 是**每机**路径，只在自动探测不适用时设，且应放**每机的全局** `shine.env.toml`，
+> `CLASH_PROFILES_FILE` 是**每机**路径，只在自动探测不适用时设，且应放**每机的全局** `shine.env.toml`，
 > **不要**放共享 overlay（否则 Windows 路径会破坏 macOS）。
 
 ### 6.3 `build.ts` 行为
 
 `shine app build clash-verge` 依次做两件事：
 
-1. **写 CVR 的 Merge.yaml**：解析出**生效的** `merge.yaml`（overlay 覆盖 base，经
-   `SHINE_APP_OVERLAY_DIR` 判定），幂等写入 `<CVR 数据目录>/profiles/Merge.yaml`（带
-   `# Managed by shine` 头，内容不变则跳过）。目标目录不存在（未建 Global Extend Config）→ 打印指引、
-   非致命跳过。这是**唯一**写入的 CVR 文件（用户内容的 merge 文件），从不写 `profiles.yaml`/绑定/缓存。
+1. **写四个订阅增强文件**：解析 overlay 胜出的组合源，再只读 `profiles.yaml` 的当前订阅
+   merge/rules/proxies/groups 绑定。普通映射键（如 `rule-providers`）写 merge；proxies、proxy-groups、
+   prepend-rules 分别转换为对应 editor 文件的 `prepend`。绑定不全或文件名越出 `profiles/` 时非致命
+   跳过，绝不回退全局文件。内容变化时提示重新选择订阅并结束。
 2. **刷新 rule-providers**：对每个 provider 键（`lan` / `lan-socks` / `other-direct`）向
    `CLASH_CONTROLLER_URL` 发 `PUT /providers/rules/<name>`，令 mihomo 立即重拉最新列表。`CLASH_CONTROLLER_URL`
    未设则跳过刷新（规则仍按 interval 自动更新）；已设但不可达则以非零退出，由 `shine app build` 作为真错误上抛。
-   注意：第 1 步的写入先于第 2 步，故即使控制器不可达，Merge.yaml 也已写好。
+   只有第 1 步判断内容已是 current 时才刷新，避免 CVR 尚未重新合成导致 provider 404。
 
 ## 7. 配置语义与约束
 
-- 规则数组用 **`prepend-rules`** 表达本地优先，**不要**依赖泛化 YAML merge 追加数组。
+- 组合源使用 `proxies` / `proxy-groups` / `prepend-rules`；build.ts 必须把它们拆进三个 editor
+  文件的 `prepend`，绝不能把数组字段原样写进 CVR merge 文件。
 - 规则顺序有语义：mihomo 从上到下首匹配；`prepend-rules` 保证本地规则先于订阅规则。
 - `rule-providers` 用 `behavior: classical, format: text` 直接消费 Surge `.list`（含
   `IP-CIDR,…,no-resolve`）——两端共用一份规则源（详见 §8 尖刺 b 的逐行兼容验证）。
+- 内网规则服务器的 provider 必须显式设 `proxy: DIRECT`，避免 provider 更新沿订阅代理出站并以
+  `EOF`/HTTP 503 失败。
+- 若 provider 域名依赖系统 split DNS（例如 Windows NRPT），还必须镜像该域名后缀与 DNS 服务器：
+  关闭 CVR DNS Override 时写组合源的 `dns.nameserver-policy`；保留 Override 时则在其 Advanced →
+  Nameserver Policy 中写同一策略，并建议将该后缀加入 Fake IP Filter。mihomo 不读取 NRPT；CVR 的
+  `dns_config.yaml` 在 Merge 之后应用，会整体替换 Merge 提供的 `dns` 映射。
 - 本地 `proxy-groups` 若引用远端节点/组，名称变更会导致 mihomo 校验失败；错误应由 CVR/mihomo 清晰
   报告，`shine` 不在安装时假装验证远端订阅内容。
+- 策略组启用 `include-all` 后，不要再在 `proxies` 显式列出同一个普通节点，否则 mihomo UI 会显示
+  两个同名项。也不要用 `exclude-filter` 去重：CVR/mihomo 2.5.1 会把显式项一起过滤；让该节点只由
+  `include-all` 收集一次即可。
 - 本地规则可含私有网络信息；本仓 base 示例不含任何真实地址、域名、令牌或订阅 URL（真实值一律
   硬编码在 overlay 的 `merge.yaml`；控制器令牌走 overlay 的 `shine.env.toml`）。
 
 ## 8. 技术尖刺
 
-正式上线前必须在当前支持的 macOS CVR 版本上验证并记录（结论以测试记录或 ADR 形式入
-`docs/kb/`）：
-
-1. **(a) Merge 接受度**：CVR 的 Merge（扩展配置）能否接受本 `merge.yaml` 的
-   `proxies` / `proxy-groups` / `rule-providers` / `prepend-rules` 结构，且 `prepend-rules`
-   确实前插于订阅规则之前。
+1. **(a) Extend Config 接受度（Windows / CVR 2.5.1 已验证）**：Global Extend Config 的
+   `proxy-groups` 整体覆盖订阅组，导致订阅规则引用的 `Proxies` 消失并校验回滚；全局
+   prepend/append 也已移除。CVR 2.5.1 的正确入口是订阅级 Rules/Proxies/Groups 独立 editor 文件，
+   格式均为 `{ prepend, append, delete }`。
 2. **(b) 规则兼容**：Surge `.list` 作为 mihomo `behavior: classical, format: text` 的 provider
    payload 是否逐行兼容，尤其 `IP-CIDR,…,no-resolve`。
 3. **(c) 控制器刷新**：mihomo 外部控制器 `PUT /providers/rules/<name>`（及可选的整体重载）的确切
@@ -236,7 +238,8 @@ merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 用以下键（�
    不被删除或改写。
 4. `shine app uninstall clash-verge` 只处理 manifest 记录的文件；不删除 CVR 的 Profile、订阅或
    节点，并经 `unbuild.ts` 给出移除增强绑定的提示。
-5. `shine app build clash-verge` 在控制器不可达/未配置时以清晰错误非零退出。
+5. `shine app build clash-verge` 对缺少订阅级绑定给出非致命指引；内容首次写入后等待 CVR 应用；
+   内容已应用而控制器不可达时以清晰错误非零退出。
 
 > CVR 侧行为（规则刷新后仍前插于订阅规则、CVR 重启后仍生效）依赖 CVR 的合成实现，`shine` 无法
 > 交付该保证，归入 §8 尖刺记录，不作为验收项。
