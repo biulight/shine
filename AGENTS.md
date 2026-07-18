@@ -348,6 +348,14 @@ Two transforms can be applied to preset files at install time (declared in `shin
 
 Transforms compose in declaration order: `transforms = ["jsonc-to-json", "template"]`.
 
+The `template` delimiter is `@@VAR@@` for **every** file type — there is deliberately no
+per-file-type delimiter. `@` is a YAML reserved indicator only as the first char of a plain
+scalar, so YAML presets either follow the clash-verge overlay pattern (hardcode real values, no
+templating) or quote the placeholder (`key: "@@VAR@@"`, which yields a string). Native-typed env
+rendering into YAML is not supported today; if ever needed it would be an explicit opt-in
+`template_open`/`template_close`, not extension inference. See
+[ADR 0013](docs/kb/decisions/0013-template-delimiter-policy.md).
+
 ### SSH session transfer flow (`shine ssh` / `shine local`)
 
 See [`docs/ssh-local-transfer-prd.md`](docs/ssh-local-transfer-prd.md) for the full design and
