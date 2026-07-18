@@ -14,6 +14,12 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Install TypeScript dependencies
+        run: bun install --frozen-lockfile
+      - name: Check Bun TypeScript sources
+        run: bun run check:ts
       - name: Install Rust
         run: rustup toolchain install stable --component llvm-tools-preview
       - name: Install cargo-llvm-cov

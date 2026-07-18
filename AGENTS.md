@@ -46,6 +46,7 @@ cargo run -- self upgrade --channel preview
 # Test (pre-commit uses nextest)
 cargo nextest run --all-features
 cargo test                     # fallback without nextest
+bun run test:ts                # Bun preset tests
 
 # Single test
 cargo test shells::tests::install_then_uninstall_roundtrip
@@ -56,9 +57,14 @@ cargo fmt
 cargo clippy --all-targets --all-features --tests --benches -- -D warnings
 cargo deny check bans licenses sources
 typos                          # spell-check
+bun run typecheck              # strict TypeScript check
+bun run check:ts               # type-check + Bun tests
 ```
 
-Pre-commit runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo deny check`, `typos`, and `cargo nextest run` on every commit. All must pass before committing.
+Run `bun install --frozen-lockfile` once before editing the Bun TypeScript presets. Pre-commit runs
+`bun run check:ts` when Bun tooling or TypeScript sources change, alongside `cargo fmt --check`,
+`cargo clippy -D warnings`, `cargo deny check`, `typos`, and `cargo nextest run`. All must pass
+before committing.
 
 ## Verification Notes
 

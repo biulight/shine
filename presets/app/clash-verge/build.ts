@@ -57,11 +57,12 @@ export function resolveBoundFiles(profilesPath: string): BoundFiles | null {
   const current = items.find((item) => item.uid === parsed.current);
   const option = current?.option;
   if (!option || typeof option !== "object") return null;
+  const bindings = option as Partial<Record<BindingKind, unknown>>;
 
   const profilesDir = join(dirname(profilesPath), "profiles");
   const result = {} as BoundFiles;
   for (const kind of BINDING_KINDS) {
-    const uid = option[kind];
+    const uid = bindings[kind];
     if (typeof uid !== "string") return null;
     const item = items.find((candidate) => candidate.uid === uid && candidate.type === kind);
     if (!item || typeof item.file !== "string") return null;
