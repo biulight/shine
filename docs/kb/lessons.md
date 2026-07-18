@@ -3,6 +3,26 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-18 — `sys init --proxy` had no effect on Windows (winget ignores proxy env vars)
+
+- **Symptom**: `shine sys init --proxy` routed macOS/Ubuntu downloads through the local proxy but
+  did nothing on Windows — the platform the feature was requested for — so installs still failed
+  behind a firewall.
+- **Root cause**: the first cut (commit `6a0ce96`) only injected the standard proxy env vars
+  (`http_proxy`/`https_proxy`/`all_proxy`) into the init-script subprocess. `curl`/`apt`/`brew`/
+  `rustup` honor those, but Windows `init.ps1` installs everything via **winget, which ignores
+  `http_proxy`/`https_proxy` entirely** — it only accepts `winget install --proxy <uri>`, and that
+  CLI option is *disabled by default* (needs a one-time admin `winget settings --enable
+  ProxyCommandLineOptions`). Compounding it, `Install-WinGetPackage` never checked winget's exit
+  code (a native exe's nonzero exit does not trip PowerShell's `ErrorActionPreference=Stop`), so a
+  proxy-rejected install still reported `installed`.
+- **Fix**: `build_proxy_env_vars` also exports `SHINE_SYS_PROXY` (the explicit URL signal), and
+  `init.ps1` reads it to pass `winget install --proxy`, best-effort enabling the CLI option and
+  checking `$LASTEXITCODE` to surface the admin remediation on failure.
+- **Rule**: env-var proxying is not universal — verify the *actual downloader* honors it. winget
+  needs `--proxy` + an admin-enabled setting, not `http_proxy`. And always check a native exe's
+  exit code in PowerShell; `ErrorActionPreference=Stop` does not.
+
 ## 2026-07-17 — `app list` leaked a whole comment block as a category description
 
 - **Symptom**: `shine app list` on a machine whose base binary predates the `clash-verge` preset

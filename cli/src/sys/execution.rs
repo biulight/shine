@@ -104,16 +104,20 @@ pub(super) fn proxy_env_vars(config: &crate::config::Config) -> Vec<(&'static st
 fn build_proxy_env_vars(host: &str, port: &str, no_proxy: &str) -> Vec<(&'static str, String)> {
     let url = format!("http://{host}:{port}");
     // Lower + upper case for both scheme-specific and all_proxy so curl, apt,
-    // winget, and Homebrew all pick it up regardless of which form they read.
+    // rustup, and Homebrew (macOS/Ubuntu) all pick it up regardless of which
+    // form they read. winget (Windows) ignores these entirely, so we also expose
+    // the URL as SHINE_SYS_PROXY — the explicit signal init.ps1 keys off to pass
+    // `winget install --proxy <url>` (env-only proxying does not work for winget).
     vec![
         ("http_proxy", url.clone()),
         ("HTTP_PROXY", url.clone()),
         ("https_proxy", url.clone()),
         ("HTTPS_PROXY", url.clone()),
         ("all_proxy", url.clone()),
-        ("ALL_PROXY", url),
+        ("ALL_PROXY", url.clone()),
         ("no_proxy", no_proxy.to_string()),
         ("NO_PROXY", no_proxy.to_string()),
+        ("SHINE_SYS_PROXY", url),
     ]
 }
 
@@ -401,7 +405,7 @@ mod tests {
     #[test]
     fn build_proxy_env_vars_assembles_http_form_lower_and_upper() {
         let vars = build_proxy_env_vars("127.0.0.1", "6152", "localhost");
-        assert_eq!(vars.len(), 8);
+        assert_eq!(vars.len(), 9);
 
         let get = |key: &str| {
             vars.iter()
@@ -416,5 +420,7 @@ mod tests {
         assert_eq!(get("ALL_PROXY"), Some("http://127.0.0.1:6152"));
         assert_eq!(get("no_proxy"), Some("localhost"));
         assert_eq!(get("NO_PROXY"), Some("localhost"));
+        // Explicit signal init.ps1 reads to pass `winget install --proxy <url>`.
+        assert_eq!(get("SHINE_SYS_PROXY"), Some("http://127.0.0.1:6152"));
     }
 }

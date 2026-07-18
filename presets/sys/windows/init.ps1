@@ -12,6 +12,29 @@ function Write-Status {
     Write-Output "SHINE_SYS_STATUS`t$State`t$Detail"
 }
 
+# Set by `shine sys init --proxy` (the shine-owned signal, not $env:HTTP_PROXY,
+# so an ambient HTTP_PROXY never turns on winget proxying without the flag).
+# winget ignores http_proxy/https_proxy env vars; it only honors `--proxy <uri>`.
+$script:ProxyUri = if ($env:SHINE_SYS_PROXY) { $env:SHINE_SYS_PROXY.Trim() } else { $null }
+$script:ProxyOptionAttempted = $false
+
+function Enable-WinGetProxyOption {
+    if (-not $script:ProxyUri -or $script:ProxyOptionAttempted) {
+        return
+    }
+    $script:ProxyOptionAttempted = $true
+    Write-Host "Using proxy $script:ProxyUri for winget."
+    try {
+        # winget's `--proxy` CLI option is disabled by default and must be enabled
+        # once by an administrator. Best-effort: succeeds when this shell is
+        # elevated, harmless no-op otherwise (the winget call then reports the
+        # failure and the caller surfaces the remediation command).
+        winget settings --enable ProxyCommandLineOptions 2>&1 | Out-Null
+    } catch {
+        # Non-admin shells cannot enable it; ignore and let the winget call report.
+    }
+}
+
 $ScriptPathCandidates = @(
     $env:SHINE_SYS_PRESET_ROOT,
     $PSScriptRoot,
@@ -71,7 +94,30 @@ function Install-WinGetPackage {
     }
 
     Write-Host "Installing $PackageId..."
-    winget install --exact --id $PackageId --accept-package-agreements --accept-source-agreements
+    $wingetArgs = @(
+        "install",
+        "--exact",
+        "--id", $PackageId,
+        "--accept-package-agreements",
+        "--accept-source-agreements"
+    )
+    if ($script:ProxyUri) {
+        Enable-WinGetProxyOption
+        $wingetArgs += @("--proxy", $script:ProxyUri)
+    }
+    winget @wingetArgs
+    if ($LASTEXITCODE -ne 0) {
+        # winget is a native exe, so a nonzero exit never triggers PowerShell's
+        # ErrorActionPreference=Stop. The Test-CommandExists guard above means we
+        # only reach here on a genuine install, so a nonzero code is a real failure.
+        $hint = if ($script:ProxyUri) {
+            " If winget's proxy option is disabled, run once as administrator: winget settings --enable ProxyCommandLineOptions"
+        } else {
+            ""
+        }
+        Write-Status "failed" "$PackageId install failed (exit $LASTEXITCODE).$hint"
+        throw "winget install $PackageId failed with exit code $LASTEXITCODE"
+    }
     Write-Status "installed" $PackageId
 }
 
