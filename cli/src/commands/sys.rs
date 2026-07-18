@@ -27,6 +27,9 @@ pub enum SysCommands {
         /// Back up and replace the sys profile instead of merging user edits
         #[arg(long)]
         force_profile: bool,
+        /// Route init-script downloads through shine's preset proxy ([env] PROXY_HOST/HTTP_PROXY_PORT)
+        #[arg(long)]
+        proxy: bool,
     },
     /// Reapply enabled managed system configuration items
     Apply {

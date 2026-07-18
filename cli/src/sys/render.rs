@@ -76,11 +76,18 @@ pub(in crate::sys) async fn print_dry_run(
     loaded: &LoadedSysPreset,
     selection: &ResolvedSelection,
     sys_shell: &str,
+    proxy_env: &[(&'static str, String)],
 ) -> Result<()> {
     println!("{}", colors::dim("[dry-run] System init preview"));
     println!("  OS: {os_id}");
     println!("  Shell: {sys_shell}");
     println!("  Selection: {}", selection.source.describe());
+    if !proxy_env.is_empty() {
+        println!("  Proxy env:");
+        for (key, value) in proxy_env {
+            println!("    {}", colors::dim(&format!("{key}={value}")));
+        }
+    }
     println!(
         "  Items: {}",
         if selection.item_ids.is_empty() {

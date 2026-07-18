@@ -84,6 +84,39 @@ pub(super) fn print_run_header(os_id: &str, sys_shell: &str, selection: &Resolve
     println!();
 }
 
+/// Build the HTTP proxy environment variables injected into init scripts by
+/// `shine sys init --proxy`, from shine's preset proxy `[env]` values.
+///
+/// Reuses the `[env]` keys already consumed by the `proxy` shell preset
+/// (`PROXY_HOST` / `HTTP_PROXY_PORT` / `PROXY_NO_PROXY`) and assembles the same
+/// HTTP-form URL as `set_proxy.sh`. SOCKS5 is intentionally left out — winget
+/// does not understand it, and it would add a live-socks-port dependency.
+pub(super) fn proxy_env_vars(config: &crate::config::Config) -> Vec<(&'static str, String)> {
+    let env = crate::env::EnvConfig::from_config(config);
+    build_proxy_env_vars(
+        env.get("PROXY_HOST").unwrap_or("127.0.0.1"),
+        env.get("HTTP_PROXY_PORT").unwrap_or("6152"),
+        env.get("PROXY_NO_PROXY")
+            .unwrap_or("localhost,127.0.0.1,::1"),
+    )
+}
+
+fn build_proxy_env_vars(host: &str, port: &str, no_proxy: &str) -> Vec<(&'static str, String)> {
+    let url = format!("http://{host}:{port}");
+    // Lower + upper case for both scheme-specific and all_proxy so curl, apt,
+    // winget, and Homebrew all pick it up regardless of which form they read.
+    vec![
+        ("http_proxy", url.clone()),
+        ("HTTP_PROXY", url.clone()),
+        ("https_proxy", url.clone()),
+        ("HTTPS_PROXY", url.clone()),
+        ("all_proxy", url.clone()),
+        ("ALL_PROXY", url),
+        ("no_proxy", no_proxy.to_string()),
+        ("NO_PROXY", no_proxy.to_string()),
+    ]
+}
+
 pub(super) async fn run_sys_item(
     command: &SysInitCommand,
     script_dir: &Path,
@@ -91,11 +124,16 @@ pub(super) async fn run_sys_item(
     sys_shell: &str,
     item_id: &str,
     label: &str,
+    proxy_env: &[(&'static str, String)],
 ) -> Result<SysItemOutcome> {
-    let output = tokio::process::Command::new(command.program)
-        .current_dir(script_dir)
+    let mut cmd = tokio::process::Command::new(command.program);
+    cmd.current_dir(script_dir)
         .env("SHINE_SYS_PRESET_ROOT", script_dir)
-        .env("SHINE_SYS_SHELL", sys_shell)
+        .env("SHINE_SYS_SHELL", sys_shell);
+    for (key, value) in proxy_env {
+        cmd.env(key, value);
+    }
+    let output = cmd
         .args(&command.fixed_args)
         .arg(script_path)
         .arg(item_id)
@@ -358,5 +396,25 @@ mod tests {
                 None => std::env::remove_var("SUDO_USER"),
             }
         }
+    }
+
+    #[test]
+    fn build_proxy_env_vars_assembles_http_form_lower_and_upper() {
+        let vars = build_proxy_env_vars("127.0.0.1", "6152", "localhost");
+        assert_eq!(vars.len(), 8);
+
+        let get = |key: &str| {
+            vars.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("http_proxy"), Some("http://127.0.0.1:6152"));
+        assert_eq!(get("HTTP_PROXY"), Some("http://127.0.0.1:6152"));
+        assert_eq!(get("https_proxy"), Some("http://127.0.0.1:6152"));
+        assert_eq!(get("HTTPS_PROXY"), Some("http://127.0.0.1:6152"));
+        assert_eq!(get("all_proxy"), Some("http://127.0.0.1:6152"));
+        assert_eq!(get("ALL_PROXY"), Some("http://127.0.0.1:6152"));
+        assert_eq!(get("no_proxy"), Some("localhost"));
+        assert_eq!(get("NO_PROXY"), Some("localhost"));
     }
 }

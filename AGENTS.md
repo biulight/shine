@@ -467,7 +467,7 @@ side only — see step 8) rides on top of the macOS/Linux implementation.
 4. In interactive mode: `dialoguer::MultiSelect` lets the user pick init items. Non-interactive mode requires `default_profile`.
 5. Calls `bash <presets_dir>/sys/<os>/init.sh <item_id>` once per selected item, then calls `bash <presets_dir>/sys/<os>/init.sh __shine_finalize` so shared shell/profile integration runs once.
 
-`shine sys init --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing.
+`shine sys init --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing. `--proxy` injects HTTP proxy env vars (`http_proxy`/`https_proxy`/`all_proxy` + uppercase = `http://$PROXY_HOST:$HTTP_PROXY_PORT`, `no_proxy` = `PROXY_NO_PROXY`) into every init-script subprocess, built from the `[env]` preset proxy keys via `sys::execution::proxy_env_vars` — reusing the same values as the `proxy` shell preset so winget/curl/apt/brew downloads route through the local proxy on locked-down networks. SOCKS5 is intentionally not injected (winget can't use it).
 
 Ubuntu ships three profiles (`presets/sys/ubuntu/shine.toml`): `recommended` (default,
 full interactive dev setup), `all` (recommended + zerotier/pnpm/mise/homebrew), and

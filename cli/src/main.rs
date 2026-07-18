@@ -282,12 +282,14 @@ async fn run(cli: Cli) -> Result<()> {
                 preset,
                 dry_run,
                 force_profile,
+                proxy,
             } => {
                 Box::pin(sys::handle_init(
                     &config,
                     preset.as_deref(),
                     dry_run,
                     force_profile,
+                    proxy,
                 ))
                 .await
             }
@@ -1075,7 +1077,8 @@ mod tests {
                 command: SysCommands::Init {
                     preset: None,
                     dry_run: false,
-                    force_profile: false
+                    force_profile: false,
+                    proxy: false
                 }
             }
         ));
@@ -1087,7 +1090,8 @@ mod tests {
                 command: SysCommands::Init {
                     preset: None,
                     dry_run: true,
-                    force_profile: false
+                    force_profile: false,
+                    proxy: false
                 }
             }
         ));
@@ -1099,7 +1103,8 @@ mod tests {
                 command: SysCommands::Init {
                     preset: Some(ref preset),
                     dry_run: false,
-                    force_profile: false
+                    force_profile: false,
+                    proxy: false
                 }
             } if preset == "recommended"
         ));
@@ -1111,7 +1116,21 @@ mod tests {
                 command: SysCommands::Init {
                     preset: None,
                     dry_run: false,
-                    force_profile: true
+                    force_profile: true,
+                    proxy: false
+                }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "init", "--proxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Init {
+                    preset: None,
+                    dry_run: false,
+                    force_profile: false,
+                    proxy: true
                 }
             }
         ));
@@ -1131,7 +1150,8 @@ mod tests {
                 command: SysCommands::Init {
                     preset: Some(ref preset),
                     dry_run: true,
-                    force_profile: false
+                    force_profile: false,
+                    proxy: false
                 }
             } if preset == "recommended"
         ));

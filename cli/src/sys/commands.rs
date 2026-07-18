@@ -235,9 +235,10 @@ pub async fn handle_init(
     preset: Option<&str>,
     dry_run: bool,
     force_profile: bool,
+    proxy: bool,
 ) -> Result<()> {
     let os_id = detect_os_id().await?;
-    handle_init_for_os(config, &os_id, preset, dry_run, force_profile).await
+    handle_init_for_os(config, &os_id, preset, dry_run, force_profile, proxy).await
 }
 
 async fn handle_init_for_os(
@@ -246,6 +247,7 @@ async fn handle_init_for_os(
     preset: Option<&str>,
     dry_run: bool,
     force_profile: bool,
+    proxy: bool,
 ) -> Result<()> {
     crate::config::print_presets_note(config);
 
@@ -253,9 +255,14 @@ async fn handle_init_for_os(
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let selection = resolve_selection(&loaded.manifest, preset, interactive)?;
     let sys_shell: &'static str = config.shell_type.into();
+    let proxy_env = if proxy {
+        super::execution::proxy_env_vars(config)
+    } else {
+        Vec::new()
+    };
 
     if dry_run {
-        print_dry_run(os_id, &loaded, &selection, sys_shell).await?;
+        print_dry_run(os_id, &loaded, &selection, sys_shell, &proxy_env).await?;
         return Ok(());
     }
 
@@ -294,6 +301,7 @@ async fn handle_init_for_os(
             sys_shell,
             item_id,
             &label,
+            &proxy_env,
         )
         .await?;
         print_item_outcome(&outcome, label_width);
@@ -1777,7 +1785,7 @@ items = ["touch-file"]
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        handle_init_for_os(&config, "fakeos", None, true, false)
+        handle_init_for_os(&config, "fakeos", None, true, false, false)
             .await
             .unwrap();
         assert!(!sentinel.exists(), "script must not have been executed");
@@ -1843,7 +1851,7 @@ esac
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        handle_init_for_os(&config, "fakeos", None, false, false)
+        handle_init_for_os(&config, "fakeos", None, false, false, false)
             .await
             .unwrap();
 
@@ -1958,7 +1966,7 @@ esac
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        let err = handle_init_for_os(&config, "fakeos", None, false, false)
+        let err = handle_init_for_os(&config, "fakeos", None, false, false, false)
             .await
             .unwrap_err();
 
