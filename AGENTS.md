@@ -309,7 +309,7 @@ shine/
 | `clear` | `cli/src/clear.rs` |
 | `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
-| `ssh [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
+| `ssh [--with ...] [--with-secret ...] [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
 | `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
 | `task save/run/list/info/delete` | `cli/src/task/` |
 | `run <NAME>` (alias for `task run`) | `cli/src/task/` |
@@ -381,7 +381,11 @@ side only — see step 8) rides on top of the macOS/Linux implementation.
 2. The remote command is replaced with a wrapper that sets
    `SHINE_SSH_SESSION`/`SHINE_SSH_TOKEN`/`SHINE_SSH_REMOTE_SOCK` via `env`
    (not `SetEnv`/`SendEnv`, which most `sshd_config`s reject), then `exec`s
-   the user's original remote command or their login shell.
+   the user's original remote command or their login shell. Repeated `--with
+   KEY[=ALIAS]` entries add exact plaintext values from the active local `[env]`;
+   `--with-secret KEY[=ALIAS]` is the separate explicit opt-in that decrypts
+   `KEY_SECRET`. Values are shell-quoted into the same wrapper and last only for
+   the session; see ADR 0014.
 3. sshd does **not** clean up the forwarded remote socket file on
    disconnect (verified against a real host via `scripts/spike-ssh-forward.sh`
    before implementation) — the wrapper registers its own `trap ... EXIT`.

@@ -572,6 +572,16 @@ $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 
 `shine ssh` 会打开一个正常的交互式 SSH 会话（它包装了系统自带的 `ssh`，并复用你的 `~/.ssh/config`），同时建立一条回连到发起端机器的会话专属传输通道。会话内的 `shine local download`/`upload`/`status` 就通过这条通道工作——不需要再单独调用 `scp`/`rsync`。
 
+还可以把本机当前有效 Shine 环境中明确选择的值注入远端登录 shell 或命令。Shine 自己的选项必须写在 SSH 目标之前；`KEY=ALIAS` 可在远端重命名变量：
+
+```bash
+shine ssh --with API_URL dev
+shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'
+shine ssh --with-secret API_TOKEN dev
+```
+
+`--with` 只读取完全同名的明文 `[env]` 键，绝不会自动解密 `KEY_SECRET`；解密后的值必须通过显式的 `--with-secret KEY[=ALIAS]` 注入。显式值会覆盖远端进程继承到的同名值，但远端登录 shell 的启动文件仍可能再次赋值。变量仅存在于本次会话，不会写入远端配置文件。密钥会暴露给远端主机，也可能被任一端具有足够权限或同用户的进程从进程参数/环境中读取。
+
 ```bash
 cd ~/work/frontend
 shine ssh dev                     # 建立会话；~/work/frontend 成为该会话下面这些命令的“本机目录”

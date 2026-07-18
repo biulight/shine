@@ -162,6 +162,17 @@ both workspace values and inherited process variables. Without a discovered or e
 workspace, at least one `--with` is required. The merged environment is applied only to the
 spawned child process, whose exit status is propagated by Shine.
 
+## SSH environment forwarding
+
+`ssh::handle_ssh` resolves each `--with KEY[=ALIAS]` from the exact plaintext key in the active
+config `[env]`; it never performs the secret-first fallback used by `env run`. Each
+`--with-secret KEY[=ALIAS]` instead loads `KEY_SECRET` and decrypts it through the tag-routed
+secret backend. Duplicate aliases and Shine's own SSH/session variable names are rejected. The
+resolved map joins `SHINE_SSH_*` and the terminal-theme hint in the quoted `env ... sh -c`
+wrapper, so it reaches either the remote command or login shell without requiring sshd
+`AcceptEnv`. Values are session-only but necessarily exposed in process argv/environments on the
+local and remote hosts; see [ADR 0014](../decisions/0014-explicit-ssh-env-forwarding.md).
+
 ## Personal task runner (`shine task run` / `shine run`)
 
 `task::handle_run` loads `<shine_dir>/tasks.toml` (`task::manifest::TaskManifest`), looks up the

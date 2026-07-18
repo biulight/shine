@@ -10,6 +10,7 @@
 //!   `SHINE_SSH_SESSION`/`SHINE_SSH_TOKEN`/`SHINE_SSH_REMOTE_SOCK` via `env`
 //!   (not `SetEnv`/`SendEnv`, which most sshd configs don't accept), then
 //!   `exec`s either the user's original remote command or their login shell.
+//!   Explicit `--with`/`--with-secret` values join that process environment.
 //! - sshd does NOT clean up the forwarded remote socket file on disconnect
 //!   (confirmed by the spike), so the wrapper registers its own `trap ...
 //!   EXIT` to remove it.
@@ -38,9 +39,13 @@ mod session_context;
 #[cfg(unix)]
 mod remote_client;
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use anyhow::{Context, Result, bail};
 
 use crate::config::Config;
+use crate::env::{EnvConfig, parse_env_specs, secret_key};
+use crate::secret;
 use crate::theme;
 
 /// Grace period given to still-running per-connection transfer tasks to
@@ -116,8 +121,14 @@ const VALUE_OPTION_LETTERS: &[char] = &[
     'W', 'w',
 ];
 
-pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
+pub async fn handle_ssh(
+    config: &Config,
+    with: &[String],
+    with_secret: &[String],
+    args: &[String],
+) -> Result<()> {
     let (ssh_options, host, remote_command) = split_ssh_args(args)?;
+    let forwarded_env = resolve_forwarded_env(config, with, with_secret).await?;
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let token = uuid::Uuid::new_v4().to_string();
@@ -164,6 +175,7 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
         &token,
         &remote_sock,
         local_theme.map(theme::Theme::as_str),
+        &forwarded_env,
         &remote_command,
     );
 
@@ -210,6 +222,81 @@ pub async fn handle_ssh(config: &Config, args: &[String]) -> Result<()> {
     }
     #[cfg(not(unix))]
     std::process::exit(1);
+}
+
+const RESERVED_REMOTE_ENV: &[&str] = &[
+    "SHINE_SSH_SESSION",
+    "SHINE_SSH_TOKEN",
+    "SHINE_SSH_REMOTE_SOCK",
+    "SHINE_TERMINAL_THEME",
+];
+
+/// Resolves only explicitly selected config values. Plaintext selection is
+/// deliberately exact: unlike `shine env run --with`, it never falls through
+/// to `<KEY>_SECRET`. Sending decrypted material to another host requires the
+/// visibly distinct `--with-secret` opt-in.
+async fn resolve_forwarded_env(
+    config: &Config,
+    with: &[String],
+    with_secret: &[String],
+) -> Result<BTreeMap<String, String>> {
+    let plain_specs = parse_env_specs(with)?;
+    let secret_specs = parse_env_specs(with_secret)?;
+    let env = EnvConfig::load_or_init(config).await?;
+    let mut targets = BTreeSet::new();
+    let mut resolved = BTreeMap::new();
+
+    for spec in plain_specs {
+        validate_forward_target(&spec.target, &mut targets)?;
+        if spec.source.ends_with("_SECRET") {
+            bail!(
+                "--with does not inject secret storage key {}; use --with-secret with the base key instead",
+                spec.source
+            );
+        }
+        let value = env.get(&spec.source).with_context(|| {
+            let encrypted = secret_key(&spec.source);
+            if env.get(&encrypted).is_some() {
+                format!(
+                    "{} is stored as {encrypted}; use --with-secret {} to decrypt and inject it",
+                    spec.source, spec.source
+                )
+            } else {
+                format!("{} is not set in the active config [env]", spec.source)
+            }
+        })?;
+        resolved.insert(spec.target, value.to_string());
+    }
+
+    for spec in secret_specs {
+        validate_forward_target(&spec.target, &mut targets)?;
+        if spec.source.ends_with("_SECRET") {
+            bail!(
+                "--with-secret expects a base key without the _SECRET suffix: {}",
+                spec.source
+            );
+        }
+        let encrypted = secret_key(&spec.source);
+        let ciphertext = env
+            .get(&encrypted)
+            .with_context(|| format!("{encrypted} is not set in the active config [env]"))?;
+        let value = secret::decrypt_secret(ciphertext, &config.age_identities())
+            .await
+            .with_context(|| format!("decrypting {encrypted}"))?;
+        resolved.insert(spec.target, value);
+    }
+
+    Ok(resolved)
+}
+
+fn validate_forward_target(target: &str, targets: &mut BTreeSet<String>) -> Result<()> {
+    if RESERVED_REMOTE_ENV.contains(&target) {
+        bail!("cannot override shine-managed SSH variable {target}");
+    }
+    if !targets.insert(target.to_string()) {
+        bail!("duplicate target variable: {target}");
+    }
+    Ok(())
 }
 
 /// Binds the local end of the session's transfer channel and returns it
@@ -332,6 +419,7 @@ fn build_wrapped_remote_command(
     token: &str,
     remote_sock: &str,
     local_theme: Option<&str>,
+    forwarded_env: &BTreeMap<String, String>,
     remote_command: &[String],
 ) -> String {
     let inner_exec = if remote_command.is_empty() {
@@ -359,6 +447,9 @@ fn build_wrapped_remote_command(
     // (`Theme::as_str`) only ever produces the literal `light` or `dark`.
     if let Some(theme) = local_theme {
         env_prefix.push_str(&format!(" SHINE_TERMINAL_THEME={}", single_quote(theme)));
+    }
+    for (key, value) in forwarded_env {
+        env_prefix.push_str(&format!(" {key}={}", single_quote(value)));
     }
 
     format!("env {env_prefix} sh -c {}", single_quote(&inner_script))
@@ -459,6 +550,7 @@ mod tests {
             "tok",
             "/tmp/shine-ssh-mod-test-sid.sock",
             None,
+            &BTreeMap::new(),
             &["echo".to_string(), "it's a test".to_string()],
         );
         let output = std::process::Command::new("sh")
@@ -575,16 +667,28 @@ mod tests {
 
     #[test]
     fn wrapped_command_defaults_to_login_shell() {
-        let wrapped =
-            build_wrapped_remote_command("sid", "tok", "/tmp/.shine-ssh-sid.sock", None, &[]);
+        let wrapped = build_wrapped_remote_command(
+            "sid",
+            "tok",
+            "/tmp/.shine-ssh-sid.sock",
+            None,
+            &BTreeMap::new(),
+            &[],
+        );
         assert!(wrapped.contains(r#"exec "$SHELL" -l"#));
         assert!(wrapped.contains("trap \"rm -f $SHINE_SSH_REMOTE_SOCK\" EXIT"));
     }
 
     #[test]
     fn wrapped_command_omits_theme_var_when_none() {
-        let wrapped =
-            build_wrapped_remote_command("sid", "tok", "/tmp/.shine-ssh-sid.sock", None, &[]);
+        let wrapped = build_wrapped_remote_command(
+            "sid",
+            "tok",
+            "/tmp/.shine-ssh-sid.sock",
+            None,
+            &BTreeMap::new(),
+            &[],
+        );
         assert!(!wrapped.contains("SHINE_TERMINAL_THEME"));
     }
 
@@ -595,6 +699,7 @@ mod tests {
             "tok",
             "/tmp/.shine-ssh-sid.sock",
             Some("dark"),
+            &BTreeMap::new(),
             &[],
         );
         assert!(wrapped.contains("SHINE_TERMINAL_THEME='dark'"));
@@ -615,6 +720,7 @@ mod tests {
             "tok",
             "/tmp/shine-ssh-mod-test-theme-sid.sock",
             Some("dark"),
+            &BTreeMap::new(),
             &["printenv".to_string(), "SHINE_TERMINAL_THEME".to_string()],
         );
         let output = std::process::Command::new("sh")
@@ -624,5 +730,123 @@ mod tests {
             .expect("failed to run sh");
         assert!(output.status.success(), "stderr: {:?}", output.stderr);
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), "dark");
+    }
+
+    #[test]
+    fn wrapped_command_forwarded_env_round_trips_special_characters() {
+        let forwarded = BTreeMap::from([(
+            "REMOTE_VALUE".to_string(),
+            "space ' quote $dollar\nand newline".to_string(),
+        )]);
+        let wrapped = build_wrapped_remote_command(
+            "sid",
+            "tok",
+            "/tmp/shine-ssh-mod-test-env-sid.sock",
+            None,
+            &forwarded,
+            &["printenv".to_string(), "REMOTE_VALUE".to_string()],
+        );
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&wrapped)
+            .output()
+            .expect("failed to run sh");
+        assert!(output.status.success(), "stderr: {:?}", output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "space ' quote $dollar\nand newline\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn forwarded_plain_env_uses_exact_key_and_alias() {
+        let dir = std::env::temp_dir().join(format!("shine-ssh-env-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config.env.insert("LOCAL_NAME".into(), "local value".into());
+        config
+            .env
+            .insert("LOCAL_NAME_SECRET".into(), "encrypted value".into());
+
+        let resolved = resolve_forwarded_env(&config, &["LOCAL_NAME=REMOTE_NAME".to_string()], &[])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resolved.get("REMOTE_NAME").map(String::as_str),
+            Some("local value")
+        );
+    }
+
+    #[tokio::test]
+    async fn forwarded_plain_env_requires_explicit_secret_opt_in() {
+        let dir = std::env::temp_dir().join(format!("shine-ssh-env-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config
+            .env
+            .insert("API_TOKEN_SECRET".into(), "ciphertext".into());
+
+        let error = resolve_forwarded_env(&config, &["API_TOKEN".to_string()], &[])
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("use --with-secret API_TOKEN"));
+    }
+
+    #[tokio::test]
+    async fn forwarded_secret_requires_base_key_and_encrypted_storage() {
+        let dir = std::env::temp_dir().join(format!("shine-ssh-env-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config.env.insert("API_TOKEN".into(), "plaintext".into());
+        config
+            .env
+            .insert("OTHER_SECRET".into(), "ciphertext".into());
+
+        let plaintext_only = resolve_forwarded_env(&config, &[], &["API_TOKEN".to_string()])
+            .await
+            .unwrap_err();
+        assert!(
+            plaintext_only
+                .to_string()
+                .contains("API_TOKEN_SECRET is not set")
+        );
+
+        let suffixed = resolve_forwarded_env(&config, &[], &["OTHER_SECRET".to_string()])
+            .await
+            .unwrap_err();
+        assert!(
+            suffixed
+                .to_string()
+                .contains("expects a base key without the _SECRET suffix")
+        );
+    }
+
+    #[tokio::test]
+    async fn forwarded_env_rejects_duplicate_and_reserved_targets() {
+        let dir = std::env::temp_dir().join(format!("shine-ssh-env-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&dir);
+        config.env.insert("ONE".into(), "1".into());
+        config.env.insert("TWO".into(), "2".into());
+
+        let duplicate = resolve_forwarded_env(
+            &config,
+            &["ONE=REMOTE".to_string(), "TWO=REMOTE".to_string()],
+            &[],
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            duplicate
+                .to_string()
+                .contains("duplicate target variable: REMOTE")
+        );
+
+        let reserved = resolve_forwarded_env(&config, &["ONE=SHINE_SSH_TOKEN".to_string()], &[])
+            .await
+            .unwrap_err();
+        assert!(
+            reserved
+                .to_string()
+                .contains("cannot override shine-managed SSH variable SHINE_SSH_TOKEN")
+        );
     }
 }

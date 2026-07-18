@@ -579,6 +579,16 @@ $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 
 `shine ssh` opens a normal interactive SSH session (it wraps the system `ssh` binary and reuses your `~/.ssh/config`) while also establishing a session-scoped transfer channel back to the machine you launched it from. `shine local download`/`upload`/`status` then use that channel from inside the session — no separate `scp`/`rsync` invocation needed.
 
+Selected values from the active local Shine environment can also be inherited by the remote login shell or command. Put Shine's options before the SSH destination; `KEY=ALIAS` renames the variable on the remote side:
+
+```bash
+shine ssh --with API_URL dev
+shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'
+shine ssh --with-secret API_TOKEN dev
+```
+
+`--with` reads only the exact plaintext `[env]` key and never decrypts `KEY_SECRET`. Decrypted values require the explicit `--with-secret KEY[=ALIAS]` form. Explicit values replace the remote process's inherited values, although remote login startup files may subsequently assign the same names again. Forwarded values are session-only and are not written to remote config files. Secrets become visible to the remote host and may also be readable from process arguments/environments by sufficiently privileged or same-user processes on either machine.
+
 ```bash
 cd ~/work/frontend
 shine ssh dev                     # opens the session; ~/work/frontend becomes this

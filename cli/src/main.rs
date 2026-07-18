@@ -300,7 +300,11 @@ async fn run(cli: Cli) -> Result<()> {
                 Box::pin(sys::handle_uninstall(&config, &item, dry_run)).await
             }
         },
-        Commands::Ssh { args } => ssh::handle_ssh(&config, &args).await,
+        Commands::Ssh {
+            with,
+            with_secret,
+            args,
+        } => ssh::handle_ssh(&config, &with, &with_secret, &args).await,
         Commands::Local { command } => match command {
             LocalCommands::Download(cmd) => {
                 ssh::handle_local_download(
@@ -362,6 +366,37 @@ fn should_warn_runtime_schema(command: &Commands) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_parses_ssh_env_forwarding_before_destination() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "ssh",
+            "--with",
+            "API_URL",
+            "--with",
+            "LOCAL_NAME=REMOTE_NAME",
+            "--with-secret",
+            "API_TOKEN",
+            "-p",
+            "2222",
+            "dev",
+            "printenv",
+            "REMOTE_NAME",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ssh {
+                with,
+                with_secret,
+                args,
+            } if with == ["API_URL", "LOCAL_NAME=REMOTE_NAME"]
+                && with_secret == ["API_TOKEN"]
+                && args == ["-p", "2222", "dev", "printenv", "REMOTE_NAME"]
+        ));
+    }
 
     #[test]
     fn cli_accepts_refactored_update_commands() {

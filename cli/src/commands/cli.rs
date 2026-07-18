@@ -118,6 +118,14 @@ pub enum Commands {
     },
     /// Open an interactive SSH session with a session-scoped file transfer channel
     Ssh {
+        /// Inject a plaintext config [env] value as KEY or KEY=ALIAS (repeatable;
+        /// must appear before the SSH destination)
+        #[arg(long = "with", value_name = "KEY[=ALIAS]")]
+        with: Vec<String>,
+        /// Decrypt KEY_SECRET and inject it as KEY or ALIAS (repeatable; must
+        /// appear before the SSH destination)
+        #[arg(long = "with-secret", value_name = "KEY[=ALIAS]")]
+        with_secret: Vec<String>,
         /// ssh options, the destination, and an optional remote command
         /// (passed through to the system `ssh` binary; see `ssh(1)`)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
