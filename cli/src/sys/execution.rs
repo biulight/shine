@@ -245,8 +245,10 @@ pub(super) async fn run_sys_update_check(
     sys_shell: &str,
     item_id: &str,
     label: &str,
+    proxy_env: &[(&'static str, String)],
 ) -> Result<SysUpdateCheck> {
-    let output = tokio::process::Command::new(command.program)
+    let mut process = tokio::process::Command::new(command.program);
+    process
         .current_dir(script_dir)
         .env("SHINE_SYS_PRESET_ROOT", script_dir)
         .env("SHINE_SYS_SHELL", sys_shell)
@@ -257,7 +259,11 @@ pub(super) async fn run_sys_update_check(
         .arg("check-update")
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in proxy_env {
+        process.env(key, value);
+    }
+    let output = process
         .output()
         .await
         .with_context(|| format!("failed to execute {}", script_path.display()))?;

@@ -207,7 +207,7 @@ shine sys update neovim --verbose
 - 非 TTY 环境下，`shine sys init` 会回退到 `default_profile`
 - `shine sys init --dry-run` 会输出解析后的项目、逐项脚本调用命令、内部 profile 更新步骤，以及脚本内容，但不会执行
 - `shine sys status` 会显示当前操作系统此前记录过的初始化项目
-- `shine sys update [ITEM] [--verbose]` 是只读命令：它只检查此前由 `shine sys init` 记录的引导软件，绝不会安装或升级任何软件，也不会修改 sys manifest 或 shell profile。默认只显示由包管理器确认的可用更新及可直接复制的上游升级命令；`--verbose` 还会显示已是最新和只能手动检查的项目。对于直接安装器和用户自行维护的 Git 配置，命令会明确标记为需要手动处理，而不会猜测版本。
+- `shine sys update [ITEM] [--verbose] [--proxy]` 是只读命令：它只检查此前由 `shine sys init` 记录的引导软件，绝不会安装或升级任何软件，也不会修改 sys manifest 或 shell profile。`--proxy` 会通过预设代理执行检查；在 Windows 上会显式传递 WinGet 的 `--proxy` 参数，因为 WinGet 会忽略标准 HTTP 代理环境变量。默认只显示由包管理器确认的可用更新及可直接复制的上游升级命令；`--verbose` 还会显示已是最新和只能手动检查的项目。对于直接安装器和用户自行维护的 Git 配置，命令会明确标记为需要手动处理，而不会猜测版本。
 
 `shine update` 与 `shine upgrade` 仍只负责协调 Shine 管理的配置和受管系统资源，不会升级第三方引导软件。复制并运行 `shine sys update` 输出的命令始终是用户自己的明确决定。
 

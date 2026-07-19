@@ -24,6 +24,9 @@ pub enum SysCommands {
         /// Also show current and manual-check-only items
         #[arg(long)]
         verbose: bool,
+        /// Route package-manager update checks through shine's preset proxy
+        #[arg(long)]
+        proxy: bool,
     },
     /// Run the system init script for the current OS
     Init {

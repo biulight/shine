@@ -280,9 +280,11 @@ async fn run(cli: Cli) -> Result<()> {
             SysCommands::List { all } => Box::pin(sys::handle_list(&config, all)).await,
             SysCommands::Info { item } => Box::pin(sys::handle_info(&config, &item)).await,
             SysCommands::Status => Box::pin(sys::handle_status(&config)).await,
-            SysCommands::Update { item, verbose } => {
-                Box::pin(sys::handle_update(&config, item.as_deref(), verbose)).await
-            }
+            SysCommands::Update {
+                item,
+                verbose,
+                proxy,
+            } => Box::pin(sys::handle_update(&config, item.as_deref(), verbose, proxy)).await,
             SysCommands::Init {
                 preset,
                 dry_run,
@@ -1247,13 +1249,15 @@ mod tests {
             Commands::Sys {
                 command: SysCommands::Update {
                     item: None,
-                    verbose: false
+                    verbose: false,
+                    proxy: false
                 }
             }
         ));
-        let cli = Cli::try_parse_from(["shine", "sys", "update", "neovim", "--verbose"]).unwrap();
+        let cli = Cli::try_parse_from(["shine", "sys", "update", "neovim", "--verbose", "--proxy"])
+            .unwrap();
         assert!(
-            matches!(cli.command, Commands::Sys { command: SysCommands::Update { item: Some(ref item), verbose: true } } if item == "neovim")
+            matches!(cli.command, Commands::Sys { command: SysCommands::Update { item: Some(ref item), verbose: true, proxy: true } } if item == "neovim")
         );
     }
 

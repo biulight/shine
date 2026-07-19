@@ -237,6 +237,7 @@ pub async fn handle_update(
     config: &Config,
     item_filter: Option<&str>,
     verbose: bool,
+    proxy: bool,
 ) -> Result<()> {
     crate::config::print_presets_note(config);
     let os_id = detect_os_id().await?;
@@ -285,6 +286,11 @@ pub async fn handle_update(
         .parent()
         .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
     let sys_shell: &'static str = config.shell_type.into();
+    let proxy_env = if proxy {
+        super::execution::proxy_env_vars(config)
+    } else {
+        Vec::new()
+    };
     let mut checks = Vec::new();
     for entry in selected {
         let Some(item) = loaded
@@ -315,6 +321,7 @@ pub async fn handle_update(
                 sys_shell,
                 &item.id,
                 &item.label,
+                &proxy_env,
             )
             .await?,
         );
@@ -1026,6 +1033,12 @@ required_env = ["NOT-AN-ENV"]
                 script.contains("check-update"),
                 "{path} lacks update dispatch"
             );
+            if os_id == "windows" {
+                assert!(
+                    script.contains("$wingetArgs += @(\"--proxy\", $script:ProxyUri)"),
+                    "Windows update checks must pass WinGet's explicit proxy option"
+                );
+            }
         }
     }
 
