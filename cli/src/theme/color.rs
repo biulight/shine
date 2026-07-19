@@ -32,6 +32,7 @@ pub fn parse_theme_str(value: &str) -> Option<Theme> {
 /// component 1-4 hex digits, matching XParseColor's `rgb:` device format)
 /// into 8-bit RGB, scaling each component from its source bit depth to
 /// 0-255.
+#[cfg(unix)]
 pub fn parse_osc_rgb(body: &str) -> Option<(u8, u8, u8)> {
     let rest = body.strip_prefix("rgb:")?;
     let mut parts = rest.splitn(3, '/');
@@ -48,6 +49,7 @@ pub fn parse_osc_rgb(body: &str) -> Option<(u8, u8, u8)> {
     ))
 }
 
+#[cfg(unix)]
 fn scale_hex_component(hex: &str) -> Option<u8> {
     if hex.is_empty() || hex.len() > 4 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
@@ -63,6 +65,7 @@ fn scale_hex_component(hex: &str) -> Option<u8> {
 /// visible light/dark boundary doesn't shift for existing users — only the
 /// read-timing bug (docs/kb/lessons.md, 2026-07-14) is fixed, not the
 /// classification itself.
+#[cfg(unix)]
 pub fn theme_from_rgb(r: u8, g: u8, b: u8) -> Theme {
     let luma = 299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b);
     if luma >= 128_000 {
@@ -100,6 +103,7 @@ mod tests {
         assert_eq!(parse_theme_str("light "), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_osc_rgb_scales_16_bit_components_to_8_bit() {
         // Full-scale white: 0xffff/0xffff/0xffff -> 255/255/255.
@@ -108,6 +112,7 @@ mod tests {
         assert_eq!(parse_osc_rgb("rgb:0000/0000/0000"), Some((0, 0, 0)));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_osc_rgb_scales_differing_component_widths() {
         // A 2-digit component (0-255 native) must scale identically to a
@@ -116,6 +121,7 @@ mod tests {
         assert_eq!(parse_osc_rgb("rgb:00/00/00"), Some((0, 0, 0)));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_osc_rgb_rejects_malformed_bodies() {
         assert_eq!(parse_osc_rgb(""), None);
@@ -127,6 +133,7 @@ mod tests {
         assert_eq!(parse_osc_rgb("not-rgb-at-all"), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn theme_from_rgb_matches_shell_luma_threshold() {
         // White: clearly light.

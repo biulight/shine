@@ -1,10 +1,10 @@
 use anyhow::{Result, bail};
 
 use crate::config::{self, Config};
+#[cfg(unix)]
+use crate::privilege;
 use crate::update_check::{self, ReleaseChannel, UpdateStatus};
-use crate::{
-    apps, colors, env, install_core, list, output, platform, privilege, shells, sys, version,
-};
+use crate::{apps, colors, env, install_core, list, output, platform, shells, sys, version};
 
 pub async fn handle_update(config: &Config, verbose: bool, refresh: bool) -> Result<()> {
     let mut printed_update = if verbose {
