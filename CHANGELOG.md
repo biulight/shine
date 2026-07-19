@@ -7,6 +7,36 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [0.39.0] — 2026-07-19
+
+### Features
+
+- Added Git-managed preset overlays with depth-one force mirroring, so a personal overlay can be linked, pulled, inspected, and cleanly unlinked without replacing the main preset source.
+- Reworked `shine ssh` / `shine local` transfers to use local-initiated `rsync` by default with `scp` fallback, SSH connection reuse, streamed native progress, glob support, overwrite protection, and dry-run previews. The local agent now supports Windows through a loopback TCP forward while Linux and macOS continue to use Unix sockets.
+- Added explicit `--with KEY[=ALIAS]` and `--with-secret KEY[=ALIAS]` forwarding to `shine ssh`, including Windows session support, so selected local config values can be injected into a remote session without forwarding the whole environment.
+- Added `post_install` hooks and explicit artifact teardown through `shine app unbuild`; app uninstall now runs teardown on a best-effort basis. The built-in Surge preset can manage proxy-group includes, and the new Clash Verge preset renders the active CVR 2.x subscription's Merge, proxy, proxy-group, and rule editor files.
+- Added Bun-powered shell preset entries, including metadata/header descriptions and optional Shine env injection through generated managed launchers.
+- Added `shine theme sync` to detect the active terminal background and export matching `SHINE_TERMINAL_THEME` / `BAT_THEME` values, with managed shell helpers for Unix and Windows.
+- Added a minimal Ubuntu system-init profile for production servers, proxy-aware `shine sys init`, and read-only software update checks for Homebrew, apt, and winget, including proxy status reporting.
+- `shine env show` now groups values by their configuration source.
+
+### Bug Fixes
+
+- Fixed Windows split-DNS reconciliation so normalized NRPT query values remain idempotent.
+- Fixed Windows SSH sessions to load their PowerShell profiles before applying forwarded environment values.
+- Fixed `shine sys init --proxy` so winget receives the configured proxy while update checks remain read-only.
+- Fixed terminal-theme OSC 11 reads on macOS and Ghostty by using deadline-based `select(2)` reads with the correct terminal mode.
+- Fixed environment writes so `env set`, `env encrypt`, and `env delete` refuse to silently write beneath a higher-priority override.
+- Fixed Clash Verge subscription rendering for enhanced profiles and platform-specific installation/theme code for Windows builds.
+
+### Internal
+
+- Pinned Rust and Bun tooling with mise, added strict TypeScript checks for Bun presets, and refreshed dependencies.
+
+### Docs
+
+- Documented Git-managed overlays, the rsync/scp SSH transfer design, explicit SSH environment forwarding, Bun shell presets, Clash Verge subscription rendering, and terminal theme synchronization.
+
 ## [0.38.0] — 2026-07-12
 
 ### Features
