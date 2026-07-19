@@ -84,7 +84,7 @@ fn split_dns_marker(item_id: &str) -> String {
 #[serde(rename_all = "PascalCase")]
 struct WindowsNrptRule {
     comment: String,
-    namespace: String,
+    namespace: Vec<String>,
     name_servers: Vec<String>,
 }
 
@@ -97,7 +97,7 @@ struct WindowsNrptRuleQuery {
 fn windows_nrpt_query(marker: &str) -> String {
     format!(
         "$rules=@(Get-DnsClientNrptRule | Where-Object {{$_.Comment -ceq '{marker}'}} | \
-         ForEach-Object {{[PSCustomObject]@{{Comment=$_.Comment;Namespace=$_.Namespace;NameServers=@($_.NameServers)}}}}); \
+         ForEach-Object {{[PSCustomObject]@{{Comment=$_.Comment;Namespace=@($_.Namespace | ForEach-Object {{$_.ToString()}});NameServers=@($_.NameServers | ForEach-Object {{$_.ToString()}})}}}}); \
          [PSCustomObject]@{{Rules=@($rules)}} | ConvertTo-Json -Compress -Depth 3",
         marker = ps_quote(marker),
     )
@@ -111,7 +111,7 @@ fn windows_nrpt_rules_match_desired(
         return false;
     };
     rule.comment == split_dns_marker(&desired.item_id)
-        && rule.namespace == desired.resource
+        && rule.namespace.as_slice() == [desired.resource.as_str()]
         && rule.name_servers == desired.servers
 }
 
@@ -583,10 +583,10 @@ mod tests {
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    fn windows_rule(comment: &str, namespace: &str, servers: &[&str]) -> WindowsNrptRule {
+    fn windows_rule(comment: &str, namespace: &[&str], servers: &[&str]) -> WindowsNrptRule {
         WindowsNrptRule {
             comment: comment.to_string(),
-            namespace: namespace.to_string(),
+            namespace: namespace.iter().map(ToString::to_string).collect(),
             name_servers: servers.iter().map(ToString::to_string).collect(),
         }
     }
@@ -603,7 +603,7 @@ mod tests {
             content_hash: None,
         };
         let marker = split_dns_marker(&desired.item_id);
-        let matching = || windows_rule(&marker, ".home.example.com", &["10.0.0.2", "10.0.0.3"]);
+        let matching = || windows_rule(&marker, &[".home.example.com"], &["10.0.0.2", "10.0.0.3"]);
 
         assert!(windows_nrpt_rules_match_desired(
             WindowsNrptRuleQuery {
@@ -615,7 +615,7 @@ mod tests {
             WindowsNrptRuleQuery {
                 rules: vec![windows_rule(
                     &marker,
-                    ".home.example.com",
+                    &[".home.example.com"],
                     &["10.0.0.3", "10.0.0.2"]
                 )]
             },
@@ -625,7 +625,7 @@ mod tests {
             WindowsNrptRuleQuery {
                 rules: vec![windows_rule(
                     &marker,
-                    ".other.example.com",
+                    &[".other.example.com"],
                     &["10.0.0.2", "10.0.0.3"]
                 )]
             },
@@ -649,8 +649,8 @@ mod tests {
         let query = windows_nrpt_query(&marker);
 
         assert!(query.contains("$_.Comment -ceq 'Managed by shine: split-dns:private-dns'"));
-        assert!(query.contains("Namespace=$_.Namespace"));
-        assert!(query.contains("NameServers=@($_.NameServers)"));
+        assert!(query.contains("Namespace=@($_.Namespace | ForEach-Object {$_.ToString()})"));
+        assert!(query.contains("NameServers=@($_.NameServers | ForEach-Object {$_.ToString()})"));
         assert!(query.contains("Rules=@($rules)"));
     }
 
