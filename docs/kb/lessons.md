@@ -74,6 +74,17 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
   needs `--proxy` + an admin-enabled setting, not `http_proxy`. And always check a native exe's
   exit code in PowerShell; `ErrorActionPreference=Stop` does not.
 
+## 2026-07-19 — `winget upgrade --id` is not an update availability check
+
+- **Symptom**: `shine sys update --proxy` installed a ZeroTier update while supposedly checking
+  for updates.
+- **Root cause**: the first Windows checker used `winget upgrade --id <id>` as though it were a
+  scoped query. That command performs the upgrade; the proxy merely made its network access work.
+- **Fix**: use the documented read-only `winget list --upgrade-available --exact --id <id>` query
+  and only print `winget upgrade --exact --id <id>` for the user to run explicitly.
+- **Rule**: never use a package manager's mutation verb to inspect availability, even when its
+  output looks list-like. Verify the command's side effects in the upstream documentation first.
+
 ## 2026-07-17 — `app list` leaked a whole comment block as a category description
 
 - **Symptom**: `shine app list` on a machine whose base binary predates the `clash-verge` preset

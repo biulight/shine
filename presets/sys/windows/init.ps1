@@ -180,7 +180,10 @@ function Install-mise {
 
 function Check-WinGetUpdate {
     param([Parameter(Mandatory = $true)] [string] $PackageId)
-    $wingetArgs = @("upgrade", "--exact", "--id", $PackageId, "--accept-source-agreements")
+    # `winget upgrade --id` performs the upgrade. `winget list` is the
+    # documented read-only query and `--upgrade-available` narrows it to
+    # packages WinGet has verified as outdated.
+    $wingetArgs = @("list", "--upgrade-available", "--exact", "--id", $PackageId, "--accept-source-agreements")
     if ($script:ProxyUri) {
         # Keep update checks read-only: unlike the install path, do not enable
         # ProxyCommandLineOptions here. If it was not enabled already, winget
@@ -191,15 +194,15 @@ function Check-WinGetUpdate {
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) {
         $hint = if ($script:ProxyUri) { " Enable it once as administrator: winget settings --enable ProxyCommandLineOptions" } else { "" }
-        Write-UpdateStatus "failed" "winget check failed for $PackageId (exit $exitCode).$hint" ""
+        Write-UpdateStatus "failed" "winget update query failed for $PackageId (exit $exitCode).$hint" ""
         return
     }
-    if ($output -match "(?i)no applicable upgrade found") {
-        Write-UpdateStatus "current" "winget reports no applicable update" ""
-    } else {
+    if ($output -match [regex]::Escape($PackageId)) {
         $command = "winget upgrade --exact --id $PackageId"
         if ($script:ProxyUri) { $command += " --proxy $script:ProxyUri" }
         Write-UpdateStatus "available" "winget reports an available update" $command
+    } else {
+        Write-UpdateStatus "current" "winget reports no applicable update" ""
     }
 }
 

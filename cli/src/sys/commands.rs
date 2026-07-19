@@ -1038,6 +1038,11 @@ required_env = ["NOT-AN-ENV"]
                     script.contains("$wingetArgs += @(\"--proxy\", $script:ProxyUri)"),
                     "Windows update checks must pass WinGet's explicit proxy option"
                 );
+                assert!(
+                    script.contains("\"list\", \"--upgrade-available\"")
+                        && !script.contains("& winget upgrade"),
+                    "Windows update checks must use WinGet's read-only list command"
+                );
             }
         }
     }
