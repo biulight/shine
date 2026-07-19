@@ -589,6 +589,17 @@ shine ssh --with-secret API_TOKEN dev
 
 `--with` reads only the exact plaintext `[env]` key and never decrypts `KEY_SECRET`. Decrypted values require the explicit `--with-secret KEY[=ALIAS]` form. Explicit values replace the remote process's inherited values, although remote login startup files may subsequently assign the same names again. Forwarded values are session-only and are not written to remote config files. Secrets become visible to the remote host and may also be readable from process arguments/environments by sufficiently privileged or same-user processes on either machine.
 
+For a Windows OpenSSH remote, opt in explicitly to its PowerShell wrapper. It safely sends the
+session hint, terminal theme, and selected values through `powershell.exe -EncodedCommand`, rather
+than trying to run the POSIX `env ... sh -c` wrapper through `cmd.exe`:
+
+```bash
+shine ssh --remote-shell windows --with-secret GH_TOKEN intel.mac.local
+```
+
+This mode supports SSH environment injection only. It does not create a transfer tunnel, so
+`shine local download`, `upload`, and `status` are unavailable in that Windows-remote session.
+
 ```bash
 cd ~/work/frontend
 shine ssh dev                     # opens the session; ~/work/frontend becomes this
@@ -606,7 +617,8 @@ Source/destination arguments are resolved by whichever side owns them: the first
 
 Both commands default to writing into the destination side's working directory under the source's file name, refuse to overwrite an existing destination unless `--force` is passed, and support `--dry-run` to preview the transfer without copying data. Progress is printed as a single overwritten line when attached to a terminal; piped/non-interactive runs get one final line instead. `shine local status` also works as a liveness check for the session when nothing is transferring.
 
-The local side of `shine local` (the machine you ran `shine ssh` from) also works on Windows; the remote host is always assumed to be Linux or macOS.
+The local side of `shine local` (the machine you ran `shine ssh` from) also works on Windows; its
+transfer protocol still requires a POSIX (Linux/macOS) remote host.
 
 ## Bundled Presets
 

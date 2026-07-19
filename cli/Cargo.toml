@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 utils = { path = "../utils" }
 anyhow = { workspace = true }
+base64 = "0.22"
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
 console = "0.16.3"

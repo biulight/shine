@@ -582,6 +582,17 @@ shine ssh --with-secret API_TOKEN dev
 
 `--with` 只读取完全同名的明文 `[env]` 键，绝不会自动解密 `KEY_SECRET`；解密后的值必须通过显式的 `--with-secret KEY[=ALIAS]` 注入。显式值会覆盖远端进程继承到的同名值，但远端登录 shell 的启动文件仍可能再次赋值。变量仅存在于本次会话，不会写入远端配置文件。密钥会暴露给远端主机，也可能被任一端具有足够权限或同用户的进程从进程参数/环境中读取。
 
+Windows OpenSSH 远端需要显式选择 PowerShell 包装器；它通过
+`powershell.exe -EncodedCommand` 安全注入会话提示、终端主题和所选变量，不会把 POSIX 的
+`env ... sh -c` 发送给 `cmd.exe`：
+
+```bash
+shine ssh --remote-shell windows --with-secret GH_TOKEN intel.mac.local
+```
+
+此模式只支持 SSH 环境注入，不创建传输隧道；该 Windows 远端会话中不支持
+`shine local download`、`upload` 或 `status`。
+
 ```bash
 cd ~/work/frontend
 shine ssh dev                     # 建立会话；~/work/frontend 成为该会话下面这些命令的“本机目录”
@@ -598,7 +609,7 @@ shine local status                            # 会话 ID、连接状态、本�
 
 两个命令都会默认把内容写入目标端工作目录下、与源同名的位置；默认拒绝覆盖已存在的目标，除非传入 `--force`；并支持 `--dry-run` 预览传输而不实际拷贝数据。连接终端时进度以单行覆写方式显示；管道/非交互场景则只输出最终一行结果。没有传输任务时，`shine local status` 也可以当作会话的存活检测使用。
 
-`shine local` 的本机侧（运行 `shine ssh` 的那台机器）在 Windows 上同样可用；远端主机始终假定为 Linux 或 macOS。
+`shine local` 的本机侧（运行 `shine ssh` 的那台机器）在 Windows 上同样可用；其传输协议远端仍要求 Linux 或 macOS。
 
 ## 内置预设
 

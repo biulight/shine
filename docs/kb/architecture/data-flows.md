@@ -168,10 +168,14 @@ spawned child process, whose exit status is propagated by Shine.
 config `[env]`; it never performs the secret-first fallback used by `env run`. Each
 `--with-secret KEY[=ALIAS]` instead loads `KEY_SECRET` and decrypts it through the tag-routed
 secret backend. Duplicate aliases and Shine's own SSH/session variable names are rejected. The
-resolved map joins `SHINE_SSH_*` and the terminal-theme hint in the quoted `env ... sh -c`
-wrapper, so it reaches either the remote command or login shell without requiring sshd
-`AcceptEnv`. Values are session-only but necessarily exposed in process argv/environments on the
-local and remote hosts; see [ADR 0014](../decisions/0014-explicit-ssh-env-forwarding.md).
+default `--remote-shell posix` flow joins the resolved map, `SHINE_SSH_*`, and terminal-theme hint
+in the quoted `env ... sh -c` wrapper and creates the transfer listener/`-R` channel. The explicit
+`--remote-shell windows` flow instead encodes a PowerShell script as UTF-16LE Base64 for
+`powershell.exe -EncodedCommand`; it sets only the session hint, theme, and selected variables and
+creates no listener, reverse forward, or `shine local` channel. Values are session-only but
+necessarily exposed in process argv/environments on the local and remote hosts; see
+[ADR 0014](../decisions/0014-explicit-ssh-env-forwarding.md) and
+[ADR 0015](../decisions/0015-windows-ssh-environment-forwarding.md).
 
 ## Personal task runner (`shine task run` / `shine run`)
 

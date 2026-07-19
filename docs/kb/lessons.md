@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-19 — POSIX SSH wrapper failed on Windows OpenSSH remotes
+
+- **Symptom**: `shine ssh --with-secret GH_TOKEN <windows-host>` sent `env ... sh -c` to the
+  Windows remote and failed with `'env' is not recognized as an internal or external command`.
+- **Root cause**: the command wrapper was selected from the local transfer architecture instead of
+  the target command shell; Windows OpenSSH normally routes remote commands through `cmd.exe`.
+- **Fix**: add explicit `--remote-shell windows`, which uses an UTF-16LE Base64-encoded PowerShell
+  wrapper and intentionally does not create a POSIX transfer channel.
+- **Rule**: remote command syntax must be chosen by the target shell. Never send a POSIX wrapper to
+  Windows CMD, and never insert secret values into a cross-shell command-line syntax layer.
+
 ## 2026-07-18 — CVR Global Extend Config replaced subscription arrays and broke its own rules
 
 - **Symptom**: `shine app reinstall clash-verge` wrote all three rule-providers but their refreshes

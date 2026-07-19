@@ -15,14 +15,12 @@
 //!   (confirmed by the spike), so the wrapper registers its own `trap ...
 //!   EXIT` to remove it.
 //!
-//! The remote host is always assumed Linux/macOS, so `remote_sock` is
-//! always a Unix socket path and the wrapped remote command is always a
-//! POSIX shell script, regardless of the *local* platform. Locally,
-//! `bind_local_listener` uses a Unix socket on macOS/Linux, or a loopback
-//! TCP socket on Windows (`ssh -R` supports mixing a Unix-socket endpoint
-//! with a TCP endpoint on the other side; verified against a real Windows
-//! OpenSSH client via `scripts/spike-ssh-forward-windows.ps1` — see
-//! `agent::LocalListener`).
+//! The default remote mode is POSIX: it uses a Unix socket and a POSIX shell
+//! wrapper regardless of the *local* platform. `--remote-shell windows` is
+//! an explicit environment-forwarding-only mode: it sends a Base64-encoded
+//! PowerShell command, and deliberately creates no transfer listener or `-R`
+//! forward. Locally, the POSIX path's `bind_local_listener` uses a Unix socket
+//! on macOS/Linux, or loopback TCP on Windows.
 
 mod agent;
 // Drives the real agent over an in-process Unix socket pair, so it is
@@ -42,7 +40,9 @@ mod remote_client;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
+use crate::commands::RemoteShell;
 use crate::config::Config;
 use crate::env::{EnvConfig, parse_env_specs, secret_key};
 use crate::secret;
@@ -123,12 +123,34 @@ const VALUE_OPTION_LETTERS: &[char] = &[
 
 pub async fn handle_ssh(
     config: &Config,
+    remote_shell: RemoteShell,
     with: &[String],
     with_secret: &[String],
     args: &[String],
 ) -> Result<()> {
     let (ssh_options, host, remote_command) = split_ssh_args(args)?;
     let forwarded_env = resolve_forwarded_env(config, with, with_secret).await?;
+
+    // Windows OpenSSH executes remote commands through cmd.exe by default.
+    // Do not create the POSIX-only transfer channel there; the encoded
+    // PowerShell command has no user-controlled syntax in cmd.exe.
+    if remote_shell == RemoteShell::Windows {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let local_theme = theme::resolve_local_terminal_theme_for_injection();
+        let wrapped_command = build_windows_wrapped_remote_command(
+            &session_id,
+            local_theme.map(theme::Theme::as_str),
+            &forwarded_env,
+            &remote_command,
+        )?;
+        let mut cmd = tokio::process::Command::new("ssh");
+        cmd.args(build_windows_ssh_invocation_args(
+            &ssh_options,
+            &host,
+            &wrapped_command,
+        ));
+        return finish_ssh_status(run_ssh_with_ctrl_c(&mut cmd).await?);
+    }
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let token = uuid::Uuid::new_v4().to_string();
@@ -195,12 +217,7 @@ pub async fn handle_ssh(
     // Ctrl-C no longer kills us before we get a chance to clean up. The ssh
     // child is in the same foreground process group and receives SIGINT
     // independently; we still await its exit so we don't race it.
-    let mut ssh_run = std::pin::pin!(cmd.status());
-    let status = tokio::select! {
-        status = &mut ssh_run => status,
-        _ = tokio::signal::ctrl_c() => ssh_run.await,
-    }
-    .context("failed to run ssh")?;
+    let status = run_ssh_with_ctrl_c(&mut cmd).await?;
 
     // Stop accepting new connections, then give any still-running transfer
     // a bounded chance to notice the tunnel is gone and run its own
@@ -209,6 +226,21 @@ pub async fn handle_ssh(
     agent::drain_connection_tasks(&connection_tasks, CONNECTION_DRAIN_GRACE_PERIOD).await;
     let _ = tokio::fs::remove_dir_all(&session_dir).await;
 
+    finish_ssh_status(status)
+}
+
+async fn run_ssh_with_ctrl_c(
+    cmd: &mut tokio::process::Command,
+) -> Result<std::process::ExitStatus> {
+    let mut ssh_run = std::pin::pin!(cmd.status());
+    tokio::select! {
+        status = &mut ssh_run => status,
+        _ = tokio::signal::ctrl_c() => ssh_run.await,
+    }
+    .context("failed to run ssh")
+}
+
+fn finish_ssh_status(status: std::process::ExitStatus) -> Result<()> {
     if status.success() {
         return Ok(());
     }
@@ -414,6 +446,22 @@ fn build_ssh_invocation_args(
     args
 }
 
+/// Windows does not receive a transfer listener, so its SSH invocation is a
+/// deliberately small normal TTY session followed by one opaque PowerShell
+/// command. Keeping the encoded payload as a single argv item prevents CMD
+/// from seeing secret values or PowerShell metacharacters.
+fn build_windows_ssh_invocation_args(
+    ssh_options: &[String],
+    host: &str,
+    wrapped_command: &str,
+) -> Vec<String> {
+    let mut args = ssh_options.to_vec();
+    args.push("-t".to_string());
+    args.push(host.to_string());
+    args.push(wrapped_command.to_string());
+    args
+}
+
 fn build_wrapped_remote_command(
     session_id: &str,
     token: &str,
@@ -453,6 +501,85 @@ fn build_wrapped_remote_command(
     }
 
     format!("env {env_prefix} sh -c {}", single_quote(&inner_script))
+}
+
+/// Builds an opaque Windows PowerShell remote command. OpenSSH passes this
+/// through cmd.exe on typical Windows servers, so only the Base64 alphabet is
+/// allowed to carry user-controlled values across that boundary.
+fn build_windows_wrapped_remote_command(
+    session_id: &str,
+    local_theme: Option<&str>,
+    forwarded_env: &BTreeMap<String, String>,
+    remote_command: &[String],
+) -> Result<String> {
+    let mut script = String::new();
+    push_powershell_env_assignment(&mut script, "SHINE_SSH_SESSION", session_id)?;
+    if let Some(theme) = local_theme {
+        push_powershell_env_assignment(&mut script, "SHINE_TERMINAL_THEME", theme)?;
+    }
+    for (key, value) in forwarded_env {
+        push_powershell_env_assignment(&mut script, key, value)?;
+    }
+
+    let interactive = remote_command.is_empty();
+    if !interactive {
+        // Reset the native-program status so a PowerShell command does not
+        // accidentally inherit a status from profile/startup execution.
+        script.push_str("$global:LASTEXITCODE = 0\n& ");
+        for (index, argument) in remote_command.iter().enumerate() {
+            if index > 0 {
+                script.push(' ');
+            }
+            script.push_str(&powershell_single_quoted_literal(argument)?);
+        }
+        script.push_str(
+            "\nif ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\nif (-not $?) { exit 1 }\n",
+        );
+    }
+
+    let encoded = BASE64.encode(utf16le_bytes(&script)?);
+    let no_exit = if interactive { " -NoExit" } else { "" };
+    Ok(format!(
+        "powershell.exe -NoProfile{no_exit} -EncodedCommand {encoded}"
+    ))
+}
+
+fn push_powershell_env_assignment(script: &mut String, key: &str, value: &str) -> Result<()> {
+    // Targets have already been parsed as environment identifiers by
+    // `parse_env_specs`; keep this check local so this builder remains safe
+    // if it is reused independently later.
+    if !key
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        bail!("cannot safely represent Windows environment variable name {key}");
+    }
+    script.push_str("$env:");
+    script.push_str(key);
+    script.push_str(" = ");
+    script.push_str(&powershell_single_quoted_literal(value)?);
+    script.push('\n');
+    Ok(())
+}
+
+/// Produces a PowerShell single-quoted string. PowerShell represents a literal
+/// apostrophe by doubling it; NUL is rejected because Windows environment
+/// values and command-line APIs cannot represent it safely.
+fn powershell_single_quoted_literal(value: &str) -> Result<String> {
+    if value.contains('\0') {
+        bail!("cannot forward values containing NUL bytes to Windows PowerShell");
+    }
+    Ok(format!("'{}'", value.replace('\'', "''")))
+}
+
+fn utf16le_bytes(value: &str) -> Result<Vec<u8>> {
+    if value.contains('\0') {
+        bail!("cannot encode PowerShell commands containing NUL bytes");
+    }
+    Ok(value
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>())
 }
 
 /// POSIX single-quotes `s` for safe embedding as one shell word, escaping
@@ -592,6 +719,29 @@ mod tests {
                 "wrapped-command",
             ]
         );
+    }
+
+    #[test]
+    fn windows_ssh_invocation_has_no_transfer_or_posix_wrapper() {
+        let invocation = build_windows_ssh_invocation_args(
+            &["-p".to_string(), "2222".to_string()],
+            "windows-host",
+            "powershell.exe -NoProfile -EncodedCommand QQ==",
+        );
+
+        assert_eq!(
+            invocation,
+            vec![
+                "-p",
+                "2222",
+                "-t",
+                "windows-host",
+                "powershell.exe -NoProfile -EncodedCommand QQ==",
+            ]
+        );
+        assert!(!invocation.iter().any(|arg| arg == "-R"));
+        assert!(!invocation.iter().any(|arg| arg.contains("env ")));
+        assert!(!invocation.iter().any(|arg| arg.contains("sh -c")));
     }
 
     #[test]
@@ -756,6 +906,56 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             "space ' quote $dollar\nand newline\n"
         );
+    }
+
+    #[test]
+    fn windows_wrapped_command_decodes_special_values_and_command_argv() {
+        let forwarded = BTreeMap::from([(
+            "REMOTE_VALUE".to_string(),
+            "space ' quote \" $dollar & amp % percent ! bang\nand newline".to_string(),
+        )]);
+        let wrapped = build_windows_wrapped_remote_command(
+            "sid",
+            Some("dark"),
+            &forwarded,
+            &[
+                "C:\\Program Files\\tool.exe".to_string(),
+                "one ' $ & % !".to_string(),
+            ],
+        )
+        .unwrap();
+
+        assert!(wrapped.starts_with("powershell.exe -NoProfile -EncodedCommand "));
+        assert!(!wrapped.contains("REMOTE_VALUE"));
+        assert!(!wrapped.contains("$dollar"));
+        let encoded = wrapped.rsplit_once(' ').unwrap().1;
+        let bytes = BASE64.decode(encoded).unwrap();
+        let units = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        let script = String::from_utf16(&units).unwrap();
+        assert!(script.contains("$env:SHINE_SSH_SESSION = 'sid'"));
+        assert!(script.contains("$env:SHINE_TERMINAL_THEME = 'dark'"));
+        assert!(script.contains(
+            "$env:REMOTE_VALUE = 'space '' quote \" $dollar & amp % percent ! bang\nand newline'"
+        ));
+        assert!(script.contains("& 'C:\\Program Files\\tool.exe' 'one '' $ & % !'"));
+        assert!(script.contains("exit $LASTEXITCODE"));
+    }
+
+    #[test]
+    fn windows_wrapped_command_uses_no_exit_for_interactive_session() {
+        let wrapped =
+            build_windows_wrapped_remote_command("sid", None, &BTreeMap::new(), &[]).unwrap();
+        assert!(wrapped.starts_with("powershell.exe -NoProfile -NoExit -EncodedCommand "));
+    }
+
+    #[test]
+    fn windows_wrapped_command_rejects_nul_values() {
+        let forwarded = BTreeMap::from([("REMOTE_VALUE".to_string(), "bad\0value".to_string())]);
+        let error = build_windows_wrapped_remote_command("sid", None, &forwarded, &[]).unwrap_err();
+        assert!(error.to_string().contains("NUL"));
     }
 
     #[tokio::test]

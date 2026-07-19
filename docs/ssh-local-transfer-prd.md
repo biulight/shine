@@ -6,7 +6,8 @@
 > 远端发送一个 `Transfer` 请求，由**本机**运行 `rsync`（默认）/ `scp`（`--scp` 或
 > 自动回退）完成传输并把输出回传远端终端；本机通过 ControlMaster 复用已认证连接，避免
 > 二次认证。通配符、增量、目录/软链接/权限均由 rsync/scp 原生处理。产品目标（本机发起、
-> 携带"出发地/当前远端"上下文、会话令牌隔离、Windows 仅作本机侧）保持不变。
+> 携带"出发地/当前远端"上下文、会话令牌隔离、Windows 仅作本机侧）保持不变；该限制只
+> 适用于传输协议，普通 SSH 环境转发可显式选择 Windows PowerShell 模式。
 
 ## 1. 背景
 
@@ -228,8 +229,8 @@ Downloaded 1.8 MiB
 - 主版本不兼容时拒绝传输并提示升级哪一端。
 - `shine ssh` 可正常连接未安装 shine 的远端，但 `shine local ...` 不可用；SSH 本身不得因此
   失败。
-- MVP 目标平台：macOS 和 Linux 互传；Windows 支持取决于技术尖刺结果，不以牺牲安全边界
-  为代价强行纳入首版。
+- 传输协议的 MVP 目标平台：macOS 和 Linux 互传；Windows 仅支持本机侧，不以牺牲安全
+  边界强行纳入远端传输。它不限制 `shine ssh --remote-shell windows` 的普通 SSH 环境注入。
 
 ## 11. 验收标准
 

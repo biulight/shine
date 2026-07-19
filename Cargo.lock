@@ -237,6 +237,7 @@ name = "cli"
 version = "0.38.0"
 dependencies = [
  "anyhow",
+ "base64",
  "clap",
  "clap_complete",
  "console",

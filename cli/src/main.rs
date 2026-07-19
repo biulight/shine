@@ -12,7 +12,9 @@ use commands::{
     SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands, ThemeCommands,
 };
 #[cfg(test)]
-use commands::{ClearCommand, InitCommand, OverlayLinkCommand, UpdateCommand, UpgradeCommand};
+use commands::{
+    ClearCommand, InitCommand, OverlayLinkCommand, RemoteShell, UpdateCommand, UpgradeCommand,
+};
 use config::Config;
 #[cfg(test)]
 use update_check::ReleaseChannel;
@@ -301,10 +303,11 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Commands::Ssh {
+            remote_shell,
             with,
             with_secret,
             args,
-        } => ssh::handle_ssh(&config, &with, &with_secret, &args).await,
+        } => ssh::handle_ssh(&config, remote_shell, &with, &with_secret, &args).await,
         Commands::Local { command } => match command {
             LocalCommands::Download(cmd) => {
                 ssh::handle_local_download(
@@ -389,12 +392,42 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Ssh {
+                remote_shell,
                 with,
                 with_secret,
                 args,
-            } if with == ["API_URL", "LOCAL_NAME=REMOTE_NAME"]
+            } if remote_shell == RemoteShell::Posix
+                && with == ["API_URL", "LOCAL_NAME=REMOTE_NAME"]
                 && with_secret == ["API_TOKEN"]
                 && args == ["-p", "2222", "dev", "printenv", "REMOTE_NAME"]
+        ));
+    }
+
+    #[test]
+    fn cli_parses_windows_remote_shell_before_destination() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "ssh",
+            "--remote-shell",
+            "windows",
+            "--with-secret",
+            "GH_TOKEN=TOKEN",
+            "intel.mac.local",
+            "cmd",
+            "/c",
+            "echo",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ssh {
+                remote_shell: RemoteShell::Windows,
+                with_secret,
+                args,
+                ..
+            } if with_secret == ["GH_TOKEN=TOKEN"]
+                && args == ["intel.mac.local", "cmd", "/c", "echo"]
         ));
     }
 
