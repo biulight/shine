@@ -196,6 +196,8 @@ shine sys init
 shine sys init --preset recommended
 shine sys init --dry-run
 shine sys status
+shine sys update
+shine sys update neovim --verbose
 ```
 
 `shine sys init` 会检测当前操作系统，读取 `presets/sys/<os>/shine.toml`，解析出待执行的安装项，然后对每个选中的 item 分别调用一次当前平台的初始化脚本。所有 item 成功完成后，`shine` 会在 Rust 侧刷新受管 shell profile 集成。
@@ -205,6 +207,9 @@ shine sys status
 - 非 TTY 环境下，`shine sys init` 会回退到 `default_profile`
 - `shine sys init --dry-run` 会输出解析后的项目、逐项脚本调用命令、内部 profile 更新步骤，以及脚本内容，但不会执行
 - `shine sys status` 会显示当前操作系统此前记录过的初始化项目
+- `shine sys update [ITEM] [--verbose]` 是只读命令：它只检查此前由 `shine sys init` 记录的引导软件，绝不会安装或升级任何软件，也不会修改 sys manifest 或 shell profile。默认只显示由包管理器确认的可用更新及可直接复制的上游升级命令；`--verbose` 还会显示已是最新和只能手动检查的项目。对于直接安装器和用户自行维护的 Git 配置，命令会明确标记为需要手动处理，而不会猜测版本。
+
+`shine update` 与 `shine upgrade` 仍只负责协调 Shine 管理的配置和受管系统资源，不会升级第三方引导软件。复制并运行 `shine sys update` 输出的命令始终是用户自己的明确决定。
 
 系统初始化预设使用如下元数据结构：
 

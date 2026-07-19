@@ -12,6 +12,38 @@ status() {
     printf 'SHINE_SYS_STATUS\t%s\t%s\n' "$state" "$detail"
 }
 
+update_status() {
+    local state="$1"
+    local detail="${2:-}"
+    local command="${3:-}"
+    printf 'SHINE_SYS_UPDATE\t%s\t%s\t%s\n' "$state" "$detail" "$command"
+}
+
+check_brew_update() {
+    local kind="$1"
+    local package="$2"
+    local command="brew upgrade ${kind:+--$kind }$package"
+    if ! command -v brew &>/dev/null; then
+        update_status "manual" "Homebrew is not available in this shell" "$command"
+    elif [[ -n "$(brew outdated "--$kind" "$package")" ]]; then
+        update_status "available" "Homebrew reports an update" "$command"
+    else
+        update_status "current" "Homebrew reports no update"
+    fi
+}
+
+check_update() {
+    case "$1" in
+        homebrew) update_status "manual" "Homebrew upgrades are user-directed" "brew update && brew upgrade" ;;
+        rust) update_status "manual" "rustup does not provide a reliable non-mutating availability query" "rustup update" ;;
+        astronvim) update_status "manual" "AstroNvim configuration is user-owned" "git -C ~/.config/nvim pull" ;;
+        zerotier) check_brew_update cask zerotier-one ;;
+        yazi|starship|neovim|zsh-autosuggestions|zsh-syntax-highlighting|zsh-vi-mode|zoxide|atuin|fzf|bat|eza|nvm|bun|pnpm|mise|fastfetch)
+            check_brew_update formula "$1" ;;
+        *) update_status "unsupported" "This item has no update checker" ;;
+    esac
+}
+
 ensure_macos() {
     if [[ "$(uname -s)" != "Darwin" ]]; then
         echo "This sys init preset only supports macOS." >&2
@@ -227,5 +259,8 @@ run_item() {
 }
 
 ensure_macos
-
-run_item "${1:-}" "${2:-}"
+if [[ "${2:-}" == "check-update" ]]; then
+    check_update "${1:-}"
+else
+    run_item "${1:-}" "${2:-}"
+fi

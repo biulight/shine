@@ -16,6 +16,15 @@ pub enum SysCommands {
     },
     /// Show system init items previously initialized by shine
     Status,
+    /// Check recorded bootstrap software for updates without upgrading it
+    Update {
+        /// Recorded bootstrap item to check
+        #[arg(value_name = "ITEM")]
+        item: Option<String>,
+        /// Also show current and manual-check-only items
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Run the system init script for the current OS
     Init {
         /// Apply a named profile without showing interactive selection

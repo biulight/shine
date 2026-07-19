@@ -12,6 +12,15 @@ function Write-Status {
     Write-Output "SHINE_SYS_STATUS`t$State`t$Detail"
 }
 
+function Write-UpdateStatus {
+    param(
+        [Parameter(Mandatory = $true)] [string] $State,
+        [string] $Detail = "",
+        [string] $Command = ""
+    )
+    Write-Output "SHINE_SYS_UPDATE`t$State`t$Detail`t$Command"
+}
+
 # Set by `shine sys init --proxy` (the shine-owned signal, not $env:HTTP_PROXY,
 # so an ambient HTTP_PROXY never turns on winget proxying without the flag).
 # winget ignores http_proxy/https_proxy env vars; it only honors `--proxy <uri>`.
@@ -169,6 +178,33 @@ function Install-mise {
     Install-WinGetPackage "jdx.mise" "mise"
 }
 
+function Check-WinGetUpdate {
+    param([Parameter(Mandatory = $true)] [string] $PackageId)
+    $output = & winget upgrade --exact --id $PackageId --accept-source-agreements 2>&1 | Out-String
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        Write-UpdateStatus "failed" "winget check failed for $PackageId (exit $exitCode)" ""
+        return
+    }
+    if ($output -match "(?i)no applicable upgrade found") {
+        Write-UpdateStatus "current" "winget reports no applicable update" ""
+    } else {
+        Write-UpdateStatus "available" "winget reports an available update" "winget upgrade --exact --id $PackageId"
+    }
+}
+
+function Check-Update {
+    param([Parameter(Mandatory = $true)] [string] $Item)
+    $packages = @{
+        "rust" = "Rustlang.Rustup"; "yazi" = "sxyazi.yazi"; "starship" = "Starship.Starship"
+        "zoxide" = "ajeetdsouza.zoxide"; "atuin" = "Atuinsh.Atuin"; "fzf" = "junegunn.fzf"
+        "bat" = "sharkdp.bat"; "eza" = "eza-community.eza"; "zerotier" = "ZeroTier.ZeroTierOne"
+        "bun" = "Oven-sh.Bun"; "pnpm" = "pnpm.pnpm"; "mise" = "jdx.mise"
+    }
+    if ($packages.ContainsKey($Item)) { Check-WinGetUpdate $packages[$Item] }
+    else { Write-UpdateStatus "unsupported" "This item has no update checker" "" }
+}
+
 function Install-Item {
     param(
         [Parameter(Mandatory = $true)]
@@ -206,5 +242,8 @@ $item = $args[0]
 if ($item -ne "__shine_finalize") {
     Assert-WinGet
 }
-
-Install-Item $item $(if ($args.Count -gt 1) { $args[1] } else { "apply" })
+if ($args.Count -gt 1 -and $args[1] -eq "check-update") {
+    Check-Update $item
+} else {
+    Install-Item $item $(if ($args.Count -gt 1) { $args[1] } else { "apply" })
+}

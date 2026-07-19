@@ -10,7 +10,7 @@ use crate::config::Config;
 use super::detect::detect_os_id;
 use super::execution::{
     manifest_item_labels, print_item_outcome, print_run_header, print_sys_summary, run_sys_item,
-    status_text, sys_init_command, sys_item_label_width,
+    run_sys_update_check, status_text, sys_init_command, sys_item_label_width,
 };
 use super::managed::managed_updates;
 use super::manifest::{self, load_sys_preset};
@@ -21,9 +21,10 @@ use super::run_manifest::{SysRunEntry, SysRunManifest};
 use super::selection::resolve_selection;
 #[cfg(test)]
 use super::{SelectionSource, SysDriverKind, SysItem};
-use super::{SysItemMode, SysItemOutcome, SysItemStatus, SysManifest};
+use super::{SysItemMode, SysItemOutcome, SysItemStatus, SysManifest, SysUpdateState};
 
 pub(super) const SYS_STATUS_PREFIX: &str = "SHINE_SYS_STATUS\t";
+pub(super) const SYS_UPDATE_PREFIX: &str = "SHINE_SYS_UPDATE\t";
 
 pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     crate::config::print_presets_note(config);
@@ -227,6 +228,137 @@ pub async fn handle_status(config: &Config) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// Inspect only init-mode entries that were previously recorded for this OS.
+/// This deliberately does not write the run manifest or touch profile wiring.
+pub async fn handle_update(
+    config: &Config,
+    item_filter: Option<&str>,
+    verbose: bool,
+) -> Result<()> {
+    crate::config::print_presets_note(config);
+    let os_id = detect_os_id().await?;
+    let loaded = load_sys_preset(config, &os_id).await?;
+    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let recorded = run_manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.os_id == os_id && !entry.managed)
+        .collect::<Vec<_>>();
+
+    let selected = if let Some(item_id) = item_filter {
+        let known = loaded.manifest.items.iter().find(|item| item.id == item_id);
+        if known.is_none() {
+            bail!("unknown sys item `{item_id}` for {os_id}");
+        }
+        if known.is_some_and(|item| item.mode == SysItemMode::Managed) {
+            bail!(
+                "`{item_id}` is a managed system resource; `shine sys update` only checks recorded bootstrap software"
+            );
+        }
+        let entry = recorded
+            .into_iter()
+            .find(|entry| entry.item_id == item_id)
+            .with_context(|| {
+                format!("`{item_id}` was not recorded by `shine sys init` for {os_id}")
+            })?;
+        vec![entry]
+    } else {
+        recorded
+    };
+
+    if selected.is_empty() {
+        println!(
+            "{}",
+            colors::dim(&format!(
+                "No bootstrap software recorded for {os_id}. Run `shine sys init` first."
+            ))
+        );
+        return Ok(());
+    }
+
+    let command = sys_init_command(&os_id);
+    let script_dir = loaded
+        .script_path
+        .parent()
+        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
+    let sys_shell: &'static str = config.shell_type.into();
+    let mut checks = Vec::new();
+    for entry in selected {
+        let Some(item) = loaded
+            .manifest
+            .items
+            .iter()
+            .find(|item| item.id == entry.item_id)
+        else {
+            // A preset may legitimately have removed an old item. Preserve the
+            // recorded entry, but do not execute an arbitrary fallback script.
+            if verbose {
+                println!(
+                    "  {:<14} {}",
+                    entry.label,
+                    colors::dim("unavailable — no longer in this preset")
+                );
+            }
+            continue;
+        };
+        if item.mode != SysItemMode::Init {
+            continue;
+        }
+        checks.push(
+            run_sys_update_check(
+                &command,
+                script_dir,
+                &loaded.script_path,
+                sys_shell,
+                &item.id,
+                &item.label,
+            )
+            .await?,
+        );
+    }
+
+    println!("{}\n", colors::bold("Bootstrap Software Updates"));
+    let mut shown = 0;
+    for check in &checks {
+        let show = check.state == SysUpdateState::Available
+            || check.state == SysUpdateState::Failed
+            || verbose;
+        if !show {
+            continue;
+        }
+        shown += 1;
+        let state = match check.state {
+            SysUpdateState::Available => colors::green("update available"),
+            SysUpdateState::Current => colors::dim("current"),
+            SysUpdateState::Manual => colors::dim("manual check"),
+            SysUpdateState::Unsupported => colors::dim("unsupported"),
+            SysUpdateState::Failed => colors::red("check failed"),
+        };
+        println!("  {:<22} {}", check.label, state);
+        if !check.detail.is_empty() {
+            println!("  {:<22} {}", "", colors::dim(&check.detail));
+        }
+        if !check.upgrade_command.is_empty() {
+            println!("  {:<22} {}", "", check.upgrade_command);
+        }
+    }
+    if shown == 0 {
+        println!(
+            "{}",
+            colors::dim(
+                "No verified updates available. Use `--verbose` to see current and manual-check items."
+            )
+        );
+    }
+    if checks
+        .iter()
+        .any(|check| check.state == SysUpdateState::Failed)
+    {
+        bail!("one or more bootstrap update checks failed");
+    }
     Ok(())
 }
 
@@ -470,7 +602,8 @@ mod tests {
     use crate::config::Config;
     use crate::shells::ShellType;
     use crate::sys::execution::{
-        format_command_preview, parse_status_event, parse_sys_item_output,
+        format_command_preview, parse_status_event, parse_sys_item_output, parse_sys_update_output,
+        parse_update_event,
     };
     use crate::sys::manifest::{parse_and_validate_manifest, sys_init_script_name};
     use crate::sys::profile::{fallback_three_way_merge, install_sys_profile_files};
@@ -830,6 +963,70 @@ required_env = ["NOT-AN-ENV"]
         assert_eq!(outcome.status, SysItemStatus::Failed);
         assert_eq!(outcome.detail, "script exited with a non-zero status");
         assert_eq!(outcome.logs, vec!["legacy script failed"]);
+    }
+
+    #[test]
+    fn parse_update_event_reads_all_protocol_states() {
+        for (wire, expected) in [
+            ("available", SysUpdateState::Available),
+            ("current", SysUpdateState::Current),
+            ("manual", SysUpdateState::Manual),
+            ("unsupported", SysUpdateState::Unsupported),
+            ("failed", SysUpdateState::Failed),
+        ] {
+            let event = parse_update_event(&format!(
+                "SHINE_SYS_UPDATE\t{wire}\tdetail\tupgrade command"
+            ))
+            .expect("update event should parse");
+            assert_eq!(
+                event,
+                (
+                    expected,
+                    "detail".to_string(),
+                    "upgrade command".to_string()
+                )
+            );
+        }
+        assert!(parse_update_event("SHINE_SYS_UPDATE\tbogus\tdetail\tcmd").is_none());
+    }
+
+    #[test]
+    fn parse_update_output_rejects_missing_or_failed_check_events() {
+        let missing = parse_sys_update_output("tool", "Tool", true, "ordinary log\n", "");
+        assert_eq!(missing.state, SysUpdateState::Failed);
+        assert!(missing.detail.contains("no valid update event"));
+
+        let failed = parse_sys_update_output(
+            "tool",
+            "Tool",
+            false,
+            "SHINE_SYS_UPDATE\tavailable\tshould not be trusted\tupgrade tool\n",
+            "",
+        );
+        assert_eq!(failed.state, SysUpdateState::Failed);
+        assert!(failed.upgrade_command.is_empty());
+    }
+
+    #[test]
+    fn embedded_sys_scripts_keep_update_checks_separate_from_installs() {
+        for (os_id, script_name) in [
+            ("macos", "init.sh"),
+            ("ubuntu", "init.sh"),
+            ("windows", "init.ps1"),
+        ] {
+            let path = format!("sys/{os_id}/{script_name}");
+            let script = crate::presets::read_asset_bytes(&path)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .expect("missing embedded sys script");
+            assert!(
+                script.contains("SHINE_SYS_UPDATE"),
+                "{path} lacks update protocol"
+            );
+            assert!(
+                script.contains("check-update"),
+                "{path} lacks update dispatch"
+            );
+        }
     }
 
     #[test]

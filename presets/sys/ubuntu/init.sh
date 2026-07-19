@@ -15,6 +15,35 @@ status() {
     printf 'SHINE_SYS_STATUS\t%s\t%s\n' "$state" "$detail"
 }
 
+update_status() {
+    local state="$1"
+    local detail="${2:-}"
+    local command="${3:-}"
+    printf 'SHINE_SYS_UPDATE\t%s\t%s\t%s\n' "$state" "$detail" "$command"
+}
+
+check_apt_update() {
+    local package="$1"
+    local command="sudo apt-get install --only-upgrade -y $package"
+    if apt list --upgradable 2>/dev/null | grep -q "^${package}/"; then
+        update_status "available" "APT reports an upgrade" "$command"
+    else
+        update_status "current" "APT reports no upgrade"
+    fi
+}
+
+check_update() {
+    case "$1" in
+        fzf|bat) check_apt_update "$1" ;;
+        astronvim) update_status "manual" "AstroNvim configuration is user-owned" "git -C ~/.config/nvim pull" ;;
+        neovim) update_status "manual" "Neovim was installed from a direct release archive" "rerun shine sys init and select neovim" ;;
+        atuin) update_status "manual" "Atuin was installed by its upstream curl installer" "atuin update" ;;
+        yazi) update_status "manual" "Yazi may have been installed from a direct release package" "rerun shine sys init and select yazi" ;;
+        starship|zoxide|zsh-vi-mode|pnpm|mise|homebrew|zerotier|eza) update_status "manual" "This item has no stable source-specific non-mutating checker" "rerun shine sys init and select $1" ;;
+        *) update_status "unsupported" "This item has no update checker" ;;
+    esac
+}
+
 brew_executable() {
     if [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
         echo "/home/linuxbrew/.linuxbrew/bin/brew"
@@ -403,4 +432,8 @@ run_item() {
     esac
 }
 
-run_item "${1:-}" "${2:-}"
+if [[ "${2:-}" == "check-update" ]]; then
+    check_update "${1:-}"
+else
+    run_item "${1:-}" "${2:-}"
+fi

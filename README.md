@@ -196,6 +196,8 @@ shine sys init
 shine sys init --preset recommended
 shine sys init --dry-run
 shine sys status
+shine sys update
+shine sys update neovim --verbose
 ```
 
 `shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After successful item work, `shine` refreshes managed shell profile integration from Rust.
@@ -205,6 +207,9 @@ shine sys status
 - Without a TTY, `shine sys init` falls back to `default_profile`.
 - `shine sys init --dry-run` prints the resolved items, per-item script invocations, the internal profile update step, and script content without executing anything.
 - `shine sys status` shows the init items previously recorded for the current OS.
+- `shine sys update [ITEM] [--verbose]` is read-only: it checks only bootstrap software previously recorded by `shine sys init`, never installs or upgrades anything, and never changes the sys manifest or shell profile. By default it shows verified package-manager updates and the exact upstream command to run. `--verbose` also shows current and manual-check-only items. Direct installers and user-owned Git configurations are intentionally reported as manual instead of guessed.
+
+`shine update` and `shine upgrade` continue to reconcile Shine-managed configuration and managed system resources. They do not upgrade third-party bootstrap software; copying and running a command printed by `shine sys update` is always the user's explicit decision.
 
 System init presets use this metadata shape:
 

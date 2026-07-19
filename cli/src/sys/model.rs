@@ -107,6 +107,27 @@ pub(super) struct SysItemOutcome {
     pub(super) logs: Vec<String>,
 }
 
+/// Ephemeral result of a bootstrap-software update check. Unlike
+/// `SysItemStatus`, this is deliberately never persisted in sys-manifest.toml.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SysUpdateState {
+    Available,
+    Current,
+    Manual,
+    Unsupported,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SysUpdateCheck {
+    pub(super) item_id: String,
+    pub(super) label: String,
+    pub(super) state: SysUpdateState,
+    pub(super) detail: String,
+    pub(super) upgrade_command: String,
+    pub(super) logs: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SysUpgradeReport {
     pub updated: usize,

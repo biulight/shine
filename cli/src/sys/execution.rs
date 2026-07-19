@@ -6,8 +6,9 @@ use std::process::Stdio;
 use crate::colors;
 
 use super::{
-    ResolvedSelection, SYS_STATUS_PREFIX, SysAction, SysInitCommand, SysItem, SysItemOutcome,
-    SysItemStatus, SysManifest, selection::format_item_ids,
+    ResolvedSelection, SYS_STATUS_PREFIX, SYS_UPDATE_PREFIX, SysAction, SysInitCommand, SysItem,
+    SysItemOutcome, SysItemStatus, SysManifest, SysUpdateCheck, SysUpdateState,
+    selection::format_item_ids,
 };
 
 /// The home directory to pass to sys scripts as `SHINE_TARGET_HOME`.
@@ -232,6 +233,98 @@ pub(super) async fn run_sys_item_action(
         &String::from_utf8_lossy(&output.stdout),
         &String::from_utf8_lossy(&output.stderr),
     ))
+}
+
+/// Run a platform-owned update check. This path intentionally never uses sudo,
+/// elevation, proxy setup, or a manifest write: scripts may inspect their source
+/// but must only print an upstream command for the user to run.
+pub(super) async fn run_sys_update_check(
+    command: &SysInitCommand,
+    script_dir: &Path,
+    script_path: &Path,
+    sys_shell: &str,
+    item_id: &str,
+    label: &str,
+) -> Result<SysUpdateCheck> {
+    let output = tokio::process::Command::new(command.program)
+        .current_dir(script_dir)
+        .env("SHINE_SYS_PRESET_ROOT", script_dir)
+        .env("SHINE_SYS_SHELL", sys_shell)
+        .env("SHINE_TARGET_HOME", target_home())
+        .args(&command.fixed_args)
+        .arg(script_path)
+        .arg(item_id)
+        .arg("check-update")
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .with_context(|| format!("failed to execute {}", script_path.display()))?;
+    Ok(parse_sys_update_output(
+        item_id,
+        label,
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    ))
+}
+
+pub(super) fn parse_sys_update_output(
+    item_id: &str,
+    label: &str,
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+) -> SysUpdateCheck {
+    let mut event = None;
+    let mut logs = Vec::new();
+    for line in stdout.lines().chain(stderr.lines()) {
+        if let Some(parsed) = parse_update_event(line) {
+            event = Some(parsed);
+        } else if !line.trim().is_empty() {
+            logs.push(line.to_string());
+        }
+    }
+    let (state, detail, upgrade_command) = if !success {
+        let detail = event
+            .as_ref()
+            .map(|(_, detail, _)| detail.clone())
+            .filter(|detail| !detail.is_empty())
+            .unwrap_or_else(|| "update checker exited with a non-zero status".to_string());
+        (SysUpdateState::Failed, detail, String::new())
+    } else if let Some(event) = event {
+        event
+    } else {
+        (
+            SysUpdateState::Failed,
+            "update checker emitted no valid update event".to_string(),
+            String::new(),
+        )
+    };
+    SysUpdateCheck {
+        item_id: item_id.to_string(),
+        label: label.to_string(),
+        state,
+        detail,
+        upgrade_command,
+        logs,
+    }
+}
+
+pub(super) fn parse_update_event(line: &str) -> Option<(SysUpdateState, String, String)> {
+    let mut parts = line.strip_prefix(SYS_UPDATE_PREFIX)?.splitn(3, '\t');
+    let state = match parts.next()? {
+        "available" => SysUpdateState::Available,
+        "current" => SysUpdateState::Current,
+        "manual" => SysUpdateState::Manual,
+        "unsupported" => SysUpdateState::Unsupported,
+        "failed" => SysUpdateState::Failed,
+        _ => return None,
+    };
+    let detail = normalize_status_detail(parts.next().unwrap_or_default());
+    let upgrade_command = parts.next().unwrap_or_default().trim().to_string();
+    Some((state, detail, upgrade_command))
 }
 
 pub(super) fn parse_sys_item_output(

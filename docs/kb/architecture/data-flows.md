@@ -102,6 +102,14 @@ and deletes the sentinel block precisely.
 
 ## Sys bootstrap (`shine sys init`)
 
+`shine sys update [ITEM] [--verbose]` is a separate, read-only bootstrap-software flow. It reads
+only `mode = "init"` entries already recorded in `sys-manifest.toml`, then invokes the current
+platform preset as `<item> check-update`. Platform scripts emit `SHINE_SYS_UPDATE` events with a
+verified availability state and an upstream command; the Rust core displays but never executes
+that command. This flow does not write the run manifest, invoke elevation, or update managed
+profiles. Global `shine update` / `shine upgrade` remain limited to Shine configuration and
+managed sys resources.
+
 Documented in `AGENTS.md` § "Sys preset flow". Key cross-module point: `sys/execution.rs` runs
 `init.sh <item_id>` once per selected item and parses `SHINE_SYS_STATUS\t<state>\t<detail>` lines
 from script stdout into the run report; anything else is rendered as indented logs. A final
