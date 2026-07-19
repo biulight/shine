@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-19 — Windows split-DNS upgraded an already-current NRPT rule
+
+- **Symptom**: `shine upgrade` always requested elevation, recreated the shine-owned Windows
+  split-DNS NRPT rule, and counted it as updated even when its namespace and name servers already
+  matched the active configuration.
+- **Root cause**: the Windows branch of `split_dns_up_to_date` unconditionally returned false, and
+  `apply_split_dns` unconditionally ran the elevated remove-and-create operation.
+- **Fix**: query `Get-DnsClientNrptRule` without elevation, parse only rules with shine's exact
+  comment marker, and treat the resource as current only when exactly one rule has the desired
+  namespace and ordered name-server list. Query or parse failures fail closed to the existing
+  elevated repair path.
+- **Rule**: convergence must validate the live managed resource before assuming a platform needs a
+  write; a managed receipt alone does not prove current system state.
+
 ## 2026-07-19 — POSIX SSH wrapper failed on Windows OpenSSH remotes
 
 - **Symptom**: `shine ssh --with-secret GH_TOKEN <windows-host>` sent `env ... sh -c` to the

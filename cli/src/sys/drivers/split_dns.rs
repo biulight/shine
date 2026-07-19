@@ -4,6 +4,7 @@ use crate::sys::resources::{
     DriverContext, RECEIPT_VERSION, ResourceOutcome, SplitDnsReceipt, SystemReceipt, config_env,
 };
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -79,6 +80,57 @@ fn split_dns_marker(item_id: &str) -> String {
     format!("{DNS_MARKER_PREFIX}{item_id}")
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct WindowsNrptRule {
+    comment: String,
+    namespace: String,
+    name_servers: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct WindowsNrptRuleQuery {
+    rules: Vec<WindowsNrptRule>,
+}
+
+fn windows_nrpt_query(marker: &str) -> String {
+    format!(
+        "$rules=@(Get-DnsClientNrptRule | Where-Object {{$_.Comment -ceq '{marker}'}} | \
+         ForEach-Object {{[PSCustomObject]@{{Comment=$_.Comment;Namespace=$_.Namespace;NameServers=@($_.NameServers)}}}}); \
+         [PSCustomObject]@{{Rules=@($rules)}} | ConvertTo-Json -Compress -Depth 3",
+        marker = ps_quote(marker),
+    )
+}
+
+fn windows_nrpt_rules_match_desired(
+    rules: WindowsNrptRuleQuery,
+    desired: &SplitDnsReceipt,
+) -> bool {
+    let [rule] = rules.rules.as_slice() else {
+        return false;
+    };
+    rule.comment == split_dns_marker(&desired.item_id)
+        && rule.namespace == desired.resource
+        && rule.name_servers == desired.servers
+}
+
+async fn windows_split_dns_up_to_date(desired: &SplitDnsReceipt) -> bool {
+    let marker = split_dns_marker(&desired.item_id);
+    let output = match tokio::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-Command", &windows_nrpt_query(&marker)])
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => output,
+        Ok(_) | Err(_) => return false,
+    };
+    let Ok(rules) = serde_json::from_slice::<WindowsNrptRuleQuery>(&output.stdout) else {
+        return false;
+    };
+    windows_nrpt_rules_match_desired(rules, desired)
+}
+
 /// Whether systemd-resolved's stub listener (127.0.0.53) is actually the thing
 /// answering DNS on this host. When `DNSStubListener=no` (e.g. because another
 /// service, like a coredns container, holds port 53 instead), the `Domains=`
@@ -139,7 +191,7 @@ fn split_dns_file_content(receipt: &SplitDnsReceipt) -> Vec<u8> {
 pub(in crate::sys) async fn split_dns_up_to_date(context: &DriverContext<'_>) -> Result<bool> {
     let desired = split_dns_desired(context)?;
     if desired.os_id == "windows" {
-        return Ok(false);
+        return Ok(windows_split_dns_up_to_date(&desired).await);
     }
     let destination = PathBuf::from(&desired.resource);
     if !destination.exists() {
@@ -193,6 +245,14 @@ pub(in crate::sys) async fn apply_split_dns(
     };
 
     let changed = if desired.os_id == "windows" {
+        if windows_split_dns_up_to_date(&desired).await {
+            return Ok(ResourceOutcome {
+                changed: false,
+                detail: desired.domain.clone(),
+                receipt: Some(SystemReceipt::SplitDns(desired)),
+                restart_hint: None,
+            });
+        }
         apply_windows_split_dns(&desired).await?;
         true
     } else {
@@ -479,7 +539,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn split_dns_up_to_date_is_false_for_windows_and_missing_destination() {
+    async fn split_dns_up_to_date_is_false_for_missing_destination() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
         let mut driver_config = toml::Table::new();
@@ -507,18 +567,6 @@ mod tests {
             ("SERVERS".to_string(), "10.0.0.2".to_string()),
         ]);
 
-        // Windows always reports not-up-to-date: there is no cheap read-only
-        // check available, so the caller falls back to requesting admin.
-        let windows_context = DriverContext {
-            config: &config,
-            os_id: "windows",
-            item: &item,
-            preset_root: &dir,
-            env: &env,
-            dry_run: false,
-        };
-        assert!(!split_dns_up_to_date(&windows_context).await.unwrap());
-
         // A fresh item id has never had its resource file written, so it must
         // never be reported as up-to-date (that would skip the admin prompt
         // for a change that hasn't actually been applied yet).
@@ -533,6 +581,77 @@ mod tests {
         assert!(!split_dns_up_to_date(&ubuntu_context).await.unwrap());
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    fn windows_rule(comment: &str, namespace: &str, servers: &[&str]) -> WindowsNrptRule {
+        WindowsNrptRule {
+            comment: comment.to_string(),
+            namespace: namespace.to_string(),
+            name_servers: servers.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    #[test]
+    fn windows_nrpt_rule_must_exactly_match_the_desired_receipt() {
+        let desired = SplitDnsReceipt {
+            version: RECEIPT_VERSION,
+            os_id: "windows".to_string(),
+            item_id: "private-dns".to_string(),
+            domain: "home.example.com".to_string(),
+            servers: vec!["10.0.0.2".to_string(), "10.0.0.3".to_string()],
+            resource: ".home.example.com".to_string(),
+            content_hash: None,
+        };
+        let marker = split_dns_marker(&desired.item_id);
+        let matching = || windows_rule(&marker, ".home.example.com", &["10.0.0.2", "10.0.0.3"]);
+
+        assert!(windows_nrpt_rules_match_desired(
+            WindowsNrptRuleQuery {
+                rules: vec![matching()]
+            },
+            &desired
+        ));
+        assert!(!windows_nrpt_rules_match_desired(
+            WindowsNrptRuleQuery {
+                rules: vec![windows_rule(
+                    &marker,
+                    ".home.example.com",
+                    &["10.0.0.3", "10.0.0.2"]
+                )]
+            },
+            &desired
+        ));
+        assert!(!windows_nrpt_rules_match_desired(
+            WindowsNrptRuleQuery {
+                rules: vec![windows_rule(
+                    &marker,
+                    ".other.example.com",
+                    &["10.0.0.2", "10.0.0.3"]
+                )]
+            },
+            &desired
+        ));
+        assert!(!windows_nrpt_rules_match_desired(
+            WindowsNrptRuleQuery { rules: Vec::new() },
+            &desired
+        ));
+        assert!(!windows_nrpt_rules_match_desired(
+            WindowsNrptRuleQuery {
+                rules: vec![matching(), matching()]
+            },
+            &desired
+        ));
+    }
+
+    #[test]
+    fn windows_nrpt_query_filters_on_the_exact_owned_comment() {
+        let marker = split_dns_marker("private-dns");
+        let query = windows_nrpt_query(&marker);
+
+        assert!(query.contains("$_.Comment -ceq 'Managed by shine: split-dns:private-dns'"));
+        assert!(query.contains("Namespace=$_.Namespace"));
+        assert!(query.contains("NameServers=@($_.NameServers)"));
+        assert!(query.contains("Rules=@($rules)"));
     }
 
     #[test]
