@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-19 — Interactive Windows SSH skipped the managed PowerShell profile
+
+- **Symptom**: `shine ssh --remote-shell windows <host>` opened PowerShell 7, but Shine-installed
+  source commands such as `setproxy` were missing.
+- **Root cause**: the encoded-command wrapper launched the final interactive `pwsh.exe` child with
+  `-NoProfile`. `setproxy` is intentionally a wrapper function registered by Shine's managed
+  PowerShell profile rather than a standalone executable, so the command could not exist in that
+  session.
+- **Fix**: keep the outer selection bootstrap profile-free, but let the final interactive child
+  load its normal profile; retain `-NoProfile` for explicit non-interactive remote commands.
+- **Rule**: an interactive shell wrapper must preserve normal startup-file semantics unless the
+  user explicitly requests isolation. Bootstrap isolation does not justify suppressing the final
+  user's profile.
+
 ## 2026-07-19 — Windows split-DNS upgraded an already-current NRPT rule
 
 - **Symptom**: `shine upgrade` always requested elevation, recreated the shine-owned Windows

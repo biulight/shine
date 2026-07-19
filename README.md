@@ -595,12 +595,17 @@ shine ssh --with-secret API_TOKEN dev
 `--with` reads only the exact plaintext `[env]` key and never decrypts `KEY_SECRET`. Decrypted values require the explicit `--with-secret KEY[=ALIAS]` form. Explicit values replace the remote process's inherited values, although remote login startup files may subsequently assign the same names again. Forwarded values are session-only and are not written to remote config files. Secrets become visible to the remote host and may also be readable from process arguments/environments by sufficiently privileged or same-user processes on either machine.
 
 For a Windows OpenSSH remote, opt in explicitly to its PowerShell wrapper. It safely sends the
-session hint, terminal theme, and selected values through `powershell.exe -EncodedCommand`, rather
-than trying to run the POSIX `env ... sh -c` wrapper through `cmd.exe`:
+session hint, terminal theme, and selected values through an encoded command, preferring
+PowerShell 7 (`pwsh.exe`) and falling back to Windows PowerShell 5.1 (`powershell.exe`), rather than
+trying to run the POSIX `env ... sh -c` wrapper through `cmd.exe`:
 
 ```bash
 shine ssh --remote-shell windows --with-secret GH_TOKEN intel.mac.local
 ```
+
+Interactive Windows sessions load the selected PowerShell's normal profile, including Shine's
+managed PATH and source-command wrappers such as `setproxy`. An explicit remote command remains a
+no-profile invocation.
 
 This mode supports SSH environment injection only. It does not create a transfer tunnel, so
 `shine local download`, `upload`, and `status` are unavailable in that Windows-remote session.

@@ -588,12 +588,16 @@ shine ssh --with-secret API_TOKEN dev
 `--with` 只读取完全同名的明文 `[env]` 键，绝不会自动解密 `KEY_SECRET`；解密后的值必须通过显式的 `--with-secret KEY[=ALIAS]` 注入。显式值会覆盖远端进程继承到的同名值，但远端登录 shell 的启动文件仍可能再次赋值。变量仅存在于本次会话，不会写入远端配置文件。密钥会暴露给远端主机，也可能被任一端具有足够权限或同用户的进程从进程参数/环境中读取。
 
 Windows OpenSSH 远端需要显式选择 PowerShell 包装器；它通过
-`powershell.exe -EncodedCommand` 安全注入会话提示、终端主题和所选变量，不会把 POSIX 的
-`env ... sh -c` 发送给 `cmd.exe`：
+编码命令安全注入会话提示、终端主题和所选变量，优先使用 PowerShell 7（`pwsh.exe`），
+未安装时回退到 Windows PowerShell 5.1（`powershell.exe`），不会把 POSIX 的 `env ... sh -c`
+发送给 `cmd.exe`：
 
 ```bash
 shine ssh --remote-shell windows --with-secret GH_TOKEN intel.mac.local
 ```
+
+交互式 Windows 会话会加载所选 PowerShell 的正常 profile，因此 Shine 管理的 PATH 和
+`setproxy` 等 source-command wrapper 都可用；显式远端命令仍以 no-profile 模式执行。
 
 此模式只支持 SSH 环境注入，不创建传输隧道；该 Windows 远端会话中不支持
 `shine local download`、`upload` 或 `status`。

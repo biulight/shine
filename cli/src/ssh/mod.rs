@@ -18,9 +18,11 @@
 //! The default remote mode is POSIX: it uses a Unix socket and a POSIX shell
 //! wrapper regardless of the *local* platform. `--remote-shell windows` is
 //! an explicit environment-forwarding-only mode: it sends a Base64-encoded
-//! PowerShell command, and deliberately creates no transfer listener or `-R`
-//! forward. Locally, the POSIX path's `bind_local_listener` uses a Unix socket
-//! on macOS/Linux, or loopback TCP on Windows.
+//! PowerShell bootstrap, preferring PowerShell 7 (`pwsh.exe`) and falling
+//! back to Windows PowerShell (`powershell.exe`), and deliberately creates no
+//! transfer listener or `-R` forward. Locally, the POSIX path's
+//! `bind_local_listener` uses a Unix socket on macOS/Linux, or loopback TCP on
+//! Windows.
 
 mod agent;
 // Drives the real agent over an in-process Unix socket pair, so it is
@@ -505,7 +507,11 @@ fn build_wrapped_remote_command(
 
 /// Builds an opaque Windows PowerShell remote command. OpenSSH passes this
 /// through cmd.exe on typical Windows servers, so only the Base64 alphabet is
-/// allowed to carry user-controlled values across that boundary.
+/// allowed to carry user-controlled values across that boundary. A small
+/// Windows PowerShell bootstrap probes for PowerShell 7 before launching the
+/// real encoded payload in the selected shell. Keeping the outer command free
+/// of CMD operators also works when the SSH server's default shell has already
+/// been changed from CMD to PowerShell.
 fn build_windows_wrapped_remote_command(
     session_id: &str,
     local_theme: Option<&str>,
@@ -537,10 +543,21 @@ fn build_windows_wrapped_remote_command(
         );
     }
 
-    let encoded = BASE64.encode(utf16le_bytes(&script)?);
+    let payload_encoded = BASE64.encode(utf16le_bytes(&script)?);
+    let no_profile = if interactive { "" } else { " -NoProfile" };
     let no_exit = if interactive { " -NoExit" } else { "" };
+    let bootstrap = format!(
+        "$pwsh = Get-Command pwsh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1\n\
+         $shell = if ($null -ne $pwsh) {{ $pwsh.Source }} else {{ 'powershell.exe' }}\n\
+         & $shell{no_profile}{no_exit} -EncodedCommand '{payload_encoded}'\n\
+         $ok = $?\n\
+         $code = $LASTEXITCODE\n\
+         if ($null -ne $code -and $code -ne 0) {{ exit $code }}\n\
+         if (-not $ok) {{ exit 1 }}\n"
+    );
+    let bootstrap_encoded = BASE64.encode(utf16le_bytes(&bootstrap)?);
     Ok(format!(
-        "powershell.exe -NoProfile{no_exit} -EncodedCommand {encoded}"
+        "powershell.exe -NoProfile -EncodedCommand {bootstrap_encoded}"
     ))
 }
 
@@ -928,13 +945,21 @@ mod tests {
         assert!(wrapped.starts_with("powershell.exe -NoProfile -EncodedCommand "));
         assert!(!wrapped.contains("REMOTE_VALUE"));
         assert!(!wrapped.contains("$dollar"));
-        let encoded = wrapped.rsplit_once(' ').unwrap().1;
-        let bytes = BASE64.decode(encoded).unwrap();
-        let units = bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect::<Vec<_>>();
-        let script = String::from_utf16(&units).unwrap();
+        let bootstrap = decode_powershell_script(wrapped.rsplit_once(' ').unwrap().1);
+        let encoded = bootstrap
+            .split(" -EncodedCommand '")
+            .nth(1)
+            .unwrap()
+            .split('\'')
+            .next()
+            .unwrap();
+        let script = decode_powershell_script(encoded);
+        assert!(!bootstrap.contains("REMOTE_VALUE"));
+        assert!(!bootstrap.contains("$dollar"));
+        assert!(bootstrap.contains("Get-Command pwsh.exe"));
+        assert!(bootstrap.contains("else { 'powershell.exe' }"));
+        assert!(bootstrap.contains("& $shell -NoProfile -EncodedCommand"));
+        assert!(bootstrap.contains("exit $code"));
         assert!(script.contains("$env:SHINE_SSH_SESSION = 'sid'"));
         assert!(script.contains("$env:SHINE_TERMINAL_THEME = 'dark'"));
         assert!(script.contains(
@@ -944,11 +969,42 @@ mod tests {
         assert!(script.contains("exit $LASTEXITCODE"));
     }
 
+    fn decode_powershell_script(encoded: &str) -> String {
+        let bytes = BASE64.decode(encoded).unwrap();
+        let units = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        String::from_utf16(&units).unwrap()
+    }
+
     #[test]
     fn windows_wrapped_command_uses_no_exit_for_interactive_session() {
         let wrapped =
             build_windows_wrapped_remote_command("sid", None, &BTreeMap::new(), &[]).unwrap();
-        assert!(wrapped.starts_with("powershell.exe -NoProfile -NoExit -EncodedCommand "));
+        let bootstrap = decode_powershell_script(wrapped.rsplit_once(' ').unwrap().1);
+        assert!(bootstrap.contains("& $shell -NoExit -EncodedCommand "));
+        assert!(!bootstrap.contains("& $shell -NoProfile"));
+    }
+
+    #[test]
+    fn windows_wrapped_command_selects_shell_before_running_payload() {
+        let wrapped = build_windows_wrapped_remote_command(
+            "sid",
+            None,
+            &BTreeMap::new(),
+            &["exit".to_string(), "7".to_string()],
+        )
+        .unwrap();
+
+        assert!(wrapped.starts_with("powershell.exe -NoProfile -EncodedCommand "));
+        let bootstrap = decode_powershell_script(wrapped.rsplit_once(' ').unwrap().1);
+        assert!(bootstrap.contains("Get-Command pwsh.exe -CommandType Application"));
+        assert!(bootstrap.contains("$pwsh.Source"));
+        assert!(bootstrap.contains("else { 'powershell.exe' }"));
+        assert_eq!(bootstrap.matches("& $shell").count(), 1);
+        assert!(!wrapped.contains("&&"));
+        assert!(!wrapped.contains("||"));
     }
 
     #[test]

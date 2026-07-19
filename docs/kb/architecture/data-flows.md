@@ -178,9 +178,12 @@ config `[env]`; it never performs the secret-first fallback used by `env run`. E
 secret backend. Duplicate aliases and Shine's own SSH/session variable names are rejected. The
 default `--remote-shell posix` flow joins the resolved map, `SHINE_SSH_*`, and terminal-theme hint
 in the quoted `env ... sh -c` wrapper and creates the transfer listener/`-R` channel. The explicit
-`--remote-shell windows` flow instead encodes a PowerShell script as UTF-16LE Base64 for
-`powershell.exe -EncodedCommand`; it sets only the session hint, theme, and selected variables and
-creates no listener, reverse forward, or `shine local` channel. Values are session-only but
+`--remote-shell windows` flow instead encodes a PowerShell script as UTF-16LE Base64, probes for
+`pwsh.exe` (PowerShell 7), and falls back to `powershell.exe` (Windows PowerShell 5.1); it sets only
+the session hint, theme, and selected variables and creates no listener, reverse forward, or
+`shine local` channel. Its interactive child loads the selected PowerShell's normal profile so
+managed PATH entries and source-command wrappers are available; an explicit remote command keeps
+`-NoProfile` for deterministic execution. Values are session-only but
 necessarily exposed in process argv/environments on the local and remote hosts; see
 [ADR 0014](../decisions/0014-explicit-ssh-env-forwarding.md) and
 [ADR 0015](../decisions/0015-windows-ssh-environment-forwarding.md).
