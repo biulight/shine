@@ -484,6 +484,19 @@ measured, not inferred.
 - **Rule**: every documented preset environment setting must occur in the rendered template;
   update detection is content-based and cannot observe unused variables.
 
+## 2026-07-20 — Shell update checks must render optional credentials exactly like installation
+
+- **Symptom**: `shine update` did not report a changed `agent/ccenv` preset when its newly-added
+  provider credential was absent from the active env config.
+- **Root cause**: installation supplies empty values for ccenv's optional provider credentials,
+  deferring validation until the sourced script runs. `status::shell_template_status` instead
+  rendered with the raw env map; the missing placeholder returned an error that `.ok()?` silently
+  converted into no template status.
+- **Fix**: share `shells::template::env_map_for_shell_template` between installation and status
+  comparison, and cover a changed ccenv template with both credentials unset.
+- **Rule**: a status comparison must use the same effective render inputs as the operation that
+  applies the update; optional runtime credentials must not suppress stale-content detection.
+
 ## 2026-07-05 — Typed config readers must not silently discard invalid entries
 
 - **Symptom**: `{ value, description }` entries in `shine.env.toml` appeared valid but had no

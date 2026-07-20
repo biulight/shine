@@ -111,7 +111,10 @@ pub(super) async fn apply_template_to_scripts(
 }
 
 /// Supplies empty optional credentials for templates that defer their validation until runtime.
-fn env_map_for_shell_template<'a>(
+///
+/// Status checks must use this same map as installation; otherwise a missing optional
+/// credential makes the comparison render fail and hides a real preset update.
+pub(crate) fn env_map_for_shell_template<'a>(
     display_name: &str,
     env_map: &'a std::collections::BTreeMap<String, String>,
 ) -> std::borrow::Cow<'a, std::collections::BTreeMap<String, String>> {

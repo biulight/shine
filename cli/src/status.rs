@@ -71,6 +71,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
             let script_path =
                 config.preset_path(Path::new("shell").join(&cat.name).join(&script.source_rel));
             let source_key = format!("shell/{}/{}", cat.name, script.source_rel.display());
+            let display_name = format!("{}/{}", cat.name, script.command_name);
             let rendered_path = config
                 .rendered_dir()
                 .join("shell")
@@ -97,6 +98,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
             let (sym, status_text) = match shell_template_status(
                 config,
                 &source_key,
+                &display_name,
                 &script_path,
                 &rendered_path,
             )
@@ -111,7 +113,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
 
             rows.push(ShellRow {
                 symbol: colors::symbol(sym),
-                label: format!("{}/{}", cat.name, script.command_name),
+                label: display_name,
                 status_sym: sym,
                 status_text,
                 is_installed: file_exists || link_exists,
@@ -125,6 +127,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
 async fn shell_template_status(
     config: &Config,
     source_key: &str,
+    display_name: &str,
     script_path: &Path,
     rendered_path: &Path,
 ) -> Option<FileStatus> {
@@ -142,7 +145,8 @@ async fn shell_template_status(
     }
 
     let env = EnvConfig::load_or_init(config).await.ok()?;
-    let rendered = apply_transforms(&["template".to_string()], &source_bytes, env.as_map()).ok()?;
+    let env_map = crate::shells::env_map_for_shell_template(display_name, env.as_map());
+    let rendered = apply_transforms(&["template".to_string()], &source_bytes, &env_map).ok()?;
     let current = tokio::fs::read(rendered_path).await.ok()?;
 
     if rendered == current {
@@ -618,6 +622,53 @@ mod tests {
             .iter()
             .find(|row| row.label == "proxy/setproxy")
             .expect("proxy/setproxy row should exist");
+
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ccenv_update_status_handles_unconfigured_optional_provider_keys() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/agent");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"cc.sh\"\ntarget = \"ccenv\"\nneeds_source = true\n",
+        )
+        .await
+        .unwrap();
+        let script = cat_dir.join("cc.sh");
+        fs::write(
+            &script,
+            b"#!/bin/bash\n# shine-template: true\necho @@DEEPSEEK_API_KEY@@ @@QWEN_API_KEY@@\n",
+        )
+        .await
+        .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        crate::shells::handle_install(&config, Some("agent"), false)
+            .await
+            .unwrap();
+
+        fs::write(
+            &script,
+            b"#!/bin/bash\n# shine-template: true\necho changed @@DEEPSEEK_API_KEY@@ @@QWEN_API_KEY@@\n",
+        )
+        .await
+        .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "agent/ccenv")
+            .expect("agent/ccenv row should exist");
 
         assert_eq!(row.status_sym, "↑");
         assert_eq!(row.status_text, "update available");

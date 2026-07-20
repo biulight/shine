@@ -10,6 +10,7 @@ pub use install::{
     handle_completion_install, handle_init_template, handle_install, handle_upgrade_installed,
 };
 pub use report::{ShellUpgradeReport, handle_list};
+pub(crate) use template::env_map_for_shell_template;
 pub use uninstall::handle_uninstall;
 
 use anyhow::{Result, bail};
