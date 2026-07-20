@@ -356,6 +356,14 @@ mod tests {
         config
     }
 
+    fn config_with_qwen_key(dir: &Path) -> Config {
+        let mut config = Config::new_for_test(dir);
+        config
+            .env
+            .insert("QWEN_API_KEY".into(), "test-qwen-key".into());
+        config
+    }
+
     fn agent_ccenv_link_path(config: &Config) -> PathBuf {
         crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("ccenv"))
     }
@@ -982,6 +990,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn embedded_agent_ccenv_renders_qwen_key_from_env_config() {
+        let dir = make_temp_dir().await;
+        let config = config_with_qwen_key(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("agent"), false).await.unwrap();
+
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
+        let rendered_content = fs::read_to_string(&rendered).await.unwrap();
+        assert!(
+            rendered_content.contains("test-qwen-key"),
+            "rendered agent script should contain configured Qwen key"
+        );
+        assert!(
+            !rendered_content.contains("@@QWEN_API_KEY@@"),
+            "rendered agent script should not contain the Qwen key template placeholder"
+        );
+        assert_agent_ccenv_link_points_to(&config, &rendered).await;
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn embedded_agent_ccenv_does_not_render_deepseek_gpg_secret() {
         let dir = make_temp_dir().await;
         let mut config = Config::new_for_test(&dir);
@@ -1006,6 +1041,37 @@ mod tests {
         assert!(
             !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
             "rendered agent script should not contain the key template placeholder"
+        );
+        assert_agent_ccenv_link_points_to(&config, &rendered).await;
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn embedded_agent_ccenv_does_not_render_qwen_gpg_secret() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.env.insert(
+            "QWEN_API_KEY_GPG_SECRET".into(),
+            "test-base64-gpg-secret".into(),
+        );
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("agent"), false).await.unwrap();
+
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
+        let rendered_content = fs::read_to_string(&rendered).await.unwrap();
+        assert!(
+            !rendered_content.contains("test-base64-gpg-secret"),
+            "rendered agent script should not embed the configured Qwen GPG secret"
+        );
+        assert!(
+            !rendered_content.contains("@@QWEN_API_KEY@@"),
+            "rendered agent script should not contain the Qwen key template placeholder"
         );
         assert_agent_ccenv_link_points_to(&config, &rendered).await;
 
@@ -1054,6 +1120,22 @@ mod tests {
             assert!(script.contains("shine env get DEEPSEEK_API_KEY_GPG_SECRET"));
             assert!(script.contains("DEEPSEEK_API_KEY_GPG_SECRET"));
             assert!(!script.contains("@@DEEPSEEK_API_KEY_GPG_SECRET@@"));
+            assert!(script.contains("shine env decrypt QWEN_API_KEY_GPG_SECRET"));
+            assert!(script.contains("shine env get QWEN_API_KEY_GPG_SECRET"));
+            assert!(script.contains("QWEN_API_KEY_GPG_SECRET"));
+            assert!(!script.contains("@@QWEN_API_KEY_GPG_SECRET@@"));
+            assert!(
+                script.contains("https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic")
+            );
+            assert!(script.contains("ANTHROPIC_DEFAULT_HAIKU_MODEL"));
+            assert!(script.contains("ANTHROPIC_DEFAULT_SONNET_MODEL"));
+            assert!(script.contains("ANTHROPIC_DEFAULT_OPUS_MODEL"));
+            assert!(script.contains("CLAUDE_CODE_SUBAGENT_MODEL"));
+            assert!(script.contains("CLAUDE_CODE_MAX_CONTEXT_TOKENS"));
+            assert!(script.contains("qwen3.8-max-preview"));
+            assert!(script.contains("qwen3.6-flash"));
+            assert!(script.contains("qwen3.7-max"));
+            assert!(script.contains("983616"));
         }
     }
 

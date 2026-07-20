@@ -86,7 +86,7 @@ shine shell list
 Shell Preset Categories
 
   agent  1 script
-    ccenv         Configure Claude Code to use DeepSeek in the current shell session.
+    ccenv         Configure Claude Code for a selected provider in the current shell session.
                    ...
 
   proxy  2 scripts
@@ -117,7 +117,7 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` or `DEEPSEEK_API_KEY_GPG_SECRET` in the active env config before use.
+Installing all shell presets includes `agent`, which requires the selected provider's API key (`DEEPSEEK_API_KEY`/`DEEPSEEK_API_KEY_GPG_SECRET` or `QWEN_API_KEY`/`QWEN_API_KEY_GPG_SECRET`) in the active env config before use.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `reinstall` when you want to overwrite managed preset files, links, and the shell config entry.
 
 Top-level `install`, `reinstall`, and `uninstall` commands accept a required category and automatically route to either `shell/<category>` or `app/<category>`. If both preset types define the same category name, `shine` prompts you to choose one.
@@ -689,7 +689,7 @@ The helper prefers `MY_TOKEN_SECRET`, decrypts it when present, and otherwise fa
 
 ### shell/agent — `ccenv`
 
-Configures the current shell for Claude Code with the DeepSeek provider.
+Configures the current shell for Claude Code with the selected DeepSeek or Qwen provider.
 
 Add your key to the global env override at `~/.shine/shine.env.toml`, or to a
 project-local env file next to `shine.config.toml`:
@@ -719,6 +719,24 @@ You can also decrypt any base64 GPG secret from the active env config directly:
 ```bash
 shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
 ```
+
+For Qwen through Alibaba Cloud's Anthropic-compatible endpoint, use the same
+credential pattern with `QWEN_API_KEY`:
+
+```toml
+QWEN_API_KEY = "..."
+# Or: QWEN_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
+```
+
+Create its encrypted value with:
+
+```bash
+shine env encrypt --from QWEN_API_KEY --set QWEN_API_KEY_GPG_SECRET
+```
+
+When `ccenv` prompts for a provider, choose `qwen` (or option `2`). It exports
+the Alibaba Cloud endpoint, Qwen model mapping, and the `983616` Claude Code
+context-token limit for the current shell session.
 
 #### age + Apple Touch ID (Secure Enclave)
 
@@ -856,9 +874,8 @@ shine shell install agent
 ccenv
 ```
 
-When both `DEEPSEEK_API_KEY_GPG_SECRET` and `DEEPSEEK_API_KEY` are set, the
-encrypted secret wins. A GPG decode/decrypt failure stops `ccenv` instead of
-falling back to plaintext.
+For either provider, its `*_GPG_SECRET` value wins over the plaintext `*_API_KEY`.
+A GPG decode/decrypt failure stops `ccenv` instead of falling back to plaintext.
 
 ### Shell preset metadata
 

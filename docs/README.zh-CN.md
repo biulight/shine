@@ -86,7 +86,7 @@ shine shell list
 Shell Preset Categories
 
   agent  1 script
-    ccenv         Configure Claude Code to use DeepSeek in the current shell session.
+    ccenv         Configure Claude Code for a selected provider in the current shell session.
                   ...
 
   proxy  2 scripts
@@ -117,7 +117,7 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-安装全部 shell 预设时会包含 `agent`，该类别在使用前需要在当前 env 配置中提供 `DEEPSEEK_API_KEY` 或 `DEEPSEEK_API_KEY_GPG_SECRET`。
+安装全部 shell 预设时会包含 `agent`；使用前需在当前 env 配置中提供所选 provider 的 API key：`DEEPSEEK_API_KEY`/`DEEPSEEK_API_KEY_GPG_SECRET` 或 `QWEN_API_KEY`/`QWEN_API_KEY_GPG_SECRET`。
 重复运行 `install` 是安全的：已存在的文件、正确的符号链接以及已配置好的 PATH 条目都会被跳过。若你想覆盖受管预设文件、链接和 shell 配置中的 PATH 条目，请使用 `reinstall`。
 
 顶层的 `install`、`reinstall` 和 `uninstall` 命令需要一个类别名，并会自动路由到 `shell/<category>` 或 `app/<category>`。如果 shell 和 app 预设中存在同名类别，`shine` 会提示你选择其中一个。
@@ -678,7 +678,7 @@ shine-env-export MY_TOKEN --as API_TOKEN
 
 ### shell/agent — `ccenv`
 
-为 Claude Code + DeepSeek provider 配置当前 shell 环境。
+为 Claude Code 配置当前 shell 的 DeepSeek 或 Qwen provider 环境。
 
 把你的 key 写入全局 env 覆盖文件 `~/.shine/shine.env.toml`，或者项目本地 `shine.config.toml` 同目录下的 env 文件：
 
@@ -705,6 +705,23 @@ shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 ```bash
 shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
 ```
+
+如需通过阿里云 Anthropic-compatible endpoint 使用 Qwen，使用相同的凭证模式并配置
+`QWEN_API_KEY`：
+
+```toml
+QWEN_API_KEY = "..."
+# 或：QWEN_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
+```
+
+可通过以下命令创建加密值：
+
+```bash
+shine env encrypt --from QWEN_API_KEY --set QWEN_API_KEY_GPG_SECRET
+```
+
+`ccenv` 提示选择 provider 时，输入 `qwen`（或选项 `2`）。它会为当前 shell 导出阿里云
+endpoint、Qwen 模型映射，以及 `983616` 的 Claude Code context-token limit。
 
 #### age + Apple Touch ID（Secure Enclave）
 
@@ -828,7 +845,7 @@ shine shell install agent
 ccenv
 ```
 
-如果同时设置了 `DEEPSEEK_API_KEY_GPG_SECRET` 和 `DEEPSEEK_API_KEY`，会优先使用加密 secret。若 GPG 解码或解密失败，`ccenv` 会直接停止，而不会回退到明文 key。
+无论 provider 为何，都会优先使用其 `*_GPG_SECRET` 值而非明文 `*_API_KEY`。若 GPG 解码或解密失败，`ccenv` 会直接停止，而不会回退到明文 key。
 
 ### Shell 预设元数据
 
