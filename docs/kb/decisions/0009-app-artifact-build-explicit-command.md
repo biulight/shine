@@ -1,6 +1,8 @@
 # 0009 — App artifact build scripts run only via an explicit `shine app build` command
 
-- **Status**: accepted
+- **Status**: accepted (the "not auto-reversed" consequence is superseded by
+  [ADR 0012](0012-app-lifecycle-post-install-and-teardown.md), which adds an optional
+  `[artifact].teardown` script; the build-is-explicit-only stance still holds)
 - **Evidence**: `cli/src/apps/build.rs`, `cli/src/apps/metadata.rs` (`[artifact]`/`AppArtifact`),
   `shine app build <app-id>`, `presets/app/surge/build.sh`
 
@@ -64,3 +66,49 @@ anything else is entirely the script's own responsibility.
   but does not un-patch the profile's `#!include` lines; the overlay `build.sh` is idempotent
   (add-only) and un-patching is a documented manual step. This is an accepted tradeoff for keeping
   the patch logic in the overlay rather than teaching Shine core a reversible profile-edit strategy.
+
+## Update (2026-07-18): cross-platform `runtime = "bun"`
+
+The original artifact runner execs the script directly (`Command::new(script)`), which relies on a
+shebang and is therefore **Unix-only**. That is fine for surge (macOS-only), but not for a
+cross-platform preset like `clash-verge` (Clash Verge Rev runs on Windows/macOS/Linux).
+
+`[artifact]` now accepts an optional `runtime` field (`native` default, or `bun`). `runtime = "bun"`
+launches the script via `bun <script>` — the same cross-platform runtime the bun **shell** presets
+use — so a `.ts` artifact works on all three platforms. `bun` is an external prerequisite; a missing
+`bun` fails with a clear "not installed" error (via `proc::ensure_command`) instead of a raw spawn
+error. A `bun` artifact's `script`/`teardown` must be a `.ts`/`.js`/`.mts`/`.mjs` file (validated at
+metadata-load time). The `native` path is unchanged.
+
+`clash-verge` uses `runtime = "bun"` with `build.ts`/`unbuild.ts`. Its refresh logic (a mihomo
+external-controller `PUT /providers/rules/<name>`) is generic and secret-free, so — unlike surge's
+provider-specific patch — it can ship in shine core; the user-specific pieces (real `merge.yaml`
+values, `CLASH_CONTROLLER_URL/TOKEN`) still live in the overlay, preserving this ADR's principle.
+
+`clash-verge`'s `build.ts` writes the **active subscription's four bound enhancement files**, not
+CVR's global `profiles/Merge.yaml`. It reads `profiles.yaml` only to follow `current` through
+`option.merge/rules/proxies/groups` to each item's file; it never changes that CVR-owned index,
+binding registration, or subscription cache. Basename checks keep malformed state from steering a
+write outside `profiles/`, and an incomplete binding never falls back to global files.
+
+The overlay `merge.yaml` is a shine-owned composite source. `rule-providers` and other mapping keys
+render to the bound merge file; `proxies`, `proxy-groups`, and `prepend-rules` render to CVR 2.x's
+separate Proxies/Groups/Rules documents as `{ prepend, append: [], delete: [] }`. After a changed
+write, build asks the user to reselect the profile; a later build performs the provider refresh.
+This prevents global array replacement and first-apply HTTP 404 failures.
+
+**Opt-in auto-run via hooks.** The core principle above — Shine's install/upgrade machinery never
+runs an artifact implicitly — is unchanged: there is still no `run_on_upgrade` field and the runner
+never invokes the artifact on its own. But a preset MAY *opt in* to auto-running its build by
+declaring a `post_install`/`post_upgrade` hook that re-invokes `shine app build <id>` (a fresh shine
+process that re-enters the artifact with the full `[env]` + `SHINE_APP_*` contract that hooks
+themselves don't get). `clash-verge` does this so `shine app install`/`shine upgrade` update the
+bound subscription enhancement files when `merge.yaml` changes. This is only appropriate because
+clash-verge's artifact is **idempotent and safe** (write-if-changed, then refresh only after CVR
+has applied it); surge does
+NOT do this — its artifact patches a live profile (provider-specific, order-sensitive), which is
+exactly the kind of side effect this ADR keeps behind an explicit command. Constraints: the hook
+needs `shine` on PATH; external presets need `allow_app_hooks = true`; it fires only when the
+preset's own files change (not on unrelated `shine upgrade` runs, and not on rule-list edits, which
+never touch `merge.yaml`); no recursion, since `shine app build` fires neither install nor upgrade
+hooks.

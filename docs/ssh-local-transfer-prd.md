@@ -1,5 +1,14 @@
 # SSH 会话内本机文件传输 PRD
 
+> **传输实现已更新（见 [ADR 0011](kb/decisions/0011-ssh-local-transfer-rsync-scp.md)）。**
+> 本文档记录了产品目标与最初的设计（§9 的自定义字节流协议、§5/§6 的目录 tar 打包与
+> 覆盖语义）。当前实现改为：`shine ssh` 建立的反向隧道只承载**控制 + 日志转发**通道，
+> 远端发送一个 `Transfer` 请求，由**本机**运行 `rsync`（默认）/ `scp`（`--scp` 或
+> 自动回退）完成传输并把输出回传远端终端；本机通过 ControlMaster 复用已认证连接，避免
+> 二次认证。通配符、增量、目录/软链接/权限均由 rsync/scp 原生处理。产品目标（本机发起、
+> 携带"出发地/当前远端"上下文、会话令牌隔离、Windows 仅作本机侧）保持不变；该限制只
+> 适用于传输协议，普通 SSH 环境转发可显式选择 Windows PowerShell 模式。
+
 ## 1. 背景
 
 用户经常从本机通过 SSH 登录远端机器，并在远端工作过程中临时传输文件或目录。
@@ -220,8 +229,8 @@ Downloaded 1.8 MiB
 - 主版本不兼容时拒绝传输并提示升级哪一端。
 - `shine ssh` 可正常连接未安装 shine 的远端，但 `shine local ...` 不可用；SSH 本身不得因此
   失败。
-- MVP 目标平台：macOS 和 Linux 互传；Windows 支持取决于技术尖刺结果，不以牺牲安全边界
-  为代价强行纳入首版。
+- 传输协议的 MVP 目标平台：macOS 和 Linux 互传；Windows 仅支持本机侧，不以牺牲安全
+  边界强行纳入远端传输。它不限制 `shine ssh --remote-shell windows` 的普通 SSH 环境注入。
 
 ## 11. 验收标准
 

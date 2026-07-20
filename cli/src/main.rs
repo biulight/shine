@@ -3,16 +3,18 @@ use clap::Parser;
 
 use cli::{
     apps, clear, colors, commands, completion, config, env, git_pull, list, serve, shells, show,
-    ssh, sys, task, update_check,
+    ssh, sys, task, theme, update_check,
 };
 
 use commands::{
     AppCommands, Cli, Commands, CompletionCommands, CompletionShell, EnvCommands,
     EnvIdentitySubcommand, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
-    SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands,
+    SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands, ThemeCommands,
 };
 #[cfg(test)]
-use commands::{ClearCommand, InitCommand, UpdateCommand, UpgradeCommand};
+use commands::{
+    ClearCommand, InitCommand, OverlayLinkCommand, RemoteShell, UpdateCommand, UpgradeCommand,
+};
 use config::Config;
 #[cfg(test)]
 use update_check::ReleaseChannel;
@@ -68,6 +70,18 @@ async fn run(cli: Cli) -> Result<()> {
         return Box::pin(clear::handle_clear(&config, cmd.dry_run)).await;
     }
 
+    // Bypassed like Init/Clear above: this runs on every interactive shell
+    // start (from the managed profile), so it must skip Config::load_or_init()
+    // (which writes to disk), the runtime-schema warning, and the background
+    // update check entirely — not just opt out of them individually.
+    // theme::handle_sync does its own read-only config load.
+    if let Commands::Theme {
+        command: ThemeCommands::Sync { auto, quiet },
+    } = &cli.command
+    {
+        return theme::handle_sync(*auto, *quiet).await;
+    }
+
     let config = Box::pin(Config::load_or_init()).await?;
 
     warn_if_runtime_schema_pending(&cli.command).await;
@@ -81,6 +95,7 @@ async fn run(cli: Cli) -> Result<()> {
         } => Box::pin(shells::handle_completion_install(&config)).await,
         Commands::Completions { .. } => unreachable!(),
         Commands::Clear(_) => unreachable!(),
+        Commands::Theme { .. } => unreachable!(),
         Commands::Install { category } => handle_install_shim(&config, &category).await,
         Commands::Reinstall { category } => handle_reinstall_shim(&config, &category).await,
         Commands::Uninstall { category } => handle_uninstall_shim(&config, &category).await,
@@ -122,6 +137,9 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
             }
             AppCommands::Build { app_id } => Box::pin(apps::handle_build(&config, &app_id)).await,
+            AppCommands::Unbuild { app_id } => {
+                Box::pin(apps::handle_unbuild(&config, &app_id)).await
+            }
         },
         Commands::Pull => git_pull::handle_pull(&config, false).await,
         Commands::Update(cmd) => {
@@ -150,9 +168,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
         Commands::Overlay { command } => match command {
-            OverlayCommands::Link(LinkCommand { path, create }) => {
-                Box::pin(handle_overlay_link(&config, path, create)).await
-            }
+            OverlayCommands::Link(cmd) => Box::pin(handle_overlay_link(&config, cmd)).await,
             OverlayCommands::Unlink => Box::pin(handle_overlay_unlink(&config)).await,
             OverlayCommands::Show => handle_overlay_show(&config),
         },
@@ -198,10 +214,12 @@ async fn run(cli: Cli) -> Result<()> {
         },
         Commands::Env { command } => match command {
             EnvCommands::Show { reveal } => env::commands::handle_show(&config, reveal).await,
-            EnvCommands::Set { key, value } => {
-                env::commands::handle_set(&config, &key, &value).await
+            EnvCommands::Set { key, value, force } => {
+                env::commands::handle_set(&config, &key, &value, force).await
             }
-            EnvCommands::Delete { key } => env::commands::handle_delete(&config, &key).await,
+            EnvCommands::Delete { key, force } => {
+                env::commands::handle_delete(&config, &key, force).await
+            }
             EnvCommands::Get { key } => env::commands::handle_get(&config, &key).await,
             EnvCommands::Decrypt { key } => env::commands::handle_decrypt(&config, &key).await,
             EnvCommands::Export { key, alias } => {
@@ -214,6 +232,7 @@ async fn run(cli: Cli) -> Result<()> {
                     &cmd.recipients,
                     cmd.set.as_deref(),
                     cmd.from.as_deref(),
+                    cmd.force,
                 )
                 .await
             }
@@ -232,6 +251,7 @@ async fn run(cli: Cli) -> Result<()> {
                     &config,
                     cmd.workspace.as_deref(),
                     cmd.mode.as_deref(),
+                    cmd.no_workspace,
                     &cmd.with,
                     &cmd.command,
                 )
@@ -260,16 +280,23 @@ async fn run(cli: Cli) -> Result<()> {
             SysCommands::List { all } => Box::pin(sys::handle_list(&config, all)).await,
             SysCommands::Info { item } => Box::pin(sys::handle_info(&config, &item)).await,
             SysCommands::Status => Box::pin(sys::handle_status(&config)).await,
+            SysCommands::Update {
+                item,
+                verbose,
+                proxy,
+            } => Box::pin(sys::handle_update(&config, item.as_deref(), verbose, proxy)).await,
             SysCommands::Init {
                 preset,
                 dry_run,
                 force_profile,
+                proxy,
             } => {
                 Box::pin(sys::handle_init(
                     &config,
                     preset.as_deref(),
                     dry_run,
                     force_profile,
+                    proxy,
                 ))
                 .await
             }
@@ -280,7 +307,12 @@ async fn run(cli: Cli) -> Result<()> {
                 Box::pin(sys::handle_uninstall(&config, &item, dry_run)).await
             }
         },
-        Commands::Ssh { args } => ssh::handle_ssh(&config, &args).await,
+        Commands::Ssh {
+            remote_shell,
+            with,
+            with_secret,
+            args,
+        } => ssh::handle_ssh(&config, remote_shell, &with, &with_secret, &args).await,
         Commands::Local { command } => match command {
             LocalCommands::Download(cmd) => {
                 ssh::handle_local_download(
@@ -288,6 +320,7 @@ async fn run(cli: Cli) -> Result<()> {
                     cmd.destination.as_deref(),
                     cmd.force,
                     cmd.dry_run,
+                    cmd.scp,
                 )
                 .await
             }
@@ -297,6 +330,7 @@ async fn run(cli: Cli) -> Result<()> {
                     cmd.destination.as_deref(),
                     cmd.force,
                     cmd.dry_run,
+                    cmd.scp,
                 )
                 .await
             }
@@ -340,6 +374,67 @@ fn should_warn_runtime_schema(command: &Commands) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_parses_ssh_env_forwarding_before_destination() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "ssh",
+            "--with",
+            "API_URL",
+            "--with",
+            "LOCAL_NAME=REMOTE_NAME",
+            "--with-secret",
+            "API_TOKEN",
+            "-p",
+            "2222",
+            "dev",
+            "printenv",
+            "REMOTE_NAME",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ssh {
+                remote_shell,
+                with,
+                with_secret,
+                args,
+            } if remote_shell == RemoteShell::Posix
+                && with == ["API_URL", "LOCAL_NAME=REMOTE_NAME"]
+                && with_secret == ["API_TOKEN"]
+                && args == ["-p", "2222", "dev", "printenv", "REMOTE_NAME"]
+        ));
+    }
+
+    #[test]
+    fn cli_parses_windows_remote_shell_before_destination() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "ssh",
+            "--remote-shell",
+            "windows",
+            "--with-secret",
+            "GH_TOKEN=TOKEN",
+            "intel.mac.local",
+            "cmd",
+            "/c",
+            "echo",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ssh {
+                remote_shell: RemoteShell::Windows,
+                with_secret,
+                args,
+                ..
+            } if with_secret == ["GH_TOKEN=TOKEN"]
+                && args == ["intel.mac.local", "cmd", "/c", "echo"]
+        ));
+    }
 
     #[test]
     fn cli_accepts_refactored_update_commands() {
@@ -502,11 +597,13 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Overlay {
-                command: OverlayCommands::Link(LinkCommand {
+                command: OverlayCommands::Link(OverlayLinkCommand {
                     ref path,
-                    create: false
+                    git: None,
+                    create: false,
+                    ..
                 })
-            } if path.as_path() == std::path::Path::new("/tmp/presets")
+            } if path.as_deref() == Some(std::path::Path::new("/tmp/presets"))
         ));
 
         let cli =
@@ -514,12 +611,38 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Overlay {
-                command: OverlayCommands::Link(LinkCommand {
+                command: OverlayCommands::Link(OverlayLinkCommand {
                     ref path,
-                    create: true
+                    create: true,
+                    ..
                 })
-            } if path.as_path() == std::path::Path::new("/tmp/presets")
+            } if path.as_deref() == Some(std::path::Path::new("/tmp/presets"))
         ));
+
+        let cli = Cli::try_parse_from([
+            "shine",
+            "overlay",
+            "link",
+            "--git",
+            "https://example.com/overlay.git",
+            "--branch",
+            "main",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Overlay {
+                command: OverlayCommands::Link(OverlayLinkCommand {
+                    path: None,
+                    git: Some(ref url),
+                    branch: Some(ref branch),
+                    ..
+                })
+            } if url == "https://example.com/overlay.git" && branch == "main"
+        ));
+
+        // A local PATH and --git are mutually exclusive.
+        assert!(Cli::try_parse_from(["shine", "overlay", "link", "/tmp/x", "--git", "u"]).is_err());
 
         assert!(Cli::try_parse_from(["shine", "overlay", "unlink"]).is_ok());
         assert!(Cli::try_parse_from(["shine", "overlay", "show"]).is_ok());
@@ -587,7 +710,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Env {
-                command: EnvCommands::Delete { key }
+                command: EnvCommands::Delete { key, .. }
             } if key == "MY_TOKEN"
         ));
     }
@@ -682,6 +805,51 @@ mod tests {
             } if cmd.with == ["TOKEN_A", "TOKEN_B=OTHER_TOKEN"]
                 && cmd.command == ["bun", "run", "build"]
         ));
+    }
+
+    #[test]
+    fn cli_accepts_env_run_no_workspace_with_explicit_values() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "run",
+            "--no-workspace",
+            "--with",
+            "API_URL",
+            "--",
+            "bun",
+            "tool.ts",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Run(cmd)
+            } if cmd.no_workspace
+                && cmd.with == ["API_URL"]
+                && cmd.command == ["bun", "tool.ts"]
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_env_run_no_workspace_with_mode() {
+        let error = Cli::try_parse_from([
+            "shine",
+            "env",
+            "run",
+            "--no-workspace",
+            "--mode",
+            "production",
+            "--",
+            "bun",
+            "tool.ts",
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "--no-workspace must conflict with --mode"
+        );
     }
 
     #[test]
@@ -918,6 +1086,17 @@ mod tests {
     }
 
     #[test]
+    fn cli_accepts_app_unbuild_command() {
+        let cli = Cli::try_parse_from(["shine", "app", "unbuild", "surge"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Unbuild { app_id }
+            } if app_id == "surge"
+        ));
+    }
+
+    #[test]
     fn cli_accepts_shell_and_app_reinstall_commands() {
         let cli = Cli::try_parse_from(["shine", "shell", "reinstall", "proxy"]).unwrap();
         assert!(matches!(
@@ -971,7 +1150,8 @@ mod tests {
                 command: SysCommands::Init {
                     preset: None,
                     dry_run: false,
-                    force_profile: false
+                    force_profile: false,
+                    proxy: false
                 }
             }
         ));
@@ -983,7 +1163,8 @@ mod tests {
                 command: SysCommands::Init {
                     preset: None,
                     dry_run: true,
-                    force_profile: false
+                    force_profile: false,
+                    proxy: false
                 }
             }
         ));
@@ -995,7 +1176,8 @@ mod tests {
                 command: SysCommands::Init {
                     preset: Some(ref preset),
                     dry_run: false,
-                    force_profile: false
+                    force_profile: false,
+                    proxy: false
                 }
             } if preset == "recommended"
         ));
@@ -1007,7 +1189,21 @@ mod tests {
                 command: SysCommands::Init {
                     preset: None,
                     dry_run: false,
-                    force_profile: true
+                    force_profile: true,
+                    proxy: false
+                }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "init", "--proxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Init {
+                    preset: None,
+                    dry_run: false,
+                    force_profile: false,
+                    proxy: true
                 }
             }
         ));
@@ -1027,7 +1223,8 @@ mod tests {
                 command: SysCommands::Init {
                     preset: Some(ref preset),
                     dry_run: true,
-                    force_profile: false
+                    force_profile: false,
+                    proxy: false
                 }
             } if preset == "recommended"
         ));
@@ -1042,6 +1239,26 @@ mod tests {
                 command: SysCommands::Status
             }
         ));
+    }
+
+    #[test]
+    fn cli_accepts_sys_update_options() {
+        let cli = Cli::try_parse_from(["shine", "sys", "update"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Update {
+                    item: None,
+                    verbose: false,
+                    proxy: false
+                }
+            }
+        ));
+        let cli = Cli::try_parse_from(["shine", "sys", "update", "neovim", "--verbose", "--proxy"])
+            .unwrap();
+        assert!(
+            matches!(cli.command, Commands::Sys { command: SysCommands::Update { item: Some(ref item), verbose: true, proxy: true } } if item == "neovim")
+        );
     }
 
     #[test]

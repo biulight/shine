@@ -1,0 +1,13 @@
+{
+  "name": "shine-tooling",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:ts": "bun test presets/app/clash-verge/build.test.ts",
+    "check:ts": "bun run typecheck && bun run test:ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^7.0.2"
+  }
+}

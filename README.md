@@ -196,6 +196,8 @@ shine sys init
 shine sys init --preset recommended
 shine sys init --dry-run
 shine sys status
+shine sys update
+shine sys update neovim --verbose
 ```
 
 `shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After successful item work, `shine` refreshes managed shell profile integration from Rust.
@@ -205,6 +207,9 @@ shine sys status
 - Without a TTY, `shine sys init` falls back to `default_profile`.
 - `shine sys init --dry-run` prints the resolved items, per-item script invocations, the internal profile update step, and script content without executing anything.
 - `shine sys status` shows the init items previously recorded for the current OS.
+- `shine sys update [ITEM] [--verbose] [--proxy]` is read-only: it checks only bootstrap software previously recorded by `shine sys init`, never installs or upgrades anything, and never changes the sys manifest or shell profile. `--proxy` routes checks through the preset proxy; on Windows it explicitly passes WinGet's `--proxy` option because WinGet ignores standard HTTP proxy environment variables. By default it shows verified package-manager updates and the exact upstream command to run. `--verbose` also shows current and manual-check-only items. Direct installers and user-owned Git configurations are intentionally reported as manual instead of guessed.
+
+`shine update` and `shine upgrade` continue to reconcile Shine-managed configuration and managed system resources. They do not upgrade third-party bootstrap software; copying and running a command printed by `shine sys update` is always the user's explicit decision.
 
 System init presets use this metadata shape:
 
@@ -237,7 +242,7 @@ Current built-in presets:
 
 When selected tools need shell integration, sys init installs managed `pre` and `post` profile loaders. The `pre` loader runs near the top of the user profile for PATH, Homebrew, and completion search path setup; the `post` loader runs near the end for Yazi, Starship, zoxide, Atuin, fzf, mise, aliases, and shell plugins. Managed profile files are merged so user edits inside them are preserved or reported for review.
 
-On Ubuntu and macOS, the managed `pre` profile also queries the interactive terminal background with OSC 11 and exports `SHINE_TERMINAL_THEME=light|dark`. It keeps bat aligned by setting `BAT_THEME` to `GitHub` for light backgrounds and `OneHalfDark` for dark backgrounds. Set `SHINE_SYNC_TERMINAL_THEME=0` before the managed profile loads to disable this behavior, or override the mapped themes with `SHINE_BAT_LIGHT_THEME` and `SHINE_BAT_DARK_THEME`. Failed or unsupported queries are skipped silently; macOS sys profile management continues to target zsh, while Ubuntu supports bash and zsh.
+On Ubuntu and macOS, the managed `pre` profile also syncs the terminal's light/dark theme via `shine theme sync`, exporting `SHINE_TERMINAL_THEME=light|dark` and setting `BAT_THEME` to `GitHub` for light backgrounds and `OneHalfDark` for dark backgrounds (override with `SHINE_BAT_LIGHT_THEME`/`SHINE_BAT_DARK_THEME`). Resolution tries, in order: an already-exported `SHINE_TERMINAL_THEME` (including the value `shine ssh` injects from your local terminal — see below), `COLORFGBG`, then a direct OSC 11 query with a total (not per-byte) read deadline. A `BAT_THEME` you've already set yourself is left untouched. Disable auto-sync with `sync_terminal_theme = false` in `config.toml` or `SHINE_SYNC_TERMINAL_THEME=0` (the env var always wins); sync manually anytime with `shine theme sync` regardless of that setting, or install the optional `shine-theme-sync` command via `shine shell install utils`. `shine ssh <host>` queries your local terminal directly before connecting, so it doesn't depend on the remote OSC query at all — see [docs/terminal-theme-sync-prd.md](docs/terminal-theme-sync-prd.md). macOS sys profile management continues to target zsh, while Ubuntu supports bash and zsh.
 
 ### Show app preset details
 
@@ -481,10 +486,32 @@ shine overlay show
 shine overlay unlink
 ```
 
-When the active preset source or overlay is managed by Git, Shine can safely fast-forward it:
+If you keep your overlay in a Git repository, you can let Shine manage the checkout for you instead of cloning it on every machine. Point the overlay at a Git URL and Shine clones it (`--depth 1`, no history) under `~/.shine/overlay` and keeps it mirrored to the remote tip:
 
 ```bash
-shine pull             # pull preset and overlay repositories
+shine overlay link --git https://github.com/you/shine-overlay.git   # optionally: --branch main
+shine overlay show      # shows the URL, branch, managed path, and clone status
+shine pull              # clones on first run, then force-mirrors to the latest commit
+```
+
+You can also just add the URL directly to `~/.shine/config.toml` and run `shine pull`:
+
+```toml
+presets_overlay_git = "https://github.com/you/shine-overlay.git"
+# presets_overlay_git_branch = "main"   # optional; defaults to the remote's default branch
+```
+
+This is ideal when one machine maintains the overlay and the rest only consume it: each device
+just needs the URL, never a manual `git clone`. Because the managed checkout is a read-only mirror,
+`shine pull` always resets it to match the remote (surviving rebases and force-pushes) and discards
+any local edits. If a pull fails (e.g. the remote is unreachable), the previous checkout is left
+intact and stays in use. A manually linked `overlay link <path>` takes precedence over a Git URL;
+the two are mutually exclusive.
+
+When the active preset source or a manually linked overlay is managed by Git, Shine also safely fast-forwards it:
+
+```bash
+shine pull             # sync managed overlay + fast-forward preset/overlay repositories
 shine update --pull    # pull first, then reload configuration and check status
 shine upgrade --pull   # pull first, then reload configuration and apply presets
 ```
@@ -531,7 +558,7 @@ shine upgrade --verbose  # include env-template check details
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.38.0+preview.abc1234`, while stable binaries continue to report `0.38.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.39.0+preview.abc1234`, while stable binaries continue to report `0.39.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -541,7 +568,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.38.0 sh install.sh
+SHINE_VERSION=0.39.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -549,13 +576,39 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.38.0"; .\install.ps1
+$env:SHINE_VERSION = "0.39.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
 ### SSH session file transfer
 
 `shine ssh` opens a normal interactive SSH session (it wraps the system `ssh` binary and reuses your `~/.ssh/config`) while also establishing a session-scoped transfer channel back to the machine you launched it from. `shine local download`/`upload`/`status` then use that channel from inside the session — no separate `scp`/`rsync` invocation needed.
+
+Selected values from the active local Shine environment can also be inherited by the remote login shell or command. Put Shine's options before the SSH destination; `KEY=ALIAS` renames the variable on the remote side:
+
+```bash
+shine ssh --with API_URL dev
+shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'
+shine ssh --with-secret API_TOKEN dev
+```
+
+`--with` reads only the exact plaintext `[env]` key and never decrypts `KEY_SECRET`. Decrypted values require the explicit `--with-secret KEY[=ALIAS]` form. Explicit values replace the remote process's inherited values, although remote login startup files may subsequently assign the same names again. Forwarded values are session-only and are not written to remote config files. Secrets become visible to the remote host and may also be readable from process arguments/environments by sufficiently privileged or same-user processes on either machine.
+
+For a Windows OpenSSH remote, opt in explicitly to its PowerShell wrapper. It safely sends the
+session hint, terminal theme, and selected values through an encoded command, preferring
+PowerShell 7 (`pwsh.exe`) and falling back to Windows PowerShell 5.1 (`powershell.exe`), rather than
+trying to run the POSIX `env ... sh -c` wrapper through `cmd.exe`:
+
+```bash
+shine ssh --remote-shell windows --with-secret GH_TOKEN intel.mac.local
+```
+
+Interactive Windows sessions load the selected PowerShell's normal profile, including Shine's
+managed PATH and source-command wrappers such as `setproxy`. An explicit remote command remains a
+no-profile invocation.
+
+This mode supports SSH environment injection only. It does not create a transfer tunnel, so
+`shine local download`, `upload`, and `status` are unavailable in that Windows-remote session.
 
 ```bash
 cd ~/work/frontend
@@ -574,7 +627,8 @@ Source/destination arguments are resolved by whichever side owns them: the first
 
 Both commands default to writing into the destination side's working directory under the source's file name, refuse to overwrite an existing destination unless `--force` is passed, and support `--dry-run` to preview the transfer without copying data. Progress is printed as a single overwritten line when attached to a terminal; piped/non-interactive runs get one final line instead. `shine local status` also works as a liveness check for the session when nothing is transferring.
 
-The local side of `shine local` (the machine you ran `shine ssh` from) also works on Windows; the remote host is always assumed to be Linux or macOS.
+The local side of `shine local` (the machine you ran `shine ssh` from) also works on Windows; its
+transfer protocol still requires a POSIX (Linux/macOS) remote host.
 
 ## Bundled Presets
 

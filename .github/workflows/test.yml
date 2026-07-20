@@ -14,8 +14,14 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
-      - name: Install Rust
-        run: rustup toolchain install stable --component llvm-tools-preview
+      - name: Install Rust and Bun with mise
+        uses: jdx/mise-action@v3
+        with:
+          version: 2026.7.7
+      - name: Install TypeScript dependencies
+        run: bun install --frozen-lockfile
+      - name: Check Bun TypeScript sources
+        run: bun run check:ts
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Install nextest

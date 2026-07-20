@@ -8,8 +8,8 @@ use tokio::fs;
 
 use super::discovery::ProjectConfig;
 use super::{
-    Config, DEFAULT_ENV_VARS, LEGACY_ENV_FILE, LEGACY_PROJECT_ENV_FILE,
-    LEGACY_PROJECT_FILES_REMOVAL_VERSION, PROJECT_ENV_FILE,
+    Config, DEFAULT_ENV_VARS, EnvOverrideKind, EnvOverrideSource, LEGACY_ENV_FILE,
+    LEGACY_PROJECT_ENV_FILE, LEGACY_PROJECT_FILES_REMOVAL_VERSION, PROJECT_ENV_FILE,
 };
 
 #[derive(serde::Deserialize)]
@@ -120,7 +120,7 @@ impl Config {
         let Some(overrides) = read_env_file(&env_path).await? else {
             return Ok(());
         };
-        self.apply_env_overrides(overrides);
+        self.apply_env_overrides(env_path, EnvOverrideKind::Global, false, overrides);
         Ok(())
     }
 
@@ -128,10 +128,19 @@ impl Config {
         let Some(overlay_dir) = self.active_presets_overlay_dir() else {
             return Ok(());
         };
-        let Some(overrides) = read_env_file(&overlay_dir.join(PROJECT_ENV_FILE)).await? else {
+        let env_path = overlay_dir.join(PROJECT_ENV_FILE);
+        let Some(overrides) = read_env_file(&env_path).await? else {
             return Ok(());
         };
-        self.apply_env_overrides(overrides);
+        // If no manual overlay dir is configured, `active_presets_overlay_dir()`
+        // can only have resolved to the shine-managed Git checkout.
+        let is_managed_overlay = self.presets_overlay_dir_override.is_none();
+        self.apply_env_overrides(
+            env_path,
+            EnvOverrideKind::Overlay,
+            is_managed_overlay,
+            overrides,
+        );
         Ok(())
     }
 
@@ -159,11 +168,27 @@ impl Config {
             );
         }
 
-        self.apply_env_overrides(overrides);
+        self.apply_env_overrides(env_path, EnvOverrideKind::Project, false, overrides);
         Ok(())
     }
 
-    fn apply_env_overrides(&mut self, overrides: EnvOverrides) {
+    fn apply_env_overrides(
+        &mut self,
+        path: std::path::PathBuf,
+        kind: EnvOverrideKind,
+        is_managed_overlay: bool,
+        overrides: EnvOverrides,
+    ) {
+        for key in overrides.values.keys() {
+            self.env_override_sources.insert(
+                key.clone(),
+                EnvOverrideSource {
+                    path: path.clone(),
+                    kind,
+                    is_managed_overlay,
+                },
+            );
+        }
         self.env.extend(overrides.values);
         self.env_descriptions.extend(overrides.descriptions);
     }
@@ -172,6 +197,56 @@ impl Config {
 #[doc(hidden)]
 pub async fn validate_env_override_file(path: &Path) -> Result<()> {
     read_env_file(path).await.map(|_| ())
+}
+
+/// Set (`Some`) or remove (`None`) one key in a `shine.env.toml`-shaped override
+/// file, preserving comments/formatting of unrelated entries and the
+/// `description` of a `{ value, description }` entry being updated. Creates the
+/// file (and its parent directory) if it doesn't exist yet.
+pub async fn write_env_override_entry(path: &Path, key: &str, value: Option<&str>) -> Result<()> {
+    let existing = match fs::read_to_string(path).await {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let mut target: toml::Table = if existing.is_empty() {
+        toml::Table::new()
+    } else {
+        toml::from_str(&existing).with_context(|| format!("parsing {}", path.display()))?
+    };
+
+    match value {
+        // Always target a plain string, mirroring `Config::env`'s always-flat
+        // `BTreeMap<String, String>` shape. `sync_table` itself detects when the
+        // *document* still has the detailed `{ value, description }` form and
+        // updates only the `value` sub-field, preserving `description` — the
+        // same mechanism `Config::save()` relies on for config.toml `[env]`.
+        Some(value) => {
+            target.insert(key.to_string(), toml::Value::String(value.to_string()));
+        }
+        None => {
+            target.remove(key);
+        }
+    }
+
+    let new_content = if existing.is_empty() {
+        toml::to_string_pretty(&target).context("serializing env override file")?
+    } else {
+        let mut doc: toml_edit::DocumentMut = existing
+            .parse()
+            .context("parsing existing env override file for comment preservation")?;
+        utils::migration::sync_table(doc.as_table_mut(), &target);
+        doc.to_string()
+    };
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    crate::persist::atomic_write(path, new_content.as_bytes())
+        .await
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 async fn read_env_file(path: &Path) -> Result<Option<EnvOverrides>> {
@@ -551,6 +626,238 @@ mod tests {
         assert_eq!(
             config.env.get("OVERLAY_ONLY").map(String::as_str),
             Some("yes")
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn global_override_records_key_source() {
+        let dir = make_temp_dir().await;
+        fs::write(dir.join(PROJECT_ENV_FILE), "TOKEN = \"global\"\n")
+            .await
+            .unwrap();
+
+        let mut config = config_in(&dir);
+        config.apply_global_env_override().await.unwrap();
+
+        let source = config.env_override_source("TOKEN").unwrap();
+        assert_eq!(source.path, dir.join(PROJECT_ENV_FILE));
+        assert_eq!(source.kind, EnvOverrideKind::Global);
+        assert!(!source.is_managed_overlay);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_overlay_override_records_unmanaged_source() {
+        let dir = make_temp_dir().await;
+        let overlay_dir = dir.join("overlay");
+        fs::create_dir_all(&overlay_dir).await.unwrap();
+        fs::write(overlay_dir.join(PROJECT_ENV_FILE), "TOKEN = \"overlay\"\n")
+            .await
+            .unwrap();
+
+        let mut config = config_in(&dir);
+        config.presets_overlay_dir_override = Some(overlay_dir.clone());
+        config.apply_overlay_env_override().await.unwrap();
+
+        let source = config.env_override_source("TOKEN").unwrap();
+        assert_eq!(source.path, overlay_dir.join(PROJECT_ENV_FILE));
+        assert_eq!(source.kind, EnvOverrideKind::Overlay);
+        assert!(
+            !source.is_managed_overlay,
+            "a manual overlay dir must not be reported as the managed mirror"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn managed_git_overlay_override_records_managed_source() {
+        let dir = make_temp_dir().await;
+        let overlay_dir = dir.join("overlay");
+        fs::create_dir_all(&overlay_dir).await.unwrap();
+        fs::write(overlay_dir.join(PROJECT_ENV_FILE), "TOKEN = \"overlay\"\n")
+            .await
+            .unwrap();
+
+        let mut config = config_in(&dir);
+        // No manual override configured; the managed checkout existing on disk
+        // is what `active_presets_overlay_dir()` falls back to.
+        config.managed_overlay_dir = Some(overlay_dir.clone());
+        config.apply_overlay_env_override().await.unwrap();
+
+        let source = config.env_override_source("TOKEN").unwrap();
+        assert_eq!(source.path, overlay_dir.join(PROJECT_ENV_FILE));
+        assert_eq!(source.kind, EnvOverrideKind::Overlay);
+        assert!(
+            source.is_managed_overlay,
+            "the shine-managed Git overlay mirror must be flagged as managed"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn later_override_layer_wins_the_recorded_source_for_shared_key() {
+        let dir = make_temp_dir().await;
+        let overlay_dir = dir.join("overlay");
+        let project_dir = dir.join("project");
+        fs::create_dir_all(&overlay_dir).await.unwrap();
+        fs::create_dir_all(&project_dir).await.unwrap();
+        fs::write(dir.join(PROJECT_ENV_FILE), "SHARED = \"global\"\n")
+            .await
+            .unwrap();
+        fs::write(overlay_dir.join(PROJECT_ENV_FILE), "SHARED = \"overlay\"\n")
+            .await
+            .unwrap();
+        fs::write(project_dir.join(PROJECT_ENV_FILE), "SHARED = \"project\"\n")
+            .await
+            .unwrap();
+
+        let mut config = config_in(&dir);
+        config.presets_overlay_dir_override = Some(overlay_dir.clone());
+        config.apply_global_env_override().await.unwrap();
+        config.apply_overlay_env_override().await.unwrap();
+        assert_eq!(
+            config.env_override_source("SHARED").unwrap().path,
+            overlay_dir.join(PROJECT_ENV_FILE),
+            "overlay layer must overwrite the global layer's recorded source"
+        );
+
+        config
+            .apply_project_env_override(&ProjectConfig {
+                path: project_dir.join(PROJECT_CONFIG_FILE),
+                root: project_dir.clone(),
+                is_legacy: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            config.env_override_source("SHARED").unwrap().path,
+            project_dir.join(PROJECT_ENV_FILE),
+            "project layer must overwrite the overlay layer's recorded source"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn config_toml_only_key_has_no_override_source() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.env.insert("PLAIN".into(), "value".into());
+        config.apply_global_env_override().await.unwrap();
+        config.apply_overlay_env_override().await.unwrap();
+
+        assert!(config.env_override_source("PLAIN").is_none());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_env_override_entry_inserts_new_plain_key() {
+        let dir = make_temp_dir().await;
+        let path = dir.join(PROJECT_ENV_FILE);
+
+        write_env_override_entry(&path, "TOKEN", Some("secret"))
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&path).await.unwrap();
+        let table: toml::Table = toml::from_str(&content).unwrap();
+        assert_eq!(
+            table.get("TOKEN").and_then(toml::Value::as_str),
+            Some("secret")
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_env_override_entry_updates_existing_plain_key_and_keeps_comments() {
+        let dir = make_temp_dir().await;
+        let path = dir.join(PROJECT_ENV_FILE);
+        // The comment guards an *unchanged* key: sync_table only preserves
+        // formatting/comments for entries it doesn't have to touch.
+        fs::write(
+            &path,
+            "TOKEN = \"old\"\n# keep this comment\nOTHER = \"unchanged\"\n",
+        )
+        .await
+        .unwrap();
+
+        write_env_override_entry(&path, "TOKEN", Some("new"))
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&path).await.unwrap();
+        assert!(content.contains("# keep this comment"));
+        assert!(content.contains("TOKEN = \"new\""));
+        assert!(content.contains("OTHER = \"unchanged\""));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_env_override_entry_updates_value_and_preserves_description() {
+        let dir = make_temp_dir().await;
+        let path = dir.join(PROJECT_ENV_FILE);
+        fs::write(
+            &path,
+            "TOKEN = { value = \"old\", description = \"Internal token\" }\n",
+        )
+        .await
+        .unwrap();
+
+        write_env_override_entry(&path, "TOKEN", Some("new"))
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&path).await.unwrap();
+        assert!(content.contains("TOKEN = { value = \"new\", description = \"Internal token\" }"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_env_override_entry_removes_key() {
+        let dir = make_temp_dir().await;
+        let path = dir.join(PROJECT_ENV_FILE);
+        fs::write(&path, "TOKEN = \"secret\"\nOTHER = \"unchanged\"\n")
+            .await
+            .unwrap();
+
+        write_env_override_entry(&path, "TOKEN", None)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&path).await.unwrap();
+        let table: toml::Table = toml::from_str(&content).unwrap();
+        assert!(!table.contains_key("TOKEN"));
+        assert_eq!(
+            table.get("OTHER").and_then(toml::Value::as_str),
+            Some("unchanged")
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_env_override_entry_creates_missing_file_and_parent_dir() {
+        let dir = make_temp_dir().await;
+        let path = dir.join("nested").join(PROJECT_ENV_FILE);
+
+        write_env_override_entry(&path, "TOKEN", Some("secret"))
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(&path).await.unwrap();
+        let table: toml::Table = toml::from_str(&content).unwrap();
+        assert_eq!(
+            table.get("TOKEN").and_then(toml::Value::as_str),
+            Some("secret")
         );
 
         fs::remove_dir_all(&dir).await.unwrap();

@@ -33,5 +33,6 @@ pub mod status;
 pub mod sys;
 pub mod task;
 pub mod test_support;
+pub mod theme;
 pub mod update_check;
 pub mod version;

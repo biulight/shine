@@ -293,6 +293,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn presets_overlay_git_round_trips_through_save() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.presets_overlay_git = Some("https://example.com/overlay.git".to_string());
+        config.presets_overlay_git_branch = Some("main".to_string());
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        assert!(content.contains("presets_overlay_git"));
+
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert_eq!(
+            loaded.presets_overlay_git.as_deref(),
+            Some("https://example.com/overlay.git")
+        );
+        assert_eq!(loaded.presets_overlay_git_branch.as_deref(), Some("main"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn gpg_key_id_round_trips_through_save() {
         let dir = make_temp_dir().await;
         let mut config = config_in(&dir);
@@ -318,6 +340,42 @@ mod tests {
         let content = fs::read_to_string(&config.config_path).await.unwrap();
         let loaded: Config = toml::from_str(&content).unwrap();
         assert!(loaded.allow_app_hooks);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_terminal_theme_false_round_trips_through_save() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.sync_terminal_theme = false;
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        assert!(content.contains("sync_terminal_theme"));
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert!(!loaded.sync_terminal_theme);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sync_terminal_theme_true_default_is_absent_from_toml() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir); // sync_terminal_theme defaults to true
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let parsed: toml::Table = toml::from_str(&content).unwrap();
+        assert!(
+            !parsed.contains_key("sync_terminal_theme"),
+            "default true value must not clutter a fresh config.toml"
+        );
+        // An old config.toml with no such key at all must still default true.
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert!(loaded.sync_terminal_theme);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

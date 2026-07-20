@@ -196,6 +196,8 @@ shine sys init
 shine sys init --preset recommended
 shine sys init --dry-run
 shine sys status
+shine sys update
+shine sys update neovim --verbose
 ```
 
 `shine sys init` 会检测当前操作系统，读取 `presets/sys/<os>/shine.toml`，解析出待执行的安装项，然后对每个选中的 item 分别调用一次当前平台的初始化脚本。所有 item 成功完成后，`shine` 会在 Rust 侧刷新受管 shell profile 集成。
@@ -205,6 +207,9 @@ shine sys status
 - 非 TTY 环境下，`shine sys init` 会回退到 `default_profile`
 - `shine sys init --dry-run` 会输出解析后的项目、逐项脚本调用命令、内部 profile 更新步骤，以及脚本内容，但不会执行
 - `shine sys status` 会显示当前操作系统此前记录过的初始化项目
+- `shine sys update [ITEM] [--verbose] [--proxy]` 是只读命令：它只检查此前由 `shine sys init` 记录的引导软件，绝不会安装或升级任何软件，也不会修改 sys manifest 或 shell profile。`--proxy` 会通过预设代理执行检查；在 Windows 上会显式传递 WinGet 的 `--proxy` 参数，因为 WinGet 会忽略标准 HTTP 代理环境变量。默认只显示由包管理器确认的可用更新及可直接复制的上游升级命令；`--verbose` 还会显示已是最新和只能手动检查的项目。对于直接安装器和用户自行维护的 Git 配置，命令会明确标记为需要手动处理，而不会猜测版本。
+
+`shine update` 与 `shine upgrade` 仍只负责协调 Shine 管理的配置和受管系统资源，不会升级第三方引导软件。复制并运行 `shine sys update` 输出的命令始终是用户自己的明确决定。
 
 系统初始化预设使用如下元数据结构：
 
@@ -237,7 +242,7 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "nvim found"
 
 当所选工具需要 shell 集成时，sys init 会安装受管的 `pre` 和 `post` profile loader。`pre` loader 会放在用户 profile 靠前位置，用于 PATH、Homebrew 和补全搜索路径；`post` loader 会放在靠后位置，用于 Yazi、Starship、zoxide、Atuin、fzf、mise、别名和 shell 插件。受管 profile 文件会被合并，用户在其中的修改会保留或提示需要检查。
 
-在 Ubuntu 和 macOS 上，受管的 `pre` profile 还会通过 OSC 11 查询交互式终端的背景色，并导出 `SHINE_TERMINAL_THEME=light|dark`。它会同步设置 bat：浅色背景使用 `GitHub`，深色背景使用 `OneHalfDark`。在受管 profile 加载前设置 `SHINE_SYNC_TERMINAL_THEME=0` 可关闭此功能；使用 `SHINE_BAT_LIGHT_THEME` 和 `SHINE_BAT_DARK_THEME` 可自定义对应主题。查询失败或终端不支持时会静默跳过；macOS 的 sys profile 仍仅管理 zsh，Ubuntu 支持 bash 和 zsh。
+在 Ubuntu 和 macOS 上，受管的 `pre` profile 还会通过 `shine theme sync` 同步终端的明暗主题，导出 `SHINE_TERMINAL_THEME=light|dark`，并设置 bat：浅色背景使用 `GitHub`，深色背景使用 `OneHalfDark`（可用 `SHINE_BAT_LIGHT_THEME`/`SHINE_BAT_DARK_THEME` 覆盖）。解析顺序依次是：已导出的 `SHINE_TERMINAL_THEME`（包含 `shine ssh` 从本地终端注入的值，见下文）、`COLORFGBG`，最后是使用总截止时间（而非逐字节超时）读取的 OSC 11 直接查询。若用户已自行设置过 `BAT_THEME`，则保持不变。可在 `config.toml` 中设置 `sync_terminal_theme = false` 或设置 `SHINE_SYNC_TERMINAL_THEME=0`（环境变量始终优先）关闭自动同步；无论该开关如何，都可随时用 `shine theme sync` 手动同步，或通过 `shine shell install utils` 安装可选的 `shine-theme-sync` 命令。`shine ssh <host>` 会在连接前直接查询本地终端，因此完全不依赖远端的 OSC 查询——详见 [docs/terminal-theme-sync-prd.md](terminal-theme-sync-prd.md)。macOS 的 sys profile 仍仅管理 zsh，Ubuntu 支持 bash 和 zsh。
 
 ### 查看应用预设详情
 
@@ -481,10 +486,30 @@ shine overlay show
 shine overlay unlink
 ```
 
-如果当前 preset 来源或 overlay 由 Git 管理，可以让 Shine 安全地快进拉取：
+如果你的 overlay 保存在 Git 仓库中，可以让 Shine 自动维护这份检出，而不必在每台机器上手动克隆。为 overlay 指定一个 Git 地址，Shine 会以 `--depth 1`（不含历史）克隆到 `~/.shine/overlay`，并始终镜像到远端最新提交：
 
 ```bash
-shine pull             # 拉取 preset 与 overlay 仓库
+shine overlay link --git https://github.com/you/shine-overlay.git   # 可选：--branch main
+shine overlay show      # 显示 URL、分支、托管路径与克隆状态
+shine pull              # 首次运行时克隆，之后强制镜像到最新提交
+```
+
+也可以直接在 `~/.shine/config.toml` 中写入地址，再执行 `shine pull`：
+
+```toml
+presets_overlay_git = "https://github.com/you/shine-overlay.git"
+# presets_overlay_git_branch = "main"   # 可选；默认使用远端默认分支
+```
+
+这特别适合「一台机器维护 overlay、其余设备只消费」的场景：每台设备只需要这个地址，
+无需手动 `git clone`。由于托管检出是只读镜像，`shine pull` 始终会将其重置为与远端一致
+（可安全应对 rebase、force-push），并丢弃任何本地改动。如果拉取失败（例如远端不可达），
+之前的检出会保持不变并继续使用。手动 `overlay link <path>` 优先于 Git 地址，两者互斥。
+
+如果当前 preset 来源或手动关联的 overlay 由 Git 管理，Shine 也会安全地快进拉取：
+
+```bash
+shine pull             # 同步托管 overlay，并快进 preset / overlay 仓库
 shine update --pull    # 先拉取并重新加载配置，再检查状态
 shine upgrade --pull   # 先拉取并重新加载配置，再应用 preset
 ```
@@ -526,7 +551,7 @@ shine upgrade --pull  # 拉取 Git 管理的 preset 后再应用配置
 shine upgrade --verbose  # 包含 env 模板检查细节
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.38.0+preview.abc1234`；稳定版则继续显示 `0.38.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.39.0+preview.abc1234`；稳定版则继续显示 `0.39.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -536,7 +561,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.38.0 sh install.sh
+SHINE_VERSION=0.39.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -544,13 +569,38 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.38.0"; .\install.ps1
+$env:SHINE_VERSION = "0.39.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
 ### SSH 会话内文件传输
 
 `shine ssh` 会打开一个正常的交互式 SSH 会话（它包装了系统自带的 `ssh`，并复用你的 `~/.ssh/config`），同时建立一条回连到发起端机器的会话专属传输通道。会话内的 `shine local download`/`upload`/`status` 就通过这条通道工作——不需要再单独调用 `scp`/`rsync`。
+
+还可以把本机当前有效 Shine 环境中明确选择的值注入远端登录 shell 或命令。Shine 自己的选项必须写在 SSH 目标之前；`KEY=ALIAS` 可在远端重命名变量：
+
+```bash
+shine ssh --with API_URL dev
+shine ssh --with LOCAL_NAME=REMOTE_NAME dev 'printenv REMOTE_NAME'
+shine ssh --with-secret API_TOKEN dev
+```
+
+`--with` 只读取完全同名的明文 `[env]` 键，绝不会自动解密 `KEY_SECRET`；解密后的值必须通过显式的 `--with-secret KEY[=ALIAS]` 注入。显式值会覆盖远端进程继承到的同名值，但远端登录 shell 的启动文件仍可能再次赋值。变量仅存在于本次会话，不会写入远端配置文件。密钥会暴露给远端主机，也可能被任一端具有足够权限或同用户的进程从进程参数/环境中读取。
+
+Windows OpenSSH 远端需要显式选择 PowerShell 包装器；它通过
+编码命令安全注入会话提示、终端主题和所选变量，优先使用 PowerShell 7（`pwsh.exe`），
+未安装时回退到 Windows PowerShell 5.1（`powershell.exe`），不会把 POSIX 的 `env ... sh -c`
+发送给 `cmd.exe`：
+
+```bash
+shine ssh --remote-shell windows --with-secret GH_TOKEN intel.mac.local
+```
+
+交互式 Windows 会话会加载所选 PowerShell 的正常 profile，因此 Shine 管理的 PATH 和
+`setproxy` 等 source-command wrapper 都可用；显式远端命令仍以 no-profile 模式执行。
+
+此模式只支持 SSH 环境注入，不创建传输隧道；该 Windows 远端会话中不支持
+`shine local download`、`upload` 或 `status`。
 
 ```bash
 cd ~/work/frontend
@@ -568,7 +618,7 @@ shine local status                            # 会话 ID、连接状态、本�
 
 两个命令都会默认把内容写入目标端工作目录下、与源同名的位置；默认拒绝覆盖已存在的目标，除非传入 `--force`；并支持 `--dry-run` 预览传输而不实际拷贝数据。连接终端时进度以单行覆写方式显示；管道/非交互场景则只输出最终一行结果。没有传输任务时，`shine local status` 也可以当作会话的存活检测使用。
 
-`shine local` 的本机侧（运行 `shine ssh` 的那台机器）在 Windows 上同样可用；远端主机始终假定为 Linux 或 macOS。
+`shine local` 的本机侧（运行 `shine ssh` 的那台机器）在 Windows 上同样可用；其传输协议远端仍要求 Linux 或 macOS。
 
 ## 内置预设
 

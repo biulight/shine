@@ -1,5 +1,6 @@
 mod annotation;
 mod build;
+mod hooks;
 mod info;
 mod install;
 mod json_merge;
@@ -8,7 +9,7 @@ mod report;
 mod uninstall;
 mod upgrade;
 
-pub use build::handle_build;
+pub use build::{handle_build, handle_unbuild};
 pub use info::{handle_info, handle_list};
 pub use install::handle_install;
 pub use metadata::{

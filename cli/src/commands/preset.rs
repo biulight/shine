@@ -22,12 +22,29 @@ pub struct LinkCommand {
     pub create: bool,
 }
 
+#[derive(Args, Debug)]
+pub struct OverlayLinkCommand {
+    /// Directory to use as the presets overlay. Mutually exclusive with --git.
+    #[arg(value_name = "PATH", conflicts_with = "git")]
+    pub path: Option<PathBuf>,
+    /// Git URL for a shine-managed overlay. shine clones it (`--depth 1`) under
+    /// `~/.shine/overlay` and keeps it mirrored to the remote tip on `shine pull`.
+    #[arg(long, value_name = "URL")]
+    pub git: Option<String>,
+    /// Branch to track for --git. Defaults to the remote's default branch.
+    #[arg(long, value_name = "BRANCH", requires = "git")]
+    pub branch: Option<String>,
+    /// Create the directory if it does not already exist (path mode only).
+    #[arg(long)]
+    pub create: bool,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum OverlayCommands {
-    /// Set the presets overlay directory in the active config.
-    Link(LinkCommand),
-    /// Remove the presets overlay directory from the active config.
+    /// Set the presets overlay in the active config (local PATH or --git URL).
+    Link(OverlayLinkCommand),
+    /// Remove the presets overlay from the active config.
     Unlink,
-    /// Show the active presets overlay directory.
+    /// Show the active presets overlay.
     Show,
 }

@@ -1,0 +1,47 @@
+description = "Clash Verge Rev subscription enhancements: layers a LAN proxy, policy groups, and remote rule-providers onto the active subscription without touching it."
+dest = "~/.shine/clash-verge"
+list_mode = "files"
+
+# `shine app build clash-verge` runs the artifact script to refresh the mihomo
+# rule-providers (and thus re-pull the LAN-served rule lists) via the external
+# controller — the analog of `surge-cli reload`. `teardown` (via
+# `shine app unbuild clash-verge`, and best-effort on `shine app uninstall`)
+# just prints how to clear the subscription enhancements in CVR, since CVR owns
+# those bindings in its private store and shine never writes them.
+#
+# runtime = "bun" runs the scripts via `bun <script>`, so — unlike surge's
+# macOS-only bash artifact — clash-verge's artifact works on macOS/Windows/Linux
+# (CVR is cross-platform). bun is an external prerequisite (https://bun.sh).
+#
+# The real logic (rendering the active subscription's four bound enhancement
+# files + refreshing rule-providers) lives in the artifact because only it receives the `[env]` table and
+# SHINE_APP_OVERLAY_DIR. The hooks below do NOT run that logic directly — they
+# re-invoke `shine app build clash-verge` so it runs automatically after
+# `shine app install`/`shine upgrade` changes merge.yaml. (No recursion: build
+# fires neither install nor upgrade hooks.) Requires `shine` on PATH; external
+# presets need allow_app_hooks = true. Note this only fires when merge.yaml
+# changes — rule edits go through `upload_surge`, not this preset's files.
+post_install = [
+  { command = "shine", args = ["app", "build", "clash-verge"], show_output = true },
+]
+post_upgrade = [
+  { command = "shine", args = ["app", "build", "clash-verge"], show_output = true },
+]
+
+[artifact]
+script = "build.ts"
+teardown = "unbuild.ts"
+runtime = "bun"
+
+# The single composite enhancement payload, installed verbatim (plain Copy — no
+# templating, so the file is always valid YAML). build.ts splits its keys into
+# CVR's bound Merge / Rules / Proxies / Groups files. The copy shipped here is
+# an inert, commented EXAMPLE (empty by default) — put your real values in a presets overlay under the same
+# name (`app/clash-verge/merge.yaml`), hardcoded directly, exactly like the Surge
+# preset's `local-*.conf`. Open the four enhancement editors on the active
+# subscription once; build.ts resolves those bindings through CVR's profiles.yaml
+# without modifying it. Rule content thereafter auto-refreshes via the providers.
+[[files]]
+source = "merge.yaml"
+target = "merge.yaml"
+description = "CVR subscription enhancements (proxies + proxy-groups + rule-providers + prepend-rules), rendered into the active profile's four bound editor files."

@@ -12,7 +12,7 @@ use discovery::resolve_config_presets_path;
 use env_layer::deserialize_env_values;
 
 pub use crate::home::{full_expand, full_expand_with_home, tilde_expand};
-pub use env_layer::validate_env_override_file;
+pub use env_layer::{validate_env_override_file, write_env_override_entry};
 
 const LEGACY_ENV_FILE: &str = "env.toml";
 const GLOBAL_CONFIG_FILE: &str = "config.toml";
@@ -38,6 +38,14 @@ pub fn default_env_map() -> BTreeMap<String, String> {
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect()
+}
+
+fn default_sync_terminal_theme() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -84,6 +92,21 @@ pub struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub presets_overlay_dir_override: Option<PathBuf>,
+    /// Optional Git URL for a shine-managed overlay. When set (and no explicit
+    /// `presets_overlay_dir` is configured), shine owns the overlay checkout at
+    /// `<shine_dir>/overlay`, cloning it `--depth 1` on `shine pull` and keeping
+    /// it as an always-latest mirror of the remote tip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presets_overlay_git: Option<String>,
+    /// Optional branch to track for `presets_overlay_git`. When unset, the
+    /// remote's default branch is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presets_overlay_git_branch: Option<String>,
+    /// Resolved `<shine_dir>/overlay` path when `presets_overlay_git` is set.
+    /// Computed at load time, never serialized. `None` when no Git overlay is
+    /// configured.
+    #[serde(skip)]
+    managed_overlay_dir: Option<PathBuf>,
     /// Optional override for the default destination root used by `shine app install`
     /// when a preset file carries no `shine-dest:` annotation.
     /// Defaults to `~/.config` when not set.
@@ -103,6 +126,17 @@ pub struct Config {
     /// Embedded presets may run hooks without this opt-in.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_app_hooks: bool,
+    /// Whether the managed sys `pre` profile auto-syncs the terminal theme
+    /// (`shine theme sync --auto`) on interactive shell startup. Defaults to
+    /// `true`. The `SHINE_SYNC_TERMINAL_THEME` env var overrides this at
+    /// runtime regardless of value (docs/terminal-theme-sync-prd.md §5).
+    /// Deliberately not project-overridable: this is a terminal/session-level
+    /// toggle, not something that varies per project.
+    #[serde(
+        default = "default_sync_terminal_theme",
+        skip_serializing_if = "is_true"
+    )]
+    pub sync_terminal_theme: bool,
     /// Path where `shine self install` last copied the binary.
     /// When set, `shine self upgrade` will try to sync the new binary there automatically.
     #[serde(
@@ -142,6 +176,41 @@ pub struct Config {
     /// Per-variable descriptions read from detailed `[env]` entries.
     #[serde(skip)]
     pub env_descriptions: BTreeMap<String, String>,
+    /// Which env override file (if any) currently supplies each key's effective
+    /// value. Only override files populate this — `config.toml [env]` layers
+    /// never do, since a plain write there is always effective unless shadowed
+    /// by one of these. Used to detect when `env set`/`encrypt`/`delete` would
+    /// otherwise silently write a value that an override file keeps shadowing.
+    #[serde(skip)]
+    pub env_override_sources: BTreeMap<String, EnvOverrideSource>,
+}
+
+/// Identifies the override file (global/overlay/project `shine.env.toml`) that
+/// currently supplies a given env key's effective value, if any.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnvOverrideSource {
+    pub path: PathBuf,
+    /// Which override layer `path` belongs to. Drives the source labels in
+    /// `shine env show`; `is_managed_overlay` further distinguishes the two
+    /// `Overlay` variants.
+    pub kind: EnvOverrideKind,
+    /// `true` when `path` is inside the shine-managed Git overlay checkout
+    /// (force-mirrored, read-only per ADR 0010) rather than the global/project
+    /// override file or a manual overlay directory.
+    pub is_managed_overlay: bool,
+}
+
+/// Which override-file layer supplied an env key's effective value. Ordered
+/// low-to-high by precedence (a later layer shadows an earlier one), matching
+/// the apply order in `Config::load_or_init`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EnvOverrideKind {
+    /// Global `<shine_dir>/shine.env.toml`.
+    Global,
+    /// Overlay `<overlay_dir>/shine.env.toml` (managed-git or manual overlay).
+    Overlay,
+    /// Project `<project_root>/shine.env.toml` (or legacy `.env.toml`).
+    Project,
 }
 
 #[derive(Clone, Debug)]
@@ -197,9 +266,13 @@ impl Config {
             shell_type: ShellType::default(),
             presets_dir_override: None,
             presets_overlay_dir_override: None,
+            presets_overlay_git: None,
+            presets_overlay_git_branch: None,
+            managed_overlay_dir: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
             allow_app_hooks: false,
+            sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_key_id: None,
             secret_backend: None,
@@ -207,6 +280,7 @@ impl Config {
             age_identity: None,
             env: default_env_map(),
             env_descriptions: BTreeMap::new(),
+            env_override_sources: BTreeMap::new(),
         }
     }
 
@@ -238,6 +312,25 @@ impl Config {
         }
     }
 
+    /// Return a clone of this config with the Git-managed overlay source
+    /// replaced. Setting a URL clears any manual `presets_overlay_dir` override
+    /// so the two overlay modes never coexist; clearing the URL leaves the
+    /// managed checkout on disk untouched.
+    pub fn with_presets_overlay_git(self, url: Option<String>, branch: Option<String>) -> Self {
+        let managed_overlay_dir = url.as_ref().map(|_| self.shine_dir.join("overlay"));
+        Self {
+            presets_overlay_dir_override: if url.is_some() {
+                None
+            } else {
+                self.presets_overlay_dir_override
+            },
+            presets_overlay_git_branch: branch,
+            presets_overlay_git: url,
+            managed_overlay_dir,
+            ..self
+        }
+    }
+
     /// Return a clone of this config with `presets_overlay_dir_override` replaced.
     pub fn with_presets_overlay_dir_override(self, value: Option<PathBuf>) -> Self {
         Self {
@@ -246,8 +339,32 @@ impl Config {
         }
     }
 
+    /// Which override file (if any) currently supplies `key`'s effective value.
+    /// `None` means the key resolves purely from `config.toml [env]` (global or
+    /// project), so writing there via `env set`/`encrypt`/`delete` is effective.
+    pub fn env_override_source(&self, key: &str) -> Option<&EnvOverrideSource> {
+        self.env_override_sources.get(key)
+    }
+
     pub fn active_presets_overlay_dir(&self) -> Option<&Path> {
-        self.presets_overlay_dir_override.as_deref()
+        if let Some(dir) = self.presets_overlay_dir_override.as_deref() {
+            return Some(dir);
+        }
+        // A Git-managed overlay only counts as active once its checkout exists
+        // on disk. Until the first `shine pull` clones it, resolution falls back
+        // to the base presets source.
+        self.managed_overlay_dir
+            .as_deref()
+            .filter(|dir| dir.exists())
+    }
+
+    /// Git source for a shine-managed overlay, if configured: `(url, branch,
+    /// managed_dir)`. Returned regardless of whether the checkout exists yet,
+    /// so `shine pull` can clone it on first use.
+    pub fn overlay_git_source(&self) -> Option<(&str, Option<&str>, &Path)> {
+        let url = self.presets_overlay_git.as_deref()?;
+        let dir = self.managed_overlay_dir.as_deref()?;
+        Some((url, self.presets_overlay_git_branch.as_deref(), dir))
     }
 
     /// Resolve a preset file with the overlay taking precedence over the base source.
@@ -266,6 +383,16 @@ impl Config {
         if let Some(path) = self.presets_overlay_dir_override.as_deref() {
             self.presets_overlay_dir_override = Some(resolve_config_presets_path(path, config_dir));
         }
+    }
+
+    /// Populate `managed_overlay_dir` from `presets_overlay_git`. Must be called
+    /// after `shine_dir` is resolved. The managed overlay always lives at
+    /// `<shine_dir>/overlay` so it follows `SHINE_CONFIG_DIR` automatically.
+    fn resolve_managed_overlay_dir(&mut self) {
+        self.managed_overlay_dir = self
+            .presets_overlay_git
+            .as_ref()
+            .map(|_| self.shine_dir.join("overlay"));
     }
 }
 
@@ -305,9 +432,13 @@ impl Default for Config {
             shell_type: ShellType::default(),
             presets_dir_override: None,
             presets_overlay_dir_override: None,
+            presets_overlay_git: None,
+            presets_overlay_git_branch: None,
+            managed_overlay_dir: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
             allow_app_hooks: false,
+            sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_key_id: None,
             secret_backend: None,
@@ -315,6 +446,7 @@ impl Default for Config {
             age_identity: None,
             env: default_env_map(),
             env_descriptions: BTreeMap::new(),
+            env_override_sources: BTreeMap::new(),
         }
     }
 }
@@ -353,6 +485,61 @@ mod tests {
         let dir = std::env::temp_dir().join("shine-test-bin-dir");
         let config = Config::new_for_test(&dir);
         assert_eq!(config.bin_dir(), dir.join("bin"));
+    }
+
+    #[test]
+    fn git_overlay_is_inactive_until_checkout_exists() {
+        let dir = std::env::temp_dir().join(format!("shine-overlay-git-{}", uuid::Uuid::new_v4()));
+        let config = Config::new_for_test(&dir)
+            .with_presets_overlay_git(Some("https://example.com/o.git".to_string()), None);
+
+        // The source is recorded regardless of on-disk state.
+        let (url, branch, managed) = config.overlay_git_source().unwrap();
+        assert_eq!(url, "https://example.com/o.git");
+        assert_eq!(branch, None);
+        assert_eq!(managed, dir.join("overlay"));
+
+        // But the overlay only becomes active once its checkout exists on disk.
+        assert!(config.active_presets_overlay_dir().is_none());
+        std::fs::create_dir_all(dir.join("overlay")).unwrap();
+        assert_eq!(
+            config.active_presets_overlay_dir(),
+            Some(dir.join("overlay").as_path())
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn manual_overlay_path_takes_precedence_over_git() {
+        let dir = std::env::temp_dir().join(format!("shine-overlay-prec-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("overlay")).unwrap();
+        let manual = dir.join("manual");
+        let config = Config::new_for_test(&dir)
+            .with_presets_overlay_git(Some("https://example.com/o.git".to_string()), None)
+            .with_presets_overlay_dir_override(Some(manual.clone()));
+
+        assert_eq!(config.active_presets_overlay_dir(), Some(manual.as_path()));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn setting_git_overlay_clears_manual_path() {
+        let dir = std::env::temp_dir().join("shine-overlay-clear");
+        let config = Config::new_for_test(&dir)
+            .with_presets_overlay_dir_override(Some(dir.join("manual")))
+            .with_presets_overlay_git(
+                Some("https://example.com/o.git".to_string()),
+                Some("dev".to_string()),
+            );
+
+        assert!(config.presets_overlay_dir_override.is_none());
+        assert_eq!(
+            config.presets_overlay_git.as_deref(),
+            Some("https://example.com/o.git")
+        );
+        assert_eq!(config.overlay_git_source().unwrap().1, Some("dev"));
     }
 
     #[test]

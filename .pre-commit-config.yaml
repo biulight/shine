@@ -38,6 +38,20 @@ repos:
         language: rust
         files: \.*$
         pass_filenames: false
+      - id: bun-check
+        name: Bun TypeScript check
+        description: Type-check and test Bun TypeScript sources.
+        entry: bash -c 'mise exec -- bun run check:ts'
+        language: system
+        files: ^(mise\.toml|package\.json|tsconfig\.json|bun\.lock|presets/app/clash-verge/.*\.ts)$
+        pass_filenames: false
+      - id: mise-check
+        name: mise config check
+        description: Check the project toolchain configuration format.
+        entry: bash -c 'mise fmt --check'
+        language: system
+        files: ^mise\.toml$
+        pass_filenames: false
       - id: cargo-check
         name: cargo check
         description: Check the package for errors.

@@ -1,4 +1,6 @@
 /target
+/node_modules
+/mise.local.toml
 .idea
 .DS_Store
 .tmp-*

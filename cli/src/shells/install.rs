@@ -27,6 +27,16 @@ needs_source = false
 
 # PowerShell scripts are also supported:
 # source = "my_tool.ps1"
+
+# Cross-platform Bun helpers (requires `bun` on PATH; shine never installs it):
+# [[files]]
+# source = "my_tool.ts"     # .ts / .js / .mts / .mjs
+# target = "mytool"
+# runtime = "bun"
+# platforms = ["unix", "windows"]
+# description = "What mytool does."  # or a `// ...` header at the top of my_tool.ts
+# transforms = ["template"] # opt into @@VAR@@ env substitution (static, needs `shine upgrade`)
+# env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]  # inject shine values at launch; read via Bun.env
 "#;
 
 pub async fn handle_init_template(force: bool) -> Result<()> {
@@ -283,6 +293,7 @@ fn build_script_pairs(
                     source_path: source,
                     rendered_path: rendered,
                     display_name: format!("{}/{}", cat.name, file.command_name),
+                    transforms: file.transforms.clone(),
                 }
             })
         })
@@ -1108,6 +1119,142 @@ mod tests {
         assert!(
             !config.bin_dir().join("extra_tool").exists(),
             "upgrade must not install preset-only scripts"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_bun_preset_installs_launcher_and_uninstall_removes_it() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n",
+        )
+        .await
+        .unwrap();
+        // A non-executable .ts source: bun launchers do not require the exec bit.
+        fs::write(cat_dir.join("tool.ts"), b"console.log('hi')\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        let launcher = config.bin_dir().join("mytool");
+        assert!(launcher.exists(), "bun launcher should be installed");
+        assert!(!launcher.is_symlink(), "bun launcher is a regular file");
+        let content = fs::read_to_string(&launcher).await.unwrap();
+        assert!(content.contains("exec bun"));
+        assert!(content.contains(&cat_dir.join("tool.ts").display().to_string()));
+        assert!(
+            !config.bin_dir().join("tool").exists(),
+            "command should use the target rename, not the .ts stem"
+        );
+
+        handle_uninstall(&config, Some("custom"), false, false)
+            .await
+            .unwrap();
+        assert!(
+            !launcher.exists(),
+            "managed bun launcher must be removed on uninstall"
+        );
+        assert!(
+            cat_dir.join("tool.ts").exists(),
+            "external source must be preserved"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_bun_preset_with_env_wraps_launcher_in_shine_env_run() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\nenv = [\"API_URL\", \"SERVICE_TOKEN=API_TOKEN\"]\n",
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join("tool.ts"), b"console.log(Bun.env.API_URL)\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        let launcher = fs::read_to_string(config.bin_dir().join("mytool"))
+            .await
+            .unwrap();
+        assert!(launcher.contains("command -v shine"));
+        assert!(launcher.contains(
+            "exec shine env run --no-workspace --with 'API_URL' --with 'SERVICE_TOKEN=API_TOKEN' -- bun "
+        ));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_bun_preset_with_template_transform_targets_rendered_copy() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n",
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join("tool.ts"), b"const host = '@@PROXY_HOST@@'\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config
+            .env
+            .insert("PROXY_HOST".into(), "proxy.example".into());
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        let rendered = config.rendered_dir().join("shell/custom/tool.ts");
+        assert!(
+            rendered.exists(),
+            "template transform should render the .ts"
+        );
+        assert!(
+            fs::read_to_string(&rendered)
+                .await
+                .unwrap()
+                .contains("proxy.example"),
+            "rendered bun script should have @@PROXY_HOST@@ substituted"
+        );
+        let launcher = fs::read_to_string(config.bin_dir().join("mytool"))
+            .await
+            .unwrap();
+        assert!(
+            launcher.contains(&rendered.display().to_string()),
+            "launcher must target the rendered copy: {launcher}"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();

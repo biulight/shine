@@ -16,6 +16,10 @@ pub struct AppCategory {
     pub files: Vec<AppFile>,
     pub list_mode: AppListMode,
     pub post_upgrade: Vec<AppHook>,
+    /// Hooks run after `shine app install`/`reinstall` when at least one file in
+    /// this category actually changed — the install-time counterpart to
+    /// `post_upgrade` (which only fires on `shine upgrade`).
+    pub post_install: Vec<AppHook>,
     // Tracks whether the category came from an explicit metadata file vs. auto-collection;
     // reserved for future upgrade/list logic.
     #[allow(dead_code)]
@@ -42,9 +46,27 @@ pub struct AppHook {
     pub show_output: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ArtifactRuntime {
+    /// The script is executed directly (`Command::new(script)`), relying on its
+    /// shebang. Unix-only in practice — fine for macOS-only presets (e.g. surge).
+    #[default]
+    Native,
+    /// The script is run via `bun <script>`, so it works on macOS/Windows/Linux
+    /// (like shine's bun shell presets). `bun` is an external prerequisite.
+    Bun,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppArtifact {
     pub script: String,
+    /// Optional companion script that reverses `script`'s side-effects. Run
+    /// explicitly via `shine app unbuild <id>` and implicitly (best-effort)
+    /// during `shine app uninstall`. Shares `build`'s full env contract.
+    pub teardown: Option<String>,
+    /// How `script`/`teardown` are launched. `Bun` makes the artifact
+    /// cross-platform; `Native` execs the file directly (Unix-only).
+    pub runtime: ArtifactRuntime,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +88,7 @@ struct CategoryToml {
     dest: DestToml,
     list_mode: Option<ListModeToml>,
     post_upgrade: Option<HookSpecToml>,
+    post_install: Option<HookSpecToml>,
     artifact: Option<ArtifactToml>,
     files: Option<Vec<FileToml>>,
 }
@@ -73,6 +96,17 @@ struct CategoryToml {
 #[derive(Debug, Clone, Deserialize)]
 struct ArtifactToml {
     script: String,
+    #[serde(default)]
+    teardown: Option<String>,
+    #[serde(default)]
+    runtime: Option<ArtifactRuntimeToml>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ArtifactRuntimeToml {
+    Native,
+    Bun,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -190,7 +224,7 @@ fn resolve_install_strategy(file: &FileToml, context: &str) -> Result<AppInstall
     }
 }
 
-fn resolve_hooks(hook: Option<HookSpecToml>, context: &str) -> Result<Vec<AppHook>> {
+fn resolve_hooks(hook: Option<HookSpecToml>, field: &str, context: &str) -> Result<Vec<AppHook>> {
     let Some(hook) = hook else {
         return Ok(Vec::new());
     };
@@ -199,12 +233,12 @@ fn resolve_hooks(hook: Option<HookSpecToml>, context: &str) -> Result<Vec<AppHoo
         HookSpecToml::Multiple(hooks) => hooks,
     };
     if hooks.is_empty() {
-        bail!("{context}: post_upgrade must not be empty");
+        bail!("{context}: {field} must not be empty");
     }
     let mut resolved = Vec::with_capacity(hooks.len());
     for hook in hooks {
         if hook.command.trim().is_empty() {
-            bail!("{context}: post_upgrade.command must not be empty");
+            bail!("{context}: {field}.command must not be empty");
         }
         resolved.push(AppHook {
             command: hook.command,
@@ -222,9 +256,40 @@ fn resolve_artifact(artifact: Option<ArtifactToml>, context: &str) -> Result<Opt
     if artifact.script.trim().is_empty() {
         bail!("{context}: artifact.script must not be empty");
     }
+    if let Some(teardown) = &artifact.teardown
+        && teardown.trim().is_empty()
+    {
+        bail!("{context}: artifact.teardown must not be empty");
+    }
+    let runtime = match artifact.runtime.unwrap_or(ArtifactRuntimeToml::Native) {
+        ArtifactRuntimeToml::Native => ArtifactRuntime::Native,
+        ArtifactRuntimeToml::Bun => {
+            // A bun artifact is run via `bun <script>`, so the script (and any
+            // teardown) must be a bun source file.
+            for name in
+                std::iter::once(artifact.script.as_str()).chain(artifact.teardown.as_deref())
+            {
+                if !has_bun_extension(name) {
+                    bail!(
+                        "{context}: artifact runtime = \"bun\" requires a .ts/.js/.mts/.mjs script, got '{name}'"
+                    );
+                }
+            }
+            ArtifactRuntime::Bun
+        }
+    };
     Ok(Some(AppArtifact {
         script: artifact.script,
+        teardown: artifact.teardown,
+        runtime,
     }))
+}
+
+fn has_bun_extension(name: &str) -> bool {
+    matches!(
+        Path::new(name).extension().and_then(|e| e.to_str()),
+        Some("ts" | "js" | "mts" | "mjs")
+    )
 }
 
 fn default_list_mode(has_explicit_files: bool) -> AppListMode {
@@ -297,7 +362,8 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
     if let Some(bytes) = presets::read_asset_bytes(&metadata_path) {
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
-        let post_upgrade = resolve_hooks(parsed.post_upgrade, &metadata_path)?;
+        let post_upgrade = resolve_hooks(parsed.post_upgrade, "post_upgrade", &metadata_path)?;
+        let post_install = resolve_hooks(parsed.post_install, "post_install", &metadata_path)?;
         let artifact = resolve_artifact(parsed.artifact, &metadata_path)?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
@@ -364,6 +430,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                 .map(Into::into)
                 .unwrap_or_else(|| default_list_mode(has_explicit_files)),
             post_upgrade,
+            post_install,
             uses_metadata: true,
             has_explicit_files,
             artifact,
@@ -394,6 +461,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
             .collect(),
         list_mode: AppListMode::Category,
         post_upgrade: Vec::new(),
+        post_install: Vec::new(),
         uses_metadata: false,
         has_explicit_files: false,
         artifact: None,
@@ -410,8 +478,16 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
             .with_context(|| format!("reading metadata: {}", metadata_path.display()))?;
         let parsed = parse_category_toml(name, &bytes)?;
         let has_explicit_files = parsed.files.is_some();
-        let post_upgrade =
-            resolve_hooks(parsed.post_upgrade, &metadata_path.display().to_string())?;
+        let post_upgrade = resolve_hooks(
+            parsed.post_upgrade,
+            "post_upgrade",
+            &metadata_path.display().to_string(),
+        )?;
+        let post_install = resolve_hooks(
+            parsed.post_install,
+            "post_install",
+            &metadata_path.display().to_string(),
+        )?;
         let artifact = resolve_artifact(parsed.artifact, &metadata_path.display().to_string())?;
         let Some(dest_root) = parsed.dest.select_for_current_platform(name)? else {
             return Ok(None);
@@ -489,6 +565,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                 .map(Into::into)
                 .unwrap_or_else(|| default_list_mode(has_explicit_files)),
             post_upgrade,
+            post_install,
             uses_metadata: true,
             has_explicit_files,
             artifact,
@@ -521,6 +598,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         files,
         list_mode: AppListMode::Category,
         post_upgrade: Vec::new(),
+        post_install: Vec::new(),
         uses_metadata: false,
         has_explicit_files: false,
         artifact: None,
@@ -580,6 +658,12 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
     }
     resolve_hooks(
         parsed.post_upgrade.clone(),
+        "post_upgrade",
+        &format!("app/{name}/shine.toml"),
+    )?;
+    resolve_hooks(
+        parsed.post_install.clone(),
+        "post_install",
         &format!("app/{name}/shine.toml"),
     )?;
     resolve_artifact(parsed.artifact.clone(), &format!("app/{name}/shine.toml"))?;
@@ -649,12 +733,15 @@ fn normalize_relative(path: &str) -> Result<PathBuf> {
 }
 
 fn parse_legacy_description(content: &[u8]) -> Option<String> {
-    let description = presets::parse_script_description(content);
-    if description.is_empty() {
-        None
-    } else {
-        Some(description.join(" "))
-    }
+    // Only the first comment line is the one-line summary. A collected data file
+    // (e.g. an overlay's merge.yaml) can carry a long multi-paragraph `#` header;
+    // joining the whole block used to leak it as the listed category description
+    // when the base ships no shine.toml (see docs/kb/lessons.md 2026-07-17).
+    // parse_script_description keeps blank comment lines as empty strings, so the
+    // first non-empty entry is the summary line.
+    presets::parse_script_description(content)
+        .into_iter()
+        .find(|line| !line.trim().is_empty())
 }
 
 #[cfg(test)]
@@ -739,6 +826,10 @@ mod tests {
                     "local-rules.conf".to_string(),
                     "local-rules.conf".to_string()
                 ),
+                (
+                    "local-proxy-groups.conf".to_string(),
+                    "local-proxy-groups.conf".to_string()
+                ),
             ]
         );
         assert_eq!(
@@ -764,7 +855,7 @@ source = "config.toml"
 "#,
         )
         .unwrap();
-        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "post_upgrade", "sample").unwrap();
         assert_eq!(hooks.len(), 1);
         assert_eq!(hooks[0].command, "/bin/echo");
         assert_eq!(hooks[0].args, vec!["updated"]);
@@ -787,7 +878,7 @@ source = "config.toml"
 "#,
         )
         .unwrap();
-        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "post_upgrade", "sample").unwrap();
         assert_eq!(hooks.len(), 1);
         assert!(hooks[0].show_output);
     }
@@ -808,7 +899,7 @@ source = "config.toml"
 "#,
         )
         .unwrap();
-        let hooks = resolve_hooks(parsed.post_upgrade, "sample").unwrap();
+        let hooks = resolve_hooks(parsed.post_upgrade, "post_upgrade", "sample").unwrap();
         assert_eq!(hooks.len(), 2);
         assert_eq!(hooks[0].args, vec!["updated"]);
         assert_eq!(hooks[1].args, vec!["reloaded"]);
@@ -833,8 +924,114 @@ source = "config.toml"
         assert_eq!(
             artifact,
             Some(AppArtifact {
-                script: "build.sh".to_string()
+                script: "build.sh".to_string(),
+                teardown: None,
+                runtime: ArtifactRuntime::Native,
             })
+        );
+    }
+
+    #[test]
+    fn artifact_teardown_parses() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[artifact]
+script = "build.sh"
+teardown = "unbuild.sh"
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let artifact = resolve_artifact(parsed.artifact, "sample").unwrap();
+        assert_eq!(
+            artifact,
+            Some(AppArtifact {
+                script: "build.sh".to_string(),
+                teardown: Some("unbuild.sh".to_string()),
+                runtime: ArtifactRuntime::Native,
+            })
+        );
+    }
+
+    #[test]
+    fn artifact_empty_teardown_is_rejected() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[artifact]
+script = "build.sh"
+teardown = "  "
+
+[[files]]
+source = "config.toml"
+"#,
+        );
+        let err = parsed.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("artifact.teardown must not be empty")
+        );
+    }
+
+    #[test]
+    fn post_install_hook_parses_single_and_array() {
+        let single = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_install = { command = "/bin/echo", args = ["installed"] }
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let hooks = resolve_hooks(single.post_install, "post_install", "sample").unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0].command, "/bin/echo");
+        assert_eq!(hooks[0].args, vec!["installed"]);
+
+        let multiple = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_install = [
+  { command = "/bin/echo", args = ["a"] },
+  { command = "/bin/echo", args = ["b"] },
+]
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap();
+        let hooks = resolve_hooks(multiple.post_install, "post_install", "sample").unwrap();
+        assert_eq!(hooks.len(), 2);
+    }
+
+    #[test]
+    fn post_install_empty_command_is_rejected() {
+        let err = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+post_install = { command = "  " }
+
+[[files]]
+source = "config.toml"
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("post_install.command must not be empty")
         );
     }
 
@@ -876,15 +1073,131 @@ source = "config.toml"
     }
 
     #[test]
+    fn artifact_runtime_defaults_native_and_bun_requires_bun_extension() {
+        let parse = |body: &str| -> CategoryToml {
+            toml::from_str(&format!(
+                "description = \"S\"\ndest = \"~/x\"\n\n{body}\n\n[[files]]\nsource = \"c\"\n"
+            ))
+            .unwrap()
+        };
+
+        // Default (no runtime) is Native.
+        let native = resolve_artifact(parse("[artifact]\nscript = \"build.sh\"").artifact, "s")
+            .unwrap()
+            .unwrap();
+        assert_eq!(native.runtime, ArtifactRuntime::Native);
+
+        // runtime = "bun" with a .ts script parses to Bun.
+        let bun = resolve_artifact(
+            parse(
+                "[artifact]\nscript = \"build.ts\"\nteardown = \"unbuild.ts\"\nruntime = \"bun\"",
+            )
+            .artifact,
+            "s",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(bun.runtime, ArtifactRuntime::Bun);
+
+        // runtime = "bun" with a non-bun script (or teardown) is rejected.
+        assert!(
+            resolve_artifact(
+                parse("[artifact]\nscript = \"build.sh\"\nruntime = \"bun\"").artifact,
+                "s"
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_artifact(
+                parse(
+                    "[artifact]\nscript = \"build.ts\"\nteardown = \"unbuild.sh\"\nruntime = \"bun\""
+                )
+                .artifact,
+                "s"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn embedded_surge_declares_artifact_script() {
         let categories = load_embedded_categories(Some("surge")).unwrap();
         let surge = categories.iter().find(|c| c.name == "surge").unwrap();
         assert_eq!(
             surge.artifact,
             Some(AppArtifact {
-                script: "build.sh".to_string()
+                script: "build.sh".to_string(),
+                teardown: Some("unbuild.sh".to_string()),
+                runtime: ArtifactRuntime::Native,
             })
         );
+    }
+
+    #[test]
+    fn embedded_clash_verge_installs_plain_merge_profile() {
+        let categories = load_embedded_categories(Some("clash-verge")).unwrap();
+        let clash = categories.iter().find(|c| c.name == "clash-verge").unwrap();
+        assert!(clash.uses_metadata);
+        assert_eq!(
+            clash.destination_root.as_deref(),
+            Some("~/.shine/clash-verge")
+        );
+
+        assert_eq!(clash.files.len(), 1);
+        let file = &clash.files[0];
+        assert_eq!(file.source_rel, std::path::Path::new("merge.yaml"));
+        assert_eq!(file.target_rel, std::path::Path::new("merge.yaml"));
+        // No templating: merge.yaml is installed verbatim (plain Copy) so the file
+        // stays valid YAML. Real values are hardcoded in the overlay copy.
+        assert!(file.transforms.is_empty());
+        assert_eq!(file.install_strategy, AppInstallStrategy::Copy);
+
+        let merge = include_str!("../../../presets/app/clash-verge/merge.yaml");
+        assert!(merge.contains("# proxies:"));
+        assert!(merge.contains("# proxy-groups:"));
+        assert!(merge.contains("# prepend-rules:"));
+
+        // post_install/post_upgrade re-invoke `shine app build clash-verge` so the
+        // artifact writes the bound CVR subscription Extend Config after an
+        // install/upgrade that changes merge.yaml, then refreshes once applied.
+        let build_hook = vec![AppHook {
+            command: "shine".to_string(),
+            args: vec![
+                "app".to_string(),
+                "build".to_string(),
+                "clash-verge".to_string(),
+            ],
+            show_output: true,
+        }];
+        assert_eq!(clash.post_install, build_hook);
+        assert_eq!(clash.post_upgrade, build_hook);
+        assert_eq!(
+            clash.artifact,
+            Some(AppArtifact {
+                script: "build.ts".to_string(),
+                teardown: Some("unbuild.ts".to_string()),
+                runtime: ArtifactRuntime::Bun,
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_description_is_first_comment_line_only() {
+        // A long multi-paragraph header (like an overlay's merge.yaml) must not
+        // leak as the listed description — only the first comment line is used.
+        let yaml = b"# Clash Verge Rev merge profile. Summary line.\n#\n# A second paragraph\n# that keeps going and going.\nproxies:\n  - name: X\n";
+        assert_eq!(
+            parse_legacy_description(yaml).as_deref(),
+            Some("Clash Verge Rev merge profile. Summary line.")
+        );
+        // The `# shine-dest:` annotation is skipped; a single-line summary is unchanged.
+        let gitconfig = b"# shine-dest: ~/.gitconfig\n# Personal git configuration.\n\n[pull]\n";
+        assert_eq!(
+            parse_legacy_description(gitconfig).as_deref(),
+            Some("Personal git configuration.")
+        );
+        // No comment header -> no description.
+        assert_eq!(parse_legacy_description(b"proxies: []\n"), None);
     }
 
     #[test]

@@ -55,4 +55,10 @@ pub enum AppCommands {
         #[arg(value_name = "APP_ID")]
         app_id: String,
     },
+    /// Run the artifact teardown script declared by an app preset (reverses `build`)
+    Unbuild {
+        /// App preset category whose artifact teardown script should run (e.g. surge)
+        #[arg(value_name = "APP_ID")]
+        app_id: String,
+    },
 }

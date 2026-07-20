@@ -3,6 +3,260 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-19 — Interactive Windows SSH skipped the managed PowerShell profile
+
+- **Symptom**: `shine ssh --remote-shell windows <host>` opened PowerShell 7, but Shine-installed
+  source commands such as `setproxy` were missing.
+- **Root cause**: the encoded-command wrapper launched the final interactive `pwsh.exe` child with
+  `-NoProfile`. `setproxy` is intentionally a wrapper function registered by Shine's managed
+  PowerShell profile rather than a standalone executable, so the command could not exist in that
+  session.
+- **Fix**: keep the outer selection bootstrap profile-free, but let the final interactive child
+  load its normal profile; retain `-NoProfile` for explicit non-interactive remote commands.
+- **Rule**: an interactive shell wrapper must preserve normal startup-file semantics unless the
+  user explicitly requests isolation. Bootstrap isolation does not justify suppressing the final
+  user's profile.
+
+## 2026-07-19 — Windows split-DNS upgraded an already-current NRPT rule
+
+- **Symptom**: `shine upgrade` always requested elevation, recreated the shine-owned Windows
+  split-DNS NRPT rule, and counted it as updated even when its namespace and name servers already
+  matched the active configuration.
+- **Root cause**: the Windows branch of `split_dns_up_to_date` unconditionally returned false, and
+  `apply_split_dns` unconditionally ran the elevated remove-and-create operation. The NRPT cmdlet
+  exposes `Namespace` as an array and `NameServers` as `IPAddress` objects, not the scalar strings
+  shown in its formatted table output.
+- **Fix**: query `Get-DnsClientNrptRule` without elevation, project those properties into stable
+  string arrays, parse only rules with shine's exact comment marker, and treat the resource as
+  current only when exactly one rule has the desired namespace and ordered name-server list. Query
+  or parse failures fail closed to the existing elevated repair path.
+- **Rule**: convergence must validate the live managed resource before assuming a platform needs a
+  write; a managed receipt alone does not prove current system state.
+
+## 2026-07-19 — POSIX SSH wrapper failed on Windows OpenSSH remotes
+
+- **Symptom**: `shine ssh --with-secret GH_TOKEN <windows-host>` sent `env ... sh -c` to the
+  Windows remote and failed with `'env' is not recognized as an internal or external command`.
+- **Root cause**: the command wrapper was selected from the local transfer architecture instead of
+  the target command shell; Windows OpenSSH normally routes remote commands through `cmd.exe`.
+- **Fix**: add explicit `--remote-shell windows`, which uses an UTF-16LE Base64-encoded PowerShell
+  wrapper and intentionally does not create a POSIX transfer channel.
+- **Rule**: remote command syntax must be chosen by the target shell. Never send a POSIX wrapper to
+  Windows CMD, and never insert secret values into a cross-shell command-line syntax layer.
+
+## 2026-07-18 — CVR Global Extend Config replaced subscription arrays and broke its own rules
+
+- **Symptom**: `shine app reinstall clash-verge` wrote all three rule-providers but their refreshes
+  returned HTTP 404. Saving Global Extend Config then failed validation because an original
+  subscription rule targeted `Proxies`, which no longer existed.
+- **Root cause**: CVR 2.5.1 treats global `proxies` / `proxy-groups` as whole-key replacements and
+  removed global prepend/append support. The preset wrote fixed `profiles/Merge.yaml`, erasing the
+  subscription groups at synthesis time; CVR also did not hot-reload that externally written file,
+  so the earlier provider refresh ran against stale runtime config.
+- **Fix**: split the composite source across the active subscription's bound Merge/Rules/Proxies/
+  Groups files; render arrays into the editor-native `{ prepend, append, delete }` shape; never fall
+  back to Global Extend Config; after a changed write, wait for profile reselection before refresh.
+- **Rule**: third-party "merge" scopes are not interchangeable. Verify array semantics and reload
+  behavior on the supported app version; resolve opaque per-profile filenames through the app's
+  binding index, but never mutate that index or guess a global filename. Compare app-reformatted
+  YAML semantically, not byte-for-byte, or every in-app save looks like a new change. Providers
+  fetching an internal URL must declare `proxy: DIRECT`; otherwise a valid direct URL can fail as
+  EOF when fetched through the subscription proxy. If that hostname relies on split DNS, mirror
+  the suffix either in Merge's `dns.nameserver-policy` with CVR DNS Override disabled, or in
+  Override's own Advanced Nameserver Policy when it remains enabled. Mihomo does not consume
+  Windows NRPT, and CVR applies its generated `dns_config.yaml` after Merge, replacing the entire
+  `dns` map. A Windows-side HTTP 200 does not prove mihomo resolves the same address; verify with
+  the controller's `/dns/query` endpoint.
+
+## 2026-07-18 — `sys init --proxy` had no effect on Windows (winget ignores proxy env vars)
+
+- **Symptom**: `shine sys init --proxy` routed macOS/Ubuntu downloads through the local proxy but
+  did nothing on Windows — the platform the feature was requested for — so installs still failed
+  behind a firewall.
+- **Root cause**: the first cut (commit `6a0ce96`) only injected the standard proxy env vars
+  (`http_proxy`/`https_proxy`/`all_proxy`) into the init-script subprocess. `curl`/`apt`/`brew`/
+  `rustup` honor those, but Windows `init.ps1` installs everything via **winget, which ignores
+  `http_proxy`/`https_proxy` entirely** — it only accepts `winget install --proxy <uri>`, and that
+  CLI option is *disabled by default* (needs a one-time admin `winget settings --enable
+  ProxyCommandLineOptions`). Compounding it, `Install-WinGetPackage` never checked winget's exit
+  code (a native exe's nonzero exit does not trip PowerShell's `ErrorActionPreference=Stop`), so a
+  proxy-rejected install still reported `installed`.
+- **Fix**: `build_proxy_env_vars` also exports `SHINE_SYS_PROXY` (the explicit URL signal), and
+  `init.ps1` reads it to pass `winget install --proxy`, best-effort enabling the CLI option and
+  checking `$LASTEXITCODE` to surface the admin remediation on failure.
+- **Rule**: env-var proxying is not universal — verify the *actual downloader* honors it. winget
+  needs `--proxy` + an admin-enabled setting, not `http_proxy`. And always check a native exe's
+  exit code in PowerShell; `ErrorActionPreference=Stop` does not.
+
+## 2026-07-19 — `winget upgrade --id` is not an update availability check
+
+- **Symptom**: `shine sys update --proxy` installed a ZeroTier update while supposedly checking
+  for updates.
+- **Root cause**: the first Windows checker used `winget upgrade --id <id>` as though it were a
+  scoped query. That command performs the upgrade; the proxy merely made its network access work.
+- **Fix**: use the documented read-only `winget list --upgrade-available --exact --id <id>` query
+  and only print `winget upgrade --exact --id <id>` for the user to run explicitly.
+- **Rule**: never use a package manager's mutation verb to inspect availability, even when its
+  output looks list-like. Verify the command's side effects in the upstream documentation first.
+
+## 2026-07-17 — `app list` leaked a whole comment block as a category description
+
+- **Symptom**: `shine app list` on a machine whose base binary predates the `clash-verge` preset
+  showed the *entire* multi-paragraph `#` header of the overlay's `merge.yaml` as the category
+  description (a one-line wall), while a machine whose presets include `clash-verge/shine.toml`
+  showed the clean `description`.
+- **Root cause**: with no `shine.toml` for the category, the legacy auto-collect path derives the
+  description from each file's leading comment block via `parse_script_description`, and
+  `parse_legacy_description` joined the *whole* block with spaces (no first-line truncation, no
+  extension filter). A data file like `merge.yaml` uses `#` comments, so its long header was parsed
+  and dumped verbatim by `apps/info.rs handle_list`.
+- **Fix**: `parse_legacy_description` now returns only the first non-empty comment line (the
+  summary), matching how single-line legacy presets (`git`, `starship`) already read.
+- **Rule**: an auto-derived one-line description must take only the first comment line — never join
+  a whole `#` block. A preset's real description belongs in `shine.toml`; the comment-header
+  fallback is a last resort and must stay one line. (The cross-platform *difference* was really a
+  stale binary: a machine missing the embedded `clash-verge/shine.toml` falls to this fallback.)
+
+## 2026-07-16 — OSC 11 reply leaks in full: macOS `poll` returns `POLLNVAL` on `/dev/tty`
+
+Follow-up to the 2026-07-14 entry. That fix (total-deadline read in `cli/src/theme/osc.rs`) cured
+the *fragmented-tail* leak but left a second, distinct one that reproduces on Ghostty (macOS): the
+**whole** reply leaks — `\033]11;rgb:ffff/ffff/ffff\033\\` with the leading `\033]` intact, not
+just the tail. It took **two** independent fixes; the first was necessary but not sufficient, and
+the second was the real blocker.
+
+- **Symptom**: every fresh Ghostty login shell prints `^[]11;rgb:…^[\` before the first prompt;
+  `shine theme sync` also reports "could not determine terminal theme". The full sequence (leading
+  `\033]` present) means the read loop consumed **zero** bytes — unlike 2026-07-14, where the
+  consumed head made `\033]` absent.
+- **Cause 1 (necessary): canonical mode.** `EchoGuard::disable` cleared `ECHO` but not `ICANON`,
+  so the tty stayed in canonical (line) mode. An OSC 11 reply has **no newline**, and the
+  canonical line discipline never marks a newline-less line readable — so `select`/`poll`/`read`
+  can't see it. Fixed by `EchoGuard` → `TtyQueryGuard`, which clears `ECHO | ICANON` and sets
+  `VMIN=1`/`VTIME=0` (in non-canonical mode those `c_cc` slots alias `VEOF`/`VEOL`; leaving them
+  inherits `VEOF`=4 as `VMIN` and stalls fragmented reads until 4 bytes accrue).
+- **Cause 2 (the real blocker): macOS `poll(2)` on `/dev/tty`.** Even with `ICANON` off the leak
+  persisted, because the read loop waited for readability with `poll(2)` and required
+  `revents & POLLIN`. On macOS, `poll` on `/dev/tty` returns **`POLLNVAL`** (revents `= 32`,
+  `POLLIN` unset) *even though the fd is readable* — a long-standing Darwin bug. So the loop broke
+  on its first iteration and read nothing. Fixed by waiting with `select(2)` instead
+  (`wait_readable`), which reports tty readability correctly on both macOS and Linux.
+- **How it was measured** (not inferred — cf. the 2026-07-14 meta-rule): a `tty.setcbreak` probe
+  against the live Ghostty tty read the full 25-byte reply in ~0.3 ms with `select`; a `poll` probe
+  that *checked revents* showed `revents=POLLNVAL, POLLIN=False`. The mistake that cost a round:
+  an earlier `poll` probe read the fd whenever poll returned *any* event and so "passed",
+  masking the missing `POLLIN`. Always inspect `revents`, don't just test "poll returned".
+- **Why the tests missed both**: the `matrix_*` tests drive the loop over a `UnixStream` socket
+  pair — no line discipline (so canonical mode never applied) and no tty (so the macOS
+  `poll`/`POLLNVAL` behavior never applied). The `openpty` regression test
+  (`read_loop_reads_newline_free_response_through_pty`) exercises canonical mode on a real pty, but
+  even a pty **slave** does not reproduce the `/dev/tty`-specific `POLLNVAL`; that path is only
+  observable against a real controlling terminal, so it stays covered by this lesson, not a test.
+- **Rule**: reading a terminal-control reply needs **both** (a) non-canonical mode (`ICANON` off —
+  control replies carry no newline) and (b) `select(2)`, not `poll(2)`, to wait for readability —
+  macOS `poll` is unreliable on `/dev/tty`. And when probing a syscall's behavior, assert on its
+  actual output flags (`revents`), never on "the call returned something".
+
+## 2026-07-15 — `env set`/`encrypt` silently wrote a value an override file kept shadowing
+
+- **Symptom**: `shine env encrypt --from KEY` (or `env set KEY value`) reported success and
+  wrote into `config.toml [env]`, but the effective value of `KEY` never changed when an
+  env override file (`shine.env.toml` — global, active overlay, or project) already defined
+  it.
+- **Root cause**: override files are merged strictly above **both** `config.toml [env]`
+  layers by design (`config/load.rs`: *"Environment override files deliberately sit above
+  both TOML layers"*), but `env set`/`encrypt`/`delete` had no awareness of that and always
+  wrote into whichever `config.toml` was active for the cwd. The write succeeded but was
+  dead on arrival — the override file kept winning at read time.
+- **Why precedence itself was not changed**: per
+  [ADR 0010](decisions/0010-git-managed-overlay.md), a shine-managed Git overlay exists
+  specifically so a value authored once on the maintaining device reliably wins on every
+  consuming machine, overriding whatever stale value a local `config.toml` holds. Flipping
+  overlay-vs-config.toml precedence would defeat that guarantee for every other key.
+- **Fix**: `Config` now tracks, per env key, which override file (if any) currently supplies
+  its effective value (`Config::env_override_sources` / `env_override_source()`, populated
+  in `apply_*_env_override`). `env set`/`encrypt`/`delete` consult it before writing: refuse
+  with a clear "this write would have no effect, X currently wins" error by default; `--force`
+  writes directly into that override file instead (`write_env_override_entry`, comment- and
+  description-preserving via the same `utils::migration::sync_table` `Config::save()` uses),
+  and warns loudly when the winning file is the shine-managed overlay mirror, since that
+  write is discarded on the next `shine pull`.
+- **Rule**: a `set`/`delete`-shaped command must never report success for a write that a
+  higher-precedence layer will keep shadowing — either make the write land where it's
+  actually effective, or refuse and say why.
+
+## 2026-07-14 — OSC 11 response tail leaks when the reply arrives fragmented
+
+Supersedes the 2026-07-13 entry that blamed tty echo. That diagnosis was wrong and its fix
+(`6f23c6b9`) does not work — the bug still reproduces on the latest build. The cause below is
+measured, not inferred.
+
+- **Symptom**: after `shine sys init` on Ubuntu, opening an SSH session displays a string such as
+  `11;rgb:0f0f/1616/1010` at the prompt. Note the missing leading `\033]` — that omission is the
+  clue, not a typo.
+- **Root cause**: the managed Unix profile's OSC 11 read loop
+  (`presets/sys/{ubuntu,macos}/profile.pre.sh`) gives the first byte 150 ms but drops the
+  **inter-byte** timeout to 10 ms (`read_timeout="0.01"`). When the reply arrives fragmented — a
+  normal outcome over SSH — the loop times out mid-response, `break`s holding only the 2 bytes it
+  read (`\033]`), and restores the tty. The remaining bytes land **after** echo is back on and are
+  echoed verbatim. The visible text is the response's *tail*, which is exactly why `\033]` is
+  absent: the loop consumed it.
+- **Why the 2026-07-13 fix failed**: `stty -echo` only covers the loop's *duration*, but the leak
+  happens *after* the loop restores the tty. (Bash's `read -s` already disabled echo per-read, so
+  that patch's delta was near zero to begin with.)
+- **Measured** with `pty.fork()` driving the real loop against synthetic OSC replies, on **both**
+  affected platforms — Ubuntu/bash 5.3.9 (the `read -n` branch) and macOS/zsh 5.9 (the `read -k`
+  branch). Both reproduce identically; the only difference is the timeout return code
+  (bash `142` = 128+SIGALRM, zsh `1`):
+
+  | reply arrival | consumed | elapsed | tail leaked |
+  |---|---|---|---|
+  | whole packet | 25 B (full) | 1 ms | no |
+  | fragmented, 50 ms gap | **2 B = `\033]`** | 10 ms | **yes** |
+  | fragmented, 5 ms gap | 25 B | 6 ms | no |
+  | no reply at all | 0 | 150 ms | no (silent skip — correct) |
+
+  Only the fragmented-beyond-10 ms case is broken; the no-reply path is healthy. `read -k -t`
+  (zsh) and `read -n -t` (bash) show no semantic difference here — this is the loop's timeout
+  policy, not a shell quirk.
+- **Fix**: landed per [`docs/terminal-theme-sync-prd.md`](../terminal-theme-sync-prd.md) §6.2 — the
+  shell-only OSC read loop was replaced entirely by `shine theme sync` (`cli/src/theme/osc.rs`),
+  which reads against a single total deadline via `poll(2)` with no inter-byte timeout to violate.
+  `presets/sys/{ubuntu,macos}/profile.pre.sh` now only decides whether to call the binary; it
+  contains no OSC/PTY/RGB parsing of its own.
+- **Rule**: read terminal-control responses against a **total deadline until the terminator**,
+  never with a tight inter-byte timeout — a partial read that then restores the tty converts the
+  remainder into user input. Disabling echo is necessary but nowhere near sufficient. The only way
+  to remove the race entirely is to not query from the remote at all (pass the value in over the
+  session instead).
+- **Meta-rule**: this entry was wrong for a day because the cause was *inferred from a plausible
+  story* rather than measured. When a terminal/pty bug's cause is not obvious, reproduce it in a
+  pty on the affected platform before writing the lesson down.
+
+## 2026-07-13 — `shine local` now runs external tools with wire-derived argv
+
+- **Symptom / risk**: rewriting `shine local` to spawn `rsync`/`scp` locally (ADR 0011) moved a
+  process-execution boundary into the transfer agent. The two path strings in a `Transfer` frame
+  (`remote_spec`, `local_spec`) come from the remote over the tunnel and are **untrusted** — the
+  session token that gates them leaks via `ps eww`/`/proc/<pid>/environ` on the remote (see the
+  2026-07-09 token-leak lesson), so a co-tenant on the remote can forge a `Transfer`. A naive
+  implementation lets a `remote_spec` of `-oProxyCommand=evil` or an rsync `-e …`/`--rsync-path=…`
+  reach an *option* position and achieve arbitrary command execution on the **local** machine.
+- **Root cause**: rsync/scp interpret leading-`-` operands as options, and rsync's `-e`/`--rsh`
+  (and `-o ProxyCommand`) are command-execution vectors. Any wire string that lands in an option
+  slot — or is word-split by a shell — is a local RCE.
+- **Fix** (`cli/src/ssh/agent.rs`): spawn argv-only, never `sh -c`; emit the remote path only as
+  the single token `<host>:<remote_spec>` after a `--` separator (a `-`-leading spec becomes an
+  inert `host:-…`); anchor local operands to the session dir and `./`-prefix any dash-leading one;
+  build the ssh reconnection `-e`/`-o` string **solely** from the local `SessionContext` (never the
+  wire); reject control chars in `remote_spec`; expand wire paths tilde-only (not `${VAR}`); expand
+  local globs with the `glob` crate, not a shell. ControlMaster reuse also avoids an *invisible*
+  local password prompt (a second connection prompting on the local terminal while the user watches
+  the remote one). Covered by `build_transfer_argv` injection unit tests.
+- **Rule**: when an agent shells out with any wire-supplied value, keep that value out of every
+  option position — argv only, `--` before operands, protocol prefixes (`host:`) that can't be read
+  as flags, and connection/transport options sourced only from local, trusted state.
+
 ## 2026-07-11 — Surge's `external-resource update` never covers URL-based Modules
 
 - **Symptom**: after `shine upgrade` correctly rewrote the installed `custom-rules.sgmodule`

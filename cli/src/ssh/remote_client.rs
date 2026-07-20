@@ -1,12 +1,15 @@
 //! `shine local download/upload`: runs on the remote host inside a
-//! `shine ssh` session. Dials the socket forwarded back to the local
-//! transfer agent (see `agent.rs`) and speaks the protocol in `protocol.rs`.
+//! `shine ssh` session. Dials the socket forwarded back to the local transfer
+//! agent (see `agent.rs`) and sends a single `Transfer` request; the local
+//! agent runs `rsync`/`scp` and streams its output back, which this process
+//! relays to the user's terminal (ADR 0011).
 
 use anyhow::{Context, Result, bail};
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::Path;
 use tokio::net::UnixStream;
 
-use super::protocol::{self, ClientMessage, PROTOCOL_VERSION, ServerMessage};
+use super::protocol::{self, ClientMessage, Direction, LogStream, PROTOCOL_VERSION, ServerMessage};
 use crate::home;
 
 struct SessionEnv {
@@ -59,17 +62,18 @@ async fn connect_and_handshake(remote_sock: &str) -> Result<UnixStream> {
     Ok(stream)
 }
 
-/// Resolves a remote-side path argument against the current directory,
-/// expanding `~` against the remote host's own home directory.
-fn resolve_remote_path(raw: &str) -> Result<PathBuf> {
+/// Anchors a remote path spec to the remote cwd without disturbing glob
+/// metacharacters anywhere in it. `~`/`$VAR` are expanded (the remote trusts its
+/// own environment); a relative result is prefixed with the cwd by a string
+/// join, never component-canonicalized, so `*`, `?`, `[...]` in any component
+/// survive for rsync/scp's remote shell to expand.
+fn absolutize_remote_spec(raw: &str) -> Result<String> {
     let expanded = home::full_expand(raw).with_context(|| format!("expanding path {raw:?}"))?;
-    let path = PathBuf::from(expanded);
-    if path.is_absolute() {
-        return Ok(path);
+    if Path::new(&expanded).is_absolute() {
+        return Ok(expanded);
     }
-    Ok(std::env::current_dir()
-        .context("reading current directory")?
-        .join(path))
+    let cwd = std::env::current_dir().context("reading current directory")?;
+    Ok(format!("{}/{}", cwd.display(), expanded))
 }
 
 pub async fn handle_download(
@@ -77,119 +81,25 @@ pub async fn handle_download(
     local_destination: Option<&str>,
     force: bool,
     dry_run: bool,
+    use_scp: bool,
 ) -> Result<()> {
     let session = session_from_env()?;
-    let resolved_source = resolve_remote_path(remote_source)?;
-    let metadata = tokio::fs::metadata(&resolved_source)
-        .await
-        .with_context(|| format!("cannot read {}", resolved_source.display()))?;
-    let is_dir = metadata.is_dir();
-    let filename = resolved_source
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .context("remote source has no file name")?;
-
-    // Skip staging a tar archive entirely for a directory dry-run preview.
-    let (content_path, size): (PathBuf, u64) = if is_dir {
-        if dry_run {
-            (resolved_source.clone(), 0)
-        } else {
-            super::dir_transfer::build_tar_to_temp_file(resolved_source.clone()).await?
-        }
-    } else {
-        (resolved_source.clone(), metadata.len())
-    };
-
+    let remote_spec = absolutize_remote_spec(remote_source)?;
     let mut stream = connect_and_handshake(&session.remote_sock).await?;
     protocol::write_message(
         &mut stream,
-        &ClientMessage::PutFile {
-            token: session.token.clone(),
-            dest_hint: local_destination.map(str::to_string),
-            filename,
-            is_dir,
-            size,
+        &ClientMessage::Transfer {
+            token: session.token,
+            direction: Direction::Download,
+            remote_spec,
+            local_spec: local_destination.map(str::to_string),
             force,
             dry_run,
+            use_scp,
         },
     )
     .await?;
-
-    let response: ServerMessage = protocol::read_message(&mut stream).await?;
-    let result: Result<()> = async {
-        match response {
-            ServerMessage::Preview {
-                resolved_path,
-                would_overwrite,
-                ..
-            } => {
-                let overwrite_note = match (is_dir, would_overwrite) {
-                    (true, true) => "would merge into existing directory",
-                    (true, false) => "new directory",
-                    (false, true) => "would overwrite existing file",
-                    (false, false) => "new file",
-                };
-                if is_dir {
-                    println!(
-                        "Would download directory ({overwrite_note})\n  remote: {}\n  local:  {}",
-                        resolved_source.display(),
-                        resolved_path
-                    );
-                } else {
-                    println!(
-                        "Would download {} ({overwrite_note})\n  remote: {}\n  local:  {}",
-                        human_bytes(size),
-                        resolved_source.display(),
-                        resolved_path
-                    );
-                }
-                Ok(())
-            }
-            ServerMessage::Proceed => {
-                let mut file = tokio::fs::File::open(&content_path)
-                    .await
-                    .with_context(|| format!("opening {}", content_path.display()))?;
-                let mut progress = ProgressPrinter::new(
-                    if is_dir {
-                        "Downloading directory"
-                    } else {
-                        "Downloading"
-                    },
-                    size,
-                );
-                protocol::copy_exact_with_progress(&mut file, &mut stream, size, |copied| {
-                    progress.update(copied)
-                })
-                .await?;
-                progress.finish();
-                match protocol::read_message(&mut stream).await? {
-                    ServerMessage::PutAck {
-                        resolved_path,
-                        bytes_written,
-                    } => {
-                        println!(
-                            "Downloaded {}{}\n  remote: {}\n  local:  {}",
-                            if is_dir { "directory " } else { "" },
-                            human_bytes(bytes_written),
-                            resolved_source.display(),
-                            resolved_path
-                        );
-                        Ok(())
-                    }
-                    ServerMessage::Error { message } => bail!("{message}"),
-                    other => bail!("unexpected response: {other:?}"),
-                }
-            }
-            ServerMessage::Error { message } => bail!("{message}"),
-            other => bail!("unexpected response: {other:?}"),
-        }
-    }
-    .await;
-
-    if is_dir && !dry_run {
-        let _ = tokio::fs::remove_file(&content_path).await;
-    }
-    result
+    relay_until_done(&mut stream).await
 }
 
 pub async fn handle_upload(
@@ -197,187 +107,69 @@ pub async fn handle_upload(
     remote_destination: Option<&str>,
     force: bool,
     dry_run: bool,
+    use_scp: bool,
 ) -> Result<()> {
     let session = session_from_env()?;
-
-    let cwd = std::env::current_dir().context("reading current directory")?;
-    let dest_candidate = match remote_destination {
-        None => cwd.clone(),
-        Some(raw) => {
-            let expanded =
-                home::full_expand(raw).with_context(|| format!("expanding path {raw:?}"))?;
-            let path = PathBuf::from(expanded);
-            if path.is_absolute() {
-                path
-            } else {
-                cwd.join(path)
-            }
-        }
+    let remote_spec = match remote_destination {
+        Some(dest) => absolutize_remote_spec(dest)?,
+        None => std::env::current_dir()
+            .context("reading current directory")?
+            .display()
+            .to_string(),
     };
-    let source_basename = Path::new(local_source)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .with_context(|| format!("{local_source:?} has no file name"))?;
-    let resolved_dest = if dest_candidate.is_dir() {
-        dest_candidate.join(&source_basename)
-    } else {
-        dest_candidate
-    };
-
-    // The local source's type (file vs directory) is only known once the
-    // agent resolves and stats it below; this only rejects the type-agnostic
-    // "exists but no --force" case early to save a round trip in the common
-    // case. Type-mismatch checks (file vs directory) happen after the
-    // agent's response reveals which one it actually is.
-    let destination_is_dir = resolved_dest.is_dir();
-    let would_overwrite = resolved_dest.exists();
-    if would_overwrite && !force && !dry_run {
-        if destination_is_dir {
-            bail!(
-                "destination directory already exists (pass --force to merge into it): {}",
-                resolved_dest.display()
-            );
-        }
-        bail!(
-            "destination already exists (pass --force to overwrite): {}",
-            resolved_dest.display()
-        );
-    }
-
     let mut stream = connect_and_handshake(&session.remote_sock).await?;
     protocol::write_message(
         &mut stream,
-        &ClientMessage::GetFile {
-            token: session.token.clone(),
-            source_hint: local_source.to_string(),
+        &ClientMessage::Transfer {
+            token: session.token,
+            direction: Direction::Upload,
+            remote_spec,
+            local_spec: Some(local_source.to_string()),
+            force,
             dry_run,
+            use_scp,
         },
     )
     .await?;
+    relay_until_done(&mut stream).await
+}
 
-    let response: ServerMessage = protocol::read_message(&mut stream).await?;
-    match response {
-        ServerMessage::Preview {
-            resolved_path,
-            is_dir,
-            size,
-            ..
-        } => {
-            let overwrite_note = match (is_dir, would_overwrite) {
-                (true, true) => "would merge into existing directory",
-                (true, false) => "new directory",
-                (false, true) => "would overwrite existing file",
-                (false, false) => "new file",
-            };
-            if is_dir {
-                println!(
-                    "Would upload directory ({overwrite_note})\n  local:  {resolved_path}\n  remote: {}",
-                    resolved_dest.display()
-                );
-            } else {
-                println!(
-                    "Would upload {} ({overwrite_note})\n  local:  {resolved_path}\n  remote: {}",
-                    size.map(human_bytes).unwrap_or_default(),
-                    resolved_dest.display()
-                );
-            }
-            Ok(())
-        }
-        ServerMessage::GetHeader {
-            resolved_path,
-            is_dir,
-            size,
-        } => {
-            if destination_is_dir && !is_dir {
-                bail!(
-                    "refusing to overwrite a directory with a file: {}",
-                    resolved_dest.display()
-                );
-            }
-            if !destination_is_dir && would_overwrite && is_dir {
-                bail!(
-                    "refusing to overwrite a file with a directory: {}",
-                    resolved_dest.display()
-                );
-            }
-
-            if is_dir {
-                let temp_tar_path = std::env::temp_dir()
-                    .join(format!("shine-ssh-upload-dir-{}.tar", uuid::Uuid::new_v4()));
-                let mut temp_file = tokio::fs::File::create(&temp_tar_path)
-                    .await
-                    .with_context(|| format!("creating temp file {}", temp_tar_path.display()))?;
-                let mut progress = ProgressPrinter::new("Uploading directory", size);
-                let copy_result = protocol::copy_exact_with_progress(
-                    &mut stream,
-                    &mut temp_file,
-                    size,
-                    |copied| progress.update(copied),
-                )
-                .await;
-                progress.finish();
-                if let Err(error) = copy_result {
-                    let _ = tokio::fs::remove_file(&temp_tar_path).await;
-                    return Err(error);
+/// Reads server frames until `Done`/`Error`, printing relayed rsync/scp output
+/// verbatim and propagating the child's exit code as this process's own.
+async fn relay_until_done(stream: &mut UnixStream) -> Result<()> {
+    loop {
+        match protocol::read_message(stream).await? {
+            ServerMessage::Starting {
+                fell_back, note, ..
+            } => {
+                if fell_back && let Some(note) = note {
+                    eprintln!("shine: {note}");
                 }
-                temp_file
-                    .sync_all()
-                    .await
-                    .context("failed to sync received tar archive to disk")?;
-                drop(temp_file);
-
-                let extract_result = super::dir_transfer::extract_tar_from_file(
-                    temp_tar_path.clone(),
-                    resolved_dest.clone(),
-                )
-                .await;
-                let _ = tokio::fs::remove_file(&temp_tar_path).await;
-                extract_result?;
-
-                println!(
-                    "Uploaded directory {}\n  local:  {resolved_path}\n  remote: {}",
-                    human_bytes(size),
-                    resolved_dest.display()
-                );
+            }
+            ServerMessage::Log {
+                stream: which,
+                chunk,
+            } => match which {
+                LogStream::Stdout => {
+                    print!("{chunk}");
+                    let _ = std::io::stdout().flush();
+                }
+                LogStream::Stderr => {
+                    eprint!("{chunk}");
+                    let _ = std::io::stderr().flush();
+                }
+            },
+            ServerMessage::Done { code } => {
+                if code != 0 {
+                    // Faithfully propagate rsync/scp status (e.g. rsync 23/24
+                    // partial-transfer) to any remote script driving this.
+                    std::process::exit(code);
+                }
                 return Ok(());
             }
-
-            let Some(parent) = resolved_dest.parent() else {
-                bail!("destination has no parent directory");
-            };
-            if !parent.is_dir() {
-                bail!("destination directory does not exist: {}", parent.display());
-            }
-            let temp_path = parent.join(format!(".shine-ssh-upload-{}", uuid::Uuid::new_v4()));
-            let mut temp_file = tokio::fs::File::create(&temp_path)
-                .await
-                .with_context(|| format!("creating temp file {}", temp_path.display()))?;
-            let mut progress = ProgressPrinter::new("Uploading", size);
-            let copy_result =
-                protocol::copy_exact_with_progress(&mut stream, &mut temp_file, size, |copied| {
-                    progress.update(copied)
-                })
-                .await;
-            progress.finish();
-            if let Err(error) = copy_result {
-                let _ = tokio::fs::remove_file(&temp_path).await;
-                return Err(error);
-            }
-            temp_file
-                .sync_all()
-                .await
-                .context("failed to sync written file to disk")?;
-            drop(temp_file);
-            crate::persist::finalize_temp(&temp_path, &resolved_dest).await?;
-            println!(
-                "Uploaded {}\n  local:  {resolved_path}\n  remote: {}",
-                human_bytes(size),
-                resolved_dest.display()
-            );
-            Ok(())
+            ServerMessage::Error { message } => bail!("{message}"),
+            other => bail!("unexpected response: {other:?}"),
         }
-        ServerMessage::Error { message } => bail!("{message}"),
-        other => bail!("unexpected response: {other:?}"),
     }
 }
 
@@ -389,15 +181,19 @@ pub async fn handle_status() -> Result<()> {
             protocol::write_message(
                 &mut stream,
                 &ClientMessage::Status {
-                    token: session.token.clone(),
+                    token: session.token,
                 },
             )
             .await?;
             match protocol::read_message(&mut stream).await? {
-                ServerMessage::StatusResponse { session_local_dir } => {
+                ServerMessage::StatusResponse {
+                    session_local_dir,
+                    host,
+                } => {
                     println!("session:    {}", session.session_id);
                     println!("connection: connected");
                     println!("protocol:   v{PROTOCOL_VERSION}");
+                    println!("host:       {host}");
                     println!("local dir:  {session_local_dir}");
                     Ok(())
                 }
@@ -410,92 +206,5 @@ pub async fn handle_status() -> Result<()> {
             println!("connection: unreachable ({error:#})");
             Ok(())
         }
-    }
-}
-
-/// Prints a periodic, throttled progress line to stderr while a transfer is
-/// in flight — but only when stderr is an attended terminal (PRD section 7:
-/// non-TTY environments get a stable single-line result, no live redraw).
-struct ProgressPrinter {
-    label: &'static str,
-    total: u64,
-    start: std::time::Instant,
-    last_print: std::time::Instant,
-    enabled: bool,
-}
-
-impl ProgressPrinter {
-    fn new(label: &'static str, total: u64) -> Self {
-        let now = std::time::Instant::now();
-        Self {
-            label,
-            total,
-            start: now,
-            last_print: now,
-            enabled: total > 0 && console::user_attended_stderr(),
-        }
-    }
-
-    fn update(&mut self, copied: u64) {
-        if !self.enabled {
-            return;
-        }
-        let now = std::time::Instant::now();
-        let is_final = copied >= self.total;
-        if !is_final && now.duration_since(self.last_print) < std::time::Duration::from_millis(150)
-        {
-            return;
-        }
-        self.last_print = now;
-
-        let elapsed = now.duration_since(self.start).as_secs_f64().max(0.001);
-        let rate = (copied as f64 / elapsed) as u64;
-        let pct = ((copied as f64 / self.total as f64) * 100.0).min(100.0) as u32;
-        eprint!(
-            "\r{}: {} / {} ({pct}%) \u{2014} {}/s\x1b[K",
-            self.label,
-            human_bytes(copied),
-            human_bytes(self.total),
-            human_bytes(rate)
-        );
-        let _ = std::io::Write::flush(&mut std::io::stderr());
-    }
-
-    fn finish(&self) {
-        if self.enabled {
-            eprint!("\r\x1b[K");
-            let _ = std::io::Write::flush(&mut std::io::stderr());
-        }
-    }
-}
-
-fn human_bytes(bytes: u64) -> String {
-    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit_index = 0;
-    while value >= 1024.0 && unit_index < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit_index += 1;
-    }
-    if unit_index == 0 {
-        format!("{bytes} {}", UNITS[0])
-    } else {
-        format!("{value:.1} {}", UNITS[unit_index])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn formats_small_byte_counts_without_decimals() {
-        assert_eq!(human_bytes(512), "512 B");
-    }
-
-    #[test]
-    fn formats_larger_byte_counts_with_units() {
-        assert_eq!(human_bytes(1024), "1.0 KiB");
-        assert_eq!(human_bytes(1024 * 1024 * 2), "2.0 MiB");
     }
 }

@@ -89,3 +89,6 @@ items = ["neovim", "astronvim", "atuin", "yazi", "starship", "zoxide", "zsh-vi-m
 
 [profiles.all]
 items = ["neovim", "astronvim", "atuin", "yazi", "starship", "zoxide", "zsh-vi-mode", "fzf", "bat", "eza", "zerotier", "pnpm", "mise", "homebrew"]
+
+[profiles.minimal]
+items = ["neovim", "fzf", "bat", "eza", "zoxide"]

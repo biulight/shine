@@ -56,6 +56,28 @@ pub fn default_self_install_dest_for(os: &str, local_appdata: Option<PathBuf>) -
     }
 }
 
+/// True when `command` resolves to a file on the current `PATH`. On Windows the
+/// common executable extensions (`.exe`, `.cmd`, `.bat`) are also probed. Used for
+/// diagnostic "is this runtime available?" hints, not as an execution gate.
+pub fn command_exists_on_path(command: &str) -> bool {
+    let var_name = if cfg!(windows) { "Path" } else { "PATH" };
+    let Some(path_value) = std::env::var_os(var_name) else {
+        return false;
+    };
+    let candidates: Vec<String> = if cfg!(windows) {
+        vec![
+            command.to_string(),
+            format!("{command}.exe"),
+            format!("{command}.cmd"),
+            format!("{command}.bat"),
+        ]
+    } else {
+        vec![command.to_string()]
+    };
+    std::env::split_paths(&path_value)
+        .any(|dir| candidates.iter().any(|name| dir.join(name).is_file()))
+}
+
 pub fn current_path_contains_dir(dir: &Path) -> bool {
     let var_name = if cfg!(windows) { "Path" } else { "PATH" };
     let Some(path_value) = std::env::var_os(var_name) else {

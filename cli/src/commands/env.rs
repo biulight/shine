@@ -15,11 +15,19 @@ pub enum EnvCommands {
         key: String,
         /// Variable value
         value: String,
+        /// Write directly into the env override file that currently shadows this
+        /// key (global/overlay/project shine.env.toml) instead of refusing
+        #[arg(long)]
+        force: bool,
     },
     /// Delete a variable from config.toml [env]
     Delete {
         /// Variable name
         key: String,
+        /// Delete directly from the env override file that currently shadows
+        /// this key (global/overlay/project shine.env.toml) instead of refusing
+        #[arg(long)]
+        force: bool,
     },
     /// Get a single variable value
     Get {
@@ -63,6 +71,10 @@ pub struct EnvEncryptCommand {
     /// Read plaintext from an existing config.toml [env] variable instead of stdin
     #[arg(long)]
     pub from: Option<String>,
+    /// Write directly into the env override file that currently shadows the
+    /// target key (global/overlay/project shine.env.toml) instead of refusing
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Args, Debug)]
@@ -117,6 +129,9 @@ pub struct EnvRunCommand {
     /// Environment mode used to expand {mode} paths
     #[arg(long)]
     pub mode: Option<String>,
+    /// Skip workspace discovery entirely; use only --with values and inherited env
+    #[arg(long, conflicts_with_all = ["workspace", "mode"])]
+    pub no_workspace: bool,
     /// Inject a config [env] value as KEY or KEY=ALIAS (repeatable)
     #[arg(long = "with", value_name = "KEY[=ALIAS]")]
     pub with: Vec<String>,

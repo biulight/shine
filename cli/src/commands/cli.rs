@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use super::{
     AppCommands, EnvCommands, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
     SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands, TaskRunCommand,
+    ThemeCommands,
 };
 
 /// `Shine` - Quick config for sys
@@ -110,8 +111,25 @@ pub enum Commands {
         #[command(subcommand)]
         command: SysCommands,
     },
+    /// Resolve and sync the terminal's light/dark theme (see `shine theme sync`)
+    Theme {
+        #[command(subcommand)]
+        command: ThemeCommands,
+    },
     /// Open an interactive SSH session with a session-scoped file transfer channel
     Ssh {
+        /// Remote command shell (must appear before the SSH destination).
+        /// Windows mode injects environment variables only; `shine local` is unavailable.
+        #[arg(long, value_enum, default_value_t = RemoteShell::Posix)]
+        remote_shell: RemoteShell,
+        /// Inject a plaintext config [env] value as KEY or KEY=ALIAS (repeatable;
+        /// must appear before the SSH destination)
+        #[arg(long = "with", value_name = "KEY[=ALIAS]")]
+        with: Vec<String>,
+        /// Decrypt KEY_SECRET and inject it as KEY or ALIAS (repeatable; must
+        /// appear before the SSH destination)
+        #[arg(long = "with-secret", value_name = "KEY[=ALIAS]")]
+        with_secret: Vec<String>,
         /// ssh options, the destination, and an optional remote command
         /// (passed through to the system `ssh` binary; see `ssh(1)`)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -129,6 +147,15 @@ pub enum Commands {
     },
     /// Run a saved task (alias for `shine task run`)
     Run(TaskRunCommand),
+}
+
+/// Shell used by the remote SSH server to interpret Shine's command wrapper.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum RemoteShell {
+    /// POSIX shell with session-scoped `shine local` file transfer support.
+    Posix,
+    /// Windows PowerShell environment injection only; `shine local` is unavailable.
+    Windows,
 }
 
 #[derive(Args, Debug)]

@@ -29,6 +29,10 @@ file. Full protocol: [`docs/kb/README.md`](docs/kb/README.md).
 ## Commands
 
 ```bash
+# Toolchain setup (versions pinned in mise.toml)
+mise install
+bun install --frozen-lockfile
+
 # Build
 cargo build
 cargo build --release          # binary at target/release/shine
@@ -46,6 +50,7 @@ cargo run -- self upgrade --channel preview
 # Test (pre-commit uses nextest)
 cargo nextest run --all-features
 cargo test                     # fallback without nextest
+bun run test:ts                # Bun preset tests
 
 # Single test
 cargo test shells::tests::install_then_uninstall_roundtrip
@@ -56,9 +61,16 @@ cargo fmt
 cargo clippy --all-targets --all-features --tests --benches -- -D warnings
 cargo deny check bans licenses sources
 typos                          # spell-check
+bun run typecheck              # strict TypeScript check
+bun run check:ts               # type-check + Bun tests
 ```
 
-Pre-commit runs `cargo fmt --check`, `cargo clippy -D warnings`, `cargo deny check`, `typos`, and `cargo nextest run` on every commit. All must pass before committing.
+Rust and Bun versions are pinned in `mise.toml`; run `mise install` once and activate mise in your
+shell before using the commands above. Then run `bun install --frozen-lockfile` before editing the
+Bun TypeScript presets. Pre-commit validates `mise.toml` and runs
+`mise exec -- bun run check:ts` when Bun tooling or TypeScript sources change, alongside
+`cargo fmt --check`, `cargo clippy -D warnings`, `cargo deny check`, `typos`, and
+`cargo nextest run`. All must pass before committing.
 
 ## Verification Notes
 
@@ -129,9 +141,12 @@ shine/
 │       │   ├── info.rs       # handle_info, handle_list
 │       │   ├── report.rs     # Install/uninstall outcome print_* helpers
 │       │   ├── upgrade.rs    # handle_upgrade_installed, stale-entry cleanup
-│       │   ├── build.rs      # handle_build: runs an app preset's [artifact].script
-│       │   │                 # (`shine app build <app-id>`), never run implicitly by
-│       │   │                 # install/upgrade — see ADR 0009
+│       │   ├── hooks.rs      # run_app_hooks: shared post_install/post_upgrade command-hook
+│       │   │                 # runner (HookPhase), gated by allow_app_hooks for external presets
+│       │   ├── build.rs      # handle_build/handle_unbuild: run an app preset's [artifact].script
+│       │   │                 # (`shine app build`) / [artifact].teardown (`shine app unbuild`),
+│       │   │                 # never run implicitly by install/upgrade. run_teardown_for_uninstall
+│       │   │                 # runs teardown best-effort on uninstall — see ADR 0009 + 0012
 │       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile, AppArtifact)
 │       │   ├── json_merge.rs # JsonMerge install strategy (managed-key merge)
 │       │   └── annotation.rs # shine-dest: comment annotation parser
@@ -195,7 +210,8 @@ shine/
 │       │   └── discovery.rs  # Project-config discovery, SHINE_CONFIG_DIR/
 │       │                     # SHINE_PRESETS priority chain
 │       ├── presets.rs        # rust-embed asset extraction, list_categories, parse_script_description
-│       ├── bin_links.rs      # Symlink management in ~/.shine/bin/
+│       ├── bin_links.rs      # ~/.shine/bin/ command management: LinkRuntime (Native symlink/shim
+│       │                     # vs Bun launcher), marker-based launcher ownership + current-ness
 │       ├── status.rs         # Shared install-status row builders used by `list`/`info`
 │       ├── clear.rs          # Clear stale runtime state after schema changes
 │       ├── colors.rs         # Terminal color helpers
@@ -221,16 +237,30 @@ shine/
 │       ├── ssh/
 │       │   ├── mod.rs        # `shine ssh`: wraps system ssh, arg splitting, session
 │       │   │                 # bootstrap, wrapped remote command (env vars + EXIT trap)
-│       │   ├── protocol.rs   # Wire format shared by agent.rs and remote_client.rs
-│       │   ├── agent.rs      # Local transfer server (PutFile/GetFile), Unix socket or
+│       │   ├── protocol.rs   # Wire format (control + log relay): Transfer request,
+│       │   │                 # Starting/Log/Done frames. Shared by agent.rs and remote_client.rs
+│       │   ├── agent.rs      # Local transfer server: spawns rsync/scp (build_transfer_argv,
+│       │   │                 # choose_tool) and relays their output. Unix socket or
 │       │   │                 # loopback TCP (Windows) via LocalListener
-│       │   ├── dir_transfer.rs # Directory tar build/extract, symlink-escape validation
+│       │   ├── session_context.rs # SessionContext (host/ssh_options/local_dir/control_path)
+│       │   │                 # captured at `shine ssh` time; source of the rsync/scp reconnect args
 │       │   └── remote_client.rs # `shine local download/upload` handlers (run on remote host)
 │       ├── task/
 │       │   ├── mod.rs        # `shine task` save/run/list/info/delete handlers,
 │       │   │                 # direct (no-shell) argv exec + exit-code passthrough,
 │       │   │                 # shell-quoted command rendering, task-name validation
 │       │   └── manifest.rs   # TaskManifest: <shine_dir>/tasks.toml load/save/upsert
+│       ├── theme/
+│       │   ├── mod.rs        # `shine theme sync`: priority chain (already-exported
+│       │   │                 # SHINE_TERMINAL_THEME -> COLORFGBG -> OSC 11), BAT_THEME
+│       │   │                 # resolution/preservation, read-only config load, also exposes
+│       │   │                 # resolve_local_terminal_theme_for_injection for `shine ssh`
+│       │   ├── color.rs      # Pure parsing: OSC 11 rgb: body, luma light/dark threshold,
+│       │   │                 # COLORFGBG — no I/O, cross-platform
+│       │   └── osc.rs        # #[cfg(unix)]: OSC 11 query over /dev/tty. Deadline-based
+│       │                     # poll(2) read loop (total deadline, never per-byte — see
+│       │                     # docs/kb/lessons.md 2026-07-14) + termios EchoGuard (RAII
+│       │                     # restore, unlike the superseded shell script's manual restore)
 │       ├── test_support.rs   # Shared test-only env-var mutex (not cfg(test)-gated,
 │       │                     # since #[cfg(test)] doesn't cross the lib/bin boundary)
 │       ├── update_check/
@@ -253,13 +283,14 @@ shine/
     │   └── utils/   copyfile.sh, shine.toml
     ├── app/
     │   ├── archey4/    config.json, shine.toml
+    │   ├── clash-verge/ merge.yaml (inert commented composite EXAMPLE — real overlay copy is hardcoded, no templating), build.ts + build.test.ts + unbuild.ts (bun), shine.toml  (dest = ~/.shine/clash-verge; plain Copy. `shine app build clash-verge` reads profiles.yaml to resolve the current subscription's merge/rules/proxies/groups bindings; renders rule-providers to Merge and proxies/proxy-groups/prepend-rules into the three CVR 2.x `{ prepend, append, delete }` editor files; never falls back to global files or mutates profiles.yaml/bindings/cache. A changed write asks the user to reselect the profile; a later build refreshes providers through CLASH_CONTROLLER_URL/TOKEN. See docs/clash-verge-local-subscription-prd.md)
     │   ├── docker-desktop/ settings-store.jsonc, shine.toml
     │   ├── docker-engine/  daemon.jsonc, shine.toml
     │   ├── fastfetch/  config.jsonc, shine.toml
     │   ├── ghostty/    config.ghostty, shine.toml
     │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig; no shine.toml, uses annotation instead)
     │   ├── JetBrains/  shine.toml
-    │   ├── surge/      local-proxies.conf, local-rules.conf, build.sh (placeholder), shine.toml  (dest = Surge Profiles dir; overlay build.sh patches the active profile's #!include lines)
+    │   ├── surge/      local-proxies.conf, local-proxy-groups.conf, local-rules.conf, build.sh + unbuild.sh (placeholders + inert commented reference examples, since the real overlay is private), shine.toml  (dest = Surge Profiles dir; overlay build.sh patches the active profile's #!include lines, unbuild.sh reverses them)
     │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
@@ -276,8 +307,9 @@ shine/
 |---|---|
 | `shell list/install/uninstall` | `cli/src/shells/` |
 | `app list/install/uninstall` | `cli/src/apps/` |
-| `app build <app-id>` | `cli/src/apps/build.rs` |
+| `app build <app-id>` / `app unbuild <app-id>` | `cli/src/apps/build.rs` |
 | `sys list/init` | `cli/src/sys/` |
+| `theme sync` | `cli/src/theme/` (bypasses `Config::load_or_init()`, like `init`/`clear`) |
 | `env show/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
 | `list` | `cli/src/list.rs` |
 | `info <TARGET>` | `cli/src/show/` |
@@ -289,7 +321,7 @@ shine/
 | `clear` | `cli/src/clear.rs` |
 | `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
-| `ssh [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
+| `ssh [--with ...] [--with-secret ...] [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
 | `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
 | `task save/run/list/info/delete` | `cli/src/task/` |
 | `run <NAME>` (alias for `task run`) | `cli/src/task/` |
@@ -328,12 +360,21 @@ Two transforms can be applied to preset files at install time (declared in `shin
 
 Transforms compose in declaration order: `transforms = ["jsonc-to-json", "template"]`.
 
+The `template` delimiter is `@@VAR@@` for **every** file type — there is deliberately no
+per-file-type delimiter. `@` is a YAML reserved indicator only as the first char of a plain
+scalar, so YAML presets either follow the clash-verge overlay pattern (hardcode real values, no
+templating) or quote the placeholder (`key: "@@VAR@@"`, which yields a string). Native-typed env
+rendering into YAML is not supported today; if ever needed it would be an explicit opt-in
+`template_open`/`template_close`, not extension inference. See
+[ADR 0013](docs/kb/decisions/0013-template-delimiter-policy.md).
+
 ### SSH session transfer flow (`shine ssh` / `shine local`)
 
-See [`docs/ssh-local-transfer-prd.md`](docs/ssh-local-transfer-prd.md) for the full design.
-Phases 1-3 implemented: file/directory transfers, progress output, and
-`shine local status`. Windows support (local side only — see step 8) added
-on top of the macOS/Linux implementation.
+See [`docs/ssh-local-transfer-prd.md`](docs/ssh-local-transfer-prd.md) for the full design and
+[ADR 0011](docs/kb/decisions/0011-ssh-local-transfer-rsync-scp.md) for the current transport.
+The tunnel carries a **control + log-relay** channel: the remote sends one `Transfer` request and
+the local agent runs `rsync` (default) / `scp` and streams its output back. Windows support (local
+side only — see step 8) rides on top of the macOS/Linux implementation.
 
 1. `shine ssh [SSH_ARGS]... <HOST> [COMMAND]` generates a session id + token
    and spawns `ssh` with `-t -R <remote-sock>:<local-forward-target>`
@@ -341,60 +382,62 @@ on top of the macOS/Linux implementation.
    destination/command boundary without reinterpreting ssh's own option
    semantics). `<remote-sock>` is always a Unix socket path under `/tmp` on
    the remote host (assumed Linux/macOS); `<local-forward-target>` is
-   platform-dependent — see step 8.
+   platform-dependent — see step 8. Unless the user already set their own
+   multiplexing, shine also injects `-o ControlMaster=auto -o
+   ControlPath=<session_dir>/ctl.sock -o ControlPersist=60` so the later
+   rsync/scp child reconnects over this authenticated master with no second
+   auth prompt (ADR 0011). The captured `host`/`ssh_options`/cwd/`control_path`
+   are stored as `ssh::session_context::SessionContext` (in-memory `Arc`, also
+   written to `<session_dir>/context.toml`) — the sole, local-trusted source of
+   the rsync/scp reconnect args.
 2. The remote command is replaced with a wrapper that sets
    `SHINE_SSH_SESSION`/`SHINE_SSH_TOKEN`/`SHINE_SSH_REMOTE_SOCK` via `env`
    (not `SetEnv`/`SendEnv`, which most `sshd_config`s reject), then `exec`s
-   the user's original remote command or their login shell.
+   the user's original remote command or their login shell. Repeated `--with
+   KEY[=ALIAS]` entries add exact plaintext values from the active local `[env]`;
+   `--with-secret KEY[=ALIAS]` is the separate explicit opt-in that decrypts
+   `KEY_SECRET`. Values are shell-quoted into the same wrapper and last only for
+   the session; see ADR 0014.
 3. sshd does **not** clean up the forwarded remote socket file on
    disconnect (verified against a real host via `scripts/spike-ssh-forward.sh`
    before implementation) — the wrapper registers its own `trap ... EXIT`.
 4. `shine local download/upload` (run on the remote host) reads those env
-   vars, dials the forwarded socket, and speaks the framed protocol in
-   `ssh::protocol` (`PutFile`/`GetFile`/`Preview` for `--dry-run`) against
-   the local agent in `ssh::agent`, which resolves destinations against the
-   session's local working directory per the PRD's default-target rules.
-   The only authorization on a request is the session token, which travels
-   to the remote host as plain argv/environ (`env SHINE_SSH_TOKEN=...`) and
-   is therefore readable by other local users there via `ps eww` — so the
-   agent does not otherwise trust wire-supplied fields: `PutFile.filename`
-   (meant to always be a bare basename) is rejected unless it is exactly
-   one normal path component (`agent::ensure_single_path_component`),
-   preventing a forged request from writing outside the session directory
-   via `..` or an absolute path, and `dest_hint`/`source_hint` are expanded
-   with `~`-only substitution (`home::tilde_expand`), not the full
-   `${VAR}`-style expansion used for locally-typed paths elsewhere in the
-   crate, since that would let a forged hint pull values out of the local
-   agent process's own environment.
-5. Directories are staged as an uncompressed tar archive in a local temp
-   file (`ssh::dir_transfer::build_tar_to_temp_file`/`extract_tar_from_file`,
-   run on `spawn_blocking` since the `tar` crate is synchronous) and sent
-   through the same `PutFile`/`GetFile` byte-streaming path with an
-   `is_dir` flag — never buffered fully in memory, and never assembled
-   in-memory as a whole archive. `tar::Entry::unpack_in` already rejects
-   absolute paths and `..` traversal in an entry's own path, but does
-   **not** validate a *symlink's target*, so `dir_transfer` adds its own
-   check enforcing the PRD's chosen policy: relative symlinks that resolve
-   inside the transferred tree are kept, absolute or escaping ones reject
-   the whole transfer. Non-file/dir/symlink entry types (hard links,
-   device nodes, FIFOs) are rejected outright. An existing destination
-   directory is rejected without `--force`; with `--force` the archive is
-   merged into it (existing files not present in the archive are kept,
-   matching the PRD's stated `--force` semantics for directories).
-6. `protocol::copy_exact_with_progress` reports cumulative bytes copied
-   after each chunk; `remote_client::ProgressPrinter` (throttled to ~150ms)
-   renders a single overwritten stderr line only when
-   `console::user_attended_stderr()` is true, per the PRD's requirement
-   that non-TTY environments get a stable single-line result with no live
-   redraw. `agent`'s side of transfers has no progress output — the
-   command always runs (and its stdout/stderr are visible) on the remote
-   host, not locally.
+   vars and sends one `ClientMessage::Transfer { direction, remote_spec,
+   local_spec, force, dry_run, use_scp }` over the forwarded socket. The
+   remote-owned spec is absolutized against the remote cwd
+   (`remote_client::absolutize_remote_spec`) with glob metacharacters
+   preserved (string join, never canonicalized), so `download '<dir>/*.log'`
+   is expanded by rsync/scp's remote shell for free. The only authorization is
+   the session token, which travels to the remote as plain argv/environ and is
+   readable by other local users there via `ps eww`, so wire fields
+   (`remote_spec`/`local_spec`) are **untrusted** — see step 5.
+5. The local agent (`ssh::agent`) validates the token, resolves the local side
+   against the session directory (tilde-only expansion via `home::tilde_expand`,
+   never `${VAR}`; upload-source globs expanded with the `glob` crate), picks the
+   tool (`choose_tool`: rsync by default, scp on `--scp` or as an auto-fallback
+   with a printed notice when rsync is missing locally or — probed over the
+   control master — on the remote), and spawns it via `build_transfer_argv`.
+   **Security (ADR 0011, `docs/kb/lessons.md`):** argv only, never a shell; the
+   remote path is emitted only as the single token `<host>:<remote_spec>` after
+   a `--` separator (so a hostile `-oProxyCommand=…` becomes an inert
+   `host:-…`); local operands are anchored to the session dir and `./`-prefixed
+   if dash-leading; the `-e`/`-o` reconnect string comes solely from
+   `SessionContext`, never the wire. rsync directories/symlinks/perms are
+   handled natively; no-`--force` maps to rsync `--ignore-existing` (scp can't
+   gate overwrite, so it warns instead).
+6. The child's stdout/stderr are read in bounded chunks and relayed verbatim as
+   `ServerMessage::Log { stream, chunk }` frames (preserving `\r` progress
+   redraws), followed by `Done { code }`; `remote_client::relay_until_done`
+   prints the chunks and propagates the child's exit code as its own. rsync's
+   own `--info=progress2` provides progress. `--dry-run` uses rsync `-n`; scp
+   has no dry-run, so the agent synthesizes a preview `Log` line and never
+   spawns.
 7. `shine local status` sends a `Status` request over the same forwarded
-   socket; the agent replies with the session's local working directory,
-   and the client also reports the session id (from `SHINE_SSH_SESSION`)
-   and negotiated protocol version. If the agent is unreachable, it
-   reports that instead of erroring, so the command doubles as a
-   liveness check without needing a live session.
+   socket; the agent replies with the session's local working directory and
+   `host`, and the client also reports the session id (from `SHINE_SSH_SESSION`)
+   and negotiated protocol version. If the agent is unreachable, it reports that
+   instead of erroring, so the command doubles as a liveness check without
+   needing a live session.
 8. Windows support is local-side only (the remote host is always assumed
    Linux/macOS; steps 1-3 above never change). `tokio::net::UnixListener`
    doesn't exist on non-unix targets, so `ssh::bind_local_listener` is
@@ -407,9 +450,8 @@ on top of the macOS/Linux implementation.
    enum over `Unix`/`Tcp` variants (the `Unix` variant itself is
    `#[cfg(unix)]`-gated); `agent::DuplexStream` is a blanket-impl marker
    trait (`AsyncRead + AsyncWrite + Unpin + Send + 'static`) so the
-   per-connection protocol logic (`handle_connection`, `handle_put_file`,
-   `handle_get_file`) stays transport-agnostic and unchanged for both
-   platforms.
+   per-connection protocol logic (`handle_connection`, `handle_transfer`)
+   stays transport-agnostic and unchanged for both platforms.
 9. `ssh::remote_client` (the *remote*-side of a session — it dials the
    forwarded socket via `UnixStream`, so it only makes sense on
    Linux/macOS, per step 8's scoping) is itself `#[cfg(unix)]`-gated;
@@ -449,7 +491,13 @@ on top of the macOS/Linux implementation.
 4. In interactive mode: `dialoguer::MultiSelect` lets the user pick init items. Non-interactive mode requires `default_profile`.
 5. Calls `bash <presets_dir>/sys/<os>/init.sh <item_id>` once per selected item, then calls `bash <presets_dir>/sys/<os>/init.sh __shine_finalize` so shared shell/profile integration runs once.
 
-`shine sys init --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing.
+`shine sys init --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing. `--proxy` injects HTTP proxy env vars (`http_proxy`/`https_proxy`/`all_proxy` + uppercase = `http://$PROXY_HOST:$HTTP_PROXY_PORT`, `no_proxy` = `PROXY_NO_PROXY`, plus a shine-owned `SHINE_SYS_PROXY` = the same URL) into every init-script subprocess, built from the `[env]` preset proxy keys via `sys::execution::proxy_env_vars` — reusing the same values as the `proxy` shell preset so downloads route through the local proxy on locked-down networks. macOS/Ubuntu `curl`/`apt`/`brew`/`rustup` read the standard env vars directly. **winget ignores `http_proxy`/`https_proxy` env vars entirely**, so `presets/sys/windows/init.ps1` instead reads `SHINE_SYS_PROXY` and passes `winget install --proxy <url>`; that winget CLI option is disabled by default, so the script best-effort runs `winget settings --enable ProxyCommandLineOptions` (works only when elevated) and, on a nonzero winget exit, prints the one-time admin remediation. SOCKS5 is intentionally not injected (winget can't use it).
+
+Ubuntu ships three profiles (`presets/sys/ubuntu/shine.toml`): `recommended` (default,
+full interactive dev setup), `all` (recommended + zerotier/pnpm/mise/homebrew), and
+`minimal` — a lean headless CLI core (`neovim`, `fzf`, `bat`, `eza`, `zoxide`) intended for
+production-server bootstrapping via `shine sys init --preset minimal`. The `minimal` profile
+reuses existing items only, so adding it needed no `init.sh` change.
 
 ### Personal tasks (`shine task` / `shine run`)
 
@@ -486,6 +534,22 @@ command = ["rsync", "-avz", "dist/", "marqueeio.develop:/var/www/keystone/alex/"
 4. Default: `~/.shine/` (shine dir), `~/.shine/presets/` (presets dir)
 
 Config is saved via `utils::sync_table` which preserves existing TOML comments while updating values.
+
+### Presets overlay
+
+An overlay merges over the active presets source by matching relative paths (`Config::preset_path`,
+`presets::read_asset_bytes`/`asset_paths`, `apps/build.rs`). There are two mutually exclusive ways to
+configure it, both resolved by `Config::active_presets_overlay_dir()`:
+
+- **Manual** — `presets_overlay_dir` in `config.toml` points at a user-owned directory
+  (`shine overlay link <path>`). Fast-forward-pulled by `shine pull` like any Git preset source.
+- **shine-managed Git** — `presets_overlay_git` (+ optional `presets_overlay_git_branch`) records a
+  Git URL (`shine overlay link --git <url>`). shine owns the checkout at `<shine_dir>/overlay`
+  (`managed_overlay_dir`, resolved by `Config::resolve_managed_overlay_dir` from `shine_dir`, so it
+  follows `SHINE_CONFIG_DIR`). It is cloned `--depth 1` on first `shine pull` and **force-mirrored**
+  (`git fetch --depth 1` + `reset --hard`) to the remote tip afterward — a read-only mirror, never
+  fast-forward-pulled. See `git_pull::sync_managed_overlay`. A managed overlay is only "active" once
+  its checkout exists on disk; setting one via the CLI clears any manual `presets_overlay_dir`.
 
 ### Local HTTP resources
 
@@ -558,13 +622,42 @@ Hard rules (details and runbook: [`docs/kb/conventions.md`](docs/kb/conventions.
 3. `cargo build` will re-embed automatically (tracked by `build.rs`).
 4. `shine shell list` will display the new category; `shine shell install <category>` will install it.
 
+Bun entries: a `[[files]]` entry may set `runtime = "bun"` with a `.ts`/`.js`/`.mts`/`.mjs`
+`source` to expose a cross-platform command run via `bun <script> "$@"`. Bun is an explicit
+external prerequisite — shine never installs it and only *checks* for it (a missing `bun` makes the
+generated launcher exit `127` with an install hint). Rules: `runtime = "bun"` cannot combine with
+`needs_source = true` (a subprocess can't mutate the parent shell — keep the thin `.sh`/`.ps1`
+wrapper for env mutation); the source must be a bun extension; only `[[files]]`-listed entries
+become commands (helper `.ts` modules are ignored by auto-collection). Env templating for bun (and
+any) entries is opt-in via `transforms = ["template"]` (the `# shine-template: true` annotation is
+`.sh`/`.ps1`-only, since `#` is not a JS/TS comment). Unlike native commands (Unix symlink / Windows
+shim), a bun command installs a **shine-managed regular launcher file** — see the launcher ownership
+invariants in [`architecture/invariants.md`](docs/kb/architecture/invariants.md) and the PRD
+[`docs/bun-shell-presets-prd.md`](docs/bun-shell-presets-prd.md).
+
+Describe a bun entry with a `//` comment header at the top of the source (the JS/TS mirror of the
+`.sh`/`.ps1` `#` block, parsed by `presets::parse_bun_description`), or set `description = "…"` in
+the `[[files]]` entry (works for any runtime, mirrors app presets) — an explicit `description` wins
+over the header. `shine shell list` shows the full block; `shine info` shows its first line.
+
+A bun `[[files]]` entry may also declare `env = ["KEY", "SOURCE=TARGET"]` (same grammar as `shine
+env run --with`, ordered, duplicate targets rejected, names validated at metadata-load time; valid
+only when `runtime = "bun"`). At launch the generated launcher runs the child through `shine env run
+--no-workspace --with … -- bun <script>` so the resolved values reach the script via `Bun.env`;
+`<KEY>_SECRET` is decrypted per invocation (no cache — a Touch ID / pinentry backend prompts every
+run). This adds a runtime dependency on `shine` being on `PATH` (missing `shine` → exit `127`, like
+missing `bun`); entries with no `env` keep the v1 `bun <script>` launcher unchanged. `env`
+(runtime, no upgrade needed) and `transforms = ["template"]` (static `@@VAR@@`, needs `shine
+upgrade`) are independent and may combine. Full design:
+[`docs/bun-shell-preset-env-injection-prd.md`](docs/bun-shell-preset-env-injection-prd.md).
+
 ### App preset category
 
 Prefer `shine.toml` metadata over legacy `shine-dest:` annotations for new categories. Place `shine.toml` in `presets/app/<category>/` with at minimum `dest = "~/<path>"`. Add `transforms = ["jsonc-to-json"]` for JSONC files or `transforms = ["template"]` for files with `@@VAR_NAME@@` env placeholders.
 
-App categories may declare a `post_upgrade = { command = "...", args = ["..."] }` hook to run a direct argv command after `shine upgrade` actually updates or installs at least one file in that category. Hooks are not run during `app install`, and external presets require `allow_app_hooks = true` in config before hooks execute. Each hook may set `show_output = true` to print its stdout to the user when it succeeds (e.g. a deliberate `echo` note); this defaults to `false` (silent) so routine command output isn't surfaced as noise.
+App categories may declare `post_upgrade` and/or `post_install` hooks (each a `{ command = "...", args = ["..."] }` table or an array of them) to run a direct argv command after a category actually changes. `post_upgrade` fires when `shine upgrade` updates/installs ≥1 file in the category; `post_install` fires when `shine app install`/`reinstall` writes ≥1 file (a plain re-install with no change runs nothing, mirroring `post_upgrade`). Both share one runner (`apps/hooks.rs::run_app_hooks`): external presets require `allow_app_hooks = true` before hooks execute, and each hook may set `show_output = true` to print its stdout on success (defaults to `false`/silent). Hooks inherit only the parent env — no `SHINE_APP_*`/`[env]` injection (that is the artifact contract below). Declare `post_install` when the very first install must run a setup/reload that `post_upgrade` would otherwise only do on a later upgrade.
 
-App categories may also declare `[artifact]\nscript = "build.sh"` to expose a `shine app build <app-id>` entry point. Unlike `post_upgrade`, this never runs implicitly (not during `install` or `upgrade`) — the script only runs when a user explicitly types `shine app build <app-id>`. The build child receives the fixed `SHINE_APP_*` env contract **plus the active `[env]` table passed as stored** (no decryption — `_SECRET` keys arrive as ciphertext, same as the `template` transform), so scripts can read user-configured values like `SURGE_PROFILE` without any build triggering a secret-decryption prompt. Keep provider-specific logic (which sections to patch, how to talk to an external app) out of this repo's own preset scripts; that belongs in an external overlay's script, which takes priority over the built-in one when both exist. For the built-in `surge` preset this is how the split works: `shine app install surge` is a plain `Copy` of `local-proxies.conf`/`local-rules.conf` into the Surge Profiles dir (`dest`), and the overlay's `build.sh` (via `shine app build surge`) patches the active profile's `[Proxy]`/`[Rule]` `#!include` lines to also include those files. See [ADR 0009](docs/kb/decisions/0009-app-artifact-build-explicit-command.md) and [`architecture/data-flows.md`](docs/kb/architecture/data-flows.md) for the full env-var contract and resolution rule.
+App categories may also declare `[artifact]\nscript = "build.sh"` (optionally `teardown = "unbuild.sh"`) to expose `shine app build <app-id>` / `shine app unbuild <app-id>` entry points. An artifact may set `runtime = "bun"` (default is `native`) so its script runs via `bun <script>` — cross-platform (macOS/Windows/Linux), like the bun shell presets, and requiring `bun` on PATH; `native` execs the script file directly (relying on its shebang, so Unix-only). A `bun` artifact's `script`/`teardown` must be a `.ts`/`.js`/`.mts`/`.mjs` file. The built-in `clash-verge` preset uses `runtime = "bun"` (CVR is cross-platform); `surge` uses the default native bash artifact (macOS-only). Unlike the hooks above, these never run implicitly from `install`/`upgrade` — `build` runs only on explicit `shine app build`, and `teardown` runs on explicit `shine app unbuild` **and** best-effort during `shine app uninstall` (the reverse of `build`). Both scripts receive the fixed `SHINE_APP_*` env contract **plus the active `[env]` table passed as stored** (no decryption — `_SECRET` keys arrive as ciphertext, same as the `template` transform), so scripts can read user-configured values like `SURGE_PROFILE` without triggering a secret-decryption prompt. The explicit `build`/`unbuild` commands are not gated by `allow_app_hooks` and propagate a nonzero exit as a real error; the implicit teardown during `uninstall` **is** gated (external presets) and is non-fatal (a broken teardown never blocks file removal). Keep provider-specific logic out of this repo's own preset scripts; it belongs in an external overlay's script, which takes priority over the built-in one when both exist. For the built-in `surge` preset: `shine app install surge` is a plain `Copy` of `local-proxies.conf`/`local-proxy-groups.conf`/`local-rules.conf` into the Surge Profiles dir (`dest`), the overlay's `build.sh` (via `shine app build surge`) patches the active profile's `[Proxy]`/`[Proxy Group]`/`[Rule]` `#!include` lines, and its `unbuild.sh` (via `shine app unbuild surge`, or automatically on uninstall) reverses that patch. See [ADR 0009](docs/kb/decisions/0009-app-artifact-build-explicit-command.md), [ADR 0012](docs/kb/decisions/0012-app-lifecycle-post-install-and-teardown.md), and [`architecture/data-flows.md`](docs/kb/architecture/data-flows.md) for the full env-var contract and resolution rule.
 
 ### Sys preset (OS init)
 

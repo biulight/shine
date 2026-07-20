@@ -79,6 +79,20 @@ overlay `build.sh`, which reads `$SURGE_PROFILE` and appends `, local-proxies.co
 `, local-rules.conf` to the `[Proxy]` / `[Rule]` `#!include` lines of the user's active profile.
 Surge itself owns the subscription (`#!MANAGED-CONFIG`); shine no longer fetches or serves it.
 
+**Teardown (`shine app unbuild <app-id>`, ADR 0012).** An `[artifact].teardown` script reverses
+`build`, sharing the *identical* resolution and env contract above (steps 1–4). It has two entry
+points: `handle_unbuild` (explicit, ungated, errors propagate — symmetric to `build`) and
+`run_teardown_for_uninstall`, called best-effort from `apps/uninstall.rs` *before* the file-removal
+loop (implicit, so gated by `allow_app_hooks` for external presets and non-fatal, and a no-op under
+`--dry-run`). Reversal logic stays in the overlay's `unbuild.sh`; shine core never learns what the
+patch was.
+
+**Lifecycle command hooks (`apps/hooks.rs`).** `post_install` (fired by `install`/`reinstall`) and
+`post_upgrade` (fired by `upgrade`) share one runner, `run_app_hooks(config, get_category, changed,
+HookPhase)` — run once per *changed* category, gated by `allow_app_hooks` for external presets,
+failures non-fatal. These are plain argv commands with only the inherited parent env — distinct from
+the richer `SHINE_APP_*` + `[env]` artifact contract used by `build`/`teardown`.
+
 ## Shell install / uninstall
 
 Documented in `AGENTS.md` § "Key data flow". Summary: extract embedded assets →
@@ -87,6 +101,14 @@ to the shell config (`shells/profile.rs`). Uninstall removes only shine-managed 
 and deletes the sentinel block precisely.
 
 ## Sys bootstrap (`shine sys init`)
+
+`shine sys update [ITEM] [--verbose]` is a separate, read-only bootstrap-software flow. It reads
+only `mode = "init"` entries already recorded in `sys-manifest.toml`, then invokes the current
+platform preset as `<item> check-update`. Platform scripts emit `SHINE_SYS_UPDATE` events with a
+verified availability state and an upstream command; the Rust core displays but never executes
+that command. This flow does not write the run manifest, invoke elevation, or update managed
+profiles. Global `shine update` / `shine upgrade` remain limited to Shine configuration and
+managed sys resources.
 
 Documented in `AGENTS.md` § "Sys preset flow". Key cross-module point: `sys/execution.rs` runs
 `init.sh <item_id>` once per selected item and parses `SHINE_SYS_STATUS\t<state>\t<detail>` lines
@@ -110,14 +132,26 @@ stable `v*` release.
 
 ## Git-managed preset pull
 
-`git_pull.rs::handle_pull` resolves the effective `presets_dir` and overlay to their Git roots,
-de-duplicates shared repositories, and validates every worktree before running
-`git pull --ff-only`. Dirty worktrees, detached HEADs, missing upstreams, and pull failures stop
-the operation. `update --pull` and `upgrade --pull` pull first, reload `Config`, then check or
-apply presets so updated project and environment configuration takes effect immediately.
-Successful pulls are summarized as one line per repository (commit range plus short file stats),
-while raw Git progress is hidden unless the parent update/upgrade command is verbose. Failed pulls
-always include captured Git diagnostics; non-Git and duplicate sources are only shown verbosely.
+`git_pull.rs::handle_pull` resolves the effective `presets_dir` and any *manually linked* overlay
+(`presets_overlay_dir`) to their Git roots, de-duplicates shared repositories, and validates every
+worktree before running `git pull --ff-only`. Dirty worktrees, detached HEADs, missing upstreams,
+and pull failures stop the operation. `update --pull` and `upgrade --pull` pull first, reload
+`Config`, then check or apply presets so updated project and environment configuration takes effect
+immediately. Successful pulls are summarized as one line per repository (commit range plus short
+file stats), while raw Git progress is hidden unless the parent update/upgrade command is verbose.
+Failed pulls always include captured Git diagnostics; non-Git and duplicate sources are only shown
+verbosely.
+
+A **shine-managed Git overlay** (`presets_overlay_git`) is handled separately, *before* the
+fast-forward loop, by `git_pull::sync_managed_overlay` against `<shine_dir>/overlay`. On first use
+it clones `--depth 1` via a temp sibling dir + atomic rename (a failed clone never leaves a
+half-populated overlay). On subsequent runs it **force-mirrors**: `git fetch --depth 1 origin
+<branch>` then `git reset --hard FETCH_HEAD`, so the checkout always equals the remote tip even
+across rebases/force-pushes, discarding local edits (the managed overlay is read-only by design).
+The fetch runs before the reset, so an unreachable remote leaves the previous checkout intact and
+usable. `shine overlay link --git <url>` writes the config and clones immediately;
+`configured_targets` deliberately excludes the managed dir from the fast-forward path. See
+[ADR 0010](../decisions/0010-git-managed-overlay.md).
 
 ## Config discovery
 
@@ -135,6 +169,24 @@ the same lookup as `env export` (`KEY_SECRET` decrypted first, then plaintext `K
 both workspace values and inherited process variables. Without a discovered or explicit
 workspace, at least one `--with` is required. The merged environment is applied only to the
 spawned child process, whose exit status is propagated by Shine.
+
+## SSH environment forwarding
+
+`ssh::handle_ssh` resolves each `--with KEY[=ALIAS]` from the exact plaintext key in the active
+config `[env]`; it never performs the secret-first fallback used by `env run`. Each
+`--with-secret KEY[=ALIAS]` instead loads `KEY_SECRET` and decrypts it through the tag-routed
+secret backend. Duplicate aliases and Shine's own SSH/session variable names are rejected. The
+default `--remote-shell posix` flow joins the resolved map, `SHINE_SSH_*`, and terminal-theme hint
+in the quoted `env ... sh -c` wrapper and creates the transfer listener/`-R` channel. The explicit
+`--remote-shell windows` flow instead encodes a PowerShell script as UTF-16LE Base64, probes for
+`pwsh.exe` (PowerShell 7), and falls back to `powershell.exe` (Windows PowerShell 5.1); it sets only
+the session hint, theme, and selected variables and creates no listener, reverse forward, or
+`shine local` channel. Its interactive child loads the selected PowerShell's normal profile so
+managed PATH entries and source-command wrappers are available; an explicit remote command keeps
+`-NoProfile` for deterministic execution. Values are session-only but
+necessarily exposed in process argv/environments on the local and remote hosts; see
+[ADR 0014](../decisions/0014-explicit-ssh-env-forwarding.md) and
+[ADR 0015](../decisions/0015-windows-ssh-environment-forwarding.md).
 
 ## Personal task runner (`shine task run` / `shine run`)
 

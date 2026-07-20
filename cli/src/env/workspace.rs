@@ -140,11 +140,19 @@ pub async fn handle_run(
     config: &Config,
     workspace_arg: Option<&Path>,
     mode_arg: Option<&str>,
+    no_workspace: bool,
     with: &[String],
     command: &[OsString],
 ) -> Result<()> {
     let explicit = resolve_explicit_values(config, with).await?;
-    let workspace_path = find_workspace_optional(workspace_arg).await?;
+    // `--no-workspace` disables discovery entirely: only explicit `--with` values
+    // and the inherited process environment reach the command. Generated Bun
+    // launchers rely on this so a nearby shine.workspace.toml can never hijack them.
+    let workspace_path = if no_workspace {
+        None
+    } else {
+        find_workspace_optional(workspace_arg).await?
+    };
     let (values, override_process_env) = if let Some(workspace_path) = workspace_path {
         let workspace = load_workspace(&workspace_path).await?;
         let mode = mode_arg
@@ -182,8 +190,8 @@ pub async fn handle_run(
         };
         (values, workspace.env.override_process_env)
     } else {
-        if explicit.is_empty() {
-            bail!("shine.workspace.toml was not found; pass --workspace");
+        if !no_workspace && explicit.is_empty() {
+            bail!("shine.workspace.toml was not found; pass --workspace or --no-workspace");
         }
         if mode_arg.is_some() {
             bail!("--mode requires a shine.workspace.toml");
@@ -198,22 +206,12 @@ async fn resolve_explicit_values(
     config: &Config,
     specs: &[String],
 ) -> Result<BTreeMap<String, String>> {
-    let mut parsed = Vec::with_capacity(specs.len());
-    let mut targets = BTreeSet::new();
-    for spec in specs {
-        let (key, target) = spec.split_once('=').unwrap_or((spec, spec));
-        validate_env_key(key)?;
-        validate_env_key(target)?;
-        if !targets.insert(target.to_string()) {
-            bail!("duplicate --with target variable: {target}");
-        }
-        parsed.push((key, target));
-    }
+    let parsed = super::parse_env_specs(specs)?;
 
     let env = super::EnvConfig::load_or_init(config).await?;
     let mut values = BTreeMap::new();
-    for (key, target) in parsed {
-        let value = match super::resolve_stored_value(&env, key)? {
+    for spec in parsed {
+        let value = match super::resolve_stored_value(&env, &spec.source)? {
             super::StoredValue::Secret {
                 key: secret_key,
                 value: ciphertext,
@@ -222,7 +220,7 @@ async fn resolve_explicit_values(
                 .with_context(|| format!("decrypting {secret_key}"))?,
             super::StoredValue::Plaintext(value) => value.to_string(),
         };
-        values.insert(target.to_string(), value);
+        values.insert(spec.target, value);
     }
     Ok(values)
 }
@@ -410,7 +408,7 @@ async fn seal_file(
     let mut new_values = BTreeMap::new();
 
     for (key, state) in &source.secret {
-        validate_env_key(key)?;
+        super::validate_env_key(key)?;
         let secret = match state {
             SecretState::Sealed(true) => old_values
                 .remove(key)
@@ -467,7 +465,7 @@ fn parse_source(path: &Path, contents: &str) -> Result<SourceFile> {
         );
     }
     for key in source.plain.keys().chain(source.secret.keys()) {
-        validate_env_key(key)?;
+        super::validate_env_key(key)?;
     }
     if let Some(key) = source
         .plain
@@ -689,19 +687,6 @@ async fn run_command(
     }
     #[cfg(not(unix))]
     std::process::exit(1);
-}
-
-fn validate_env_key(key: &str) -> Result<()> {
-    let mut chars = key.chars();
-    let Some(first) = chars.next() else {
-        bail!("environment variable name must not be empty");
-    };
-    if !(first == '_' || first.is_ascii_alphabetic())
-        || !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-    {
-        bail!("invalid environment variable name: {key}");
-    }
-    Ok(())
 }
 
 fn absolute_from_current(path: &Path) -> Result<PathBuf> {
@@ -928,11 +913,54 @@ mod tests {
                 .await
                 .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate --with target variable")
-        );
+        assert!(error.to_string().contains("duplicate target variable"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_workspace_injects_explicit_without_discovery() {
+        let directory = std::env::temp_dir().join(format!("shine-nows-{}", uuid::Uuid::new_v4()));
+        let mut config = Config::new_for_test(&directory);
+        config.env.insert("SHINE_NOWS_TOKEN".into(), "alpha".into());
+
+        // no_workspace = true must skip discovery entirely and inject only --with.
+        handle_run(
+            &config,
+            None,
+            None,
+            true,
+            &["SHINE_NOWS_TOKEN".into()],
+            &[
+                OsString::from("sh"),
+                OsString::from("-c"),
+                OsString::from("test \"$SHINE_NOWS_TOKEN\" = alpha"),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_workspace_allows_empty_with() {
+        let directory =
+            std::env::temp_dir().join(format!("shine-nows-empty-{}", uuid::Uuid::new_v4()));
+        let config = Config::new_for_test(&directory);
+
+        handle_run(
+            &config,
+            None,
+            None,
+            true,
+            &[],
+            &[
+                OsString::from("sh"),
+                OsString::from("-c"),
+                OsString::from("true"),
+            ],
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

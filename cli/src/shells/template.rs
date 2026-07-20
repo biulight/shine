@@ -10,6 +10,10 @@ pub(super) struct ScriptTemplate {
     pub(super) source_path: PathBuf,
     pub(super) rendered_path: PathBuf,
     pub(super) display_name: String,
+    /// Metadata-declared transforms (e.g. `["template"]`). When empty, a native
+    /// `.sh`/`.ps1` script may still opt in via the `# shine-template: true`
+    /// annotation; scripts with neither are left unrendered.
+    pub(super) transforms: Vec<String>,
 }
 
 #[derive(Default)]
@@ -31,13 +35,20 @@ pub(super) async fn apply_template_to_scripts(
             Err(_) => continue,
         };
 
-        if !crate::presets::parse_template_annotation(&content) {
+        // Metadata-declared transforms take precedence; otherwise fall back to the
+        // legacy `# shine-template: true` annotation (native scripts only). Scripts
+        // with neither are left unrendered.
+        let effective_transforms: Vec<String> = if !script.transforms.is_empty() {
+            script.transforms.clone()
+        } else if crate::presets::parse_template_annotation(&content) {
+            vec!["template".to_string()]
+        } else {
             continue;
-        }
+        };
 
         let script_env_map = env_map_for_script(script, env_map);
         let rendered = match crate::install_core::apply_transforms(
-            &["template".to_string()],
+            &effective_transforms,
             &content,
             &script_env_map,
         ) {
