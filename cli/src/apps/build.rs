@@ -404,6 +404,39 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
+    async fn build_falls_back_to_source_script_when_overlay_has_only_content() {
+        let dir = make_temp_dir().await;
+        let marker = dir.join("source-ran");
+        write_sample_category(
+            &dir,
+            &format!("#!/bin/sh\ntouch \"{}\"\n", marker.display()),
+        )
+        .await;
+
+        let overlay_dir = dir.join("overlay");
+        let overlay_cat_dir = overlay_dir.join("app/sample");
+        fs::create_dir_all(&overlay_cat_dir).await.unwrap();
+        fs::write(overlay_cat_dir.join("config.toml"), "name = \"overlay\"\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.presets_overlay_dir_override = Some(overlay_dir);
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        handle_build(&config, "sample").await.unwrap();
+
+        assert!(
+            marker.exists(),
+            "source build script should run when the overlay has no artifact script"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
     async fn build_propagates_nonzero_script_exit_as_error() {
         let dir = make_temp_dir().await;
         write_sample_category(&dir, "#!/bin/sh\nexit 7\n").await;

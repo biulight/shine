@@ -364,6 +364,43 @@ The default `app_default_dest_root` is `~/.config`.
 
 If the destination already exists and is not managed by `shine`, it is moved aside to `*.shine.bak` before the preset is installed. Managed app installs are tracked in `~/.shine/app-manifest.toml`, so repeat installs can safely skip unchanged files and overwrite only files previously installed by `shine`.
 
+### Surge URI subscriptions
+
+The macOS `surge` preset can turn a Base64 URI subscription into a generated
+`subscription-proxies.conf`. Configure the HTTPS URL, then install the preset:
+
+```bash
+shine env set SURGE_SUBSCRIPTION_URL 'https://provider.example/subscription?...'
+shine app install surge
+```
+
+This feature requires Bun. It converts compatible `ss://` and `vmess://`
+records, skips VLESS and unsupported transports with a credential-free
+summary, and never modifies the user-maintained `local-proxies.conf`.
+`shine update` downloads and compares the generated content without writing;
+`shine upgrade` applies a changed result and reloads Surge. A failed refresh
+keeps the last-known-good managed file.
+
+`local-proxy-groups.conf` declares:
+
+```ini
+Subscription = select, DIRECT, policy-path=subscription-proxies.conf, external-policy-name-prefix="SUB · "
+```
+
+Another group can import all generated nodes with
+`include-other-group=Subscription`. The active Surge profile must include
+`local-proxy-groups.conf` in `[Proxy Group]`. Configure the profile and apply
+the built-in, idempotent artifact once:
+
+```bash
+shine env set SURGE_PROFILE '~/Library/Application Support/Surge/Profiles/MyProfile.conf'
+shine app build surge
+```
+
+`shine app unbuild surge` removes those local section includes. App uninstall
+also attempts the same teardown before removing managed files. Build and
+unbuild require Bun and never run implicitly during install or upgrade.
+
 ### Uninstall app presets
 
 ```bash

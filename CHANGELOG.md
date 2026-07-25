@@ -7,6 +7,15 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+- Added generic app-file generators whose stdout participates in normal
+  install/update/upgrade hashing and safety checks. The Surge preset can now
+  fetch a Base64 URI subscription, convert compatible SS/VMess nodes into a
+  `policy-path`-backed `Subscription` group, and retain the last-known-good
+  generated file when a refresh fails.
+- Moved the generic Surge profile include patch/unpatch artifact from the
+  private overlay into the built-in Bun preset, with atomic writes, permission
+  and line-ending preservation, symlink protection, and symmetric teardown.
+
 ## [0.39.0] — 2026-07-19
 
 ### Features

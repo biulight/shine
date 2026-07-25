@@ -282,6 +282,24 @@ async fn app_file_row_status(
         Err(_) => (None, FileStatus::NotInstalled),
         Ok(dest) => {
             let status = match manifest.find_by_dest(&dest) {
+                None if file
+                    .generator
+                    .as_ref()
+                    .is_some_and(|generator| env.contains_key(&generator.when_env))
+                    && manifest.entries.iter().any(|entry| {
+                        entry
+                            .source
+                            .strip_prefix("app/")
+                            .and_then(|source| source.split_once('/'))
+                            .is_some_and(|(category, _)| category == cat.name)
+                    }) =>
+                {
+                    if source_hash_for_file(config, cat, file, env).await.is_some() {
+                        FileStatus::UpdateAvail
+                    } else {
+                        FileStatus::NotInstalled
+                    }
+                }
                 None => FileStatus::NotInstalled,
                 Some(entry) => app_entry_status(config, cat, file, entry, env).await,
             };
@@ -305,6 +323,18 @@ pub(crate) async fn app_entry_status(
     entry: &AppEntry,
     env: &BTreeMap<String, String>,
 ) -> FileStatus {
+    // Generators are intentionally polled on every status/update pass, even
+    // when the installed destination was edited. Static sources keep the
+    // cheaper existing behavior and are read only after ownership is proven.
+    let generator_enabled = file
+        .generator
+        .as_ref()
+        .is_some_and(|generator| env.contains_key(&generator.when_env));
+    let generated_source_hash = if generator_enabled {
+        source_hash_for_file(config, cat, file, env).await
+    } else {
+        None
+    };
     if !entry.destination.exists() {
         return FileStatus::Missing;
     }
@@ -314,7 +344,12 @@ pub(crate) async fn app_entry_status(
             let manifest_hash = entry.content_hash;
             match installed_content_hash(file, &dest_bytes) {
                 Ok(Some(dest_hash)) if dest_hash == manifest_hash => {
-                    match source_hash_for_file(config, cat, file, env).await {
+                    let source_hash = if generator_enabled {
+                        generated_source_hash
+                    } else {
+                        source_hash_for_file(config, cat, file, env).await
+                    };
+                    match source_hash {
                         Some(src) if src != manifest_hash => FileStatus::UpdateAvail,
                         _ => FileStatus::UpToDate,
                     }
@@ -352,6 +387,7 @@ mod tests {
             install_strategy: AppInstallStrategy::Copy,
             requires_admin: false,
             restart_hint: None,
+            generator: None,
         }
     }
 
@@ -741,6 +777,7 @@ mod tests {
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 },
                 AppFile {
                     source_rel: PathBuf::from("themes/shine-light"),
@@ -752,6 +789,7 @@ mod tests {
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 },
             ],
             list_mode: AppListMode::Category,
@@ -794,6 +832,7 @@ mod tests {
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 },
                 AppFile {
                     source_rel: PathBuf::from("theme.toml"),
@@ -805,6 +844,7 @@ mod tests {
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 },
             ],
             list_mode: AppListMode::Files,

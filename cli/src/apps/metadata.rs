@@ -1,5 +1,6 @@
 use super::manifest::AppInstallStrategy;
 use crate::config::Config;
+use crate::env::EnvVarSpec;
 use crate::platform::current_platform;
 use crate::presets;
 use anyhow::{Context, Result, bail};
@@ -80,6 +81,15 @@ pub struct AppFile {
     pub install_strategy: AppInstallStrategy,
     pub requires_admin: bool,
     pub restart_hint: Option<String>,
+    pub generator: Option<AppGenerator>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppGenerator {
+    pub script: PathBuf,
+    pub runtime: ArtifactRuntime,
+    pub env: Vec<EnvVarSpec>,
+    pub when_env: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,6 +190,17 @@ struct FileToml {
     #[serde(default)]
     requires_admin: bool,
     restart_hint: Option<String>,
+    generator: Option<GeneratorToml>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GeneratorToml {
+    script: String,
+    #[serde(default)]
+    runtime: Option<ArtifactRuntimeToml>,
+    #[serde(default)]
+    env: Vec<String>,
+    when_env: String,
 }
 
 fn resolve_transforms(file: &FileToml, context: &str) -> Result<Vec<String>> {
@@ -285,6 +306,45 @@ fn resolve_artifact(artifact: Option<ArtifactToml>, context: &str) -> Result<Opt
     }))
 }
 
+fn resolve_generator(
+    generator: Option<GeneratorToml>,
+    context: &str,
+) -> Result<Option<AppGenerator>> {
+    let Some(generator) = generator else {
+        return Ok(None);
+    };
+    let script = normalize_relative(&generator.script)
+        .with_context(|| format!("{context}: invalid generator.script"))?;
+    let runtime = match generator.runtime.unwrap_or(ArtifactRuntimeToml::Native) {
+        ArtifactRuntimeToml::Native => ArtifactRuntime::Native,
+        ArtifactRuntimeToml::Bun => {
+            if !has_bun_extension(&generator.script) {
+                bail!(
+                    "{context}: generator runtime = \"bun\" requires a .ts/.js/.mts/.mjs script, got '{}'",
+                    generator.script
+                );
+            }
+            ArtifactRuntime::Bun
+        }
+    };
+    let env = crate::env::parse_env_specs(&generator.env)
+        .with_context(|| format!("{context}: invalid generator.env"))?;
+    crate::env::validate_env_key(&generator.when_env)
+        .with_context(|| format!("{context}: invalid generator.when_env"))?;
+    if !env.iter().any(|spec| spec.source == generator.when_env) {
+        bail!(
+            "{context}: generator.when_env '{}' must be declared in generator.env",
+            generator.when_env
+        );
+    }
+    Ok(Some(AppGenerator {
+        script,
+        runtime,
+        env,
+        when_env: generator.when_env,
+    }))
+}
+
 fn has_bun_extension(name: &str) -> bool {
     matches!(
         Path::new(name).extension().and_then(|e| e.to_str()),
@@ -387,6 +447,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                                 .with_context(|| format!("invalid target for {context}"))?;
                         let transforms = resolve_transforms(&file, &context)?;
                         let install_strategy = resolve_install_strategy(&file, &context)?;
+                        let generator = resolve_generator(file.generator.clone(), &context)?;
                         Ok(AppFile {
                             source_rel,
                             target_rel,
@@ -397,6 +458,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                             install_strategy,
                             requires_admin: file.requires_admin,
                             restart_hint: file.restart_hint,
+                            generator,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?
@@ -413,6 +475,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 })
                 .collect(),
         };
@@ -456,6 +519,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 }
             })
             .collect(),
@@ -511,6 +575,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                                 .with_context(|| format!("invalid target for {context}"))?;
                         let transforms = resolve_transforms(&file, &context)?;
                         let install_strategy = resolve_install_strategy(&file, &context)?;
+                        let generator = resolve_generator(file.generator.clone(), &context)?;
                         Ok(AppFile {
                             source_rel,
                             target_rel,
@@ -521,6 +586,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                             install_strategy,
                             requires_admin: file.requires_admin,
                             restart_hint: file.restart_hint,
+                            generator,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?
@@ -538,6 +604,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 })
                 .collect(),
         };
@@ -552,6 +619,15 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                     "app/{name}/shine.toml references missing file: {}",
                     file.source_rel.display()
                 );
+            }
+            if let Some(generator) = &file.generator {
+                let script_path = config.preset_path(category_rel.join(&generator.script));
+                if !script_path.exists() {
+                    bail!(
+                        "app/{name}/shine.toml references missing generator script: {}",
+                        generator.script.display()
+                    );
+                }
             }
         }
 
@@ -588,6 +664,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
             install_strategy: AppInstallStrategy::Copy,
             requires_admin: false,
             restart_hint: None,
+            generator: None,
         });
     }
 
@@ -654,6 +731,7 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
             let context = format!("app/{name}/shine.toml");
             resolve_transforms(file, &context)?;
             resolve_install_strategy(file, &context)?;
+            resolve_generator(file.generator.clone(), &context)?;
         }
     }
     resolve_hooks(
@@ -830,7 +908,28 @@ mod tests {
                     "local-proxy-groups.conf".to_string(),
                     "local-proxy-groups.conf".to_string()
                 ),
+                (
+                    "subscription-proxies.conf".to_string(),
+                    "subscription-proxies.conf".to_string()
+                ),
             ]
+        );
+        let subscription = surge
+            .files
+            .iter()
+            .find(|file| file.source_rel == Path::new("subscription-proxies.conf"))
+            .unwrap();
+        assert_eq!(
+            subscription.generator,
+            Some(AppGenerator {
+                script: PathBuf::from("generate-subscription.ts"),
+                runtime: ArtifactRuntime::Bun,
+                env: vec![EnvVarSpec {
+                    source: "SURGE_SUBSCRIPTION_URL".to_string(),
+                    target: "SURGE_SUBSCRIPTION_URL".to_string(),
+                }],
+                when_env: "SURGE_SUBSCRIPTION_URL".to_string(),
+            })
         );
         assert_eq!(
             surge.post_upgrade,
@@ -839,6 +938,14 @@ mod tests {
                 args: vec!["reload".to_string()],
                 show_output: false,
             }]
+        );
+        assert_eq!(
+            surge.artifact,
+            Some(AppArtifact {
+                script: "build.ts".to_string(),
+                teardown: Some("unbuild.ts".to_string()),
+                runtime: ArtifactRuntime::Bun,
+            })
         );
     }
 
@@ -1126,9 +1233,9 @@ source = "config.toml"
         assert_eq!(
             surge.artifact,
             Some(AppArtifact {
-                script: "build.sh".to_string(),
-                teardown: Some("unbuild.sh".to_string()),
-                runtime: ArtifactRuntime::Native,
+                script: "build.ts".to_string(),
+                teardown: Some("unbuild.ts".to_string()),
+                runtime: ArtifactRuntime::Bun,
             })
         );
     }
@@ -1478,6 +1585,7 @@ install_mode = "json-merge"
                     managed_keys: None,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 };
                 resolve_transforms(&file, "test").is_err()
             }
@@ -1498,7 +1606,46 @@ install_mode = "json-merge"
             managed_keys: None,
             requires_admin: false,
             restart_hint: None,
+            generator: None,
         };
         assert!(resolve_transforms(&file, "test").is_err());
+    }
+
+    #[test]
+    fn generator_metadata_parses_and_validates_condition_env() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "/tmp"
+[[files]]
+source = "fallback.conf"
+generator = { script = "generate.ts", runtime = "bun", env = ["SOURCE_URL"], when_env = "SOURCE_URL" }
+"#,
+        )
+        .unwrap();
+        let generator = resolve_generator(
+            parsed.files.unwrap().remove(0).generator,
+            "app/sample/shine.toml",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(generator.script, Path::new("generate.ts"));
+        assert_eq!(generator.runtime, ArtifactRuntime::Bun);
+        assert_eq!(generator.when_env, "SOURCE_URL");
+    }
+
+    #[test]
+    fn generator_condition_must_be_in_declared_env() {
+        let error = parse_category_toml(
+            "sample",
+            br#"
+dest = "/tmp"
+[[files]]
+source = "fallback.conf"
+generator = { script = "generate.ts", runtime = "bun", env = ["OTHER_URL"], when_env = "SOURCE_URL" }
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("must be declared"));
     }
 }

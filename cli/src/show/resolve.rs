@@ -287,6 +287,7 @@ mod tests {
                 install_strategy: AppInstallStrategy::Copy,
                 requires_admin: false,
                 restart_hint: None,
+                generator: None,
             },
             destination: PathBuf::from(dest),
             status: FileStatus::UpToDate,

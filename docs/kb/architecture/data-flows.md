@@ -46,6 +46,31 @@ the receipt comparison includes the normalized domain, DNS servers, and platform
 Update and sys-info output render those receipt differences field by field (`old -> new`) so the
 user can inspect the pending system change before granting administrator access to upgrade.
 
+## Generated app files
+
+An app `[[files]]` entry may declare
+`generator = { script, runtime, env, when_env }`. The static `source` remains a
+safe fallback and stable manifest identity. When `when_env` exists in the active
+`[env]` table, `apps::materialize_file_content` runs the generator and uses its
+UTF-8 stdout as the effective source before normal transforms and install
+strategies:
+
+1. `shine app install` and `shine upgrade` materialize first, then reuse the
+   normal manifest hash, user-modification guard, and atomic file installer.
+2. `shine update` materializes into memory and compares hashes without writing.
+3. An existing managed destination is the last-known-good snapshot when a
+   generator fails; a first-time enabled generator failure is fatal.
+4. Only `generator.env` values are injected. External preset or overlay
+   generator code requires `allow_app_hooks = true`. Execution is deadline- and
+   output-size-limited.
+
+The Surge generator downloads the Base64 URI list in
+`SURGE_SUBSCRIPTION_URL`, converts supported SS/VMess nodes, and writes bare
+policy declarations to `subscription-proxies.conf`. Its `Subscription` group
+loads that file through `policy-path`; other groups reuse the nodes through
+`include-other-group=Subscription`. VLESS and unsupported transports are
+counted and skipped without logging credentials.
+
 ## App artifact build (`shine app build <app-id>`)
 
 `apps/build.rs::handle_build` is fully separate from install/upgrade — it never runs
@@ -55,11 +80,9 @@ app preset's `[artifact].script`:
 1. Resolves the category the same way `app info`/`app install` do
    (`metadata::load_active_categories`), force-extracting embedded assets first when not in
    external-presets mode (the same `extract_prefix` call `app install` makes).
-2. Resolves the script's location: the overlay's `app/<name>/<script>` wins over the source
-   (built-in or external) copy *if the overlay's copy of that category exists at all* — decided
-   once for the whole category directory, not per file (unlike `Config::preset_path`'s per-file
-   overlay precedence used for installed content), since a build script's sibling files (e.g. a
-   `provider-url` file the script reads directly) are one package with the script.
+2. Resolves the script's location: an overlay's `app/<name>/<script>` wins when that exact script
+   exists; otherwise the source (built-in or external) script is used. This lets an overlay keep
+   local policy files while inheriting a generic built-in artifact.
 3. Creates (idempotently, before spawning) `SHINE_APP_HTTP_DIR` (`<shine_dir>/http/app/<name>`),
    `SHINE_STATE_DIR` (`<shine_dir>/state/app/<name>`), and `SHINE_CACHE_DIR` (the OS cache dir via
    the `directories` crate — `<os-cache>/shine/app/<name>`, the same crate/pattern
@@ -73,19 +96,23 @@ app preset's `[artifact].script`:
    captured like `post_upgrade` hooks), so build output streams live; a nonzero exit becomes a
    real `Result::Err` instead of being swallowed.
 
-For Surge specifically: `shine app install surge` is a plain `Copy` install of `local-proxies.conf`
-/ `local-rules.conf` into the Surge Profiles dir (`dest`), and `shine app build surge` runs the
-overlay `build.sh`, which reads `$SURGE_PROFILE` and appends `, local-proxies.conf` /
-`, local-rules.conf` to the `[Proxy]` / `[Rule]` `#!include` lines of the user's active profile.
-Surge itself owns the subscription (`#!MANAGED-CONFIG`); shine no longer fetches or serves it.
+For Surge specifically, `shine app install surge` copies the local files and
+the generated-subscription fallback into the Surge Profiles dir. The built-in
+Bun `build.ts` atomically appends `local-proxies.conf`,
+`local-proxy-groups.conf`, and `local-rules.conf` to the corresponding section
+includes after `SURGE_PROFILE` is configured. It preserves permissions and line
+endings, rejects symlink profiles, and fails when an expected section has no
+patchable include. Subscription nodes are not added to `[Proxy]`;
+`local-proxy-groups.conf` loads the generated bare policy file through
+`policy-path`.
 
 **Teardown (`shine app unbuild <app-id>`, ADR 0012).** An `[artifact].teardown` script reverses
 `build`, sharing the *identical* resolution and env contract above (steps 1–4). It has two entry
 points: `handle_unbuild` (explicit, ungated, errors propagate — symmetric to `build`) and
 `run_teardown_for_uninstall`, called best-effort from `apps/uninstall.rs` *before* the file-removal
 loop (implicit, so gated by `allow_app_hooks` for external presets and non-fatal, and a no-op under
-`--dry-run`). Reversal logic stays in the overlay's `unbuild.sh`; shine core never learns what the
-patch was.
+`--dry-run`). Surge ships a symmetric built-in Bun `unbuild.ts`; other app
+presets may still keep artifact-specific reversal logic in an overlay.
 
 **Lifecycle command hooks (`apps/hooks.rs`).** `post_install` (fired by `install`/`reinstall`) and
 `post_upgrade` (fired by `upgrade`) share one runner, `run_app_hooks(config, get_category, changed,

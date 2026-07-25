@@ -186,6 +186,13 @@ pub async fn handle_config_upgrade(
         println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
     }
 
+    if app_report.failed > 0 {
+        bail!(
+            "{} generated app configuration item(s) failed",
+            app_report.failed
+        );
+    }
+
     if sys_report.failed > 0 {
         bail!(
             "{} managed system configuration item(s) failed",

@@ -364,6 +364,39 @@ transforms = ["jsonc-to-json"]
 
 如果目标文件已经存在且不受 `shine` 管理，安装前会先把它移到 `*.shine.bak`。已安装的应用文件会记录到 `~/.shine/app-manifest.toml` 中，因此重复安装时可以安全跳过未变化文件，只覆盖那些此前由 `shine` 安装过的文件。
 
+### Surge URI 订阅
+
+macOS 的 `surge` 预设可以把 Base64 URI 订阅转换成受管的
+`subscription-proxies.conf`。先配置 HTTPS URL，再安装：
+
+```bash
+shine env set SURGE_SUBSCRIPTION_URL 'https://provider.example/subscription?...'
+shine app install surge
+```
+
+该功能需要 Bun。转换器支持可兼容的 `ss://` 和 `vmess://`，并以不含凭据的摘要报告被跳过的 VLESS、未知 transport 和坏记录；用户维护的
+`local-proxies.conf` 不会被改写。`shine update` 只下载到内存并比较，
+`shine upgrade` 才应用变化并 reload Surge；刷新失败时保留上次成功生成的文件。
+
+`local-proxy-groups.conf` 中提供：
+
+```ini
+Subscription = select, DIRECT, policy-path=subscription-proxies.conf, external-policy-name-prefix="SUB · "
+```
+
+其它策略组可通过 `include-other-group=Subscription` 纳入全部订阅节点。活动
+Surge Profile 需要在 `[Proxy Group]` include `local-proxy-groups.conf`。设置
+Profile 路径后，可运行内置的幂等 artifact 完成补丁：
+
+```bash
+shine env set SURGE_PROFILE '~/Library/Application Support/Surge/Profiles/MyProfile.conf'
+shine app build surge
+```
+
+`shine app unbuild surge` 会移除这些本地 section include；卸载 app 时也会在
+删除托管文件前尽力执行相同的 teardown。build/unbuild 需要 Bun，并且不会在
+install 或 upgrade 时隐式执行。
+
 ### 卸载应用预设
 
 ```bash

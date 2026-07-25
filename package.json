@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test:ts": "bun test presets/app/clash-verge/build.test.ts",
+    "test:ts": "bun test presets/app/clash-verge/build.test.ts presets/app/surge/generate-subscription.test.ts presets/app/surge/profile-artifact.test.ts",
     "check:ts": "bun run typecheck && bun run test:ts"
   },
   "devDependencies": {

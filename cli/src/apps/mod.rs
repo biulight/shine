@@ -1,5 +1,6 @@
 mod annotation;
 mod build;
+mod generator;
 mod hooks;
 mod info;
 mod install;
@@ -13,8 +14,8 @@ pub use build::{handle_build, handle_unbuild};
 pub use info::{handle_info, handle_list};
 pub use install::handle_install;
 pub use metadata::{
-    AppCategory, AppFile, AppHook, AppListMode, load_active_categories, load_embedded_categories,
-    load_installed_categories,
+    AppCategory, AppFile, AppGenerator, AppHook, AppListMode, load_active_categories,
+    load_embedded_categories, load_installed_categories,
 };
 pub use uninstall::handle_uninstall;
 pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
@@ -37,6 +38,8 @@ description = "Main application config"
 display_name = "config.toml"
 # Known transforms: "template", "jsonc-to-json".
 transforms = []
+# Optional generated source. The static `source` above is the fallback.
+# generator = { script = "generate.ts", runtime = "bun", env = ["SOURCE_URL"], when_env = "SOURCE_URL" }
 "#;
 
 pub async fn handle_init_template(force: bool) -> Result<()> {
@@ -54,25 +57,40 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
 /// Hash the effective install content for `file` — applies transforms if declared.
 ///
 /// Returns `None` when the source cannot be read (e.g. not yet extracted).
+pub async fn materialize_file_content(
+    config: &Config,
+    cat: &metadata::AppCategory,
+    file: &metadata::AppFile,
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    let raw = if let Some(generated) = generator::generate(config, cat, file, env).await? {
+        generated
+    } else if config.is_external_presets {
+        let path = config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
+        tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("reading {}", path.display()))?
+    } else {
+        let key = format!("app/{}/{}", cat.name, file.source_rel.display());
+        crate::presets::read_asset_bytes(&key)
+            .with_context(|| format!("embedded source not found: {key}"))?
+    };
+
+    if file.transforms.is_empty() {
+        Ok(raw)
+    } else {
+        transforms::apply(&file.transforms, &raw, env)
+            .with_context(|| format!("transform failed: {}", file.transforms.join(", ")))
+    }
+}
+
 pub async fn source_bytes_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
     file: &metadata::AppFile,
     env: &BTreeMap<String, String>,
 ) -> Option<Vec<u8>> {
-    let raw = if config.is_external_presets {
-        let path = config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
-        tokio::fs::read(&path).await.ok()?
-    } else {
-        let key = format!("app/{}/{}", cat.name, file.source_rel.display());
-        crate::presets::read_asset_bytes(&key)?
-    };
-
-    if file.transforms.is_empty() {
-        Some(raw)
-    } else {
-        transforms::apply(&file.transforms, &raw, env).ok()
-    }
+    materialize_file_content(config, cat, file, env).await.ok()
 }
 
 pub async fn source_hash_for_file(
@@ -81,7 +99,18 @@ pub async fn source_hash_for_file(
     file: &metadata::AppFile,
     env: &BTreeMap<String, String>,
 ) -> Option<u64> {
-    let effective = source_bytes_for_file(config, cat, file, env).await?;
+    let effective = match materialize_file_content(config, cat, file, env).await {
+        Ok(content) => content,
+        Err(error) => {
+            eprintln!(
+                "  {} {}/{}: source unavailable; no changes applied ({error:#})",
+                crate::colors::symbol("!"),
+                cat.name,
+                file.source_rel.display()
+            );
+            return None;
+        }
+    };
     desired_content_hash(file, &effective).ok()
 }
 

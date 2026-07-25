@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use dialoguer::Confirm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
@@ -9,7 +9,6 @@ use crate::config::Config;
 use crate::env::EnvConfig;
 use crate::output;
 use crate::path_display;
-use crate::presets;
 
 use super::file_ops::{InstallOutcome, UninstallOutcome};
 use super::manifest::{AppEntry, AppManifest};
@@ -17,7 +16,6 @@ use super::metadata;
 use super::report::{
     print_install_error, print_install_success, print_stale_not_found, print_stale_removed,
 };
-use super::transforms;
 use super::{
     app_category_from_source, app_source_parts, desired_content_hash, install_prepared_content,
     installed_content_hash, resolve_install_destination, uninstall_app_entry,
@@ -27,6 +25,7 @@ use super::{
 pub struct AppUpgradeReport {
     pub updated: usize,
     pub skipped: usize,
+    pub failed: usize,
     pub user_modified: usize,
     pub restart_hints: BTreeSet<String>,
 }
@@ -81,6 +80,7 @@ pub async fn handle_upgrade_installed(
 
     let mut updated = 0usize;
     let mut skipped = 0usize;
+    let mut failed = 0usize;
     let mut user_modified = 0usize;
     let mut pending_upserts: Vec<AppEntry> = Vec::new();
     let mut restart_hints = BTreeSet::new();
@@ -151,6 +151,9 @@ pub async fn handle_upgrade_installed(
             EntryUpgradeResult::Skipped | EntryUpgradeResult::Failed => {
                 skipped += 1;
             }
+            EntryUpgradeResult::FatalGenerator => {
+                failed += 1;
+            }
         }
     }
 
@@ -158,7 +161,7 @@ pub async fn handle_upgrade_installed(
         manifest.remove_by_dest(&destination);
     }
 
-    let (new_updated, new_skipped, new_upserts, new_restart_hints) =
+    let (new_updated, new_skipped, new_failed, new_upserts, new_restart_hints) =
         install_new_category_files(config, &categories_by_name, &manifest, env_map).await?;
     updated += new_updated;
     skipped += new_skipped;
@@ -186,6 +189,7 @@ pub async fn handle_upgrade_installed(
     Ok(AppUpgradeReport {
         updated,
         skipped,
+        failed: failed + new_failed,
         user_modified,
         restart_hints,
     })
@@ -196,6 +200,7 @@ enum EntryUpgradeResult {
     UserModified,
     Skipped,
     Failed,
+    FatalGenerator,
 }
 
 async fn try_upgrade_entry(
@@ -209,7 +214,16 @@ async fn try_upgrade_entry(
         Ok(c) => c,
         Err(e) => {
             print_install_error(&entry.source, &e);
-            return EntryUpgradeResult::Failed;
+            return if file
+                .generator
+                .as_ref()
+                .is_some_and(|generator| env_map.contains_key(&generator.when_env))
+                && !entry.destination.exists()
+            {
+                EntryUpgradeResult::FatalGenerator
+            } else {
+                EntryUpgradeResult::Failed
+            };
         }
     };
 
@@ -349,9 +363,10 @@ async fn install_new_category_files(
     categories_by_name: &BTreeMap<String, metadata::AppCategory>,
     manifest: &AppManifest,
     env_map: &BTreeMap<String, String>,
-) -> Result<(usize, usize, Vec<AppEntry>, BTreeSet<String>)> {
+) -> Result<(usize, usize, usize, Vec<AppEntry>, BTreeSet<String>)> {
     let mut updated = 0usize;
     let mut skipped = 0usize;
+    let mut failed = 0usize;
     let mut new_upserts: Vec<AppEntry> = Vec::new();
     let mut restart_hints = BTreeSet::new();
 
@@ -390,7 +405,15 @@ async fn install_new_category_files(
                 Ok(content) => content,
                 Err(e) => {
                     eprintln!("  {} {}: {e:#}", colors::symbol_stderr("✗"), source);
-                    skipped += 1;
+                    if file
+                        .generator
+                        .as_ref()
+                        .is_some_and(|generator| env_map.contains_key(&generator.when_env))
+                    {
+                        failed += 1;
+                    } else {
+                        skipped += 1;
+                    }
                     continue;
                 }
             };
@@ -413,7 +436,8 @@ async fn install_new_category_files(
                         backup: None,
                         content_hash: hash,
                         install_strategy: file.install_strategy.clone(),
-                        uses_env: file.transforms.iter().any(|t| t == "template"),
+                        uses_env: file.transforms.iter().any(|t| t == "template")
+                            || file.generator.is_some(),
                         requires_admin: file.requires_admin,
                     });
                     updated += 1;
@@ -440,7 +464,7 @@ async fn install_new_category_files(
         }
     }
 
-    Ok((updated, skipped, new_upserts, restart_hints))
+    Ok((updated, skipped, failed, new_upserts, restart_hints))
 }
 
 async fn cleanup_stale_entry(
@@ -520,21 +544,5 @@ async fn upgrade_file_content(
     file: &metadata::AppFile,
     env_map: &BTreeMap<String, String>,
 ) -> Result<Vec<u8>> {
-    let raw = if config.is_external_presets {
-        let path = config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
-        tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("reading {}", path.display()))?
-    } else {
-        let source = format!("app/{}/{}", cat.name, file.source_rel.display());
-        presets::read_asset_bytes(&source)
-            .with_context(|| format!("embedded source not found: {source}"))?
-    };
-
-    if file.transforms.is_empty() {
-        Ok(raw)
-    } else {
-        transforms::apply(&file.transforms, &raw, env_map)
-            .with_context(|| format!("transform failed: {}", file.transforms.join(", ")))
-    }
+    super::materialize_file_content(config, cat, file, env_map).await
 }
