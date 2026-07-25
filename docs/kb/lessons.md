@@ -3,6 +3,28 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-25 — Subscription values crossed the generated-config line boundary
+
+- **Symptom**: a VMess subscription field containing CR/LF could add a second Surge configuration
+  line instead of being counted as an invalid node.
+- **Root cause**: quoting a value escaped quotes and backslashes but preserved control characters;
+  Surge's configuration remains line-oriented even when a field is quoted.
+- **Fix**: reject control characters in every emitted remote value, reject configuration
+  delimiters in unquoted positional values, and keep node-name sanitization control-safe.
+- **Rule**: quoting is not validation for generated line-oriented configuration. Validate every
+  untrusted field before interpolation, and reject line/control characters even inside quotes.
+
+## 2026-07-25 — Generator output limits were checked after unbounded capture
+
+- **Symptom**: a faulty generator could make the parent buffer arbitrary stdout/stderr for the
+  full timeout despite advertised 8 MiB/64 KiB limits.
+- **Root cause**: `Command::output()` collected both pipes completely before their lengths were
+  checked.
+- **Fix**: drain stdout and stderr concurrently in bounded chunks, retain at most each configured
+  limit, and terminate/reap the child immediately when either stream exceeds it.
+- **Rule**: a post-capture size check is not a memory bound. Enforce subprocess output limits while
+  draining both pipes concurrently so neither pipe deadlocks the child.
+
 ## 2026-07-19 — Interactive Windows SSH skipped the managed PowerShell profile
 
 - **Symptom**: `shine ssh --remote-shell windows <host>` opened PowerShell 7, but Shine-installed

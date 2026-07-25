@@ -92,6 +92,41 @@ describe("Surge subscription conversion", () => {
     expect(convertSubscription(encoded).stats.imported).toBe(1);
   });
 
+  test("rejects configuration delimiters and control characters in remote fields", () => {
+    const good = `vmess://${b64(JSON.stringify({
+      ps: "Good",
+      add: "good.example",
+      port: 443,
+      id: "00000000-0000-0000-0000-000000000004",
+    }))}`;
+    const maliciousRecords = [
+      { add: "bad.example\nInjected = direct" },
+      { id: "uuid\r\nInjected = direct" },
+      { net: "ws", path: "/socket\nInjected = direct" },
+      { net: "ws", host: "cdn.example\u0000Injected" },
+      { tls: "tls", sni: "origin.example\tInjected" },
+      { add: "bad.example, direct" },
+    ];
+    const malicious = maliciousRecords.map((fields, index) =>
+      `vmess://${b64(JSON.stringify({
+        ps: `Bad ${index}`,
+        add: "bad.example",
+        port: 443,
+        id: `00000000-0000-0000-0000-0000000001${index}`,
+        ...fields,
+      }))}`
+    );
+
+    const result = convertSubscription(subscription(good, ...malicious));
+
+    expect(result.stats.imported).toBe(1);
+    expect(result.stats.invalid).toBe(malicious.length);
+    expect(result.output).toBe(
+      "Good = vmess, good.example, 443, username=00000000-0000-0000-0000-000000000004, vmess-aead=true\n",
+    );
+    expect(result.output).not.toContain("Injected");
+  });
+
   test("fails when no compatible nodes remain", () => {
     expect(() => convertSubscription(subscription("vless://example"))).toThrow(
       "no compatible proxy nodes",

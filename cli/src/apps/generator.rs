@@ -11,8 +11,10 @@ use anyhow::{Context, Result, bail};
 use directories::BaseDirs;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 use tokio::fs;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 const GENERATOR_TIMEOUT: Duration = Duration::from_secs(30);
@@ -105,11 +107,16 @@ pub(super) async fn generate(
         command.env("SHINE_APP_OVERLAY_DIR", overlay_dir);
     }
 
-    let output = tokio::time::timeout(GENERATOR_TIMEOUT, command.output()).await;
+    let output = run_generator_command(
+        &mut command,
+        &category.name,
+        GENERATOR_TIMEOUT,
+        MAX_STDOUT_BYTES,
+        MAX_STDERR_BYTES,
+    )
+    .await;
     resolved.cleanup().await;
-    let output = output
-        .map_err(|_| anyhow::anyhow!("app '{}' generator timed out", category.name))?
-        .with_context(|| format!("running app '{}' generator", category.name))?;
+    let output = output?;
 
     if !output.status.success() {
         bail!(
@@ -118,38 +125,151 @@ pub(super) async fn generate(
             output.status
         );
     }
-    if output.stdout.len() > MAX_STDOUT_BYTES {
-        bail!(
-            "app '{}' generator output exceeds the {} MiB limit",
-            category.name,
-            MAX_STDOUT_BYTES / 1024 / 1024
-        );
-    }
     let content = String::from_utf8(output.stdout)
         .with_context(|| format!("app '{}' generator output is not UTF-8", category.name))?;
 
     if !output.stderr.is_empty() {
-        if output.stderr.len() > MAX_STDERR_BYTES {
+        let note = String::from_utf8_lossy(&output.stderr);
+        let note = note.trim();
+        if !note.is_empty() {
             eprintln!(
-                "  {} {}: generator note omitted (output too large)",
+                "  {} {}: {}",
                 crate::colors::symbol("!"),
-                category.name
+                category.name,
+                note
             );
-        } else {
-            let note = String::from_utf8_lossy(&output.stderr);
-            let note = note.trim();
-            if !note.is_empty() {
-                eprintln!(
-                    "  {} {}: {}",
-                    crate::colors::symbol("!"),
-                    category.name,
-                    note
-                );
-            }
         }
     }
 
     Ok(Some(content.into_bytes()))
+}
+
+#[derive(Debug)]
+struct GeneratorOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+enum LimitedReadError {
+    LimitExceeded,
+    Io(std::io::Error),
+}
+
+async fn read_limited(
+    mut stream: impl AsyncRead + Unpin,
+    limit: usize,
+) -> std::result::Result<Vec<u8>, LimitedReadError> {
+    let mut output = Vec::with_capacity(limit.min(64 * 1024));
+    let mut chunk = [0_u8; 8 * 1024];
+    loop {
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .map_err(LimitedReadError::Io)?;
+        if read == 0 {
+            return Ok(output);
+        }
+        let remaining = limit.saturating_sub(output.len());
+        if read > remaining {
+            return Err(LimitedReadError::LimitExceeded);
+        }
+        output.extend_from_slice(&chunk[..read]);
+    }
+}
+
+async fn terminate_child(child: &mut tokio::process::Child) {
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+async fn run_generator_command(
+    command: &mut Command,
+    app_id: &str,
+    timeout: Duration,
+    stdout_limit: usize,
+    stderr_limit: usize,
+) -> Result<GeneratorOutput> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("running app '{app_id}' generator"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("generator stdout pipe is unavailable")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("generator stderr pipe is unavailable")?;
+    let stdout_reader = read_limited(stdout, stdout_limit);
+    let stderr_reader = read_limited(stderr, stderr_limit);
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(stdout_reader, stderr_reader, deadline);
+
+    let mut status = None;
+    let mut stdout = None;
+    let mut stderr = None;
+    loop {
+        tokio::select! {
+            _ = &mut deadline => {
+                terminate_child(&mut child).await;
+                bail!("app '{app_id}' generator timed out");
+            }
+            result = &mut stdout_reader, if stdout.is_none() => {
+                match result {
+                    Ok(bytes) => stdout = Some(bytes),
+                    Err(LimitedReadError::LimitExceeded) => {
+                        terminate_child(&mut child).await;
+                        bail!(
+                            "app '{app_id}' generator output exceeds the {} MiB limit",
+                            stdout_limit / 1024 / 1024
+                        );
+                    }
+                    Err(LimitedReadError::Io(error)) => {
+                        terminate_child(&mut child).await;
+                        return Err(error).context("reading generator stdout");
+                    }
+                }
+            }
+            result = &mut stderr_reader, if stderr.is_none() => {
+                match result {
+                    Ok(bytes) => stderr = Some(bytes),
+                    Err(LimitedReadError::LimitExceeded) => {
+                        terminate_child(&mut child).await;
+                        bail!(
+                            "app '{app_id}' generator stderr exceeds the {} KiB limit",
+                            stderr_limit / 1024
+                        );
+                    }
+                    Err(LimitedReadError::Io(error)) => {
+                        terminate_child(&mut child).await;
+                        return Err(error).context("reading generator stderr");
+                    }
+                }
+            }
+            result = child.wait(), if status.is_none() => {
+                status = Some(
+                    result.with_context(|| format!("waiting for app '{app_id}' generator"))?
+                );
+            }
+        }
+
+        match (status.take(), stdout.take(), stderr.take()) {
+            (Some(status), Some(stdout), Some(stderr)) => {
+                return Ok(GeneratorOutput {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            (pending_status, pending_stdout, pending_stderr) => {
+                status = pending_status;
+                stdout = pending_stdout;
+                stderr = pending_stderr;
+            }
+        }
+    }
 }
 
 struct ResolvedScript {
@@ -325,5 +445,41 @@ mod tests {
                 .is_none()
         );
         fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn generator_is_terminated_when_stdout_exceeds_limit() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("i=0; while [ \"$i\" -lt 2048 ]; do printf x; i=$((i + 1)); done; sleep 10");
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_generator_command(&mut command, "sample", Duration::from_secs(30), 1024, 1024),
+        )
+        .await
+        .expect("generator was not terminated promptly")
+        .unwrap_err();
+
+        assert!(error.to_string().contains("output exceeds"));
+    }
+
+    #[tokio::test]
+    async fn generator_is_terminated_when_stderr_exceeds_limit() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("i=0; while [ \"$i\" -lt 2048 ]; do printf x >&2; i=$((i + 1)); done; sleep 10");
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_generator_command(&mut command, "sample", Duration::from_secs(30), 1024, 1024),
+        )
+        .await
+        .expect("generator was not terminated promptly")
+        .unwrap_err();
+
+        assert!(error.to_string().contains("stderr exceeds"));
     }
 }

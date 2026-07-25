@@ -54,15 +54,25 @@ function decodeName(value: string | undefined, fallback: string): string {
 
 function sanitizeName(value: string): string {
   const cleaned = value
-    .replace(/[\r\n=,]/g, " ")
+    .replace(/[\x00-\x1f\x7f=,]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   return (cleaned || "Subscription Node").slice(0, 96);
 }
 
 function value(value: string): string {
-  if (/^[^,\r\n"]+$/.test(value)) return value;
+  if (/[\x00-\x1f\x7f]/.test(value)) {
+    throw new Error("invalid control character");
+  }
+  if (/^[^,"]+$/.test(value)) return value;
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function positionalValue(value: string): string {
+  if (!value || /[\x00-\x1f\x7f,="]/.test(value)) {
+    throw new Error("invalid positional value");
+  }
+  return value;
 }
 
 function parsePort(value: string | number): number {
@@ -131,7 +141,7 @@ function parseShadowsocks(uri: string): ParsedProxy {
   const name = sanitizeName(decodeName(fragment, fallback));
   const params = [
     "ss",
-    endpoint.host,
+    positionalValue(endpoint.host),
     String(endpoint.port),
     `encrypt-method=${value(credentials.method)}`,
     `password=${value(credentials.password)}`,
@@ -162,7 +172,12 @@ function parseVmess(uri: string): ParsedProxy {
     throw new Error("unsupported VMess transport");
   }
 
-  const params = ["vmess", host, String(port), `username=${value(id)}`];
+  const params = [
+    "vmess",
+    positionalValue(host),
+    String(port),
+    `username=${value(id)}`,
+  ];
   const alterId = asString(record, "aid").trim();
   params.push(`vmess-aead=${alterId === "" || alterId === "0" ? "true" : "false"}`);
 
