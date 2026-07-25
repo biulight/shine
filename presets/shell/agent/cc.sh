@@ -2,7 +2,7 @@
 # shine-template: true
 # Configure Claude Code to use a selected provider in the current shell session.
 # Reads provider API keys or base64-encoded GPG secrets from the active shine env config.
-# Use: ccenv
+# Use: ccenv [-r|--run] [--] [CLAUDE_ARGS...]
 
 cc_is_sourced() {
     if [ -n "${ZSH_EVAL_CONTEXT:-}" ]; then
@@ -76,7 +76,6 @@ cc_configure_deepseek() {
     unset CLAUDE_CODE_MAX_CONTEXT_TOKENS
 
     echo "ccenv: Claude Code environment configured for DeepSeek."
-    echo "ccenv: Run 'claude' when you are ready to start Claude Code."
 }
 
 cc_configure_qwen() {
@@ -108,13 +107,22 @@ cc_configure_qwen() {
     unset CLAUDE_CODE_EFFORT_LEVEL
 
     echo "ccenv: Claude Code environment configured for Qwen."
-    echo "ccenv: Run 'claude' when you are ready to start Claude Code."
 }
 
 if ! cc_is_sourced; then
     echo "ccenv: this command must be sourced to update the current shell environment." >&2
     echo "ccenv: run 'source ccenv', or install with 'shine shell install agent' and reload your shell." >&2
     exit 1
+fi
+
+cc_run_claude=0
+if [ "$#" -gt 0 ]; then
+    cc_run_claude=1
+    case "$1" in
+        -r|--run|--)
+            shift
+            ;;
+    esac
 fi
 
 cc_provider="$(cc_select_provider)" || return 1
@@ -134,3 +142,12 @@ esac
 
 unset cc_provider provider_choice
 unset -f cc_is_sourced cc_fail cc_select_provider cc_configure_deepseek cc_configure_qwen
+
+if [ "$cc_run_claude" -eq 1 ]; then
+    unset cc_run_claude
+    command claude "$@"
+    return $?
+fi
+
+unset cc_run_claude
+echo "ccenv: Run 'claude' when you are ready to start Claude Code."

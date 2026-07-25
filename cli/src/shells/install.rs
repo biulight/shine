@@ -1136,7 +1136,151 @@ mod tests {
             assert!(script.contains("qwen3.6-flash"));
             assert!(script.contains("qwen3.7-max"));
             assert!(script.contains("983616"));
+
+            if path.ends_with(".sh") {
+                assert!(script.contains("-r|--run|--)"));
+                assert!(script.contains("command claude \"$@\""));
+                assert!(script.contains("return $?"));
+            } else {
+                assert!(script.contains("@('-r', '--run', '--')"));
+                assert!(script.contains("& claude @ccClaudeArgs"));
+                assert!(script.contains("$global:LASTEXITCODE = $ccClaudeExitCode"));
+            }
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn embedded_agent_ccenv_launches_claude_with_expected_arguments() {
+        async fn run_ccenv(
+            script: &Path,
+            fake_bin: &Path,
+            log_path: &Path,
+            args: &[&str],
+            claude_exit: i32,
+        ) -> std::process::Output {
+            let mut path_entries = vec![fake_bin.to_path_buf()];
+            if let Some(current_path) = std::env::var_os("PATH") {
+                path_entries.extend(std::env::split_paths(&current_path));
+            }
+            let path = std::env::join_paths(path_entries).unwrap();
+            let mut command = tokio::process::Command::new("bash");
+            command
+                .arg("-c")
+                .arg(
+                    r#"ccenv_script=$1
+shift
+source "$ccenv_script" "$@" <<< "1"
+ccenv_status=$?
+printf '__STATUS__=%s\n' "$ccenv_status"
+printf '__TOKEN__=%s\n' "${ANTHROPIC_AUTH_TOKEN:-}"
+"#,
+                )
+                .arg("ccenv-test")
+                .arg(script)
+                .args(args)
+                .env("PATH", path)
+                .env("CCENV_TEST_LOG", log_path)
+                .env("CCENV_TEST_EXIT", claude_exit.to_string());
+            command.output().await.unwrap()
+        }
+
+        let dir = make_temp_dir().await;
+        let config = config_with_deepseek_key(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        handle_install(&config, Some("agent"), false).await.unwrap();
+
+        let rendered = config.rendered_dir().join("shell/agent/cc.sh");
+        let fake_bin = dir.join("fake-bin");
+        fs::create_dir_all(&fake_bin).await.unwrap();
+        let fake_shine = fake_bin.join("shine");
+        fs::write(&fake_shine, b"#!/bin/bash\nexit 1\n")
+            .await
+            .unwrap();
+        make_executable(&fake_shine).await;
+        let fake_claude = fake_bin.join("claude");
+        fs::write(
+            &fake_claude,
+            br#"#!/bin/bash
+printf 'TOKEN=%s\n' "$ANTHROPIC_AUTH_TOKEN" > "$CCENV_TEST_LOG"
+for arg in "$@"; do
+    printf 'ARG=%s\n' "$arg" >> "$CCENV_TEST_LOG"
+done
+exit "${CCENV_TEST_EXIT:-0}"
+"#,
+        )
+        .await
+        .unwrap();
+        make_executable(&fake_claude).await;
+
+        let no_args_log = dir.join("no-args.log");
+        let no_args = run_ccenv(&rendered, &fake_bin, &no_args_log, &[], 0).await;
+        let no_args_stdout = String::from_utf8(no_args.stdout).unwrap();
+        assert!(no_args.status.success(), "{no_args_stdout}");
+        assert!(
+            !no_args_log.exists(),
+            "plain ccenv should not launch claude"
+        );
+        assert!(no_args_stdout.contains("Run 'claude' when you are ready"));
+        assert!(no_args_stdout.contains("__TOKEN__=test-deepseek-key"));
+
+        for flag in ["-r", "--run"] {
+            let log = dir.join(format!("{}.log", flag.trim_start_matches('-')));
+            let output = run_ccenv(&rendered, &fake_bin, &log, &[flag], 0).await;
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(output.status.success(), "{stdout}");
+            assert_eq!(
+                fs::read_to_string(&log).await.unwrap(),
+                "TOKEN=test-deepseek-key\n"
+            );
+            assert!(!stdout.contains("Run 'claude' when you are ready"));
+        }
+
+        let args_log = dir.join("args.log");
+        let args_output = run_ccenv(
+            &rendered,
+            &fake_bin,
+            &args_log,
+            &["--print", "hello world", "tail"],
+            23,
+        )
+        .await;
+        let args_stdout = String::from_utf8(args_output.stdout).unwrap();
+        assert!(args_stdout.contains("__STATUS__=23"), "{args_stdout}");
+        assert_eq!(
+            fs::read_to_string(&args_log).await.unwrap(),
+            "TOKEN=test-deepseek-key\nARG=--print\nARG=hello world\nARG=tail\n"
+        );
+
+        let escaped_log = dir.join("escaped.log");
+        let escaped = run_ccenv(&rendered, &fake_bin, &escaped_log, &["--", "--run"], 0).await;
+        assert!(escaped.status.success());
+        assert_eq!(
+            fs::read_to_string(&escaped_log).await.unwrap(),
+            "TOKEN=test-deepseek-key\nARG=--run\n"
+        );
+
+        let missing_dir = dir.join("missing-key");
+        let missing_config = Config::new_for_test(&missing_dir);
+        fs::create_dir_all(missing_config.presets_dir())
+            .await
+            .unwrap();
+        fs::create_dir_all(missing_config.bin_dir()).await.unwrap();
+        handle_install(&missing_config, Some("agent"), false)
+            .await
+            .unwrap();
+        let missing_script = missing_config.rendered_dir().join("shell/agent/cc.sh");
+        let missing_log = dir.join("missing.log");
+        let missing = run_ccenv(&missing_script, &fake_bin, &missing_log, &["--run"], 0).await;
+        let missing_stdout = String::from_utf8(missing.stdout).unwrap();
+        assert!(missing_stdout.contains("__STATUS__=1"), "{missing_stdout}");
+        assert!(
+            !missing_log.exists(),
+            "credential failure should not launch claude"
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[cfg(unix)]

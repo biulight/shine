@@ -1,7 +1,7 @@
 # shine-template: true
 # Configure Claude Code to use a selected provider in the current PowerShell session.
 # Reads provider API keys or base64-encoded GPG secrets from the active shine env config.
-# Use: ccenv
+# Use: ccenv [-r|--run] [--] [CLAUDE_ARGS...]
 
 function Fail-CcEnv {
     param(
@@ -71,7 +71,6 @@ function Set-CcDeepSeekEnv {
     Remove-Item Env:CLAUDE_CODE_MAX_CONTEXT_TOKENS -ErrorAction SilentlyContinue
 
     Write-Host 'ccenv: Claude Code environment configured for DeepSeek.'
-    Write-Host "ccenv: Run 'claude' when you are ready to start Claude Code."
     return $true
 }
 
@@ -104,8 +103,17 @@ function Set-CcQwenEnv {
     Remove-Item Env:CLAUDE_CODE_EFFORT_LEVEL -ErrorAction SilentlyContinue
 
     Write-Host 'ccenv: Claude Code environment configured for Qwen.'
-    Write-Host "ccenv: Run 'claude' when you are ready to start Claude Code."
     return $true
+}
+
+$ccRunClaude = $args.Count -gt 0
+$ccClaudeArgs = @($args)
+if ($ccRunClaude -and $ccClaudeArgs[0] -in @('-r', '--run', '--')) {
+    if ($ccClaudeArgs.Count -gt 1) {
+        $ccClaudeArgs = @($ccClaudeArgs[1..($ccClaudeArgs.Count - 1)])
+    } else {
+        $ccClaudeArgs = @()
+    }
 }
 
 $ccProvider = Select-CcProvider
@@ -135,3 +143,17 @@ Remove-Item function:Select-CcProvider -ErrorAction SilentlyContinue
 Remove-Item function:Set-CcDeepSeekEnv -ErrorAction SilentlyContinue
 Remove-Item function:Set-CcQwenEnv -ErrorAction SilentlyContinue
 Remove-Variable ccProvider -ErrorAction SilentlyContinue
+
+if ($ccRunClaude) {
+    & claude @ccClaudeArgs
+    $ccClaudeExitCode = $LASTEXITCODE
+    Remove-Variable ccRunClaude -ErrorAction SilentlyContinue
+    Remove-Variable ccClaudeArgs -ErrorAction SilentlyContinue
+    $global:LASTEXITCODE = $ccClaudeExitCode
+    Remove-Variable ccClaudeExitCode -ErrorAction SilentlyContinue
+    return
+}
+
+Remove-Variable ccRunClaude -ErrorAction SilentlyContinue
+Remove-Variable ccClaudeArgs -ErrorAction SilentlyContinue
+Write-Host "ccenv: Run 'claude' when you are ready to start Claude Code."

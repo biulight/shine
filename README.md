@@ -874,6 +874,22 @@ shine shell install agent
 ccenv
 ```
 
+Running `ccenv` by itself only configures the current shell. Pass Claude Code arguments to
+configure the provider and start Claude in one step, or use `-r`/`--run` to start Claude without
+arguments:
+
+```bash
+ccenv --run
+ccenv --print "hello"
+```
+
+The `-r`/`--run` flag is recognized only as the first argument. Use `--` when a conflicting
+argument must be passed through to Claude itself:
+
+```bash
+ccenv -- --run
+```
+
 For either provider, its `*_GPG_SECRET` value wins over the plaintext `*_API_KEY`.
 A GPG decode/decrypt failure stops `ccenv` instead of falling back to plaintext.
 

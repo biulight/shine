@@ -845,6 +845,21 @@ shine shell install agent
 ccenv
 ```
 
+单独运行 `ccenv` 只配置当前 shell。传入 Claude Code 参数时，会在配置 provider 后一步启动
+Claude；也可以用 `-r`/`--run` 启动不带参数的 Claude：
+
+```bash
+ccenv --run
+ccenv --print "hello"
+```
+
+`-r`/`--run` 仅在第一个参数位置作为 `ccenv` 参数识别。如果需要把冲突参数传给 Claude
+本身，请使用 `--`：
+
+```bash
+ccenv -- --run
+```
+
 无论 provider 为何，都会优先使用其 `*_GPG_SECRET` 值而非明文 `*_API_KEY`。若 GPG 解码或解密失败，`ccenv` 会直接停止，而不会回退到明文 key。
 
 ### Shell 预设元数据
