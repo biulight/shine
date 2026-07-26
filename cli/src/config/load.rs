@@ -11,10 +11,7 @@ use super::discovery::{
     read_presets_override_from_toml, resolve_config_presets_path, resolve_runtime_config_dirs,
 };
 use super::env_layer::{deserialize_env_values, parse_env_descriptions};
-use super::{
-    Config, GLOBAL_CONFIG_FILE, LEGACY_PROJECT_FILES_REMOVAL_VERSION, PROJECT_CONFIG_FILE,
-    ProjectSaveState,
-};
+use super::{Config, GLOBAL_CONFIG_FILE, PROJECT_CONFIG_FILE, ProjectSaveState};
 use crate::home::{default_config_and_presets_dir, effective_home_dir};
 
 #[derive(Default, Deserialize)]
@@ -46,8 +43,7 @@ impl Config {
         let current_dir = std::env::current_dir().context("resolving current directory")?;
         let (default_shine_dir, _) = default_config_and_presets_dir()?;
         let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
-        let global_config_path = preliminary_shine_dir.join(GLOBAL_CONFIG_FILE);
-        if let Some(project_config) = find_project_config(&current_dir, &global_config_path) {
+        if let Some(project_config) = find_project_config(&current_dir) {
             bail!(
                 "{} already exists; current directory is already under a shine project at {}",
                 project_config.path.display(),
@@ -83,20 +79,10 @@ impl Config {
     pub async fn load_or_init() -> Result<Self> {
         let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir()?;
         let current_dir = std::env::current_dir().context("resolving current directory")?;
-        let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
-        let global_config_path = preliminary_shine_dir.join(GLOBAL_CONFIG_FILE);
-        let project_config = find_project_config(&current_dir, &global_config_path);
+        let project_config = find_project_config(&current_dir);
         let Some(project_config) = project_config else {
             return Self::load_global_runtime_or_init().await;
         };
-        if project_config.is_legacy {
-            eprintln!(
-                "Warning: project config {} is deprecated and will no longer be supported in {}; rename it to {}.",
-                project_config.path.display(),
-                LEGACY_PROJECT_FILES_REMOVAL_VERSION,
-                project_config.root.join(PROJECT_CONFIG_FILE).display()
-            );
-        }
         // Initialize and migrate the global layer before applying the sparse project layer.
         let (mut config, global_exists) = Self::load_global_runtime_base().await?;
         fs::create_dir_all(config.shine_dir()).await?;
@@ -514,7 +500,7 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
-    async fn global_config_with_presets_dir_is_not_legacy_project_config() {
+    async fn global_config_with_presets_dir_remains_global_config() {
         let _guard = env_lock();
         let original_dir = std::env::current_dir().unwrap();
         let original_home = std::env::var("HOME").ok();
@@ -555,7 +541,7 @@ mod tests {
         );
         assert!(
             !config.is_project_config,
-            "global config.toml must not be treated as a legacy project config"
+            "global config.toml must not be treated as a project config"
         );
         assert_eq!(
             fs::canonicalize(config.presets_dir()).await.unwrap(),
@@ -583,7 +569,7 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
-    async fn load_or_init_supports_legacy_project_config_and_env_when_new_files_absent() {
+    async fn load_or_init_ignores_generic_project_config_and_dotenv() {
         let _guard = env_lock();
         let original_dir = std::env::current_dir().unwrap();
         let project_dir = make_temp_dir().await;
@@ -615,17 +601,18 @@ mod tests {
 
         assert_eq!(
             fs::canonicalize(&config.config_path).await.unwrap(),
-            fs::canonicalize(project_dir.join("config.toml"))
+            fs::canonicalize(state_dir.join("config.toml"))
                 .await
                 .unwrap()
         );
+        assert!(!config.is_project_config);
         assert_eq!(
             fs::canonicalize(config.presets_dir()).await.unwrap(),
-            fs::canonicalize(&project_dir).await.unwrap()
+            fs::canonicalize(state_dir.join("presets")).await.unwrap()
         );
         assert_eq!(
             config.env.get("HTTP_PROXY_PORT").map(String::as_str),
-            Some("3333")
+            Some("6152")
         );
 
         restore_current_dir(&original_dir);
@@ -638,10 +625,16 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
-    async fn init_current_dir_config_writes_presets_dir_and_refuses_existing_file() {
+    async fn init_current_dir_config_ignores_generic_config_and_refuses_existing_shine_config() {
         let _guard = env_lock();
         let original_dir = std::env::current_dir().unwrap();
         let project_dir = make_temp_dir().await;
+        fs::write(
+            project_dir.join("config.toml"),
+            "presets_dir = \"other-tool\"\n",
+        )
+        .await
+        .unwrap();
         std::env::set_current_dir(&project_dir).unwrap();
 
         let path = Config::init_current_dir_config().await.unwrap();

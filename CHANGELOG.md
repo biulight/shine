@@ -15,6 +15,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Moved the generic Surge profile include patch/unpatch artifact from the
   private overlay into the built-in Bun preset, with atomic writes, permission
   and line-ending preservation, symlink protection, and symmetric teardown.
+- Removed support for legacy project-local `config.toml` and `.env.toml` filenames; projects must
+  use `shine.config.toml` and `shine.env.toml`.
 
 ## [0.39.0] — 2026-07-19
 

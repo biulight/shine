@@ -979,7 +979,12 @@ Or persist a custom presets directory in `~/.shine/config.toml`:
 presets_dir = "/custom/presets"
 ```
 
-Config discovery searches the current directory and its parents for `shine.config.toml`. If none is found, legacy project `config.toml` files that contain `presets_dir` are still recognized with a warning. This legacy filename will no longer be supported in v0.40.0; rename it to `shine.config.toml`. A project config is a sparse override layer on top of the global config under `~/.shine/` or `SHINE_CONFIG_DIR`: fields omitted by the project inherit their global values, while fields explicitly present in the project take priority. Relative paths are resolved from the directory containing the file that defines them. Saving a project setting does not copy inherited global values into the project file.
+Config discovery searches the current directory and its parents for `shine.config.toml`. Generic
+project `config.toml` files are ignored. A project config is a sparse override layer on top of the
+global config under `~/.shine/` or `SHINE_CONFIG_DIR`: fields omitted by the project inherit their
+global values, while fields explicitly present in the project take priority. Relative paths are
+resolved from the directory containing the file that defines them. Saving a project setting does
+not copy inherited global values into the project file.
 
 Preset source priority is: `SHINE_PRESETS` > project `presets_dir` > global `presets_dir` > default. `SHINE_CONFIG_DIR` selects the global config and runtime-state directory; its default presets directory is `$SHINE_CONFIG_DIR/presets`.
 
@@ -1049,9 +1054,7 @@ For global overrides, place a flat `shine.env.toml` next to the global config at
 `shine.env.toml` next to `shine.config.toml`. Values from `shine.env.toml`
 override matching keys from the active config's `[env]` table without modifying
 either file. When both global and project-local env files are present, the
-project-local file wins. Legacy project `.env.toml` files are still recognized
-when project `shine.env.toml` is absent, but this compatibility will be removed
-in v0.40.0; rename the file to `shine.env.toml`.
+project-local file wins. Generic project `.env.toml` files are ignored.
 
 An active directory linked with `shine overlay link <path>` may also contain a
 flat `<path>/shine.env.toml`. Its values override global env values and are

@@ -8,8 +8,7 @@ use tokio::fs;
 
 use super::discovery::ProjectConfig;
 use super::{
-    Config, DEFAULT_ENV_VARS, EnvOverrideKind, EnvOverrideSource, LEGACY_ENV_FILE,
-    LEGACY_PROJECT_ENV_FILE, LEGACY_PROJECT_FILES_REMOVAL_VERSION, PROJECT_ENV_FILE,
+    Config, DEFAULT_ENV_VARS, EnvOverrideKind, EnvOverrideSource, LEGACY_ENV_FILE, PROJECT_ENV_FILE,
 };
 
 #[derive(serde::Deserialize)]
@@ -149,24 +148,9 @@ impl Config {
         project_config: &ProjectConfig,
     ) -> Result<()> {
         let env_path = project_config.root.join(PROJECT_ENV_FILE);
-        let (env_path, is_legacy) = if env_path.exists() {
-            (env_path, false)
-        } else {
-            let legacy_env_path = project_config.root.join(LEGACY_PROJECT_ENV_FILE);
-            (legacy_env_path, true)
-        };
         let Some(overrides) = read_env_file(&env_path).await? else {
             return Ok(());
         };
-
-        if is_legacy {
-            eprintln!(
-                "Warning: project env {} is deprecated and will no longer be supported in {}; rename it to {}.",
-                env_path.display(),
-                LEGACY_PROJECT_FILES_REMOVAL_VERSION,
-                project_config.root.join(PROJECT_ENV_FILE).display()
-            );
-        }
 
         self.apply_env_overrides(env_path, EnvOverrideKind::Project, false, overrides);
         Ok(())
@@ -500,6 +484,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_dotenv_toml_is_ignored() {
+        let dir = make_temp_dir().await;
+        let project_dir = dir.join("project");
+        fs::create_dir_all(&project_dir).await.unwrap();
+        fs::write(
+            project_dir.join(".env.toml"),
+            "GENERIC_DOTENV_VALUE = \"ignored\"\n",
+        )
+        .await
+        .unwrap();
+        let mut config = config_in(&dir);
+
+        config
+            .apply_project_env_override(&ProjectConfig {
+                path: project_dir.join(PROJECT_CONFIG_FILE),
+                root: project_dir,
+            })
+            .await
+            .unwrap();
+
+        assert!(!config.env.contains_key("GENERIC_DOTENV_VALUE"));
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn overlay_env_sits_between_global_and_project_env_overrides() {
         let dir = make_temp_dir().await;
         let overlay_dir = dir.join("overlay");
@@ -557,7 +566,6 @@ mod tests {
             .apply_project_env_override(&ProjectConfig {
                 path: project_dir.join(PROJECT_CONFIG_FILE),
                 root: project_dir,
-                is_legacy: false,
             })
             .await
             .unwrap();
@@ -730,7 +738,6 @@ mod tests {
             .apply_project_env_override(&ProjectConfig {
                 path: project_dir.join(PROJECT_CONFIG_FILE),
                 root: project_dir.clone(),
-                is_legacy: false,
             })
             .await
             .unwrap();

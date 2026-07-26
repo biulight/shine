@@ -577,7 +577,8 @@ measured, not inferred.
 
 - **Symptom**: project-local configs silently lost global settings.
 - **Root cause**: project config was read standalone instead of layering over the global one.
-- **Fix**: `a5aed62` (inheritance) + `0936f05` (scheduled cleanup of the legacy project file).
+- **Fix**: `a5aed62` (inheritance) + `0936f05` (scheduled cleanup of the legacy project file);
+  v0.40.0 completed that cleanup after the deprecation window.
 - **Rule**: project config is an overlay over global config, not a replacement; removing legacy
   state should be scheduled/graceful, not abrupt.
 
