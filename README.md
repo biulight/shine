@@ -1056,6 +1056,12 @@ override matching keys from the active config's `[env]` table without modifying
 either file. When both global and project-local env files are present, the
 project-local file wins. Generic project `.env.toml` files are ignored.
 
+As of v0.40, the former global `~/.shine/env.toml` is no longer migrated
+automatically. Before upgrading, run a v0.39 binary once to migrate it; otherwise,
+move it to `~/.shine/shine.env.toml`, or merge its values there if that file already
+exists. A normal config-loading command stops with recovery instructions while the
+old file remains.
+
 An active directory linked with `shine overlay link <path>` may also contain a
 flat `<path>/shine.env.toml`. Its values override global env values and are
 available from any working directory; project-local `shine.env.toml` values

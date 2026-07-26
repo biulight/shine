@@ -179,6 +179,19 @@ the second was the real blocker.
   macOS `poll` is unreliable on `/dev/tty`. And when probing a syscall's behavior, assert on its
   actual output flags (`revents`), never on "the call returned something".
 
+## 2026-07-26 — Removed global state needs a fail-fast recovery tombstone
+
+- **Risk**: silently ignoring `~/.shine/env.toml` after removing its automatic migration would
+  make users believe their environment values were still active, while automatically deleting
+  or rewriting it would destroy the easiest recovery path.
+- **Fix**: normal config initialization now detects the removed file before saving anything and
+  stops with v0.39 migration or explicit move/merge instructions. It never parses, modifies, or
+  deletes the file.
+- **Exception**: the read-only global loader used by dry runs and `theme sync` deliberately
+  ignores the tombstone so shell startup remains non-fatal and side-effect free.
+- **Rule**: when retiring user-owned state, fail before mutation and preserve the original for
+  recovery; keep explicitly non-fatal/read-only startup paths outside that guard.
+
 ## 2026-07-15 — `env set`/`encrypt` silently wrote a value an override file kept shadowing
 
 - **Symptom**: `shine env encrypt --from KEY` (or `env set KEY value`) reported success and

@@ -17,6 +17,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   and line-ending preservation, symlink protection, and symmetric teardown.
 - Removed support for legacy project-local `config.toml` and `.env.toml` filenames; projects must
   use `shine.config.toml` and `shine.env.toml`.
+- Removed automatic migration of the former global `~/.shine/env.toml`. Before upgrading, run a
+  v0.39 binary once to migrate it, or move/merge its values into `~/.shine/shine.env.toml`.
 
 ## [0.39.0] — 2026-07-19
 

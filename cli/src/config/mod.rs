@@ -14,7 +14,6 @@ use env_layer::deserialize_env_values;
 pub use crate::home::{full_expand, full_expand_with_home, tilde_expand};
 pub use env_layer::{validate_env_override_file, write_env_override_entry};
 
-const LEGACY_ENV_FILE: &str = "env.toml";
 const GLOBAL_CONFIG_FILE: &str = "config.toml";
 const PROJECT_CONFIG_FILE: &str = "shine.config.toml";
 const PROJECT_ENV_FILE: &str = "shine.env.toml";

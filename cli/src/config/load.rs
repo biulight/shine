@@ -83,7 +83,7 @@ impl Config {
         let Some(project_config) = project_config else {
             return Self::load_global_runtime_or_init().await;
         };
-        // Initialize and migrate the global layer before applying the sparse project layer.
+        // Initialize the global layer before applying the sparse project layer.
         let (mut config, global_exists) = Self::load_global_runtime_base().await?;
         fs::create_dir_all(config.shine_dir()).await?;
         fs::create_dir_all(config.presets_dir()).await?;
@@ -94,7 +94,7 @@ impl Config {
         } else {
             false
         };
-        config.migrate_env(global_has_env).await?;
+        config.ensure_env_defaults(global_has_env).await?;
 
         let contents = fs::read_to_string(&project_config.path)
             .await
@@ -203,7 +203,7 @@ impl Config {
         } else {
             false
         };
-        config.migrate_env(config_has_env).await?;
+        config.ensure_env_defaults(config_has_env).await?;
         config.apply_global_env_override().await?;
         config.apply_overlay_env_override().await?;
         Ok(config)
@@ -360,6 +360,41 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
+    async fn load_or_init_backfills_missing_env_defaults() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        fs::write(dir.join("config.toml"), "[env]\nCUSTOM = \"kept\"\n")
+            .await
+            .unwrap();
+
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+
+        let config = Config::load_or_init().await.unwrap();
+
+        assert_eq!(config.env.get("CUSTOM").map(String::as_str), Some("kept"));
+        assert_eq!(
+            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
+            Some("6152")
+        );
+        assert_eq!(
+            config.env.get("SOCKS5_PROXY_PORT").map(String::as_str),
+            Some("6153")
+        );
+        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
+        assert!(content.contains("CUSTOM = \"kept\""));
+        assert!(content.contains("HTTP_PROXY_PORT = \"6152\""));
+        assert!(content.contains("SOCKS5_PROXY_PORT = \"6153\""));
+
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
     async fn load_or_init_discovers_project_config_from_child_dir() {
         let _guard = env_lock();
         let original_dir = std::env::current_dir().unwrap();
@@ -496,6 +531,32 @@ mod tests {
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_global_runtime_for_dry_run_ignores_removed_global_env_file() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        let removed_path = dir.join("env.toml");
+        fs::write(&removed_path, "CUSTOM_TOKEN = \"abc\"\n")
+            .await
+            .unwrap();
+
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
+        unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
+
+        let config = Config::load_global_runtime_for_dry_run().await.unwrap();
+
+        assert_eq!(config.config_path(), dir.join("config.toml"));
+        assert!(removed_path.exists());
+        assert!(!dir.join("config.toml").exists());
+
+        // SAFETY: env_lock() is held for the duration of this block, preventing
+        //          concurrent env mutation from other threads in this test binary.
+        unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[allow(clippy::await_holding_lock)]

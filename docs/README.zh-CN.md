@@ -1008,6 +1008,10 @@ inline description 的优先级高于 preset catalog。Catalog 只保存元数�
 表中的同名 key，而不会改写任一文件。当全局和项目本地 env 文件同时存在时，项目本地
 优先。普通项目 `.env.toml` 文件会被忽略。
 
+从 v0.40 起，Shine 不再自动迁移旧的全局 `~/.shine/env.toml`。升级前可先运行一次
+v0.39 完成迁移；否则请将它移动为 `~/.shine/shine.env.toml`，若目标文件已存在则手动
+合并。旧文件仍存在时，普通配置加载命令会停止并给出恢复提示。
+
 通过 `shine overlay link <path>` 关联的有效 overlay 目录也可以包含扁平的
 `<path>/shine.env.toml`。其中的值会覆盖全局 env，并可在任意工作目录下生效；
 项目本地 `shine.env.toml` 仍拥有更高优先级。该文件会在每次运行时重新读取，

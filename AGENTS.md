@@ -208,7 +208,7 @@ shine/
 │       │   ├── mod.rs        # Config struct + accessors, Default, new_for_test
 │       │   ├── load.rs       # load_or_init, global/project layering, schema version read
 │       │   ├── save.rs       # Atomic save, comment-preserving merge, sparse project diff
-│       │   ├── env_layer.rs  # [env] table parsing, legacy env.toml migration, override files
+│       │   ├── env_layer.rs  # [env] defaults/parsing, removed env.toml guard, override files
 │       │   └── discovery.rs  # Project-config discovery, SHINE_CONFIG_DIR/
 │       │                     # SHINE_PRESETS priority chain
 │       ├── presets.rs        # rust-embed asset extraction, list_categories, parse_script_description
