@@ -394,6 +394,7 @@ mod tests {
                     target: "SOURCE_URL".to_string(),
                 }],
                 when_env: "SOURCE_URL".to_string(),
+                auto: true,
             }),
         };
         let category = AppCategory {

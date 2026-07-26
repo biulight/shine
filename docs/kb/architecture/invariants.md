@@ -74,11 +74,16 @@ bugs. Check this list before changing the modules named in each entry.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and docs (AGENTS.md § Config) must agree.
 - **External app preset hooks and generators are opt-in only.** `post_upgrade`
-  runs commands after upgrades, while a file generator runs during
-  install/update/upgrade and supplies effective source bytes. Embedded code may
+  runs commands after upgrades, while an automatic file generator may run
+  during install/update/upgrade and supply effective source bytes. Embedded code may
   run implicitly, but external preset or overlay code must be gated by
   `allow_app_hooks = true`; otherwise a user-controlled presets checkout would
   gain command execution during ordinary read-oriented update checks.
+- **Manual generators never run from implicit status or upgrade paths.**
+  `generator.auto = false` leaves `list`/`info`/`show`/`update` local-only and
+  causes upgrade to preserve the manifest snapshot. Only install/reinstall or
+  `shine app refresh` may run it; refresh must target manifest-owned files and
+  preserve user modifications unless `--force` is explicit.
 - **Generator failures never destroy the last-known-good managed file.** Status
   and upgrade warn and retain an existing manifest-owned destination. An enabled
   generator with no successful installed snapshot fails rather than installing

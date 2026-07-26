@@ -377,9 +377,19 @@ shine app install surge
 This feature requires Bun. It converts compatible `ss://` and `vmess://`
 records, skips VLESS and unsupported transports with a credential-free
 summary, and never modifies the user-maintained `local-proxies.conf`.
-`shine update` downloads and compares the generated content without writing;
-`shine upgrade` applies a changed result and reloads Surge. A failed refresh
-keeps the last-known-good managed file.
+The built-in generator is manual so routine `shine update` and `shine upgrade`
+never consume a provider's short subscription-access window. Open that window,
+then refresh only the generated file:
+
+```bash
+shine app refresh surge subscription-proxies.conf
+```
+
+`shine app refresh surge` refreshes every installed generated file in the
+category. A failed refresh keeps the last-known-good managed file; a
+user-modified destination is preserved unless `--force` is supplied. A
+successful change reloads Surge through the preset's existing post-upgrade
+hook.
 
 `local-proxy-groups.conf` declares:
 

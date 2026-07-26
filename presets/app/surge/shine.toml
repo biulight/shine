@@ -39,4 +39,4 @@ description = "Local proxy groups merged into [Proxy Group] after provider group
 source = "subscription-proxies.conf"
 target = "subscription-proxies.conf"
 description = "SS/VMess policies generated from SURGE_SUBSCRIPTION_URL."
-generator = { script = "generate-subscription.ts", runtime = "bun", env = ["SURGE_SUBSCRIPTION_URL"], when_env = "SURGE_SUBSCRIPTION_URL" }
+generator = { script = "generate-subscription.ts", runtime = "bun", env = ["SURGE_SUBSCRIPTION_URL"], when_env = "SURGE_SUBSCRIPTION_URL", auto = false }

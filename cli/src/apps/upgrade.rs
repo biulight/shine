@@ -135,6 +135,15 @@ pub async fn handle_upgrade_installed(
             continue;
         };
 
+        if file
+            .generator
+            .as_ref()
+            .is_some_and(|generator| !generator.auto)
+        {
+            skipped += 1;
+            continue;
+        }
+
         match try_upgrade_entry(config, entry, cat, file, env_map).await {
             EntryUpgradeResult::Updated(new_entry) => {
                 updated_categories.insert(cat.name.clone());
@@ -372,6 +381,13 @@ async fn install_new_category_files(
 
     for cat in categories_by_name.values() {
         for file in &cat.files {
+            if file
+                .generator
+                .as_ref()
+                .is_some_and(|generator| !generator.auto)
+            {
+                continue;
+            }
             let destination = match resolve_install_destination(cat, file, config) {
                 Ok(d) => d,
                 Err(e) => {

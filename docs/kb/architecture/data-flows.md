@@ -49,24 +49,30 @@ user can inspect the pending system change before granting administrator access 
 ## Generated app files
 
 An app `[[files]]` entry may declare
-`generator = { script, runtime, env, when_env }`. The static `source` remains a
+`generator = { script, runtime, env, when_env, auto }`. The static `source` remains a
 safe fallback and stable manifest identity. When `when_env` exists in the active
 `[env]` table, `apps::materialize_file_content` runs the generator and uses its
 UTF-8 stdout as the effective source before normal transforms and install
 strategies:
 
-1. `shine app install` and `shine upgrade` materialize first, then reuse the
-   normal manifest hash, user-modification guard, and atomic file installer.
-2. `shine update` materializes into memory and compares hashes without writing.
-3. An existing managed destination is the last-known-good snapshot when a
+1. `shine app install` always materializes first, then reuses the normal
+   manifest hash and atomic file installer.
+2. `auto` defaults to true; automatic generators retain the existing behavior
+   of materializing during status/update checks and `shine upgrade`.
+3. `auto = false` makes status local-only and excludes the file from upgrade.
+   `shine app refresh <category> [source]` explicitly refreshes only
+   manifest-owned generated files, with an optional `--force` for user changes.
+4. An existing managed destination is the last-known-good snapshot when a
    generator fails; a first-time enabled generator failure is fatal.
-4. Only `generator.env` values are injected. External preset or overlay
+5. Only `generator.env` values are injected. External preset or overlay
    generator code requires `allow_app_hooks = true`. Execution is deadline- and
    output-size-limited.
 
 The Surge generator downloads the Base64 URI list in
 `SURGE_SUBSCRIPTION_URL`, converts supported SS/VMess nodes, and writes bare
-policy declarations to `subscription-proxies.conf`. Its `Subscription` group
+policy declarations to `subscription-proxies.conf`. It declares `auto = false`
+so it runs on install/reinstall or explicit refresh, not ordinary
+status/upgrade passes. Its `Subscription` group
 loads that file through `policy-path`; other groups reuse the nodes through
 `include-other-group=Subscription`. VLESS and unsupported transports are
 counted and skipped without logging credentials.

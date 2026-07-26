@@ -90,6 +90,10 @@ pub struct AppGenerator {
     pub runtime: ArtifactRuntime,
     pub env: Vec<EnvVarSpec>,
     pub when_env: String,
+    /// Whether read-oriented status checks and `shine upgrade` may run this
+    /// generator implicitly. Install/reinstall and `app refresh` ignore this
+    /// switch. Defaults to true for compatibility with existing presets.
+    pub auto: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,6 +205,12 @@ struct GeneratorToml {
     #[serde(default)]
     env: Vec<String>,
     when_env: String,
+    #[serde(default = "default_true")]
+    auto: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn resolve_transforms(file: &FileToml, context: &str) -> Result<Vec<String>> {
@@ -342,6 +352,7 @@ fn resolve_generator(
         runtime,
         env,
         when_env: generator.when_env,
+        auto: generator.auto,
     }))
 }
 
@@ -929,6 +940,7 @@ mod tests {
                     target: "SURGE_SUBSCRIPTION_URL".to_string(),
                 }],
                 when_env: "SURGE_SUBSCRIPTION_URL".to_string(),
+                auto: false,
             })
         );
         assert_eq!(
@@ -1632,6 +1644,30 @@ generator = { script = "generate.ts", runtime = "bun", env = ["SOURCE_URL"], whe
         assert_eq!(generator.script, Path::new("generate.ts"));
         assert_eq!(generator.runtime, ArtifactRuntime::Bun);
         assert_eq!(generator.when_env, "SOURCE_URL");
+        assert!(generator.auto);
+    }
+
+    #[test]
+    fn generator_auto_can_be_disabled() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+description = "sample"
+dest = "~/.config/sample"
+
+[[files]]
+source = "fallback.txt"
+generator = { script = "generate.ts", runtime = "bun", env = ["SOURCE_URL"], when_env = "SOURCE_URL", auto = false }
+"#,
+        )
+        .unwrap();
+        let generator = resolve_generator(
+            parsed.files.unwrap().remove(0).generator,
+            "app/sample/shine.toml",
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!generator.auto);
     }
 
     #[test]

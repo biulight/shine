@@ -6,6 +6,8 @@
   `presets/app/surge/shine.toml`
 - **Supersedes**: ADR 0009's narrower conclusion that Shine never fetches a
   Surge subscription. Artifact build scripts remain explicit-only.
+- **Amended by**: ADR 0018, which adds manual generators for short-lived
+  subscription access windows.
 
 ## Context
 

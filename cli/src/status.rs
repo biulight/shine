@@ -282,17 +282,15 @@ async fn app_file_row_status(
         Err(_) => (None, FileStatus::NotInstalled),
         Ok(dest) => {
             let status = match manifest.find_by_dest(&dest) {
-                None if file
-                    .generator
-                    .as_ref()
-                    .is_some_and(|generator| env.contains_key(&generator.when_env))
-                    && manifest.entries.iter().any(|entry| {
-                        entry
-                            .source
-                            .strip_prefix("app/")
-                            .and_then(|source| source.split_once('/'))
-                            .is_some_and(|(category, _)| category == cat.name)
-                    }) =>
+                None if file.generator.as_ref().is_some_and(|generator| {
+                    generator.auto && env.contains_key(&generator.when_env)
+                }) && manifest.entries.iter().any(|entry| {
+                    entry
+                        .source
+                        .strip_prefix("app/")
+                        .and_then(|source| source.split_once('/'))
+                        .is_some_and(|(category, _)| category == cat.name)
+                }) =>
                 {
                     if source_hash_for_file(config, cat, file, env).await.is_some() {
                         FileStatus::UpdateAvail
@@ -329,7 +327,11 @@ pub(crate) async fn app_entry_status(
     let generator_enabled = file
         .generator
         .as_ref()
-        .is_some_and(|generator| env.contains_key(&generator.when_env));
+        .is_some_and(|generator| generator.auto && env.contains_key(&generator.when_env));
+    let manual_generator = file
+        .generator
+        .as_ref()
+        .is_some_and(|generator| !generator.auto);
     let generated_source_hash = if generator_enabled {
         source_hash_for_file(config, cat, file, env).await
     } else {
@@ -344,6 +346,9 @@ pub(crate) async fn app_entry_status(
             let manifest_hash = entry.content_hash;
             match installed_content_hash(file, &dest_bytes) {
                 Ok(Some(dest_hash)) if dest_hash == manifest_hash => {
+                    if manual_generator {
+                        return FileStatus::UpToDate;
+                    }
                     let source_hash = if generator_enabled {
                         generated_source_hash
                     } else {

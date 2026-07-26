@@ -6,6 +6,7 @@ mod info;
 mod install;
 mod json_merge;
 mod metadata;
+mod refresh;
 mod report;
 mod uninstall;
 mod upgrade;
@@ -17,6 +18,7 @@ pub use metadata::{
     AppCategory, AppFile, AppGenerator, AppHook, AppListMode, load_active_categories,
     load_embedded_categories, load_installed_categories,
 };
+pub use refresh::handle_refresh;
 pub use uninstall::handle_uninstall;
 pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
 
@@ -39,7 +41,8 @@ display_name = "config.toml"
 # Known transforms: "template", "jsonc-to-json".
 transforms = []
 # Optional generated source. The static `source` above is the fallback.
-# generator = { script = "generate.ts", runtime = "bun", env = ["SOURCE_URL"], when_env = "SOURCE_URL" }
+# `auto = false` disables implicit status/upgrade runs; use `app refresh`.
+# generator = { script = "generate.ts", runtime = "bun", env = ["SOURCE_URL"], when_env = "SOURCE_URL", auto = false }
 "#;
 
 pub async fn handle_init_template(force: bool) -> Result<()> {
