@@ -432,9 +432,16 @@ App Configs
   git       →  ~/.gitconfig
   ghostty   →  ~/.config/ghostty
   starship  →  ~/.config/starship/starship.toml
+
+System Configs
+  Private split DNS  (split-dns)
 ```
 
-如果当前没有安装任何内容，`shine list` 会提示运行 `shine shell install` 或 `shine app install`。
+受管系统配置来自 `sys-manifest.toml` 中当前操作系统已登记的条目；详细状态仍通过
+`shine sys status` 和 `shine sys info <ITEM>` 查看。
+
+如果当前没有安装任何内容，`shine list` 除了提示 shell 和 app 安装命令，也会提示运行
+`shine sys list`。
 
 ### 检查已安装配置详情
 
@@ -581,7 +588,7 @@ shine self upgrade --channel stable   # 显式重装稳定版
 shine self upgrade --channel preview  # 安装持续滚动的 preview 预发布版
 shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --pull  # 拉取 Git 管理的 preset 后再应用配置
-shine upgrade --verbose  # 包含 env 模板检查细节
+shine upgrade --verbose  # 包含 env 模板检查以及 skipped/已是最新的明细
 ```
 
 preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.39.0+preview.abc1234`；稳定版则继续显示 `0.39.0`。

@@ -142,6 +142,12 @@ pub struct SysUpdateRow {
     pub details: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SysInstalledRow {
+    pub item_id: String,
+    pub label: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SysProfilePhase {
     Pre,

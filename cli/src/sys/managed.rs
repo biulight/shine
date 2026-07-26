@@ -12,8 +12,8 @@ use super::manifest::load_sys_preset;
 use super::resources::{self, SystemDriver};
 use super::run_manifest::{SysRunEntry, SysRunManifest};
 use super::{
-    SysDriverKind, SysItem, SysItemMode, SysItemOutcome, SysItemStatus, SysUpdateRow,
-    SysUpgradeReport,
+    SysDriverKind, SysInstalledRow, SysItem, SysItemMode, SysItemOutcome, SysItemStatus,
+    SysUpdateRow, SysUpgradeReport,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,8 +31,32 @@ impl SysAction {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManagedOutputMode {
+    Explicit,
+    Upgrade { verbose: bool },
+}
+
+impl ManagedOutputMode {
+    fn is_explicit(self) -> bool {
+        matches!(self, Self::Explicit)
+    }
+
+    fn show_all_outcomes(self) -> bool {
+        matches!(self, Self::Explicit | Self::Upgrade { verbose: true })
+    }
+}
+
 pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) -> Result<()> {
-    let report = run_managed(config, item, SysAction::Apply, dry_run, true, None).await?;
+    let report = run_managed(
+        config,
+        item,
+        SysAction::Apply,
+        dry_run,
+        ManagedOutputMode::Explicit,
+        None,
+    )
+    .await?;
     if report.failed > 0 {
         bail!(
             "{} managed system configuration item(s) failed",
@@ -43,7 +67,15 @@ pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) ->
 }
 
 pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Result<()> {
-    let report = run_managed(config, Some(item), SysAction::Remove, dry_run, true, None).await?;
+    let report = run_managed(
+        config,
+        Some(item),
+        SysAction::Remove,
+        dry_run,
+        ManagedOutputMode::Explicit,
+        None,
+    )
+    .await?;
     if report.failed > 0 {
         bail!("failed to remove managed system configuration `{item}`");
     }
@@ -52,14 +84,47 @@ pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Res
 
 pub async fn handle_upgrade_managed(
     config: &Config,
+    verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<SysUpgradeReport> {
-    run_managed(config, None, SysAction::Apply, false, false, Some(sep)).await
+    run_managed(
+        config,
+        None,
+        SysAction::Apply,
+        false,
+        ManagedOutputMode::Upgrade { verbose },
+        Some(sep),
+    )
+    .await
 }
 
 pub async fn managed_updates(config: &Config) -> Result<Vec<SysUpdateRow>> {
     let os_id = detect_os_id().await?;
     managed_updates_for_os(config, &os_id).await
+}
+
+pub(crate) async fn installed_managed(config: &Config) -> Result<Vec<SysInstalledRow>> {
+    let os_id = detect_os_id().await?;
+    installed_managed_for_os(config, &os_id).await
+}
+
+async fn installed_managed_for_os(config: &Config, os_id: &str) -> Result<Vec<SysInstalledRow>> {
+    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let mut rows = run_manifest
+        .entries
+        .into_iter()
+        .filter(|entry| entry.os_id == os_id && entry.managed)
+        .map(|entry| SysInstalledRow {
+            item_id: entry.item_id,
+            label: entry.label,
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then_with(|| left.item_id.cmp(&right.item_id))
+    });
+    Ok(rows)
 }
 
 async fn managed_updates_for_os(config: &Config, os_id: &str) -> Result<Vec<SysUpdateRow>> {
@@ -116,11 +181,11 @@ async fn run_managed(
     requested: Option<&str>,
     action: SysAction,
     dry_run: bool,
-    explicit: bool,
+    output_mode: ManagedOutputMode,
     sep: Option<&mut crate::output::SectionSeparator>,
 ) -> Result<SysUpgradeReport> {
     let os_id = detect_os_id().await?;
-    run_managed_for_os(config, &os_id, requested, action, dry_run, explicit, sep).await
+    run_managed_for_os(config, &os_id, requested, action, dry_run, output_mode, sep).await
 }
 
 async fn run_managed_for_os(
@@ -129,7 +194,7 @@ async fn run_managed_for_os(
     requested: Option<&str>,
     action: SysAction,
     dry_run: bool,
-    explicit: bool,
+    output_mode: ManagedOutputMode,
     mut sep: Option<&mut crate::output::SectionSeparator>,
 ) -> Result<SysUpgradeReport> {
     let mut run_manifest = SysRunManifest::load(config.shine_dir()).await?;
@@ -241,7 +306,7 @@ async fn run_managed_for_os(
     }
 
     if selected.is_empty() {
-        if explicit {
+        if output_mode.is_explicit() {
             println!(
                 "{}",
                 colors::dim("No managed system configuration items selected.")
@@ -250,18 +315,11 @@ async fn run_managed_for_os(
         return Ok(SysUpgradeReport::default());
     }
 
-    if let Some(sep) = &mut sep {
-        sep.begin();
-    }
-    println!(
-        "{}",
-        colors::bold(match action {
-            SysAction::Apply => "Managed System Configs",
-            SysAction::Remove => "Remove Managed System Config",
-        })
-    );
-    for item in &selected {
-        println!("  {} {}", colors::symbol("•"), item.label);
+    let show_all_outcomes = output_mode.show_all_outcomes();
+    let mut section_started = false;
+    if show_all_outcomes {
+        begin_managed_section(&mut sep, action, &selected, true);
+        section_started = true;
     }
 
     let env = EnvConfig::load_or_init(config).await?;
@@ -365,18 +423,24 @@ async fn run_managed_for_os(
             break;
         }
     }
-    if needs_admin && !authorize_admin(selected.len()).await? {
-        return Ok(SysUpgradeReport {
-            failed: selected.len(),
-            ..SysUpgradeReport::default()
-        });
+    if needs_admin {
+        if !section_started {
+            begin_managed_section(&mut sep, action, &selected, false);
+            section_started = true;
+        }
+        if !authorize_admin(selected.len()).await? {
+            return Ok(SysUpgradeReport {
+                failed: selected.len(),
+                ..SysUpgradeReport::default()
+            });
+        }
     }
 
     let command = sys_init_command(os_id);
     let sys_shell: &'static str = config.shell_type.into();
     let mut report = SysUpgradeReport::default();
 
-    for item in selected {
+    for item in &selected {
         let missing = item
             .required_env
             .iter()
@@ -391,6 +455,10 @@ async fn run_managed_for_os(
                 detail: format!("missing environment variable(s): {}", missing.join(", ")),
                 logs: Vec::new(),
             };
+            if !section_started {
+                begin_managed_section(&mut sep, action, &selected, false);
+                section_started = true;
+            }
             print_item_outcome(&outcome, item.label.len().max(14));
             report.failed += 1;
             continue;
@@ -475,11 +543,17 @@ async fn run_managed_for_os(
                 },
             }
         };
-        print_item_outcome(&outcome, item.label.len().max(14));
-        if let Some(hint) = restart_hint
-            && outcome.status != SysItemStatus::Failed
-        {
-            println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+        if should_print_managed_outcome(show_all_outcomes, outcome.status) {
+            if !section_started {
+                begin_managed_section(&mut sep, action, &selected, false);
+                section_started = true;
+            }
+            print_item_outcome(&outcome, item.label.len().max(14));
+            if let Some(hint) = restart_hint
+                && outcome.status != SysItemStatus::Failed
+            {
+                println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+            }
         }
         if outcome.status == SysItemStatus::Failed {
             report.failed += 1;
@@ -517,6 +591,37 @@ async fn run_managed_for_os(
 
 async fn authorize_admin(item_count: usize) -> Result<bool> {
     crate::privilege::ensure_admin(item_count).await
+}
+
+fn begin_managed_section(
+    sep: &mut Option<&mut crate::output::SectionSeparator>,
+    action: SysAction,
+    selected: &[&SysItem],
+    show_selection: bool,
+) {
+    if let Some(sep) = sep {
+        sep.begin();
+    }
+    println!(
+        "{}",
+        colors::bold(match action {
+            SysAction::Apply => "Managed System Configs",
+            SysAction::Remove => "Remove Managed System Config",
+        })
+    );
+    if show_selection {
+        for item in selected {
+            println!("  {} {}", colors::symbol("•"), item.label);
+        }
+    }
+}
+
+fn should_print_managed_outcome(show_all: bool, status: SysItemStatus) -> bool {
+    show_all
+        || !matches!(
+            status,
+            SysItemStatus::AlreadyInstalled | SysItemStatus::Skipped
+        )
 }
 
 #[cfg(test)]
@@ -575,7 +680,7 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
             Some("managed-test"),
             SysAction::Apply,
             false,
-            true,
+            ManagedOutputMode::Explicit,
             None,
         )
         .await
@@ -594,7 +699,7 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
             None,
             SysAction::Apply,
             false,
-            false,
+            ManagedOutputMode::Upgrade { verbose: false },
             None,
         )
         .await
@@ -606,7 +711,7 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
             Some("managed-test"),
             SysAction::Remove,
             false,
-            true,
+            ManagedOutputMode::Explicit,
             None,
         )
         .await
@@ -695,6 +800,52 @@ resource = "/etc/resolver/private.example"
     }
 
     #[tokio::test]
+    async fn installed_managed_lists_only_current_os_managed_entries() {
+        let dir = make_temp_dir().await;
+        fs::write(
+            dir.join(SYS_MANIFEST_FILE),
+            r#"
+[[entries]]
+os_id = "macos"
+item_id = "split-dns"
+label = "Private split DNS"
+status = "already-installed"
+updated_at = "1"
+managed = true
+
+[[entries]]
+os_id = "macos"
+item_id = "homebrew"
+label = "Homebrew"
+status = "installed"
+updated_at = "1"
+
+[[entries]]
+os_id = "ubuntu"
+item_id = "split-dns"
+label = "Ubuntu split DNS"
+status = "installed"
+updated_at = "1"
+managed = true
+"#,
+        )
+        .await
+        .unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let rows = installed_managed_for_os(&config, "macos").await.unwrap();
+
+        assert_eq!(
+            rows,
+            [SysInstalledRow {
+                item_id: "split-dns".to_string(),
+                label: "Private split DNS".to_string(),
+            }]
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn builtin_receipt_uninstalls_after_preset_is_deleted() {
         let dir = make_temp_dir().await;
         let os_dir = dir.join("presets/sys/fakeos");
@@ -736,13 +887,27 @@ target = {:?}
             Some("managed-file-test"),
             SysAction::Apply,
             false,
-            true,
+            ManagedOutputMode::Explicit,
             None,
         )
         .await
         .unwrap();
         assert_eq!(applied.updated, 1);
         assert_eq!(fs::read_to_string(&destination).await.unwrap(), "managed");
+
+        let unchanged = run_managed_for_os(
+            &config,
+            "fakeos",
+            None,
+            SysAction::Apply,
+            false,
+            ManagedOutputMode::Upgrade { verbose: false },
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(unchanged.updated, 0);
+        assert_eq!(unchanged.skipped, 1);
 
         fs::remove_dir_all(&os_dir).await.unwrap();
         let removed = run_managed_for_os(
@@ -751,7 +916,7 @@ target = {:?}
             Some("managed-file-test"),
             SysAction::Remove,
             false,
-            true,
+            ManagedOutputMode::Explicit,
             None,
         )
         .await
@@ -767,5 +932,33 @@ target = {:?}
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn managed_upgrade_output_hides_only_no_op_rows_by_default() {
+        assert!(!should_print_managed_outcome(
+            false,
+            SysItemStatus::AlreadyInstalled
+        ));
+        assert!(!should_print_managed_outcome(false, SysItemStatus::Skipped));
+
+        for status in [
+            SysItemStatus::Installed,
+            SysItemStatus::Updated,
+            SysItemStatus::NeedsAction,
+            SysItemStatus::Completed,
+            SysItemStatus::Failed,
+        ] {
+            assert!(should_print_managed_outcome(false, status), "{status:?}");
+        }
+    }
+
+    #[test]
+    fn managed_upgrade_verbose_output_includes_no_op_rows() {
+        assert!(should_print_managed_outcome(
+            true,
+            SysItemStatus::AlreadyInstalled
+        ));
+        assert!(should_print_managed_outcome(true, SysItemStatus::Skipped));
     }
 }

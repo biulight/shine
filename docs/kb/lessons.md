@@ -455,6 +455,17 @@ measured, not inferred.
   anything," not on "is this category of action normally privileged" — compute the cheap
   read-only diff first.
 
+## 2026-07-26 — Managed system no-op rows ignored `upgrade --verbose`
+
+- **Symptom**: a default `shine upgrade` printed a full `Managed System Configs` section for an
+  already-current split-DNS resource, even though the only result was counted as skipped.
+- **Root cause**: the global upgrade's `verbose` flag was not passed to the managed-system
+  handler, whose output path printed every selected item and outcome unconditionally.
+- **Fix**: hide `already installed` and ordinary `skipped` managed outcomes by default, lazily
+  create the section only for a visible result, and retain the full listing under `--verbose`.
+- **Rule**: optional upgrade sections must not print a header for no-op rows hidden by the
+  command's verbosity policy; aggregate counters may still include those rows.
+
 ## 2026-07-06 — Embedded Git progress overwhelms command-level results
 
 - **Symptom**: `shine update --pull` printed Git transfer plumbing, fetch refs, fast-forward

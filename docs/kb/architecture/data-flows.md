@@ -142,6 +142,11 @@ Documented in `AGENTS.md` § "Sys preset flow". Key cross-module point: `sys/exe
 from script stdout into the run report; anything else is rendered as indented logs. A final
 `init.sh __shine_finalize` call performs shared profile integration exactly once.
 
+Top-level `shine list` reads current-OS entries with `managed = true` directly from
+`sys-manifest.toml` for its installed-only `System Configs` section. It does not call the live
+desired-state checker; `shine update` remains responsible for showing only pending managed
+changes.
+
 ## Update check (`shine update` / background check)
 
 `cli/src/update_check/` (`mod.rs` core + cache, `github.rs` API/auth, `upgrade.rs` install flow):

@@ -436,9 +436,16 @@ App Configs
   git       →  ~/.gitconfig
   ghostty   →  ~/.config/ghostty
   starship  →  ~/.config/starship/starship.toml
+
+System Configs
+  Private split DNS  (split-dns)
 ```
 
-If nothing is installed yet, `shine list` prints a hint to run `shine shell install` or `shine app install`.
+Managed system configs are read from the current OS entries recorded in `sys-manifest.toml`;
+status details remain available through `shine sys status` and `shine sys info <ITEM>`.
+
+If nothing is installed yet, `shine list` also points to `shine sys list` alongside the shell and
+app install commands.
 
 ### Inspect installed config details
 
@@ -590,7 +597,7 @@ shine self upgrade --channel stable   # explicitly reinstall the stable release
 shine self upgrade --channel preview  # install the moving preview prerelease
 shine upgrade       # force-update installed shell and app configs
 shine upgrade --pull  # pull Git-managed presets before applying configs
-shine upgrade --verbose  # include env-template check details
+shine upgrade --verbose  # include env-template checks and skipped/current rows
 ```
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.

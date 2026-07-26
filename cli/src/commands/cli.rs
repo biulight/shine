@@ -57,7 +57,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: CompletionCommands,
     },
-    /// List installed shell presets and app configs
+    /// List installed shell presets, app configs, and managed system configs
     List,
     /// Show details for an installed config or shell preset
     Info {
