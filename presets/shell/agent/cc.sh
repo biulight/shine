@@ -25,26 +25,61 @@ cc_fail() {
 
 cc_select_provider() {
     echo "Select Claude Code provider:" >&2
-    echo "  1) deepseek" >&2
-    echo "  2) qwen" >&2
-    echo "  3) glm5 (not configured yet)" >&2
+    echo "  1) codex" >&2
+    echo "  2) deepseek" >&2
+    echo "  3) qwen" >&2
+    echo "  4) glm5 (not configured yet)" >&2
     printf "Provider [1]: " >&2
     read -r provider_choice
 
     case "${provider_choice:-1}" in
-        1|deepseek|DeepSeek|DEEPSEEK)
+        1|codex|Codex|CODEX)
+            echo "codex"
+            ;;
+        2|deepseek|DeepSeek|DEEPSEEK)
             echo "deepseek"
             ;;
-        2|qwen|Qwen|QWEN)
+        3|qwen|Qwen|QWEN)
             echo "qwen"
             ;;
-        3|glm|glm5|GLM|GLM5)
+        4|glm|glm5|GLM|GLM5)
             echo "glm5"
             ;;
         *)
             cc_fail "invalid provider: ${provider_choice}"
             ;;
     esac
+}
+
+cc_configure_codex() {
+    local cliproxyapi_auth_token="@@CLIPROXYAPI_AUTH_TOKEN@@"
+    local anthropic_auth_token
+
+    if shine env get CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET >/dev/null 2>&1; then
+        if ! anthropic_auth_token="$(shine env decrypt CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET)"; then
+            cc_fail "failed to decrypt CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET with gpg"
+            return 1
+        fi
+    else
+        anthropic_auth_token="$cliproxyapi_auth_token"
+    fi
+
+    if [ -z "${anthropic_auth_token}" ]; then
+        cc_fail "CLIProxyAPI auth token is not set. Add CLIPROXYAPI_AUTH_TOKEN or CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET to the active shine env config."
+        return 1
+    fi
+
+    export ANTHROPIC_BASE_URL="http://127.0.0.1:8317"
+    export ANTHROPIC_AUTH_TOKEN="$anthropic_auth_token"
+    export ANTHROPIC_DEFAULT_OPUS_MODEL="gpt-5.6-sol"
+    export ANTHROPIC_DEFAULT_SONNET_MODEL="gpt-5.6-terra"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL="gpt-5.6-luna"
+    export CLAUDE_CODE_SUBAGENT_MODEL="gpt-5.6-luna"
+    export CLAUDE_CODE_EFFORT_LEVEL="high"
+    unset ANTHROPIC_API_KEY ANTHROPIC_MODEL CLAUDE_CODE_OAUTH_TOKEN
+    unset CLAUDE_CODE_MAX_CONTEXT_TOKENS
+
+    echo "ccenv: Claude Code environment configured for Codex through CLIProxyAPI."
 }
 
 cc_configure_deepseek() {
@@ -128,6 +163,9 @@ fi
 cc_provider="$(cc_select_provider)" || return 1
 
 case "$cc_provider" in
+    codex)
+        cc_configure_codex || return 1
+        ;;
     deepseek)
         cc_configure_deepseek || return 1
         ;;
@@ -141,7 +179,7 @@ case "$cc_provider" in
 esac
 
 unset cc_provider provider_choice
-unset -f cc_is_sourced cc_fail cc_select_provider cc_configure_deepseek cc_configure_qwen
+unset -f cc_is_sourced cc_fail cc_select_provider cc_configure_codex cc_configure_deepseek cc_configure_qwen
 
 if [ "$cc_run_claude" -eq 1 ]; then
     unset cc_run_claude

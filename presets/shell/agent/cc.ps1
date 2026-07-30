@@ -15,22 +15,27 @@ function Fail-CcEnv {
 
 function Select-CcProvider {
     Write-Host "Select Claude Code provider:"
-    Write-Host "  1) deepseek"
-    Write-Host "  2) qwen"
-    Write-Host "  3) glm5 (not configured yet)"
+    Write-Host "  1) codex"
+    Write-Host "  2) deepseek"
+    Write-Host "  3) qwen"
+    Write-Host "  4) glm5 (not configured yet)"
     $providerChoice = Read-Host "Provider [1]"
 
     switch ($providerChoice) {
-        { [string]::IsNullOrWhiteSpace($_) } { return 'deepseek' }
-        '1' { return 'deepseek' }
+        { [string]::IsNullOrWhiteSpace($_) } { return 'codex' }
+        '1' { return 'codex' }
+        'codex' { return 'codex' }
+        'Codex' { return 'codex' }
+        'CODEX' { return 'codex' }
+        '2' { return 'deepseek' }
         'deepseek' { return 'deepseek' }
         'DeepSeek' { return 'deepseek' }
         'DEEPSEEK' { return 'deepseek' }
-        '2' { return 'qwen' }
+        '3' { return 'qwen' }
         'qwen' { return 'qwen' }
         'Qwen' { return 'qwen' }
         'QWEN' { return 'qwen' }
-        '3' { return 'glm5' }
+        '4' { return 'glm5' }
         'glm' { return 'glm5' }
         'glm5' { return 'glm5' }
         'GLM' { return 'glm5' }
@@ -40,6 +45,40 @@ function Select-CcProvider {
             return $null
         }
     }
+}
+
+function Set-CcCodexEnv {
+    $cliproxyapiAuthToken = '@@CLIPROXYAPI_AUTH_TOKEN@@'
+    $anthropicAuthToken = $null
+
+    shine env get CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $anthropicAuthToken = shine env decrypt CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET
+        if ($LASTEXITCODE -ne 0) {
+            return (Fail-CcEnv 'failed to decrypt CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET with gpg')
+        }
+    } else {
+        $anthropicAuthToken = $cliproxyapiAuthToken
+    }
+
+    if ([string]::IsNullOrEmpty($anthropicAuthToken)) {
+        return (Fail-CcEnv 'CLIProxyAPI auth token is not set. Add CLIPROXYAPI_AUTH_TOKEN or CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET to the active shine env config.')
+    }
+
+    $env:ANTHROPIC_BASE_URL = 'http://127.0.0.1:8317'
+    $env:ANTHROPIC_AUTH_TOKEN = $anthropicAuthToken
+    $env:ANTHROPIC_DEFAULT_OPUS_MODEL = 'gpt-5.6-sol'
+    $env:ANTHROPIC_DEFAULT_SONNET_MODEL = 'gpt-5.6-terra'
+    $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = 'gpt-5.6-luna'
+    $env:CLAUDE_CODE_SUBAGENT_MODEL = 'gpt-5.6-luna'
+    $env:CLAUDE_CODE_EFFORT_LEVEL = 'high'
+    Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+    Remove-Item Env:ANTHROPIC_MODEL -ErrorAction SilentlyContinue
+    Remove-Item Env:CLAUDE_CODE_OAUTH_TOKEN -ErrorAction SilentlyContinue
+    Remove-Item Env:CLAUDE_CODE_MAX_CONTEXT_TOKENS -ErrorAction SilentlyContinue
+
+    Write-Host 'ccenv: Claude Code environment configured for Codex through CLIProxyAPI.'
+    return $true
 }
 
 function Set-CcDeepSeekEnv {
@@ -122,6 +161,11 @@ if (-not $ccProvider) {
 }
 
 switch ($ccProvider) {
+    'codex' {
+        if (-not (Set-CcCodexEnv)) {
+            return 1
+        }
+    }
     'deepseek' {
         if (-not (Set-CcDeepSeekEnv)) {
             return 1
@@ -140,6 +184,7 @@ switch ($ccProvider) {
 
 Remove-Item function:Fail-CcEnv -ErrorAction SilentlyContinue
 Remove-Item function:Select-CcProvider -ErrorAction SilentlyContinue
+Remove-Item function:Set-CcCodexEnv -ErrorAction SilentlyContinue
 Remove-Item function:Set-CcDeepSeekEnv -ErrorAction SilentlyContinue
 Remove-Item function:Set-CcQwenEnv -ErrorAction SilentlyContinue
 Remove-Variable ccProvider -ErrorAction SilentlyContinue

@@ -364,6 +364,15 @@ mod tests {
         config
     }
 
+    fn config_with_cliproxyapi_token(dir: &Path) -> Config {
+        let mut config = Config::new_for_test(dir);
+        config.env.insert(
+            "CLIPROXYAPI_AUTH_TOKEN".into(),
+            "test-cliproxyapi-token".into(),
+        );
+        config
+    }
+
     fn agent_ccenv_link_path(config: &Config) -> PathBuf {
         crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("ccenv"))
     }
@@ -1017,6 +1026,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn embedded_agent_ccenv_renders_cliproxyapi_token_from_env_config() {
+        let dir = make_temp_dir().await;
+        let config = config_with_cliproxyapi_token(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("agent"), false).await.unwrap();
+
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
+        let rendered_content = fs::read_to_string(&rendered).await.unwrap();
+        assert!(
+            rendered_content.contains("test-cliproxyapi-token"),
+            "rendered agent script should contain configured CLIProxyAPI token"
+        );
+        assert!(
+            !rendered_content.contains("@@CLIPROXYAPI_AUTH_TOKEN@@"),
+            "rendered agent script should not contain the CLIProxyAPI token placeholder"
+        );
+        assert_agent_ccenv_link_points_to(&config, &rendered).await;
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn embedded_agent_ccenv_does_not_render_deepseek_gpg_secret() {
         let dir = make_temp_dir().await;
         let mut config = Config::new_for_test(&dir);
@@ -1079,6 +1115,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn embedded_agent_ccenv_does_not_render_cliproxyapi_gpg_secret() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.env.insert(
+            "CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET".into(),
+            "test-base64-gpg-secret".into(),
+        );
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("agent"), false).await.unwrap();
+
+        let rendered = config.rendered_dir().join(format!(
+            "shell/agent/{}",
+            if cfg!(windows) { "cc.ps1" } else { "cc.sh" }
+        ));
+        let rendered_content = fs::read_to_string(&rendered).await.unwrap();
+        assert!(
+            !rendered_content.contains("test-base64-gpg-secret"),
+            "rendered agent script should not embed the CLIProxyAPI GPG secret"
+        );
+        assert!(
+            !rendered_content.contains("@@CLIPROXYAPI_AUTH_TOKEN@@"),
+            "rendered agent script should not contain the CLIProxyAPI token placeholder"
+        );
+        assert_agent_ccenv_link_points_to(&config, &rendered).await;
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn embedded_agent_install_succeeds_without_deepseek_secret() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
@@ -1099,8 +1166,18 @@ mod tests {
             "rendered agent script should keep the runtime missing-secret error"
         );
         assert!(
+            rendered_content.contains(
+                "CLIProxyAPI auth token is not set. Add CLIPROXYAPI_AUTH_TOKEN or CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET"
+            ),
+            "rendered agent script should keep the CLIProxyAPI runtime missing-secret error"
+        );
+        assert!(
             !rendered_content.contains("@@DEEPSEEK_API_KEY@@"),
             "rendered agent script should not contain the key template placeholder"
+        );
+        assert!(
+            !rendered_content.contains("@@CLIPROXYAPI_AUTH_TOKEN@@"),
+            "rendered agent script should not contain the CLIProxyAPI token placeholder"
         );
         assert!(
             agent_ccenv_link_path(&config).exists(),
@@ -1124,6 +1201,22 @@ mod tests {
             assert!(script.contains("shine env get QWEN_API_KEY_GPG_SECRET"));
             assert!(script.contains("QWEN_API_KEY_GPG_SECRET"));
             assert!(!script.contains("@@QWEN_API_KEY_GPG_SECRET@@"));
+            assert!(script.contains("shine env decrypt CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET"));
+            assert!(script.contains("shine env get CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET"));
+            assert!(script.contains("CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET"));
+            assert!(!script.contains("@@CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET@@"));
+            assert!(script.contains("http://127.0.0.1:8317"));
+            assert!(script.contains("gpt-5.6-sol"));
+            assert!(script.contains("gpt-5.6-terra"));
+            assert!(script.contains("gpt-5.6-luna"));
+            assert!(
+                script.contains("CLAUDE_CODE_EFFORT_LEVEL=\"high\"")
+                    || script.contains("CLAUDE_CODE_EFFORT_LEVEL = 'high'")
+            );
+            assert!(script.contains("  1) codex"));
+            assert!(script.contains("  2) deepseek"));
+            assert!(script.contains("  3) qwen"));
+            assert!(script.contains("  4) glm5 (not configured yet)"));
             assert!(
                 script.contains("https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic")
             );
@@ -1138,10 +1231,24 @@ mod tests {
             assert!(script.contains("983616"));
 
             if path.ends_with(".sh") {
+                assert!(script.contains("1|codex|Codex|CODEX)"));
+                assert!(script.contains("2|deepseek|DeepSeek|DEEPSEEK)"));
+                assert!(script.contains("3|qwen|Qwen|QWEN)"));
+                assert!(
+                    script.contains(
+                        "unset ANTHROPIC_API_KEY ANTHROPIC_MODEL CLAUDE_CODE_OAUTH_TOKEN"
+                    )
+                );
                 assert!(script.contains("-r|--run|--)"));
                 assert!(script.contains("command claude \"$@\""));
                 assert!(script.contains("return $?"));
             } else {
+                assert!(script.contains("'1' { return 'codex' }"));
+                assert!(script.contains("'2' { return 'deepseek' }"));
+                assert!(script.contains("'3' { return 'qwen' }"));
+                assert!(script.contains(
+                    "Remove-Item Env:CLAUDE_CODE_OAUTH_TOKEN -ErrorAction SilentlyContinue"
+                ));
                 assert!(script.contains("@('-r', '--run', '--')"));
                 assert!(script.contains("& claude @ccClaudeArgs"));
                 assert!(script.contains("$global:LASTEXITCODE = $ccClaudeExitCode"));
@@ -1156,6 +1263,7 @@ mod tests {
             script: &Path,
             fake_bin: &Path,
             log_path: &Path,
+            provider: &str,
             args: &[&str],
             claude_exit: i32,
         ) -> std::process::Output {
@@ -1170,18 +1278,34 @@ mod tests {
                 .arg(
                     r#"ccenv_script=$1
 shift
-source "$ccenv_script" "$@" <<< "1"
+source "$ccenv_script" "$@" <<< "$CCENV_TEST_PROVIDER"
 ccenv_status=$?
 printf '__STATUS__=%s\n' "$ccenv_status"
 printf '__TOKEN__=%s\n' "${ANTHROPIC_AUTH_TOKEN:-}"
+printf '__BASE__=%s\n' "${ANTHROPIC_BASE_URL:-}"
+printf '__MODEL__=%s\n' "${ANTHROPIC_MODEL:-}"
+printf '__OPUS__=%s\n' "${ANTHROPIC_DEFAULT_OPUS_MODEL:-}"
+printf '__SONNET__=%s\n' "${ANTHROPIC_DEFAULT_SONNET_MODEL:-}"
+printf '__HAIKU__=%s\n' "${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}"
+printf '__SUBAGENT__=%s\n' "${CLAUDE_CODE_SUBAGENT_MODEL:-}"
+printf '__API_KEY__=%s\n' "${ANTHROPIC_API_KEY:-}"
+printf '__OAUTH__=%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+printf '__CONTEXT__=%s\n' "${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-}"
+printf '__EFFORT__=%s\n' "${CLAUDE_CODE_EFFORT_LEVEL:-}"
 "#,
                 )
                 .arg("ccenv-test")
                 .arg(script)
                 .args(args)
                 .env("PATH", path)
+                .env("CCENV_TEST_PROVIDER", provider)
                 .env("CCENV_TEST_LOG", log_path)
-                .env("CCENV_TEST_EXIT", claude_exit.to_string());
+                .env("CCENV_TEST_EXIT", claude_exit.to_string())
+                .env("ANTHROPIC_API_KEY", "stale-api-key")
+                .env("ANTHROPIC_MODEL", "stale-model")
+                .env("CLAUDE_CODE_OAUTH_TOKEN", "stale-oauth-token")
+                .env("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "123")
+                .env("CLAUDE_CODE_EFFORT_LEVEL", "low");
             command.output().await.unwrap()
         }
 
@@ -1215,7 +1339,7 @@ exit "${CCENV_TEST_EXIT:-0}"
         make_executable(&fake_claude).await;
 
         let no_args_log = dir.join("no-args.log");
-        let no_args = run_ccenv(&rendered, &fake_bin, &no_args_log, &[], 0).await;
+        let no_args = run_ccenv(&rendered, &fake_bin, &no_args_log, "deepseek", &[], 0).await;
         let no_args_stdout = String::from_utf8(no_args.stdout).unwrap();
         assert!(no_args.status.success(), "{no_args_stdout}");
         assert!(
@@ -1227,7 +1351,7 @@ exit "${CCENV_TEST_EXIT:-0}"
 
         for flag in ["-r", "--run"] {
             let log = dir.join(format!("{}.log", flag.trim_start_matches('-')));
-            let output = run_ccenv(&rendered, &fake_bin, &log, &[flag], 0).await;
+            let output = run_ccenv(&rendered, &fake_bin, &log, "2", &[flag], 0).await;
             let stdout = String::from_utf8(output.stdout).unwrap();
             assert!(output.status.success(), "{stdout}");
             assert_eq!(
@@ -1242,6 +1366,7 @@ exit "${CCENV_TEST_EXIT:-0}"
             &rendered,
             &fake_bin,
             &args_log,
+            "2",
             &["--print", "hello world", "tail"],
             23,
         )
@@ -1254,12 +1379,82 @@ exit "${CCENV_TEST_EXIT:-0}"
         );
 
         let escaped_log = dir.join("escaped.log");
-        let escaped = run_ccenv(&rendered, &fake_bin, &escaped_log, &["--", "--run"], 0).await;
+        let escaped = run_ccenv(&rendered, &fake_bin, &escaped_log, "2", &["--", "--run"], 0).await;
         assert!(escaped.status.success());
         assert_eq!(
             fs::read_to_string(&escaped_log).await.unwrap(),
             "TOKEN=test-deepseek-key\nARG=--run\n"
         );
+
+        let codex_dir = dir.join("codex");
+        let codex_config = config_with_cliproxyapi_token(&codex_dir);
+        fs::create_dir_all(codex_config.presets_dir())
+            .await
+            .unwrap();
+        fs::create_dir_all(codex_config.bin_dir()).await.unwrap();
+        handle_install(&codex_config, Some("agent"), false)
+            .await
+            .unwrap();
+        let codex_script = codex_config.rendered_dir().join("shell/agent/cc.sh");
+
+        for (label, provider) in [("default", ""), ("number", "1"), ("name", "codex")] {
+            let log = dir.join(format!("codex-{label}.log"));
+            let output = run_ccenv(&codex_script, &fake_bin, &log, provider, &[], 0).await;
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(output.status.success(), "{stdout}");
+            assert!(!log.exists(), "configuring Codex should not launch claude");
+            assert!(stdout.contains("__TOKEN__=test-cliproxyapi-token"));
+            assert!(stdout.contains("__BASE__=http://127.0.0.1:8317"));
+            assert!(stdout.contains("__MODEL__=\n"));
+            assert!(stdout.contains("__OPUS__=gpt-5.6-sol"));
+            assert!(stdout.contains("__SONNET__=gpt-5.6-terra"));
+            assert!(stdout.contains("__HAIKU__=gpt-5.6-luna"));
+            assert!(stdout.contains("__SUBAGENT__=gpt-5.6-luna"));
+            assert!(stdout.contains("__API_KEY__=\n"));
+            assert!(stdout.contains("__OAUTH__=\n"));
+            assert!(stdout.contains("__CONTEXT__=\n"));
+            assert!(stdout.contains("__EFFORT__=high"));
+        }
+
+        let codex_args_log = dir.join("codex-args.log");
+        let codex_args = run_ccenv(
+            &codex_script,
+            &fake_bin,
+            &codex_args_log,
+            "codex",
+            &["--print", "codex test"],
+            19,
+        )
+        .await;
+        let codex_args_stdout = String::from_utf8(codex_args.stdout).unwrap();
+        assert!(
+            codex_args_stdout.contains("__STATUS__=19"),
+            "{codex_args_stdout}"
+        );
+        assert_eq!(
+            fs::read_to_string(&codex_args_log).await.unwrap(),
+            "TOKEN=test-cliproxyapi-token\nARG=--print\nARG=codex test\n"
+        );
+
+        let qwen_dir = dir.join("qwen");
+        let qwen_config = config_with_qwen_key(&qwen_dir);
+        fs::create_dir_all(qwen_config.presets_dir()).await.unwrap();
+        fs::create_dir_all(qwen_config.bin_dir()).await.unwrap();
+        handle_install(&qwen_config, Some("agent"), false)
+            .await
+            .unwrap();
+        let qwen_script = qwen_config.rendered_dir().join("shell/agent/cc.sh");
+        for (label, provider) in [("number", "3"), ("name", "qwen")] {
+            let qwen_log = dir.join(format!("qwen-{label}.log"));
+            let qwen = run_ccenv(&qwen_script, &fake_bin, &qwen_log, provider, &[], 0).await;
+            let qwen_stdout = String::from_utf8(qwen.stdout).unwrap();
+            assert!(qwen.status.success(), "{qwen_stdout}");
+            assert!(qwen_stdout.contains("__TOKEN__=test-qwen-key"));
+            assert!(
+                !qwen_log.exists(),
+                "configuring Qwen should not launch claude"
+            );
+        }
 
         let missing_dir = dir.join("missing-key");
         let missing_config = Config::new_for_test(&missing_dir);
@@ -1272,12 +1467,32 @@ exit "${CCENV_TEST_EXIT:-0}"
             .unwrap();
         let missing_script = missing_config.rendered_dir().join("shell/agent/cc.sh");
         let missing_log = dir.join("missing.log");
-        let missing = run_ccenv(&missing_script, &fake_bin, &missing_log, &["--run"], 0).await;
+        let missing = run_ccenv(&missing_script, &fake_bin, &missing_log, "2", &["--run"], 0).await;
         let missing_stdout = String::from_utf8(missing.stdout).unwrap();
         assert!(missing_stdout.contains("__STATUS__=1"), "{missing_stdout}");
         assert!(
             !missing_log.exists(),
             "credential failure should not launch claude"
+        );
+
+        let missing_codex_log = dir.join("missing-codex.log");
+        let missing_codex = run_ccenv(
+            &missing_script,
+            &fake_bin,
+            &missing_codex_log,
+            "",
+            &["--run"],
+            0,
+        )
+        .await;
+        let missing_codex_stdout = String::from_utf8(missing_codex.stdout).unwrap();
+        assert!(
+            missing_codex_stdout.contains("__STATUS__=1"),
+            "{missing_codex_stdout}"
+        );
+        assert!(
+            !missing_codex_log.exists(),
+            "missing CLIProxyAPI token should not launch claude"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();

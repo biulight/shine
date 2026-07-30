@@ -117,7 +117,7 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-安装全部 shell 预设时会包含 `agent`；使用前需在当前 env 配置中提供所选 provider 的 API key：`DEEPSEEK_API_KEY`/`DEEPSEEK_API_KEY_GPG_SECRET` 或 `QWEN_API_KEY`/`QWEN_API_KEY_GPG_SECRET`。
+安装全部 shell 预设时会包含 `agent`。默认 Codex provider 需要 `CLIPROXYAPI_AUTH_TOKEN` 或 `CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET`；DeepSeek 和 Qwen 则使用当前 env 配置中各自的 API-key 变量。
 重复运行 `install` 是安全的：已存在的文件、正确的符号链接以及已配置好的 PATH 条目都会被跳过。若你想覆盖受管预设文件、链接和 shell 配置中的 PATH 条目，请使用 `reinstall`。
 
 顶层的 `install`、`reinstall` 和 `uninstall` 命令需要一个类别名，并会自动路由到 `shell/<category>` 或 `app/<category>`。如果 shell 和 app 预设中存在同名类别，`shine` 会提示你选择其中一个。
@@ -718,21 +718,45 @@ shine-env-export MY_TOKEN --as API_TOKEN
 
 ### shell/agent — `ccenv`
 
-为 Claude Code 配置当前 shell 的 DeepSeek 或 Qwen provider 环境。
+为 Claude Code 配置当前 shell 的 provider 环境：默认通过 CLIProxyAPI 使用 Codex，也可选择 DeepSeek 或 Qwen。
+选择菜单依次为 `codex`、`deepseek`、`qwen` 和尚未配置的 `glm5`（选项 1–4）；
+直接按 Enter 会选择 Codex。
 
-把你的 key 写入全局 env 覆盖文件 `~/.shine/shine.env.toml`，或者项目本地 `shine.config.toml` 同目录下的 env 文件：
+使用默认 Codex provider 时，把 CLIProxyAPI `api-keys` 中的客户端 token 写入全局 env
+覆盖文件 `~/.shine/shine.env.toml`，或者项目本地 `shine.config.toml` 同目录下的 env 文件：
+
+```toml
+CLIPROXYAPI_AUTH_TOKEN = "..."
+# 或：CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET = "<base64-gpg-ciphertext>"
+```
+
+可通过以下命令创建加密值：
+
+```bash
+shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN --set CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET
+```
+
+Codex 固定连接 `http://127.0.0.1:8317`，并把 Claude Code 的 Opus、Sonnet、Haiku
+档位依次映射到 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`。同时设置
+`CLAUDE_CODE_EFFORT_LEVEL=high`，CLIProxyAPI 会将其传递为 Codex 的
+`reasoning.effort=high`。CLIProxyAPI 应配置相同 token，并仅绑定回环地址，避免把服务
+暴露到局域网：
+
+```yaml
+host: "127.0.0.1"
+port: 8317
+api-keys:
+  - "..."
+```
+
+DeepSeek 使用相同的明文或加密凭据模式：
 
 ```toml
 DEEPSEEK_API_KEY = "..."
+# 或：DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
 ```
 
-也可以改为存储 base64 编码后的 GPG 密文：
-
-```toml
-DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
-```
-
-用你现有的 GPG key 生成该加密值。如果私钥托管在 YubiKey 上，`gpg-agent` 会在执行 `ccenv` 时处理 PIN / touch 提示：
+用现有 GPG key 生成加密值。如果私钥托管在 YubiKey 上，`gpg-agent` 会在执行 `ccenv` 时处理 PIN / touch 提示：
 
 ```bash
 shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
@@ -760,7 +784,7 @@ QWEN_API_KEY = "..."
 shine env encrypt --from QWEN_API_KEY --set QWEN_API_KEY_GPG_SECRET
 ```
 
-`ccenv` 提示选择 provider 时，输入 `qwen`（或选项 `2`）。它会为当前 shell 导出阿里云
+`ccenv` 提示选择 provider 时，输入 `qwen`（或选项 `3`）。它会为当前 shell 导出阿里云
 endpoint、Qwen 模型映射，以及 `983616` 的 Claude Code context-token limit。
 
 #### age + Apple Touch ID（Secure Enclave）
@@ -900,7 +924,7 @@ ccenv --print "hello"
 ccenv -- --run
 ```
 
-无论 provider 为何，都会优先使用其 `*_GPG_SECRET` 值而非明文 `*_API_KEY`。若 GPG 解码或解密失败，`ccenv` 会直接停止，而不会回退到明文 key。
+每个已配置 provider 都会优先使用其 `*_GPG_SECRET` 值，而非对应的明文凭据。若 GPG 解码或解密失败，`ccenv` 会直接停止，不会回退到明文值。
 
 ### Shell 预设元数据
 

@@ -122,6 +122,7 @@ pub(crate) fn env_map_for_shell_template<'a>(
         let mut map = env_map.clone();
         map.entry("DEEPSEEK_API_KEY".to_string()).or_default();
         map.entry("QWEN_API_KEY".to_string()).or_default();
+        map.entry("CLIPROXYAPI_AUTH_TOKEN".to_string()).or_default();
         std::borrow::Cow::Owned(map)
     } else {
         std::borrow::Cow::Borrowed(env_map)

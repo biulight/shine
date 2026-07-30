@@ -117,7 +117,7 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-Installing all shell presets includes `agent`, which requires the selected provider's API key (`DEEPSEEK_API_KEY`/`DEEPSEEK_API_KEY_GPG_SECRET` or `QWEN_API_KEY`/`QWEN_API_KEY_GPG_SECRET`) in the active env config before use.
+Installing all shell presets includes `agent`. Its default Codex provider requires `CLIPROXYAPI_AUTH_TOKEN` or `CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET`; DeepSeek and Qwen use their corresponding API-key variables in the active env config.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `reinstall` when you want to overwrite managed preset files, links, and the shell config entry.
 
 Top-level `install`, `reinstall`, and `uninstall` commands accept a required category and automatically route to either `shell/<category>` or `app/<category>`. If both preset types define the same category name, `shine` prompts you to choose one.
@@ -743,22 +743,47 @@ The helper prefers `MY_TOKEN_SECRET`, decrypts it when present, and otherwise fa
 
 ### shell/agent — `ccenv`
 
-Configures the current shell for Claude Code with the selected DeepSeek or Qwen provider.
+Configures the current shell for Claude Code with Codex through CLIProxyAPI (the default), DeepSeek, or Qwen.
+The prompt lists `codex`, `deepseek`, `qwen`, and the not-yet-configured `glm5`
+as options 1–4; pressing Enter selects Codex.
 
-Add your key to the global env override at `~/.shine/shine.env.toml`, or to a
-project-local env file next to `shine.config.toml`:
+For the default Codex provider, add the client token from CLIProxyAPI's `api-keys`
+to the global env override at `~/.shine/shine.env.toml`, or to a project-local
+env file next to `shine.config.toml`:
+
+```toml
+CLIPROXYAPI_AUTH_TOKEN = "..."
+# Or: CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET = "<base64-gpg-ciphertext>"
+```
+
+Create the encrypted value with:
+
+```bash
+shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN --set CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET
+```
+
+Codex connects to `http://127.0.0.1:8317` and maps Claude Code's Opus, Sonnet,
+and Haiku tiers to `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`
+respectively. It also sets `CLAUDE_CODE_EFFORT_LEVEL=high`, which CLIProxyAPI
+passes through as Codex `reasoning.effort=high`. Configure CLIProxyAPI to use
+the same token and bind it to loopback so the service is not exposed to the
+local network:
+
+```yaml
+host: "127.0.0.1"
+port: 8317
+api-keys:
+  - "..."
+```
+
+For DeepSeek, use the same plaintext-or-encrypted credential pattern:
 
 ```toml
 DEEPSEEK_API_KEY = "..."
+# Or: DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
 ```
 
-Or store a base64-encoded GPG secret instead:
-
-```toml
-DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
-```
-
-Create the encrypted value with your existing GPG key. If the private key is
+Create encrypted values with your existing GPG key. If the private key is
 backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
 
 ```bash
@@ -788,7 +813,7 @@ Create its encrypted value with:
 shine env encrypt --from QWEN_API_KEY --set QWEN_API_KEY_GPG_SECRET
 ```
 
-When `ccenv` prompts for a provider, choose `qwen` (or option `2`). It exports
+When `ccenv` prompts for a provider, choose `qwen` (or option `3`). It exports
 the Alibaba Cloud endpoint, Qwen model mapping, and the `983616` Claude Code
 context-token limit for the current shell session.
 
@@ -944,7 +969,7 @@ argument must be passed through to Claude itself:
 ccenv -- --run
 ```
 
-For either provider, its `*_GPG_SECRET` value wins over the plaintext `*_API_KEY`.
+For every configured provider, its `*_GPG_SECRET` value wins over the corresponding plaintext credential.
 A GPG decode/decrypt failure stops `ccenv` instead of falling back to plaintext.
 
 ### Shell preset metadata

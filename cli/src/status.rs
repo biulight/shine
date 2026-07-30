@@ -685,7 +685,7 @@ mod tests {
         let script = cat_dir.join("cc.sh");
         fs::write(
             &script,
-            b"#!/bin/bash\n# shine-template: true\necho @@DEEPSEEK_API_KEY@@ @@QWEN_API_KEY@@\n",
+            b"#!/bin/bash\n# shine-template: true\necho @@DEEPSEEK_API_KEY@@ @@QWEN_API_KEY@@ @@CLIPROXYAPI_AUTH_TOKEN@@\n",
         )
         .await
         .unwrap();
@@ -700,7 +700,7 @@ mod tests {
 
         fs::write(
             &script,
-            b"#!/bin/bash\n# shine-template: true\necho changed @@DEEPSEEK_API_KEY@@ @@QWEN_API_KEY@@\n",
+            b"#!/bin/bash\n# shine-template: true\necho changed @@DEEPSEEK_API_KEY@@ @@QWEN_API_KEY@@ @@CLIPROXYAPI_AUTH_TOKEN@@\n",
         )
         .await
         .unwrap();
