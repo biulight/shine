@@ -85,6 +85,18 @@ Shell Preset Categories
                   ...
 ```
 
+### 查看 shell 预设详情
+
+安装前后都可以查看某个类别或具体命令的详情：
+
+```bash
+shine shell info proxy
+shine shell info setproxy
+shine shell info proxy/setproxy
+```
+
+详情会显示 source 元数据、runtime 要求、transforms、声明的环境变量名称以及当前安装状态，但不会输出环境变量值。
+
 ### 安装 shell 预设
 
 ```bash
@@ -443,9 +455,10 @@ shine info git --verbose
 ```bash
 shine info app/git
 shine info shell/proxy/setproxy
+shine info sys/split-dns
 ```
 
-对于应用配置，`shine info --verbose` 读取的是已安装目标文件。对于 shell 预设，它读取的是实际生效的脚本目标；如果脚本使用了模板渲染，则会读取 `~/.shine/rendered/` 下对应的渲染结果。
+对于应用配置，`shine info --verbose` 读取的是已安装目标文件。对于 shell 预设，它读取的是实际生效的脚本目标；如果脚本使用了模板渲染，则会读取 `~/.shine/rendered/` 下对应的渲染结果。系统项目必须使用明确的 `sys/<ITEM>` 形式，并且不接受 `--diff` 或 `--verbose`。
 
 ### 更新状态和版本检查
 
@@ -458,7 +471,7 @@ shine update --verbose
 
 只显示已安装配置里存在可用更新的条目，然后再检查是否有更新的 `shine` 发行版。加 `--verbose` 后，会把已是最新或需要关注的安装项一并列出：
 
-加上 `--diff` 后，会直接在每个可更新的 shell 或 app 条目下显示预期内容差异。也可以传入一个已安装的 shell/app 目标来只检查该目标；目标模式默认显示 diff、跳过 `shine` 发行版检查，并可与 `--pull` 组合，但不能与 `--verbose` 或 `--refresh` 组合。需要查看当前完整内容时继续使用 `shine info <TARGET> --verbose`。受管系统资源已经显示结构化字段变化，不再额外生成内容 diff。
+加上 `--diff` 后，会直接在每个可更新的 shell 或 app 条目下显示预期内容差异。也可以传入一个已安装的 shell/app 目标来只检查该目标；目标模式默认显示 diff、跳过 `shine` 发行版检查，并可与 `--pull` 组合，但不能与 `--verbose` 或 `--refresh-release` 组合。需要查看当前完整内容时继续使用 `shine info <TARGET> --verbose`。受管系统资源已经显示结构化字段变化，不再额外生成内容 diff。
 
 ```
 Shell Presets
@@ -478,10 +491,17 @@ App Configs
 | `!` | 目标文件缺失（曾安装过） |
 | `✗` | 未安装 |
 
-### 导出并自定义预设
+当新版 Shine 的 runtime schema 需要清理旧状态时，可以先预览、再执行版本化迁移：
 
 ```bash
-shine export
+shine state migrate --dry-run
+shine state migrate
+```
+
+### 管理和自定义 preset 来源
+
+```bash
+shine preset export
 ```
 
 会把所有内置 shell 脚本和应用配置复制到当前配置的 `presets_dir`（默认是 `~/.shine/presets/`）。导出后你可以自由修改这些文件；后续安装时，`shine` 会优先读取文件系统中的副本，而不是二进制内置资源。
@@ -489,8 +509,8 @@ shine export
 如果想通过 CLI 把 `shine` 切换到自定义预设目录：
 
 ```bash
-shine link ~/dotfiles/shine-presets --create
-shine export
+shine preset link ~/dotfiles/shine-presets --create
+shine preset export
 ```
 
 也可以在 `~/.shine/config.toml` 中设置 `presets_dir`：
@@ -502,7 +522,7 @@ presets_dir = "~/dotfiles/shine-presets"
 然后把默认预设导出过去，作为初始版本：
 
 ```bash
-SHINE_PRESETS=~/dotfiles/shine-presets shine export
+SHINE_PRESETS=~/dotfiles/shine-presets shine preset export
 ```
 
 当配置了 `presets_dir` 后，所有 `install`、`update` 和 `list` 命令都会自动从外部目录读取。每个命令输出中都会显示当前激活的预设来源，避免你混淆实际使用的是哪份文件。
@@ -510,20 +530,20 @@ SHINE_PRESETS=~/dotfiles/shine-presets shine export
 如果只想做少量自定义，可以使用 presets overlay。Overlay 会按相同相对路径覆盖当前预设来源（内置或外部），例如 `app/starship/starship.toml` 或 `shell/proxy/set_proxy.sh`。同路径文件以 overlay 为准，overlay 独有的分类也会加入基础来源。
 
 ```bash
-shine overlay link ~/dotfiles/shine-overlay --create
-shine overlay show
-shine overlay unlink
+shine preset overlay link ~/dotfiles/shine-overlay --create
+shine preset overlay info
+shine preset overlay unlink
 ```
 
 如果你的 overlay 保存在 Git 仓库中，可以让 Shine 自动维护这份检出，而不必在每台机器上手动克隆。为 overlay 指定一个 Git 地址，Shine 会以 `--depth 1`（不含历史）克隆到 `~/.shine/overlay`，并始终镜像到远端最新提交：
 
 ```bash
-shine overlay link --git https://github.com/you/shine-overlay.git   # 可选：--branch main
-shine overlay show      # 显示 URL、分支、托管路径与克隆状态
-shine pull              # 首次运行时克隆，之后强制镜像到最新提交
+shine preset overlay link --git https://github.com/you/shine-overlay.git   # 可选：--branch main
+shine preset overlay info      # 显示 URL、分支、托管路径与克隆状态
+shine preset pull              # 首次运行时克隆，之后强制镜像到最新提交
 ```
 
-也可以直接在 `~/.shine/config.toml` 中写入地址，再执行 `shine pull`：
+也可以直接在 `~/.shine/config.toml` 中写入地址，再执行 `shine preset pull`：
 
 ```toml
 presets_overlay_git = "https://github.com/you/shine-overlay.git"
@@ -531,14 +551,14 @@ presets_overlay_git = "https://github.com/you/shine-overlay.git"
 ```
 
 这特别适合「一台机器维护 overlay、其余设备只消费」的场景：每台设备只需要这个地址，
-无需手动 `git clone`。由于托管检出是只读镜像，`shine pull` 始终会将其重置为与远端一致
+无需手动 `git clone`。由于托管检出是只读镜像，`shine preset pull` 始终会将其重置为与远端一致
 （可安全应对 rebase、force-push），并丢弃任何本地改动。如果拉取失败（例如远端不可达），
-之前的检出会保持不变并继续使用。手动 `overlay link <path>` 优先于 Git 地址，两者互斥。
+之前的检出会保持不变并继续使用。手动 `preset overlay link <path>` 优先于 Git 地址，两者互斥。
 
 如果当前 preset 来源或手动关联的 overlay 由 Git 管理，Shine 也会安全地快进拉取：
 
 ```bash
-shine pull             # 同步托管 overlay，并快进 preset / overlay 仓库
+shine preset pull             # 同步托管 overlay，并快进 preset / overlay 仓库
 shine update --pull    # 先拉取并重新加载配置，再检查状态
 shine upgrade --pull   # 先拉取并重新加载配置，再应用 preset
 ```
@@ -582,7 +602,7 @@ shine upgrade --pull  # 拉取 Git 管理的 preset 后再应用配置
 shine upgrade --verbose  # 包含 env 模板检查以及 skipped/已是最新的明细
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.40.0+preview.abc1234`；稳定版则继续显示 `0.40.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。`shine --version` 采用与 Cargo 一致的来源信息格式：稳定版显示 `shine 1.0.0 (<commit> <date>)`，preview 版显示 `shine 1.0.0-preview (<commit> <date>)`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -592,7 +612,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.40.0 sh install.sh
+SHINE_VERSION=1.0.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -600,7 +620,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.40.0"; .\install.ps1
+$env:SHINE_VERSION = "1.0.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -999,7 +1019,7 @@ GHOSTTY_BG_DARK = ""
 
 环境变量按 key 依次合并：内置默认值、全局 `[env]`、项目 `[env]`、全局 `shine.env.toml`、当前 presets overlay 的 `shine.env.toml`、项目 `shine.env.toml`。
 
-`shine env show` 会显示当前 preset catalog 提供的变量说明，并默认隐藏敏感值；需要查看完整值时可使用 `--reveal`。如果需要在当前配置中覆盖说明，可以把值和说明写在同一个 inline table 中：
+`shine env list` 会显示当前 preset catalog 提供的变量说明，并默认隐藏敏感值；需要查看完整值时可使用 `--reveal`。如果需要在当前配置中覆盖说明，可以把值和说明写在同一个 inline table 中：
 
 ```toml
 [env]
@@ -1028,10 +1048,10 @@ inline description 的优先级高于 preset catalog。Catalog 只保存元数�
 v0.39 完成迁移；否则请将它移动为 `~/.shine/shine.env.toml`，若目标文件已存在则手动
 合并。旧文件仍存在时，普通配置加载命令会停止并给出恢复提示。
 
-通过 `shine overlay link <path>` 关联的有效 overlay 目录也可以包含扁平的
+通过 `shine preset overlay link <path>` 关联的有效 overlay 目录也可以包含扁平的
 `<path>/shine.env.toml`。其中的值会覆盖全局 env，并可在任意工作目录下生效；
 项目本地 `shine.env.toml` 仍拥有更高优先级。该文件会在每次运行时重新读取，
-无需项目级 `shine.config.toml`；执行 `shine overlay unlink` 后即停止生效。
+无需项目级 `shine.config.toml`；执行 `shine preset overlay unlink` 后即停止生效。
 Overlay 也可以与完整的外部 presets 来源同时使用：同路径文件以 overlay 为准，
 其余文件继续来自外部 presets。
 

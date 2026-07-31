@@ -1,4 +1,4 @@
-//! Handlers for `shine env show/set/delete/get/decrypt/export/encrypt`.
+//! Handlers for `shine env list/set/delete/get/decrypt/export/encrypt`.
 
 use anyhow::{Context, Result, bail};
 
@@ -8,7 +8,7 @@ use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{colors, path_display, secret, shells};
 
 /// Which layer supplied a variable's effective value, used to group the
-/// `env show` output. `Config` is the `config.toml [env]` table (global or
+/// `env list` output. `Config` is the `config.toml [env]` table (global or
 /// project, deliberately not distinguished); the rest are `shine.env.toml`
 /// override files. Ordering matches display order (`config.toml` first, then
 /// override layers low-to-high by precedence).
@@ -78,7 +78,7 @@ fn group_env_keys<'a>(
     groups
 }
 
-pub async fn handle_show(config: &Config, reveal: bool) -> Result<()> {
+pub async fn handle_list(config: &Config, reveal: bool) -> Result<()> {
     let env = EnvConfig::load_or_init(config).await?;
     let catalog = super::catalog::load(config).await?;
     let terminal_width = usize::from(console::Term::stdout().size().1).max(40);
@@ -220,7 +220,7 @@ enum EnvWriteTarget<'a> {
 /// override file already shadows `config.toml [env]` for this key, since a
 /// plain write there would silently have no effect on the resolved value. With
 /// `force`, warns loudly when the winning file is the shine-managed overlay
-/// mirror, since that write will be discarded on the next `shine pull`.
+/// mirror, since that write will be discarded on the next `shine preset pull`.
 fn resolve_env_write_target<'a>(
     config: &'a Config,
     key: &str,
@@ -240,7 +240,7 @@ fn resolve_env_write_target<'a>(
         eprintln!(
             "{}",
             colors::yellow(&format!(
-                "Warning: {} is the shine-managed overlay mirror; this change will be discarded on the next `shine pull`/`shine update`. Edit it upstream on the maintaining device instead.",
+                "Warning: {} is the shine-managed overlay mirror; this change will be discarded on the next `shine preset pull`/`shine update`. Edit it upstream on the maintaining device instead.",
                 path_display::format(&source.path)
             ))
         );

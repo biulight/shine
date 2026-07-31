@@ -87,6 +87,19 @@ Shell Preset Categories
                   ...
 ```
 
+### Inspect shell preset details
+
+Inspect a category or one of its commands before or after installation:
+
+```bash
+shine shell info proxy
+shine shell info setproxy
+shine shell info proxy/setproxy
+```
+
+The detail view reports source metadata, runtime requirements, transforms, declared environment
+variable names, and current installation status. It never prints environment values.
+
 ### Install shell presets
 
 ```bash
@@ -459,9 +472,10 @@ Shows metadata, colorized status, and when applicable an expected-content diff f
 ```bash
 shine info app/git
 shine info shell/proxy/setproxy
+shine info sys/split-dns
 ```
 
-For app configs, `shine info --verbose` reads the installed destination file. For shell presets, it reads the effective script target, including rendered template scripts under `~/.shine/rendered/` when applicable.
+For app configs, `shine info --verbose` reads the installed destination file. For shell presets, it reads the effective script target, including rendered template scripts under `~/.shine/rendered/` when applicable. System items require the explicit `sys/<ITEM>` form and do not accept `--diff` or `--verbose`.
 
 ### Update status and release check
 
@@ -474,7 +488,7 @@ shine update --verbose
 
 Shows only available installed configuration updates, then checks for a newer shine release. Use `--verbose` to include installed entries that are already up-to-date or need attention:
 
-Add `--diff` to print the expected-content diff directly below each available shell or app update. Pass an installed shell/app target to inspect only that target; target mode implies diff, skips the shine release check, and can be combined with `--pull` but not `--verbose` or `--refresh`. Use `shine info <TARGET> --verbose` when the complete current content is needed. Managed system resources already show structured field changes and do not produce content diffs.
+Add `--diff` to print the expected-content diff directly below each available shell or app update. Pass an installed shell/app target to inspect only that target; target mode implies diff, skips the shine release check, and can be combined with `--pull` but not `--verbose` or `--refresh-release`. Use `shine info <TARGET> --verbose` when the complete current content is needed. Managed system resources already show structured field changes and do not produce content diffs.
 
 ```
 Shell Presets
@@ -494,10 +508,17 @@ Status symbols:
 | `!` | Destination missing (was installed) |
 | `✗` | Not installed |
 
-### Export and customize presets
+When a newer Shine runtime schema requires cleanup, inspect and apply its versioned migration with:
 
 ```bash
-shine export
+shine state migrate --dry-run
+shine state migrate
+```
+
+### Manage and customize preset sources
+
+```bash
+shine preset export
 ```
 
 Copies all built-in shell scripts and app configs into your configured `presets_dir` (default `~/.shine/presets/`). Once exported you can edit the files freely — `shine` will read from the filesystem copy instead of the embedded binary on subsequent installs.
@@ -505,8 +526,8 @@ Copies all built-in shell scripts and app configs into your configured `presets_
 To switch `shine` to a custom preset source directory with the CLI:
 
 ```bash
-shine link ~/dotfiles/shine-presets --create
-shine export
+shine preset link ~/dotfiles/shine-presets --create
+shine preset export
 ```
 
 To use a custom directory as your preset source, set `presets_dir` in `~/.shine/config.toml`:
@@ -518,7 +539,7 @@ presets_dir = "~/dotfiles/shine-presets"
 Then export the defaults there as a starting point:
 
 ```bash
-SHINE_PRESETS=~/dotfiles/shine-presets shine export
+SHINE_PRESETS=~/dotfiles/shine-presets shine preset export
 ```
 
 All `install`, `update`, and `list` commands will automatically read from the external directory when `presets_dir` is configured. The active preset source is printed in each command's output so you always know which files are being used.
@@ -526,20 +547,20 @@ All `install`, `update`, and `list` commands will automatically read from the ex
 For smaller customizations, use a presets overlay. Overlay files are merged over the active presets source—embedded or external—by matching the same relative paths, such as `app/starship/starship.toml` or `shell/proxy/set_proxy.sh`. Matching overlay files take priority, and overlay-only categories are added to the base source.
 
 ```bash
-shine overlay link ~/dotfiles/shine-overlay --create
-shine overlay show
-shine overlay unlink
+shine preset overlay link ~/dotfiles/shine-overlay --create
+shine preset overlay info
+shine preset overlay unlink
 ```
 
 If you keep your overlay in a Git repository, you can let Shine manage the checkout for you instead of cloning it on every machine. Point the overlay at a Git URL and Shine clones it (`--depth 1`, no history) under `~/.shine/overlay` and keeps it mirrored to the remote tip:
 
 ```bash
-shine overlay link --git https://github.com/you/shine-overlay.git   # optionally: --branch main
-shine overlay show      # shows the URL, branch, managed path, and clone status
-shine pull              # clones on first run, then force-mirrors to the latest commit
+shine preset overlay link --git https://github.com/you/shine-overlay.git   # optionally: --branch main
+shine preset overlay info      # shows the URL, branch, managed path, and clone status
+shine preset pull              # clones on first run, then force-mirrors to the latest commit
 ```
 
-You can also just add the URL directly to `~/.shine/config.toml` and run `shine pull`:
+You can also just add the URL directly to `~/.shine/config.toml` and run `shine preset pull`:
 
 ```toml
 presets_overlay_git = "https://github.com/you/shine-overlay.git"
@@ -548,15 +569,15 @@ presets_overlay_git = "https://github.com/you/shine-overlay.git"
 
 This is ideal when one machine maintains the overlay and the rest only consume it: each device
 just needs the URL, never a manual `git clone`. Because the managed checkout is a read-only mirror,
-`shine pull` always resets it to match the remote (surviving rebases and force-pushes) and discards
+`shine preset pull` always resets it to match the remote (surviving rebases and force-pushes) and discards
 any local edits. If a pull fails (e.g. the remote is unreachable), the previous checkout is left
-intact and stays in use. A manually linked `overlay link <path>` takes precedence over a Git URL;
+intact and stays in use. A manually linked `preset overlay link <path>` takes precedence over a Git URL;
 the two are mutually exclusive.
 
 When the active preset source or a manually linked overlay is managed by Git, Shine also safely fast-forwards it:
 
 ```bash
-shine pull             # sync managed overlay + fast-forward preset/overlay repositories
+shine preset pull             # sync managed overlay + fast-forward preset/overlay repositories
 shine update --pull    # pull first, then reload configuration and check status
 shine upgrade --pull   # pull first, then reload configuration and apply presets
 ```
@@ -605,7 +626,7 @@ shine upgrade --verbose  # include env-template checks and skipped/current rows
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.40.0+preview.abc1234`, while stable binaries continue to report `0.40.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. `shine --version` uses the same provenance layout as Cargo: stable builds report `shine 1.0.0 (<commit> <date>)`, while preview builds report `shine 1.0.0-preview (<commit> <date>)`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -615,7 +636,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.40.0 sh install.sh
+SHINE_VERSION=1.0.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -623,7 +644,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.40.0"; .\install.ps1
+$env:SHINE_VERSION = "1.0.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -1051,7 +1072,7 @@ GHOSTTY_BG_DARK = ""
 
 Environment values merge by key in this order: built-in defaults, global `[env]`, project `[env]`, global `shine.env.toml`, active presets-overlay `shine.env.toml`, then project `shine.env.toml`.
 
-`shine env show` displays these values with descriptions from the active preset
+`shine env list` displays these values with descriptions from the active preset
 catalog and redacts sensitive values by default. Use `--reveal` when the full
 value is required. A value can carry a config-local description without
 separating it from its key:
@@ -1090,11 +1111,11 @@ move it to `~/.shine/shine.env.toml`, or merge its values there if that file alr
 exists. A normal config-loading command stops with recovery instructions while the
 old file remains.
 
-An active directory linked with `shine overlay link <path>` may also contain a
+An active directory linked with `shine preset overlay link <path>` may also contain a
 flat `<path>/shine.env.toml`. Its values override global env values and are
 available from any working directory; project-local `shine.env.toml` values
 still take priority. The file is re-read on every run, requires no project
-`shine.config.toml`, and stops applying after `shine overlay unlink`. Overlays
+`shine.config.toml`, and stops applying after `shine preset overlay unlink`. Overlays
 also compose with a full external presets source: matching overlay paths win,
 while other files continue to come from the external source.
 

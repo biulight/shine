@@ -24,7 +24,7 @@ LAN 规则服务器**，使本地规则可版本控制、可通过 presets overl
   `shine app build clash-verge` 可经 mihomo 外部控制器 API 立即应用（`surge-cli reload` 的等价物）。
 - 本地规则明确以 **`prepend-rules`** 置于订阅规则之前，保证本地优先（mihomo 首匹配优先）。
 - 不直接编辑或替换远端订阅 YAML，不保存订阅 URL、节点或订阅凭据。
-- `shine` 管理的文件可由 presets overlay 覆盖，支持个人私有规则仓库随 `shine pull` / `shine upgrade` 更新。
+- `shine` 管理的文件可由 presets overlay 覆盖，支持个人私有规则仓库随 `shine preset pull` / `shine upgrade` 更新。
 - 与 CVR 已有的增强机制协作；不重造订阅下载、刷新或 mihomo 配置合成逻辑。
 
 ## 3. 非目标

@@ -9,7 +9,7 @@ mod uninstall;
 pub use install::{
     handle_completion_install, handle_init_template, handle_install, handle_upgrade_installed,
 };
-pub use report::{ShellUpgradeReport, handle_list};
+pub use report::{ShellUpgradeReport, handle_info, handle_list};
 pub use uninstall::handle_uninstall;
 
 use anyhow::{Result, bail};

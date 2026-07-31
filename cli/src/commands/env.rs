@@ -4,7 +4,7 @@ use std::{ffi::OsString, path::PathBuf};
 #[derive(Subcommand, Debug)]
 pub enum EnvCommands {
     /// List all env variables
-    Show {
+    List {
         /// Show sensitive values instead of redacting them
         #[arg(long)]
         reveal: bool,
@@ -118,7 +118,7 @@ pub enum EnvIdentitySubcommand {
         force: bool,
     },
     /// Print the recipient(s) for the configured identity file(s)
-    Show,
+    List,
 }
 
 #[derive(Args, Debug)]

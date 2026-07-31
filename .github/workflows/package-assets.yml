@@ -55,7 +55,8 @@ jobs:
         shell: bash
         run: |
           if [ "$REF_TYPE" = "branch" ]; then
-            export SHINE_VERSION_METADATA="preview.${GITHUB_SHA::7}"
+            export SHINE_VERSION_METADATA="preview"
+            export SHINE_GIT_SHA="$GITHUB_SHA"
           fi
           cargo build --release -p cli --target ${{ matrix.target }}
       - name: Package archive

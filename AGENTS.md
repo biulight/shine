@@ -44,7 +44,7 @@ cargo run -- shell install proxy
 cargo run -- shell uninstall --dry-run
 cargo run -- sys list
 cargo run -- sys init --dry-run
-cargo run -- env show
+cargo run -- env list
 cargo run -- self upgrade --channel preview
 
 # Test (pre-commit uses nextest)
@@ -114,7 +114,7 @@ shine/
 │       │                     # `pub mod` in lib.rs (not bin-private), so its unit
 │       │                     # tests run under `cargo test --lib` too.
 │       ├── home.rs           # effective_home_dir (sudo-aware), tilde/full path expansion
-│       ├── presets_commands.rs # export/link/unlink, overlay link/unlink/show.
+│       ├── preset_commands.rs # preset export/link/unlink/pull, overlay link/unlink/info.
 │       │                     # `pub mod` in lib.rs, same lib-testability reasoning as shim.rs.
 │       ├── self_install.rs   # update/self-upgrade/upgrade-installed-configs,
 │       │                     # atomic self-install binary copy. `pub mod` in lib.rs,
@@ -126,7 +126,8 @@ shine/
 │       │   │                 # crate since completion.rs needs them)
 │       │   ├── app.rs        # AppCommands enum
 │       │   ├── env.rs        # EnvCommands enum
-│       │   ├── preset.rs     # ExportCommand, LinkCommand structs
+│       │   ├── preset.rs     # PresetCommands + export/link/overlay arg types
+│       │   ├── state.rs      # StateCommands (`state migrate`)
 │       │   ├── self_install.rs # SelfCommands enum (install, upgrade)
 │       │   ├── shell.rs      # ShellCommands enum
 │       │   └── sys.rs        # SysCommands enum
@@ -163,9 +164,9 @@ shine/
 │       │   └── transforms/   # File content transforms: jsonc-to-json, template
 │       ├── env/
 │       │   ├── mod.rs        # EnvConfig: [env] table in config.toml, @@VAR@@ substitution
-│       │   ├── commands.rs   # `shine env show/set/delete/get/decrypt/export/encrypt` handlers
-│       │   ├── catalog.rs    # Known env-var metadata (description, sensitive) for `env show`
-│       │   ├── identity.rs   # `shine env identity init/show`: age identity generation
+│       │   ├── commands.rs   # `shine env list/set/delete/get/decrypt/export/encrypt` handlers
+│       │   ├── catalog.rs    # Known env-var metadata (description, sensitive) for `env list`
+│       │   ├── identity.rs   # `shine env identity init/list`: age identity generation
 │       │   │                 # (age-keygen / age-plugin-se --touch-id) and recipient inspection
 │       │   ├── upgrade.rs    # Re-apply env template transforms to installed presets
 │       │   └── workspace.rs  # `shine env seal/run`: workspace env files, `--with` injection
@@ -217,7 +218,7 @@ shine/
 │       ├── bin_links.rs      # ~/.shine/bin/ command management: LinkRuntime (Native symlink/shim
 │       │                     # vs Bun launcher), marker-based launcher ownership + current-ness
 │       ├── status.rs         # Shared install-status row builders used by `list`/`info`
-│       ├── clear.rs          # Clear stale runtime state after schema changes
+│       ├── state.rs          # `shine state migrate`: versioned runtime-state cleanup
 │       ├── colors.rs         # Terminal color helpers
 │       ├── serve.rs          # Local HTTP server for shine-managed resources under ~/.shine/http/
 │       ├── list.rs           # Top-level `shine list` and status views
@@ -233,11 +234,11 @@ shine/
 │       │   ├── gpg.rs        # GPG-backed encrypt/decrypt, untagged base64 ciphertext
 │       │   └── age.rs        # age-backed encrypt/decrypt, multi-recipient + Secure Enclave
 │       │                     # (age-plugin-se) identity support, `age:`-tagged ciphertext
-│       ├── show/
-│       │   ├── mod.rs        # `shine info <TARGET>`: handle_show orchestration entry point
-│       │   ├── collect.rs    # Gathers installed AppShowFile/ShellShowFile data from manifests
-│       │   ├── resolve.rs    # Resolves a TARGET string to a ShowRef via canonical/alias matching
-│       │   └── render.rs     # println!/diff formatting for app and shell show output
+│       ├── info/
+│       │   ├── mod.rs        # `shine info <TARGET>` orchestration and update diffs
+│       │   ├── collect.rs    # Gathers installed AppInfoFile/ShellInfoFile data from manifests
+│       │   ├── resolve.rs    # Resolves a TARGET string to an InfoRef via canonical/alias matching
+│       │   └── render.rs     # println!/diff formatting for app and shell info output
 │       ├── ssh/
 │       │   ├── mod.rs        # `shine ssh`: wraps system ssh, arg splitting, session
 │       │   │                 # bootstrap, wrapped remote command (env vars + EXIT trap)
@@ -309,21 +310,21 @@ shine/
 
 | Top-level command | Handler module |
 |---|---|
-| `shell list/install/uninstall` | `cli/src/shells/` |
+| `shell list/info/install/uninstall` | `cli/src/shells/` |
 | `app list/install/uninstall` | `cli/src/apps/` |
 | `app build <app-id>` / `app unbuild <app-id>` | `cli/src/apps/build.rs` |
 | `app refresh <app-id> [file]` | `cli/src/apps/refresh.rs` |
 | `sys list/init` | `cli/src/sys/` |
-| `theme sync` | `cli/src/theme/` (bypasses `Config::load_or_init()`, like `init`/`clear`) |
-| `env show/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
+| `theme sync` | `cli/src/theme/` (bypasses `Config::load_or_init()`, like `init`/`state migrate`) |
+| `env list/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
 | `list` | `cli/src/list.rs` |
-| `info <TARGET>` | `cli/src/show/` |
-| `export` / `link` / `unlink` / `overlay` | `cli/src/presets_commands.rs` |
-| `pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
+| `info <TARGET>` | `cli/src/info/` (+ `sys/` for explicit `sys/<ITEM>`) |
+| `preset export/link/unlink/overlay` | `cli/src/preset_commands.rs` |
+| `preset pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
 | `init` | `cli/src/init.rs` |
 | `self install/upgrade` | `cli/src/self_install.rs` + `update_check/` |
 | `update` / `upgrade` | `cli/src/self_install.rs` + `update_check/` |
-| `clear` | `cli/src/clear.rs` |
+| `state migrate` | `cli/src/state.rs` |
 | `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
 | `ssh [--with ...] [--with-secret ...] [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
@@ -353,7 +354,7 @@ routed through `secret::encrypt_secret`/`decrypt_secret` (`secret/mod.rs`) to ei
 optional Apple Touch ID via `age-plugin-se`) backend. Decryption always routes purely on the
 ciphertext's tag, never on config — see
 [ADR 0008](docs/kb/decisions/0008-age-secret-backend-tagged-ciphertext.md). `shine env identity
-init/show` (`env/identity.rs`) manages the age identity file consulted via
+init/list` (`env/identity.rs`) manages the age identity file consulted via
 `Config::age_identities()`.
 
 ### File transforms (`install_core/transforms/`)
@@ -547,11 +548,11 @@ An overlay merges over the active presets source by matching relative paths (`Co
 configure it, both resolved by `Config::active_presets_overlay_dir()`:
 
 - **Manual** — `presets_overlay_dir` in `config.toml` points at a user-owned directory
-  (`shine overlay link <path>`). Fast-forward-pulled by `shine pull` like any Git preset source.
+  (`shine preset overlay link <path>`). Fast-forward-pulled by `shine preset pull` like any Git preset source.
 - **shine-managed Git** — `presets_overlay_git` (+ optional `presets_overlay_git_branch`) records a
-  Git URL (`shine overlay link --git <url>`). shine owns the checkout at `<shine_dir>/overlay`
+  Git URL (`shine preset overlay link --git <url>`). shine owns the checkout at `<shine_dir>/overlay`
   (`managed_overlay_dir`, resolved by `Config::resolve_managed_overlay_dir` from `shine_dir`, so it
-  follows `SHINE_CONFIG_DIR`). It is cloned `--depth 1` on first `shine pull` and **force-mirrored**
+  follows `SHINE_CONFIG_DIR`). It is cloned `--depth 1` on first `shine preset pull` and **force-mirrored**
   (`git fetch --depth 1` + `reset --hard`) to the remote tip afterward — a read-only mirror, never
   fast-forward-pulled. See `git_pull::sync_managed_overlay`. A managed overlay is only "active" once
   its checkout exists on disk; setting one via the CLI clears any manual `presets_overlay_dir`.

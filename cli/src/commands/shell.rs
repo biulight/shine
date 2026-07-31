@@ -10,6 +10,12 @@ pub enum ShellCommands {
     },
     /// List available shell preset categories and their scripts
     List,
+    /// Show detailed information about a shell preset category or command
+    Info {
+        /// Category, command, or category/command to inspect
+        #[arg(value_name = "TARGET")]
+        target: String,
+    },
     /// Install shell presets and create bin symlinks.
     /// Run 'shine shell list' to see available categories.
     Install {

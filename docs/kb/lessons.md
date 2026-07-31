@@ -215,7 +215,7 @@ the second was the real blocker.
   writes directly into that override file instead (`write_env_override_entry`, comment- and
   description-preserving via the same `utils::migration::sync_table` `Config::save()` uses),
   and warns loudly when the winning file is the shine-managed overlay mirror, since that
-  write is discarded on the next `shine pull`.
+  write is discarded on the next `shine preset pull`.
 - **Rule**: a `set`/`delete`-shaped command must never report success for a write that a
   higher-precedence layer will keep shadowing — either make the write land where it's
   actually effective, or refuse and say why.

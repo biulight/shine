@@ -2,7 +2,7 @@ use crate::commands::CompletionShell;
 use crate::config;
 use clap::CommandFactory;
 use clap_complete::engine::{ArgValueCandidates, CompletionCandidate};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub fn complete_from_env() {
@@ -25,6 +25,7 @@ pub fn generate_registration(shell: CompletionShell) {
 pub fn command() -> clap::Command {
     let all_categories = ArgValueCandidates::new(all_category_candidates);
     let shell_categories = ArgValueCandidates::new(shell_category_candidates);
+    let shell_targets = ArgValueCandidates::new(shell_info_candidates);
     let app_categories = ArgValueCandidates::new(app_category_candidates);
     let sys_items = ArgValueCandidates::new(sys_item_candidates);
 
@@ -39,7 +40,10 @@ pub fn command() -> clap::Command {
             cmd.mut_arg("category", |arg| arg.add(all_categories.clone()))
         })
         .mut_subcommand("shell", |cmd| {
-            cmd.mut_subcommand("install", |cmd| {
+            cmd.mut_subcommand("info", |cmd| {
+                cmd.mut_arg("target", |arg| arg.add(shell_targets.clone()))
+            })
+            .mut_subcommand("install", |cmd| {
                 cmd.mut_arg("category", |arg| arg.add(shell_categories.clone()))
             })
             .mut_subcommand("reinstall", |cmd| {
@@ -85,6 +89,122 @@ fn all_category_candidates() -> Vec<CompletionCandidate> {
 
 fn shell_category_candidates() -> Vec<CompletionCandidate> {
     completion_candidates(category_names("shell"))
+}
+
+fn shell_info_candidates() -> Vec<CompletionCandidate> {
+    let mut names = shell_category_names();
+    for (category, commands) in shell_command_names() {
+        for command in commands {
+            names.insert(command.clone());
+            names.insert(format!("{category}/{command}"));
+        }
+    }
+    completion_candidates(names)
+}
+
+fn shell_category_names() -> BTreeSet<String> {
+    category_names("shell")
+}
+
+fn shell_command_names() -> Vec<(String, BTreeSet<String>)> {
+    if let Some((presets_dir, true)) = runtime_presets_dir() {
+        return collect_fs_shell_command_names(&presets_dir.join("shell"))
+            .into_iter()
+            .collect();
+    }
+
+    let mut commands = crate::shells::metadata::load_embedded_categories(None)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|category| {
+            (
+                category.name,
+                category
+                    .files
+                    .into_iter()
+                    .map(|file| file.command_name)
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if let Some(overlay_dir) = runtime_presets_overlay_dir() {
+        for (category, overlay_commands) in
+            collect_fs_shell_command_names(&overlay_dir.join("shell"))
+        {
+            commands
+                .entry(category)
+                .or_default()
+                .extend(overlay_commands);
+        }
+    }
+    commands.into_iter().collect()
+}
+
+fn collect_fs_shell_command_names(root: &Path) -> BTreeMap<String, BTreeSet<String>> {
+    #[derive(serde::Deserialize)]
+    struct ShellManifest {
+        files: Option<Vec<ShellFile>>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ShellFile {
+        source: PathBuf,
+        target: Option<String>,
+    }
+
+    let mut result = BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return result;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let Some(category) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let dir = entry.path();
+        let declared_commands = if let Ok(content) = std::fs::read_to_string(dir.join("shine.toml"))
+        {
+            toml::from_str::<ShellManifest>(&content)
+                .map(|manifest| {
+                    manifest.files.map(|files| {
+                        files
+                            .into_iter()
+                            .filter_map(|file| {
+                                file.target.or_else(|| {
+                                    crate::bin_links::link_stem(&file.source).into_string().ok()
+                                })
+                            })
+                            .collect()
+                    })
+                })
+                .unwrap_or(None)
+        } else {
+            None
+        };
+        let commands = declared_commands.unwrap_or_else(|| {
+            std::fs::read_dir(&dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter_map(|file| {
+                    let path = file.path();
+                    (path.is_file()
+                        && matches!(
+                            path.extension().and_then(|extension| extension.to_str()),
+                            Some("sh" | "ps1")
+                        ))
+                    .then(|| crate::bin_links::link_stem(&path).into_string().ok())
+                    .flatten()
+                })
+                .collect()
+        });
+        result.insert(category, commands);
+    }
+    result
 }
 
 fn app_category_candidates() -> Vec<CompletionCandidate> {
@@ -333,6 +453,12 @@ mod tests {
         assert!(shell.contains("proxy"), "shell candidates: {shell:?}");
         assert!(app.contains("starship"), "app candidates: {app:?}");
         assert!(sys.contains("split-dns"), "sys candidates: {sys:?}");
+        let shell_info = shell_info_candidates()
+            .into_iter()
+            .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
+            .collect::<BTreeSet<_>>();
+        assert!(shell_info.contains("setproxy"));
+        assert!(shell_info.contains("proxy/setproxy"));
     }
 
     #[test]
@@ -347,6 +473,16 @@ mod tests {
             "[[items]]\nid = \"custom-sys\"\nlabel = \"Custom sys\"\n",
         )
         .unwrap();
+        std::fs::write(
+            dir.join("presets/shell/custom-shell/shine.toml"),
+            "[[files]]\nsource = \"tool.sh\"\ntarget = \"custom-tool\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("presets/shell/custom-shell/tool.sh"),
+            "#!/bin/sh\n",
+        )
+        .unwrap();
 
         unsafe {
             std::env::set_var("SHINE_CONFIG_DIR", &dir);
@@ -356,6 +492,12 @@ mod tests {
         assert!(category_names("shell").contains("custom-shell"));
         assert!(category_names("app").contains("custom-app"));
         assert!(sys_item_names().contains("custom-sys"));
+        let shell_info = shell_info_candidates()
+            .into_iter()
+            .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
+            .collect::<BTreeSet<_>>();
+        assert!(shell_info.contains("custom-tool"));
+        assert!(shell_info.contains("custom-shell/custom-tool"));
         assert!(
             !dir.join("config.toml").exists(),
             "completion must not initialize config files"

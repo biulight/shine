@@ -6,7 +6,7 @@ use std::pin::Pin;
 
 const UPDATE_CACHE_FILE: &str = "update-check.json";
 
-pub async fn handle_clear(config: &Config, dry_run: bool) -> Result<()> {
+pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
     let schema_version = config.schema_version;
     if schema_version > CURRENT_RUNTIME_SCHEMA_VERSION {
         bail!(
@@ -32,7 +32,7 @@ pub async fn handle_clear(config: &Config, dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("{}", colors::bold("Clearing old runtime state"));
+    println!("{}", colors::bold("Migrating old runtime state"));
     crate::config::print_presets_note(config);
 
     for step in &steps {
@@ -51,7 +51,7 @@ pub async fn handle_clear(config: &Config, dry_run: bool) -> Result<()> {
         println!();
         println!(
             "{}",
-            colors::dim("Dry run only. Run `shine clear` to apply these changes.")
+            colors::dim("Dry run only. Run `shine state migrate` to apply these changes.")
         );
         return Ok(());
     }
@@ -77,7 +77,7 @@ pub fn pending_schema_warning(schema_version: u32) -> Option<String> {
     }
 
     Some(format!(
-        "Runtime config schema is behind: {schema_version} -> {CURRENT_RUNTIME_SCHEMA_VERSION}. Run `shine clear --dry-run` to inspect cleanup, then `shine clear`."
+        "Runtime config schema is behind: {schema_version} -> {CURRENT_RUNTIME_SCHEMA_VERSION}. Run `shine state migrate --dry-run` to inspect cleanup, then `shine state migrate`."
     ))
 }
 
@@ -121,7 +121,7 @@ mod tests {
     use tokio::fs;
 
     async fn make_temp_dir() -> std::path::PathBuf {
-        crate::test_support::make_temp_dir("shine-clear").await
+        crate::test_support::make_temp_dir("shine-state-migrate").await
     }
 
     #[test]
@@ -132,7 +132,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clear_removes_update_cache_and_records_schema() {
+    async fn migrate_removes_update_cache_and_records_schema() {
         let dir = make_temp_dir().await;
         let mut config = Config::new_for_test(&dir);
         config.schema_version = 0;
@@ -140,7 +140,7 @@ mod tests {
             .await
             .unwrap();
 
-        handle_clear(&config, false).await.unwrap();
+        handle_migrate(&config, false).await.unwrap();
 
         assert!(!dir.join(UPDATE_CACHE_FILE).exists());
         let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
@@ -166,7 +166,7 @@ mod tests {
             .await
             .unwrap();
 
-        handle_clear(&config, true).await.unwrap();
+        handle_migrate(&config, true).await.unwrap();
 
         assert!(dir.join(UPDATE_CACHE_FILE).exists());
         assert!(!dir.join("config.toml").exists());
@@ -175,11 +175,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clear_records_last_cleared_when_already_current() {
+    async fn migrate_records_last_cleared_when_already_current() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
 
-        handle_clear(&config, false).await.unwrap();
+        handle_migrate(&config, false).await.unwrap();
 
         let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
         let parsed: toml::Table = toml::from_str(&content).unwrap();
@@ -196,7 +196,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clear_does_not_remove_other_runtime_files() {
+    async fn migrate_does_not_remove_other_runtime_files() {
         let dir = make_temp_dir().await;
         let mut config = Config::new_for_test(&dir);
         config.schema_version = 0;
@@ -207,7 +207,7 @@ mod tests {
             .await
             .unwrap();
 
-        handle_clear(&config, false).await.unwrap();
+        handle_migrate(&config, false).await.unwrap();
 
         assert!(dir.join("rendered").exists());
         assert!(dir.join("bin").exists());

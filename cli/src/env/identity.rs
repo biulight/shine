@@ -1,4 +1,4 @@
-//! `shine env identity init/show`: generate and inspect age identities used
+//! `shine env identity init/list`: generate and inspect age identities used
 //! to decrypt `age:`-tagged secrets, including Secure Enclave (Touch ID)
 //! identities minted by `age-plugin-se`.
 
@@ -111,7 +111,7 @@ pub async fn handle_identity_init(
     Ok(())
 }
 
-pub async fn handle_identity_show(config: &Config) -> Result<()> {
+pub async fn handle_identity_list(config: &Config) -> Result<()> {
     let identities = config.age_identities();
     if identities.is_empty() {
         println!(

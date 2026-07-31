@@ -1,4 +1,4 @@
-use super::collect::{AppShowFile, ShellShowFile};
+use super::collect::{AppInfoFile, ShellInfoFile};
 use crate::apps::{AppCategory, AppFile, source_bytes_for_file};
 use crate::colors;
 use crate::config::Config;
@@ -12,7 +12,7 @@ use std::path::Path;
 
 pub(super) async fn print_app_file(
     config: &Config,
-    item: &AppShowFile,
+    item: &AppInfoFile,
     diff: bool,
     verbose: bool,
 ) -> Result<()> {
@@ -73,7 +73,7 @@ pub(super) async fn print_app_file(
 
 pub(super) async fn print_shell_file(
     config: &Config,
-    item: &ShellShowFile,
+    item: &ShellInfoFile,
     diff: bool,
     verbose: bool,
 ) -> Result<()> {
@@ -125,20 +125,20 @@ pub(super) async fn print_shell_file(
     Ok(())
 }
 
-pub(super) async fn print_app_update_diff(config: &Config, item: &AppShowFile) -> Result<()> {
+pub(super) async fn print_app_update_diff(config: &Config, item: &AppInfoFile) -> Result<()> {
     let diff_output = app_diff_output(config, item).await?;
     print_block("Diff", &item.destination, &diff_output);
     Ok(())
 }
 
-pub(super) async fn print_shell_update_diff(config: &Config, item: &ShellShowFile) -> Result<()> {
+pub(super) async fn print_shell_update_diff(config: &Config, item: &ShellInfoFile) -> Result<()> {
     let content_path = shell_content_path(item);
     let diff_output = shell_diff_output(config, item, &content_path).await?;
     print_block("Diff", &content_path, &diff_output);
     Ok(())
 }
 
-fn shell_content_path(item: &ShellShowFile) -> std::path::PathBuf {
+fn shell_content_path(item: &ShellInfoFile) -> std::path::PathBuf {
     item.link_target
         .as_ref()
         .filter(|target| target.starts_with(&item.rendered_path) || **target == item.rendered_path)
@@ -225,7 +225,7 @@ fn colored_shell_status(status: &str) -> String {
     colors::status_label(status, shell_status_sym(status))
 }
 
-async fn app_diff_output(config: &Config, item: &AppShowFile) -> Result<String> {
+async fn app_diff_output(config: &Config, item: &AppInfoFile) -> Result<String> {
     if item
         .file
         .generator
@@ -234,7 +234,7 @@ async fn app_diff_output(config: &Config, item: &AppShowFile) -> Result<String> 
     {
         return Ok(
             "Expected content is an explicitly refreshed generator snapshot; \
-             run `shine app refresh` to materialize it without polling during show.\n"
+             run `shine app refresh` to materialize it without polling during info.\n"
                 .to_string(),
         );
     }
@@ -278,7 +278,7 @@ async fn app_diff_output(config: &Config, item: &AppShowFile) -> Result<String> 
 
 async fn shell_diff_output(
     config: &Config,
-    item: &ShellShowFile,
+    item: &ShellInfoFile,
     current_path: &Path,
 ) -> Result<String> {
     let expected = match shell_expected_bytes(config, item).await? {
@@ -318,7 +318,7 @@ async fn shell_diff_output(
     ))
 }
 
-async fn shell_expected_bytes(config: &Config, item: &ShellShowFile) -> Result<Option<Vec<u8>>> {
+async fn shell_expected_bytes(config: &Config, item: &ShellInfoFile) -> Result<Option<Vec<u8>>> {
     let source_key = format!(
         "shell/{}/{}",
         item.category.name,
@@ -401,8 +401,8 @@ mod tests {
     use super::*;
     use crate::shells::metadata::ShellCategory;
 
-    fn shell_file(category: &str, command: &str, source: &str) -> ShellShowFile {
-        ShellShowFile {
+    fn shell_file(category: &str, command: &str, source: &str) -> ShellInfoFile {
+        ShellInfoFile {
             category: ShellCategory {
                 name: category.to_string(),
                 description: None,
@@ -466,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn embedded_shell_diff_ignores_stale_extracted_source() {
-        let dir = std::env::temp_dir().join(format!("shine-show-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("shine-info-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let stale_source = dir.join("set_proxy.sh");
         tokio::fs::write(&stale_source, b"#!/bin/bash\necho stale\n")

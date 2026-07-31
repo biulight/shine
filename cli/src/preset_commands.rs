@@ -5,7 +5,7 @@ use crate::commands::OverlayLinkCommand;
 use crate::config::{self, Config};
 use crate::{colors, presets};
 
-pub async fn handle_presets_export(
+pub async fn handle_preset_export(
     config: &Config,
     dir: Option<PathBuf>,
     force: bool,
@@ -44,7 +44,7 @@ pub async fn handle_presets_export(
     if !config.is_external_presets {
         println!();
         println!(
-            "Tip: run `shine link {}` to activate this directory.",
+            "Tip: run `shine preset link {}` to activate this directory.",
             target.display()
         );
     }
@@ -147,7 +147,9 @@ async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKin
             println!("{}", colors::external_presets_note(&absolute));
             println!(
                 "{}",
-                colors::dim("Run `shine export` to populate the directory with built-in presets.")
+                colors::dim(
+                    "Run `shine preset export` to populate the directory with built-in presets."
+                )
             );
         }
         LinkKind::Overlay => {
@@ -162,11 +164,11 @@ async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKin
     Ok(())
 }
 
-pub async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
+pub async fn handle_preset_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
     handle_link(config, path, create, LinkKind::Presets).await
 }
 
-pub async fn handle_presets_unlink(config: &Config) -> Result<()> {
+pub async fn handle_preset_unlink(config: &Config) -> Result<()> {
     if config.presets_dir_override.is_none() {
         println!(
             "{}",
@@ -231,7 +233,7 @@ async fn handle_overlay_link_git(
     println!("  {} {}", colors::dim("managed dir:"), dir.display());
 
     // Clone (or mirror, if already present) now so the overlay is usable right
-    // away instead of waiting for the next `shine pull`.
+    // away instead of waiting for the next `shine preset pull`.
     crate::git_pull::sync_managed_overlay(url, branch, dir, false).await?;
     Ok(())
 }
@@ -273,7 +275,7 @@ pub async fn handle_overlay_unlink(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub fn handle_overlay_show(config: &Config) -> Result<()> {
+pub fn handle_overlay_info(config: &Config) -> Result<()> {
     if let Some((url, branch, dir)) = config.overlay_git_source() {
         println!("{}", colors::green(&format!("Overlay Git source: {url}")));
         if let Some(branch) = branch {
@@ -285,7 +287,7 @@ pub fn handle_overlay_show(config: &Config) -> Result<()> {
         } else {
             println!(
                 "{}",
-                colors::dim("Not cloned yet — run `shine pull` to fetch it.")
+                colors::dim("Not cloned yet — run `shine preset pull` to fetch it.")
             );
         }
         return Ok(());
@@ -308,7 +310,7 @@ mod tests {
     use tokio::fs;
 
     async fn make_temp_dir() -> PathBuf {
-        crate::test_support::make_temp_dir("shine-presets-commands-test").await
+        crate::test_support::make_temp_dir("shine-preset-commands-test").await
     }
 
     fn config_in(dir: &std::path::Path) -> Config {
@@ -369,7 +371,7 @@ mod tests {
         let presets = make_temp_dir().await;
         let config = config_in(&dir);
 
-        handle_presets_link(&config, presets.clone(), false)
+        handle_preset_link(&config, presets.clone(), false)
             .await
             .unwrap();
 
@@ -389,7 +391,7 @@ mod tests {
         let config = config_in(&dir);
         let new_dir = dir.join("new-presets");
 
-        handle_presets_link(&config, new_dir.clone(), true)
+        handle_preset_link(&config, new_dir.clone(), true)
             .await
             .unwrap();
 
@@ -403,7 +405,7 @@ mod tests {
         let config = config_in(&dir);
         let missing = dir.join("does-not-exist");
 
-        let err = handle_presets_link(&config, missing, false).await;
+        let err = handle_preset_link(&config, missing, false).await;
         assert!(err.is_err());
         let msg = err.unwrap_err().to_string();
         assert!(
@@ -421,7 +423,7 @@ mod tests {
         let file = dir.join("not-a-dir.txt");
         fs::write(&file, b"hello").await.unwrap();
 
-        let err = handle_presets_link(&config, file, false).await;
+        let err = handle_preset_link(&config, file, false).await;
         assert!(err.is_err());
         assert!(
             err.unwrap_err().to_string().contains("not a directory"),
@@ -441,7 +443,7 @@ mod tests {
         let config = config_in(&dir).with_presets_dir_override(Some(abs.clone()));
 
         // Should return Ok without error
-        handle_presets_link(&config, presets.clone(), false)
+        handle_preset_link(&config, presets.clone(), false)
             .await
             .unwrap();
 
@@ -463,7 +465,7 @@ mod tests {
         // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
         unsafe { std::env::set_var("SHINE_PRESETS", "/some/override") };
         // Should succeed even with env var set
-        handle_presets_link(&config, presets.clone(), false)
+        handle_preset_link(&config, presets.clone(), false)
             .await
             .unwrap();
         // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
@@ -481,7 +483,7 @@ mod tests {
         // Write initial config with presets_dir set
         config.save().await.unwrap();
 
-        handle_presets_unlink(&config).await.unwrap();
+        handle_preset_unlink(&config).await.unwrap();
 
         let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
         let parsed: toml::Table = toml::from_str(&content).unwrap();
@@ -500,7 +502,7 @@ mod tests {
         let config = config_in(&dir);
 
         // Should return Ok, no file written
-        handle_presets_unlink(&config).await.unwrap();
+        handle_preset_unlink(&config).await.unwrap();
         assert!(!dir.join("config.toml").exists());
 
         fs::remove_dir_all(&dir).await.unwrap();

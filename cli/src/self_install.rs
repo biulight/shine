@@ -4,17 +4,17 @@ use crate::config::{self, Config};
 #[cfg(unix)]
 use crate::privilege;
 use crate::update_check::{self, ReleaseChannel, UpdateStatus};
-use crate::{apps, colors, env, install_core, list, output, platform, shells, show, sys, version};
+use crate::{apps, colors, env, info, install_core, list, output, platform, shells, sys, version};
 
 pub async fn handle_update(
     config: &Config,
     target: Option<&str>,
     diff: bool,
     verbose: bool,
-    refresh: bool,
+    refresh_release: bool,
 ) -> Result<()> {
     if let Some(target) = target {
-        return show::handle_update_target(config, target).await;
+        return info::handle_update_target(config, target).await;
     }
 
     let mut printed_update = if verbose {
@@ -25,12 +25,12 @@ pub async fn handle_update(
         Box::pin(list::handle_update_list(config, diff)).await?
     };
 
-    let current = version::display();
+    let current = version::semver();
     if verbose {
         println!("Checking for updates (current: {current})...");
     }
 
-    let update_status = if refresh {
+    let update_status = if refresh_release {
         update_check::check_for_update_forced(config).await
     } else {
         update_check::check_for_update(config).await
@@ -88,7 +88,7 @@ fn format_update_check_failure_warning(err: &anyhow::Error) -> String {
 }
 
 pub async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
-    let current = version::display();
+    let current = version::semver();
     let selected_channel = channel.unwrap_or(ReleaseChannel::Stable);
     let force_install = channel.is_some();
     println!(
@@ -145,7 +145,7 @@ fn format_self_upgrade_message(
             format!("Upgraded shine from {previous_display} to {installed_version}.")
         }
         ReleaseChannel::Preview => {
-            if previous_display.contains("+preview.") {
+            if previous_display.contains("-preview") {
                 format!(
                     "Updated shine preview from {previous_display} to {installed_version} ({release_tag})."
                 )
@@ -610,10 +610,10 @@ mod tests {
             format_self_upgrade_message(
                 ReleaseChannel::Preview,
                 "0.21.3",
-                "0.21.4+preview.237a8a0",
+                "1.0.0-preview",
                 "preview",
             ),
-            "Installed shine preview 0.21.4+preview.237a8a0 over stable 0.21.3 (preview)."
+            "Installed shine preview 1.0.0-preview over stable 0.21.3 (preview)."
         );
     }
 
@@ -622,11 +622,11 @@ mod tests {
         assert_eq!(
             format_self_upgrade_message(
                 ReleaseChannel::Preview,
-                "0.21.4+preview.1111111",
-                "0.21.4+preview.237a8a0",
+                "1.0.0-preview",
+                "1.0.1-preview",
                 "preview",
             ),
-            "Updated shine preview from 0.21.4+preview.1111111 to 0.21.4+preview.237a8a0 (preview)."
+            "Updated shine preview from 1.0.0-preview to 1.0.1-preview (preview)."
         );
     }
 }

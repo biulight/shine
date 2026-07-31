@@ -134,7 +134,7 @@ async fn ensure_clean(label: &str, root: &Path) -> Result<()> {
     }
     if !output.stdout.is_empty() {
         bail!(
-            "refusing to pull {label}: Git worktree has uncommitted changes: {}\nCommit, stash, or discard the changes, then run 'shine pull' again.",
+            "refusing to pull {label}: Git worktree has uncommitted changes: {}\nCommit, stash, or discard the changes, then run 'shine preset pull' again.",
             root.display()
         );
     }
@@ -224,7 +224,7 @@ async fn pull_ff_only(root: &Path, verbose: bool) -> Result<PullSummary> {
     };
     if let Some(detail) = failure_detail {
         bail!(
-            "Git pull failed in {}: {}\nResolve the Git error, then run 'shine pull' again.",
+            "Git pull failed in {}: {}\nResolve the Git error, then run 'shine preset pull' again.",
             root.display(),
             detail
         );

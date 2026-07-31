@@ -25,6 +25,6 @@ with a [`lessons.md`](../lessons.md) entry.
 
 | Symptom | Likely cause / fix |
 |---|---|
-| `shine update` says up-to-date right after a release | 24 h version cache (`UPDATE_CACHE_TTL`). Use the force-refresh path or clear the cache file in the shine dir. |
+| `shine update` says up-to-date right after a release | 24 h version cache (`UPDATE_CACHE_TTL`). Run `shine update --refresh-release` to bypass it. |
 | Version check errors or GitHub rate limits | Non-fatal by design (`605fdd8`); rate-limit cooldowns are cached per auth mode (`f033a25`). The user's primary command must still succeed. |
 | Upgrade comparing against the wrong version | The moving `preview` tag was used as baseline. Always compare with the latest stable `v*` tag. |

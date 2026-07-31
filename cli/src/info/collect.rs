@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
-pub(super) struct AppShowFile {
+pub(super) struct AppInfoFile {
     pub(super) category: AppCategory,
     pub(super) file: AppFile,
     pub(super) destination: PathBuf,
@@ -19,7 +19,7 @@ pub(super) struct AppShowFile {
 }
 
 #[derive(Clone)]
-pub(super) struct ShellShowFile {
+pub(super) struct ShellInfoFile {
     pub(super) category: ShellCategory,
     pub(super) file: crate::shells::metadata::ShellFile,
     pub(super) source_path: PathBuf,
@@ -29,7 +29,7 @@ pub(super) struct ShellShowFile {
     pub(super) status: &'static str,
 }
 
-pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppShowFile>> {
+pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile>> {
     let categories = load_active_categories(config, None).await?;
     let manifest = AppManifest::load(config.shine_dir()).await?;
     let env = EnvConfig::load_or_init(config).await.ok();
@@ -62,7 +62,7 @@ pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppShowFile
             };
             let status =
                 crate::status::app_entry_status(config, &category, file, &entry, env_map).await;
-            files.push(AppShowFile {
+            files.push(AppInfoFile {
                 category: category.clone(),
                 file: file.clone(),
                 destination,
@@ -75,7 +75,7 @@ pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppShowFile
     Ok(files)
 }
 
-pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShowFile>> {
+pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfoFile>> {
     let categories = load_active_shells(config, None).await?;
 
     let shell_rows = build_shell_rows(config).await?;
@@ -117,7 +117,7 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellShow
                 .map(|row| row.status_text)
                 .unwrap_or(fallback_status);
 
-            files.push(ShellShowFile {
+            files.push(ShellInfoFile {
                 category: category.clone(),
                 file: file.clone(),
                 source_path,
@@ -153,7 +153,7 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn renamed_docker_category_has_no_legacy_alias() {
-        let dir = std::env::temp_dir().join(format!("shine-show-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("shine-info-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
         let config = Config::new_for_test(&dir);
