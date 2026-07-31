@@ -1,16 +1,15 @@
-//! Env variable layering: `[env]` table parsing, legacy `env.toml` migration,
-//! and the `shine.env.toml` override files (global, overlay, project).
+//! Env variable layering: `[env]` defaults and parsing, removed global
+//! `env.toml` detection, and `shine.env.toml` override files.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
 use std::path::Path;
 use tokio::fs;
 
 use super::discovery::ProjectConfig;
-use super::{
-    Config, DEFAULT_ENV_VARS, EnvOverrideKind, EnvOverrideSource, LEGACY_ENV_FILE,
-    LEGACY_PROJECT_ENV_FILE, LEGACY_PROJECT_FILES_REMOVAL_VERSION, PROJECT_ENV_FILE,
-};
+use super::{Config, DEFAULT_ENV_VARS, EnvOverrideKind, EnvOverrideSource, PROJECT_ENV_FILE};
+
+const REMOVED_GLOBAL_ENV_FILE: &str = "env.toml";
 
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
@@ -67,26 +66,9 @@ pub(super) fn parse_env_descriptions(contents: &str) -> BTreeMap<String, String>
 }
 
 impl Config {
-    pub(super) async fn migrate_env(&mut self, config_has_env: bool) -> Result<()> {
+    pub(super) async fn ensure_env_defaults(&mut self, config_has_env: bool) -> Result<()> {
+        self.reject_removed_global_env_file().await?;
         let mut needs_save = !config_has_env;
-
-        let legacy_path = self.shine_dir().join(LEGACY_ENV_FILE);
-        let legacy_env = read_env_file(&legacy_path).await?;
-        let has_legacy = legacy_env.is_some();
-
-        if let Some(overrides) = legacy_env {
-            for (key, value) in overrides.values {
-                if config_has_env {
-                    if let std::collections::btree_map::Entry::Vacant(entry) = self.env.entry(key) {
-                        entry.insert(value);
-                        needs_save = true;
-                    }
-                } else {
-                    self.env.insert(key, value);
-                    needs_save = true;
-                }
-            }
-        }
 
         for (key, value) in DEFAULT_ENV_VARS {
             if let std::collections::btree_map::Entry::Vacant(entry) =
@@ -101,18 +83,37 @@ impl Config {
             self.save().await?;
         }
 
-        if has_legacy {
-            match fs::remove_file(&legacy_path).await {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    return Err(e)
-                        .with_context(|| format!("failed to remove {}", legacy_path.display()));
-                }
-            }
+        Ok(())
+    }
+
+    async fn reject_removed_global_env_file(&self) -> Result<()> {
+        let removed_path = self.shine_dir().join(REMOVED_GLOBAL_ENV_FILE);
+        if !fs::try_exists(&removed_path)
+            .await
+            .with_context(|| format!("checking {}", removed_path.display()))?
+        {
+            return Ok(());
         }
 
-        Ok(())
+        let override_path = self.shine_dir().join(PROJECT_ENV_FILE);
+        if fs::try_exists(&override_path)
+            .await
+            .with_context(|| format!("checking {}", override_path.display()))?
+        {
+            bail!(
+                "the removed global env file {} still exists; run a v0.39 shine binary once to \
+                 migrate it, or manually merge its values into {} and then remove the old file",
+                removed_path.display(),
+                override_path.display()
+            );
+        }
+
+        bail!(
+            "the removed global env file {} still exists; run a v0.39 shine binary once to \
+             migrate it, or rename it to {}",
+            removed_path.display(),
+            override_path.display()
+        )
     }
 
     pub(super) async fn apply_global_env_override(&mut self) -> Result<()> {
@@ -149,24 +150,9 @@ impl Config {
         project_config: &ProjectConfig,
     ) -> Result<()> {
         let env_path = project_config.root.join(PROJECT_ENV_FILE);
-        let (env_path, is_legacy) = if env_path.exists() {
-            (env_path, false)
-        } else {
-            let legacy_env_path = project_config.root.join(LEGACY_PROJECT_ENV_FILE);
-            (legacy_env_path, true)
-        };
         let Some(overrides) = read_env_file(&env_path).await? else {
             return Ok(());
         };
-
-        if is_legacy {
-            eprintln!(
-                "Warning: project env {} is deprecated and will no longer be supported in {}; rename it to {}.",
-                env_path.display(),
-                LEGACY_PROJECT_FILES_REMOVAL_VERSION,
-                project_config.root.join(PROJECT_ENV_FILE).display()
-            );
-        }
 
         self.apply_env_overrides(env_path, EnvOverrideKind::Project, false, overrides);
         Ok(())
@@ -309,32 +295,29 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
-    async fn load_or_init_migrates_legacy_env_file_and_deletes_it() {
+    async fn load_or_init_rejects_removed_global_env_file_without_mutating_state() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
-        fs::write(
-            dir.join("env.toml"),
-            "HTTP_PROXY_PORT = \"7890\"\nCUSTOM_TOKEN = \"abc\"\n",
-        )
-        .await
-        .unwrap();
+        fs::write(dir.join("env.toml"), "not valid = [\n")
+            .await
+            .unwrap();
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
 
-        let config = Config::load_or_init().await.unwrap();
+        let error = Config::load_or_init().await.unwrap_err().to_string();
 
-        assert_eq!(
-            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
-            Some("7890")
-        );
-        assert_eq!(
-            config.env.get("CUSTOM_TOKEN").map(String::as_str),
-            Some("abc")
+        assert!(error.contains(&dir.join("env.toml").display().to_string()));
+        assert!(error.contains("v0.39"));
+        assert!(error.contains("rename"));
+        assert!(error.contains(&dir.join("shine.env.toml").display().to_string()));
+        assert!(
+            dir.join("env.toml").exists(),
+            "removed env.toml must be left for explicit recovery"
         );
         assert!(
-            !dir.join("env.toml").exists(),
-            "legacy env.toml should be removed"
+            !dir.join("config.toml").exists(),
+            "rejection must happen before config initialization"
         );
 
         // SAFETY: env_lock() is held for the duration of this block, preventing
@@ -459,7 +442,7 @@ mod tests {
 
     #[allow(clippy::await_holding_lock)]
     #[tokio::test(flavor = "current_thread")]
-    async fn config_env_wins_over_legacy_env_file() {
+    async fn removed_global_env_file_requires_manual_merge_when_override_exists() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;
         fs::write(
@@ -474,28 +457,70 @@ mod tests {
         )
         .await
         .unwrap();
+        fs::write(
+            dir.join("shine.env.toml"),
+            "HTTP_PROXY_PORT = \"3333\"\nSIDECAR_ONLY = \"sidecar\"\n",
+        )
+        .await
+        .unwrap();
+        let original_config = fs::read_to_string(dir.join("config.toml")).await.unwrap();
+        let original_removed = fs::read_to_string(dir.join("env.toml")).await.unwrap();
+        let original_override = fs::read_to_string(dir.join("shine.env.toml"))
+            .await
+            .unwrap();
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::set_var("SHINE_CONFIG_DIR", dir.to_str().unwrap()) };
 
-        let config = Config::load_or_init().await.unwrap();
+        let error = Config::load_or_init().await.unwrap_err().to_string();
 
+        assert!(error.contains("v0.39"));
+        assert!(error.contains("manually merge"));
+        assert!(error.contains(&dir.join("env.toml").display().to_string()));
+        assert!(error.contains(&dir.join("shine.env.toml").display().to_string()));
         assert_eq!(
-            config.env.get("HTTP_PROXY_PORT").map(String::as_str),
-            Some("1111")
+            fs::read_to_string(dir.join("config.toml")).await.unwrap(),
+            original_config
         );
         assert_eq!(
-            config.env.get("CUSTOM_TOKEN").map(String::as_str),
-            Some("abc")
+            fs::read_to_string(dir.join("env.toml")).await.unwrap(),
+            original_removed
         );
-        assert!(
-            !dir.join("env.toml").exists(),
-            "legacy env.toml should be removed"
+        assert_eq!(
+            fs::read_to_string(dir.join("shine.env.toml"))
+                .await
+                .unwrap(),
+            original_override
         );
 
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.
         unsafe { std::env::remove_var("SHINE_CONFIG_DIR") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn project_dotenv_toml_is_ignored() {
+        let dir = make_temp_dir().await;
+        let project_dir = dir.join("project");
+        fs::create_dir_all(&project_dir).await.unwrap();
+        fs::write(
+            project_dir.join(".env.toml"),
+            "GENERIC_DOTENV_VALUE = \"ignored\"\n",
+        )
+        .await
+        .unwrap();
+        let mut config = config_in(&dir);
+
+        config
+            .apply_project_env_override(&ProjectConfig {
+                path: project_dir.join(PROJECT_CONFIG_FILE),
+                root: project_dir,
+            })
+            .await
+            .unwrap();
+
+        assert!(!config.env.contains_key("GENERIC_DOTENV_VALUE"));
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -557,7 +582,6 @@ mod tests {
             .apply_project_env_override(&ProjectConfig {
                 path: project_dir.join(PROJECT_CONFIG_FILE),
                 root: project_dir,
-                is_legacy: false,
             })
             .await
             .unwrap();
@@ -730,7 +754,6 @@ mod tests {
             .apply_project_env_override(&ProjectConfig {
                 path: project_dir.join(PROJECT_CONFIG_FILE),
                 root: project_dir.clone(),
-                is_legacy: false,
             })
             .await
             .unwrap();

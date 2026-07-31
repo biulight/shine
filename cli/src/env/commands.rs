@@ -158,6 +158,7 @@ fn is_sensitive_env_key(key: &str) -> bool {
         "API_KEY",
         "PRIVATE_KEY",
         "ACCESS_KEY",
+        "SUBSCRIPTION_URL",
     ]
     .iter()
     .any(|suffix| key == *suffix || key.ends_with(&format!("_{suffix}")))
@@ -248,6 +249,10 @@ fn resolve_env_write_target<'a>(
 }
 
 pub async fn handle_set(config: &Config, key: &str, value: &str, force: bool) -> Result<()> {
+    let catalog = super::catalog::load(config).await?;
+    let sensitive =
+        catalog.get(key).is_some_and(|item| item.sensitive) || is_sensitive_env_key(key);
+    let display_value = display_env_value(value, sensitive, false);
     match resolve_env_write_target(config, key, force)? {
         EnvWriteTarget::ConfigToml => {
             let mut env = EnvConfig::load_or_init(config).await?;
@@ -256,7 +261,7 @@ pub async fn handle_set(config: &Config, key: &str, value: &str, force: bool) ->
             println!(
                 "{}",
                 colors::green(&format!(
-                    "set {key} = \"{value}\" in {}",
+                    "set {key} = \"{display_value}\" in {}",
                     path_display::format(config.config_path())
                 ))
             );
@@ -266,7 +271,7 @@ pub async fn handle_set(config: &Config, key: &str, value: &str, force: bool) ->
             println!(
                 "{}",
                 colors::green(&format!(
-                    "set {key} = \"{value}\" in {}",
+                    "set {key} = \"{display_value}\" in {}",
                     path_display::format(&source.path)
                 ))
             );
@@ -579,6 +584,7 @@ mod tests {
         assert_eq!(display_env_value("", true, false), "<empty>");
         assert!(is_sensitive_env_key("MY_API_KEY"));
         assert!(is_sensitive_env_key("token"));
+        assert!(is_sensitive_env_key("SURGE_SUBSCRIPTION_URL"));
         assert!(!is_sensitive_env_key("MONKEY"));
     }
 

@@ -287,6 +287,7 @@ mod tests {
                 install_strategy: AppInstallStrategy::Copy,
                 requires_admin: false,
                 restart_hint: None,
+                generator: None,
             },
             destination: PathBuf::from(dest),
             status: FileStatus::UpToDate,
@@ -392,7 +393,7 @@ mod tests {
             app_file("docker-engine", "daemon.jsonc", "/tmp/daemon.json"),
         ];
         let shell_files = vec![
-            shell_file("agent", "ccenv", "cc.sh"),
+            shell_file("agent", "ccenv", "cc.ts"),
             shell_file("proxy", "setproxy", "set_proxy.sh"),
             shell_file("utils", "copyfile", "copyfile.sh"),
         ];

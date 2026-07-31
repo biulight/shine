@@ -14,13 +14,9 @@ use env_layer::deserialize_env_values;
 pub use crate::home::{full_expand, full_expand_with_home, tilde_expand};
 pub use env_layer::{validate_env_override_file, write_env_override_entry};
 
-const LEGACY_ENV_FILE: &str = "env.toml";
 const GLOBAL_CONFIG_FILE: &str = "config.toml";
 const PROJECT_CONFIG_FILE: &str = "shine.config.toml";
-const LEGACY_PROJECT_CONFIG_FILE: &str = "config.toml";
 const PROJECT_ENV_FILE: &str = "shine.env.toml";
-const LEGACY_PROJECT_ENV_FILE: &str = ".env.toml";
-const LEGACY_PROJECT_FILES_REMOVAL_VERSION: &str = "v0.40.0";
 
 pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 1;
 
@@ -209,7 +205,7 @@ pub enum EnvOverrideKind {
     Global,
     /// Overlay `<overlay_dir>/shine.env.toml` (managed-git or manual overlay).
     Overlay,
-    /// Project `<project_root>/shine.env.toml` (or legacy `.env.toml`).
+    /// Project `<project_root>/shine.env.toml`.
     Project,
 }
 

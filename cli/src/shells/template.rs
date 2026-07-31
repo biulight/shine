@@ -46,18 +46,14 @@ pub(super) async fn apply_template_to_scripts(
             continue;
         };
 
-        let script_env_map = env_map_for_script(script, env_map);
-        let rendered = match crate::install_core::apply_transforms(
-            &effective_transforms,
-            &content,
-            &script_env_map,
-        ) {
-            Ok(b) => b,
-            Err(e) => bail!(
-                "template substitution failed for {}: {e:#}",
-                script.source_path.display()
-            ),
-        };
+        let rendered =
+            match crate::install_core::apply_transforms(&effective_transforms, &content, env_map) {
+                Ok(b) => b,
+                Err(e) => bail!(
+                    "template substitution failed for {}: {e:#}",
+                    script.source_path.display()
+                ),
+            };
 
         #[cfg(unix)]
         let mode = {
@@ -108,17 +104,4 @@ pub(super) async fn apply_template_to_scripts(
     }
 
     Ok(report)
-}
-
-fn env_map_for_script<'a>(
-    script: &ScriptTemplate,
-    env_map: &'a std::collections::BTreeMap<String, String>,
-) -> std::borrow::Cow<'a, std::collections::BTreeMap<String, String>> {
-    if script.display_name == "agent/ccenv" {
-        let mut map = env_map.clone();
-        map.entry("DEEPSEEK_API_KEY".to_string()).or_default();
-        std::borrow::Cow::Owned(map)
-    } else {
-        std::borrow::Cow::Borrowed(env_map)
-    }
 }

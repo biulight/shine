@@ -210,6 +210,18 @@ fn colored_shell_status(status: &str) -> String {
 }
 
 async fn app_diff_output(config: &Config, item: &AppShowFile) -> Result<String> {
+    if item
+        .file
+        .generator
+        .as_ref()
+        .is_some_and(|generator| !generator.auto)
+    {
+        return Ok(
+            "Expected content is an explicitly refreshed generator snapshot; \
+             run `shine app refresh` to materialize it without polling during show.\n"
+                .to_string(),
+        );
+    }
     let env = EnvConfig::load_or_init(config).await.ok();
     let empty_map = BTreeMap::new();
     let env_map = env.as_ref().map(|e| e.as_map()).unwrap_or(&empty_map);

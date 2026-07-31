@@ -4,9 +4,12 @@
 - **Evidence**: `cli/src/apps/hooks.rs` (`run_app_hooks`, `HookPhase`), `cli/src/apps/build.rs`
   (`handle_unbuild`, `run_teardown_for_uninstall`), `cli/src/apps/install.rs`,
   `cli/src/apps/uninstall.rs`, `cli/src/apps/metadata.rs` (`AppCategory.post_install`,
-  `AppArtifact.teardown`), `shine app unbuild <app-id>`, `presets/app/surge/unbuild.sh`
+  `AppArtifact.teardown`), `shine app unbuild <app-id>`, `presets/app/surge/unbuild.ts`
 - **Supersedes**: the "not auto-reversed" consequence of
   [ADR 0009](0009-app-artifact-build-explicit-command.md)
+- **Update**: [ADR 0017](0017-built-in-surge-profile-artifact.md) moves the
+  canonical Surge build/teardown implementation from a private overlay into
+  the built-in Bun preset; the lifecycle semantics here are unchanged.
 
 ## Context
 
@@ -24,8 +27,8 @@ Two gaps surfaced after [ADR 0009](0009-app-artifact-build-explicit-command.md) 
 The reversal problem has two shapes. A **generic receipt model** (like `sys/` drivers, which persist
 a `SystemReceipt` and reverse it) would force Shine core to understand what an arbitrary script did —
 exactly what ADR 0009 forbids, and exactly why `sys`'s own `Script` driver is *exempt* from reversal.
-The alternative is a **symmetric teardown script**: the overlay owns both build and un-build, and
-Shine only runs it.
+The alternative is a **symmetric teardown script**: the app preset owns both
+build and un-build, and Shine only runs it.
 
 ## Decision
 
@@ -55,15 +58,16 @@ config key.
     **gated** by `allow_app_hooks` for external presets, and **non-fatal** (a broken teardown must
     never block file removal). It runs *before* the file-removal loop so the script sees the same
     on-disk state `build` saw, and `--dry-run` prints the intended script without executing.
-- Shine core still does not know what the script does — reversal logic lives entirely in the
-  overlay's `unbuild.sh`, mirroring how `build.sh` works. The built-in `presets/app/surge/unbuild.sh`
-  is an inert placeholder + commented reference example (the canonical overlay is private).
+- Shine core still does not know what the script does. Reversal logic lives in
+  the preset's artifact, whether built-in or supplied by an overlay. Surge now
+  ships a built-in Bun implementation under ADR 0017.
 
 ## Consequences
 
-- `shine app uninstall surge` now reverses the profile patch (given the overlay's `unbuild.sh` and
-  the `allow_app_hooks` opt-in for external presets), closing ADR 0009's manual-step gap. Reversal is
-  still best-effort and script-owned, not a core-tracked receipt.
+- `shine app uninstall surge` now reverses the profile patch through the active
+  preset's teardown (subject to the `allow_app_hooks` opt-in for external
+  presets), closing ADR 0009's manual-step gap. Reversal is still best-effort
+  and script-owned, not a core-tracked receipt.
 - A preset's reload/setup can run on first install via `post_install` without waiting for an upgrade.
 - `shine upgrade` and `shine app install` stay side-effect-predictable: they never run artifact
   scripts; only the explicit `build`/`unbuild` commands and the uninstall-time teardown do.

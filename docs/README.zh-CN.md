@@ -1,49 +1,34 @@
 # shine
 
-一个用于管理 shell 预设、应用配置和系统初始化预设的 Rust CLI。
+一个跨平台 Rust CLI，用于管理个人 shell 命令、应用配置、系统资源和可重复的机器初始化流程。
 
-`shine` 将可复用的 shell 脚本、应用配置预设和操作系统初始化预设打包进一个二进制中。它会把受管资产安装到 `~/.shine/`，把 shell 命令链接到 `~/.shine/bin/`，也可以把应用配置文件复制到最终目标位置。
+`shine` 把 dotfiles 和初始化流程转化为由 manifest 跟踪的资源，可安全地安装、检查、更新和
+卸载。它在一个自包含二进制中提供常用预设，也支持个人预设仓库与 overlay，并能应用分层
+环境变量而不接管无关的用户文件。此外，它还提供受管系统设置、加密环境变量工作流、个人
+任务、终端主题同步和 SSH 会话文件传输。
 
 English README: [`../README.md`](../README.md)
 
 ## 功能特性
 
-- **内置预设** — shell 脚本和应用配置会编译进二进制；安装后不需要联网
-- **外部预设目录和 overlay** — 可用 `presets_dir` 指定基础预设来源，再链接一个小型 overlay 覆盖少量预设文件
-- **项目本地预设仓库** — 在预设仓库内运行 `shine init`，即可创建指向当前仓库的 `shine.config.toml`
-- **受管 bin 目录** — `~/.shine/bin/` 在 Unix 上保存展平后的符号链接，在 Windows 上保存命令 shim
-- **自动配置 PATH** — `install` 会自动把 `~/.shine/bin` 追加到你的 shell 配置文件
-- **按类别安装/卸载** — 可安装或卸载全部预设，也可只处理某个子集（如 `proxy`）
-- **仅显示已安装项** — `shine list` 只展示已安装内容，不输出额外状态噪音
-- **安全卸载** — 只删除 `shine` 管理的文件；用户自行创建的文件不会被触碰
-- **支持 dry-run** — 任何破坏性操作都可以先预览再执行
-- **TOML 配置** — 使用 `~/.shine/config.toml`，更新时会尽量保留注释
-- **应用预设安装器** — 可安装 `~/.gitconfig`、`~/.config/starship/starship.toml`、`~/.config/ghostty/config.ghostty` 等受管配置
-- **已安装内容检查** — `shine info <target>` 会输出已安装应用配置和 shell 预设的元数据、彩色状态和值得关注的预期内容差异；加 `--verbose` 可查看完整内容
-- **版本更新检查** — 运行时检查 GitHub Releases，并使用 24 小时缓存
-- **多 shell 支持** — bash、zsh 和 PowerShell；当同一类别在 Unix 和 Windows 需要不同文件时，可按平台声明 shell 预设条目
-- **系统初始化预设** — 通过 `shine sys init` 对当前操作系统执行一组整理过的初始化步骤
-
-当前支持范围：`shine shell` 支持 `bash`、`zsh` 和 PowerShell。Windows 支持目前覆盖 `shine self`、`shine shell`，`docker-engine`、`docker-desktop` 这类已适配的 app 预设，以及用 PowerShell 实现的 Windows `shine sys init` 预设。
-
-## 规划流程
-
-仓库规划通过 GitHub 采用一套轻量的问题单流程管理：
-
-- 使用 `Idea / Plan` issue 模板记录新想法
-- 将已接受的工作提升为 `Task` issue
-- 用 `status:` 标签跟踪状态
-- 只对和发布有关的工作使用 milestone
-
-完整规则见 [`PLAN.md`](PLAN.md)。
-
-## 发布分支流程
-
-- `release` 是主要的集成和发布分支。
-- 日常提交和功能 PR 应以 `release` 为目标分支。
-- 版本标签（`v*`）应从 `release` 创建；CI 会构建产物并发布 GitHub Release。
-- CI 创建完 GitHub Release 后，会自动发起一个从 `release` 到 `main` 的 PR。
-- `main` 只用于这个发布后的同步 PR，而不是日常开发。
+- **自包含且可扩展的预设** — 使用编译进二进制的 shell、app 和操作系统预设，也可以
+  链接并安全拉取自己的 Git 预设来源与选择性 overlay
+- **由 manifest 跟踪的生命周期** — 只对 Shine 拥有的资源执行安装、检查、diff、更新、
+  升级和卸载，并提供备份、用户修改保护，以及相应命令支持的 dry-run
+- **可移植的 shell 命令** — 通过统一的受管 bin 目录发布脚本或 Bun 程序，并为 bash、
+  zsh 和 PowerShell 自动设置 PATH 与命令补全
+- **应用配置管理** — 复制、转换、合并、生成并显式构建 app 配置 artifact，同时保留
+  用户拥有的内容
+- **分层环境变量与密钥** — 合并全局、项目和 overlay 值；通过 GPG 或 age 加密；向命令
+  或远程 SSH 会话注入明确选择的值
+- **系统设置与受管资源** — 运行整理过的操作系统初始化 profile，并收敛或移除受管文件、
+  split DNS 等系统资源
+- **状态与更新** — 检查已安装内容和预期 diff、检测预设/配置漂移、拉取 Git 来源，并通过
+  不影响主命令的 24 小时缓存检查 GitHub Releases
+- **个人工作流** — 保存直接执行的任务、同步终端主题、提供受管本地资源，并通过经过认证的
+  `shine ssh` 会话传输文件
+- **跨平台运行** — macOS 和 Linux 是主要目标；Windows 原生支持范围见下文所列 CLI
+  功能和预设
 
 ## 安装
 
@@ -86,7 +71,7 @@ shine shell list
 Shell Preset Categories
 
   agent  1 script
-    ccenv         Configure Claude Code to use DeepSeek in the current shell session.
+    ccenv         Launch Claude Code with a selected provider.
                   ...
 
   proxy  2 scripts
@@ -117,12 +102,12 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-安装全部 shell 预设时会包含 `agent`，该类别在使用前需要在当前 env 配置中提供 `DEEPSEEK_API_KEY` 或 `DEEPSEEK_API_KEY_GPG_SECRET`。
+安装全部 shell 预设时会包含 `agent`。默认 Codex provider 需要 `CLIPROXYAPI_AUTH_TOKEN` 或 `CLIPROXYAPI_AUTH_TOKEN_SECRET`；DeepSeek 和 Qwen 则使用当前 env 配置中各自的 API-key 变量。
 重复运行 `install` 是安全的：已存在的文件、正确的符号链接以及已配置好的 PATH 条目都会被跳过。若你想覆盖受管预设文件、链接和 shell 配置中的 PATH 条目，请使用 `reinstall`。
 
 顶层的 `install`、`reinstall` 和 `uninstall` 命令需要一个类别名，并会自动路由到 `shell/<category>` 或 `app/<category>`。如果 shell 和 app 预设中存在同名类别，`shine` 会提示你选择其中一个。
 
-shell 元数据可以通过 `platforms = ["unix"]` 或 `platforms = ["windows"]` 只在特定平台暴露某些条目。内置的 `agent` 类别就使用了这个机制：Unix shell 下的 `ccenv` 来自 `cc.sh`，Windows PowerShell 下的 `ccenv` 来自 `cc.ps1`。
+shell 元数据可以通过 `platforms = ["unix"]` 或 `platforms = ["windows"]` 只在特定平台暴露某些条目。内置的 `agent` 类别通过 Bun runtime 在所有平台暴露同一份 `cc.ts`。
 
 在 Windows 上，PowerShell 的 PATH 注入会同时更新这两个 profile 文件，确保 `powershell.exe` 和 `pwsh.exe` 都能看到同一条 `~/.shine/bin` 配置：
 
@@ -364,6 +349,39 @@ transforms = ["jsonc-to-json"]
 
 如果目标文件已经存在且不受 `shine` 管理，安装前会先把它移到 `*.shine.bak`。已安装的应用文件会记录到 `~/.shine/app-manifest.toml` 中，因此重复安装时可以安全跳过未变化文件，只覆盖那些此前由 `shine` 安装过的文件。
 
+### Surge URI 订阅
+
+macOS 的 `surge` 预设可以把 Base64 URI 订阅转换成受管的
+`subscription-proxies.conf`。先配置 HTTPS URL，再安装：
+
+```bash
+shine env set SURGE_SUBSCRIPTION_URL 'https://provider.example/subscription?...'
+shine app install surge
+```
+
+该功能需要 Bun。转换器支持可兼容的 `ss://` 和 `vmess://`，并以不含凭据的摘要报告被跳过的 VLESS、未知 transport 和坏记录；用户维护的
+`local-proxies.conf` 不会被改写。`shine update` 只下载到内存并比较，
+`shine upgrade` 才应用变化并 reload Surge；刷新失败时保留上次成功生成的文件。
+
+`local-proxy-groups.conf` 中提供：
+
+```ini
+Subscription = select, DIRECT, policy-path=subscription-proxies.conf, external-policy-name-prefix="SUB · "
+```
+
+其它策略组可通过 `include-other-group=Subscription` 纳入全部订阅节点。活动
+Surge Profile 需要在 `[Proxy Group]` include `local-proxy-groups.conf`。设置
+Profile 路径后，可运行内置的幂等 artifact 完成补丁：
+
+```bash
+shine env set SURGE_PROFILE '~/Library/Application Support/Surge/Profiles/MyProfile.conf'
+shine app build surge
+```
+
+`shine app unbuild surge` 会移除这些本地 section include；卸载 app 时也会在
+删除托管文件前尽力执行相同的 teardown。build/unbuild 需要 Bun，并且不会在
+install 或 upgrade 时隐式执行。
+
 ### 卸载应用预设
 
 ```bash
@@ -399,9 +417,16 @@ App Configs
   git       →  ~/.gitconfig
   ghostty   →  ~/.config/ghostty
   starship  →  ~/.config/starship/starship.toml
+
+System Configs
+  Private split DNS  (split-dns)
 ```
 
-如果当前没有安装任何内容，`shine list` 会提示运行 `shine shell install` 或 `shine app install`。
+受管系统配置来自 `sys-manifest.toml` 中当前操作系统已登记的条目；详细状态仍通过
+`shine sys status` 和 `shine sys info <ITEM>` 查看。
+
+如果当前没有安装任何内容，`shine list` 除了提示 shell 和 app 安装命令，也会提示运行
+`shine sys list`。
 
 ### 检查已安装配置详情
 
@@ -548,10 +573,10 @@ shine self upgrade --channel stable   # 显式重装稳定版
 shine self upgrade --channel preview  # 安装持续滚动的 preview 预发布版
 shine upgrade       # 强制更新已安装的 shell 和应用配置
 shine upgrade --pull  # 拉取 Git 管理的 preset 后再应用配置
-shine upgrade --verbose  # 包含 env 模板检查细节
+shine upgrade --verbose  # 包含 env 模板检查以及 skipped/已是最新的明细
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.39.0+preview.abc1234`；稳定版则继续显示 `0.39.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.40.0+preview.abc1234`；稳定版则继续显示 `0.40.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -561,7 +586,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.39.0 sh install.sh
+SHINE_VERSION=0.40.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -569,7 +594,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.39.0"; .\install.ps1
+$env:SHINE_VERSION = "0.40.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -678,24 +703,49 @@ shine-env-export MY_TOKEN --as API_TOKEN
 
 ### shell/agent — `ccenv`
 
-为 Claude Code + DeepSeek provider 配置当前 shell 环境。
+使用选定的 provider 启动 Claude Code：默认通过 CLIProxyAPI 使用 Codex，也可选择 DeepSeek 或 Qwen。
+provider 环境仅注入 Claude 子进程，不会修改当前终端。
+选择菜单依次为 `codex`、`deepseek`、`qwen` 和尚未配置的 `glm5`（选项 1–4）；
+直接按 Enter 会选择 Codex。
 
-把你的 key 写入全局 env 覆盖文件 `~/.shine/shine.env.toml`，或者项目本地 `shine.config.toml` 同目录下的 env 文件：
+使用默认 Codex provider 时，把 CLIProxyAPI `api-keys` 中的客户端 token 写入全局 env
+覆盖文件 `~/.shine/shine.env.toml`，或者项目本地 `shine.config.toml` 同目录下的 env 文件：
+
+```toml
+CLIPROXYAPI_AUTH_TOKEN = "..."
+# 或：CLIPROXYAPI_AUTH_TOKEN_SECRET = "<tagged-or-GPG-ciphertext>"
+```
+
+可通过以下命令创建加密值：
+
+```bash
+shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN
+```
+
+Codex 固定连接 `http://127.0.0.1:8317`，并把 Claude Code 的 Opus、Sonnet、Haiku
+档位依次映射到 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`。同时设置
+`CLAUDE_CODE_EFFORT_LEVEL=high`，CLIProxyAPI 会将其传递为 Codex 的
+`reasoning.effort=high`。CLIProxyAPI 应配置相同 token，并仅绑定回环地址，避免把服务
+暴露到局域网：
+
+```yaml
+host: "127.0.0.1"
+port: 8317
+api-keys:
+  - "..."
+```
+
+DeepSeek 使用相同的明文或加密凭据模式：
 
 ```toml
 DEEPSEEK_API_KEY = "..."
+# 或：DEEPSEEK_API_KEY_SECRET = "<tagged-or-GPG-ciphertext>"
 ```
 
-也可以改为存储 base64 编码后的 GPG 密文：
-
-```toml
-DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
-```
-
-用你现有的 GPG key 生成该加密值。如果私钥托管在 YubiKey 上，`gpg-agent` 会在执行 `ccenv` 时处理 PIN / touch 提示：
+用现有 GPG key 生成加密值。如果私钥托管在 YubiKey 上，`gpg-agent` 会在执行 `ccenv` 时处理 PIN / touch 提示：
 
 ```bash
-shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
+shine env encrypt --from DEEPSEEK_API_KEY
 ```
 
 `shine env encrypt` 默认使用 `config.toml` 中的 `gpg_key_id`。如需单次覆盖，可传入 `-r/--recipient <key-id>`。
@@ -703,8 +753,25 @@ shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 也可以直接解密当前 env 配置中的任意 base64 GPG secret：
 
 ```bash
-shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
+shine env decrypt DEEPSEEK_API_KEY_SECRET
 ```
+
+如需通过阿里云 Anthropic-compatible endpoint 使用 Qwen，使用相同的凭证模式并配置
+`QWEN_API_KEY`：
+
+```toml
+QWEN_API_KEY = "..."
+# 或：QWEN_API_KEY_SECRET = "<tagged-or-GPG-ciphertext>"
+```
+
+可通过以下命令创建加密值：
+
+```bash
+shine env encrypt --from QWEN_API_KEY
+```
+
+`ccenv` 提示选择 provider 时，输入 `qwen`（或选项 `3`）。Claude 子进程会收到阿里云
+endpoint、Qwen 模型映射，以及 `983616` 的 context-token limit。
 
 #### age + Apple Touch ID（Secure Enclave）
 
@@ -828,7 +895,22 @@ shine shell install agent
 ccenv
 ```
 
-如果同时设置了 `DEEPSEEK_API_KEY_GPG_SECRET` 和 `DEEPSEEK_API_KEY`，会优先使用加密 secret。若 GPG 解码或解密失败，`ccenv` 会直接停止，而不会回退到明文 key。
+运行 `ccenv` 会选择 provider 并启动交互式 Claude。传入的 Claude Code 参数会原样转交；
+`-r`/`--run` 作为兼容别名仍表示不带参数启动：
+
+```bash
+ccenv --run
+ccenv --print "hello"
+```
+
+`-r`/`--run` 仅在第一个参数位置作为 `ccenv` 参数识别。如果需要把冲突参数传给 Claude
+本身，请使用 `--`：
+
+```bash
+ccenv -- --run
+```
+
+凭据按 `KEY_SECRET`、旧版 `KEY_GPG_SECRET`、明文 `KEY` 的顺序解析。选中的密文若解码或解密失败，`ccenv` 会直接停止，不会回退。
 
 ### Shell 预设元数据
 
@@ -869,7 +951,11 @@ SHINE_PRESETS=/custom/presets shine shell install   # 仅覆盖 presets 目录
 presets_dir = "/custom/presets"
 ```
 
-配置发现逻辑会从当前目录开始向父目录查找 `shine.config.toml`。如果找不到，仍会兼容识别包含 `presets_dir` 的旧式项目 `config.toml`，但会给出警告。该旧文件名将在 v0.40.0 停止支持，请将其改名为 `shine.config.toml`。项目配置是 `~/.shine/` 或 `SHINE_CONFIG_DIR` 下全局配置之上的稀疏覆盖层：项目未声明的字段继承全局值，明确声明的字段则以项目值为准。相对路径以定义该字段的配置文件所在目录为基准解析。保存项目设置时，不会把继承的全局值复制到项目文件中。
+配置发现逻辑会从当前目录开始向父目录查找 `shine.config.toml`，普通项目
+`config.toml` 会被忽略。项目配置是 `~/.shine/` 或 `SHINE_CONFIG_DIR` 下全局配置之上的
+稀疏覆盖层：项目未声明的字段继承全局值，明确声明的字段则以项目值为准。相对路径以
+定义该字段的配置文件所在目录为基准解析。保存项目设置时，不会把继承的全局值复制到
+项目文件中。
 
 预设来源优先级为：`SHINE_PRESETS` > 项目 `presets_dir` > 全局 `presets_dir` > 默认目录。`SHINE_CONFIG_DIR` 用于选择全局配置和运行时状态目录，其默认预设目录为 `$SHINE_CONFIG_DIR/presets`。
 
@@ -927,7 +1013,14 @@ inline description 的优先级高于 preset catalog。Catalog 只保存元数�
 
 设置 `GHOSTTY_BG_LIGHT` 和 `GHOSTTY_BG_DARK` 后，Ghostty 预设在不同外观模式下会安装带背景图片路径的主题。保留为空则表示安装内置 Ghostty 预设但不启用背景图。
 
-全局覆盖可通过放置在 `~/.shine/shine.env.toml` 的扁平 `shine.env.toml` 文件提供。项目本地覆盖则放在 `shine.config.toml` 同目录下。`shine.env.toml` 中的值会覆盖当前配置 `[env]` 表中的同名 key，而不会改写任一文件。当全局和项目本地 env 文件同时存在时，项目本地优先。若项目本地 `shine.env.toml` 不存在，仍会兼容读取旧的 `.env.toml`；该兼容将在 v0.40.0 移除，请将文件改名为 `shine.env.toml`。
+全局覆盖可通过放置在 `~/.shine/shine.env.toml` 的扁平 `shine.env.toml` 文件提供。项目本地
+覆盖则放在 `shine.config.toml` 同目录下。`shine.env.toml` 中的值会覆盖当前配置 `[env]`
+表中的同名 key，而不会改写任一文件。当全局和项目本地 env 文件同时存在时，项目本地
+优先。普通项目 `.env.toml` 文件会被忽略。
+
+从 v0.40 起，Shine 不再自动迁移旧的全局 `~/.shine/env.toml`。升级前可先运行一次
+v0.39 完成迁移；否则请将它移动为 `~/.shine/shine.env.toml`，若目标文件已存在则手动
+合并。旧文件仍存在时，普通配置加载命令会停止并给出恢复提示。
 
 通过 `shine overlay link <path>` 关联的有效 overlay 目录也可以包含扁平的
 `<path>/shine.env.toml`。其中的值会覆盖全局 env，并可在任意工作目录下生效；
@@ -992,6 +1085,25 @@ inline `{ value, description }` 表。详细项会同时覆盖值和说明；字
 ~/.config/ghostty/config.ghostty
 ~/.config/starship/starship.toml
 ```
+
+## 规划流程
+
+仓库规划通过 GitHub 采用一套轻量的问题单流程管理：
+
+- 使用 `Idea / Plan` issue 模板记录新想法
+- 将已接受的工作提升为 `Task` issue
+- 用 `status:` 标签跟踪状态
+- 只对和发布有关的工作使用 milestone
+
+完整规则见 [`PLAN.md`](PLAN.md)。
+
+## 发布分支流程
+
+- `release` 是主要的集成和发布分支。
+- 日常提交和功能 PR 应以 `release` 为目标分支。
+- 版本标签（`v*`）应从 `release` 创建；CI 会构建产物并发布 GitHub Release。
+- CI 创建完 GitHub Release 后，会自动发起一个从 `release` 到 `main` 的 PR。
+- `main` 只用于这个发布后的同步 PR，而不是日常开发。
 
 ## 开发
 

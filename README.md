@@ -1,49 +1,36 @@
 # shine
 
-A Rust CLI for managing shell presets, app configs, and system bootstrap presets.
+A cross-platform Rust CLI for managing personal shell commands, application configs, system
+resources, and repeatable machine setup.
 
-`shine` bundles reusable shell scripts, app configuration presets, and OS bootstrap presets into a single binary. It installs managed assets under `~/.shine/`, links shell commands into `~/.shine/bin/`, and can also copy app config files to their final destinations.
+`shine` turns dotfiles and bootstrap workflows into manifest-tracked resources that can be
+installed, inspected, updated, and safely removed. It ships useful presets in one self-contained
+binary, supports personal preset repositories and overlays, and applies layered environment values
+without taking ownership of unrelated user files. It also provides managed system setup, encrypted
+environment workflows, saved tasks, terminal-theme synchronization, and SSH session file transfer.
 
 中文文档: [`docs/README.zh-CN.md`](docs/README.zh-CN.md)
 
 ## Features
 
-- **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
-- **External presets and overlays** — point `presets_dir` at your own base directory, then optionally link a small overlay to override selected preset files
-- **Project-local presets** — run `shine init` inside a presets repo to create a local `shine.config.toml` that points `presets_dir` at the repo
-- **Managed bin directory** — `~/.shine/bin/` holds flat symlinks on Unix and command shims on Windows
-- **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
-- **Category install/uninstall** — install or uninstall all presets or a specific subset (e.g. `proxy`)
-- **Installed-only view** — `shine list` shows installed items without status noise
-- **Safe uninstall** — removes only shine-managed files; user-created files are never touched
-- **Dry-run support** — preview any destructive operation before it runs
-- **TOML config** — `~/.shine/config.toml` with comment preservation on updates
-- **App preset installer** — install managed config files like `~/.gitconfig`, `~/.config/starship/starship.toml`, or `~/.config/ghostty/config.ghostty`
-- **Installed content inspection** — `shine info <target>` prints metadata, colorized status, and expected-content diffs for installed app configs and shell presets; add `--verbose` for full content
-- **Release update check** — checks GitHub Releases at runtime with a 24h cache
-- **Multi-shell support** — bash, zsh, and PowerShell, with per-platform shell preset entries when a category needs different files on Unix and Windows
-- **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
-
-Current support scope: `shine shell` supports bash, zsh, and PowerShell. Windows support covers `shine self`, `shine shell`, selected app presets such as `docker-engine` and `docker-desktop`, and a Windows `shine sys init` preset implemented with PowerShell.
-
-## Planning Workflow
-
-Repository planning is managed in GitHub with a lightweight issue-based flow:
-
-- Open ideas with the `Idea / Plan` issue template
-- Promote accepted work into `Task` issues
-- Track state with `status:` labels
-- Use milestones only for release-relevant work
-
-The full workflow lives in [`docs/PLAN.md`](docs/PLAN.md).
-
-## Release Branch Workflow
-
-- `release` is the primary integration and release branch.
-- Regular pushes and feature PRs should target `release`.
-- Version tags (`v*`) should be created from `release`; CI will build artifacts and create the GitHub Release.
-- After CI creates the GitHub Release, it automatically opens a PR from `release` to `main`.
-- `main` is reserved for that post-release sync PR instead of day-to-day development.
+- **Self-contained and extensible presets** — use the shell, app, and OS presets embedded in the
+  binary, or link and safely pull your own Git-managed preset source and selective overlay
+- **Manifest-tracked lifecycle** — install, inspect, diff, update, upgrade, and uninstall only
+  resources owned by Shine, with backups, modification guards, and dry-run support where offered
+- **Portable shell commands** — publish scripts or Bun programs through one managed bin directory,
+  with automatic PATH and completion setup for bash, zsh, and PowerShell
+- **Application configuration** — copy, transform, merge, generate, and explicitly build app
+  config artifacts while preserving user-owned content
+- **Layered environments and secrets** — combine global, project, and overlay values; encrypt with
+  GPG or age; inject selected values into commands or remote SSH sessions
+- **System setup and managed resources** — run curated OS bootstrap profiles and converge or remove
+  system resources such as managed files and split DNS
+- **Status and updates** — inspect installed content and expected diffs, detect preset/config drift,
+  pull Git sources, and check GitHub Releases through a non-fatal 24-hour cache
+- **Personal workflows** — save direct-execution tasks, synchronize terminal themes, serve managed
+  local resources, and transfer files through an authenticated `shine ssh` session
+- **Cross-platform operation** — macOS and Linux are the primary targets, with native Windows
+  support for the CLI areas and presets described below
 
 ## Installation
 
@@ -86,7 +73,7 @@ shine shell list
 Shell Preset Categories
 
   agent  1 script
-    ccenv         Configure Claude Code to use DeepSeek in the current shell session.
+    ccenv         Launch Claude Code with a selected provider.
                    ...
 
   proxy  2 scripts
@@ -117,12 +104,12 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-Installing all shell presets includes `agent`, which requires `DEEPSEEK_API_KEY` or `DEEPSEEK_API_KEY_GPG_SECRET` in the active env config before use.
+Installing all shell presets includes `agent`. Its default Codex provider requires `CLIPROXYAPI_AUTH_TOKEN` or `CLIPROXYAPI_AUTH_TOKEN_SECRET`; DeepSeek and Qwen use their corresponding API-key variables in the active env config.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `reinstall` when you want to overwrite managed preset files, links, and the shell config entry.
 
 Top-level `install`, `reinstall`, and `uninstall` commands accept a required category and automatically route to either `shell/<category>` or `app/<category>`. If both preset types define the same category name, `shine` prompts you to choose one.
 
-Shell metadata can scope entries to `platforms = ["unix"]` or `platforms = ["windows"]`. The built-in `agent` category uses this to expose `ccenv` from `cc.sh` on Unix shells and from `cc.ps1` on Windows PowerShell.
+Shell metadata can scope entries to `platforms = ["unix"]` or `platforms = ["windows"]`. The built-in `agent` category exposes one cross-platform `cc.ts` entry through the Bun runtime.
 
 On Windows, PowerShell PATH setup updates both supported profile locations so `powershell.exe` and `pwsh.exe` see the same `~/.shine/bin` entry:
 
@@ -364,6 +351,53 @@ The default `app_default_dest_root` is `~/.config`.
 
 If the destination already exists and is not managed by `shine`, it is moved aside to `*.shine.bak` before the preset is installed. Managed app installs are tracked in `~/.shine/app-manifest.toml`, so repeat installs can safely skip unchanged files and overwrite only files previously installed by `shine`.
 
+### Surge URI subscriptions
+
+The macOS `surge` preset can turn a Base64 URI subscription into a generated
+`subscription-proxies.conf`. Configure the HTTPS URL, then install the preset:
+
+```bash
+shine env set SURGE_SUBSCRIPTION_URL 'https://provider.example/subscription?...'
+shine app install surge
+```
+
+This feature requires Bun. It converts compatible `ss://` and `vmess://`
+records, skips VLESS and unsupported transports with a credential-free
+summary, and never modifies the user-maintained `local-proxies.conf`.
+The built-in generator is manual so routine `shine update` and `shine upgrade`
+never consume a provider's short subscription-access window. Open that window,
+then refresh only the generated file:
+
+```bash
+shine app refresh surge subscription-proxies.conf
+```
+
+`shine app refresh surge` refreshes every installed generated file in the
+category. A failed refresh keeps the last-known-good managed file; a
+user-modified destination is preserved unless `--force` is supplied. A
+successful change reloads Surge through the preset's existing post-upgrade
+hook.
+
+`local-proxy-groups.conf` declares:
+
+```ini
+Subscription = select, DIRECT, policy-path=subscription-proxies.conf, external-policy-name-prefix="SUB · "
+```
+
+Another group can import all generated nodes with
+`include-other-group=Subscription`. The active Surge profile must include
+`local-proxy-groups.conf` in `[Proxy Group]`. Configure the profile and apply
+the built-in, idempotent artifact once:
+
+```bash
+shine env set SURGE_PROFILE '~/Library/Application Support/Surge/Profiles/MyProfile.conf'
+shine app build surge
+```
+
+`shine app unbuild surge` removes those local section includes. App uninstall
+also attempts the same teardown before removing managed files. Build and
+unbuild require Bun and never run implicitly during install or upgrade.
+
 ### Uninstall app presets
 
 ```bash
@@ -399,9 +433,16 @@ App Configs
   git       →  ~/.gitconfig
   ghostty   →  ~/.config/ghostty
   starship  →  ~/.config/starship/starship.toml
+
+System Configs
+  Private split DNS  (split-dns)
 ```
 
-If nothing is installed yet, `shine list` prints a hint to run `shine shell install` or `shine app install`.
+Managed system configs are read from the current OS entries recorded in `sys-manifest.toml`;
+status details remain available through `shine sys status` and `shine sys info <ITEM>`.
+
+If nothing is installed yet, `shine list` also points to `shine sys list` alongside the shell and
+app install commands.
 
 ### Inspect installed config details
 
@@ -553,12 +594,12 @@ shine self upgrade --channel stable   # explicitly reinstall the stable release
 shine self upgrade --channel preview  # install the moving preview prerelease
 shine upgrade       # force-update installed shell and app configs
 shine upgrade --pull  # pull Git-managed presets before applying configs
-shine upgrade --verbose  # include env-template check details
+shine upgrade --verbose  # include env-template checks and skipped/current rows
 ```
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.39.0+preview.abc1234`, while stable binaries continue to report `0.39.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.40.0+preview.abc1234`, while stable binaries continue to report `0.40.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -568,7 +609,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.39.0 sh install.sh
+SHINE_VERSION=0.40.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -576,7 +617,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.39.0"; .\install.ps1
+$env:SHINE_VERSION = "0.40.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -689,26 +730,52 @@ The helper prefers `MY_TOKEN_SECRET`, decrypts it when present, and otherwise fa
 
 ### shell/agent — `ccenv`
 
-Configures the current shell for Claude Code with the DeepSeek provider.
+Launches Claude Code with Codex through CLIProxyAPI (the default), DeepSeek, or Qwen.
+The selected environment is scoped to the Claude process and does not modify the current shell.
+The prompt lists `codex`, `deepseek`, `qwen`, and the not-yet-configured `glm5`
+as options 1–4; pressing Enter selects Codex.
 
-Add your key to the global env override at `~/.shine/shine.env.toml`, or to a
-project-local env file next to `shine.config.toml`:
+For the default Codex provider, add the client token from CLIProxyAPI's `api-keys`
+to the global env override at `~/.shine/shine.env.toml`, or to a project-local
+env file next to `shine.config.toml`:
+
+```toml
+CLIPROXYAPI_AUTH_TOKEN = "..."
+# Or: CLIPROXYAPI_AUTH_TOKEN_SECRET = "<tagged-or-GPG-ciphertext>"
+```
+
+Create the encrypted value with:
+
+```bash
+shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN
+```
+
+Codex connects to `http://127.0.0.1:8317` and maps Claude Code's Opus, Sonnet,
+and Haiku tiers to `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`
+respectively. It also sets `CLAUDE_CODE_EFFORT_LEVEL=high`, which CLIProxyAPI
+passes through as Codex `reasoning.effort=high`. Configure CLIProxyAPI to use
+the same token and bind it to loopback so the service is not exposed to the
+local network:
+
+```yaml
+host: "127.0.0.1"
+port: 8317
+api-keys:
+  - "..."
+```
+
+For DeepSeek, use the same plaintext-or-encrypted credential pattern:
 
 ```toml
 DEEPSEEK_API_KEY = "..."
+# Or: DEEPSEEK_API_KEY_SECRET = "<tagged-or-GPG-ciphertext>"
 ```
 
-Or store a base64-encoded GPG secret instead:
-
-```toml
-DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
-```
-
-Create the encrypted value with your existing GPG key. If the private key is
+Create encrypted values with your existing GPG key. If the private key is
 backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
 
 ```bash
-shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
+shine env encrypt --from DEEPSEEK_API_KEY
 ```
 
 `shine env encrypt` uses `gpg_key_id` from `config.toml` by default. Pass
@@ -717,8 +784,26 @@ shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 You can also decrypt any base64 GPG secret from the active env config directly:
 
 ```bash
-shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
+shine env decrypt DEEPSEEK_API_KEY_SECRET
 ```
+
+For Qwen through Alibaba Cloud's Anthropic-compatible endpoint, use the same
+credential pattern with `QWEN_API_KEY`:
+
+```toml
+QWEN_API_KEY = "..."
+# Or: QWEN_API_KEY_SECRET = "<tagged-or-GPG-ciphertext>"
+```
+
+Create its encrypted value with:
+
+```bash
+shine env encrypt --from QWEN_API_KEY
+```
+
+When `ccenv` prompts for a provider, choose `qwen` (or option `3`). The Claude
+process receives the Alibaba Cloud endpoint, Qwen model mapping, and the
+`983616` context-token limit.
 
 #### age + Apple Touch ID (Secure Enclave)
 
@@ -856,9 +941,23 @@ shine shell install agent
 ccenv
 ```
 
-When both `DEEPSEEK_API_KEY_GPG_SECRET` and `DEEPSEEK_API_KEY` are set, the
-encrypted secret wins. A GPG decode/decrypt failure stops `ccenv` instead of
-falling back to plaintext.
+Running `ccenv` selects a provider and starts interactive Claude. Claude Code arguments are
+forwarded unchanged; `-r`/`--run` remain compatibility aliases for an argument-free launch:
+
+```bash
+ccenv --run
+ccenv --print "hello"
+```
+
+The `-r`/`--run` flag is recognized only as the first argument. Use `--` when a conflicting
+argument must be passed through to Claude itself:
+
+```bash
+ccenv -- --run
+```
+
+Credentials resolve in this order: `KEY_SECRET`, legacy `KEY_GPG_SECRET`, then plaintext `KEY`.
+Any selected secret's decode/decrypt failure stops `ccenv` instead of falling back.
 
 ### Shell preset metadata
 
@@ -902,7 +1001,12 @@ Or persist a custom presets directory in `~/.shine/config.toml`:
 presets_dir = "/custom/presets"
 ```
 
-Config discovery searches the current directory and its parents for `shine.config.toml`. If none is found, legacy project `config.toml` files that contain `presets_dir` are still recognized with a warning. This legacy filename will no longer be supported in v0.40.0; rename it to `shine.config.toml`. A project config is a sparse override layer on top of the global config under `~/.shine/` or `SHINE_CONFIG_DIR`: fields omitted by the project inherit their global values, while fields explicitly present in the project take priority. Relative paths are resolved from the directory containing the file that defines them. Saving a project setting does not copy inherited global values into the project file.
+Config discovery searches the current directory and its parents for `shine.config.toml`. Generic
+project `config.toml` files are ignored. A project config is a sparse override layer on top of the
+global config under `~/.shine/` or `SHINE_CONFIG_DIR`: fields omitted by the project inherit their
+global values, while fields explicitly present in the project take priority. Relative paths are
+resolved from the directory containing the file that defines them. Saving a project setting does
+not copy inherited global values into the project file.
 
 Preset source priority is: `SHINE_PRESETS` > project `presets_dir` > global `presets_dir` > default. `SHINE_CONFIG_DIR` selects the global config and runtime-state directory; its default presets directory is `$SHINE_CONFIG_DIR/presets`.
 
@@ -972,9 +1076,13 @@ For global overrides, place a flat `shine.env.toml` next to the global config at
 `shine.env.toml` next to `shine.config.toml`. Values from `shine.env.toml`
 override matching keys from the active config's `[env]` table without modifying
 either file. When both global and project-local env files are present, the
-project-local file wins. Legacy project `.env.toml` files are still recognized
-when project `shine.env.toml` is absent, but this compatibility will be removed
-in v0.40.0; rename the file to `shine.env.toml`.
+project-local file wins. Generic project `.env.toml` files are ignored.
+
+As of v0.40, the former global `~/.shine/env.toml` is no longer migrated
+automatically. Before upgrading, run a v0.39 binary once to migrate it; otherwise,
+move it to `~/.shine/shine.env.toml`, or merge its values there if that file already
+exists. A normal config-loading command stops with recovery instructions while the
+old file remains.
 
 An active directory linked with `shine overlay link <path>` may also contain a
 flat `<path>/shine.env.toml`. Its values override global env values and are
@@ -1041,6 +1149,25 @@ Installed app files live at their annotated destinations, for example:
 ~/.config/ghostty/config.ghostty
 ~/.config/starship/starship.toml
 ```
+
+## Planning Workflow
+
+Repository planning is managed in GitHub with a lightweight issue-based flow:
+
+- Open ideas with the `Idea / Plan` issue template
+- Promote accepted work into `Task` issues
+- Track state with `status:` labels
+- Use milestones only for release-relevant work
+
+The full workflow lives in [`docs/PLAN.md`](docs/PLAN.md).
+
+## Release Branch Workflow
+
+- `release` is the primary integration and release branch.
+- Regular pushes and feature PRs should target `release`.
+- Version tags (`v*`) should be created from `release`; CI will build artifacts and create the GitHub Release.
+- After CI creates the GitHub Release, it automatically opens a PR from `release` to `main`.
+- `main` is reserved for that post-release sync PR instead of day-to-day development.
 
 ## Development
 

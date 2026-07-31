@@ -1,57 +1,19 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use super::{LEGACY_PROJECT_CONFIG_FILE, PROJECT_CONFIG_FILE, tilde_expand};
+use super::{PROJECT_CONFIG_FILE, tilde_expand};
 
 #[derive(Clone, Debug)]
 pub(super) struct ProjectConfig {
     pub(super) path: PathBuf,
     pub(super) root: PathBuf,
-    pub(super) is_legacy: bool,
 }
 
-pub(super) fn find_project_config(
-    start: &Path,
-    global_config_path: &Path,
-) -> Option<ProjectConfig> {
-    find_ancestor_file(start, PROJECT_CONFIG_FILE)
-        .and_then(|path| {
-            let root = path.parent()?.to_path_buf();
-            Some(ProjectConfig {
-                root,
-                path,
-                is_legacy: false,
-            })
-        })
-        .or_else(|| {
-            find_ancestor_file(start, LEGACY_PROJECT_CONFIG_FILE)
-                .filter(|path| !paths_match(path, global_config_path))
-                .filter(|path| config_file_has_presets_dir(path))
-                .and_then(|path| {
-                    let root = path.parent()?.to_path_buf();
-                    Some(ProjectConfig {
-                        root,
-                        path,
-                        is_legacy: true,
-                    })
-                })
-        })
-}
-
-fn paths_match(left: &Path, right: &Path) -> bool {
-    if left == right {
-        return true;
-    }
-
-    // If canonicalization fails for either side (most commonly because the global
-    // config doesn't exist yet), treat the paths as not matching.  A non-NotFound
-    // I/O error (e.g. permission denied on an ancestor) would also return false
-    // here, which is intentionally conservative: the project config is then used
-    // without attempting to merge in the global one.
-    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
+pub(super) fn find_project_config(start: &Path) -> Option<ProjectConfig> {
+    find_ancestor_file(start, PROJECT_CONFIG_FILE).and_then(|path| {
+        let root = path.parent()?.to_path_buf();
+        Some(ProjectConfig { root, path })
+    })
 }
 
 fn find_ancestor_file(start: &Path, file_name: &str) -> Option<PathBuf> {
@@ -75,15 +37,6 @@ pub(super) struct MinimalConfig {
 
 pub(super) fn read_minimal_config(content: &str) -> Result<MinimalConfig, toml::de::Error> {
     toml::from_str(content)
-}
-
-fn config_file_has_presets_dir(path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    read_minimal_config(&content)
-        .map(|config| config.presets_dir.is_some())
-        .unwrap_or(false)
 }
 
 /// Return the shine root dir implied by `SHINE_CONFIG_DIR`, or `default` if unset.
@@ -189,10 +142,9 @@ mod tests {
     use tokio::fs;
 
     #[tokio::test]
-    async fn project_config_discovery_prefers_new_name_over_legacy_config() {
+    async fn project_config_discovery_finds_shine_config() {
         let project_dir = make_temp_dir().await;
         let child_dir = project_dir.join("subdir");
-        let global_config = make_temp_dir().await.join("config.toml");
         fs::create_dir_all(&child_dir).await.unwrap();
         fs::write(
             project_dir.join("shine.config.toml"),
@@ -200,6 +152,16 @@ mod tests {
         )
         .await
         .unwrap();
+        let config = find_project_config(&child_dir).expect("project config should be found");
+
+        assert_eq!(config.path, project_dir.join("shine.config.toml"));
+
+        fs::remove_dir_all(&project_dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn generic_config_toml_is_not_project_config() {
+        let project_dir = make_temp_dir().await;
         fs::write(
             project_dir.join("config.toml"),
             "presets_dir = \"legacy\"\n",
@@ -207,32 +169,9 @@ mod tests {
         .await
         .unwrap();
 
-        let config = find_project_config(&child_dir, &global_config)
-            .expect("project config should be found");
-
-        assert_eq!(config.path, project_dir.join("shine.config.toml"));
-        assert!(!config.is_legacy);
+        assert!(find_project_config(&project_dir).is_none());
 
         fs::remove_dir_all(&project_dir).await.unwrap();
-        fs::remove_dir_all(global_config.parent().unwrap())
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn legacy_config_without_presets_dir_is_not_project_config() {
-        let project_dir = make_temp_dir().await;
-        let global_config = make_temp_dir().await.join("config.toml");
-        fs::write(project_dir.join("config.toml"), "name = \"other-app\"\n")
-            .await
-            .unwrap();
-
-        assert!(find_project_config(&project_dir, &global_config).is_none());
-
-        fs::remove_dir_all(&project_dir).await.unwrap();
-        fs::remove_dir_all(global_config.parent().unwrap())
-            .await
-            .unwrap();
     }
 
     // --- resolve_runtime_config_dirs unit tests ---

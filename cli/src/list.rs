@@ -257,13 +257,16 @@ pub async fn handle_list(config: &Config) -> Result<()> {
         .iter()
         .filter(|r| r.file_status != FileStatus::NotInstalled)
         .collect();
+    let installed_sys = sys::installed_managed(config).await?;
 
-    let any = !installed_shell.is_empty() || !installed_app.is_empty();
+    let any = !installed_shell.is_empty() || !installed_app.is_empty() || !installed_sys.is_empty();
 
     if !any {
         println!(
             "{}",
-            colors::dim("Nothing installed yet. Run `shine shell install` or `shine app install`.")
+            colors::dim(
+                "Nothing installed yet. Run `shine shell install`, `shine app install`, or `shine sys list`."
+            )
         );
         return Ok(());
     }
@@ -290,6 +293,20 @@ pub async fn handle_list(config: &Config) -> Result<()> {
                 ),
                 None => println!("  {}", row.simple_label),
             }
+        }
+    }
+
+    if !installed_sys.is_empty() {
+        if !installed_shell.is_empty() || !installed_app.is_empty() {
+            println!();
+        }
+        println!("{}", colors::bold("System Configs"));
+        for row in &installed_sys {
+            println!(
+                "  {}  {}",
+                row.label,
+                colors::dim(&format!("({})", row.item_id))
+            );
         }
     }
 

@@ -71,6 +71,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
             let script_path =
                 config.preset_path(Path::new("shell").join(&cat.name).join(&script.source_rel));
             let source_key = format!("shell/{}/{}", cat.name, script.source_rel.display());
+            let display_name = format!("{}/{}", cat.name, script.command_name);
             let rendered_path = config
                 .rendered_dir()
                 .join("shell")
@@ -86,6 +87,27 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                     .map(|m| m.file_type().is_symlink())
                     .unwrap_or(false)
             };
+            let effective_source = if rendered_path.exists() {
+                &rendered_path
+            } else {
+                &script_path
+            };
+            let runtime_env = script
+                .env
+                .iter()
+                .map(crate::env::EnvVarSpec::to_with_arg)
+                .collect::<Vec<_>>();
+            let link_current = if link_exists {
+                crate::bin_links::link_is_current(
+                    &link_path,
+                    effective_source,
+                    script.runtime,
+                    &runtime_env,
+                )
+                .await?
+            } else {
+                false
+            };
 
             let (sym, status_text) = match (file_exists, link_exists) {
                 (true, true) => ("✓", "up-to-date"),
@@ -94,24 +116,29 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 (false, false) => ("✗", "not installed"),
             };
 
-            let (sym, status_text) = match shell_template_status(
-                config,
-                &source_key,
-                &script_path,
-                &rendered_path,
-            )
-            .await
-            {
-                Some(FileStatus::UpdateAvail) if file_exists || link_exists => {
-                    ("↑", "update available")
+            let (sym, status_text) = if link_exists && !link_current {
+                ("↑", "update available")
+            } else {
+                match shell_source_status(
+                    config,
+                    &source_key,
+                    &script_path,
+                    &rendered_path,
+                    &script.transforms,
+                )
+                .await
+                {
+                    Some(FileStatus::UpdateAvail) if file_exists || link_exists => {
+                        ("↑", "update available")
+                    }
+                    Some(FileStatus::Missing) if link_exists => ("!", "rendered script missing"),
+                    _ => (sym, status_text),
                 }
-                Some(FileStatus::Missing) if link_exists => ("!", "rendered script missing"),
-                _ => (sym, status_text),
             };
 
             rows.push(ShellRow {
                 symbol: colors::symbol(sym),
-                label: format!("{}/{}", cat.name, script.command_name),
+                label: display_name,
                 status_sym: sym,
                 status_text,
                 is_installed: file_exists || link_exists,
@@ -122,27 +149,43 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     Ok(rows)
 }
 
-async fn shell_template_status(
+async fn shell_source_status(
     config: &Config,
     source_key: &str,
     script_path: &Path,
     rendered_path: &Path,
+    declared_transforms: &[String],
 ) -> Option<FileStatus> {
     let source_bytes = if config.is_external_presets {
         tokio::fs::read(script_path).await.ok()?
     } else {
         crate::presets::read_asset_bytes(source_key)?
     };
-    if !crate::presets::parse_template_annotation(&source_bytes) {
-        return None;
+    if !config.is_external_presets && !script_path.exists() {
+        return Some(FileStatus::UpdateAvail);
     }
+    let transforms = if !declared_transforms.is_empty() {
+        declared_transforms.to_vec()
+    } else if crate::presets::parse_template_annotation(&source_bytes) {
+        vec!["template".to_string()]
+    } else {
+        if config.is_external_presets {
+            return Some(FileStatus::UpToDate);
+        }
+        let current = tokio::fs::read(script_path).await.ok()?;
+        return Some(if source_bytes == current {
+            FileStatus::UpToDate
+        } else {
+            FileStatus::UpdateAvail
+        });
+    };
 
     if !rendered_path.exists() {
         return Some(FileStatus::Missing);
     }
 
     let env = EnvConfig::load_or_init(config).await.ok()?;
-    let rendered = apply_transforms(&["template".to_string()], &source_bytes, env.as_map()).ok()?;
+    let rendered = apply_transforms(&transforms, &source_bytes, env.as_map()).ok()?;
     let current = tokio::fs::read(rendered_path).await.ok()?;
 
     if rendered == current {
@@ -278,6 +321,22 @@ async fn app_file_row_status(
         Err(_) => (None, FileStatus::NotInstalled),
         Ok(dest) => {
             let status = match manifest.find_by_dest(&dest) {
+                None if file.generator.as_ref().is_some_and(|generator| {
+                    generator.auto && env.contains_key(&generator.when_env)
+                }) && manifest.entries.iter().any(|entry| {
+                    entry
+                        .source
+                        .strip_prefix("app/")
+                        .and_then(|source| source.split_once('/'))
+                        .is_some_and(|(category, _)| category == cat.name)
+                }) =>
+                {
+                    if source_hash_for_file(config, cat, file, env).await.is_some() {
+                        FileStatus::UpdateAvail
+                    } else {
+                        FileStatus::NotInstalled
+                    }
+                }
                 None => FileStatus::NotInstalled,
                 Some(entry) => app_entry_status(config, cat, file, entry, env).await,
             };
@@ -301,6 +360,22 @@ pub(crate) async fn app_entry_status(
     entry: &AppEntry,
     env: &BTreeMap<String, String>,
 ) -> FileStatus {
+    // Generators are intentionally polled on every status/update pass, even
+    // when the installed destination was edited. Static sources keep the
+    // cheaper existing behavior and are read only after ownership is proven.
+    let generator_enabled = file
+        .generator
+        .as_ref()
+        .is_some_and(|generator| generator.auto && env.contains_key(&generator.when_env));
+    let manual_generator = file
+        .generator
+        .as_ref()
+        .is_some_and(|generator| !generator.auto);
+    let generated_source_hash = if generator_enabled {
+        source_hash_for_file(config, cat, file, env).await
+    } else {
+        None
+    };
     if !entry.destination.exists() {
         return FileStatus::Missing;
     }
@@ -310,7 +385,15 @@ pub(crate) async fn app_entry_status(
             let manifest_hash = entry.content_hash;
             match installed_content_hash(file, &dest_bytes) {
                 Ok(Some(dest_hash)) if dest_hash == manifest_hash => {
-                    match source_hash_for_file(config, cat, file, env).await {
+                    if manual_generator {
+                        return FileStatus::UpToDate;
+                    }
+                    let source_hash = if generator_enabled {
+                        generated_source_hash
+                    } else {
+                        source_hash_for_file(config, cat, file, env).await
+                    };
+                    match source_hash {
                         Some(src) if src != manifest_hash => FileStatus::UpdateAvail,
                         _ => FileStatus::UpToDate,
                     }
@@ -348,6 +431,7 @@ mod tests {
             install_strategy: AppInstallStrategy::Copy,
             requires_admin: false,
             restart_hint: None,
+            generator: None,
         }
     }
 
@@ -625,6 +709,119 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[tokio::test]
+    async fn embedded_bun_source_change_reports_update_available() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        crate::shells::handle_install(&config, Some("agent"), false)
+            .await
+            .unwrap();
+
+        let extracted = config.presets_dir().join("shell/agent/cc.ts");
+        fs::write(&extracted, b"// stale extracted ccenv\n")
+            .await
+            .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "agent/ccenv")
+            .expect("agent/ccenv row should exist");
+
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn embedded_shell_source_rename_reports_update_available() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/agent");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        let old_source = if cfg!(windows) { "cc.ps1" } else { "cc.sh" };
+        fs::write(
+            cat_dir.join("shine.toml"),
+            format!(
+                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\n"
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join(old_source), b"# old sourced ccenv\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::shells::handle_install(&config, Some("agent"), false)
+            .await
+            .unwrap();
+
+        config.is_external_presets = false;
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "agent/ccenv")
+            .expect("embedded agent/ccenv row should exist");
+
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn external_shell_runtime_and_source_change_reports_update_available() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/agent");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        let old_source = if cfg!(windows) { "cc.ps1" } else { "cc.sh" };
+        fs::write(
+            cat_dir.join("shine.toml"),
+            format!(
+                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\n"
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join(old_source), b"# old sourced ccenv\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::shells::handle_install(&config, Some("agent"), false)
+            .await
+            .unwrap();
+
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"cc.ts\"\ntarget = \"ccenv\"\nruntime = \"bun\"\nplatforms = [\"unix\", \"windows\"]\n",
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join("cc.ts"), b"console.log('new ccenv');\n")
+            .await
+            .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "agent/ccenv")
+            .expect("external agent/ccenv row should exist");
+
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn shell_env_change_reports_update_available() {
@@ -690,6 +887,7 @@ mod tests {
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 },
                 AppFile {
                     source_rel: PathBuf::from("themes/shine-light"),
@@ -701,6 +899,7 @@ mod tests {
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 },
             ],
             list_mode: AppListMode::Category,
@@ -743,6 +942,7 @@ mod tests {
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 },
                 AppFile {
                     source_rel: PathBuf::from("theme.toml"),
@@ -754,6 +954,7 @@ mod tests {
                     install_strategy: AppInstallStrategy::Copy,
                     requires_admin: false,
                     restart_hint: None,
+                    generator: None,
                 },
             ],
             list_mode: AppListMode::Files,

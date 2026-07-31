@@ -315,6 +315,7 @@ mod tests {
                 install_strategy: AppInstallStrategy::Copy,
                 requires_admin: false,
                 restart_hint: None,
+                generator: None,
             }],
             list_mode: AppListMode::Files,
             post_upgrade: Vec::new(),

@@ -174,7 +174,7 @@ fn runtime_presets_overlay_dir() -> Option<PathBuf> {
     let current_dir = std::env::current_dir().ok();
     let config_path = current_dir
         .as_deref()
-        .and_then(|dir| find_project_config(dir, &global_config))
+        .and_then(find_project_config)
         .unwrap_or(global_config);
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     read_presets_overlay_override_from_toml(&config_path)
@@ -186,9 +186,7 @@ fn runtime_presets_dir() -> Option<(PathBuf, bool)> {
     let default_presets_dir = default_shine_dir.join("presets");
     let current_dir = std::env::current_dir().ok();
     let global_config = shine_dir_from_env_or_default(&default_shine_dir).join("config.toml");
-    let project_config = current_dir
-        .as_deref()
-        .and_then(|dir| find_project_config(dir, &global_config));
+    let project_config = current_dir.as_deref().and_then(find_project_config);
     let has_project_config = project_config.is_some();
     let config_path = project_config.unwrap_or(global_config);
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
@@ -272,26 +270,14 @@ fn resolve_config_presets_path(path: &Path, config_dir: &Path) -> PathBuf {
     }
 }
 
-fn find_project_config(start: &Path, global_config: &Path) -> Option<PathBuf> {
+fn find_project_config(start: &Path) -> Option<PathBuf> {
     for dir in start.ancestors() {
         let path = dir.join("shine.config.toml");
         if path.exists() {
             return Some(path);
         }
-
-        let legacy_path = dir.join("config.toml");
-        if legacy_path.exists()
-            && legacy_path != global_config
-            && config_has_presets_dir(&legacy_path)
-        {
-            return Some(legacy_path);
-        }
     }
     None
-}
-
-fn config_has_presets_dir(path: &Path) -> bool {
-    read_presets_override_from_toml(path).is_some()
 }
 
 fn fs_category_names(root: &Path) -> Option<BTreeSet<String>> {
@@ -417,6 +403,23 @@ mod tests {
 
         assert!(shell.contains("proxy"), "shell candidates: {shell:?}");
         assert!(shell.contains("personal"), "shell candidates: {shell:?}");
+    }
+
+    #[test]
+    fn project_config_discovery_ignores_generic_config_toml() {
+        let dir = temp_dir("project-config");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), "presets_dir = \".\"\n").unwrap();
+
+        assert_eq!(find_project_config(&dir), None);
+
+        std::fs::write(dir.join("shine.config.toml"), "presets_dir = \".\"\n").unwrap();
+        assert_eq!(
+            find_project_config(&dir),
+            Some(dir.join("shine.config.toml"))
+        );
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

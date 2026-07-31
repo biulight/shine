@@ -276,6 +276,35 @@ pub async fn link_executables_with_names(
     Ok(report)
 }
 
+/// Return whether an installed command exactly matches its expected source, runtime, and
+/// runtime environment declaration.
+///
+/// Status surfaces use the same current-ness rules as install/upgrade so an existing command
+/// from an older source or runtime is reported as an available update.
+pub(crate) async fn link_is_current(
+    link_path: &Path,
+    source: &Path,
+    runtime: LinkRuntime,
+    env: &[String],
+) -> Result<bool> {
+    match tokio::fs::symlink_metadata(link_path).await {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            if runtime != LinkRuntime::Native {
+                return Ok(false);
+            }
+            Ok(tokio::fs::read_link(link_path)
+                .await
+                .is_ok_and(|target| target == source))
+        }
+        Ok(_) => Ok(matches!(
+            launcher_status(link_path, source, runtime, env).await?,
+            LauncherStatus::Current
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("stat failed: {link_path:?}")),
+    }
+}
+
 pub fn command_path_for_name(bin_dir: &Path, stem: &OsStr) -> PathBuf {
     #[cfg(unix)]
     {

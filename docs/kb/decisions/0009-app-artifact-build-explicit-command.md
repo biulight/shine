@@ -2,9 +2,14 @@
 
 - **Status**: accepted (the "not auto-reversed" consequence is superseded by
   [ADR 0012](0012-app-lifecycle-post-install-and-teardown.md), which adds an optional
-  `[artifact].teardown` script; the build-is-explicit-only stance still holds)
+  `[artifact].teardown` script; the build-is-explicit-only stance still holds).
+  The statement that Shine never fetches Surge subscriptions is superseded by
+  [ADR 0016](0016-generated-app-files-and-surge-subscriptions.md), whose file
+  generator is separate from artifact build scripts. The placement of the
+  canonical Surge artifact in a private overlay is superseded by
+  [ADR 0017](0017-built-in-surge-profile-artifact.md).
 - **Evidence**: `cli/src/apps/build.rs`, `cli/src/apps/metadata.rs` (`[artifact]`/`AppArtifact`),
-  `shine app build <app-id>`, `presets/app/surge/build.sh`
+  `shine app build <app-id>`, `presets/app/surge/build.ts`
 
 ## Context
 
@@ -55,9 +60,10 @@ anything else is entirely the script's own responsibility.
 
 - `shine upgrade` stays side-effect-predictable: it never touches the active Surge profile and never
   fetches a subscription. It only re-copies the tracked `local-*.conf` files.
-- Real provider-specific logic (which sections to patch, the profile's path from `SURGE_PROFILE`,
-  the idempotent `#!include` append) lives entirely outside this repo, in the `shineOverlay`
-  project's own `build.sh`; the built-in `presets/app/surge/build.sh` is a placeholder only.
+- The original implementation placed Surge's patch algorithm in
+  `shineOverlay`. ADR 0017 later established that the section-to-local-file
+  mapping is generic and moved it into the built-in Bun artifact; overlays
+  retain only user-specific policy content.
 - Adding an artifact script to a new app preset requires no Shine core changes — just an
   `[artifact]` table and a script that honors the environment contract.
 - A category with no `[artifact]` section behaves exactly as before; `shine app build` on such a

@@ -121,6 +121,19 @@ async fn run(cli: Cli) -> Result<()> {
                 ))
                 .await
             }
+            AppCommands::Refresh {
+                category,
+                file,
+                force,
+            } => {
+                Box::pin(apps::handle_refresh(
+                    &config,
+                    &category,
+                    file.as_deref(),
+                    force,
+                ))
+                .await
+            }
             AppCommands::Uninstall {
                 category,
                 force,
@@ -1093,6 +1106,41 @@ mod tests {
             Commands::App {
                 command: AppCommands::Unbuild { app_id }
             } if app_id == "surge"
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_app_refresh_commands() {
+        let cli = Cli::try_parse_from(["shine", "app", "refresh", "surge"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Refresh {
+                    category,
+                    file: None,
+                    force: false,
+                }
+            } if category == "surge"
+        ));
+
+        let cli = Cli::try_parse_from([
+            "shine",
+            "app",
+            "refresh",
+            "surge",
+            "subscription-proxies.conf",
+            "--force",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Refresh {
+                    category,
+                    file: Some(file),
+                    force: true,
+                }
+            } if category == "surge" && file == "subscription-proxies.conf"
         ));
     }
 

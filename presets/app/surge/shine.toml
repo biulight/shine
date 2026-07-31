@@ -13,11 +13,12 @@ post_install = [
 # `shine app build surge` runs the artifact script to patch the active profile's
 # per-section `#!include` lines so they also include the local files installed
 # here. `teardown` (via `shine app unbuild surge`, and best-effort on
-# `shine app uninstall surge`) reverses that patch. Provider-specific logic lives
-# in the overlay's build.sh/unbuild.sh, not here.
+# `shine app uninstall surge`) reverses that patch. The implementation is
+# generic; overlays provide only their local policy files and profile path.
 [artifact]
-script = "build.sh"
-teardown = "unbuild.sh"
+script = "build.ts"
+teardown = "unbuild.ts"
+runtime = "bun"
 
 [[files]]
 source = "local-proxies.conf"
@@ -33,3 +34,9 @@ description = "Local priority rules merged into [Rule] ahead of provider rules."
 source = "local-proxy-groups.conf"
 target = "local-proxy-groups.conf"
 description = "Local proxy groups merged into [Proxy Group] after provider groups."
+
+[[files]]
+source = "subscription-proxies.conf"
+target = "subscription-proxies.conf"
+description = "SS/VMess policies generated from SURGE_SUBSCRIPTION_URL."
+generator = { script = "generate-subscription.ts", runtime = "bun", env = ["SURGE_SUBSCRIPTION_URL"], when_env = "SURGE_SUBSCRIPTION_URL", auto = false }

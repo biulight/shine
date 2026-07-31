@@ -73,10 +73,28 @@ bugs. Check this list before changing the modules named in each entry.
   Never serialize the whole file from a struct — that destroys comments.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and docs (AGENTS.md § Config) must agree.
-- **External app preset hooks are opt-in only.** `post_upgrade` runs commands from app preset
-  metadata after `shine upgrade` changes files. Embedded presets may run hooks, but external
-  presets must be gated by `allow_app_hooks = true`; otherwise a user-controlled presets checkout
-  would gain command execution on ordinary upgrades.
+- **External app preset hooks and generators are opt-in only.** `post_upgrade`
+  runs commands after upgrades, while an automatic file generator may run
+  during install/update/upgrade and supply effective source bytes. Embedded code may
+  run implicitly, but external preset or overlay code must be gated by
+  `allow_app_hooks = true`; otherwise a user-controlled presets checkout would
+  gain command execution during ordinary read-oriented update checks.
+- **Manual generators never run from implicit status or upgrade paths.**
+  `generator.auto = false` leaves `list`/`info`/`show`/`update` local-only and
+  causes upgrade to preserve the manifest snapshot. Only install/reinstall or
+  `shine app refresh` may run it; refresh must target manifest-owned files and
+  preserve user modifications unless `--force` is explicit.
+- **Generator failures never destroy the last-known-good managed file.** Status
+  and upgrade warn and retain an existing manifest-owned destination. An enabled
+  generator with no successful installed snapshot fails rather than installing
+  empty or partial output. Generator diagnostics must not include source URLs,
+  credentials, or raw subscription records.
+- **The Surge profile artifact treats `SURGE_PROFILE` as a user-owned file.**
+  `profile-artifact.ts` rejects symlinks and invalid UTF-8, computes the full
+  desired content before writing, replaces through a same-directory temporary
+  file, and preserves mode and per-line endings. A missing patchable
+  `#!include` is an error, never a successful no-op. Keep parsing and filesystem
+  behavior shared by build and teardown; do not duplicate it in an overlay.
 - **Local HTTP resources share one loopback server.** Files that need stable local URLs live under
   `<shine_dir>/http/` and are served by `shine serve start`; `shine serve install` registers one
   global user service for that server. Do not add per-app HTTP daemons, ports, or launchd jobs.

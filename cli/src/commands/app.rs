@@ -34,6 +34,18 @@ pub enum AppCommands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Explicitly refresh installed generated files for an app preset
+    Refresh {
+        /// App preset category to refresh
+        #[arg(value_name = "CATEGORY")]
+        category: String,
+        /// Optional generator source path; refreshes all installed generators when omitted
+        #[arg(value_name = "FILE")]
+        file: Option<String>,
+        /// Overwrite a managed destination that was modified after install
+        #[arg(long)]
+        force: bool,
+    },
     /// Uninstall installed app preset files and optionally restore backups
     Uninstall {
         /// Category to uninstall (e.g. vim, starship). Uninstalls all if omitted.

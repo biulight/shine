@@ -2,17 +2,17 @@ use super::report::{
     print_already_managed, print_dry_run_install, print_install_error, print_install_success,
     print_install_success_with_backup,
 };
-use super::{install_prepared_content, metadata, resolve_install_destination};
+use super::{
+    install_prepared_content, materialize_file_content, metadata, resolve_install_destination,
+};
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
 use crate::install_core::manifest::{AppEntry, AppManifest};
-use crate::install_core::transforms;
 use crate::output;
 use anyhow::Result;
 use file_ops::InstallOutcome;
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::install_core::file_ops;
 
@@ -57,6 +57,41 @@ pub async fn handle_install(
     );
 
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
+    let mut generated_content: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut unavailable_generators: BTreeSet<String> = BTreeSet::new();
+
+    // Run enabled generators before any install writes. A first-time failure
+    // aborts cleanly; an existing managed destination is the last-known-good
+    // snapshot and is kept with a warning.
+    for cat in &categories {
+        for file in &cat.files {
+            let Some(generator) = &file.generator else {
+                continue;
+            };
+            if !env_map.contains_key(&generator.when_env) {
+                continue;
+            }
+            let key = format!("{}/{}", cat.name, file.source_rel.display());
+            let destination = resolve_install_destination(cat, file, config)?;
+            match materialize_file_content(config, cat, file, env_map).await {
+                Ok(content) => {
+                    generated_content.insert(key, content);
+                }
+                Err(error)
+                    if manifest.find_by_dest(&destination).is_some() && destination.exists() =>
+                {
+                    eprintln!(
+                        "  {} {}/{}: generator unavailable; installed copy kept ({error:#})",
+                        colors::symbol("!"),
+                        cat.name,
+                        file.source_rel.display()
+                    );
+                    unavailable_generators.insert(key);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
 
     let mut installed = 0usize;
     let mut skipped = 0usize;
@@ -68,9 +103,11 @@ pub async fn handle_install(
 
     for cat in &categories {
         for file in &cat.files {
-            let source_path =
-                config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
             let display_name = format!("{}/{}", cat.name, file.source_rel.display());
+            if unavailable_generators.contains(&display_name) {
+                skipped += 1;
+                continue;
+            }
             let destination = match resolve_install_destination(cat, file, config) {
                 Ok(d) => d,
                 Err(e) => {
@@ -84,46 +121,23 @@ pub async fn handle_install(
 
             let is_managed = manifest.find_by_dest(&destination).is_some();
 
-            let file_uses_env = file.transforms.iter().any(|t| t == "template");
+            let file_uses_env =
+                file.transforms.iter().any(|t| t == "template") || file.generator.is_some();
 
-            // Apply transforms (e.g. jsonc-to-json, template) before writing to destination.
-            let outcome = if !file.transforms.is_empty() {
-                match tokio::fs::read(&source_path).await {
-                    Err(e) => {
-                        eprintln!("  {} {display_name}: {e:#}", colors::symbol_stderr("✗"));
-                        continue;
-                    }
-                    Ok(raw) => match transforms::apply(&file.transforms, &raw, env_map) {
-                        Err(e) => {
-                            eprintln!(
-                                "  {} {display_name}: transform failed: {e:#}",
-                                colors::symbol("✗")
-                            );
-                            continue;
-                        }
-                        Ok(transformed) => {
-                            install_prepared_content(
-                                file,
-                                &transformed,
-                                &destination,
-                                is_managed,
-                                dry_run,
-                                force,
-                            )
-                            .await
-                        }
-                    },
-                }
+            let content = if let Some(content) = generated_content.remove(&display_name) {
+                content
             } else {
-                let raw = match tokio::fs::read(&source_path).await {
-                    Ok(raw) => raw,
-                    Err(e) => {
-                        eprintln!("  {} {display_name}: {e:#}", colors::symbol_stderr("✗"));
+                match materialize_file_content(config, cat, file, env_map).await {
+                    Ok(content) => content,
+                    Err(error) => {
+                        eprintln!("  {} {display_name}: {error:#}", colors::symbol_stderr("✗"));
                         continue;
                     }
-                };
-                install_prepared_content(file, &raw, &destination, is_managed, dry_run, force).await
+                }
             };
+            let outcome =
+                install_prepared_content(file, &content, &destination, is_managed, dry_run, force)
+                    .await;
 
             let transform_label = if !file.transforms.is_empty() {
                 format!(

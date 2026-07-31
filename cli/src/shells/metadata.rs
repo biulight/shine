@@ -605,18 +605,17 @@ mod tests {
     }
 
     #[test]
-    fn embedded_agent_category_uses_ccenv_source_wrapper() {
+    fn embedded_agent_category_uses_cross_platform_bun_entry() {
         let categories = load_embedded_categories(Some("agent")).unwrap();
         let agent = categories.iter().find(|cat| cat.name == "agent").unwrap();
 
         assert_eq!(agent.files.len(), 1);
         assert_eq!(agent.files[0].command_name, "ccenv");
-        let expected = if cfg!(windows) { "cc.ps1" } else { "cc.sh" };
-        assert_eq!(agent.files[0].source_rel, PathBuf::from(expected));
-        assert!(agent.files[0].needs_source);
-
-        let bytes = presets::read_asset_bytes(&format!("shell/agent/{expected}")).unwrap();
-        assert!(presets::parse_template_annotation(&bytes));
+        assert_eq!(agent.files[0].source_rel, PathBuf::from("cc.ts"));
+        assert!(!agent.files[0].needs_source);
+        assert_eq!(agent.files[0].runtime, crate::bin_links::LinkRuntime::Bun);
+        assert!(agent.files[0].transforms.is_empty());
+        assert!(agent.files[0].env.is_empty());
     }
 
     #[test]

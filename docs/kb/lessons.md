@@ -3,6 +3,28 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-07-25 — Subscription values crossed the generated-config line boundary
+
+- **Symptom**: a VMess subscription field containing CR/LF could add a second Surge configuration
+  line instead of being counted as an invalid node.
+- **Root cause**: quoting a value escaped quotes and backslashes but preserved control characters;
+  Surge's configuration remains line-oriented even when a field is quoted.
+- **Fix**: reject control characters in every emitted remote value, reject configuration
+  delimiters in unquoted positional values, and keep node-name sanitization control-safe.
+- **Rule**: quoting is not validation for generated line-oriented configuration. Validate every
+  untrusted field before interpolation, and reject line/control characters even inside quotes.
+
+## 2026-07-25 — Generator output limits were checked after unbounded capture
+
+- **Symptom**: a faulty generator could make the parent buffer arbitrary stdout/stderr for the
+  full timeout despite advertised 8 MiB/64 KiB limits.
+- **Root cause**: `Command::output()` collected both pipes completely before their lengths were
+  checked.
+- **Fix**: drain stdout and stderr concurrently in bounded chunks, retain at most each configured
+  limit, and terminate/reap the child immediately when either stream exceeds it.
+- **Rule**: a post-capture size check is not a memory bound. Enforce subprocess output limits while
+  draining both pipes concurrently so neither pipe deadlocks the child.
+
 ## 2026-07-19 — Interactive Windows SSH skipped the managed PowerShell profile
 
 - **Symptom**: `shine ssh --remote-shell windows <host>` opened PowerShell 7, but Shine-installed
@@ -156,6 +178,19 @@ the second was the real blocker.
   control replies carry no newline) and (b) `select(2)`, not `poll(2)`, to wait for readability —
   macOS `poll` is unreliable on `/dev/tty`. And when probing a syscall's behavior, assert on its
   actual output flags (`revents`), never on "the call returned something".
+
+## 2026-07-26 — Removed global state needs a fail-fast recovery tombstone
+
+- **Risk**: silently ignoring `~/.shine/env.toml` after removing its automatic migration would
+  make users believe their environment values were still active, while automatically deleting
+  or rewriting it would destroy the easiest recovery path.
+- **Fix**: normal config initialization now detects the removed file before saving anything and
+  stops with v0.39 migration or explicit move/merge instructions. It never parses, modifies, or
+  deletes the file.
+- **Exception**: the read-only global loader used by dry runs and `theme sync` deliberately
+  ignores the tombstone so shell startup remains non-fatal and side-effect free.
+- **Rule**: when retiring user-owned state, fail before mutation and preserve the original for
+  recovery; keep explicitly non-fatal/read-only startup paths outside that guard.
 
 ## 2026-07-15 — `env set`/`encrypt` silently wrote a value an override file kept shadowing
 
@@ -433,6 +468,17 @@ measured, not inferred.
   anything," not on "is this category of action normally privileged" — compute the cheap
   read-only diff first.
 
+## 2026-07-26 — Managed system no-op rows ignored `upgrade --verbose`
+
+- **Symptom**: a default `shine upgrade` printed a full `Managed System Configs` section for an
+  already-current split-DNS resource, even though the only result was counted as skipped.
+- **Root cause**: the global upgrade's `verbose` flag was not passed to the managed-system
+  handler, whose output path printed every selected item and outcome unconditionally.
+- **Fix**: hide `already installed` and ordinary `skipped` managed outcomes by default, lazily
+  create the section only for a visible result, and retain the full listing under `--verbose`.
+- **Rule**: optional upgrade sections must not print a header for no-op rows hidden by the
+  command's verbosity policy; aggregate counters may still include those rows.
+
 ## 2026-07-06 — Embedded Git progress overwhelms command-level results
 
 - **Symptom**: `shine update --pull` printed Git transfer plumbing, fetch refs, fast-forward
@@ -484,6 +530,20 @@ measured, not inferred.
 - **Rule**: every documented preset environment setting must occur in the rendered template;
   update detection is content-based and cannot observe unused variables.
 
+## 2026-07-31 — Embedded shell sources need identity and content status
+
+- **Symptom**: after moving `agent/ccenv` from sourced `cc.sh`/`cc.ps1` to Bun `cc.ts`, a freshly
+  installed binary reported `Nothing to update` and kept running the old source wrapper.
+- **Root cause**: shell status compared effective bytes only for template-rendered scripts,
+  treated a missing new embedded source as generic missing state, and checked bin entries only
+  for existence. In external-presets mode the new source already existed, so the stale native
+  link was incorrectly considered current without validating its source or runtime.
+- **Fix**: `status::shell_source_status` reports an update when an installed command's expected
+  embedded source is absent and compares raw extracted bytes with rust-embed. Shell rows also use
+  `bin_links`' install-equivalent current-ness check for source, runtime, and runtime env.
+- **Rule**: shell status must compare expected source identity, content, and launcher runtime;
+  existence of some command at the target name does not prove the current preset is installed.
+
 ## 2026-07-05 — Typed config readers must not silently discard invalid entries
 
 - **Symptom**: `{ value, description }` entries in `shine.env.toml` appeared valid but had no
@@ -531,7 +591,8 @@ measured, not inferred.
 
 - **Symptom**: project-local configs silently lost global settings.
 - **Root cause**: project config was read standalone instead of layering over the global one.
-- **Fix**: `a5aed62` (inheritance) + `0936f05` (scheduled cleanup of the legacy project file).
+- **Fix**: `a5aed62` (inheritance) + `0936f05` (scheduled cleanup of the legacy project file);
+  v0.40.0 completed that cleanup after the deprecation window.
 - **Rule**: project config is an overlay over global config, not a replacement; removing legacy
   state should be scheduled/graceful, not abrupt.
 

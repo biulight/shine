@@ -167,7 +167,7 @@ pub async fn handle_config_upgrade(
         &mut sep,
     ))
     .await?;
-    let sys_report = Box::pin(sys::handle_upgrade_managed(config, &mut sep)).await?;
+    let sys_report = Box::pin(sys::handle_upgrade_managed(config, verbose, &mut sep)).await?;
 
     let updated = env_report.updated
         + shell_report.templates_updated
@@ -184,6 +184,13 @@ pub async fn handle_config_upgrade(
     output::footer("Done", &summary);
     for hint in &app_report.restart_hints {
         println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
+    }
+
+    if app_report.failed > 0 {
+        bail!(
+            "{} generated app configuration item(s) failed",
+            app_report.failed
+        );
     }
 
     if sys_report.failed > 0 {
