@@ -1,49 +1,36 @@
 # shine
 
-A Rust CLI for managing shell presets, app configs, and system bootstrap presets.
+A cross-platform Rust CLI for managing personal shell commands, application configs, system
+resources, and repeatable machine setup.
 
-`shine` bundles reusable shell scripts, app configuration presets, and OS bootstrap presets into a single binary. It installs managed assets under `~/.shine/`, links shell commands into `~/.shine/bin/`, and can also copy app config files to their final destinations.
+`shine` turns dotfiles and bootstrap workflows into manifest-tracked resources that can be
+installed, inspected, updated, and safely removed. It ships useful presets in one self-contained
+binary, supports personal preset repositories and overlays, and applies layered environment values
+without taking ownership of unrelated user files. It also provides managed system setup, encrypted
+environment workflows, saved tasks, terminal-theme synchronization, and SSH session file transfer.
 
 中文文档: [`docs/README.zh-CN.md`](docs/README.zh-CN.md)
 
 ## Features
 
-- **Embedded presets** — shell scripts and app configs are compiled into the binary; no internet required after installation
-- **External presets and overlays** — point `presets_dir` at your own base directory, then optionally link a small overlay to override selected preset files
-- **Project-local presets** — run `shine init` inside a presets repo to create a local `shine.config.toml` that points `presets_dir` at the repo
-- **Managed bin directory** — `~/.shine/bin/` holds flat symlinks on Unix and command shims on Windows
-- **Auto PATH setup** — `install` appends `~/.shine/bin` to your shell config automatically
-- **Category install/uninstall** — install or uninstall all presets or a specific subset (e.g. `proxy`)
-- **Installed-only view** — `shine list` shows installed items without status noise
-- **Safe uninstall** — removes only shine-managed files; user-created files are never touched
-- **Dry-run support** — preview any destructive operation before it runs
-- **TOML config** — `~/.shine/config.toml` with comment preservation on updates
-- **App preset installer** — install managed config files like `~/.gitconfig`, `~/.config/starship/starship.toml`, or `~/.config/ghostty/config.ghostty`
-- **Installed content inspection** — `shine info <target>` prints metadata, colorized status, and expected-content diffs for installed app configs and shell presets; add `--verbose` for full content
-- **Release update check** — checks GitHub Releases at runtime with a 24h cache
-- **Multi-shell support** — bash, zsh, and PowerShell, with per-platform shell preset entries when a category needs different files on Unix and Windows
-- **System init presets** — bootstrap the current OS with curated setup steps via `shine sys init`
-
-Current support scope: `shine shell` supports bash, zsh, and PowerShell. Windows support covers `shine self`, `shine shell`, selected app presets such as `docker-engine` and `docker-desktop`, and a Windows `shine sys init` preset implemented with PowerShell.
-
-## Planning Workflow
-
-Repository planning is managed in GitHub with a lightweight issue-based flow:
-
-- Open ideas with the `Idea / Plan` issue template
-- Promote accepted work into `Task` issues
-- Track state with `status:` labels
-- Use milestones only for release-relevant work
-
-The full workflow lives in [`docs/PLAN.md`](docs/PLAN.md).
-
-## Release Branch Workflow
-
-- `release` is the primary integration and release branch.
-- Regular pushes and feature PRs should target `release`.
-- Version tags (`v*`) should be created from `release`; CI will build artifacts and create the GitHub Release.
-- After CI creates the GitHub Release, it automatically opens a PR from `release` to `main`.
-- `main` is reserved for that post-release sync PR instead of day-to-day development.
+- **Self-contained and extensible presets** — use the shell, app, and OS presets embedded in the
+  binary, or link and safely pull your own Git-managed preset source and selective overlay
+- **Manifest-tracked lifecycle** — install, inspect, diff, update, upgrade, and uninstall only
+  resources owned by Shine, with backups, modification guards, and dry-run support where offered
+- **Portable shell commands** — publish scripts or Bun programs through one managed bin directory,
+  with automatic PATH and completion setup for bash, zsh, and PowerShell
+- **Application configuration** — copy, transform, merge, generate, and explicitly build app
+  config artifacts while preserving user-owned content
+- **Layered environments and secrets** — combine global, project, and overlay values; encrypt with
+  GPG or age; inject selected values into commands or remote SSH sessions
+- **System setup and managed resources** — run curated OS bootstrap profiles and converge or remove
+  system resources such as managed files and split DNS
+- **Status and updates** — inspect installed content and expected diffs, detect preset/config drift,
+  pull Git sources, and check GitHub Releases through a non-fatal 24-hour cache
+- **Personal workflows** — save direct-execution tasks, synchronize terminal themes, serve managed
+  local resources, and transfer files through an authenticated `shine ssh` session
+- **Cross-platform operation** — macOS and Linux are the primary targets, with native Windows
+  support for the CLI areas and presets described below
 
 ## Installation
 
@@ -612,7 +599,7 @@ shine upgrade --verbose  # include env-template checks and skipped/current rows
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.39.0+preview.abc1234`, while stable binaries continue to report `0.39.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.40.0+preview.abc1234`, while stable binaries continue to report `0.40.0`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -622,7 +609,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.39.0 sh install.sh
+SHINE_VERSION=0.40.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -630,7 +617,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.39.0"; .\install.ps1
+$env:SHINE_VERSION = "0.40.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -1162,6 +1149,25 @@ Installed app files live at their annotated destinations, for example:
 ~/.config/ghostty/config.ghostty
 ~/.config/starship/starship.toml
 ```
+
+## Planning Workflow
+
+Repository planning is managed in GitHub with a lightweight issue-based flow:
+
+- Open ideas with the `Idea / Plan` issue template
+- Promote accepted work into `Task` issues
+- Track state with `status:` labels
+- Use milestones only for release-relevant work
+
+The full workflow lives in [`docs/PLAN.md`](docs/PLAN.md).
+
+## Release Branch Workflow
+
+- `release` is the primary integration and release branch.
+- Regular pushes and feature PRs should target `release`.
+- Version tags (`v*`) should be created from `release`; CI will build artifacts and create the GitHub Release.
+- After CI creates the GitHub Release, it automatically opens a PR from `release` to `main`.
+- `main` is reserved for that post-release sync PR instead of day-to-day development.
 
 ## Development
 

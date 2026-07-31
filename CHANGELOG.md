@@ -7,18 +7,45 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
-- Added generic app-file generators whose stdout participates in normal
-  install/update/upgrade hashing and safety checks. The Surge preset can now
-  fetch a Base64 URI subscription, convert compatible SS/VMess nodes into a
-  `policy-path`-backed `Subscription` group, and retain the last-known-good
-  generated file when a refresh fails.
-- Moved the generic Surge profile include patch/unpatch artifact from the
-  private overlay into the built-in Bun preset, with atomic writes, permission
-  and line-ending preservation, symlink protection, and symmetric teardown.
+## [0.40.0] — 2026-08-01
+
+### Features
+
+- Added generic app-file generators whose output participates in normal install, update, and
+  upgrade hashing and safety checks, plus `shine app refresh <app-id> [file]` for explicitly
+  refreshing manual generators without consuming short-lived provider access during routine
+  update checks.
+- The Surge preset can now fetch a Base64 URI subscription, convert compatible SS/VMess nodes
+  into a `policy-path`-backed `Subscription` group, and retain the last-known-good generated file
+  when a refresh fails.
+- Moved the Surge profile include patch/unpatch artifact into the built-in Bun preset, with atomic
+  writes, permission and line-ending preservation, symlink protection, and symmetric teardown.
+- Reworked `ccenv` as a cross-platform Bun launcher for Claude Code. It now defaults to Codex
+  through CLIProxyAPI, also supports DeepSeek and Qwen, forwards Claude arguments unchanged, and
+  scopes provider credentials and model settings to the launched process.
+- Added managed system configurations to `shine list` and expanded verbose update/upgrade output
+  so skipped, current, and attention-needed resources are visible alongside available updates.
 - Removed support for legacy project-local `config.toml` and `.env.toml` filenames; projects must
   use `shine.config.toml` and `shine.env.toml`.
 - Removed automatic migration of the former global `~/.shine/env.toml`. Before upgrading, run a
   v0.39 binary once to migrate it, or move/merge its values into `~/.shine/shine.env.toml`.
+
+### Bug Fixes
+
+- Fixed update detection for changed or renamed embedded shell sources, including stale pre-Bun
+  `ccenv` installations.
+- Hardened app generators with explicit trust gates, bounded execution, HTTPS-only subscription
+  URLs, environment allowlists, and credential-free diagnostics.
+
+### Internal
+
+- Added Bun tests and strict type-checking coverage for the cross-platform `ccenv` launcher and
+  the Surge subscription/profile tooling.
+
+### Docs
+
+- Documented generated app files, explicit generator refresh, the built-in Surge artifact,
+  process-scoped Bun `ccenv`, managed system status visibility, and the v0.40 config migration.
 
 ## [0.39.0] — 2026-07-19
 

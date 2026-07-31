@@ -1,49 +1,34 @@
 # shine
 
-一个用于管理 shell 预设、应用配置和系统初始化预设的 Rust CLI。
+一个跨平台 Rust CLI，用于管理个人 shell 命令、应用配置、系统资源和可重复的机器初始化流程。
 
-`shine` 将可复用的 shell 脚本、应用配置预设和操作系统初始化预设打包进一个二进制中。它会把受管资产安装到 `~/.shine/`，把 shell 命令链接到 `~/.shine/bin/`，也可以把应用配置文件复制到最终目标位置。
+`shine` 把 dotfiles 和初始化流程转化为由 manifest 跟踪的资源，可安全地安装、检查、更新和
+卸载。它在一个自包含二进制中提供常用预设，也支持个人预设仓库与 overlay，并能应用分层
+环境变量而不接管无关的用户文件。此外，它还提供受管系统设置、加密环境变量工作流、个人
+任务、终端主题同步和 SSH 会话文件传输。
 
 English README: [`../README.md`](../README.md)
 
 ## 功能特性
 
-- **内置预设** — shell 脚本和应用配置会编译进二进制；安装后不需要联网
-- **外部预设目录和 overlay** — 可用 `presets_dir` 指定基础预设来源，再链接一个小型 overlay 覆盖少量预设文件
-- **项目本地预设仓库** — 在预设仓库内运行 `shine init`，即可创建指向当前仓库的 `shine.config.toml`
-- **受管 bin 目录** — `~/.shine/bin/` 在 Unix 上保存展平后的符号链接，在 Windows 上保存命令 shim
-- **自动配置 PATH** — `install` 会自动把 `~/.shine/bin` 追加到你的 shell 配置文件
-- **按类别安装/卸载** — 可安装或卸载全部预设，也可只处理某个子集（如 `proxy`）
-- **仅显示已安装项** — `shine list` 只展示已安装内容，不输出额外状态噪音
-- **安全卸载** — 只删除 `shine` 管理的文件；用户自行创建的文件不会被触碰
-- **支持 dry-run** — 任何破坏性操作都可以先预览再执行
-- **TOML 配置** — 使用 `~/.shine/config.toml`，更新时会尽量保留注释
-- **应用预设安装器** — 可安装 `~/.gitconfig`、`~/.config/starship/starship.toml`、`~/.config/ghostty/config.ghostty` 等受管配置
-- **已安装内容检查** — `shine info <target>` 会输出已安装应用配置和 shell 预设的元数据、彩色状态和值得关注的预期内容差异；加 `--verbose` 可查看完整内容
-- **版本更新检查** — 运行时检查 GitHub Releases，并使用 24 小时缓存
-- **多 shell 支持** — bash、zsh 和 PowerShell；当同一类别在 Unix 和 Windows 需要不同文件时，可按平台声明 shell 预设条目
-- **系统初始化预设** — 通过 `shine sys init` 对当前操作系统执行一组整理过的初始化步骤
-
-当前支持范围：`shine shell` 支持 `bash`、`zsh` 和 PowerShell。Windows 支持目前覆盖 `shine self`、`shine shell`，`docker-engine`、`docker-desktop` 这类已适配的 app 预设，以及用 PowerShell 实现的 Windows `shine sys init` 预设。
-
-## 规划流程
-
-仓库规划通过 GitHub 采用一套轻量的问题单流程管理：
-
-- 使用 `Idea / Plan` issue 模板记录新想法
-- 将已接受的工作提升为 `Task` issue
-- 用 `status:` 标签跟踪状态
-- 只对和发布有关的工作使用 milestone
-
-完整规则见 [`PLAN.md`](PLAN.md)。
-
-## 发布分支流程
-
-- `release` 是主要的集成和发布分支。
-- 日常提交和功能 PR 应以 `release` 为目标分支。
-- 版本标签（`v*`）应从 `release` 创建；CI 会构建产物并发布 GitHub Release。
-- CI 创建完 GitHub Release 后，会自动发起一个从 `release` 到 `main` 的 PR。
-- `main` 只用于这个发布后的同步 PR，而不是日常开发。
+- **自包含且可扩展的预设** — 使用编译进二进制的 shell、app 和操作系统预设，也可以
+  链接并安全拉取自己的 Git 预设来源与选择性 overlay
+- **由 manifest 跟踪的生命周期** — 只对 Shine 拥有的资源执行安装、检查、diff、更新、
+  升级和卸载，并提供备份、用户修改保护，以及相应命令支持的 dry-run
+- **可移植的 shell 命令** — 通过统一的受管 bin 目录发布脚本或 Bun 程序，并为 bash、
+  zsh 和 PowerShell 自动设置 PATH 与命令补全
+- **应用配置管理** — 复制、转换、合并、生成并显式构建 app 配置 artifact，同时保留
+  用户拥有的内容
+- **分层环境变量与密钥** — 合并全局、项目和 overlay 值；通过 GPG 或 age 加密；向命令
+  或远程 SSH 会话注入明确选择的值
+- **系统设置与受管资源** — 运行整理过的操作系统初始化 profile，并收敛或移除受管文件、
+  split DNS 等系统资源
+- **状态与更新** — 检查已安装内容和预期 diff、检测预设/配置漂移、拉取 Git 来源，并通过
+  不影响主命令的 24 小时缓存检查 GitHub Releases
+- **个人工作流** — 保存直接执行的任务、同步终端主题、提供受管本地资源，并通过经过认证的
+  `shine ssh` 会话传输文件
+- **跨平台运行** — macOS 和 Linux 是主要目标；Windows 原生支持范围见下文所列 CLI
+  功能和预设
 
 ## 安装
 
@@ -591,7 +576,7 @@ shine upgrade --pull  # 拉取 Git 管理的 preset 后再应用配置
 shine upgrade --verbose  # 包含 env 模板检查以及 skipped/已是最新的明细
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.39.0+preview.abc1234`；稳定版则继续显示 `0.39.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.40.0+preview.abc1234`；稳定版则继续显示 `0.40.0`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -601,7 +586,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.39.0 sh install.sh
+SHINE_VERSION=0.40.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -609,7 +594,7 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.39.0"; .\install.ps1
+$env:SHINE_VERSION = "0.40.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
@@ -1100,6 +1085,25 @@ inline `{ value, description }` 表。详细项会同时覆盖值和说明；字
 ~/.config/ghostty/config.ghostty
 ~/.config/starship/starship.toml
 ```
+
+## 规划流程
+
+仓库规划通过 GitHub 采用一套轻量的问题单流程管理：
+
+- 使用 `Idea / Plan` issue 模板记录新想法
+- 将已接受的工作提升为 `Task` issue
+- 用 `status:` 标签跟踪状态
+- 只对和发布有关的工作使用 milestone
+
+完整规则见 [`PLAN.md`](PLAN.md)。
+
+## 发布分支流程
+
+- `release` 是主要的集成和发布分支。
+- 日常提交和功能 PR 应以 `release` 为目标分支。
+- 版本标签（`v*`）应从 `release` 创建；CI 会构建产物并发布 GitHub Release。
+- CI 创建完 GitHub Release 后，会自动发起一个从 `release` 到 `main` 的 PR。
+- `main` 只用于这个发布后的同步 PR，而不是日常开发。
 
 ## 开发
 
