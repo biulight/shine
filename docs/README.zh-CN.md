@@ -451,10 +451,14 @@ shine info shell/proxy/setproxy
 
 ```bash
 shine update
+shine update --diff
+shine update proxy/setproxy
 shine update --verbose
 ```
 
 只显示已安装配置里存在可用更新的条目，然后再检查是否有更新的 `shine` 发行版。加 `--verbose` 后，会把已是最新或需要关注的安装项一并列出：
+
+加上 `--diff` 后，会直接在每个可更新的 shell 或 app 条目下显示预期内容差异。也可以传入一个已安装的 shell/app 目标来只检查该目标；目标模式默认显示 diff、跳过 `shine` 发行版检查，并可与 `--pull` 组合，但不能与 `--verbose` 或 `--refresh` 组合。需要查看当前完整内容时继续使用 `shine info <TARGET> --verbose`。受管系统资源已经显示结构化字段变化，不再额外生成内容 diff。
 
 ```
 Shell Presets
@@ -566,6 +570,8 @@ shine init
 
 ```bash
 shine update        # 显示可用配置更新，然后强制检查最新 release
+shine update --diff # 显示可更新 shell/app 的内容差异
+shine update proxy/setproxy  # 只检查一个已安装目标，并跳过 release 检查
 shine update --verbose  # 同时显示已是最新和非更新类状态
 shine update --pull  # 拉取 Git 管理的 preset 后再检查状态
 shine self upgrade  # 下载并安装当前平台的最新稳定版

@@ -467,10 +467,14 @@ For app configs, `shine info --verbose` reads the installed destination file. Fo
 
 ```bash
 shine update
+shine update --diff
+shine update proxy/setproxy
 shine update --verbose
 ```
 
 Shows only available installed configuration updates, then checks for a newer shine release. Use `--verbose` to include installed entries that are already up-to-date or need attention:
+
+Add `--diff` to print the expected-content diff directly below each available shell or app update. Pass an installed shell/app target to inspect only that target; target mode implies diff, skips the shine release check, and can be combined with `--pull` but not `--verbose` or `--refresh`. Use `shine info <TARGET> --verbose` when the complete current content is needed. Managed system resources already show structured field changes and do not produce content diffs.
 
 ```
 Shell Presets
@@ -585,6 +589,8 @@ Manual commands:
 
 ```bash
 shine update        # show available updates, then force-check the latest release
+shine update --diff # include content diffs for available shell/app updates
+shine update proxy/setproxy  # inspect one installed target and skip the release check
 shine update --verbose  # include up-to-date and non-update status rows
 shine update --pull  # pull Git-managed presets before checking status
 shine self install  # copy the current binary to the platform default install path

@@ -4,15 +4,25 @@ use crate::config::{self, Config};
 #[cfg(unix)]
 use crate::privilege;
 use crate::update_check::{self, ReleaseChannel, UpdateStatus};
-use crate::{apps, colors, env, install_core, list, output, platform, shells, sys, version};
+use crate::{apps, colors, env, install_core, list, output, platform, shells, show, sys, version};
 
-pub async fn handle_update(config: &Config, verbose: bool, refresh: bool) -> Result<()> {
+pub async fn handle_update(
+    config: &Config,
+    target: Option<&str>,
+    diff: bool,
+    verbose: bool,
+    refresh: bool,
+) -> Result<()> {
+    if let Some(target) = target {
+        return show::handle_update_target(config, target).await;
+    }
+
     let mut printed_update = if verbose {
-        Box::pin(list::handle_status_list(config)).await?;
+        Box::pin(list::handle_status_list(config, diff)).await?;
         println!();
         true
     } else {
-        Box::pin(list::handle_update_list(config)).await?
+        Box::pin(list::handle_update_list(config, diff)).await?
     };
 
     let current = version::display();

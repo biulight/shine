@@ -222,14 +222,20 @@ impl CompletionShell {
 
 #[derive(Parser, Debug)]
 pub struct UpdateCommand {
+    /// Installed shell or app target to inspect (shows pending content differences)
+    #[arg(value_name = "TARGET")]
+    pub target: Option<String>,
     /// Pull Git-managed preset sources before checking status
     #[arg(long)]
     pub pull: bool,
-    /// Show installed entries that are already current or need attention
+    /// Show content differences for available shell and app updates
     #[arg(long)]
+    pub diff: bool,
+    /// Show installed entries that are already current or need attention
+    #[arg(long, conflicts_with = "target")]
     pub verbose: bool,
     /// Bypass the 24-hour version cache and check GitHub now
-    #[arg(long)]
+    #[arg(long, conflicts_with = "target")]
     pub refresh: bool,
 }
 

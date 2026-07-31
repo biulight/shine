@@ -159,9 +159,23 @@ async fn run(cli: Cli) -> Result<()> {
             if cmd.pull {
                 git_pull::handle_pull(&config, cmd.verbose).await?;
                 let config = Box::pin(Config::load_or_init()).await?;
-                handle_update(&config, cmd.verbose, cmd.refresh).await
+                handle_update(
+                    &config,
+                    cmd.target.as_deref(),
+                    cmd.diff,
+                    cmd.verbose,
+                    cmd.refresh,
+                )
+                .await
             } else {
-                handle_update(&config, cmd.verbose, cmd.refresh).await
+                handle_update(
+                    &config,
+                    cmd.target.as_deref(),
+                    cmd.diff,
+                    cmd.verbose,
+                    cmd.refresh,
+                )
+                .await
             }
         }
         Commands::Upgrade(cmd) => {
@@ -491,7 +505,9 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                target: None,
                 pull: false,
+                diff: false,
                 verbose: false,
                 refresh: false
             })
@@ -501,7 +517,9 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                target: None,
                 pull: false,
+                diff: false,
                 verbose: true,
                 refresh: false
             })
@@ -511,7 +529,9 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                target: None,
                 pull: false,
+                diff: false,
                 verbose: false,
                 refresh: true
             })
@@ -524,11 +544,53 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                target: None,
                 pull: true,
+                diff: false,
                 verbose: false,
                 refresh: false
             })
         ));
+
+        let cli = Cli::try_parse_from(["shine", "update", "proxy/setproxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                target: Some(ref target),
+                pull: false,
+                diff: false,
+                verbose: false,
+                refresh: false
+            }) if target == "proxy/setproxy"
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "update", "--diff"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                target: None,
+                pull: false,
+                diff: true,
+                verbose: false,
+                refresh: false
+            })
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--pull", "--diff"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                target: Some(ref target),
+                pull: true,
+                diff: true,
+                verbose: false,
+                refresh: false
+            }) if target == "proxy/setproxy"
+        ));
+
+        assert!(Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--verbose"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--refresh"]).is_err());
 
         let cli = Cli::try_parse_from(["shine", "upgrade"]).unwrap();
         assert!(matches!(

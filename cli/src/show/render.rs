@@ -106,17 +106,7 @@ pub(super) async fn print_shell_file(
     );
     println!("{} {}", colors::dim("Needs source"), item.file.needs_source);
 
-    let content_path = item
-        .link_target
-        .as_ref()
-        .filter(|target| target.starts_with(&item.rendered_path) || **target == item.rendered_path)
-        .cloned()
-        .or_else(|| {
-            item.rendered_path
-                .exists()
-                .then(|| item.rendered_path.clone())
-        })
-        .unwrap_or_else(|| item.source_path.clone());
+    let content_path = shell_content_path(item);
 
     if content_path == item.rendered_path {
         println!(
@@ -133,6 +123,32 @@ pub(super) async fn print_shell_file(
         print_file_content(&content_path, "Content").await?;
     }
     Ok(())
+}
+
+pub(super) async fn print_app_update_diff(config: &Config, item: &AppShowFile) -> Result<()> {
+    let diff_output = app_diff_output(config, item).await?;
+    print_block("Diff", &item.destination, &diff_output);
+    Ok(())
+}
+
+pub(super) async fn print_shell_update_diff(config: &Config, item: &ShellShowFile) -> Result<()> {
+    let content_path = shell_content_path(item);
+    let diff_output = shell_diff_output(config, item, &content_path).await?;
+    print_block("Diff", &content_path, &diff_output);
+    Ok(())
+}
+
+fn shell_content_path(item: &ShellShowFile) -> std::path::PathBuf {
+    item.link_target
+        .as_ref()
+        .filter(|target| target.starts_with(&item.rendered_path) || **target == item.rendered_path)
+        .cloned()
+        .or_else(|| {
+            item.rendered_path
+                .exists()
+                .then(|| item.rendered_path.clone())
+        })
+        .unwrap_or_else(|| item.source_path.clone())
 }
 
 fn print_heading(heading: &str, path: &Path) {
