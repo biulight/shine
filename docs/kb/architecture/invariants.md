@@ -106,6 +106,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **`shine task run` propagates the child exit code verbatim** and never runs the saved argv
   through a shell. Wrapping the failure in an anyhow error (or defaulting to exit 1) would corrupt
   the task's own exit semantics. Shell syntax is opt-in via an explicit saved `sh -c '...'`.
+- **A missing task `cwd` means dynamic caller cwd.** Legacy `tasks.toml` entries have no `cwd`, so
+  deserialization must default it to `None`; only an explicit `task save --cwd` fixes the working
+  directory. Never reinterpret missing `cwd` as the save-time directory.
 
 ## Embedded presets
 

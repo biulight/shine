@@ -31,7 +31,7 @@ kill <pid>
 - MVP 不做交互式 TUI。
 - MVP 不自动解析或安全改写 shell 命令。
 - MVP 不支持模板参数，例如 `{port}`、`{env}`。
-- MVP 不支持固定工作目录、任务描述、创建时间、更新时间等元数据。
+- MVP 不支持任务描述、创建时间、更新时间等元数据。
 - MVP 不替代 shell alias、Makefile、justfile；它解决的是“个人高频命令保存与快速执行”。
 - MVP 不把 task 安装成 `~/.shine/bin/<name>` 下的独立 shell 命令。
 
@@ -44,8 +44,8 @@ Task 是由用户保存的命令条目，至少包含：
 - `name`：用户指定的稳定标识符。
 - `command`：按 argv 数组保存的命令与参数。
 
-MVP 中 task 不包含工作目录。执行时使用用户调用 `shine task run` 或 `shine run` 时的当前工作
-目录。
+Task 可以通过 `task save --cwd <DIR>` 显式保存固定工作目录。未设置 `cwd`（包括旧版 task）时，
+执行仍使用用户调用 `shine task run` 或 `shine run` 时的当前工作目录。
 
 ### 4.2 正式入口与便捷 alias
 
@@ -73,7 +73,7 @@ shine task save kill-port-3000 -- sh -c 'lsof -ti :3000 | xargs kill'
 ### 5.1 保存任务
 
 ```text
-shine task save <NAME> [--force] -- <COMMAND> [ARGS]...
+shine task save <NAME> [--force] [--cwd <DIR>] -- <COMMAND> [ARGS]...
 ```
 
 示例：
@@ -81,6 +81,7 @@ shine task save <NAME> [--force] -- <COMMAND> [ARGS]...
 ```bash
 shine task save deploy-keystone -- rsync -avz dist/ marqueeio.develop:/var/www/keystone/alex/
 shine task save port-3000 -- lsof -i :3000
+shine task save build --cwd . -- cargo build
 ```
 
 行为：
@@ -88,8 +89,11 @@ shine task save port-3000 -- lsof -i :3000
 - `<NAME>` 必须是稳定标识符，允许字符为字母、数字、点、短横线、下划线。
 - `<NAME>` 必须以字母或数字开头。
 - `--` 后的内容作为 argv 数组保存。
+- `--cwd` 是可选的；`~` 会按有效用户 home 展开，相对路径基于保存时当前目录解析。
+- 指定的 cwd 必须已经存在且是目录，并以规范化绝对路径保存。
+- 未指定 cwd 时不记录目录，执行时继续使用调用者当前目录。
 - 如果任务已存在，默认报错。
-- `--force` 覆盖已有任务。
+- `--force` 覆盖已有任务；未再次传入 `--cwd` 会清除旧任务的固定目录。
 - 保存成功后打印任务名和完整命令。
 
 建议输出：
@@ -115,7 +119,7 @@ shine run <NAME> [-- <EXTRA_ARGS>...]
 
 行为：
 
-- 找到任务后，在当前工作目录执行。
+- 有固定 cwd 时在该目录执行；否则在当前工作目录执行。
 - 子进程继承当前 stdin/stdout/stderr。
 - 子进程继承当前环境变量。
 - `shine` 返回任务命令的退出码。
@@ -236,6 +240,10 @@ command = ["rsync", "-avz", "dist/", "marqueeio.develop:/var/www/keystone/alex/"
 
 [tasks.port-3000]
 command = ["lsof", "-i", ":3000"]
+
+[tasks.build]
+command = ["cargo", "build"]
+cwd = "/Users/alice/src/project"
 ```
 
 设计选择：
@@ -243,6 +251,7 @@ command = ["lsof", "-i", ":3000"]
 - task 属于运行时用户状态，不属于 embedded preset。
 - task 文件随 `SHINE_CONFIG_DIR` 切换，测试时写入隔离目录。
 - 命令按 argv 数组保存，保留参数边界。
+- `cwd` 是可选的规范化绝对路径；缺失时保持动态当前目录语义。
 - 执行时使用进程 API，不默认通过 shell。
 - 如果需要 shell 语法，由用户显式保存 `sh -c ...` 或对应平台 shell。
 
@@ -299,6 +308,7 @@ Failed to run task deploy-keystone: command not found: rsync
 
 - 不默认使用 `shell -c`。
 - `shine task info` 必须能显示完整 argv 渲染后的命令。
+- 有固定 cwd 时，`task save`、`task info` 和运行提示显示该目录（home 下路径缩写为 `~`）。
 - **命令展示使用 shell 引用（决策）**：`info`/`list`/`run` 把 argv 渲染回命令行时，对含空格或
   shell 特殊字符的参数加单引号（内部 `'` 转义为 `'\''`），路径/URL 等安全字符不加引号。目的是让
   展示的命令可直接复制粘贴执行，例如 `sh -c 'lsof -ti :3000 | xargs kill'` 会带引号显示。
@@ -319,7 +329,7 @@ Failed to run task deploy-keystone: command not found: rsync
 ## 11. 推荐 MVP 命令集
 
 ```text
-shine task save <NAME> [--force] -- <COMMAND> [ARGS]...
+shine task save <NAME> [--force] [--cwd <DIR>] -- <COMMAND> [ARGS]...
 shine task run <NAME> [-- <EXTRA_ARGS>...]
 shine task list
 shine task info <NAME>
@@ -341,12 +351,15 @@ shine run <NAME> [-- <EXTRA_ARGS>...]
 - `shine task delete <NAME>` 删除任务，删除后不可再运行。
 - 使用 `SHINE_CONFIG_DIR` 时，任务文件写入隔离目录。
 - 保存带空格参数的命令时，argv 能正确保留参数边界。
+- 使用 `--cwd` 保存后，从其他目录运行仍在固定目录中执行。
+- 未使用 `--cwd` 的新旧任务仍在调用目录执行。
+- 保存不存在或非目录的 cwd 时失败；保存后目录消失时运行给出明确 cwd 错误。
 
 ## 13. 后续方向
 
 - `shine task rename <OLD> <NEW>`：重命名任务。
 - `shine task edit <NAME>`：编辑任务命令。
 - `shine task install <NAME>`：安装成 `~/.shine/bin/<name>` 下的独立命令。
-- 支持 task 描述、固定工作目录、环境变量覆盖。
+- 支持 task 描述、环境变量覆盖。
 - 支持模板参数，例如 `shine task run kill-port --port 3000`。
 - 支持从当前 shell history 中选择并保存任务。

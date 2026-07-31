@@ -252,7 +252,7 @@ shine/
 │       │   └── remote_client.rs # `shine local download/upload` handlers (run on remote host)
 │       ├── task/
 │       │   ├── mod.rs        # `shine task` save/run/list/info/delete handlers,
-│       │   │                 # direct (no-shell) argv exec + exit-code passthrough,
+│       │   │                 # optional fixed cwd, direct (no-shell) argv exec + exit-code passthrough,
 │       │   │                 # shell-quoted command rendering, task-name validation
 │       │   └── manifest.rs   # TaskManifest: <shine_dir>/tasks.toml load/save/upsert
 │       ├── theme/

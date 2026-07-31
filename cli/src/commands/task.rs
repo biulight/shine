@@ -1,4 +1,5 @@
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueHint};
+use std::path::PathBuf;
 
 #[derive(Subcommand, Debug)]
 pub enum TaskCommands {
@@ -9,6 +10,9 @@ pub enum TaskCommands {
         /// Replace an existing task with the same name
         #[arg(long)]
         force: bool,
+        /// Always run the task from this directory
+        #[arg(long, value_hint = ValueHint::DirPath)]
+        cwd: Option<PathBuf>,
         /// Command and arguments to save (after `--`)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,

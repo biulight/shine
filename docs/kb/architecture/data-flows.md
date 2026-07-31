@@ -238,7 +238,9 @@ necessarily exposed in process argv/environments on the local and remote hosts; 
 `task::handle_run` loads `<shine_dir>/tasks.toml` (`task::manifest::TaskManifest`), looks up the
 named task's saved argv, appends any `-- EXTRA...` args, and spawns it with
 `std::process::Command` — **directly, with no shell** — inheriting the caller's stdio and
-environment. The child's exit code is propagated verbatim (`std::process::exit(code)`; on Unix a
+environment. When the task has an explicit `cwd`, saved as a canonical absolute path by
+`task save --cwd`, the handler validates it and sets `Command::current_dir`; missing `cwd` retains
+the caller's current directory for backward compatibility. The child's exit code is propagated verbatim (`std::process::exit(code)`; on Unix a
 terminating signal becomes `128 + signal`), never wrapped in an anyhow error, so the task's own
 exit semantics survive Shine in the middle. `shine run <NAME>` is a top-level alias routed to the
 same handler. `task::handle_save` validates the name (`[A-Za-z0-9._-]`, letter/digit start) and

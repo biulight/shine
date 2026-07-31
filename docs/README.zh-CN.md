@@ -624,6 +624,22 @@ $env:SHINE_VERSION = "1.0.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
+### 个人任务
+
+可以把常用命令按 argv 保存为个人任务。任务默认在调用时所在目录运行；如果希望无论从哪里调用都
+使用同一工作目录，可通过 `--cwd` 绑定一个已经存在的目录：
+
+```bash
+shine task save check -- cargo test
+shine task save build --cwd ~/work/project -- cargo build --release
+shine task run build
+shine run build                 # `shine task run build` 的简写
+shine task info build
+```
+
+`--cwd` 会在保存时展开 `~` 并解析相对路径。命令默认不经过 shell，而是直接执行 argv；需要管道、
+重定向等 shell 语法时，应显式保存 `sh -c '...'`。
+
 ### SSH 会话内文件传输
 
 `shine ssh` 会打开一个正常的交互式 SSH 会话（它包装了系统自带的 `ssh`，并复用你的 `~/.ssh/config`），同时建立一条回连到发起端机器的会话专属传输通道。会话内的 `shine local download`/`upload`/`status` 就通过这条通道工作——不需要再单独调用 `scp`/`rsync`。

@@ -7,6 +7,11 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Improvements
+
+- Added optional fixed working directories for personal tasks through `shine task save --cwd`,
+  while existing tasks continue to run from the caller's current directory.
+
 ## [1.0.0] — 2026-08-01
 
 ### Breaking Changes

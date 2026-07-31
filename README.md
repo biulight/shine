@@ -648,6 +648,23 @@ $env:SHINE_VERSION = "1.0.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
 
+### Personal tasks
+
+Save frequently used commands as argv-based personal tasks. Tasks normally run from the directory
+where you invoke them; use `--cwd` to bind a task to an existing directory so it can be launched
+reliably from anywhere:
+
+```bash
+shine task save check -- cargo test
+shine task save build --cwd ~/work/project -- cargo build --release
+shine task run build
+shine run build                 # shorthand for `shine task run build`
+shine task info build
+```
+
+`--cwd` expands `~` and resolves relative paths when the task is saved. Commands are executed
+directly without an implicit shell; save an explicit `sh -c '...'` when shell syntax is required.
+
 ### SSH session file transfer
 
 `shine ssh` opens a normal interactive SSH session (it wraps the system `ssh` binary and reuses your `~/.ssh/config`) while also establishing a session-scoped transfer channel back to the machine you launched it from. `shine local download`/`upload`/`status` then use that channel from inside the session — no separate `scp`/`rsync` invocation needed.

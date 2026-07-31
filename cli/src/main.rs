@@ -380,8 +380,9 @@ async fn run(cli: Cli) -> Result<()> {
             TaskCommands::Save {
                 name,
                 force,
+                cwd,
                 command,
-            } => task::handle_save(&config, &name, force, command).await,
+            } => task::handle_save(&config, &name, force, cwd.as_deref(), command).await,
             TaskCommands::Run(cmd) => task::handle_run(&config, &cmd.name, &cmd.extra).await,
             TaskCommands::List => task::handle_list(&config).await,
             TaskCommands::Info { name } => task::handle_info(&config, &name).await,
@@ -1020,6 +1021,7 @@ mod tests {
                 command: TaskCommands::Save {
                     name,
                     force: false,
+                    cwd: None,
                     command,
                 }
             } if name == "port-3000" && command == ["lsof", "-i", ":3000"]
@@ -1038,9 +1040,29 @@ mod tests {
                 command: TaskCommands::Save {
                     name,
                     force: true,
+                    cwd: None,
                     command,
                 }
             } if name == "deploy" && command == ["rsync", "-avz", "dist/"]
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_task_save_with_cwd() {
+        let cli = Cli::try_parse_from([
+            "shine", "task", "save", "build", "--cwd", ".", "--", "cargo", "build",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Task {
+                command: TaskCommands::Save {
+                    name,
+                    force: false,
+                    cwd: Some(cwd),
+                    command,
+                }
+            } if name == "build" && cwd == std::path::Path::new(".") && command == ["cargo", "build"]
         ));
     }
 
