@@ -1,7 +1,8 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use super::{PROJECT_CONFIG_FILE, tilde_expand};
+use super::{GLOBAL_CONFIG_FILE, PROJECT_CONFIG_FILE, tilde_expand};
+use crate::home::default_config_and_presets_dir;
 
 #[derive(Clone, Debug)]
 pub(super) struct ProjectConfig {
@@ -31,6 +32,10 @@ fn find_ancestor_file(start: &Path, file_name: &str) -> Option<PathBuf> {
 pub(super) struct MinimalConfig {
     #[serde(default)]
     pub(super) presets_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub(super) presets_overlay_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub(super) presets_overlay_git: Option<String>,
     #[serde(default)]
     pub(super) schema_version: u32,
 }
@@ -71,6 +76,99 @@ pub(super) fn resolve_config_presets_path(path: &Path, config_dir: &Path) -> Pat
     } else {
         config_dir.join(path)
     }
+}
+
+/// Paths needed by latency-sensitive, read-only commands such as dynamic shell
+/// completion. Discovery never creates config or preset directories.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReadOnlyRuntimePaths {
+    pub(crate) shine_dir: PathBuf,
+    pub(crate) presets_dir: PathBuf,
+    pub(crate) presets_overlay_dir: Option<PathBuf>,
+    pub(crate) is_external_presets: bool,
+}
+
+/// Resolve the active runtime paths without initializing `Config` or writing
+/// any state. This mirrors the global/project preset layering in
+/// `Config::load_or_init` while deliberately ignoring unrelated config keys.
+pub(crate) fn discover_runtime_paths_read_only() -> Option<ReadOnlyRuntimePaths> {
+    let (default_shine_dir, default_presets_dir) = default_config_and_presets_dir().ok()?;
+    let preliminary_shine_dir = preliminary_shine_dir_from_env(&default_shine_dir);
+    let global_path = preliminary_shine_dir.join(GLOBAL_CONFIG_FILE);
+    let global_dir = global_path.parent().unwrap_or_else(|| Path::new("."));
+    let global = read_minimal_config_file(&global_path);
+    let global_presets = global
+        .as_ref()
+        .and_then(|config| config.presets_dir.as_deref())
+        .map(|path| resolve_config_presets_path(path, global_dir));
+    let (global_shine_dir, global_presets_dir, global_is_external) = resolve_runtime_config_dirs(
+        &default_shine_dir,
+        &default_presets_dir,
+        global_presets.as_deref(),
+        false,
+    );
+    let global_overlay = global.as_ref().and_then(|config| {
+        config
+            .presets_overlay_dir
+            .as_deref()
+            .map(|path| resolve_config_presets_path(path, global_dir))
+            .or_else(|| {
+                config
+                    .presets_overlay_git
+                    .as_ref()
+                    .map(|_| global_shine_dir.join("overlay"))
+                    .filter(|path| path.exists())
+            })
+    });
+
+    let current_dir = std::env::current_dir().ok()?;
+    let Some(project) = find_project_config(&current_dir) else {
+        return Some(ReadOnlyRuntimePaths {
+            shine_dir: global_shine_dir,
+            presets_dir: global_presets_dir,
+            presets_overlay_dir: global_overlay,
+            is_external_presets: global_is_external,
+        });
+    };
+
+    let project_config = read_minimal_config_file(&project.path);
+    let project_presets = project_config
+        .as_ref()
+        .and_then(|config| config.presets_dir.as_deref())
+        .map(|path| resolve_config_presets_path(path, &project.root));
+    let effective_presets = project_presets
+        .clone()
+        .or_else(|| global_is_external.then_some(global_presets_dir.clone()));
+    let runtime_presets = if project_presets.is_none()
+        && std::env::var("SHINE_CONFIG_DIR").is_ok_and(|value| !value.trim().is_empty())
+    {
+        None
+    } else {
+        effective_presets
+    };
+    let (shine_dir, presets_dir, is_external_presets) = resolve_runtime_config_dirs(
+        &default_shine_dir,
+        &default_presets_dir,
+        runtime_presets.as_deref(),
+        true,
+    );
+    let presets_overlay_dir = project_config
+        .as_ref()
+        .and_then(|config| config.presets_overlay_dir.as_deref())
+        .map(|path| resolve_config_presets_path(path, &project.root))
+        .or(global_overlay);
+
+    Some(ReadOnlyRuntimePaths {
+        shine_dir,
+        presets_dir,
+        presets_overlay_dir,
+        is_external_presets,
+    })
+}
+
+fn read_minimal_config_file(path: &Path) -> Option<MinimalConfig> {
+    let content = std::fs::read_to_string(path).ok()?;
+    read_minimal_config(&content).ok()
 }
 
 /// Resolve the runtime (shine_dir, presets_dir) pair.

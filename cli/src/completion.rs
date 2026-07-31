@@ -1,5 +1,4 @@
 use crate::commands::CompletionShell;
-use crate::config;
 use clap::CommandFactory;
 use clap_complete::engine::{ArgValueCandidates, CompletionCandidate};
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,7 +26,15 @@ pub fn command() -> clap::Command {
     let shell_categories = ArgValueCandidates::new(shell_category_candidates);
     let shell_targets = ArgValueCandidates::new(shell_info_candidates);
     let app_categories = ArgValueCandidates::new(app_category_candidates);
+    let app_build_categories = ArgValueCandidates::new(app_build_candidates);
+    let app_unbuild_categories = ArgValueCandidates::new(app_unbuild_candidates);
+    let app_refresh_categories = ArgValueCandidates::new(app_refresh_candidates);
     let sys_items = ArgValueCandidates::new(sys_item_candidates);
+    let sys_updates = ArgValueCandidates::new(sys_update_candidates);
+    let resource_targets = ArgValueCandidates::new(resource_target_candidates);
+    let installed_targets = ArgValueCandidates::new(installed_target_candidates);
+    let task_names = ArgValueCandidates::new(task_name_candidates);
+    let preset_copy_targets = ArgValueCandidates::new(preset_copy_candidates);
 
     crate::commands::Cli::command()
         .mut_subcommand("install", |cmd| {
@@ -38,6 +45,12 @@ pub fn command() -> clap::Command {
         })
         .mut_subcommand("uninstall", |cmd| {
             cmd.mut_arg("category", |arg| arg.add(all_categories.clone()))
+        })
+        .mut_subcommand("info", |cmd| {
+            cmd.mut_arg("target", |arg| arg.add(resource_targets.clone()))
+        })
+        .mut_subcommand("update", |cmd| {
+            cmd.mut_arg("target", |arg| arg.add(installed_targets.clone()))
         })
         .mut_subcommand("shell", |cmd| {
             cmd.mut_subcommand("info", |cmd| {
@@ -66,6 +79,18 @@ pub fn command() -> clap::Command {
             .mut_subcommand("uninstall", |cmd| {
                 cmd.mut_arg("category", |arg| arg.add(app_categories.clone()))
             })
+            .mut_subcommand("refresh", |cmd| {
+                cmd.mut_arg("category", |arg| {
+                    arg.index(1).add(app_refresh_categories.clone())
+                })
+                .mut_arg("file", |arg| arg.index(2))
+            })
+            .mut_subcommand("build", |cmd| {
+                cmd.mut_arg("app_id", |arg| arg.add(app_build_categories.clone()))
+            })
+            .mut_subcommand("unbuild", |cmd| {
+                cmd.mut_arg("app_id", |arg| arg.add(app_unbuild_categories.clone()))
+            })
         })
         .mut_subcommand("sys", |cmd| {
             cmd.mut_subcommand("info", |cmd| {
@@ -74,10 +99,47 @@ pub fn command() -> clap::Command {
             .mut_subcommand("apply", |cmd| {
                 cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
             })
+            .mut_subcommand("update", |cmd| {
+                cmd.mut_arg("item", |arg| arg.add(sys_updates.clone()))
+            })
             .mut_subcommand("uninstall", |cmd| {
                 cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
             })
         })
+        .mut_subcommand("task", |cmd| {
+            cmd.mut_subcommand("run", |cmd| {
+                cmd.mut_arg("name", |arg| arg.index(1).add(task_names.clone()))
+                    .mut_arg("extra", |arg| arg.index(2))
+            })
+            .mut_subcommand("info", |cmd| {
+                cmd.mut_arg("name", |arg| arg.add(task_names.clone()))
+            })
+            .mut_subcommand("delete", |cmd| {
+                cmd.mut_arg("name", |arg| arg.add(task_names.clone()))
+            })
+        })
+        .mut_subcommand("preset", |cmd| {
+            cmd.mut_subcommand("copy", |cmd| {
+                cmd.mut_arg("target", |arg| arg.add(preset_copy_targets))
+            })
+        })
+        .mut_subcommand("run", |cmd| {
+            cmd.mut_arg("name", |arg| arg.index(1).add(task_names))
+                .mut_arg("extra", |arg| arg.index(2))
+        })
+}
+
+fn preset_copy_candidates() -> Vec<CompletionCandidate> {
+    let targets = crate::presets::embedded_asset_paths("")
+        .into_iter()
+        .filter_map(|path| {
+            let mut parts = path.split('/');
+            let kind = parts.next()?;
+            let name = parts.next()?;
+            matches!(kind, "app" | "shell" | "sys").then(|| format!("{kind}/{name}"))
+        })
+        .collect();
+    completion_candidates(targets)
 }
 
 fn all_category_candidates() -> Vec<CompletionCandidate> {
@@ -107,8 +169,11 @@ fn shell_category_names() -> BTreeSet<String> {
 }
 
 fn shell_command_names() -> Vec<(String, BTreeSet<String>)> {
-    if let Some((presets_dir, true)) = runtime_presets_dir() {
-        return collect_fs_shell_command_names(&presets_dir.join("shell"))
+    let Some(paths) = runtime_paths() else {
+        return Vec::new();
+    };
+    if paths.is_external_presets {
+        return collect_fs_shell_command_names(&paths.presets_dir.join("shell"))
             .into_iter()
             .collect();
     }
@@ -127,7 +192,7 @@ fn shell_command_names() -> Vec<(String, BTreeSet<String>)> {
             )
         })
         .collect::<BTreeMap<_, _>>();
-    if let Some(overlay_dir) = runtime_presets_overlay_dir() {
+    if let Some(overlay_dir) = paths.presets_overlay_dir {
         for (category, overlay_commands) in
             collect_fs_shell_command_names(&overlay_dir.join("shell"))
         {
@@ -211,14 +276,156 @@ fn app_category_candidates() -> Vec<CompletionCandidate> {
     completion_candidates(category_names("app"))
 }
 
+fn app_build_candidates() -> Vec<CompletionCandidate> {
+    completion_candidates(app_capability_names(AppCapability::Build))
+}
+
+fn app_unbuild_candidates() -> Vec<CompletionCandidate> {
+    completion_candidates(app_capability_names(AppCapability::Unbuild))
+}
+
+fn app_refresh_candidates() -> Vec<CompletionCandidate> {
+    completion_candidates(app_capability_names(AppCapability::Refresh))
+}
+
+#[derive(Clone, Copy)]
+enum AppCapability {
+    Build,
+    Unbuild,
+    Refresh,
+}
+
+fn app_capability_names(capability: AppCapability) -> BTreeSet<String> {
+    let Some(paths) = runtime_paths() else {
+        return BTreeSet::new();
+    };
+    if paths.is_external_presets {
+        return collect_fs_app_capabilities(&paths.presets_dir.join("app"), capability);
+    }
+
+    let mut names: BTreeSet<String> = crate::apps::load_embedded_categories(None)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|category| match capability {
+            AppCapability::Build => category.artifact.is_some(),
+            AppCapability::Unbuild => category
+                .artifact
+                .as_ref()
+                .is_some_and(|artifact| artifact.teardown.is_some()),
+            AppCapability::Refresh => category.files.iter().any(|file| file.generator.is_some()),
+        })
+        .map(|category| category.name)
+        .collect();
+    if let Some(overlay_dir) = paths.presets_overlay_dir {
+        names.extend(collect_fs_app_capabilities(
+            &overlay_dir.join("app"),
+            capability,
+        ));
+    }
+    names
+}
+
+fn collect_fs_app_capabilities(root: &Path, capability: AppCapability) -> BTreeSet<String> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return BTreeSet::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_string();
+            let content = std::fs::read_to_string(entry.path().join("shine.toml")).ok()?;
+            let value = toml::from_str::<toml::Value>(&content).ok()?;
+            let matches = match capability {
+                AppCapability::Build => value.get("artifact").is_some_and(|artifact| {
+                    artifact
+                        .get("script")
+                        .and_then(toml::Value::as_str)
+                        .is_some()
+                }),
+                AppCapability::Unbuild => value.get("artifact").is_some_and(|artifact| {
+                    artifact
+                        .get("teardown")
+                        .and_then(toml::Value::as_str)
+                        .is_some()
+                }),
+                AppCapability::Refresh => value
+                    .get("files")
+                    .and_then(toml::Value::as_array)
+                    .is_some_and(|files| files.iter().any(|file| file.get("generator").is_some())),
+            };
+            matches.then_some(name)
+        })
+        .collect()
+}
+
+fn installed_target_candidates() -> Vec<CompletionCandidate> {
+    completion_candidates(installed_target_names())
+}
+
+fn resource_target_candidates() -> Vec<CompletionCandidate> {
+    let mut names = installed_target_names();
+    names.extend(
+        sys_item_names()
+            .into_iter()
+            .map(|item| format!("sys/{item}")),
+    );
+    completion_candidates(names)
+}
+
+fn installed_target_names() -> BTreeSet<String> {
+    #[derive(serde::Deserialize)]
+    struct AppManifest {
+        #[serde(default)]
+        entries: Vec<AppEntry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct AppEntry {
+        source: String,
+    }
+
+    let Some(paths) = runtime_paths() else {
+        return BTreeSet::new();
+    };
+    let mut names = BTreeSet::new();
+    if let Ok(content) = std::fs::read_to_string(paths.shine_dir.join("app-manifest.toml"))
+        && let Ok(manifest) = toml::from_str::<AppManifest>(&content)
+    {
+        for entry in manifest.entries {
+            let mut parts = entry.source.splitn(3, '/');
+            if let (Some("app"), Some(category), Some(file)) =
+                (parts.next(), parts.next(), parts.next())
+            {
+                names.insert(category.to_string());
+                names.insert(format!("app/{category}"));
+                names.insert(format!("{category}/{file}"));
+                names.insert(format!("app/{category}/{file}"));
+            }
+        }
+    }
+
+    for (category, commands) in collect_fs_shell_command_names(&paths.presets_dir.join("shell")) {
+        names.insert(category.clone());
+        names.insert(format!("shell/{category}"));
+        for command in commands {
+            names.insert(command.clone());
+            names.insert(format!("{category}/{command}"));
+            names.insert(format!("shell/{category}/{command}"));
+        }
+    }
+    names
+}
+
 fn sys_item_candidates() -> Vec<CompletionCandidate> {
     completion_candidates(sys_item_names())
 }
 
 fn sys_item_names() -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    if let Some((presets_dir, true)) = runtime_presets_dir() {
-        collect_fs_sys_item_names(&presets_dir.join("sys"), &mut names);
+    let Some(paths) = runtime_paths() else {
+        return names;
+    };
+    if paths.is_external_presets {
+        collect_fs_sys_item_names(&paths.presets_dir.join("sys"), &mut names);
         return names;
     }
 
@@ -230,7 +437,53 @@ fn sys_item_names() -> BTreeSet<String> {
             collect_toml_sys_item_names(&bytes, &mut names);
         }
     }
+    if let Some(overlay_dir) = paths.presets_overlay_dir {
+        collect_fs_sys_item_names(&overlay_dir.join("sys"), &mut names);
+    }
     names
+}
+
+fn sys_update_candidates() -> Vec<CompletionCandidate> {
+    #[derive(serde::Deserialize)]
+    struct Manifest {
+        #[serde(default)]
+        entries: Vec<Entry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        item_id: String,
+        #[serde(default)]
+        managed: bool,
+    }
+
+    let names = runtime_paths()
+        .and_then(|paths| std::fs::read_to_string(paths.shine_dir.join("sys-manifest.toml")).ok())
+        .and_then(|content| toml::from_str::<Manifest>(&content).ok())
+        .map(|manifest| {
+            manifest
+                .entries
+                .into_iter()
+                .filter(|entry| !entry.managed)
+                .map(|entry| entry.item_id)
+                .collect()
+        })
+        .unwrap_or_default();
+    completion_candidates(names)
+}
+
+fn task_name_candidates() -> Vec<CompletionCandidate> {
+    #[derive(serde::Deserialize)]
+    struct Manifest {
+        #[serde(default)]
+        tasks: BTreeMap<String, toml::Value>,
+    }
+
+    let names = runtime_paths()
+        .and_then(|paths| std::fs::read_to_string(paths.shine_dir.join("tasks.toml")).ok())
+        .and_then(|content| toml::from_str::<Manifest>(&content).ok())
+        .map(|manifest| manifest.tasks.into_keys().collect())
+        .unwrap_or_default();
+    completion_candidates(names)
 }
 
 fn collect_fs_sys_item_names(root: &Path, names: &mut BTreeSet<String>) {
@@ -268,15 +521,18 @@ fn completion_candidates(names: BTreeSet<String>) -> Vec<CompletionCandidate> {
 
 fn category_names(kind: &str) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    if let Some((presets_dir, true)) = runtime_presets_dir()
-        && let Some(fs_names) = fs_category_names(&presets_dir.join(kind))
+    let Some(paths) = runtime_paths() else {
+        return names;
+    };
+    if paths.is_external_presets
+        && let Some(fs_names) = fs_category_names(&paths.presets_dir.join(kind))
     {
         names.extend(fs_names);
         return names;
     }
 
     names.extend(embedded_category_names(kind));
-    if let Some(overlay_dir) = runtime_presets_overlay_dir()
+    if let Some(overlay_dir) = paths.presets_overlay_dir
         && let Some(fs_names) = fs_category_names(&overlay_dir.join(kind))
     {
         names.extend(fs_names);
@@ -284,120 +540,8 @@ fn category_names(kind: &str) -> BTreeSet<String> {
     names
 }
 
-fn runtime_presets_overlay_dir() -> Option<PathBuf> {
-    if runtime_presets_dir()?.1 {
-        return None;
-    }
-
-    let default_shine_dir = default_shine_dir();
-    let global_config = shine_dir_from_env_or_default(&default_shine_dir).join("config.toml");
-    let current_dir = std::env::current_dir().ok();
-    let config_path = current_dir
-        .as_deref()
-        .and_then(find_project_config)
-        .unwrap_or(global_config);
-    let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-    read_presets_overlay_override_from_toml(&config_path)
-        .map(|path| resolve_config_presets_path(&path, config_dir))
-}
-
-fn runtime_presets_dir() -> Option<(PathBuf, bool)> {
-    let default_shine_dir = default_shine_dir();
-    let default_presets_dir = default_shine_dir.join("presets");
-    let current_dir = std::env::current_dir().ok();
-    let global_config = shine_dir_from_env_or_default(&default_shine_dir).join("config.toml");
-    let project_config = current_dir.as_deref().and_then(find_project_config);
-    let has_project_config = project_config.is_some();
-    let config_path = project_config.unwrap_or(global_config);
-    let config_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let toml_presets = read_presets_override_from_toml(&config_path)
-        .map(|path| resolve_config_presets_path(&path, config_dir));
-
-    if let Ok(val) = std::env::var("SHINE_CONFIG_DIR") {
-        let val = val.trim();
-        if !val.is_empty() {
-            let shine_dir = PathBuf::from(config::tilde_expand(val));
-            if !has_project_config {
-                return Some((shine_dir.join("presets"), true));
-            }
-            if let Some(presets) = presets_from_env() {
-                return Some((presets, true));
-            }
-            return toml_presets
-                .map(|presets| (presets, true))
-                .or_else(|| Some((shine_dir.join("presets"), false)));
-        }
-    }
-
-    presets_from_env()
-        .map(|presets| (presets, true))
-        .or_else(|| toml_presets.map(|presets| (presets, true)))
-        .or(Some((default_presets_dir, false)))
-}
-
-fn presets_from_env() -> Option<PathBuf> {
-    let val = std::env::var("SHINE_PRESETS").ok()?;
-    let val = val.trim();
-    (!val.is_empty()).then(|| PathBuf::from(config::tilde_expand(val)))
-}
-
-fn default_shine_dir() -> PathBuf {
-    crate::home::effective_home_dir().join(".shine")
-}
-
-fn shine_dir_from_env_or_default(default: &Path) -> PathBuf {
-    std::env::var("SHINE_CONFIG_DIR")
-        .ok()
-        .map(|val| val.trim().to_string())
-        .filter(|val| !val.is_empty())
-        .map(|val| PathBuf::from(config::tilde_expand(&val)))
-        .unwrap_or_else(|| default.to_path_buf())
-}
-
-fn read_presets_override_from_toml(path: &Path) -> Option<PathBuf> {
-    let content = std::fs::read_to_string(path).ok()?;
-    #[derive(serde::Deserialize)]
-    struct MinimalConfig {
-        #[serde(default)]
-        presets_dir: Option<PathBuf>,
-    }
-    toml::from_str::<MinimalConfig>(&content).ok()?.presets_dir
-}
-
-fn read_presets_overlay_override_from_toml(path: &Path) -> Option<PathBuf> {
-    let content = std::fs::read_to_string(path).ok()?;
-    #[derive(serde::Deserialize)]
-    struct MinimalConfig {
-        #[serde(default)]
-        presets_overlay_dir: Option<PathBuf>,
-    }
-    toml::from_str::<MinimalConfig>(&content)
-        .ok()?
-        .presets_overlay_dir
-}
-
-fn resolve_config_presets_path(path: &Path, config_dir: &Path) -> PathBuf {
-    if let Some(s) = path.to_str()
-        && s.starts_with('~')
-    {
-        return PathBuf::from(config::tilde_expand(s));
-    }
-
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        config_dir.join(path)
-    }
-}
-
-fn find_project_config(start: &Path) -> Option<PathBuf> {
-    for dir in start.ancestors() {
-        let path = dir.join("shine.config.toml");
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    None
+fn runtime_paths() -> Option<crate::config::ReadOnlyRuntimePaths> {
+    crate::config::discover_runtime_paths_read_only()
 }
 
 fn fs_category_names(root: &Path) -> Option<BTreeSet<String>> {
@@ -433,9 +577,23 @@ fn embedded_category_names(kind: &str) -> BTreeSet<String> {
 mod tests {
     use super::*;
     use crate::test_support::env_lock;
+    use std::ffi::OsString;
 
     fn temp_dir(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("shine-completion-{name}-{}", uuid::Uuid::new_v4()))
+    }
+
+    fn complete_values(args: &[&str], arg_index: usize) -> BTreeSet<String> {
+        clap_complete::engine::complete(
+            &mut command(),
+            args.iter().map(OsString::from).collect(),
+            arg_index,
+            None,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
+        .collect()
     }
 
     #[test]
@@ -459,6 +617,16 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(shell_info.contains("setproxy"));
         assert!(shell_info.contains("proxy/setproxy"));
+        let build = complete_values(&["shine", "app", "build", ""], 3);
+        assert!(build.contains("surge"));
+        assert!(!build.contains("starship"));
+        assert!(complete_values(&["shine", "app", "refresh", ""], 3).contains("surge"));
+        assert!(complete_values(&["shine", "info", ""], 2).contains("sys/split-dns"));
+        let preset_copy = complete_values(&["shine", "preset", "copy", ""], 3);
+        assert!(preset_copy.contains("app/surge"));
+        assert!(preset_copy.contains("shell/proxy"));
+        assert!(preset_copy.contains("sys/macos"));
+        assert!(!preset_copy.contains("surge"));
     }
 
     #[test]
@@ -483,6 +651,16 @@ mod tests {
             "#!/bin/sh\n",
         )
         .unwrap();
+        std::fs::write(
+            dir.join("tasks.toml"),
+            "[tasks.ship]\ncommand = [\"cargo\", \"publish\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("sys-manifest.toml"),
+            "[[entries]]\nitem_id = \"brew\"\n\n[[entries]]\nitem_id = \"split-dns\"\nmanaged = true\n",
+        )
+        .unwrap();
 
         unsafe {
             std::env::set_var("SHINE_CONFIG_DIR", &dir);
@@ -498,6 +676,10 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(shell_info.contains("custom-tool"));
         assert!(shell_info.contains("custom-shell/custom-tool"));
+        assert!(complete_values(&["shine", "run", ""], 2).contains("ship"));
+        let sys_updates = complete_values(&["shine", "sys", "update", ""], 3);
+        assert!(sys_updates.contains("brew"));
+        assert!(!sys_updates.contains("split-dns"));
         assert!(
             !dir.join("config.toml").exists(),
             "completion must not initialize config files"
@@ -545,23 +727,6 @@ mod tests {
 
         assert!(shell.contains("proxy"), "shell candidates: {shell:?}");
         assert!(shell.contains("personal"), "shell candidates: {shell:?}");
-    }
-
-    #[test]
-    fn project_config_discovery_ignores_generic_config_toml() {
-        let dir = temp_dir("project-config");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("config.toml"), "presets_dir = \".\"\n").unwrap();
-
-        assert_eq!(find_project_config(&dir), None);
-
-        std::fs::write(dir.join("shine.config.toml"), "presets_dir = \".\"\n").unwrap();
-        assert_eq!(
-            find_project_config(&dir),
-            Some(dir.join("shine.config.toml"))
-        );
-
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

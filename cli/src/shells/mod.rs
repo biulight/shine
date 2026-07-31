@@ -210,6 +210,13 @@ mod tests {
             !fish.contains("COMPLETE=fish shine"),
             "fish completion should not be changed: {fish}"
         );
+        assert!(profile::supports_completion_registration(
+            &ShellType::PowerShell
+        ));
+        assert!(!profile::supports_completion_registration(&ShellType::Fish));
+        assert!(!profile::supports_completion_registration(
+            &ShellType::Elvish
+        ));
     }
 
     #[test]

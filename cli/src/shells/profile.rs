@@ -91,6 +91,10 @@ fn completion_registration_snippet(shell: &ShellType) -> Option<&'static str> {
     }
 }
 
+pub(super) fn supports_completion_registration(shell: &ShellType) -> bool {
+    completion_registration_snippet(shell).is_some()
+}
+
 pub(super) fn shell_config_snippet(
     shell: &ShellType,
     profile_path: &Path,

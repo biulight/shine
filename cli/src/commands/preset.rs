@@ -13,6 +13,38 @@ pub struct ExportCommand {
 }
 
 #[derive(Args, Debug)]
+pub struct CopyCommand {
+    /// Built-in preset to copy (app/name, shell/name, or sys/name)
+    #[arg(value_name = "KIND/NAME", value_parser = parse_copy_target)]
+    pub target: String,
+    /// Overwrite existing files
+    #[arg(long, short = 'f')]
+    pub force: bool,
+}
+
+pub(crate) fn parse_copy_target(value: &str) -> Result<String, String> {
+    if value.contains('\\') {
+        return Err(format!(
+            "invalid preset target '{value}': expected app/name, shell/name, or sys/name"
+        ));
+    }
+
+    let mut parts = value.split('/');
+    let kind = parts.next().unwrap_or_default();
+    let name = parts.next().unwrap_or_default();
+    if parts.next().is_some()
+        || !matches!(kind, "app" | "shell" | "sys")
+        || name.is_empty()
+        || matches!(name, "." | "..")
+    {
+        return Err(format!(
+            "invalid preset target '{value}': expected app/name, shell/name, or sys/name"
+        ));
+    }
+    Ok(value.to_string())
+}
+
+#[derive(Args, Debug)]
 pub struct LinkCommand {
     /// Directory to use as the external presets source.
     #[arg(value_name = "PATH")]
@@ -53,6 +85,8 @@ pub enum OverlayCommands {
 pub enum PresetCommands {
     /// Copy built-in presets to a directory for local customization
     Export(ExportCommand),
+    /// Copy one built-in preset into the current directory
+    Copy(CopyCommand),
     /// Set the external presets directory in the active config
     Link(LinkCommand),
     /// Remove the external presets directory from the active config

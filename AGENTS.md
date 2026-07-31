@@ -114,7 +114,7 @@ shine/
 │       │                     # `pub mod` in lib.rs (not bin-private), so its unit
 │       │                     # tests run under `cargo test --lib` too.
 │       ├── home.rs           # effective_home_dir (sudo-aware), tilde/full path expansion
-│       ├── preset_commands.rs # preset export/link/unlink/pull, overlay link/unlink/info.
+│       ├── preset_commands.rs # preset export/copy/link/unlink/pull, overlay link/unlink/info.
 │       │                     # `pub mod` in lib.rs, same lib-testability reasoning as shim.rs.
 │       ├── self_install.rs   # update/self-upgrade/upgrade-installed-configs,
 │       │                     # atomic self-install binary copy. `pub mod` in lib.rs,
@@ -126,7 +126,7 @@ shine/
 │       │   │                 # crate since completion.rs needs them)
 │       │   ├── app.rs        # AppCommands enum
 │       │   ├── env.rs        # EnvCommands enum
-│       │   ├── preset.rs     # PresetCommands + export/link/overlay arg types
+│       │   ├── preset.rs     # PresetCommands + export/copy/link/overlay arg types
 │       │   ├── state.rs      # StateCommands (`state migrate`)
 │       │   ├── self_install.rs # SelfCommands enum (install, upgrade)
 │       │   ├── shell.rs      # ShellCommands enum
@@ -319,7 +319,7 @@ shine/
 | `env list/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
 | `list` | `cli/src/list.rs` |
 | `info <TARGET>` | `cli/src/info/` (+ `sys/` for explicit `sys/<ITEM>`) |
-| `preset export/link/unlink/overlay` | `cli/src/preset_commands.rs` |
+| `preset export/copy/link/unlink/overlay` | `cli/src/preset_commands.rs` |
 | `preset pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
 | `init` | `cli/src/init.rs` |
 | `self install/upgrade` | `cli/src/self_install.rs` + `update_check/` |

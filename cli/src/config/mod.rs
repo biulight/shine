@@ -9,6 +9,7 @@ mod load;
 mod save;
 
 use discovery::resolve_config_presets_path;
+pub(crate) use discovery::{ReadOnlyRuntimePaths, discover_runtime_paths_read_only};
 use env_layer::deserialize_env_values;
 
 pub use crate::home::{full_expand, full_expand_with_home, tilde_expand};

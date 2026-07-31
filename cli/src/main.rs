@@ -21,8 +21,8 @@ use config::Config;
 use update_check::ReleaseChannel;
 
 use cli::preset_commands::{
-    handle_overlay_info, handle_overlay_link, handle_overlay_unlink, handle_preset_export,
-    handle_preset_link, handle_preset_unlink,
+    handle_overlay_info, handle_overlay_link, handle_overlay_unlink, handle_preset_copy,
+    handle_preset_export, handle_preset_link, handle_preset_unlink,
 };
 use cli::self_install::{
     handle_config_upgrade, handle_self_install, handle_self_upgrade, handle_update,
@@ -194,6 +194,7 @@ async fn run(cli: Cli) -> Result<()> {
             PresetCommands::Export(cmd) => {
                 Box::pin(handle_preset_export(&config, cmd.dir, cmd.force)).await
             }
+            PresetCommands::Copy(cmd) => Box::pin(handle_preset_copy(&cmd.target, cmd.force)).await,
             PresetCommands::Link(cmd) => {
                 Box::pin(handle_preset_link(&config, cmd.path, cmd.create)).await
             }
@@ -698,6 +699,43 @@ mod tests {
                 })
             }
         ));
+
+        let cli = Cli::try_parse_from(["shine", "preset", "copy", "app/surge"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Copy(commands::CopyCommand {
+                    target,
+                    force: false
+                })
+            } if target == "app/surge"
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "preset", "copy", "shell/proxy", "--force"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Copy(commands::CopyCommand {
+                    target,
+                    force: true
+                })
+            } if target == "shell/proxy"
+        ));
+        assert!(Cli::try_parse_from(["shine", "preset", "copy"]).is_err());
+        for invalid in [
+            "surge",
+            "app/",
+            "/app/surge",
+            "app/../surge",
+            "app/surge/extra",
+            "other/surge",
+        ] {
+            assert!(
+                Cli::try_parse_from(["shine", "preset", "copy", invalid]).is_err(),
+                "target should be rejected during CLI parsing: {invalid}"
+            );
+        }
 
         let cli =
             Cli::try_parse_from(["shine", "preset", "link", "/tmp/presets", "--create"]).unwrap();

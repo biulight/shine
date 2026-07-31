@@ -277,6 +277,15 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
         }
     }
 
+    if !super::profile::supports_completion_registration(&config.shell_type) {
+        let shell: &'static str = config.shell_type.into();
+        output::detail_line(
+            "Completion",
+            &colors::yellow("unsupported"),
+            Some(format!("{shell}; PATH setup was installed")),
+        );
+    }
+
     output::hint_line(
         "Next Step",
         &format!(

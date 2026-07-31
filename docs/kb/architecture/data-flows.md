@@ -206,6 +206,16 @@ usable. `shine preset overlay link --git <url>` writes the config and clones imm
 config (see lessons entry 2026-07-04 on inheritance). `Config` saves go through
 `utils::sync_table`, which preserves TOML comments.
 
+## Dynamic shell completion
+
+`main.rs` calls `completion::complete_from_env` before Clap parsing, Tokio startup, config
+initialization, schema warnings, or update checks. Registration and each Tab request build the
+Clap command graph and attach dynamic candidates for active preset resources, recorded sys items,
+and saved tasks. Candidate callbacks use `config::discover_runtime_paths_read_only`, which mirrors
+global/project preset and overlay inheritance synchronously without creating `~/.shine`, then read
+only the small preset metadata or runtime manifest needed for the active argument. Parse or I/O
+failures are tolerated and never break the user's shell.
+
 ## Environment command runner
 
 `env/workspace.rs::handle_run` optionally loads and merges workspace environment sources, then

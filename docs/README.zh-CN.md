@@ -153,7 +153,9 @@ shine completions install
 
 安装或重装某个具体 shell 预设（例如 `shine shell install proxy`）时，也会在刷新 managed shell profile 的同时更新补全配置。
 
-如果需要手动配置或检查脚本，`shine completions <shell>` 仍会把 `bash`、`zsh` 和 `powershell` 的注册脚本输出到 `stdout`。
+补全是动态的：preset 类别和命令会跟随当前内置、外部、项目及 overlay 来源，已记录的系统更新项和保存的任务名则来自 Shine 的运行时 manifest。当前支持 Bash、Zsh 和 PowerShell；在 Fish 或 Elvish 下，`completions install` 会保留受管 PATH 配置，并明确提示 Shine 补全暂不支持。
+
+如需高级手动配置或检查脚本，`shine completions <shell>` 仍会把 `bash`、`zsh` 和 `powershell` 的注册脚本输出到 `stdout`。
 
 ### 查看可用的应用预设
 
@@ -505,6 +507,20 @@ shine preset export
 ```
 
 会把所有内置 shell 脚本和应用配置复制到当前配置的 `presets_dir`（默认是 `~/.shine/presets/`）。导出后你可以自由修改这些文件；后续安装时，`shine` 会优先读取文件系统中的副本，而不是二进制内置资源。
+
+如果只想把某一个内置 preset 作为 overlay 的修改起点，可以在 overlay 根目录按规范的
+`kind/name` 复制完整快照：
+
+```bash
+cd ~/dotfiles/shine-overlay
+shine preset copy app/surge
+shine preset copy app/clash-verge
+```
+
+命令会生成包含当前二进制全部内置文件的 `app/surge/` 和 `app/clash-verge/`。请删除不准备
+修改的文件：overlay 按相对路径逐文件覆盖，删除后该路径会回退到内置版本并继续获得 Shine
+更新。已有文件默认保留，只有 `--force` 才会覆盖。可通过 `shine preset overlay link .` 激活
+当前目录。
 
 如果想通过 CLI 把 `shine` 切换到自定义预设目录：
 

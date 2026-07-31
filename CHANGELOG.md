@@ -9,8 +9,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Improvements
 
+- Added `shine preset copy <kind>/<name>` to copy one complete built-in preset into the current
+  directory as an overlay customization starting point.
 - Added optional fixed working directories for personal tasks through `shine task save --cwd`,
   while existing tasks continue to run from the caller's current directory.
+- Expanded dynamic shell completion to installed targets, app build/refresh categories, recorded
+  system-update items, and saved task names; completion path discovery is now shared with the
+  config module and remains read-only.
 
 ## [1.0.0] — 2026-08-01
 

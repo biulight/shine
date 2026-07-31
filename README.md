@@ -156,7 +156,9 @@ Open a new shell, or reload your shell config once (`source ~/.zshrc` or `source
 
 Installing or reinstalling a specific shell preset, such as `shine shell install proxy`, also refreshes completions as part of the managed shell profile update.
 
-For manual setup or inspection, `shine completions <shell>` prints the registration script to `stdout` for `bash`, `zsh`, and `powershell`.
+Completions are dynamic: preset categories and commands follow the active built-in, external, project, and overlay sources, while installed system-update items and saved task names come from Shine's runtime manifests. Bash, Zsh, and PowerShell are supported; on Fish or Elvish, `completions install` keeps the managed PATH setup and reports that Shine completion is unavailable.
+
+For advanced manual setup or inspection, `shine completions <shell>` prints the registration script to `stdout` for `bash`, `zsh`, and `powershell`.
 
 ### List available app presets
 
@@ -522,6 +524,20 @@ shine preset export
 ```
 
 Copies all built-in shell scripts and app configs into your configured `presets_dir` (default `~/.shine/presets/`). Once exported you can edit the files freely — `shine` will read from the filesystem copy instead of the embedded binary on subsequent installs.
+
+To use one built-in preset as the starting point for an overlay, copy its complete snapshot into
+the current directory using its canonical `kind/name`:
+
+```bash
+cd ~/dotfiles/shine-overlay
+shine preset copy app/surge
+shine preset copy app/clash-verge
+```
+
+This creates `app/surge/` and `app/clash-verge/` with all files shipped by the current binary.
+Delete files you do not intend to customize: overlay matching is per path, so removed files fall
+back to the built-in version and continue receiving Shine updates. Existing files are preserved by
+default; use `--force` to overwrite them. Activate the directory with `shine preset overlay link .`.
 
 To switch `shine` to a custom preset source directory with the CLI:
 
