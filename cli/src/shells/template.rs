@@ -46,18 +46,14 @@ pub(super) async fn apply_template_to_scripts(
             continue;
         };
 
-        let script_env_map = env_map_for_shell_template(&script.display_name, env_map);
-        let rendered = match crate::install_core::apply_transforms(
-            &effective_transforms,
-            &content,
-            &script_env_map,
-        ) {
-            Ok(b) => b,
-            Err(e) => bail!(
-                "template substitution failed for {}: {e:#}",
-                script.source_path.display()
-            ),
-        };
+        let rendered =
+            match crate::install_core::apply_transforms(&effective_transforms, &content, env_map) {
+                Ok(b) => b,
+                Err(e) => bail!(
+                    "template substitution failed for {}: {e:#}",
+                    script.source_path.display()
+                ),
+            };
 
         #[cfg(unix)]
         let mode = {
@@ -108,23 +104,4 @@ pub(super) async fn apply_template_to_scripts(
     }
 
     Ok(report)
-}
-
-/// Supplies empty optional credentials for templates that defer their validation until runtime.
-///
-/// Status checks must use this same map as installation; otherwise a missing optional
-/// credential makes the comparison render fail and hides a real preset update.
-pub(crate) fn env_map_for_shell_template<'a>(
-    display_name: &str,
-    env_map: &'a std::collections::BTreeMap<String, String>,
-) -> std::borrow::Cow<'a, std::collections::BTreeMap<String, String>> {
-    if display_name == "agent/ccenv" {
-        let mut map = env_map.clone();
-        map.entry("DEEPSEEK_API_KEY".to_string()).or_default();
-        map.entry("QWEN_API_KEY".to_string()).or_default();
-        map.entry("CLIPROXYAPI_AUTH_TOKEN".to_string()).or_default();
-        std::borrow::Cow::Owned(map)
-    } else {
-        std::borrow::Cow::Borrowed(env_map)
-    }
 }

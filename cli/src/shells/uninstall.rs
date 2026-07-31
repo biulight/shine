@@ -110,19 +110,11 @@ mod tests {
     use super::super::install::handle_install;
     use super::super::profile::{append_path_to_shell_config, managed_shell_profile_path};
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use tokio::fs;
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-shell").await
-    }
-
-    fn config_with_deepseek_key(dir: &Path) -> Config {
-        let mut config = Config::new_for_test(dir);
-        config
-            .env
-            .insert("DEEPSEEK_API_KEY".into(), "test-deepseek-key".into());
-        config
     }
 
     fn wrapper_marker(command: &str, shell: &ShellType) -> String {
@@ -137,7 +129,7 @@ mod tests {
     #[tokio::test]
     async fn uninstall_purge_removes_managed_dirs_but_not_config() {
         let dir = make_temp_dir().await;
-        let config = config_with_deepseek_key(&dir);
+        let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -162,7 +154,7 @@ mod tests {
     #[tokio::test]
     async fn uninstall_dry_run_leaves_everything_intact() {
         let dir = make_temp_dir().await;
-        let config = config_with_deepseek_key(&dir);
+        let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -208,7 +200,7 @@ mod tests {
     #[tokio::test]
     async fn uninstall_dry_run_does_not_modify_shell_config() {
         let dir = make_temp_dir().await;
-        let config = config_with_deepseek_key(&dir);
+        let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -233,9 +225,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn uninstall_category_refreshes_managed_profile_source_wrappers() {
+    async fn uninstall_category_keeps_agent_launcher_and_prunes_source_wrappers() {
         let dir = make_temp_dir().await;
-        let config = config_with_deepseek_key(&dir);
+        let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
@@ -249,10 +241,7 @@ mod tests {
         let profile = fs::read_to_string(managed_shell_profile_path(&config))
             .await
             .unwrap();
-        assert!(
-            profile.contains(&wrapper_marker("ccenv", &config.shell_type)),
-            "remaining source wrapper should be kept: {profile}"
-        );
+        assert!(!profile.contains(&wrapper_marker("ccenv", &config.shell_type)));
         assert!(
             !profile.contains(&wrapper_marker("setproxy", &config.shell_type)),
             "removed category wrapper should be pruned: {profile}"
@@ -261,6 +250,11 @@ mod tests {
             !profile.contains(&wrapper_marker("usetproxy", &config.shell_type)),
             "removed category wrapper should be pruned: {profile}"
         );
+        let ccenv = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("ccenv"),
+        );
+        assert!(ccenv.exists(), "remaining Bun launcher should be kept");
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

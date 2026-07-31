@@ -86,7 +86,7 @@ shine shell list
 Shell Preset Categories
 
   agent  1 script
-    ccenv         Configure Claude Code for a selected provider in the current shell session.
+    ccenv         Launch Claude Code with a selected provider.
                   ...
 
   proxy  2 scripts
@@ -117,12 +117,12 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-安装全部 shell 预设时会包含 `agent`。默认 Codex provider 需要 `CLIPROXYAPI_AUTH_TOKEN` 或 `CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET`；DeepSeek 和 Qwen 则使用当前 env 配置中各自的 API-key 变量。
+安装全部 shell 预设时会包含 `agent`。默认 Codex provider 需要 `CLIPROXYAPI_AUTH_TOKEN` 或 `CLIPROXYAPI_AUTH_TOKEN_SECRET`；DeepSeek 和 Qwen 则使用当前 env 配置中各自的 API-key 变量。
 重复运行 `install` 是安全的：已存在的文件、正确的符号链接以及已配置好的 PATH 条目都会被跳过。若你想覆盖受管预设文件、链接和 shell 配置中的 PATH 条目，请使用 `reinstall`。
 
 顶层的 `install`、`reinstall` 和 `uninstall` 命令需要一个类别名，并会自动路由到 `shell/<category>` 或 `app/<category>`。如果 shell 和 app 预设中存在同名类别，`shine` 会提示你选择其中一个。
 
-shell 元数据可以通过 `platforms = ["unix"]` 或 `platforms = ["windows"]` 只在特定平台暴露某些条目。内置的 `agent` 类别就使用了这个机制：Unix shell 下的 `ccenv` 来自 `cc.sh`，Windows PowerShell 下的 `ccenv` 来自 `cc.ps1`。
+shell 元数据可以通过 `platforms = ["unix"]` 或 `platforms = ["windows"]` 只在特定平台暴露某些条目。内置的 `agent` 类别通过 Bun runtime 在所有平台暴露同一份 `cc.ts`。
 
 在 Windows 上，PowerShell 的 PATH 注入会同时更新这两个 profile 文件，确保 `powershell.exe` 和 `pwsh.exe` 都能看到同一条 `~/.shine/bin` 配置：
 
@@ -718,7 +718,8 @@ shine-env-export MY_TOKEN --as API_TOKEN
 
 ### shell/agent — `ccenv`
 
-为 Claude Code 配置当前 shell 的 provider 环境：默认通过 CLIProxyAPI 使用 Codex，也可选择 DeepSeek 或 Qwen。
+使用选定的 provider 启动 Claude Code：默认通过 CLIProxyAPI 使用 Codex，也可选择 DeepSeek 或 Qwen。
+provider 环境仅注入 Claude 子进程，不会修改当前终端。
 选择菜单依次为 `codex`、`deepseek`、`qwen` 和尚未配置的 `glm5`（选项 1–4）；
 直接按 Enter 会选择 Codex。
 
@@ -727,13 +728,13 @@ shine-env-export MY_TOKEN --as API_TOKEN
 
 ```toml
 CLIPROXYAPI_AUTH_TOKEN = "..."
-# 或：CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET = "<base64-gpg-ciphertext>"
+# 或：CLIPROXYAPI_AUTH_TOKEN_SECRET = "<tagged-or-GPG-ciphertext>"
 ```
 
 可通过以下命令创建加密值：
 
 ```bash
-shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN --set CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET
+shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN
 ```
 
 Codex 固定连接 `http://127.0.0.1:8317`，并把 Claude Code 的 Opus、Sonnet、Haiku
@@ -753,13 +754,13 @@ DeepSeek 使用相同的明文或加密凭据模式：
 
 ```toml
 DEEPSEEK_API_KEY = "..."
-# 或：DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
+# 或：DEEPSEEK_API_KEY_SECRET = "<tagged-or-GPG-ciphertext>"
 ```
 
 用现有 GPG key 生成加密值。如果私钥托管在 YubiKey 上，`gpg-agent` 会在执行 `ccenv` 时处理 PIN / touch 提示：
 
 ```bash
-shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
+shine env encrypt --from DEEPSEEK_API_KEY
 ```
 
 `shine env encrypt` 默认使用 `config.toml` 中的 `gpg_key_id`。如需单次覆盖，可传入 `-r/--recipient <key-id>`。
@@ -767,7 +768,7 @@ shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 也可以直接解密当前 env 配置中的任意 base64 GPG secret：
 
 ```bash
-shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
+shine env decrypt DEEPSEEK_API_KEY_SECRET
 ```
 
 如需通过阿里云 Anthropic-compatible endpoint 使用 Qwen，使用相同的凭证模式并配置
@@ -775,17 +776,17 @@ shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
 
 ```toml
 QWEN_API_KEY = "..."
-# 或：QWEN_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
+# 或：QWEN_API_KEY_SECRET = "<tagged-or-GPG-ciphertext>"
 ```
 
 可通过以下命令创建加密值：
 
 ```bash
-shine env encrypt --from QWEN_API_KEY --set QWEN_API_KEY_GPG_SECRET
+shine env encrypt --from QWEN_API_KEY
 ```
 
-`ccenv` 提示选择 provider 时，输入 `qwen`（或选项 `3`）。它会为当前 shell 导出阿里云
-endpoint、Qwen 模型映射，以及 `983616` 的 Claude Code context-token limit。
+`ccenv` 提示选择 provider 时，输入 `qwen`（或选项 `3`）。Claude 子进程会收到阿里云
+endpoint、Qwen 模型映射，以及 `983616` 的 context-token limit。
 
 #### age + Apple Touch ID（Secure Enclave）
 
@@ -909,8 +910,8 @@ shine shell install agent
 ccenv
 ```
 
-单独运行 `ccenv` 只配置当前 shell。传入 Claude Code 参数时，会在配置 provider 后一步启动
-Claude；也可以用 `-r`/`--run` 启动不带参数的 Claude：
+运行 `ccenv` 会选择 provider 并启动交互式 Claude。传入的 Claude Code 参数会原样转交；
+`-r`/`--run` 作为兼容别名仍表示不带参数启动：
 
 ```bash
 ccenv --run
@@ -924,7 +925,7 @@ ccenv --print "hello"
 ccenv -- --run
 ```
 
-每个已配置 provider 都会优先使用其 `*_GPG_SECRET` 值，而非对应的明文凭据。若 GPG 解码或解密失败，`ccenv` 会直接停止，不会回退到明文值。
+凭据按 `KEY_SECRET`、旧版 `KEY_GPG_SECRET`、明文 `KEY` 的顺序解析。选中的密文若解码或解密失败，`ccenv` 会直接停止，不会回退。
 
 ### Shell 预设元数据
 

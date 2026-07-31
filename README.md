@@ -86,7 +86,7 @@ shine shell list
 Shell Preset Categories
 
   agent  1 script
-    ccenv         Configure Claude Code for a selected provider in the current shell session.
+    ccenv         Launch Claude Code with a selected provider.
                    ...
 
   proxy  2 scripts
@@ -117,12 +117,12 @@ Shell Presets  4 created
 Bin Links      4 created
 ```
 
-Installing all shell presets includes `agent`. Its default Codex provider requires `CLIPROXYAPI_AUTH_TOKEN` or `CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET`; DeepSeek and Qwen use their corresponding API-key variables in the active env config.
+Installing all shell presets includes `agent`. Its default Codex provider requires `CLIPROXYAPI_AUTH_TOKEN` or `CLIPROXYAPI_AUTH_TOKEN_SECRET`; DeepSeek and Qwen use their corresponding API-key variables in the active env config.
 Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `reinstall` when you want to overwrite managed preset files, links, and the shell config entry.
 
 Top-level `install`, `reinstall`, and `uninstall` commands accept a required category and automatically route to either `shell/<category>` or `app/<category>`. If both preset types define the same category name, `shine` prompts you to choose one.
 
-Shell metadata can scope entries to `platforms = ["unix"]` or `platforms = ["windows"]`. The built-in `agent` category uses this to expose `ccenv` from `cc.sh` on Unix shells and from `cc.ps1` on Windows PowerShell.
+Shell metadata can scope entries to `platforms = ["unix"]` or `platforms = ["windows"]`. The built-in `agent` category exposes one cross-platform `cc.ts` entry through the Bun runtime.
 
 On Windows, PowerShell PATH setup updates both supported profile locations so `powershell.exe` and `pwsh.exe` see the same `~/.shine/bin` entry:
 
@@ -743,7 +743,8 @@ The helper prefers `MY_TOKEN_SECRET`, decrypts it when present, and otherwise fa
 
 ### shell/agent — `ccenv`
 
-Configures the current shell for Claude Code with Codex through CLIProxyAPI (the default), DeepSeek, or Qwen.
+Launches Claude Code with Codex through CLIProxyAPI (the default), DeepSeek, or Qwen.
+The selected environment is scoped to the Claude process and does not modify the current shell.
 The prompt lists `codex`, `deepseek`, `qwen`, and the not-yet-configured `glm5`
 as options 1–4; pressing Enter selects Codex.
 
@@ -753,13 +754,13 @@ env file next to `shine.config.toml`:
 
 ```toml
 CLIPROXYAPI_AUTH_TOKEN = "..."
-# Or: CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET = "<base64-gpg-ciphertext>"
+# Or: CLIPROXYAPI_AUTH_TOKEN_SECRET = "<tagged-or-GPG-ciphertext>"
 ```
 
 Create the encrypted value with:
 
 ```bash
-shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN --set CLIPROXYAPI_AUTH_TOKEN_GPG_SECRET
+shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN
 ```
 
 Codex connects to `http://127.0.0.1:8317` and maps Claude Code's Opus, Sonnet,
@@ -780,14 +781,14 @@ For DeepSeek, use the same plaintext-or-encrypted credential pattern:
 
 ```toml
 DEEPSEEK_API_KEY = "..."
-# Or: DEEPSEEK_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
+# Or: DEEPSEEK_API_KEY_SECRET = "<tagged-or-GPG-ciphertext>"
 ```
 
 Create encrypted values with your existing GPG key. If the private key is
 backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
 
 ```bash
-shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
+shine env encrypt --from DEEPSEEK_API_KEY
 ```
 
 `shine env encrypt` uses `gpg_key_id` from `config.toml` by default. Pass
@@ -796,7 +797,7 @@ shine env encrypt --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_GPG_SECRET
 You can also decrypt any base64 GPG secret from the active env config directly:
 
 ```bash
-shine env decrypt DEEPSEEK_API_KEY_GPG_SECRET
+shine env decrypt DEEPSEEK_API_KEY_SECRET
 ```
 
 For Qwen through Alibaba Cloud's Anthropic-compatible endpoint, use the same
@@ -804,18 +805,18 @@ credential pattern with `QWEN_API_KEY`:
 
 ```toml
 QWEN_API_KEY = "..."
-# Or: QWEN_API_KEY_GPG_SECRET = "<base64-gpg-ciphertext>"
+# Or: QWEN_API_KEY_SECRET = "<tagged-or-GPG-ciphertext>"
 ```
 
 Create its encrypted value with:
 
 ```bash
-shine env encrypt --from QWEN_API_KEY --set QWEN_API_KEY_GPG_SECRET
+shine env encrypt --from QWEN_API_KEY
 ```
 
-When `ccenv` prompts for a provider, choose `qwen` (or option `3`). It exports
-the Alibaba Cloud endpoint, Qwen model mapping, and the `983616` Claude Code
-context-token limit for the current shell session.
+When `ccenv` prompts for a provider, choose `qwen` (or option `3`). The Claude
+process receives the Alibaba Cloud endpoint, Qwen model mapping, and the
+`983616` context-token limit.
 
 #### age + Apple Touch ID (Secure Enclave)
 
@@ -953,9 +954,8 @@ shine shell install agent
 ccenv
 ```
 
-Running `ccenv` by itself only configures the current shell. Pass Claude Code arguments to
-configure the provider and start Claude in one step, or use `-r`/`--run` to start Claude without
-arguments:
+Running `ccenv` selects a provider and starts interactive Claude. Claude Code arguments are
+forwarded unchanged; `-r`/`--run` remain compatibility aliases for an argument-free launch:
 
 ```bash
 ccenv --run
@@ -969,8 +969,8 @@ argument must be passed through to Claude itself:
 ccenv -- --run
 ```
 
-For every configured provider, its `*_GPG_SECRET` value wins over the corresponding plaintext credential.
-A GPG decode/decrypt failure stops `ccenv` instead of falling back to plaintext.
+Credentials resolve in this order: `KEY_SECRET`, legacy `KEY_GPG_SECRET`, then plaintext `KEY`.
+Any selected secret's decode/decrypt failure stops `ccenv` instead of falling back.
 
 ### Shell preset metadata
 

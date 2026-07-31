@@ -1,13 +1,8 @@
 description = "AI agent provider environment helpers."
 
 [[files]]
-source = "cc.sh"
+source = "cc.ts"
 target = "ccenv"
-needs_source = true
-platforms = ["unix"]
-
-[[files]]
-source = "cc.ps1"
-target = "ccenv"
-needs_source = true
-platforms = ["windows"]
+runtime = "bun"
+platforms = ["unix", "windows"]
+description = "Launch Claude Code with a selected provider."

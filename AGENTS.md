@@ -282,7 +282,7 @@ shine/
 │       └── init_template.rs  # write_shine_toml_template (shared by `app init`/`shell init`)
 └── presets/      # Embedded assets (compiled into binary via rust-embed)
     ├── shell/
-    │   ├── agent/   cc.sh, cc.ps1, shine.toml  (needs_source=true; installed as `ccenv`; platform-scoped per shell family)
+    │   ├── agent/   cc.ts, cc.test.ts, shine.toml  (cross-platform Bun `ccenv`; launches Claude with a selected provider)
     │   ├── proxy/   set_proxy.sh, uset_proxy.sh, shine.toml
     │   └── utils/   copyfile.sh, shine.toml
     ├── app/
@@ -588,7 +588,7 @@ On Windows, PowerShell profile updates target both `~/Documents/PowerShell/Micro
 
 Reads embedded assets, groups them by immediate subdirectory under `shell/`, and displays per-script descriptions. If a category has `shine.toml`, the metadata file drives file listing and command names. Without `shine.toml`, descriptions are parsed from the leading comment block of each `.sh` file (lines starting with `# ` after the shebang, until the first non-comment line).
 
-Shell categories can declare `needs_source = true` in `shine.toml` to mark a script as requiring `source` (not direct execution). These are exposed as shell functions rather than symlinked commands. Entries can also declare `platforms = ["unix"]` or `platforms = ["windows"]` to ship different source files for the same command name on different platforms (e.g., `ccenv` from `presets/shell/agent/cc.sh` on Unix and `presets/shell/agent/cc.ps1` on Windows).
+Shell categories can declare `needs_source = true` in `shine.toml` to mark a script as requiring `source` (not direct execution). These are exposed as shell functions rather than symlinked commands. Entries can also declare `platforms = ["unix"]` or `platforms = ["windows"]` to ship different source files for the same command name. Cross-platform helpers such as `ccenv` should prefer one `runtime = "bun"` entry when they do not need to modify the parent shell.
 
 ## Git Push Policy
 

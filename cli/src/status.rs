@@ -87,6 +87,27 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                     .map(|m| m.file_type().is_symlink())
                     .unwrap_or(false)
             };
+            let effective_source = if rendered_path.exists() {
+                &rendered_path
+            } else {
+                &script_path
+            };
+            let runtime_env = script
+                .env
+                .iter()
+                .map(crate::env::EnvVarSpec::to_with_arg)
+                .collect::<Vec<_>>();
+            let link_current = if link_exists {
+                crate::bin_links::link_is_current(
+                    &link_path,
+                    effective_source,
+                    script.runtime,
+                    &runtime_env,
+                )
+                .await?
+            } else {
+                false
+            };
 
             let (sym, status_text) = match (file_exists, link_exists) {
                 (true, true) => ("✓", "up-to-date"),
@@ -95,20 +116,24 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 (false, false) => ("✗", "not installed"),
             };
 
-            let (sym, status_text) = match shell_template_status(
-                config,
-                &source_key,
-                &display_name,
-                &script_path,
-                &rendered_path,
-            )
-            .await
-            {
-                Some(FileStatus::UpdateAvail) if file_exists || link_exists => {
-                    ("↑", "update available")
+            let (sym, status_text) = if link_exists && !link_current {
+                ("↑", "update available")
+            } else {
+                match shell_source_status(
+                    config,
+                    &source_key,
+                    &script_path,
+                    &rendered_path,
+                    &script.transforms,
+                )
+                .await
+                {
+                    Some(FileStatus::UpdateAvail) if file_exists || link_exists => {
+                        ("↑", "update available")
+                    }
+                    Some(FileStatus::Missing) if link_exists => ("!", "rendered script missing"),
+                    _ => (sym, status_text),
                 }
-                Some(FileStatus::Missing) if link_exists => ("!", "rendered script missing"),
-                _ => (sym, status_text),
             };
 
             rows.push(ShellRow {
@@ -124,29 +149,43 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     Ok(rows)
 }
 
-async fn shell_template_status(
+async fn shell_source_status(
     config: &Config,
     source_key: &str,
-    display_name: &str,
     script_path: &Path,
     rendered_path: &Path,
+    declared_transforms: &[String],
 ) -> Option<FileStatus> {
     let source_bytes = if config.is_external_presets {
         tokio::fs::read(script_path).await.ok()?
     } else {
         crate::presets::read_asset_bytes(source_key)?
     };
-    if !crate::presets::parse_template_annotation(&source_bytes) {
-        return None;
+    if !config.is_external_presets && !script_path.exists() {
+        return Some(FileStatus::UpdateAvail);
     }
+    let transforms = if !declared_transforms.is_empty() {
+        declared_transforms.to_vec()
+    } else if crate::presets::parse_template_annotation(&source_bytes) {
+        vec!["template".to_string()]
+    } else {
+        if config.is_external_presets {
+            return Some(FileStatus::UpToDate);
+        }
+        let current = tokio::fs::read(script_path).await.ok()?;
+        return Some(if source_bytes == current {
+            FileStatus::UpToDate
+        } else {
+            FileStatus::UpdateAvail
+        });
+    };
 
     if !rendered_path.exists() {
         return Some(FileStatus::Missing);
     }
 
     let env = EnvConfig::load_or_init(config).await.ok()?;
-    let env_map = crate::shells::env_map_for_shell_template(display_name, env.as_map());
-    let rendered = apply_transforms(&["template".to_string()], &source_bytes, &env_map).ok()?;
+    let rendered = apply_transforms(&transforms, &source_bytes, env.as_map()).ok()?;
     let current = tokio::fs::read(rendered_path).await.ok()?;
 
     if rendered == current {
@@ -670,46 +709,112 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
-    #[cfg(unix)]
     #[tokio::test]
-    async fn ccenv_update_status_handles_unconfigured_optional_provider_keys() {
+    async fn embedded_bun_source_change_reports_update_available() {
         let dir = make_temp_dir().await;
-        let cat_dir = dir.join("presets/shell/agent");
-        fs::create_dir_all(&cat_dir).await.unwrap();
-        fs::write(
-            cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"cc.sh\"\ntarget = \"ccenv\"\nneeds_source = true\n",
-        )
-        .await
-        .unwrap();
-        let script = cat_dir.join("cc.sh");
-        fs::write(
-            &script,
-            b"#!/bin/bash\n# shine-template: true\necho @@DEEPSEEK_API_KEY@@ @@QWEN_API_KEY@@ @@CLIPROXYAPI_AUTH_TOKEN@@\n",
-        )
-        .await
-        .unwrap();
-
-        let mut config = Config::new_for_test(&dir);
-        config.is_external_presets = true;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
         crate::shells::handle_install(&config, Some("agent"), false)
             .await
             .unwrap();
 
-        fs::write(
-            &script,
-            b"#!/bin/bash\n# shine-template: true\necho changed @@DEEPSEEK_API_KEY@@ @@QWEN_API_KEY@@ @@CLIPROXYAPI_AUTH_TOKEN@@\n",
-        )
-        .await
-        .unwrap();
+        let extracted = config.presets_dir().join("shell/agent/cc.ts");
+        fs::write(&extracted, b"// stale extracted ccenv\n")
+            .await
+            .unwrap();
 
         let rows = build_shell_rows(&config).await.unwrap();
         let row = rows
             .iter()
             .find(|row| row.label == "agent/ccenv")
             .expect("agent/ccenv row should exist");
+
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn embedded_shell_source_rename_reports_update_available() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/agent");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        let old_source = if cfg!(windows) { "cc.ps1" } else { "cc.sh" };
+        fs::write(
+            cat_dir.join("shine.toml"),
+            format!(
+                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\n"
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join(old_source), b"# old sourced ccenv\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::shells::handle_install(&config, Some("agent"), false)
+            .await
+            .unwrap();
+
+        config.is_external_presets = false;
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "agent/ccenv")
+            .expect("embedded agent/ccenv row should exist");
+
+        assert_eq!(row.status_sym, "↑");
+        assert_eq!(row.status_text, "update available");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn external_shell_runtime_and_source_change_reports_update_available() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/agent");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        let old_source = if cfg!(windows) { "cc.ps1" } else { "cc.sh" };
+        fs::write(
+            cat_dir.join("shine.toml"),
+            format!(
+                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\n"
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join(old_source), b"# old sourced ccenv\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::shells::handle_install(&config, Some("agent"), false)
+            .await
+            .unwrap();
+
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"cc.ts\"\ntarget = \"ccenv\"\nruntime = \"bun\"\nplatforms = [\"unix\", \"windows\"]\n",
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join("cc.ts"), b"console.log('new ccenv');\n")
+            .await
+            .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "agent/ccenv")
+            .expect("external agent/ccenv row should exist");
 
         assert_eq!(row.status_sym, "↑");
         assert_eq!(row.status_text, "update available");

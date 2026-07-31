@@ -530,18 +530,19 @@ measured, not inferred.
 - **Rule**: every documented preset environment setting must occur in the rendered template;
   update detection is content-based and cannot observe unused variables.
 
-## 2026-07-20 — Shell update checks must render optional credentials exactly like installation
+## 2026-07-31 — Embedded shell sources need identity and content status
 
-- **Symptom**: `shine update` did not report a changed `agent/ccenv` preset when its newly-added
-  provider credential was absent from the active env config.
-- **Root cause**: installation supplies empty values for ccenv's optional provider credentials,
-  deferring validation until the sourced script runs. `status::shell_template_status` instead
-  rendered with the raw env map; the missing placeholder returned an error that `.ok()?` silently
-  converted into no template status.
-- **Fix**: share `shells::template::env_map_for_shell_template` between installation and status
-  comparison, and cover a changed ccenv template with both credentials unset.
-- **Rule**: a status comparison must use the same effective render inputs as the operation that
-  applies the update; optional runtime credentials must not suppress stale-content detection.
+- **Symptom**: after moving `agent/ccenv` from sourced `cc.sh`/`cc.ps1` to Bun `cc.ts`, a freshly
+  installed binary reported `Nothing to update` and kept running the old source wrapper.
+- **Root cause**: shell status compared effective bytes only for template-rendered scripts,
+  treated a missing new embedded source as generic missing state, and checked bin entries only
+  for existence. In external-presets mode the new source already existed, so the stale native
+  link was incorrectly considered current without validating its source or runtime.
+- **Fix**: `status::shell_source_status` reports an update when an installed command's expected
+  embedded source is absent and compares raw extracted bytes with rust-embed. Shell rows also use
+  `bin_links`' install-equivalent current-ness check for source, runtime, and runtime env.
+- **Rule**: shell status must compare expected source identity, content, and launcher runtime;
+  existence of some command at the target name does not prove the current preset is installed.
 
 ## 2026-07-05 — Typed config readers must not silently discard invalid entries
 
