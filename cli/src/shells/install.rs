@@ -151,15 +151,6 @@ pub async fn handle_upgrade_installed(
         .map(|(cat_name, _)| cat_name.clone())
         .collect();
 
-    sep.begin();
-    output::summary_line(
-        "Shell Presets",
-        &[colors::dim(&format!(
-            "{} installed categories",
-            installed_categories.len()
-        ))],
-    );
-
     if !config.is_external_presets {
         for category in &installed_categories {
             let prefix = format!("shell/{category}");
@@ -180,42 +171,73 @@ pub async fn handle_upgrade_installed(
 
     let script_pairs = build_script_pairs(config, &categories);
     let template_report = apply_template_to_scripts(config, &script_pairs).await?;
-    for name in &template_report.updated {
-        println!("  {} {}", colors::symbol("✓"), name);
-    }
 
     let link_specs = build_link_specs(config, &categories);
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
 
     let link_parts = upgrade_link_report_summary_parts(&link_report, verbose);
-    if !link_parts.is_empty() {
-        output::summary_line("Bin Links", &link_parts);
-    }
-    print_link_conflicts(config, &link_report.conflicts, None);
 
     let source_commands = installed_source_commands(config).await?;
 
     let shell_update = append_path_to_shell_config(config, false, &source_commands).await?;
-    let path_changed = match shell_update.config_status {
-        PathUpdateStatus::AlreadyConfigured => false,
-        PathUpdateStatus::Updated(path) => {
+    let updated_shell_config = match shell_update.config_status {
+        PathUpdateStatus::AlreadyConfigured => None,
+        PathUpdateStatus::Updated(path) => Some(path),
+    };
+
+    let has_visible_result = should_print_upgrade_section(
+        verbose,
+        !template_report.updated.is_empty(),
+        !link_parts.is_empty(),
+        updated_shell_config.is_some(),
+    );
+    if has_visible_result {
+        sep.begin();
+        if verbose {
+            output::summary_line(
+                "Shell Presets",
+                &[colors::dim(&format!(
+                    "{} installed categories",
+                    installed_categories.len()
+                ))],
+            );
+        } else {
+            println!("{}", colors::bold("Shell Presets"));
+        }
+
+        for name in &template_report.updated {
+            println!("  {} {}", colors::symbol("✓"), name);
+        }
+        if !link_parts.is_empty() {
+            output::summary_line("Bin Links", &link_parts);
+        }
+        print_link_conflicts(config, &link_report.conflicts, None);
+        if let Some(path) = &updated_shell_config {
             output::detail_line(
                 "Shell Config",
                 &colors::green("updated"),
                 Some(path.display().to_string()),
             );
-            true
         }
-    };
+    }
 
     Ok(ShellUpgradeReport {
         templates_updated: template_report.updated.len(),
         links_created: link_report.created.len(),
         links_updated: link_report.overwritten.len(),
         link_conflicts: link_report.conflicts.len(),
-        path_changed,
+        path_changed: updated_shell_config.is_some(),
     })
+}
+
+fn should_print_upgrade_section(
+    verbose: bool,
+    templates_updated: bool,
+    has_link_result: bool,
+    path_changed: bool,
+) -> bool {
+    verbose || templates_updated || has_link_result || path_changed
 }
 
 pub async fn handle_completion_install(config: &Config) -> Result<()> {
@@ -335,6 +357,15 @@ mod tests {
     use crate::config::Config;
     use std::path::PathBuf;
     use tokio::fs;
+
+    #[test]
+    fn upgrade_section_hides_no_op_by_default_and_shows_verbose_or_changes() {
+        assert!(!should_print_upgrade_section(false, false, false, false));
+        assert!(should_print_upgrade_section(true, false, false, false));
+        assert!(should_print_upgrade_section(false, true, false, false));
+        assert!(should_print_upgrade_section(false, false, true, false));
+        assert!(should_print_upgrade_section(false, false, false, true));
+    }
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-shell").await

@@ -20,6 +20,7 @@ pub use metadata::{
 };
 pub use refresh::handle_refresh;
 pub use uninstall::handle_uninstall;
+pub(crate) use upgrade::handle_upgrade_installed_with_output;
 pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
 
 use crate::config::Config;

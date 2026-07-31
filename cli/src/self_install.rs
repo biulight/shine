@@ -163,17 +163,24 @@ pub async fn handle_config_upgrade(
     verbose: bool,
     prune_stale: bool,
 ) -> Result<()> {
-    println!("{}", colors::bold("Upgrading installed configs"));
-    config::print_presets_note(config);
+    if verbose {
+        println!("{}", colors::bold("Upgrading installed configs"));
+        config::print_presets_note(config);
+    }
 
-    let mut sep = output::SectionSeparator::new();
+    let mut sep = if verbose {
+        output::SectionSeparator::new()
+    } else {
+        output::SectionSeparator::with_preamble(colors::bold("Upgrading installed configs"))
+    };
 
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
     let shell_report =
         Box::pin(shells::handle_upgrade_installed(config, verbose, &mut sep)).await?;
-    let app_report = Box::pin(apps::handle_upgrade_installed(
+    let app_report = Box::pin(apps::handle_upgrade_installed_with_output(
         config,
         prune_stale,
+        verbose,
         &mut sep,
     ))
     .await?;
@@ -186,12 +193,14 @@ pub async fn handle_config_upgrade(
         + usize::from(shell_report.path_changed)
         + app_report.updated
         + sys_report.updated;
-    let skipped = env_report.skipped + app_report.skipped + sys_report.skipped;
     let user_modified = env_report.user_modified + app_report.user_modified;
 
-    let summary =
-        config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts, skipped);
-    output::footer("Done", &summary);
+    let summary = config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts);
+    if verbose || sep.has_printed() {
+        output::footer("Done", &summary);
+    } else {
+        println!("{}", colors::dim("Nothing to upgrade."));
+    }
     for hint in &app_report.restart_hints {
         println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
     }
@@ -217,7 +226,6 @@ fn config_upgrade_summary_parts(
     updated: usize,
     user_modified: usize,
     link_conflicts: usize,
-    skipped: usize,
 ) -> Vec<String> {
     let mut parts = Vec::new();
     output::push_count(&mut parts, updated, colors::green, "updated");
@@ -228,7 +236,6 @@ fn config_upgrade_summary_parts(
         "user-modified (kept)",
     );
     output::push_count(&mut parts, link_conflicts, colors::yellow, "link conflicts");
-    output::push_count(&mut parts, skipped, colors::dim, "skipped");
     parts
 }
 
@@ -567,25 +574,24 @@ mod tests {
     #[test]
     fn config_upgrade_summary_parts_includes_only_nonzero_counts() {
         assert_eq!(
-            config_upgrade_summary_parts(2, 0, 0, 1),
-            vec!["2 updated".to_string(), "1 skipped".to_string()]
+            config_upgrade_summary_parts(2, 0, 0),
+            vec!["2 updated".to_string()]
         );
     }
 
     #[test]
     fn config_upgrade_summary_parts_empty_when_all_zero() {
-        assert!(config_upgrade_summary_parts(0, 0, 0, 0).is_empty());
+        assert!(config_upgrade_summary_parts(0, 0, 0).is_empty());
     }
 
     #[test]
-    fn config_upgrade_summary_parts_reports_all_four_counters() {
+    fn config_upgrade_summary_parts_reports_actionable_counters() {
         assert_eq!(
-            config_upgrade_summary_parts(1, 2, 3, 4),
+            config_upgrade_summary_parts(1, 2, 3),
             vec![
                 "1 updated".to_string(),
                 "2 user-modified (kept)".to_string(),
                 "3 link conflicts".to_string(),
-                "4 skipped".to_string(),
             ]
         );
     }

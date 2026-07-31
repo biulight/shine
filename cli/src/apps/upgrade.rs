@@ -30,9 +30,76 @@ pub struct AppUpgradeReport {
     pub restart_hints: BTreeSet<String>,
 }
 
+struct UpgradeSection<'a> {
+    sep: &'a mut crate::output::SectionSeparator,
+    verbose: bool,
+    installed_count: usize,
+    started: bool,
+}
+
+impl<'a> UpgradeSection<'a> {
+    fn new(
+        sep: &'a mut crate::output::SectionSeparator,
+        verbose: bool,
+        installed_count: usize,
+    ) -> Self {
+        Self {
+            sep,
+            verbose,
+            installed_count,
+            started: false,
+        }
+    }
+
+    fn begin(&mut self) {
+        if self.started {
+            return;
+        }
+        self.sep.begin();
+        if self.verbose {
+            output::summary_line(
+                "App Configs",
+                &[colors::dim(&format!(
+                    "{} installed file(s)",
+                    self.installed_count
+                ))],
+            );
+        } else {
+            println!("{}", colors::bold("App Configs"));
+        }
+        self.started = true;
+    }
+
+    fn print_up_to_date(&mut self, source: &str) {
+        if self.verbose {
+            self.begin();
+            println!("  {} {source}: up to date", colors::symbol("✓"));
+        }
+    }
+
+    fn print_manual_refresh(&mut self, source: &str, category: &str, file: &str) {
+        if self.verbose {
+            self.begin();
+            println!(
+                "  {} {source}: manual refresh only (shine app refresh {category} {file})",
+                colors::symbol("•")
+            );
+        }
+    }
+}
+
 pub async fn handle_upgrade_installed(
     config: &Config,
     prune_stale: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<AppUpgradeReport> {
+    handle_upgrade_installed_with_output(config, prune_stale, false, sep).await
+}
+
+pub(crate) async fn handle_upgrade_installed_with_output(
+    config: &Config,
+    prune_stale: bool,
+    verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<AppUpgradeReport> {
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
@@ -69,14 +136,10 @@ pub async fn handle_upgrade_installed(
         }
     }
 
-    sep.begin();
-    output::summary_line(
-        "App Configs",
-        &[colors::dim(&format!(
-            "{} installed file(s)",
-            manifest.entries.len()
-        ))],
-    );
+    let mut section = UpgradeSection::new(sep, verbose, manifest.entries.len());
+    if verbose {
+        section.begin();
+    }
 
     let mut updated = 0usize;
     let mut skipped = 0usize;
@@ -89,6 +152,7 @@ pub async fn handle_upgrade_installed(
 
     for entry in &manifest.entries {
         let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
+            section.begin();
             eprintln!(
                 "  {} {}: invalid source, skipped",
                 colors::symbol("!"),
@@ -99,6 +163,7 @@ pub async fn handle_upgrade_installed(
         };
 
         let Some(cat) = categories_by_name.get(cat_name) else {
+            section.begin();
             handle_stale_entry(
                 config,
                 entry,
@@ -119,6 +184,7 @@ pub async fn handle_upgrade_installed(
             .iter()
             .find(|file| file.source_rel.to_string_lossy().as_ref() == file_rel)
         else {
+            section.begin();
             handle_stale_entry(
                 config,
                 entry,
@@ -140,11 +206,12 @@ pub async fn handle_upgrade_installed(
             .as_ref()
             .is_some_and(|generator| !generator.auto)
         {
+            section.print_manual_refresh(&entry.source, cat_name, file_rel);
             skipped += 1;
             continue;
         }
 
-        match try_upgrade_entry(config, entry, cat, file, env_map).await {
+        match try_upgrade_entry(config, entry, cat, file, env_map, &mut section).await {
             EntryUpgradeResult::Updated(new_entry) => {
                 updated_categories.insert(cat.name.clone());
                 pending_upserts.push(new_entry);
@@ -157,7 +224,11 @@ pub async fn handle_upgrade_installed(
                 user_modified += 1;
                 skipped += 1;
             }
-            EntryUpgradeResult::Skipped | EntryUpgradeResult::Failed => {
+            EntryUpgradeResult::Skipped => {
+                section.print_up_to_date(&entry.source);
+                skipped += 1;
+            }
+            EntryUpgradeResult::Failed => {
                 skipped += 1;
             }
             EntryUpgradeResult::FatalGenerator => {
@@ -171,7 +242,14 @@ pub async fn handle_upgrade_installed(
     }
 
     let (new_updated, new_skipped, new_failed, new_upserts, new_restart_hints) =
-        install_new_category_files(config, &categories_by_name, &manifest, env_map).await?;
+        install_new_category_files(
+            config,
+            &categories_by_name,
+            &manifest,
+            env_map,
+            &mut section,
+        )
+        .await?;
     updated += new_updated;
     skipped += new_skipped;
     for entry in &new_upserts {
@@ -218,10 +296,12 @@ async fn try_upgrade_entry(
     cat: &metadata::AppCategory,
     file: &metadata::AppFile,
     env_map: &BTreeMap<String, String>,
+    section: &mut UpgradeSection<'_>,
 ) -> EntryUpgradeResult {
     let content = match upgrade_file_content(config, cat, file, env_map).await {
         Ok(c) => c,
         Err(e) => {
+            section.begin();
             print_install_error(&entry.source, &e);
             return if file
                 .generator
@@ -239,6 +319,7 @@ async fn try_upgrade_entry(
     let new_hash = match desired_content_hash(file, &content) {
         Ok(h) => h,
         Err(e) => {
+            section.begin();
             print_install_error(&entry.source, &e);
             return EntryUpgradeResult::Failed;
         }
@@ -249,6 +330,7 @@ async fn try_upgrade_entry(
             let current_hash = match installed_content_hash(file, &current) {
                 Ok(Some(h)) => h,
                 Ok(None) => {
+                    section.begin();
                     eprintln!(
                         "  {} {}: managed keys missing, skipped",
                         colors::symbol("!"),
@@ -257,11 +339,13 @@ async fn try_upgrade_entry(
                     return EntryUpgradeResult::UserModified;
                 }
                 Err(e) => {
+                    section.begin();
                     print_install_error(&entry.source, &e);
                     return EntryUpgradeResult::Failed;
                 }
             };
             if current_hash != entry.content_hash {
+                section.begin();
                 eprintln!(
                     "  {} {}: user-modified, skipped",
                     colors::symbol("!"),
@@ -275,6 +359,7 @@ async fn try_upgrade_entry(
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
+            section.begin();
             print_install_error(&entry.source, &anyhow::Error::from(e));
             return EntryUpgradeResult::Failed;
         }
@@ -288,6 +373,7 @@ async fn try_upgrade_entry(
                 .as_deref()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
+            section.begin();
             print_install_success(&display_name, "", &entry.destination, config);
             EntryUpgradeResult::Updated(AppEntry {
                 source: entry.source.clone(),
@@ -303,6 +389,7 @@ async fn try_upgrade_entry(
             EntryUpgradeResult::Skipped
         }
         Err(e) => {
+            section.begin();
             print_install_error(&entry.source, &e);
             EntryUpgradeResult::Failed
         }
@@ -372,6 +459,7 @@ async fn install_new_category_files(
     categories_by_name: &BTreeMap<String, metadata::AppCategory>,
     manifest: &AppManifest,
     env_map: &BTreeMap<String, String>,
+    section: &mut UpgradeSection<'_>,
 ) -> Result<(usize, usize, usize, Vec<AppEntry>, BTreeSet<String>)> {
     let mut updated = 0usize;
     let mut skipped = 0usize;
@@ -391,6 +479,7 @@ async fn install_new_category_files(
             let destination = match resolve_install_destination(cat, file, config) {
                 Ok(d) => d,
                 Err(e) => {
+                    section.begin();
                     eprintln!(
                         "  {} {}/{}: bad destination: {e:#}",
                         colors::symbol("✗"),
@@ -408,6 +497,7 @@ async fn install_new_category_files(
             let source = format!("app/{}/{}", cat.name, file.source_rel.display());
 
             if destination.exists() && file.install_strategy.is_copy() {
+                section.begin();
                 eprintln!(
                     "  {} {}: destination exists and is not managed, skipped",
                     colors::symbol("!"),
@@ -420,6 +510,7 @@ async fn install_new_category_files(
             let content = match upgrade_file_content(config, cat, file, env_map).await {
                 Ok(content) => content,
                 Err(e) => {
+                    section.begin();
                     eprintln!("  {} {}: {e:#}", colors::symbol_stderr("✗"), source);
                     if file
                         .generator
@@ -445,6 +536,7 @@ async fn install_new_category_files(
                         .as_deref()
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
+                    section.begin();
                     print_install_success(&display_name, "", &destination, config);
                     new_upserts.push(AppEntry {
                         source,
@@ -462,6 +554,7 @@ async fn install_new_category_files(
                     }
                 }
                 Ok(InstallOutcome::AlreadyManaged) => {
+                    section.begin();
                     eprintln!(
                         "  {} {}: destination exists and is not managed, skipped",
                         colors::symbol("!"),
@@ -473,6 +566,7 @@ async fn install_new_category_files(
                     skipped += 1;
                 }
                 Err(e) => {
+                    section.begin();
                     eprintln!("  {} {}: {e:#}", colors::symbol_stderr("✗"), source);
                     skipped += 1;
                 }
@@ -561,4 +655,23 @@ async fn upgrade_file_content(
     env_map: &BTreeMap<String, String>,
 ) -> Result<Vec<u8>> {
     super::materialize_file_content(config, cat, file, env_map).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_op_rows_only_start_the_app_section_in_verbose_mode() {
+        let mut quiet_separator = crate::output::SectionSeparator::new();
+        let mut quiet = UpgradeSection::new(&mut quiet_separator, false, 1);
+        quiet.print_up_to_date("app/sample/config.toml");
+        quiet.print_manual_refresh("app/sample/generated.txt", "sample", "generated.txt");
+        assert!(!quiet.started);
+
+        let mut verbose_separator = crate::output::SectionSeparator::new();
+        let mut verbose = UpgradeSection::new(&mut verbose_separator, true, 1);
+        verbose.print_up_to_date("app/sample/config.toml");
+        assert!(verbose.started);
+    }
 }

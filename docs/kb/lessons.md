@@ -468,7 +468,7 @@ measured, not inferred.
   anything," not on "is this category of action normally privileged" — compute the cheap
   read-only diff first.
 
-## 2026-07-26 — Managed system no-op rows ignored `upgrade --verbose`
+## 2026-07-26 — Global upgrade no-op sections must honor `--verbose`
 
 - **Symptom**: a default `shine upgrade` printed a full `Managed System Configs` section for an
   already-current split-DNS resource, even though the only result was counted as skipped.
@@ -478,6 +478,12 @@ measured, not inferred.
   create the section only for a visible result, and retain the full listing under `--verbose`.
 - **Rule**: optional upgrade sections must not print a header for no-op rows hidden by the
   command's verbosity policy; aggregate counters may still include those rows.
+- **Follow-up (2026-08-01)**: shell and app upgrade paths still printed inventory-only section
+  headers during a no-op run, and the footer collapsed unlike outcomes into an incomplete
+  `skipped` count. Global upgrade now lazily prints all three subsystem sections, reserves preset
+  source paths and ordinary no-op rows for `--verbose`, and limits the default footer to actionable
+  outcomes. The global heading is lazy too, so a fully converged default run matches `shine update`'s
+  compact empty-state style with the single line `Nothing to upgrade.`.
 
 ## 2026-07-06 — Embedded Git progress overwhelms command-level results
 
