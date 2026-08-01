@@ -409,9 +409,43 @@ shine env set SURGE_PROFILE '~/Library/Application Support/Surge/Profiles/MyProf
 shine app build surge
 ```
 
+The preset also installs commented, inert examples under `rules/` for three
+traffic classes: `LAN Network`, `LAN PROXY`, and `Other Direct`. Each class in
+`local-rules.conf` shows three alternative `RULE-SET` sources:
+
+```ini
+# RULE-SET,rules/lan.list,LAN Network
+# RULE-SET,http://127.0.0.1:8080/rules/lan.list,LAN Network,update-interval=86400
+# RULE-SET,https://rules.example.com/surge/lan.list,LAN Network,update-interval=86400
+```
+
+Use exactly one form per class. The relative file is recommended because Shine
+already installs it beside the profile. A loopback URL requires a separate HTTP
+server on the same device as Surge (`localhost` on iOS is the iOS device), while
+the HTTPS form requires replacing the example host with your own server. The
+example proxy, policy groups, and list entries remain commented until explicitly
+enabled.
+
 `shine app unbuild surge` removes those local section includes. App uninstall
 also attempts the same teardown before removing managed files. Build and
 unbuild require Bun and never run implicitly during install or upgrade.
+
+### Clash Verge Rev rule-provider examples
+
+The built-in `clash-verge` preset uses the same three traffic classes and ships
+an inert, fully commented `merge.yaml`. Its `rule-providers` section demonstrates
+three mutually exclusive source layouts:
+
+- `type: file` for rule lists already copied under mihomo's `HomeDir`;
+- `type: http` with `http://127.0.0.1:8080/...` for a separate loopback server;
+- `type: http` with `https://rules.example.com/...` for a remote server.
+
+Choose one complete provider block and uncomment the matching `LAN Network`,
+`LAN PROXY`, and `Other Direct` groups and `prepend-rules`. Mihomo restricts a
+file provider's `path` to its `HomeDir` unless `SAFE_PATHS` is configured, so
+Shine does not automatically point it at `~/.shine` or copy files into CVR's
+private data directory. As with Surge, localhost means the device running the
+client, not another LAN host.
 
 ### Uninstall app presets
 

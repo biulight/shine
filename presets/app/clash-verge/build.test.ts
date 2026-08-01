@@ -117,6 +117,11 @@ test("the example exposes the composite source keys", () => {
   expect(example).toContain("# proxies:");
   expect(example).toContain("# proxy-groups:");
   expect(example).toContain("# prepend-rules:");
-  expect(example).toContain("name: LAN SOCKS Rules, type: select, include-all: true, proxies: [DIRECT]");
+  expect(example).toContain("name: LAN Network, type: select");
+  expect(example).toContain("name: LAN PROXY, type: select");
+  expect(example).toContain("type: file, behavior: classical, format: text");
+  expect(example).toContain("http://127.0.0.1:8080/rules/lan.list");
+  expect(example).toContain("https://rules.example.com/surge/lan.list");
   expect(example).not.toContain("exclude-filter:");
+  expect(example).not.toContain("surge.biulight.internal");
 });

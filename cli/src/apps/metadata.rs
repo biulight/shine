@@ -915,6 +915,15 @@ mod tests {
                     "local-rules.conf".to_string(),
                     "local-rules.conf".to_string()
                 ),
+                ("rules/lan.list".to_string(), "rules/lan.list".to_string()),
+                (
+                    "rules/lan-socks.list".to_string(),
+                    "rules/lan-socks.list".to_string()
+                ),
+                (
+                    "rules/other-direct.list".to_string(),
+                    "rules/other-direct.list".to_string()
+                ),
                 (
                     "local-proxy-groups.conf".to_string(),
                     "local-proxy-groups.conf".to_string()
@@ -1275,6 +1284,9 @@ source = "config.toml"
         assert!(merge.contains("# proxies:"));
         assert!(merge.contains("# proxy-groups:"));
         assert!(merge.contains("# prepend-rules:"));
+        assert!(merge.contains("type: file, behavior: classical, format: text"));
+        assert!(merge.contains("http://127.0.0.1:8080/rules/lan.list"));
+        assert!(merge.contains("https://rules.example.com/surge/lan.list"));
 
         // post_install/post_upgrade re-invoke `shine app build clash-verge` so the
         // artifact writes the bound CVR subscription Extend Config after an

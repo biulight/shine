@@ -31,6 +31,21 @@ target = "local-rules.conf"
 description = "Local priority rules merged into [Rule] ahead of provider rules."
 
 [[files]]
+source = "rules/lan.list"
+target = "rules/lan.list"
+description = "Example local/private-network rules for the LAN Network group."
+
+[[files]]
+source = "rules/lan-socks.list"
+target = "rules/lan-socks.list"
+description = "Example rules for traffic that should prefer a LAN SOCKS exit."
+
+[[files]]
+source = "rules/other-direct.list"
+target = "rules/other-direct.list"
+description = "Example rules for destinations that should default to direct routing."
+
+[[files]]
 source = "local-proxy-groups.conf"
 target = "local-proxy-groups.conf"
 description = "Local proxy groups merged into [Proxy Group] after provider groups."

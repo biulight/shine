@@ -11,9 +11,11 @@
 LAN 规则服务器**，使本地规则可版本控制、可通过 presets overlay 个性化、可跨订阅长期保留，且对
 远端订阅零侵入。
 
-本 PRD 与仓库内的 **`surge` 预设逐项对齐**——两者共享同一套「规则真源 → 推送到 LAN 服务器 →
-客户端按 URL 远程拉取并按 interval 自动刷新」的机制，只是把 Surge 的 `#!include` / `RULE-SET`
-换成 mihomo 的 **Merge 配置 + `rule-providers`**。
+本 PRD 与仓库内的 **`surge` 预设逐项对齐**——实际 overlay 中两者共享同一套「规则真源 →
+推送到 LAN 服务器 → 客户端按 URL 远程拉取并按 interval 自动刷新」的机制，只是把
+Surge 的 `#!include` / `RULE-SET` 换成 mihomo 的 **Merge 配置 + `rule-providers`**。内置
+惰性示例另外展示 HomeDir 本地文件、localhost HTTP 和远程 HTTPS 三种来源，但不改变
+overlay 的远程共享方案。
 
 ## 2. 产品目标
 
@@ -113,7 +115,7 @@ shine task run upload_surge     # 推送规则到 LAN 服务器
 shine app build clash-verge     # 经 mihomo API 立即刷新 provider（可选；否则按 interval 自动生效）
 ```
 
-规则需引用 `merge.yaml` 中定义的策略组名称（`Local Network` / `LAN SOCKS Rules` / `Other Direct`）；
+规则需引用 `merge.yaml` 中定义的策略组名称（`LAN Network` / `LAN PROXY` / `Other Direct`）；
 内置模板不用虚构的策略组名启用任何规则。
 
 ### 5.4 刷新订阅
@@ -145,12 +147,15 @@ presets/app/clash-verge/                      # 本仓 base：仅示例
 ```
 
 **base 仅示例，真实值在 overlay**（与 Surge `local-*.conf` 完全一致的分层）：本仓 `merge.yaml` 是
-惰性、逐行注释、默认空的示例；真实配置放在 presets overlay 的**同名文件** `app/clash-verge/merge.yaml`
+惰性、逐行注释、默认空的示例，并展示 HomeDir file / localhost HTTP / remote HTTPS 三种互斥
+provider 写法；真实配置放在 presets overlay 的**同名文件** `app/clash-verge/merge.yaml`
 （真实值**直接硬编码**、无模板），按同名路径覆盖 base。因不再用 `@@VAR@@`，overlay 的 `merge.yaml`
 始终是合法 YAML（可直接编辑/校验/导入）；overlay 的 `shine.env.toml` 只留 `CLASH_CONTROLLER_URL/TOKEN`。
 
-**不含 `rules/`**：规则真源与 Surge 共用，由 `upload_surge` 推送；`merge.yaml` 的 `rule-providers`
-引用同一 LAN 服务器。base build.ts 无私密、通用可用；overlay 无需自带 build.ts（`shine app build`
+**不含 `rules/`**：实际 overlay 的规则真源与 Surge 共用，由 `upload_surge` 推送；
+`merge.yaml` 的 `rule-providers` 引用同一 LAN 服务器。如果选择内置的 `type: file` 示例，用户必须
+自行将 `.list` 文件放入 mihomo `HomeDir`；出于 mihomo 的路径安全限制，Shine 不会自动写入 CVR 私有目录或
+配置 `SAFE_PATHS`。base build.ts 无私密、通用可用；overlay 无需自带 build.ts（`shine app build`
 在 overlay 缺脚本时回退到 base 版）。
 
 `shine.toml`：`dest = "~/.shine/clash-verge"`（shine 自管暂存区，不碰 CVR 私有存储）；`[artifact]`
@@ -202,6 +207,8 @@ merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 用以下键（�
 - 规则顺序有语义：mihomo 从上到下首匹配；`prepend-rules` 保证本地规则先于订阅规则。
 - `rule-providers` 用 `behavior: classical, format: text` 直接消费 Surge `.list`（含
   `IP-CIDR,…,no-resolve`）——两端共用一份规则源（详见 §8 尖刺 b 的逐行兼容验证）。
+- `type: file` 的 `path` 必须位于 mihomo `HomeDir`；需访问其他目录时由用户显式配置
+  `SAFE_PATHS`。localhost HTTP provider 需要在运行 mihomo 的同一设备上有独立服务。
 - 内网规则服务器的 provider 必须显式设 `proxy: DIRECT`，避免 provider 更新沿订阅代理出站并以
   `EOF`/HTTP 503 失败。
 - 若 provider 域名依赖系统 split DNS（例如 Windows NRPT），还必须镜像该域名后缀与 DNS 服务器：

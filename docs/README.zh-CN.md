@@ -374,8 +374,15 @@ shine app install surge
 ```
 
 该功能需要 Bun。转换器支持可兼容的 `ss://` 和 `vmess://`，并以不含凭据的摘要报告被跳过的 VLESS、未知 transport 和坏记录；用户维护的
-`local-proxies.conf` 不会被改写。`shine update` 只下载到内存并比较，
-`shine upgrade` 才应用变化并 reload Surge；刷新失败时保留上次成功生成的文件。
+`local-proxies.conf` 不会被改写。内置生成器为手动模式，常规的 `shine update`
+和 `shine upgrade` 不会消耗订阅服务商的短时访问窗口。打开窗口后可显式刷新：
+
+```bash
+shine app refresh surge subscription-proxies.conf
+```
+
+`shine app refresh surge` 会刷新该类别下所有已安装的生成文件。刷新失败时保留上次
+成功生成的文件；除非指定 `--force`，否则用户修改过的目标文件不会被覆盖。
 
 `local-proxy-groups.conf` 中提供：
 
@@ -392,9 +399,38 @@ shine env set SURGE_PROFILE '~/Library/Application Support/Surge/Profiles/MyProf
 shine app build surge
 ```
 
+预设还会在 `rules/` 目录安装三类默认注释、不会生效的示例：`LAN Network`、
+`LAN PROXY` 和 `Other Direct`。`local-rules.conf` 为每类流量同时展示三种可替代的
+`RULE-SET` 来源：
+
+```ini
+# RULE-SET,rules/lan.list,LAN Network
+# RULE-SET,http://127.0.0.1:8080/rules/lan.list,LAN Network,update-interval=86400
+# RULE-SET,https://rules.example.com/surge/lan.list,LAN Network,update-interval=86400
+```
+
+每类只应启用一种。推荐使用相对文件，因为 Shine 已将它与 Profile 安装在同一目录。
+localhost 写法需要在运行 Surge 的同一设备上额外启动 HTTP 服务；iOS 上的
+`localhost` 指 iOS 设备本身。HTTPS 写法则需要将示例域名换成自己的服务器。代理、
+策略组和规则列表中的示例均保持注释，只有显式取消注释后才会生效。
+
 `shine app unbuild surge` 会移除这些本地 section include；卸载 app 时也会在
 删除托管文件前尽力执行相同的 teardown。build/unbuild 需要 Bun，并且不会在
 install 或 upgrade 时隐式执行。
+
+### Clash Verge Rev 规则 Provider 示例
+
+内置 `clash-verge` 预设使用与 Surge 相同的三类流量，并提供一份完全注释、默认不生效的
+`merge.yaml`。其 `rule-providers` 同时展示三套互斥的来源：
+
+- `type: file`：规则文件已复制到 mihomo `HomeDir` 内；
+- `type: http` + `http://127.0.0.1:8080/...`：由额外的 loopback HTTP 服务提供；
+- `type: http` + `https://rules.example.com/...`：由远程 HTTPS 服务提供。
+
+每次只选择一整套 provider，并同时取消 `LAN Network`、`LAN PROXY`、`Other Direct`
+策略组与 `prepend-rules` 的注释。mihomo 默认将 file provider 的 `path` 限制在
+`HomeDir` 内，除非额外配置 `SAFE_PATHS`；因此 Shine 不会自动指向 `~/.shine`，也不会将文件
+偷偷写入 CVR 的私有数据目录。与 Surge 相同，localhost 指运行客户端的设备，不是另一台 LAN 主机。
 
 ### 卸载应用预设
 

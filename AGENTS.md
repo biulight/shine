@@ -288,14 +288,14 @@ shine/
     │   └── utils/   copyfile.sh, shine.toml
     ├── app/
     │   ├── archey4/    config.json, shine.toml
-    │   ├── clash-verge/ merge.yaml (inert commented composite EXAMPLE — real overlay copy is hardcoded, no templating), build.ts + build.test.ts + unbuild.ts (bun), shine.toml  (dest = ~/.shine/clash-verge; plain Copy. `shine app build clash-verge` reads profiles.yaml to resolve the current subscription's merge/rules/proxies/groups bindings; renders rule-providers to Merge and proxies/proxy-groups/prepend-rules into the three CVR 2.x `{ prepend, append, delete }` editor files; never falls back to global files or mutates profiles.yaml/bindings/cache. A changed write asks the user to reselect the profile; a later build refreshes providers through CLASH_CONTROLLER_URL/TOKEN. See docs/clash-verge-local-subscription-prd.md)
+    │   ├── clash-verge/ merge.yaml (inert commented composite EXAMPLE with file/loopback/HTTPS rule-provider alternatives — real overlay copy is hardcoded, no templating), build.ts + build.test.ts + unbuild.ts (bun), shine.toml  (dest = ~/.shine/clash-verge; plain Copy. `shine app build clash-verge` reads profiles.yaml to resolve the current subscription's merge/rules/proxies/groups bindings; renders rule-providers to Merge and proxies/proxy-groups/prepend-rules into the three CVR 2.x `{ prepend, append, delete }` editor files; never falls back to global files or mutates profiles.yaml/bindings/cache. A changed write asks the user to reselect the profile; a later build refreshes providers through CLASH_CONTROLLER_URL/TOKEN. See docs/clash-verge-local-subscription-prd.md)
     │   ├── docker-desktop/ settings-store.jsonc, shine.toml
     │   ├── docker-engine/  daemon.jsonc, shine.toml
     │   ├── fastfetch/  config.jsonc, shine.toml
     │   ├── ghostty/    config.ghostty, shine.toml
     │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig; no shine.toml, uses annotation instead)
     │   ├── JetBrains/  shine.toml
-    │   ├── surge/      local-proxies.conf, local-proxy-groups.conf, local-rules.conf, subscription-proxies.conf + generate-subscription.ts/tests (Bun Base64 SS/VMess generator; VLESS skipped), build.ts + unbuild.ts + profile-artifact.ts/tests (Bun; atomic profile section-include patch/teardown), shine.toml  (dest = Surge Profiles dir; Subscription group loads generated policies through policy-path)
+    │   ├── surge/      local-proxies.conf, local-proxy-groups.conf, local-rules.conf, rules/*.list examples, subscription-proxies.conf + generate-subscription.ts/tests (Bun Base64 SS/VMess generator; VLESS skipped), build.ts + unbuild.ts + profile-artifact.ts/tests (Bun; atomic profile section-include patch/teardown), shine.toml  (dest = Surge Profiles dir; Subscription group loads generated policies through policy-path)
     │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
