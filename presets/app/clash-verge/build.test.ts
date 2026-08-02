@@ -122,6 +122,8 @@ test("the example exposes the composite source keys", () => {
   expect(example).toContain("type: file, behavior: classical, format: text");
   expect(example).toContain("http://127.0.0.1:8080/rules/lan.list");
   expect(example).toContain("https://rules.example.com/surge/lan.list");
+  expect(example).toContain('"+.corp.example": 192.0.2.53');
+  expect(example.match(/^#   (?:lan|lan-socks|other-direct):.*proxy: DIRECT/gm)).toHaveLength(6);
   expect(example).not.toContain("exclude-filter:");
   expect(example).not.toContain("surge.biulight.internal");
 });

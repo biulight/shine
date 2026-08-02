@@ -42,13 +42,17 @@
 #   other-direct: { type: file, behavior: classical, format: text, path: ./ruleset/shine-source/other-direct.list }
 #
 # # Option 2 — a separate HTTP server on the device running mihomo. `localhost`
-# # may replace `127.0.0.1`; it never means another machine on the LAN.
+# # may replace `127.0.0.1`; it never means another machine on the LAN. Here
+# # `proxy: DIRECT` affects only provider downloads and prevents loopback traffic
+# # from following the currently selected GLOBAL/proxy policy.
 # rule-providers:
 #   lan:          { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: http://127.0.0.1:8080/rules/lan.list,          path: ./ruleset/shine-loopback-lan.list }
 #   lan-socks:    { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: http://127.0.0.1:8080/rules/lan-socks.list,    path: ./ruleset/shine-loopback-lan-socks.list }
 #   other-direct: { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: http://127.0.0.1:8080/rules/other-direct.list, path: ./ruleset/shine-loopback-other-direct.list }
 #
 # # Option 3 — a remote HTTPS server. Replace rules.example.com with your host.
+# # Keep `proxy: DIRECT` for LAN/private servers; remove it or select another
+# # proxy when the rule host itself is reachable only through a proxy.
 # rule-providers:
 #   lan:          { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: https://rules.example.com/surge/lan.list,          path: ./ruleset/shine-remote-lan.list }
 #   lan-socks:    { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: https://rules.example.com/surge/lan-socks.list,    path: ./ruleset/shine-remote-lan-socks.list }

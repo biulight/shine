@@ -445,7 +445,12 @@ Choose one complete provider block and uncomment the matching `LAN Network`,
 file provider's `path` to its `HomeDir` unless `SAFE_PATHS` is configured, so
 Shine does not automatically point it at `~/.shine` or copy files into CVR's
 private data directory. As with Surge, localhost means the device running the
-client, not another LAN host.
+client, not another LAN host. The HTTP examples use `proxy: DIRECT` only for
+provider downloads, preventing a loopback or private rule server from following
+the selected `GLOBAL`/proxy policy; remove or change it if a remote rule server
+is reachable only through a proxy. For a private provider hostname that the OS
+resolves through split DNS (for example, Windows NRPT), also adapt the example
+`dns.nameserver-policy`, because mihomo may use its own DNS resolver.
 
 ### Uninstall app presets
 

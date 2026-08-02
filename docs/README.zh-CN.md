@@ -431,6 +431,10 @@ install 或 upgrade 时隐式执行。
 策略组与 `prepend-rules` 的注释。mihomo 默认将 file provider 的 `path` 限制在
 `HomeDir` 内，除非额外配置 `SAFE_PATHS`；因此 Shine 不会自动指向 `~/.shine`，也不会将文件
 偷偷写入 CVR 的私有数据目录。与 Surge 相同，localhost 指运行客户端的设备，不是另一台 LAN 主机。
+HTTP 示例中的 `proxy: DIRECT` 只控制 provider 规则文件的下载，避免 loopback 或私有规则服务器
+跟随当前 `GLOBAL`/代理策略；如果远程规则服务器只能通过代理访问，则应删除或调整该字段。若私有
+provider 域名依赖系统的分流 DNS（例如 Windows NRPT），还需按实际环境修改示例中的
+`dns.nameserver-policy`，因为 mihomo 可能使用自己的 DNS 解析器。
 
 ### 卸载应用预设
 
