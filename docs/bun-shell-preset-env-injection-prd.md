@@ -177,7 +177,7 @@ ownership rules remain the sole authority for overwrite and uninstall decisions.
 - Regenerate launchers deterministically and refresh **only when the resolved
   launcher content actually changes**. An entry that gains, drops, or reorders an
   `env` declaration produces different launcher bytes and refreshes on
-  install/reinstall/upgrade. An entry with no `env` declaration produces launcher
+  install (including `--replace-managed`) or upgrade. An entry with no `env` declaration produces launcher
   bytes byte-identical to v1 and stays current — it must not be needlessly rewritten.
   A user-modified launcher remains a conflict rather than becoming implicitly managed.
 - Existing Bun entries that omit `env` retain their v1 launcher behavior and do not

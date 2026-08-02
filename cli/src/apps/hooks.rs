@@ -1,6 +1,6 @@
 //! Shared runner for app-preset lifecycle command hooks.
 //!
-//! `post_install` (fired by `shine app install`/`reinstall`) and `post_upgrade`
+//! `post_install` (fired by `shine app install`, including `--replace-managed`) and `post_upgrade`
 //! (fired by `shine upgrade`) share identical execution semantics — run once per
 //! changed category, gated behind `allow_app_hooks` for external presets, with
 //! non-fatal failures. This module is the single implementation; the two phases

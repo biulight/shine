@@ -81,7 +81,7 @@ bugs. Check this list before changing the modules named in each entry.
   gain command execution during ordinary read-oriented update checks.
 - **Manual generators never run from implicit status or upgrade paths.**
   `generator.auto = false` leaves `list`/`info`/`update` local-only and
-  causes upgrade to preserve the manifest snapshot. Only install/reinstall or
+  causes upgrade to preserve the manifest snapshot. Only install (including `--replace-managed`) or
   `shine app refresh` may run it; refresh must target manifest-owned files and
   preserve user modifications unless `--force` is explicit.
 - **Generator failures never destroy the last-known-good managed file.** Status

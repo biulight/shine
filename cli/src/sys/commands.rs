@@ -412,7 +412,7 @@ async fn handle_init_for_os(
         println!(
             "{}",
             colors::dim(&format!(
-                "No sys init items selected for {} ({}).",
+                "No sys bootstrap items selected for {} ({}).",
                 os_id,
                 selection.source.describe()
             ))
@@ -472,7 +472,7 @@ async fn handle_init_for_os(
         .iter()
         .any(|outcome| outcome.status == SysItemStatus::Failed)
     {
-        bail!("sys init failed");
+        bail!("sys bootstrap failed");
     }
 
     Ok(())
@@ -678,7 +678,7 @@ label = "Two"
 "#,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("duplicate sys init item id"));
+        assert!(err.to_string().contains("duplicate sys bootstrap item id"));
     }
 
     #[test]
@@ -1711,7 +1711,7 @@ required_env = ["NOT-AN-ENV"]
         ] {
             let content = crate::presets::read_asset_bytes(path)
                 .and_then(|bytes| String::from_utf8(bytes).ok())
-                .unwrap_or_else(|| panic!("missing embedded sys init script: {path}"));
+                .unwrap_or_else(|| panic!("missing embedded sys bootstrap script: {path}"));
 
             assert!(
                 content.contains(marker),
@@ -2188,7 +2188,7 @@ esac
             .await
             .unwrap_err();
 
-        assert!(err.to_string().contains("sys init failed"));
+        assert!(err.to_string().contains("sys bootstrap failed"));
         let calls = fs::read_to_string(&calls).await.unwrap();
         assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "fails"]);
         let sys_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();

@@ -33,5 +33,6 @@ The former command names are removed rather than retained as aliases. `update --
 - ADR 0007's pull safety policy and ADR 0010's managed-overlay policy are unchanged; only their
   public command paths move under `shine preset`.
 
-ADR 0022 extends this vocabulary with an action-first everyday interface, canonical resource
-targets, and hidden compatibility spellings for lifecycle commands.
+ADR 0022 extends this vocabulary with an action-first everyday interface and canonical resource
+targets. It also removes the superseded pre-release lifecycle spellings instead of retaining
+hidden compatibility aliases.

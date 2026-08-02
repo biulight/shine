@@ -75,9 +75,8 @@ shine update
 shine upgrade app/starship
 ```
 
-Previous `reinstall`, `app build`/`unbuild`, `sys init`, flat `env encrypt`/`decrypt`/`export`/
-`seal`/`identity`, and scoped `app init`/`shell init` spellings remain accepted as hidden
-compatibility aliases. New scripts should use the primary forms documented here.
+Shine 1.0 intentionally accepts only the primary spellings documented here; superseded
+pre-release command forms are not retained as aliases.
 
 ### List available shell presets
 
@@ -257,7 +256,7 @@ Current built-in presets:
 - `macos` — offers selectable Homebrew, Rust, Yazi, Starship, Neovim, AstroNvim, ZeroTier, zsh plugin, zoxide, Atuin, fzf, bat, eza, nvm, Bun, pnpm, mise, and Fastfetch steps. The `recommended` profile includes Homebrew and the core terminal/editor tools; the `all` profile adds JavaScript runtimes, mise, and Fastfetch.
 - `windows` — offers selectable Rust, Yazi, Starship, zoxide, Atuin, fzf, bat, eza, ZeroTier, Bun, pnpm, and mise steps. The `recommended` profile includes Rust and core terminal tools; the `all` profile adds JavaScript runtime and environment manager steps.
 
-When selected tools need shell integration, sys init installs managed `pre` and `post` profile loaders. The `pre` loader runs near the top of the user profile for PATH, Homebrew, and completion search path setup; the `post` loader runs near the end for Yazi, Starship, zoxide, Atuin, fzf, mise, aliases, and shell plugins. Managed profile files are merged so user edits inside them are preserved or reported for review.
+When selected tools need shell integration, `sys bootstrap` installs managed `pre` and `post` profile loaders. The `pre` loader runs near the top of the user profile for PATH, Homebrew, and completion search path setup; the `post` loader runs near the end for Yazi, Starship, zoxide, Atuin, fzf, mise, aliases, and shell plugins. Managed profile files are merged so user edits inside them are preserved or reported for review.
 
 On Ubuntu and macOS, the managed `pre` profile also syncs the terminal's light/dark theme via `shine theme sync`, exporting `SHINE_TERMINAL_THEME=light|dark` and setting `BAT_THEME` to `GitHub` for light backgrounds and `OneHalfDark` for dark backgrounds (override with `SHINE_BAT_LIGHT_THEME`/`SHINE_BAT_DARK_THEME`). Resolution tries, in order: an already-exported `SHINE_TERMINAL_THEME` (including the value `shine ssh` injects from your local terminal — see below), `COLORFGBG`, then a direct OSC 11 query with a total (not per-byte) read deadline. A `BAT_THEME` you've already set yourself is left untouched. Disable auto-sync with `sync_terminal_theme = false` in `config.toml` or `SHINE_SYNC_TERMINAL_THEME=0` (the env var always wins); sync manually anytime with `shine theme sync` regardless of that setting, or install the optional `shine-theme-sync` command via `shine shell install utils`. `shine ssh <host>` queries your local terminal directly before connecting, so it doesn't depend on the remote OSC query at all — see [docs/terminal-theme-sync-prd.md](docs/terminal-theme-sync-prd.md). macOS sys profile management continues to target zsh, while Ubuntu supports bash and zsh.
 
@@ -992,7 +991,7 @@ shine env run --with MY_TOKEN=API_TOKEN -- bun run build
 shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
 ```
 
-Each value follows the same encrypted-first lookup as `env export`. The optional
+Each value follows the same encrypted-first lookup as `env secret export`. The optional
 name after `=` is the environment variable visible to the child process. Explicit
 `--with` values override variables inherited from the shell and values loaded from
 a workspace, and no workspace file is required when at least one `--with` is used.

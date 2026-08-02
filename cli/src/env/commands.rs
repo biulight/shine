@@ -382,13 +382,13 @@ fn env_export_secret_key(key: &str) -> String {
 fn validate_env_export_key(key: &str) -> Result<()> {
     let mut chars = key.chars();
     let Some(first) = chars.next() else {
-        bail!("env export key must not be empty");
+        bail!("env secret export key must not be empty");
     };
     if !(first == '_' || first.is_ascii_alphabetic()) {
-        bail!("env export key must start with a letter or underscore: {key}");
+        bail!("env secret export key must start with a letter or underscore: {key}");
     }
     if !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
-        bail!("env export key must contain only letters, digits, and underscores: {key}");
+        bail!("env secret export key must contain only letters, digits, and underscores: {key}");
     }
     Ok(())
 }
@@ -871,8 +871,9 @@ mod tests {
         let err = resolve_env_encrypt_output(None, Some("GH-TOKEN")).unwrap_err();
 
         assert!(
-            err.to_string()
-                .contains("env export key must contain only letters, digits, and underscores"),
+            err.to_string().contains(
+                "env secret export key must contain only letters, digits, and underscores"
+            ),
             "error should explain invalid inferred key: {err:#}"
         );
     }

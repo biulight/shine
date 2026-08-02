@@ -1,6 +1,5 @@
-//! Top-level `shine install/reinstall/uninstall <category>` shims: they infer
-//! whether `category` names a shell preset or an app preset (or ask the user
-//! when both match) and delegate to the corresponding handler.
+//! Top-level `shine install/uninstall <target>` shims: they resolve canonical
+//! or unambiguous preset targets and delegate to the corresponding handler.
 
 use anyhow::{Result, bail};
 
@@ -47,10 +46,6 @@ pub async fn handle_install_shim(
         ShimResolution::Conflict => bail_ambiguous(category),
         ShimResolution::Missing => bail_shim_missing(category),
     }
-}
-
-pub async fn handle_reinstall_shim(config: &Config, target: &str) -> Result<()> {
-    handle_install_shim(config, target, true).await
 }
 
 pub async fn handle_uninstall_shim(

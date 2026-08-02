@@ -34,32 +34,8 @@ pub enum EnvCommands {
         /// Variable name
         key: String,
     },
-    /// Decode and decrypt an encrypted secret from [env] (GPG or age)
-    #[command(hide = true)]
-    Decrypt {
-        /// Variable name containing encrypted ciphertext
-        key: String,
-    },
-    /// Decrypt KEY_SECRET and print shell code that exports KEY
-    #[command(hide = true)]
-    Export {
-        /// Variable name to export from KEY_SECRET
-        key: String,
-        /// Export under a different name in the current shell
-        #[arg(long = "as", value_name = "ALIAS")]
-        alias: Option<String>,
-    },
-    /// Encrypt stdin and print ciphertext (GPG by default, or age with --backend age)
-    #[command(hide = true)]
-    Encrypt(EnvEncryptCommand),
-    /// Seal pending secrets in workspace environment files
-    #[command(hide = true)]
-    Seal(EnvSealCommand),
     /// Run a command with the workspace environment
     Run(EnvRunCommand),
-    /// Manage age identities used to decrypt age-backed secrets
-    #[command(hide = true)]
-    Identity(EnvIdentityCommand),
     /// Encrypt, decrypt, export, and manage secret identities
     Secret(EnvSecretCommand),
 }

@@ -42,8 +42,8 @@ config key.
 - `run_post_upgrade_hooks` is generalized into `apps/hooks.rs::run_app_hooks(config, get_category,
   changed, HookPhase)`; `upgrade` passes `PostUpgrade`, `install` passes `PostInstall`. Identical
   semantics: run once per *changed* category, gated behind `allow_app_hooks` for external presets,
-  failures non-fatal. `reinstall` = `handle_install(force = true)`, whose forced overwrite counts as
-  a change, so `post_install` fires there too.
+  failures non-fatal. `install --replace-managed` calls `handle_install(force = true)`; its forced
+  overwrite counts as a change, so `post_install` fires there too.
 - Hooks still inherit only the parent env (no `SHINE_APP_*`/`[env]` injection) — that richer contract
   is reserved for artifact scripts, below.
 
@@ -70,6 +70,6 @@ config key.
   and script-owned, not a core-tracked receipt.
 - A preset's reload/setup can run on first install via `post_install` without waiting for an upgrade.
 - `shine upgrade` and `shine app install` stay side-effect-predictable: they never run artifact
-  scripts; only the explicit `build`/`unbuild` commands and the uninstall-time teardown do.
+  scripts; only explicit `shine app artifact apply`/`remove` and the uninstall-time teardown do.
 - Adding either mechanism to a new app preset needs no Shine core change — just a `post_install`
   table and/or an `[artifact].teardown` script that honors the env contract.

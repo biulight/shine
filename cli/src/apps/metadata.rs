@@ -17,7 +17,7 @@ pub struct AppCategory {
     pub files: Vec<AppFile>,
     pub list_mode: AppListMode,
     pub post_upgrade: Vec<AppHook>,
-    /// Hooks run after `shine app install`/`reinstall` when at least one file in
+    /// Hooks run after `shine app install` (including `--replace-managed`) when at least one file in
     /// this category actually changed — the install-time counterpart to
     /// `post_upgrade` (which only fires on `shine upgrade`).
     pub post_install: Vec<AppHook>,
@@ -91,8 +91,8 @@ pub struct AppGenerator {
     pub env: Vec<EnvVarSpec>,
     pub when_env: String,
     /// Whether read-oriented status checks and `shine upgrade` may run this
-    /// generator implicitly. Install/reinstall and `app refresh` ignore this
-    /// switch. Defaults to true for compatibility with existing presets.
+    /// generator implicitly. Install (including `--replace-managed`) and `app refresh` ignore
+    /// this switch. Defaults to true for compatibility with existing presets.
     pub auto: bool,
 }
 

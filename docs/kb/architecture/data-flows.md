@@ -224,7 +224,7 @@ failures are tolerated and never break the user's shell.
 
 `env/workspace.rs::handle_run` optionally loads and merges workspace environment sources, then
 adds each repeated `--with KEY[=ALIAS]` value from the active config `[env]`. Explicit values use
-the same lookup as `env export` (`KEY_SECRET` decrypted first, then plaintext `KEY`) and override
+the same lookup as `env secret export` (`KEY_SECRET` decrypted first, then plaintext `KEY`) and override
 both workspace values and inherited process variables. Without a discovered or explicit
 workspace, at least one `--with` is required. The merged environment is applied only to the
 spawned child process, whose exit status is propagated by Shine.

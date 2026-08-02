@@ -71,8 +71,7 @@ shine update
 shine upgrade app/starship
 ```
 
-旧的 `reinstall`、`app build`/`unbuild`、`sys init`、扁平的 `env encrypt`/`decrypt`/`export`/
-`seal`/`identity`，以及 scoped `app init`/`shell init` 拼写仍作为隐藏兼容入口可用。新脚本应使用本文档中的主拼写。
+Shine 1.0 只接受本文档中的主拼写；发布前被替代的命令形式不再保留别名。
 
 ### 查看可用的 shell 预设
 
@@ -251,7 +250,7 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "nvim found"
 - `macos` — 提供 Homebrew、Rust、Yazi、Starship、Neovim、AstroNvim、ZeroTier、zsh 插件、zoxide、Atuin、fzf、bat、eza、nvm、Bun、pnpm、mise 和 Fastfetch 的可选步骤。`recommended` profile 包含 Homebrew 和核心终端/编辑器工具；`all` profile 额外包含 JavaScript 运行时、mise 和 Fastfetch。
 - `windows` — 提供 Rust、Yazi、Starship、zoxide、Atuin、fzf、bat、eza、ZeroTier、Bun、pnpm 和 mise 的可选步骤。`recommended` profile 包含 Rust 和核心终端工具；`all` profile 额外包含 JavaScript 运行时和环境管理器步骤。
 
-当所选工具需要 shell 集成时，sys init 会安装受管的 `pre` 和 `post` profile loader。`pre` loader 会放在用户 profile 靠前位置，用于 PATH、Homebrew 和补全搜索路径；`post` loader 会放在靠后位置，用于 Yazi、Starship、zoxide、Atuin、fzf、mise、别名和 shell 插件。受管 profile 文件会被合并，用户在其中的修改会保留或提示需要检查。
+当所选工具需要 shell 集成时，`sys bootstrap` 会安装受管的 `pre` 和 `post` profile loader。`pre` loader 会放在用户 profile 靠前位置，用于 PATH、Homebrew 和补全搜索路径；`post` loader 会放在靠后位置，用于 Yazi、Starship、zoxide、Atuin、fzf、mise、别名和 shell 插件。受管 profile 文件会被合并，用户在其中的修改会保留或提示需要检查。
 
 在 Ubuntu 和 macOS 上，受管的 `pre` profile 还会通过 `shine theme sync` 同步终端的明暗主题，导出 `SHINE_TERMINAL_THEME=light|dark`，并设置 bat：浅色背景使用 `GitHub`，深色背景使用 `OneHalfDark`（可用 `SHINE_BAT_LIGHT_THEME`/`SHINE_BAT_DARK_THEME` 覆盖）。解析顺序依次是：已导出的 `SHINE_TERMINAL_THEME`（包含 `shine ssh` 从本地终端注入的值，见下文）、`COLORFGBG`，最后是使用总截止时间（而非逐字节超时）读取的 OSC 11 直接查询。若用户已自行设置过 `BAT_THEME`，则保持不变。可在 `config.toml` 中设置 `sync_terminal_theme = false` 或设置 `SHINE_SYNC_TERMINAL_THEME=0`（环境变量始终优先）关闭自动同步；无论该开关如何，都可随时用 `shine theme sync` 手动同步，或通过 `shine shell install utils` 安装可选的 `shine-theme-sync` 命令。`shine ssh <host>` 会在连接前直接查询本地终端，因此完全不依赖远端的 OSC 查询——详见 [docs/terminal-theme-sync-prd.md](terminal-theme-sync-prd.md)。macOS 的 sys profile 仍仅管理 zsh，Ubuntu 支持 bash 和 zsh。
 
@@ -946,7 +945,7 @@ shine env run --with MY_TOKEN=API_TOKEN -- bun run build
 shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
 ```
 
-每个变量都沿用 `env export` 的规则，优先解密 `<KEY>_SECRET`，否则读取明文 `<KEY>`。
+每个变量都沿用 `env secret export` 的规则，优先解密 `<KEY>_SECRET`，否则读取明文 `<KEY>`。
 等号右侧可指定子进程看到的变量名。显式 `--with` 值会覆盖当前终端和 workspace 中的
 同名变量；只要指定了至少一个 `--with`，就不要求存在 workspace 文件。
 

@@ -57,10 +57,10 @@ fn validate_manifest(manifest: &SysManifest) -> Result<()> {
     for item in &manifest.items {
         validate_item_id(&item.id)?;
         if item.label.trim().is_empty() {
-            bail!("sys init item `{}` must have a label", item.id);
+            bail!("sys bootstrap item `{}` must have a label", item.id);
         }
         if !ids.insert(item.id.clone()) {
-            bail!("duplicate sys init item id `{}`", item.id);
+            bail!("duplicate sys bootstrap item id `{}`", item.id);
         }
         let mut env_keys = BTreeSet::new();
         for key in &item.required_env {
@@ -112,7 +112,7 @@ fn validate_manifest(manifest: &SysManifest) -> Result<()> {
 fn validate_driver_config(item: &SysItem) -> Result<()> {
     if item.mode == SysItemMode::Init && item.driver != SysDriverKind::Script {
         bail!(
-            "sys init item `{}` cannot use managed driver `{:?}`",
+            "sys bootstrap item `{}` cannot use managed driver `{:?}`",
             item.id,
             item.driver
         );
@@ -182,14 +182,14 @@ fn validate_driver_config(item: &SysItem) -> Result<()> {
 
 fn validate_item_id(item_id: &str) -> Result<()> {
     if item_id.trim().is_empty() {
-        bail!("sys init item ids must not be empty");
+        bail!("sys bootstrap item ids must not be empty");
     }
     if !item_id
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         bail!(
-            "sys init item id `{item_id}` contains invalid characters (allowed: a-z A-Z 0-9 - _)"
+            "sys bootstrap item id `{item_id}` contains invalid characters (allowed: a-z A-Z 0-9 - _)"
         );
     }
     Ok(())

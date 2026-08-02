@@ -45,13 +45,6 @@ pub enum Commands {
         #[arg(long)]
         replace_managed: bool,
     },
-    /// Reinstall a shell or app preset category (legacy alias for install --replace-managed)
-    #[command(hide = true)]
-    Reinstall {
-        /// Preset category to reinstall (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
-    },
     /// Uninstall one shell or app preset
     Uninstall {
         /// Preset target: app/<category>, shell/<category>, or a unique category name

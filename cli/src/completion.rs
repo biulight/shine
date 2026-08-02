@@ -22,7 +22,6 @@ pub fn generate_registration(shell: CompletionShell) {
 }
 
 pub fn command() -> clap::Command {
-    let all_categories = ArgValueCandidates::new(all_category_candidates);
     let preset_targets = ArgValueCandidates::new(preset_target_candidates);
     let shell_categories = ArgValueCandidates::new(shell_category_candidates);
     let shell_targets = ArgValueCandidates::new(shell_info_candidates);
@@ -41,9 +40,6 @@ pub fn command() -> clap::Command {
     crate::commands::Cli::command()
         .mut_subcommand("install", |cmd| {
             cmd.mut_arg("target", |arg| arg.add(preset_targets.clone()))
-        })
-        .mut_subcommand("reinstall", |cmd| {
-            cmd.mut_arg("category", |arg| arg.add(all_categories.clone()))
         })
         .mut_subcommand("uninstall", |cmd| {
             cmd.mut_arg("target", |arg| arg.add(preset_targets.clone()))
@@ -64,9 +60,6 @@ pub fn command() -> clap::Command {
             .mut_subcommand("install", |cmd| {
                 cmd.mut_arg("category", |arg| arg.add(shell_categories.clone()))
             })
-            .mut_subcommand("reinstall", |cmd| {
-                cmd.mut_arg("category", |arg| arg.add(shell_categories.clone()))
-            })
             .mut_subcommand("uninstall", |cmd| {
                 cmd.mut_arg("category", |arg| arg.add(shell_categories.clone()))
             })
@@ -78,9 +71,6 @@ pub fn command() -> clap::Command {
             .mut_subcommand("install", |cmd| {
                 cmd.mut_arg("category", |arg| arg.add(app_categories.clone()))
             })
-            .mut_subcommand("reinstall", |cmd| {
-                cmd.mut_arg("category", |arg| arg.add(app_categories.clone()))
-            })
             .mut_subcommand("uninstall", |cmd| {
                 cmd.mut_arg("category", |arg| arg.add(app_categories.clone()))
             })
@@ -89,12 +79,6 @@ pub fn command() -> clap::Command {
                     arg.index(1).add(app_refresh_categories.clone())
                 })
                 .mut_arg("file", |arg| arg.index(2))
-            })
-            .mut_subcommand("build", |cmd| {
-                cmd.mut_arg("app_id", |arg| arg.add(app_build_categories.clone()))
-            })
-            .mut_subcommand("unbuild", |cmd| {
-                cmd.mut_arg("app_id", |arg| arg.add(app_unbuild_categories.clone()))
             })
             .mut_subcommand("artifact", |cmd| {
                 cmd.mut_subcommand("apply", |cmd| {
@@ -153,13 +137,6 @@ fn preset_copy_candidates() -> Vec<CompletionCandidate> {
         })
         .collect();
     completion_candidates(targets)
-}
-
-fn all_category_candidates() -> Vec<CompletionCandidate> {
-    let mut categories = BTreeSet::new();
-    categories.extend(category_names("shell"));
-    categories.extend(category_names("app"));
-    completion_candidates(categories)
 }
 
 fn preset_target_candidates() -> Vec<CompletionCandidate> {

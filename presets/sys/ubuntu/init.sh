@@ -426,7 +426,7 @@ run_item() {
         __shine_finalize) status "completed" "profile is managed by shine CLI" ;;
         "") return 0 ;;
         *)
-            echo "Unknown sys init item: $1" >&2
+            echo "Unknown sys bootstrap item: $1" >&2
             return 1
             ;;
     esac

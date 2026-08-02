@@ -176,8 +176,8 @@ bun <effective-script-path> arg1 arg2
 - 生命周期测试：embedded、外部 preset 与 overlay 都能生成 Bun 入口；声明 `transforms = ["template"]`
   时 wrapper 指向 rendered 副本（`@@VAR@@` 已替换、未定义变量报错终止安装）；`shell uninstall --dry-run`
   不写入；实际卸载不删除用户改写的 wrapper。
-- CLI 验收：`shell list` 显示 runtime 状态（无 `shell info` 子命令）；`shell install`、`upgrade`、
-  `reinstall` 与 `uninstall` 的输出保持现有格式和冲突保护。
+- CLI 验收：`shell list` 显示 runtime 状态（无 `shell info` 子命令）；`shell install`（包括
+  `--replace-managed`）、`upgrade` 与 `uninstall` 的输出保持现有格式和冲突保护。
 
 ## 9. 默认决策
 

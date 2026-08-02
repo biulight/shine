@@ -6,7 +6,7 @@
 
 ## Context
 
-After the 1.0 vocabulary cleanup, Shine still exposed two overlapping navigation models. Users
+While preparing the 1.0 vocabulary, Shine still exposed two overlapping navigation models. Users
 could start from an action (`install`, `list`, `info`, `update`, `upgrade`) or a resource namespace
 (`app`, `shell`, `sys`), but the accepted target syntax and available flags differed. A bare
 install category could also trigger an interactive app/shell choice, while `info` and preset copy
@@ -24,8 +24,9 @@ operation supports that resource. A bare app/shell category remains a shorthand 
 unique. Ambiguity is an error with canonical choices, never an interactive prompt in the resolver
 used by scripts.
 
-`shine install <TARGET> --replace-managed` replaces `reinstall` as the documented repair flow.
-The old top-level and scoped `reinstall` spellings remain hidden compatibility commands.
+`shine install <TARGET> --replace-managed` replaces `reinstall` as the repair flow. Because this
+decision predates the first stable 1.0 release, the old top-level and scoped `reinstall` spellings
+are removed instead of retained as aliases.
 
 `shine list` remains the installed inventory. `shine list --available [app|shell|sys]` is the
 unified catalog, and top-level `shine info` falls back to available app/shell metadata when the
@@ -35,13 +36,15 @@ target is not installed. Installed-only `--diff` and `--verbose` behavior is unc
 category, or managed system item. A file/command target deliberately upgrades at its owning
 category boundary. A targeted upgrade must not traverse or mutate entries owned by other targets.
 
-Advanced or author-oriented operations use explicit namespaces in help:
+Advanced or author-oriented operations use explicit namespaces:
 
-- preset templates: `shine preset new app|shell` (`app init`/`shell init` stay hidden);
-- system bootstrap: `shine sys bootstrap` (`sys init` stays an alias);
-- app artifacts: `shine app artifact apply|remove` (`build`/`unbuild` stay hidden).
-- secret operations: `shine env secret encrypt|decrypt|export|seal|identity` (the former flat
-  `env` spellings stay hidden).
+- preset templates: `shine preset new app|shell`;
+- system bootstrap: `shine sys bootstrap`;
+- app artifacts: `shine app artifact apply|remove`;
+- secret operations: `shine env secret encrypt|decrypt|export|seal|identity`.
+
+Their superseded pre-release spellings are not accepted. This keeps the first stable command
+grammar singular instead of beginning 1.0 with compatibility debt.
 
 The read-only `update` versus mutating `upgrade` boundary remains unchanged.
 
@@ -49,7 +52,7 @@ The read-only `update` versus mutating `upgrade` boundary remains unchanged.
 
 - Common workflows use six stable verbs and one target grammar.
 - Canonical targets make terminal and non-interactive behavior identical.
-- Hidden compatibility spellings avoid breaking existing scripts while keeping default help small.
+- Superseded pre-release spellings fail explicitly, so scripts converge on one grammar.
 - Dynamic completions must offer canonical targets as well as unambiguous shorthand.
 - Help, README examples, preset hooks, and the command-routing documentation must use the new
   primary spellings.

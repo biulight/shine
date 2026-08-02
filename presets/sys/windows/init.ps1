@@ -69,7 +69,7 @@ $SysPresetRoot = $ScriptPathCandidates |
 
 function Assert-Windows {
     if (-not $IsWindows -and $env:OS -ne "Windows_NT") {
-        throw "This sys init preset only supports Windows."
+        throw "This sys bootstrap preset only supports Windows."
     }
 }
 
@@ -240,7 +240,7 @@ function Install-Item {
         "pnpm" { Install-pnpm }
         "mise" { Install-mise }
         "__shine_finalize" { Write-Status "completed" "profile is managed by shine CLI" }
-        default { throw "Unknown Windows sys init item: $Item" }
+        default { throw "Unknown Windows sys bootstrap item: $Item" }
     }
 }
 

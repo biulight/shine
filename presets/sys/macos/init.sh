@@ -46,7 +46,7 @@ check_update() {
 
 ensure_macos() {
     if [[ "$(uname -s)" != "Darwin" ]]; then
-        echo "This sys init preset only supports macOS." >&2
+        echo "This sys bootstrap preset only supports macOS." >&2
         return 1
     fi
 }
@@ -252,7 +252,7 @@ run_item() {
         __shine_finalize) status "completed" "profile is managed by shine CLI" ;;
         "") return 0 ;;
         *)
-            echo "Unknown sys init item: $1" >&2
+            echo "Unknown sys bootstrap item: $1" >&2
             return 1
             ;;
     esac

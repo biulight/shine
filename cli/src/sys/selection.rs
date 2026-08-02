@@ -33,7 +33,7 @@ pub(super) fn resolve_selection(
     }
 
     let Some(default_profile) = manifest.default_profile.as_deref() else {
-        bail!("sys init requires `default_profile` for non-interactive runs");
+        bail!("sys bootstrap requires `default_profile` for non-interactive runs");
     };
 
     Ok(ResolvedSelection {
@@ -46,7 +46,7 @@ fn profile_items<'a>(manifest: &'a SysManifest, profile_name: &str) -> Result<&'
     let profile = manifest
         .profiles
         .get(profile_name)
-        .with_context(|| format!("unknown sys init profile `{profile_name}`"))?;
+        .with_context(|| format!("unknown sys bootstrap profile `{profile_name}`"))?;
     Ok(&profile.items)
 }
 

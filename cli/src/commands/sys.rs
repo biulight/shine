@@ -29,8 +29,7 @@ pub enum SysCommands {
         proxy: bool,
     },
     /// Bootstrap software and shell integration for the current OS
-    #[command(name = "bootstrap", alias = "init")]
-    Init {
+    Bootstrap {
         /// Apply a named profile without showing interactive selection
         #[arg(long, value_name = "PROFILE")]
         preset: Option<String>,

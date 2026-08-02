@@ -2,13 +2,6 @@ use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 pub enum AppCommands {
-    /// Generate an app preset shine.toml template in the current directory
-    #[command(hide = true)]
-    Init {
-        /// Overwrite shine.toml if it already exists
-        #[arg(long, short = 'f')]
-        force: bool,
-    },
     /// List available app preset categories and their destination paths
     List,
     /// Show detailed information about a specific app preset category
@@ -28,16 +21,6 @@ pub enum AppCommands {
         /// Replace user-modified files that are already managed by shine
         #[arg(long)]
         replace_managed: bool,
-    },
-    /// Reinstall app preset files for all or a specific category, overwriting managed files
-    #[command(hide = true)]
-    Reinstall {
-        /// Category to reinstall (e.g. JetBrains, starship). Reinstalls all if omitted.
-        #[arg(value_name = "CATEGORY")]
-        category: Option<String>,
-        /// Print what would be installed without making any changes
-        #[arg(long)]
-        dry_run: bool,
     },
     /// Explicitly refresh installed generated files for an app preset
     Refresh {
@@ -70,20 +53,6 @@ pub enum AppCommands {
     Artifact {
         #[command(subcommand)]
         command: AppArtifactCommands,
-    },
-    /// Run the artifact build script declared by an app preset (legacy spelling)
-    #[command(hide = true)]
-    Build {
-        /// App preset category whose artifact script should run (e.g. surge)
-        #[arg(value_name = "APP_ID")]
-        app_id: String,
-    },
-    /// Run the artifact teardown script declared by an app preset (legacy spelling)
-    #[command(hide = true)]
-    Unbuild {
-        /// App preset category whose artifact teardown script should run (e.g. surge)
-        #[arg(value_name = "APP_ID")]
-        app_id: String,
     },
 }
 
