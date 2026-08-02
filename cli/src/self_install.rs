@@ -4,23 +4,33 @@ use crate::config::{self, Config};
 #[cfg(unix)]
 use crate::privilege;
 use crate::update_check::{self, ReleaseChannel, UpdateStatus};
-use crate::{apps, colors, env, install_core, list, output, platform, shells, sys, version};
+use crate::{apps, colors, env, info, install_core, list, output, platform, shells, sys, version};
 
-pub async fn handle_update(config: &Config, verbose: bool, refresh: bool) -> Result<()> {
+pub async fn handle_update(
+    config: &Config,
+    target: Option<&str>,
+    diff: bool,
+    verbose: bool,
+    refresh_release: bool,
+) -> Result<()> {
+    if let Some(target) = target {
+        return info::handle_update_target(config, target).await;
+    }
+
     let mut printed_update = if verbose {
-        Box::pin(list::handle_status_list(config)).await?;
+        Box::pin(list::handle_status_list(config, diff)).await?;
         println!();
         true
     } else {
-        Box::pin(list::handle_update_list(config)).await?
+        Box::pin(list::handle_update_list(config, diff)).await?
     };
 
-    let current = version::display();
+    let current = version::semver();
     if verbose {
         println!("Checking for updates (current: {current})...");
     }
 
-    let update_status = if refresh {
+    let update_status = if refresh_release {
         update_check::check_for_update_forced(config).await
     } else {
         update_check::check_for_update(config).await
@@ -78,7 +88,7 @@ fn format_update_check_failure_warning(err: &anyhow::Error) -> String {
 }
 
 pub async fn handle_self_upgrade(config: &Config, channel: Option<ReleaseChannel>) -> Result<()> {
-    let current = version::display();
+    let current = version::semver();
     let selected_channel = channel.unwrap_or(ReleaseChannel::Stable);
     let force_install = channel.is_some();
     println!(
@@ -135,7 +145,7 @@ fn format_self_upgrade_message(
             format!("Upgraded shine from {previous_display} to {installed_version}.")
         }
         ReleaseChannel::Preview => {
-            if previous_display.contains("+preview.") {
+            if previous_display.contains("-preview") {
                 format!(
                     "Updated shine preview from {previous_display} to {installed_version} ({release_tag})."
                 )
@@ -150,20 +160,31 @@ fn format_self_upgrade_message(
 
 pub async fn handle_config_upgrade(
     config: &Config,
+    target: Option<&str>,
     verbose: bool,
     prune_stale: bool,
 ) -> Result<()> {
-    println!("{}", colors::bold("Upgrading installed configs"));
-    config::print_presets_note(config);
+    if let Some(target) = target {
+        return handle_config_target_upgrade(config, target, verbose, prune_stale).await;
+    }
+    if verbose {
+        println!("{}", colors::bold("Upgrading installed configs"));
+        config::print_presets_note(config);
+    }
 
-    let mut sep = output::SectionSeparator::new();
+    let mut sep = if verbose {
+        output::SectionSeparator::new()
+    } else {
+        output::SectionSeparator::with_preamble(colors::bold("Upgrading installed configs"))
+    };
 
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
     let shell_report =
         Box::pin(shells::handle_upgrade_installed(config, verbose, &mut sep)).await?;
-    let app_report = Box::pin(apps::handle_upgrade_installed(
+    let app_report = Box::pin(apps::handle_upgrade_installed_with_output(
         config,
         prune_stale,
+        verbose,
         &mut sep,
     ))
     .await?;
@@ -176,12 +197,14 @@ pub async fn handle_config_upgrade(
         + usize::from(shell_report.path_changed)
         + app_report.updated
         + sys_report.updated;
-    let skipped = env_report.skipped + app_report.skipped + sys_report.skipped;
     let user_modified = env_report.user_modified + app_report.user_modified;
 
-    let summary =
-        config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts, skipped);
-    output::footer("Done", &summary);
+    let summary = config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts);
+    if verbose || sep.has_printed() {
+        output::footer("Done", &summary);
+    } else {
+        println!("{}", colors::dim("Nothing to upgrade."));
+    }
     for hint in &app_report.restart_hints {
         println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
     }
@@ -203,11 +226,116 @@ pub async fn handle_config_upgrade(
     Ok(())
 }
 
+async fn handle_config_target_upgrade(
+    config: &Config,
+    target: &str,
+    verbose: bool,
+    prune_stale: bool,
+) -> Result<()> {
+    use crate::shim::{PresetKind, resolve_preset_kind};
+
+    let target = target.trim();
+    if target.is_empty() {
+        bail!("upgrade target must not be empty");
+    }
+
+    let mut sep = if verbose {
+        println!("{}", colors::bold(&format!("Upgrading {target}")));
+        config::print_presets_note(config);
+        output::SectionSeparator::new()
+    } else {
+        output::SectionSeparator::with_preamble(colors::bold(&format!("Upgrading {target}")))
+    };
+
+    let (updated, user_modified, link_conflicts, failed, restart_hints) =
+        if let Some(item) = target.strip_prefix("sys/") {
+            if item.is_empty() || item.contains('/') {
+                bail!("invalid system target `{target}`; expected sys/<item>");
+            }
+            if prune_stale {
+                bail!("`--prune-stale` applies only to app targets");
+            }
+            let report = Box::pin(sys::handle_upgrade_managed_target(
+                config,
+                Some(item),
+                verbose,
+                &mut sep,
+            ))
+            .await?;
+            (report.updated, 0, 0, report.failed, Default::default())
+        } else {
+            let normalized = if let Some(rest) = target.strip_prefix("app/") {
+                let category = rest.split('/').next().unwrap_or_default();
+                format!("app/{category}")
+            } else if let Some(rest) = target.strip_prefix("shell/") {
+                let category = rest.split('/').next().unwrap_or_default();
+                format!("shell/{category}")
+            } else {
+                target.to_string()
+            };
+            let (kind, category) = resolve_preset_kind(config, &normalized).await?;
+            match kind {
+                PresetKind::App => {
+                    let report = Box::pin(apps::handle_upgrade_installed_target(
+                        config,
+                        Some(&category),
+                        prune_stale,
+                        verbose,
+                        &mut sep,
+                    ))
+                    .await?;
+                    (
+                        report.updated,
+                        report.user_modified,
+                        0,
+                        report.failed,
+                        report.restart_hints,
+                    )
+                }
+                PresetKind::Shell => {
+                    if prune_stale {
+                        bail!("`--prune-stale` applies only to app targets");
+                    }
+                    let report = Box::pin(shells::handle_upgrade_installed_target(
+                        config,
+                        Some(&category),
+                        verbose,
+                        &mut sep,
+                    ))
+                    .await?;
+                    (
+                        report.templates_updated
+                            + report.links_created
+                            + report.links_updated
+                            + usize::from(report.path_changed),
+                        0,
+                        report.link_conflicts,
+                        0,
+                        Default::default(),
+                    )
+                }
+            }
+        };
+
+    let summary = config_upgrade_summary_parts(updated, user_modified, link_conflicts);
+    if verbose || sep.has_printed() {
+        output::footer("Done", &summary);
+    } else {
+        println!("{}", colors::dim("Nothing to upgrade."));
+    }
+    for hint in restart_hints {
+        println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+    }
+    if failed > 0 {
+        bail!("{failed} managed configuration item(s) failed");
+    }
+    Ok(())
+}
+
 fn config_upgrade_summary_parts(
     updated: usize,
     user_modified: usize,
     link_conflicts: usize,
-    skipped: usize,
 ) -> Vec<String> {
     let mut parts = Vec::new();
     output::push_count(&mut parts, updated, colors::green, "updated");
@@ -218,7 +346,6 @@ fn config_upgrade_summary_parts(
         "user-modified (kept)",
     );
     output::push_count(&mut parts, link_conflicts, colors::yellow, "link conflicts");
-    output::push_count(&mut parts, skipped, colors::dim, "skipped");
     parts
 }
 
@@ -557,25 +684,24 @@ mod tests {
     #[test]
     fn config_upgrade_summary_parts_includes_only_nonzero_counts() {
         assert_eq!(
-            config_upgrade_summary_parts(2, 0, 0, 1),
-            vec!["2 updated".to_string(), "1 skipped".to_string()]
+            config_upgrade_summary_parts(2, 0, 0),
+            vec!["2 updated".to_string()]
         );
     }
 
     #[test]
     fn config_upgrade_summary_parts_empty_when_all_zero() {
-        assert!(config_upgrade_summary_parts(0, 0, 0, 0).is_empty());
+        assert!(config_upgrade_summary_parts(0, 0, 0).is_empty());
     }
 
     #[test]
-    fn config_upgrade_summary_parts_reports_all_four_counters() {
+    fn config_upgrade_summary_parts_reports_actionable_counters() {
         assert_eq!(
-            config_upgrade_summary_parts(1, 2, 3, 4),
+            config_upgrade_summary_parts(1, 2, 3),
             vec![
                 "1 updated".to_string(),
                 "2 user-modified (kept)".to_string(),
                 "3 link conflicts".to_string(),
-                "4 skipped".to_string(),
             ]
         );
     }
@@ -594,10 +720,10 @@ mod tests {
             format_self_upgrade_message(
                 ReleaseChannel::Preview,
                 "0.21.3",
-                "0.21.4+preview.237a8a0",
+                "1.0.0-preview",
                 "preview",
             ),
-            "Installed shine preview 0.21.4+preview.237a8a0 over stable 0.21.3 (preview)."
+            "Installed shine preview 1.0.0-preview over stable 0.21.3 (preview)."
         );
     }
 
@@ -606,11 +732,11 @@ mod tests {
         assert_eq!(
             format_self_upgrade_message(
                 ReleaseChannel::Preview,
-                "0.21.4+preview.1111111",
-                "0.21.4+preview.237a8a0",
+                "1.0.0-preview",
+                "1.0.1-preview",
                 "preview",
             ),
-            "Updated shine preview from 0.21.4+preview.1111111 to 0.21.4+preview.237a8a0 (preview)."
+            "Updated shine preview from 1.0.0-preview to 1.0.1-preview (preview)."
         );
     }
 }

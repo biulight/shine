@@ -10,13 +10,13 @@
 
 Some subscription providers expose a configured URL only during a short access
 window. Treating such a generator as ordinary remote desired state consumes
-that window during unrelated `shine update`, `list`, `info`, `show`, and
+that window during unrelated `shine update`, `list`, and `info`, and
 `upgrade` commands. A time-based cache only postpones the same uncontrolled
 request and cannot know when the provider's window is open.
 
-Using `reinstall` as the manual trigger would force every managed file in the
-category to be rewritten, and does not allow selecting one of several generated
-files.
+Using `install --replace-managed` as the manual trigger forces every managed file
+in the category to be rewritten and does not allow selecting one of several
+generated files.
 
 ## Decision
 
@@ -38,7 +38,7 @@ omitting it selects all installed generated files in the category. Refresh:
 - updates the manifest atomically and runs the category's `post_upgrade` hook
   once only when at least one file changes.
 
-Install and reinstall always run an enabled generator regardless of `auto`.
+Install, including `--replace-managed`, always runs an enabled generator regardless of `auto`.
 External preset and overlay execution remains gated by `allow_app_hooks`.
 
 ## Consequences

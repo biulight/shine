@@ -1,11 +1,12 @@
-description = "Clash Verge Rev subscription enhancements: layers a LAN proxy, policy groups, and remote rule-providers onto the active subscription without touching it."
+description = "Clash Verge Rev subscription enhancements: layers a LAN proxy, policy groups, and rule-providers onto the active subscription without touching it."
 dest = "~/.shine/clash-verge"
 list_mode = "files"
 
-# `shine app build clash-verge` runs the artifact script to refresh the mihomo
-# rule-providers (and thus re-pull the LAN-served rule lists) via the external
-# controller — the analog of `surge-cli reload`. `teardown` (via
-# `shine app unbuild clash-verge`, and best-effort on `shine app uninstall`)
+# `shine app artifact apply clash-verge` runs the artifact script to refresh the mihomo
+# rule-providers via the external controller — the analog of `surge-cli reload`.
+# HTTP providers re-pull their source; file providers reload their local file.
+# `teardown` (via
+# `shine app artifact remove clash-verge`, and best-effort on `shine app uninstall`)
 # just prints how to clear the subscription enhancements in CVR, since CVR owns
 # those bindings in its private store and shine never writes them.
 #
@@ -16,16 +17,16 @@ list_mode = "files"
 # The real logic (rendering the active subscription's four bound enhancement
 # files + refreshing rule-providers) lives in the artifact because only it receives the `[env]` table and
 # SHINE_APP_OVERLAY_DIR. The hooks below do NOT run that logic directly — they
-# re-invoke `shine app build clash-verge` so it runs automatically after
+# re-invoke `shine app artifact apply clash-verge` so it runs automatically after
 # `shine app install`/`shine upgrade` changes merge.yaml. (No recursion: build
 # fires neither install nor upgrade hooks.) Requires `shine` on PATH; external
 # presets need allow_app_hooks = true. Note this only fires when merge.yaml
 # changes — rule edits go through `upload_surge`, not this preset's files.
 post_install = [
-  { command = "shine", args = ["app", "build", "clash-verge"], show_output = true },
+  { command = "shine", args = ["app", "artifact", "apply", "clash-verge"], show_output = true },
 ]
 post_upgrade = [
-  { command = "shine", args = ["app", "build", "clash-verge"], show_output = true },
+  { command = "shine", args = ["app", "artifact", "apply", "clash-verge"], show_output = true },
 ]
 
 [artifact]
@@ -44,4 +45,4 @@ runtime = "bun"
 [[files]]
 source = "merge.yaml"
 target = "merge.yaml"
-description = "CVR subscription enhancements (proxies + proxy-groups + rule-providers + prepend-rules), rendered into the active profile's four bound editor files."
+description = "CVR subscription enhancements (proxies + proxy-groups + file/loopback/remote rule-provider examples + prepend-rules), rendered into the active profile's four bound editor files."

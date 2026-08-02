@@ -1300,7 +1300,7 @@ mod tests {
         let script = src.join("tool.ts");
         fs::write(&script, b"console.log('hi')\n").await.unwrap();
 
-        // Install with no env, then reinstall the same source with a declaration.
+        // Install with no env, then replace the same source with a declaration.
         link_executables_with_names(&bin, &[bun_spec(&script, "tool")], false)
             .await
             .unwrap();

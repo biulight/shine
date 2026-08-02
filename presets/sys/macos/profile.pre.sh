@@ -1,4 +1,4 @@
-# Managed by `shine sys init` for macOS. Existing user config is left untouched.
+# Managed by `shine sys bootstrap` for macOS. Existing user config is left untouched.
 
 # Keep terminal-aware tools aligned with the terminal used for this session.
 # OSC/PTY/timeout/RGB parsing lives entirely in the shine binary — see

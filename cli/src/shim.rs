@@ -1,15 +1,13 @@
-//! Top-level `shine install/reinstall/uninstall <category>` shims: they infer
-//! whether `category` names a shell preset or an app preset (or ask the user
-//! when both match) and delegate to the corresponding handler.
+//! Top-level `shine install/uninstall <target>` shims: they resolve canonical
+//! or unambiguous preset targets and delegate to the corresponding handler.
 
 use anyhow::{Result, bail};
-use dialoguer::Select;
 
 use crate::config::Config;
 use crate::{apps, shells};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum PresetKind {
+pub(crate) enum PresetKind {
     Shell,
     App,
 }
@@ -21,54 +19,53 @@ enum ShimResolution {
     Missing,
 }
 
-pub async fn handle_install_shim(config: &Config, category: &str) -> Result<()> {
-    match resolve_shim_category(config, category).await? {
+pub async fn handle_install_shim(
+    config: &Config,
+    target: &str,
+    replace_managed: bool,
+) -> Result<()> {
+    let (explicit_kind, category) = parse_preset_target(target)?;
+    match resolve_shim_target(config, explicit_kind, category).await? {
         ShimResolution::Found(PresetKind::Shell) => {
-            Box::pin(shells::handle_install(config, Some(category), false)).await
+            Box::pin(shells::handle_install(
+                config,
+                Some(category),
+                replace_managed,
+            ))
+            .await
         }
         ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_install(config, Some(category), false, false)).await
-        }
-        ShimResolution::Conflict => match select_shim_kind("Install", category)? {
-            PresetKind::Shell => {
-                Box::pin(shells::handle_install(config, Some(category), false)).await
-            }
-            PresetKind::App => {
-                Box::pin(apps::handle_install(config, Some(category), false, false)).await
-            }
-        },
-        ShimResolution::Missing => bail_shim_missing(category),
-    }
-}
-
-pub async fn handle_reinstall_shim(config: &Config, category: &str) -> Result<()> {
-    match resolve_shim_category(config, category).await? {
-        ShimResolution::Found(PresetKind::Shell) => {
-            Box::pin(shells::handle_install(config, Some(category), true)).await
-        }
-        ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_install(config, Some(category), false, true)).await
-        }
-        ShimResolution::Conflict => match select_shim_kind("Reinstall", category)? {
-            PresetKind::Shell => {
-                Box::pin(shells::handle_install(config, Some(category), true)).await
-            }
-            PresetKind::App => {
-                Box::pin(apps::handle_install(config, Some(category), false, true)).await
-            }
-        },
-        ShimResolution::Missing => bail_shim_missing(category),
-    }
-}
-
-pub async fn handle_uninstall_shim(config: &Config, category: &str) -> Result<()> {
-    match resolve_shim_category(config, category).await? {
-        ShimResolution::Found(PresetKind::Shell) => {
-            Box::pin(shells::handle_uninstall(
+            Box::pin(apps::handle_install(
                 config,
                 Some(category),
                 false,
-                false,
+                replace_managed,
+            ))
+            .await
+        }
+        ShimResolution::Conflict => bail_ambiguous(category),
+        ShimResolution::Missing => bail_shim_missing(category),
+    }
+}
+
+pub async fn handle_uninstall_shim(
+    config: &Config,
+    target: &str,
+    force: bool,
+    purge: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let (explicit_kind, category) = parse_preset_target(target)?;
+    match resolve_shim_target(config, explicit_kind, category).await? {
+        ShimResolution::Found(PresetKind::Shell) => {
+            if force {
+                bail!("`--force` applies only to app presets");
+            }
+            Box::pin(shells::handle_uninstall(
+                config,
+                Some(category),
+                purge,
+                dry_run,
             ))
             .await
         }
@@ -76,35 +73,70 @@ pub async fn handle_uninstall_shim(config: &Config, category: &str) -> Result<()
             Box::pin(apps::handle_uninstall(
                 config,
                 Some(category),
-                false,
-                false,
-                false,
+                force,
+                purge,
+                dry_run,
             ))
             .await
         }
-        ShimResolution::Conflict => match select_shim_kind("Uninstall", category)? {
-            PresetKind::Shell => {
-                Box::pin(shells::handle_uninstall(
-                    config,
-                    Some(category),
-                    false,
-                    false,
-                ))
-                .await
-            }
-            PresetKind::App => {
-                Box::pin(apps::handle_uninstall(
-                    config,
-                    Some(category),
-                    false,
-                    false,
-                    false,
-                ))
-                .await
-            }
-        },
+        ShimResolution::Conflict => bail_ambiguous(category),
         ShimResolution::Missing => bail_shim_missing(category),
     }
+}
+
+pub(crate) async fn resolve_preset_kind(
+    config: &Config,
+    target: &str,
+) -> Result<(PresetKind, String)> {
+    let (explicit_kind, category) = parse_preset_target(target)?;
+    match resolve_shim_target(config, explicit_kind, category).await? {
+        ShimResolution::Found(kind) => Ok((kind, category.to_string())),
+        ShimResolution::Conflict => bail_ambiguous(category),
+        ShimResolution::Missing => bail_shim_missing(category),
+    }
+}
+
+fn parse_preset_target(target: &str) -> Result<(Option<PresetKind>, &str)> {
+    let target = target.trim();
+    if target.is_empty() {
+        bail!("preset target must not be empty");
+    }
+    let (kind, category) = match target.split_once('/') {
+        Some(("app", category)) => (Some(PresetKind::App), category),
+        Some(("shell", category)) => (Some(PresetKind::Shell), category),
+        Some((kind, _)) => bail!(
+            "unsupported preset target kind `{kind}`; expected app/<category> or shell/<category>"
+        ),
+        None => (None, target),
+    };
+    if category.is_empty() || category.contains('/') {
+        bail!(
+            "invalid preset target `{target}`; expected app/<category>, shell/<category>, or a unique category name"
+        );
+    }
+    Ok((kind, category))
+}
+
+async fn resolve_shim_target(
+    config: &Config,
+    explicit_kind: Option<PresetKind>,
+    category: &str,
+) -> Result<ShimResolution> {
+    if let Some(kind) = explicit_kind {
+        let resolution = resolve_shim_category(config, category).await?;
+        return Ok(match (kind, resolution) {
+            (
+                PresetKind::Shell,
+                ShimResolution::Found(PresetKind::Shell) | ShimResolution::Conflict,
+            ) => ShimResolution::Found(PresetKind::Shell),
+            (
+                PresetKind::App,
+                ShimResolution::Found(PresetKind::App) | ShimResolution::Conflict,
+            ) => ShimResolution::Found(PresetKind::App),
+            _ => ShimResolution::Missing,
+        });
+    }
+    resolve_shim_category(config, category).await
 }
 
 async fn resolve_shim_category(config: &Config, category: &str) -> Result<ShimResolution> {
@@ -150,21 +182,11 @@ fn classify_shim_resolution(shell_matches: bool, app_matches: bool) -> ShimResol
     }
 }
 
-fn select_shim_kind(action: &str, category: &str) -> Result<PresetKind> {
-    let choices = [format!("shell/{category}"), format!("app/{category}")];
-    let selected = Select::new()
-        .with_prompt(format!("{action} which preset?"))
-        .items(&choices)
-        .default(0)
-        .interact()?;
-    Ok(match selected {
-        0 => PresetKind::Shell,
-        1 => PresetKind::App,
-        _ => unreachable!("dialoguer Select returned out-of-range index {selected}"),
-    })
+fn bail_ambiguous<T>(category: &str) -> Result<T> {
+    bail!("ambiguous preset target `{category}`; use `app/{category}` or `shell/{category}`")
 }
 
-fn bail_shim_missing(category: &str) -> Result<()> {
+fn bail_shim_missing<T>(category: &str) -> Result<T> {
     bail!(
         "preset category not found in shell or app presets: {category}\nRun `shine shell list` or `shine app list` to see available categories."
     )
@@ -201,6 +223,21 @@ mod tests {
             classify_shim_resolution(false, false),
             ShimResolution::Missing
         );
+    }
+
+    #[test]
+    fn parse_preset_target_accepts_canonical_and_unique_shorthand_forms() {
+        assert_eq!(
+            parse_preset_target("app/starship").unwrap(),
+            (Some(PresetKind::App), "starship")
+        );
+        assert_eq!(
+            parse_preset_target("shell/proxy").unwrap(),
+            (Some(PresetKind::Shell), "proxy")
+        );
+        assert_eq!(parse_preset_target("proxy").unwrap(), (None, "proxy"));
+        assert!(parse_preset_target("sys/split-dns").is_err());
+        assert!(parse_preset_target("app/surge/file").is_err());
     }
 
     #[tokio::test]

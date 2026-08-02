@@ -3,15 +3,17 @@ use crate::version;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use super::{
-    AppCommands, EnvCommands, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
-    SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands, TaskRunCommand,
-    ThemeCommands,
+    AppCommands, EnvCommands, LocalCommands, PresetCommands, SelfCommands, ServeCommands,
+    ShellCommands, StateCommands, SysCommands, TaskCommands, TaskRunCommand, ThemeCommands,
 };
 
-/// `Shine` - Quick config for sys
+/// Manage shell presets, app configs, system setup, and personal tools
 #[derive(Parser, Debug)]
 #[command(name = "shine")]
 #[command(version = version::display(), about, long_about = None)]
+#[command(
+    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>, or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, state, self, serve, completions, theme, and local are advanced tools."
+)]
 pub struct Cli {
     #[arg(long, global = true)]
     pub config_dir: Option<String>,
@@ -24,42 +26,55 @@ pub struct Cli {
 pub enum Commands {
     /// Initialize the current directory as a shine presets directory
     Init(InitCommand),
-    /// Initialize quick shells
+    /// Manage shell command presets
     Shell {
         #[command(subcommand)]
         command: ShellCommands,
     },
-    /// Install app config files (e.g. starship.toml, .ideavimrc) to their annotated destinations
+    /// Manage application configuration presets
     App {
         #[command(subcommand)]
         command: AppCommands,
     },
-    /// Install a shell or app preset category
+    /// Install or repair one shell or app preset
     Install {
-        /// Preset category to install (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
+        /// Preset target: app/<category>, shell/<category>, or a unique category name
+        #[arg(value_name = "TARGET")]
+        target: String,
+        /// Replace user-modified files that are already managed by shine
+        #[arg(long)]
+        replace_managed: bool,
     },
-    /// Reinstall a shell or app preset category
-    Reinstall {
-        /// Preset category to reinstall (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
-    },
-    /// Uninstall a shell or app preset category
+    /// Uninstall one shell or app preset
     Uninstall {
-        /// Preset category to uninstall (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
+        /// Preset target: app/<category>, shell/<category>, or a unique category name
+        #[arg(value_name = "TARGET")]
+        target: String,
+        /// Remove managed files even when they were modified after installation (app only)
+        #[arg(long)]
+        force: bool,
+        /// Also remove empty managed preset directories
+        #[arg(long)]
+        purge: bool,
+        /// Print what would be removed without changing anything
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Generate or install shell completion scripts
     Completions {
         #[command(subcommand)]
         command: CompletionCommands,
     },
-    /// List installed shell presets, app configs, and managed system configs
-    List,
-    /// Show details for an installed config or shell preset
+    /// List installed resources, or browse available resources with --available
+    List {
+        /// List available resources instead of installed resources
+        #[arg(long)]
+        available: bool,
+        /// Limit --available output to app, shell, or sys resources
+        #[arg(value_enum, requires = "available", value_name = "KIND")]
+        kind: Option<ResourceKind>,
+    },
+    /// Show details for an available or installed app/shell target, or `sys/<ITEM>`
     Info {
         /// Installed item to inspect (e.g. git, starship, proxy, setproxy)
         #[arg(value_name = "TARGET")]
@@ -71,25 +86,20 @@ pub enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Copy built-in presets to a directory for local customization
-    Export(ExportCommand),
-    /// Set the external presets directory in the active config
-    Link(LinkCommand),
-    /// Remove the external presets directory from the active config
-    Unlink,
-    /// Manage the personal presets overlay directory
-    Overlay {
+    /// Manage preset sources, overlays, exports, and Git synchronization
+    Preset {
         #[command(subcommand)]
-        command: OverlayCommands,
+        command: PresetCommands,
     },
-    /// Pull Git-managed preset and overlay repositories
-    Pull,
-    /// Show installed config status and check for a newer version of shine
+    /// Check managed configuration and shine release updates
     Update(UpdateCommand),
-    /// Force-update installed shell and app configs
+    /// Apply available managed configuration updates
     Upgrade(UpgradeCommand),
-    /// Clear old shine-owned runtime state after schema changes
-    Clear(ClearCommand),
+    /// Manage shine-owned runtime state
+    State {
+        #[command(subcommand)]
+        command: StateCommands,
+    },
     /// Manage the shine binary itself
     #[command(name = "self")]
     Self_ {
@@ -106,7 +116,7 @@ pub enum Commands {
         #[command(subcommand)]
         command: EnvCommands,
     },
-    /// Initialize or inspect system-level presets for the current OS
+    /// Manage system bootstrap and configuration for the current OS
     Sys {
         #[command(subcommand)]
         command: SysCommands,
@@ -156,6 +166,13 @@ pub enum RemoteShell {
     Posix,
     /// Windows PowerShell environment injection only; `shine local` is unavailable.
     Windows,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ResourceKind {
+    App,
+    Shell,
+    Sys,
 }
 
 #[derive(Args, Debug)]
@@ -222,19 +239,28 @@ impl CompletionShell {
 
 #[derive(Parser, Debug)]
 pub struct UpdateCommand {
+    /// Installed shell or app target to inspect (shows pending content differences)
+    #[arg(value_name = "TARGET")]
+    pub target: Option<String>,
     /// Pull Git-managed preset sources before checking status
     #[arg(long)]
     pub pull: bool,
-    /// Show installed entries that are already current or need attention
+    /// Show content differences for available shell and app updates
     #[arg(long)]
+    pub diff: bool,
+    /// Show installed entries that are already current or need attention
+    #[arg(long, conflicts_with = "target")]
     pub verbose: bool,
     /// Bypass the 24-hour version cache and check GitHub now
-    #[arg(long)]
-    pub refresh: bool,
+    #[arg(long, conflicts_with = "target")]
+    pub refresh_release: bool,
 }
 
 #[derive(Parser, Debug)]
 pub struct UpgradeCommand {
+    /// Installed app, shell, or managed sys target to upgrade
+    #[arg(value_name = "TARGET")]
+    pub target: Option<String>,
     /// Pull Git-managed preset sources before upgrading installed configs
     #[arg(long)]
     pub pull: bool,
@@ -244,11 +270,4 @@ pub struct UpgradeCommand {
     /// Remove stale managed app files whose preset source no longer exists
     #[arg(long)]
     pub prune_stale: bool,
-}
-
-#[derive(Parser, Debug)]
-pub struct ClearCommand {
-    /// Print cleanup steps without changing files
-    #[arg(long)]
-    pub dry_run: bool,
 }

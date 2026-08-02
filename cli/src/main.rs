@@ -2,31 +2,33 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 
 use cli::{
-    apps, clear, colors, commands, completion, config, env, git_pull, list, serve, shells, show,
-    ssh, sys, task, theme, update_check,
+    apps, colors, commands, completion, config, env, git_pull, info, list, serve, shells, ssh,
+    state, sys, task, theme, update_check,
 };
 
 use commands::{
-    AppCommands, Cli, Commands, CompletionCommands, CompletionShell, EnvCommands,
-    EnvIdentitySubcommand, ExportCommand, LinkCommand, LocalCommands, OverlayCommands,
-    SelfCommands, ServeCommands, ShellCommands, SysCommands, TaskCommands, ThemeCommands,
+    AppArtifactCommands, AppCommands, Cli, Commands, CompletionCommands, CompletionShell,
+    EnvCommands, EnvIdentitySubcommand, EnvSecretSubcommand, LocalCommands, OverlayCommands,
+    PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands, ShellCommands,
+    StateCommands, SysCommands, TaskCommands, ThemeCommands,
 };
 #[cfg(test)]
 use commands::{
-    ClearCommand, InitCommand, OverlayLinkCommand, RemoteShell, UpdateCommand, UpgradeCommand,
+    InitCommand, OverlayLinkCommand, RemoteShell, StateMigrateCommand, UpdateCommand,
+    UpgradeCommand,
 };
 use config::Config;
 #[cfg(test)]
 use update_check::ReleaseChannel;
 
-use cli::presets_commands::{
-    handle_overlay_link, handle_overlay_show, handle_overlay_unlink, handle_presets_export,
-    handle_presets_link, handle_presets_unlink,
+use cli::preset_commands::{
+    handle_overlay_info, handle_overlay_link, handle_overlay_unlink, handle_preset_copy,
+    handle_preset_export, handle_preset_link, handle_preset_unlink,
 };
 use cli::self_install::{
     handle_config_upgrade, handle_self_install, handle_self_upgrade, handle_update,
 };
-use cli::shim::{handle_install_shim, handle_reinstall_shim, handle_uninstall_shim};
+use cli::shim::{handle_install_shim, handle_uninstall_shim};
 
 fn main() -> Result<()> {
     completion::complete_from_env();
@@ -61,16 +63,19 @@ async fn run(cli: Cli) -> Result<()> {
         return cli::init::handle_init(cmd.yes).await;
     }
 
-    if let Commands::Clear(cmd) = &cli.command {
+    if let Commands::State {
+        command: StateCommands::Migrate(cmd),
+    } = &cli.command
+    {
         let config = if cmd.dry_run {
             Box::pin(Config::load_global_runtime_for_dry_run()).await?
         } else {
             Box::pin(Config::load_global_runtime_or_init()).await?
         };
-        return Box::pin(clear::handle_clear(&config, cmd.dry_run)).await;
+        return Box::pin(state::handle_migrate(&config, cmd.dry_run)).await;
     }
 
-    // Bypassed like Init/Clear above: this runs on every interactive shell
+    // Bypassed like Init/State above: this runs on every interactive shell
     // start (from the managed profile), so it must skip Config::load_or_init()
     // (which writes to disk), the runtime-schema warning, and the background
     // update check entirely — not just opt out of them individually.
@@ -94,30 +99,31 @@ async fn run(cli: Cli) -> Result<()> {
             command: CompletionCommands::Install,
         } => Box::pin(shells::handle_completion_install(&config)).await,
         Commands::Completions { .. } => unreachable!(),
-        Commands::Clear(_) => unreachable!(),
+        Commands::State { .. } => unreachable!(),
         Commands::Theme { .. } => unreachable!(),
-        Commands::Install { category } => handle_install_shim(&config, &category).await,
-        Commands::Reinstall { category } => handle_reinstall_shim(&config, &category).await,
-        Commands::Uninstall { category } => handle_uninstall_shim(&config, &category).await,
+        Commands::Install {
+            target,
+            replace_managed,
+        } => handle_install_shim(&config, &target, replace_managed).await,
+        Commands::Uninstall {
+            target,
+            force,
+            purge,
+            dry_run,
+        } => handle_uninstall_shim(&config, &target, force, purge, dry_run).await,
         Commands::App { command } => match command {
-            AppCommands::Init { force } => apps::handle_init_template(force).await,
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
             AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
-            AppCommands::Install { category, dry_run } => {
+            AppCommands::Install {
+                category,
+                dry_run,
+                replace_managed,
+            } => {
                 Box::pin(apps::handle_install(
                     &config,
                     category.as_deref(),
                     dry_run,
-                    false,
-                ))
-                .await
-            }
-            AppCommands::Reinstall { category, dry_run } => {
-                Box::pin(apps::handle_install(
-                    &config,
-                    category.as_deref(),
-                    dry_run,
-                    true,
+                    replace_managed,
                 ))
                 .await
             }
@@ -149,48 +155,87 @@ async fn run(cli: Cli) -> Result<()> {
                 ))
                 .await
             }
-            AppCommands::Build { app_id } => Box::pin(apps::handle_build(&config, &app_id)).await,
-            AppCommands::Unbuild { app_id } => {
-                Box::pin(apps::handle_unbuild(&config, &app_id)).await
-            }
+            AppCommands::Artifact { command } => match command {
+                AppArtifactCommands::Apply { app_id } => {
+                    Box::pin(apps::handle_build(&config, &app_id)).await
+                }
+                AppArtifactCommands::Remove { app_id } => {
+                    Box::pin(apps::handle_unbuild(&config, &app_id)).await
+                }
+            },
         },
-        Commands::Pull => git_pull::handle_pull(&config, false).await,
         Commands::Update(cmd) => {
             if cmd.pull {
                 git_pull::handle_pull(&config, cmd.verbose).await?;
                 let config = Box::pin(Config::load_or_init()).await?;
-                handle_update(&config, cmd.verbose, cmd.refresh).await
+                handle_update(
+                    &config,
+                    cmd.target.as_deref(),
+                    cmd.diff,
+                    cmd.verbose,
+                    cmd.refresh_release,
+                )
+                .await
             } else {
-                handle_update(&config, cmd.verbose, cmd.refresh).await
+                handle_update(
+                    &config,
+                    cmd.target.as_deref(),
+                    cmd.diff,
+                    cmd.verbose,
+                    cmd.refresh_release,
+                )
+                .await
             }
         }
         Commands::Upgrade(cmd) => {
             if cmd.pull {
                 git_pull::handle_pull(&config, cmd.verbose).await?;
                 let config = Box::pin(Config::load_or_init()).await?;
-                handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
+                handle_config_upgrade(&config, cmd.target.as_deref(), cmd.verbose, cmd.prune_stale)
+                    .await
             } else {
-                handle_config_upgrade(&config, cmd.verbose, cmd.prune_stale).await
+                handle_config_upgrade(&config, cmd.target.as_deref(), cmd.verbose, cmd.prune_stale)
+                    .await
             }
         }
-        Commands::Export(ExportCommand { dir, force }) => {
-            Box::pin(handle_presets_export(&config, dir, force)).await
-        }
-        Commands::Link(LinkCommand { path, create }) => {
-            Box::pin(handle_presets_link(&config, path, create)).await
-        }
-        Commands::Unlink => Box::pin(handle_presets_unlink(&config)).await,
-        Commands::Overlay { command } => match command {
-            OverlayCommands::Link(cmd) => Box::pin(handle_overlay_link(&config, cmd)).await,
-            OverlayCommands::Unlink => Box::pin(handle_overlay_unlink(&config)).await,
-            OverlayCommands::Show => handle_overlay_show(&config),
+        Commands::Preset { command } => match command {
+            PresetCommands::New { kind, force } => match kind {
+                PresetTemplateKind::App => apps::handle_init_template(force).await,
+                PresetTemplateKind::Shell => shells::handle_init_template(force).await,
+            },
+            PresetCommands::Export(cmd) => {
+                Box::pin(handle_preset_export(&config, cmd.dir, cmd.force)).await
+            }
+            PresetCommands::Copy(cmd) => Box::pin(handle_preset_copy(&cmd.target, cmd.force)).await,
+            PresetCommands::Link(cmd) => {
+                Box::pin(handle_preset_link(&config, cmd.path, cmd.create)).await
+            }
+            PresetCommands::Unlink => Box::pin(handle_preset_unlink(&config)).await,
+            PresetCommands::Overlay { command } => match command {
+                OverlayCommands::Link(cmd) => Box::pin(handle_overlay_link(&config, cmd)).await,
+                OverlayCommands::Unlink => Box::pin(handle_overlay_unlink(&config)).await,
+                OverlayCommands::Info => handle_overlay_info(&config),
+            },
+            PresetCommands::Pull => git_pull::handle_pull(&config, false).await,
         },
-        Commands::List => Box::pin(list::handle_list(&config)).await,
+        Commands::List { available, kind } => {
+            if available {
+                handle_available_list(&config, kind).await
+            } else {
+                Box::pin(list::handle_list(&config)).await
+            }
+        }
         Commands::Info {
             target,
             diff,
             verbose,
-        } => Box::pin(show::handle_show(&config, &target, diff, verbose)).await,
+        } => {
+            if let Some(item) = system_info_item(&target, diff, verbose)? {
+                Box::pin(sys::handle_info(&config, item)).await
+            } else {
+                Box::pin(info::handle_info(&config, &target, diff, verbose)).await
+            }
+        }
         Commands::Self_ { command } => match command {
             SelfCommands::Install { dest } => handle_self_install(config.clone(), dest).await,
             SelfCommands::Upgrade { channel } => handle_self_upgrade(&config, channel).await,
@@ -203,13 +248,18 @@ async fn run(cli: Cli) -> Result<()> {
             ServeCommands::Url(cmd) => serve::handle_url(&cmd.path, cmd.port),
         },
         Commands::Shell { command } => match command {
-            ShellCommands::Init { force } => shells::handle_init_template(force).await,
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
-            ShellCommands::Install { category } => {
-                Box::pin(shells::handle_install(&config, category.as_deref(), false)).await
-            }
-            ShellCommands::Reinstall { category } => {
-                Box::pin(shells::handle_install(&config, category.as_deref(), true)).await
+            ShellCommands::Info { target } => Box::pin(shells::handle_info(&config, &target)).await,
+            ShellCommands::Install {
+                category,
+                replace_managed,
+            } => {
+                Box::pin(shells::handle_install(
+                    &config,
+                    category.as_deref(),
+                    replace_managed,
+                ))
+                .await
             }
             ShellCommands::Uninstall {
                 category,
@@ -226,7 +276,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
         },
         Commands::Env { command } => match command {
-            EnvCommands::Show { reveal } => env::commands::handle_show(&config, reveal).await,
+            EnvCommands::List { reveal } => env::commands::handle_list(&config, reveal).await,
             EnvCommands::Set { key, value, force } => {
                 env::commands::handle_set(&config, &key, &value, force).await
             }
@@ -234,31 +284,6 @@ async fn run(cli: Cli) -> Result<()> {
                 env::commands::handle_delete(&config, &key, force).await
             }
             EnvCommands::Get { key } => env::commands::handle_get(&config, &key).await,
-            EnvCommands::Decrypt { key } => env::commands::handle_decrypt(&config, &key).await,
-            EnvCommands::Export { key, alias } => {
-                env::commands::handle_export(&config, &key, alias.as_deref()).await
-            }
-            EnvCommands::Encrypt(cmd) => {
-                env::commands::handle_encrypt(
-                    &config,
-                    cmd.backend.as_deref(),
-                    &cmd.recipients,
-                    cmd.set.as_deref(),
-                    cmd.from.as_deref(),
-                    cmd.force,
-                )
-                .await
-            }
-            EnvCommands::Seal(cmd) => {
-                env::workspace::handle_seal(
-                    &config,
-                    cmd.workspace.as_deref(),
-                    cmd.file.as_deref(),
-                    cmd.backend.as_deref(),
-                    &cmd.recipients,
-                )
-                .await
-            }
             EnvCommands::Run(cmd) => {
                 env::workspace::handle_run(
                     &config,
@@ -270,23 +295,54 @@ async fn run(cli: Cli) -> Result<()> {
                 )
                 .await
             }
-            EnvCommands::Identity(cmd) => match cmd.command {
-                EnvIdentitySubcommand::Init {
-                    touch_id,
-                    access_control,
-                    output,
-                    force,
-                } => {
-                    env::identity::handle_identity_init(
+            EnvCommands::Secret(cmd) => match cmd.command {
+                EnvSecretSubcommand::Decrypt { key } => {
+                    env::commands::handle_decrypt(&config, &key).await
+                }
+                EnvSecretSubcommand::Export { key, alias } => {
+                    env::commands::handle_export(&config, &key, alias.as_deref()).await
+                }
+                EnvSecretSubcommand::Encrypt(cmd) => {
+                    env::commands::handle_encrypt(
                         &config,
-                        touch_id,
-                        access_control.as_deref(),
-                        output.as_deref(),
-                        force,
+                        cmd.backend.as_deref(),
+                        &cmd.recipients,
+                        cmd.set.as_deref(),
+                        cmd.from.as_deref(),
+                        cmd.force,
                     )
                     .await
                 }
-                EnvIdentitySubcommand::Show => env::identity::handle_identity_show(&config).await,
+                EnvSecretSubcommand::Seal(cmd) => {
+                    env::workspace::handle_seal(
+                        &config,
+                        cmd.workspace.as_deref(),
+                        cmd.file.as_deref(),
+                        cmd.backend.as_deref(),
+                        &cmd.recipients,
+                    )
+                    .await
+                }
+                EnvSecretSubcommand::Identity(cmd) => match cmd.command {
+                    EnvIdentitySubcommand::Init {
+                        touch_id,
+                        access_control,
+                        output,
+                        force,
+                    } => {
+                        env::identity::handle_identity_init(
+                            &config,
+                            touch_id,
+                            access_control.as_deref(),
+                            output.as_deref(),
+                            force,
+                        )
+                        .await
+                    }
+                    EnvIdentitySubcommand::List => {
+                        env::identity::handle_identity_list(&config).await
+                    }
+                },
             },
         },
         Commands::Sys { command } => match command {
@@ -298,7 +354,7 @@ async fn run(cli: Cli) -> Result<()> {
                 verbose,
                 proxy,
             } => Box::pin(sys::handle_update(&config, item.as_deref(), verbose, proxy)).await,
-            SysCommands::Init {
+            SysCommands::Bootstrap {
                 preset,
                 dry_run,
                 force_profile,
@@ -353,8 +409,9 @@ async fn run(cli: Cli) -> Result<()> {
             TaskCommands::Save {
                 name,
                 force,
+                cwd,
                 command,
-            } => task::handle_save(&config, &name, force, command).await,
+            } => task::handle_save(&config, &name, force, cwd.as_deref(), command).await,
             TaskCommands::Run(cmd) => task::handle_run(&config, &cmd.name, &cmd.extra).await,
             TaskCommands::List => task::handle_list(&config).await,
             TaskCommands::Info { name } => task::handle_info(&config, &name).await,
@@ -365,13 +422,42 @@ async fn run(cli: Cli) -> Result<()> {
     }
 }
 
+async fn handle_available_list(config: &Config, kind: Option<ResourceKind>) -> Result<()> {
+    match kind {
+        Some(ResourceKind::App) => Box::pin(apps::handle_list(config)).await,
+        Some(ResourceKind::Shell) => Box::pin(shells::handle_list(config)).await,
+        Some(ResourceKind::Sys) => Box::pin(sys::handle_list(config, false)).await,
+        None => {
+            config::print_presets_note(config);
+            Box::pin(shells::handle_list_with_presets_note(config, false)).await?;
+            println!();
+            Box::pin(apps::handle_list_with_presets_note(config, false)).await?;
+            println!();
+            Box::pin(sys::handle_list(config, false)).await
+        }
+    }
+}
+
+fn system_info_item(target: &str, diff: bool, verbose: bool) -> Result<Option<&str>> {
+    let Some(item) = target.strip_prefix("sys/") else {
+        return Ok(None);
+    };
+    if item.is_empty() {
+        bail!("system info target must not be empty; use `shine info sys/<ITEM>`");
+    }
+    if diff || verbose {
+        bail!("`--diff` and `--verbose` apply only to installed app and shell targets");
+    }
+    Ok(Some(item))
+}
+
 async fn warn_if_runtime_schema_pending(command: &Commands) {
     if !should_warn_runtime_schema(command) {
         return;
     }
 
     if let Ok(schema_version) = Config::read_global_runtime_schema_version().await
-        && let Some(warning) = clear::pending_schema_warning(schema_version)
+        && let Some(warning) = state::pending_schema_warning(schema_version)
     {
         eprintln!("{}", colors::yellow_stderr(&warning));
     }
@@ -380,7 +466,7 @@ async fn warn_if_runtime_schema_pending(command: &Commands) {
 fn should_warn_runtime_schema(command: &Commands) -> bool {
     !matches!(
         command,
-        Commands::Init(_) | Commands::Completions { .. } | Commands::Clear(_)
+        Commands::Init(_) | Commands::Completions { .. } | Commands::State { .. }
     )
 }
 
@@ -491,9 +577,11 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                target: None,
                 pull: false,
+                diff: false,
                 verbose: false,
-                refresh: false
+                refresh_release: false
             })
         ));
 
@@ -501,39 +589,95 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                target: None,
                 pull: false,
+                diff: false,
                 verbose: true,
-                refresh: false
+                refresh_release: false
             })
         ));
 
-        let cli = Cli::try_parse_from(["shine", "update", "--refresh"]).unwrap();
+        let cli = Cli::try_parse_from(["shine", "update", "--refresh-release"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                target: None,
                 pull: false,
+                diff: false,
                 verbose: false,
-                refresh: true
+                refresh_release: true
             })
         ));
 
-        let cli = Cli::try_parse_from(["shine", "pull"]).unwrap();
-        assert!(matches!(cli.command, Commands::Pull));
+        let cli = Cli::try_parse_from(["shine", "preset", "pull"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Pull
+            }
+        ));
 
         let cli = Cli::try_parse_from(["shine", "update", "--pull"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Update(UpdateCommand {
+                target: None,
                 pull: true,
+                diff: false,
                 verbose: false,
-                refresh: false
+                refresh_release: false
             })
         ));
+
+        let cli = Cli::try_parse_from(["shine", "update", "proxy/setproxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                target: Some(ref target),
+                pull: false,
+                diff: false,
+                verbose: false,
+                refresh_release: false
+            }) if target == "proxy/setproxy"
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "update", "--diff"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                target: None,
+                pull: false,
+                diff: true,
+                verbose: false,
+                refresh_release: false
+            })
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--pull", "--diff"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                target: Some(ref target),
+                pull: true,
+                diff: true,
+                verbose: false,
+                refresh_release: false
+            }) if target == "proxy/setproxy"
+        ));
+
+        assert!(Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--verbose"]).is_err());
+        assert!(
+            Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--refresh-release"])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from(["shine", "update", "--refresh"]).is_err());
 
         let cli = Cli::try_parse_from(["shine", "upgrade"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Upgrade(UpgradeCommand {
+                target: None,
                 pull: false,
                 verbose: false,
                 prune_stale: false
@@ -544,6 +688,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Upgrade(UpgradeCommand {
+                target: None,
                 pull: false,
                 verbose: true,
                 prune_stale: false
@@ -554,6 +699,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Upgrade(UpgradeCommand {
+                target: None,
                 pull: false,
                 verbose: false,
                 prune_stale: true
@@ -564,76 +710,167 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Upgrade(UpgradeCommand {
+                target: None,
                 pull: true,
                 verbose: false,
                 prune_stale: false
             })
         ));
 
-        let cli = Cli::try_parse_from(["shine", "clear"]).unwrap();
+        let cli = Cli::try_parse_from(["shine", "upgrade", "app/starship"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Clear(ClearCommand { dry_run: false })
+            Commands::Upgrade(UpgradeCommand {
+                target: Some(ref target),
+                pull: false,
+                verbose: false,
+                prune_stale: false,
+            }) if target == "app/starship"
         ));
 
-        let cli = Cli::try_parse_from(["shine", "clear", "--dry-run"]).unwrap();
+        let cli = Cli::try_parse_from(["shine", "list", "--available", "app"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Clear(ClearCommand { dry_run: true })
+            Commands::List {
+                available: true,
+                kind: Some(ResourceKind::App),
+            }
         ));
+        assert!(Cli::try_parse_from(["shine", "list", "app"]).is_err());
+
+        let cli = Cli::try_parse_from(["shine", "state", "migrate"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::State {
+                command: StateCommands::Migrate(StateMigrateCommand { dry_run: false })
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "state", "migrate", "--dry-run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::State {
+                command: StateCommands::Migrate(StateMigrateCommand { dry_run: true })
+            }
+        ));
+        assert!(Cli::try_parse_from(["shine", "clear"]).is_err());
     }
 
     #[test]
-    fn cli_accepts_top_level_presets_commands() {
-        let cli = Cli::try_parse_from(["shine", "export"]).unwrap();
+    fn cli_accepts_preset_commands() {
+        let cli = Cli::try_parse_from(["shine", "preset", "export"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Export(ExportCommand {
-                dir: None,
-                force: false
-            })
+            Commands::Preset {
+                command: PresetCommands::Export(commands::ExportCommand {
+                    dir: None,
+                    force: false
+                })
+            }
         ));
 
-        let cli = Cli::try_parse_from(["shine", "link", "/tmp/presets", "--create"]).unwrap();
+        let cli = Cli::try_parse_from(["shine", "preset", "copy", "app/surge"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Link(LinkCommand { create: true, .. })
+            Commands::Preset {
+                command: PresetCommands::Copy(commands::CopyCommand {
+                    target,
+                    force: false
+                })
+            } if target == "app/surge"
         ));
 
-        let cli = Cli::try_parse_from(["shine", "unlink"]).unwrap();
-        assert!(matches!(cli.command, Commands::Unlink));
+        let cli =
+            Cli::try_parse_from(["shine", "preset", "copy", "shell/proxy", "--force"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Copy(commands::CopyCommand {
+                    target,
+                    force: true
+                })
+            } if target == "shell/proxy"
+        ));
+        assert!(Cli::try_parse_from(["shine", "preset", "copy"]).is_err());
+        for invalid in [
+            "surge",
+            "app/",
+            "/app/surge",
+            "app/../surge",
+            "app/surge/extra",
+            "other/surge",
+        ] {
+            assert!(
+                Cli::try_parse_from(["shine", "preset", "copy", invalid]).is_err(),
+                "target should be rejected during CLI parsing: {invalid}"
+            );
+        }
+
+        let cli =
+            Cli::try_parse_from(["shine", "preset", "link", "/tmp/presets", "--create"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Link(commands::LinkCommand { create: true, .. })
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "preset", "unlink"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Unlink
+            }
+        ));
+
+        for legacy in ["export", "link", "unlink", "overlay", "pull"] {
+            assert!(Cli::try_parse_from(["shine", legacy]).is_err());
+        }
     }
 
     #[test]
     fn cli_accepts_overlay_commands() {
-        let cli = Cli::try_parse_from(["shine", "overlay", "link", "/tmp/presets"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Overlay {
-                command: OverlayCommands::Link(OverlayLinkCommand {
-                    ref path,
-                    git: None,
-                    create: false,
-                    ..
-                })
-            } if path.as_deref() == Some(std::path::Path::new("/tmp/presets"))
-        ));
-
         let cli =
-            Cli::try_parse_from(["shine", "overlay", "link", "/tmp/presets", "--create"]).unwrap();
+            Cli::try_parse_from(["shine", "preset", "overlay", "link", "/tmp/presets"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Overlay {
-                command: OverlayCommands::Link(OverlayLinkCommand {
-                    ref path,
-                    create: true,
-                    ..
-                })
+            Commands::Preset {
+                command: PresetCommands::Overlay {
+                    command: OverlayCommands::Link(OverlayLinkCommand {
+                        ref path,
+                        git: None,
+                        create: false,
+                        ..
+                    })
+                }
             } if path.as_deref() == Some(std::path::Path::new("/tmp/presets"))
         ));
 
         let cli = Cli::try_parse_from([
             "shine",
+            "preset",
+            "overlay",
+            "link",
+            "/tmp/presets",
+            "--create",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Overlay {
+                    command: OverlayCommands::Link(OverlayLinkCommand {
+                        ref path,
+                        create: true,
+                        ..
+                    })
+                }
+            } if path.as_deref() == Some(std::path::Path::new("/tmp/presets"))
+        ));
+
+        let cli = Cli::try_parse_from([
+            "shine",
+            "preset",
             "overlay",
             "link",
             "--git",
@@ -644,21 +881,27 @@ mod tests {
         .unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Overlay {
-                command: OverlayCommands::Link(OverlayLinkCommand {
-                    path: None,
-                    git: Some(ref url),
-                    branch: Some(ref branch),
-                    ..
-                })
+            Commands::Preset {
+                command: PresetCommands::Overlay {
+                    command: OverlayCommands::Link(OverlayLinkCommand {
+                        path: None,
+                        git: Some(ref url),
+                        branch: Some(ref branch),
+                        ..
+                    })
+                }
             } if url == "https://example.com/overlay.git" && branch == "main"
         ));
 
         // A local PATH and --git are mutually exclusive.
-        assert!(Cli::try_parse_from(["shine", "overlay", "link", "/tmp/x", "--git", "u"]).is_err());
+        assert!(
+            Cli::try_parse_from(["shine", "preset", "overlay", "link", "/tmp/x", "--git", "u"])
+                .is_err()
+        );
 
-        assert!(Cli::try_parse_from(["shine", "overlay", "unlink"]).is_ok());
-        assert!(Cli::try_parse_from(["shine", "overlay", "show"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "preset", "overlay", "unlink"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "preset", "overlay", "info"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "preset", "overlay", "show"]).is_err());
     }
 
     #[test]
@@ -677,32 +920,52 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_env_export_command() {
-        let cli = Cli::try_parse_from(["shine", "env", "export", "DEEPSEEK_API_KEY"]).unwrap();
+    fn cli_accepts_env_secret_export_command() {
+        let cli =
+            Cli::try_parse_from(["shine", "env", "secret", "export", "DEEPSEEK_API_KEY"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Env {
-                command: EnvCommands::Export { key, alias: None }
+                command: EnvCommands::Secret(commands::EnvSecretCommand {
+                    command: EnvSecretSubcommand::Export { key, alias: None }
+                })
             } if key == "DEEPSEEK_API_KEY"
         ));
     }
 
     #[test]
-    fn cli_accepts_env_show_reveal() {
-        let cli = Cli::try_parse_from(["shine", "env", "show", "--reveal"]).unwrap();
+    fn cli_accepts_primary_env_secret_commands() {
         assert!(matches!(
-            cli.command,
+            Cli::try_parse_from(["shine", "env", "secret", "decrypt", "TOKEN_SECRET"])
+                .unwrap()
+                .command,
             Commands::Env {
-                command: EnvCommands::Show { reveal: true }
-            }
+                command: EnvCommands::Secret(commands::EnvSecretCommand {
+                    command: EnvSecretSubcommand::Decrypt { key }
+                })
+            } if key == "TOKEN_SECRET"
         ));
+        assert!(Cli::try_parse_from(["shine", "env", "secret", "identity", "list",]).is_ok());
     }
 
     #[test]
-    fn cli_accepts_env_export_with_alias() {
+    fn cli_accepts_env_list_reveal() {
+        let cli = Cli::try_parse_from(["shine", "env", "list", "--reveal"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::List { reveal: true }
+            }
+        ));
+        assert!(Cli::try_parse_from(["shine", "env", "show"]).is_err());
+    }
+
+    #[test]
+    fn cli_accepts_env_secret_export_with_alias() {
         let cli = Cli::try_parse_from([
             "shine",
             "env",
+            "secret",
             "export",
             "DEEPSEEK_API_KEY",
             "--as",
@@ -712,7 +975,9 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Env {
-                command: EnvCommands::Export { key, alias: Some(a) }
+                command: EnvCommands::Secret(commands::EnvSecretCommand {
+                    command: EnvSecretSubcommand::Export { key, alias: Some(a) }
+                })
             } if key == "DEEPSEEK_API_KEY" && a == "AI_KEY"
         ));
     }
@@ -729,33 +994,46 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_env_encrypt_without_recipient() {
-        let cli = Cli::try_parse_from(["shine", "env", "encrypt", "--from", "MY_TOKEN"]).unwrap();
+    fn cli_accepts_env_secret_encrypt_without_recipient() {
+        let cli = Cli::try_parse_from(["shine", "env", "secret", "encrypt", "--from", "MY_TOKEN"])
+            .unwrap();
         assert!(matches!(
             cli.command,
             Commands::Env {
-                command: EnvCommands::Encrypt(cmd)
+                command: EnvCommands::Secret(commands::EnvSecretCommand {
+                    command: EnvSecretSubcommand::Encrypt(cmd)
+                })
             } if cmd.recipients.is_empty() && cmd.from.as_deref() == Some("MY_TOKEN")
         ));
     }
 
     #[test]
-    fn cli_accepts_env_encrypt_with_recipient() {
-        let cli =
-            Cli::try_parse_from(["shine", "env", "encrypt", "-r", "alice@example.com"]).unwrap();
+    fn cli_accepts_env_secret_encrypt_with_recipient() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "secret",
+            "encrypt",
+            "-r",
+            "alice@example.com",
+        ])
+        .unwrap();
         assert!(matches!(
             cli.command,
             Commands::Env {
-                command: EnvCommands::Encrypt(cmd)
+                command: EnvCommands::Secret(commands::EnvSecretCommand {
+                    command: EnvSecretSubcommand::Encrypt(cmd)
+                })
             } if cmd.recipients == ["alice@example.com"]
         ));
     }
 
     #[test]
-    fn cli_accepts_workspace_env_seal() {
+    fn cli_accepts_workspace_env_secret_seal() {
         let cli = Cli::try_parse_from([
             "shine",
             "env",
+            "secret",
             "seal",
             ".env.production.shine.toml",
             "--recipient",
@@ -765,7 +1043,9 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Env {
-                command: EnvCommands::Seal(cmd)
+                command: EnvCommands::Secret(commands::EnvSecretCommand {
+                    command: EnvSecretSubcommand::Seal(cmd)
+                })
             } if cmd.file.as_deref() == Some(std::path::Path::new(".env.production.shine.toml"))
                 && cmd.recipients == ["alice@example.com"]
         ));
@@ -884,6 +1164,7 @@ mod tests {
                 command: TaskCommands::Save {
                     name,
                     force: false,
+                    cwd: None,
                     command,
                 }
             } if name == "port-3000" && command == ["lsof", "-i", ":3000"]
@@ -902,9 +1183,29 @@ mod tests {
                 command: TaskCommands::Save {
                     name,
                     force: true,
+                    cwd: None,
                     command,
                 }
             } if name == "deploy" && command == ["rsync", "-avz", "dist/"]
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_task_save_with_cwd() {
+        let cli = Cli::try_parse_from([
+            "shine", "task", "save", "build", "--cwd", ".", "--", "cargo", "build",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Task {
+                command: TaskCommands::Save {
+                    name,
+                    force: false,
+                    cwd: Some(cwd),
+                    command,
+                }
+            } if name == "build" && cwd == std::path::Path::new(".") && command == ["cargo", "build"]
         ));
     }
 
@@ -960,23 +1261,29 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_top_level_install_reinstall_and_uninstall_commands() {
+    fn cli_accepts_top_level_install_and_uninstall_commands() {
         let cli = Cli::try_parse_from(["shine", "install", "proxy"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Install { category } if category == "proxy"
+            Commands::Install { target, replace_managed: false } if target == "proxy"
         ));
 
-        let cli = Cli::try_parse_from(["shine", "reinstall", "proxy"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["shine", "install", "app/starship", "--replace-managed"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Reinstall { category } if category == "proxy"
+            Commands::Install { target, replace_managed: true } if target == "app/starship"
         ));
 
         let cli = Cli::try_parse_from(["shine", "uninstall", "starship"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Uninstall { category } if category == "starship"
+            Commands::Uninstall {
+                target,
+                force: false,
+                purge: false,
+                dry_run: false,
+            } if target == "starship"
         ));
     }
 
@@ -984,6 +1291,7 @@ mod tests {
     fn cli_rejects_top_level_shims_without_category() {
         assert!(Cli::try_parse_from(["shine", "install"]).is_err());
         assert!(Cli::try_parse_from(["shine", "reinstall"]).is_err());
+        assert!(Cli::try_parse_from(["shine", "reinstall", "proxy"]).is_err());
         assert!(Cli::try_parse_from(["shine", "uninstall"]).is_err());
     }
 
@@ -993,12 +1301,17 @@ mod tests {
         let completions = Commands::Completions {
             command: CompletionCommands::Bash,
         };
-        let clear = Commands::Clear(ClearCommand { dry_run: false });
-        let list = Commands::List;
+        let state = Commands::State {
+            command: StateCommands::Migrate(StateMigrateCommand { dry_run: false }),
+        };
+        let list = Commands::List {
+            available: false,
+            kind: None,
+        };
 
         assert!(!should_warn_runtime_schema(&init));
         assert!(!should_warn_runtime_schema(&completions));
-        assert!(!should_warn_runtime_schema(&clear));
+        assert!(!should_warn_runtime_schema(&state));
         assert!(should_warn_runtime_schema(&list));
     }
 
@@ -1047,65 +1360,67 @@ mod tests {
     }
 
     #[test]
+    fn top_level_info_routes_only_explicit_system_targets() {
+        assert_eq!(
+            system_info_item("sys/split-dns", false, false).unwrap(),
+            Some("split-dns")
+        );
+        assert_eq!(system_info_item("split-dns", false, false).unwrap(), None);
+        assert!(system_info_item("sys/", false, false).is_err());
+        assert!(system_info_item("sys/split-dns", true, false).is_err());
+        assert!(system_info_item("sys/split-dns", false, true).is_err());
+    }
+
+    #[test]
+    fn cli_accepts_shell_info_and_identity_list() {
+        let cli = Cli::try_parse_from(["shine", "shell", "info", "proxy/setproxy"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Shell {
+                command: ShellCommands::Info { target }
+            } if target == "proxy/setproxy"
+        ));
+
+        assert!(Cli::try_parse_from(["shine", "env", "secret", "identity", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["shine", "env", "identity", "list"]).is_err());
+    }
+
+    #[test]
     fn cli_rejects_legacy_show_command() {
         let err = Cli::try_parse_from(["shine", "show", "setproxy"]).unwrap_err();
         assert!(err.to_string().contains("unrecognized subcommand 'show'"));
     }
 
     #[test]
-    fn cli_accepts_shell_and_app_init_commands() {
-        let cli = Cli::try_parse_from(["shine", "shell", "init"]).unwrap();
+    fn cli_accepts_primary_authoring_artifact_and_bootstrap_spellings() {
         assert!(matches!(
-            cli.command,
-            Commands::Shell {
-                command: ShellCommands::Init { force: false }
+            Cli::try_parse_from(["shine", "preset", "new", "app"])
+                .unwrap()
+                .command,
+            Commands::Preset {
+                command: PresetCommands::New {
+                    kind: PresetTemplateKind::App,
+                    force: false,
+                }
             }
         ));
-
-        let cli = Cli::try_parse_from(["shine", "shell", "init", "--force"]).unwrap();
         assert!(matches!(
-            cli.command,
-            Commands::Shell {
-                command: ShellCommands::Init { force: true }
-            }
-        ));
-
-        let cli = Cli::try_parse_from(["shine", "app", "init"]).unwrap();
-        assert!(matches!(
-            cli.command,
+            Cli::try_parse_from(["shine", "app", "artifact", "apply", "surge"])
+                .unwrap()
+                .command,
             Commands::App {
-                command: AppCommands::Init { force: false }
-            }
-        ));
-
-        let cli = Cli::try_parse_from(["shine", "app", "init", "-f"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::App {
-                command: AppCommands::Init { force: true }
-            }
-        ));
-    }
-
-    #[test]
-    fn cli_accepts_app_build_command() {
-        let cli = Cli::try_parse_from(["shine", "app", "build", "surge"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::App {
-                command: AppCommands::Build { app_id }
+                command: AppCommands::Artifact {
+                    command: AppArtifactCommands::Apply { app_id }
+                }
             } if app_id == "surge"
         ));
-    }
-
-    #[test]
-    fn cli_accepts_app_unbuild_command() {
-        let cli = Cli::try_parse_from(["shine", "app", "unbuild", "surge"]).unwrap();
         assert!(matches!(
-            cli.command,
-            Commands::App {
-                command: AppCommands::Unbuild { app_id }
-            } if app_id == "surge"
+            Cli::try_parse_from(["shine", "sys", "bootstrap", "--dry-run"])
+                .unwrap()
+                .command,
+            Commands::Sys {
+                command: SysCommands::Bootstrap { dry_run: true, .. }
+            }
         ));
     }
 
@@ -1145,37 +1460,27 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_shell_and_app_reinstall_commands() {
-        let cli = Cli::try_parse_from(["shine", "shell", "reinstall", "proxy"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Shell {
-                command: ShellCommands::Reinstall { category }
-            } if category.as_deref() == Some("proxy")
-        ));
-
-        let cli = Cli::try_parse_from(["shine", "app", "reinstall", "ghostty"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::App {
-                command: AppCommands::Reinstall {
-                    category,
-                    dry_run: false
-                }
-            } if category.as_deref() == Some("ghostty")
-        ));
-
-        let cli =
-            Cli::try_parse_from(["shine", "app", "reinstall", "ghostty", "--dry-run"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::App {
-                command: AppCommands::Reinstall {
-                    category,
-                    dry_run: true
-                }
-            } if category.as_deref() == Some("ghostty")
-        ));
+    fn cli_rejects_removed_pre_1_0_compatibility_commands() {
+        for args in [
+            &["shine", "reinstall", "proxy"][..],
+            &["shine", "shell", "reinstall", "proxy"],
+            &["shine", "app", "reinstall", "ghostty"],
+            &["shine", "shell", "init"],
+            &["shine", "app", "init"],
+            &["shine", "app", "build", "surge"],
+            &["shine", "app", "unbuild", "surge"],
+            &["shine", "sys", "init"],
+            &["shine", "env", "encrypt"],
+            &["shine", "env", "decrypt", "TOKEN_SECRET"],
+            &["shine", "env", "export", "TOKEN"],
+            &["shine", "env", "seal"],
+            &["shine", "env", "identity", "list"],
+        ] {
+            assert!(
+                Cli::try_parse_from(args).is_err(),
+                "accepted removed command: {args:?}"
+            );
+        }
     }
 
     #[test]
@@ -1190,12 +1495,12 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_sys_init_options() {
-        let cli = Cli::try_parse_from(["shine", "sys", "init"]).unwrap();
+    fn cli_accepts_sys_bootstrap_options() {
+        let cli = Cli::try_parse_from(["shine", "sys", "bootstrap"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Sys {
-                command: SysCommands::Init {
+                command: SysCommands::Bootstrap {
                     preset: None,
                     dry_run: false,
                     force_profile: false,
@@ -1204,11 +1509,11 @@ mod tests {
             }
         ));
 
-        let cli = Cli::try_parse_from(["shine", "sys", "init", "--dry-run"]).unwrap();
+        let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "--dry-run"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Sys {
-                command: SysCommands::Init {
+                command: SysCommands::Bootstrap {
                     preset: None,
                     dry_run: true,
                     force_profile: false,
@@ -1217,11 +1522,12 @@ mod tests {
             }
         ));
 
-        let cli = Cli::try_parse_from(["shine", "sys", "init", "--preset", "recommended"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["shine", "sys", "bootstrap", "--preset", "recommended"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Sys {
-                command: SysCommands::Init {
+                command: SysCommands::Bootstrap {
                     preset: Some(ref preset),
                     dry_run: false,
                     force_profile: false,
@@ -1230,11 +1536,11 @@ mod tests {
             } if preset == "recommended"
         ));
 
-        let cli = Cli::try_parse_from(["shine", "sys", "init", "--force-profile"]).unwrap();
+        let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "--force-profile"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Sys {
-                command: SysCommands::Init {
+                command: SysCommands::Bootstrap {
                     preset: None,
                     dry_run: false,
                     force_profile: true,
@@ -1243,11 +1549,11 @@ mod tests {
             }
         ));
 
-        let cli = Cli::try_parse_from(["shine", "sys", "init", "--proxy"]).unwrap();
+        let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "--proxy"]).unwrap();
         assert!(matches!(
             cli.command,
             Commands::Sys {
-                command: SysCommands::Init {
+                command: SysCommands::Bootstrap {
                     preset: None,
                     dry_run: false,
                     force_profile: false,
@@ -1259,7 +1565,7 @@ mod tests {
         let cli = Cli::try_parse_from([
             "shine",
             "sys",
-            "init",
+            "bootstrap",
             "--preset",
             "recommended",
             "--dry-run",
@@ -1268,7 +1574,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Commands::Sys {
-                command: SysCommands::Init {
+                command: SysCommands::Bootstrap {
                     preset: Some(ref preset),
                     dry_run: true,
                     force_profile: false,

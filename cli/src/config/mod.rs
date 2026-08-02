@@ -9,6 +9,7 @@ mod load;
 mod save;
 
 use discovery::resolve_config_presets_path;
+pub(crate) use discovery::{ReadOnlyRuntimePaths, discover_runtime_paths_read_only};
 use env_layer::deserialize_env_values;
 
 pub use crate::home::{full_expand, full_expand_with_home, tilde_expand};
@@ -90,7 +91,7 @@ pub struct Config {
     pub presets_overlay_dir_override: Option<PathBuf>,
     /// Optional Git URL for a shine-managed overlay. When set (and no explicit
     /// `presets_overlay_dir` is configured), shine owns the overlay checkout at
-    /// `<shine_dir>/overlay`, cloning it `--depth 1` on `shine pull` and keeping
+    /// `<shine_dir>/overlay`, cloning it `--depth 1` on `shine preset pull` and keeping
     /// it as an always-latest mirror of the remote tip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presets_overlay_git: Option<String>,
@@ -141,7 +142,7 @@ pub struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub self_install_dest: Option<PathBuf>,
-    /// Default GPG recipient key used by `shine env encrypt` when the command
+    /// Default GPG recipient key used by `shine env secret encrypt` when the command
     /// does not provide `-r/--recipient`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpg_key_id: Option<String>,
@@ -187,7 +188,7 @@ pub struct Config {
 pub struct EnvOverrideSource {
     pub path: PathBuf,
     /// Which override layer `path` belongs to. Drives the source labels in
-    /// `shine env show`; `is_managed_overlay` further distinguishes the two
+    /// `shine env list`; `is_managed_overlay` further distinguishes the two
     /// `Overlay` variants.
     pub kind: EnvOverrideKind,
     /// `true` when `path` is inside the shine-managed Git overlay checkout
@@ -347,7 +348,7 @@ impl Config {
             return Some(dir);
         }
         // A Git-managed overlay only counts as active once its checkout exists
-        // on disk. Until the first `shine pull` clones it, resolution falls back
+        // on disk. Until the first `shine preset pull` clones it, resolution falls back
         // to the base presets source.
         self.managed_overlay_dir
             .as_deref()
@@ -356,7 +357,7 @@ impl Config {
 
     /// Git source for a shine-managed overlay, if configured: `(url, branch,
     /// managed_dir)`. Returned regardless of whether the checkout exists yet,
-    /// so `shine pull` can clone it on first use.
+    /// so `shine preset pull` can clone it on first use.
     pub fn overlay_git_source(&self) -> Option<(&str, Option<&str>, &Path)> {
         let url = self.presets_overlay_git.as_deref()?;
         let dir = self.managed_overlay_dir.as_deref()?;

@@ -8,8 +8,11 @@ mod uninstall;
 
 pub use install::{
     handle_completion_install, handle_init_template, handle_install, handle_upgrade_installed,
+    handle_upgrade_installed_target,
 };
-pub use report::{ShellUpgradeReport, handle_list};
+#[doc(hidden)]
+pub use report::handle_list_with_presets_note;
+pub use report::{ShellUpgradeReport, handle_info, handle_list};
 pub use uninstall::handle_uninstall;
 
 use anyhow::{Result, bail};
@@ -210,6 +213,13 @@ mod tests {
             !fish.contains("COMPLETE=fish shine"),
             "fish completion should not be changed: {fish}"
         );
+        assert!(profile::supports_completion_registration(
+            &ShellType::PowerShell
+        ));
+        assert!(!profile::supports_completion_registration(&ShellType::Fish));
+        assert!(!profile::supports_completion_registration(
+            &ShellType::Elvish
+        ));
     }
 
     #[test]

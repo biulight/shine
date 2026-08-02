@@ -17,7 +17,7 @@ pub struct AppCategory {
     pub files: Vec<AppFile>,
     pub list_mode: AppListMode,
     pub post_upgrade: Vec<AppHook>,
-    /// Hooks run after `shine app install`/`reinstall` when at least one file in
+    /// Hooks run after `shine app install` (including `--replace-managed`) when at least one file in
     /// this category actually changed — the install-time counterpart to
     /// `post_upgrade` (which only fires on `shine upgrade`).
     pub post_install: Vec<AppHook>,
@@ -62,7 +62,7 @@ pub enum ArtifactRuntime {
 pub struct AppArtifact {
     pub script: String,
     /// Optional companion script that reverses `script`'s side-effects. Run
-    /// explicitly via `shine app unbuild <id>` and implicitly (best-effort)
+    /// explicitly via `shine app artifact remove <id>` and implicitly (best-effort)
     /// during `shine app uninstall`. Shares `build`'s full env contract.
     pub teardown: Option<String>,
     /// How `script`/`teardown` are launched. `Bun` makes the artifact
@@ -91,8 +91,8 @@ pub struct AppGenerator {
     pub env: Vec<EnvVarSpec>,
     pub when_env: String,
     /// Whether read-oriented status checks and `shine upgrade` may run this
-    /// generator implicitly. Install/reinstall and `app refresh` ignore this
-    /// switch. Defaults to true for compatibility with existing presets.
+    /// generator implicitly. Install (including `--replace-managed`) and `app refresh` ignore
+    /// this switch. Defaults to true for compatibility with existing presets.
     pub auto: bool,
 }
 
@@ -915,6 +915,15 @@ mod tests {
                     "local-rules.conf".to_string(),
                     "local-rules.conf".to_string()
                 ),
+                ("rules/lan.list".to_string(), "rules/lan.list".to_string()),
+                (
+                    "rules/lan-socks.list".to_string(),
+                    "rules/lan-socks.list".to_string()
+                ),
+                (
+                    "rules/other-direct.list".to_string(),
+                    "rules/other-direct.list".to_string()
+                ),
                 (
                     "local-proxy-groups.conf".to_string(),
                     "local-proxy-groups.conf".to_string()
@@ -1275,15 +1284,19 @@ source = "config.toml"
         assert!(merge.contains("# proxies:"));
         assert!(merge.contains("# proxy-groups:"));
         assert!(merge.contains("# prepend-rules:"));
+        assert!(merge.contains("type: file, behavior: classical, format: text"));
+        assert!(merge.contains("http://127.0.0.1:8080/rules/lan.list"));
+        assert!(merge.contains("https://rules.example.com/surge/lan.list"));
 
-        // post_install/post_upgrade re-invoke `shine app build clash-verge` so the
+        // post_install/post_upgrade re-invoke `shine app artifact apply clash-verge` so the
         // artifact writes the bound CVR subscription Extend Config after an
         // install/upgrade that changes merge.yaml, then refreshes once applied.
         let build_hook = vec![AppHook {
             command: "shine".to_string(),
             args: vec![
                 "app".to_string(),
-                "build".to_string(),
+                "artifact".to_string(),
+                "apply".to_string(),
                 "clash-verge".to_string(),
             ],
             show_output: true,

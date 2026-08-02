@@ -13,6 +13,7 @@ const DETAIL_STATUS_WIDTH: usize = 13;
 #[derive(Default)]
 pub struct SectionSeparator {
     printed: bool,
+    preamble: Option<String>,
 }
 
 impl SectionSeparator {
@@ -20,13 +21,28 @@ impl SectionSeparator {
         Self::default()
     }
 
+    /// Creates a separator that prints `preamble` immediately before its first
+    /// visible section. If no section begins, the preamble stays hidden.
+    pub fn with_preamble(preamble: impl Into<String>) -> Self {
+        Self {
+            printed: false,
+            preamble: Some(preamble.into()),
+        }
+    }
+
     /// Call immediately before printing a section's header, only on the path
     /// where the section is actually about to print something.
     pub fn begin(&mut self) {
         if self.printed {
             println!();
+        } else if let Some(preamble) = self.preamble.take() {
+            println!("{preamble}");
         }
         self.printed = true;
+    }
+
+    pub fn has_printed(&self) -> bool {
+        self.printed
     }
 }
 
@@ -135,5 +151,13 @@ mod tests {
     #[test]
     fn visible_len_ignores_ansi_sequences() {
         assert_eq!(visible_len_without_ansi("\x1b[32mupdated\x1b[0m"), 7);
+    }
+
+    #[test]
+    fn preamble_stays_pending_until_the_first_section() {
+        let mut separator = SectionSeparator::with_preamble("Upgrade");
+        assert!(!separator.has_printed());
+        separator.begin();
+        assert!(separator.has_printed());
     }
 }

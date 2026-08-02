@@ -50,7 +50,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 cargo install --path cli
 ```
 
-Windows 支持目前覆盖 PowerShell 下的 `shine self`、`shine shell`、部分已适配的 app 预设，以及用 PowerShell 实现的 `shine sys init` 预设，并会同时更新 `powershell.exe` 与 `pwsh.exe` 对应的 profile。
+Windows 支持目前覆盖 PowerShell 下的 `shine self`、`shine shell`、部分已适配的 app 预设，以及用 PowerShell 实现的 `shine sys bootstrap` 预设，并会同时更新 `powershell.exe` 与 `pwsh.exe` 对应的 profile。
 
 也可以自己构建：
 
@@ -60,6 +60,18 @@ cargo build --release
 ```
 
 ## 使用方法
+
+日常接口以动作为主。资源使用 `app/starship`、`shell/proxy`、`sys/split-dns` 这样的 canonical target；当 app/shell 类别名唯一时，也可以继续使用裸名称简写：
+
+```bash
+shine list --available
+shine info app/starship
+shine install app/starship
+shine update
+shine upgrade app/starship
+```
+
+Shine 1.0 只接受本文档中的主拼写；发布前被替代的命令形式不再保留别名。
 
 ### 查看可用的 shell 预设
 
@@ -85,14 +97,25 @@ Shell Preset Categories
                   ...
 ```
 
+### 查看 shell 预设详情
+
+安装前后都可以查看某个类别或具体命令的详情：
+
+```bash
+shine shell info proxy
+shine shell info setproxy
+shine shell info proxy/setproxy
+```
+
+详情会显示 source 元数据、runtime 要求、transforms、声明的环境变量名称以及当前安装状态，但不会输出环境变量值。
+
 ### 安装 shell 预设
 
 ```bash
 shine install proxy            # 自动匹配 shell/app 类别的简写
 shine shell install            # 安装全部类别
 shine shell install proxy      # 仅安装 proxy 类别
-shine reinstall proxy          # 自动匹配类别的重装简写
-shine shell reinstall proxy    # 覆盖 proxy 的受管文件和链接
+shine install shell/proxy --replace-managed  # 修复受管文件和链接
 ```
 
 它会把内置 shell 脚本解包到 `~/.shine/presets/shell/`，在 `~/.shine/bin/` 中创建符号链接或 Windows shim，并把 PATH 条目追加到你的 shell 配置文件（`~/.zshrc`、`~/.bashrc`、PowerShell profile 等）：
@@ -103,9 +126,9 @@ Bin Links      4 created
 ```
 
 安装全部 shell 预设时会包含 `agent`。默认 Codex provider 需要 `CLIPROXYAPI_AUTH_TOKEN` 或 `CLIPROXYAPI_AUTH_TOKEN_SECRET`；DeepSeek 和 Qwen 则使用当前 env 配置中各自的 API-key 变量。
-重复运行 `install` 是安全的：已存在的文件、正确的符号链接以及已配置好的 PATH 条目都会被跳过。若你想覆盖受管预设文件、链接和 shell 配置中的 PATH 条目，请使用 `reinstall`。
+重复运行 `install` 是安全的：已存在的文件、正确的符号链接以及已配置好的 PATH 条目都会被跳过。若要修复被用户修改过的受管预设文件、链接和 shell 集成，请使用 `--replace-managed`。
 
-顶层的 `install`、`reinstall` 和 `uninstall` 命令需要一个类别名，并会自动路由到 `shell/<category>` 或 `app/<category>`。如果 shell 和 app 预设中存在同名类别，`shine` 会提示你选择其中一个。
+顶层的 `install` 和 `uninstall` 接受 canonical `shell/<category>` 或 `app/<category>` target。裸类别名只有在能唯一确定预设类型时才会被接受；若同名，命令会直接给出两个 canonical 选项而不是进入交互提示，因此终端与脚本使用相同语法。
 
 shell 元数据可以通过 `platforms = ["unix"]` 或 `platforms = ["windows"]` 只在特定平台暴露某些条目。内置的 `agent` 类别通过 Bun runtime 在所有平台暴露同一份 `cc.ts`。
 
@@ -139,9 +162,11 @@ shine completions install
 
 打开新 shell，或手动重新加载一次 shell 配置（`source ~/.zshrc` 或 `source ~/.bashrc`）。
 
-安装或重装某个具体 shell 预设（例如 `shine shell install proxy`）时，也会在刷新 managed shell profile 的同时更新补全配置。
+安装或修复某个具体 shell 预设（例如 `shine install shell/proxy --replace-managed`）时，也会在刷新 managed shell profile 的同时更新补全配置。
 
-如果需要手动配置或检查脚本，`shine completions <shell>` 仍会把 `bash`、`zsh` 和 `powershell` 的注册脚本输出到 `stdout`。
+补全是动态的：preset 类别和命令会跟随当前内置、外部、项目及 overlay 来源，已记录的系统更新项和保存的任务名则来自 Shine 的运行时 manifest。当前支持 Bash、Zsh 和 PowerShell；在 Fish 或 Elvish 下，`completions install` 会保留受管 PATH 配置，并明确提示 Shine 补全暂不支持。
+
+如需高级手动配置或检查脚本，`shine completions <shell>` 仍会把 `bash`、`zsh` 和 `powershell` 的注册脚本输出到 `stdout`。
 
 ### 查看可用的应用预设
 
@@ -177,22 +202,22 @@ shine sys info split-dns
 ### 运行当前操作系统的初始化流程
 
 ```bash
-shine sys init
-shine sys init --preset recommended
-shine sys init --dry-run
+shine sys bootstrap
+shine sys bootstrap --preset recommended
+shine sys bootstrap --dry-run
 shine sys status
 shine sys update
 shine sys update neovim --verbose
 ```
 
-`shine sys init` 会检测当前操作系统，读取 `presets/sys/<os>/shine.toml`，解析出待执行的安装项，然后对每个选中的 item 分别调用一次当前平台的初始化脚本。所有 item 成功完成后，`shine` 会在 Rust 侧刷新受管 shell profile 集成。
+`shine sys bootstrap` 会检测当前操作系统，读取 `presets/sys/<os>/shine.toml`，解析出待执行的安装项，然后对每个选中的 item 分别调用一次当前平台的初始化脚本。所有 item 成功完成后，`shine` 会在 Rust 侧刷新受管 shell profile 集成。
 
-- 在 TTY 中，`shine sys init` 会打开一个交互式多选界面，默认值来自预设的 `default_profile`
-- `shine sys init --preset <PROFILE>` 会跳过交互，直接应用指定 profile
-- 非 TTY 环境下，`shine sys init` 会回退到 `default_profile`
-- `shine sys init --dry-run` 会输出解析后的项目、逐项脚本调用命令、内部 profile 更新步骤，以及脚本内容，但不会执行
+- 在 TTY 中，`shine sys bootstrap` 会打开一个交互式多选界面，默认值来自预设的 `default_profile`
+- `shine sys bootstrap --preset <PROFILE>` 会跳过交互，直接应用指定 profile
+- 非 TTY 环境下，`shine sys bootstrap` 会回退到 `default_profile`
+- `shine sys bootstrap --dry-run` 会输出解析后的项目、逐项脚本调用命令、内部 profile 更新步骤，以及脚本内容，但不会执行
 - `shine sys status` 会显示当前操作系统此前记录过的初始化项目
-- `shine sys update [ITEM] [--verbose] [--proxy]` 是只读命令：它只检查此前由 `shine sys init` 记录的引导软件，绝不会安装或升级任何软件，也不会修改 sys manifest 或 shell profile。`--proxy` 会通过预设代理执行检查；在 Windows 上会显式传递 WinGet 的 `--proxy` 参数，因为 WinGet 会忽略标准 HTTP 代理环境变量。默认只显示由包管理器确认的可用更新及可直接复制的上游升级命令；`--verbose` 还会显示已是最新和只能手动检查的项目。对于直接安装器和用户自行维护的 Git 配置，命令会明确标记为需要手动处理，而不会猜测版本。
+- `shine sys update [ITEM] [--verbose] [--proxy]` 是只读命令：它只检查此前由 `shine sys bootstrap` 记录的引导软件，绝不会安装或升级任何软件，也不会修改 sys manifest 或 shell profile。`--proxy` 会通过预设代理执行检查；在 Windows 上会显式传递 WinGet 的 `--proxy` 参数，因为 WinGet 会忽略标准 HTTP 代理环境变量。默认只显示由包管理器确认的可用更新及可直接复制的上游升级命令；`--verbose` 还会显示已是最新和只能手动检查的项目。对于直接安装器和用户自行维护的 Git 配置，命令会明确标记为需要手动处理，而不会猜测版本。
 
 `shine update` 与 `shine upgrade` 仍只负责协调 Shine 管理的配置和受管系统资源，不会升级第三方引导软件。复制并运行 `shine sys update` 输出的命令始终是用户自己的明确决定。
 
@@ -225,7 +250,7 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "nvim found"
 - `macos` — 提供 Homebrew、Rust、Yazi、Starship、Neovim、AstroNvim、ZeroTier、zsh 插件、zoxide、Atuin、fzf、bat、eza、nvm、Bun、pnpm、mise 和 Fastfetch 的可选步骤。`recommended` profile 包含 Homebrew 和核心终端/编辑器工具；`all` profile 额外包含 JavaScript 运行时、mise 和 Fastfetch。
 - `windows` — 提供 Rust、Yazi、Starship、zoxide、Atuin、fzf、bat、eza、ZeroTier、Bun、pnpm 和 mise 的可选步骤。`recommended` profile 包含 Rust 和核心终端工具；`all` profile 额外包含 JavaScript 运行时和环境管理器步骤。
 
-当所选工具需要 shell 集成时，sys init 会安装受管的 `pre` 和 `post` profile loader。`pre` loader 会放在用户 profile 靠前位置，用于 PATH、Homebrew 和补全搜索路径；`post` loader 会放在靠后位置，用于 Yazi、Starship、zoxide、Atuin、fzf、mise、别名和 shell 插件。受管 profile 文件会被合并，用户在其中的修改会保留或提示需要检查。
+当所选工具需要 shell 集成时，`sys bootstrap` 会安装受管的 `pre` 和 `post` profile loader。`pre` loader 会放在用户 profile 靠前位置，用于 PATH、Homebrew 和补全搜索路径；`post` loader 会放在靠后位置，用于 Yazi、Starship、zoxide、Atuin、fzf、mise、别名和 shell 插件。受管 profile 文件会被合并，用户在其中的修改会保留或提示需要检查。
 
 在 Ubuntu 和 macOS 上，受管的 `pre` profile 还会通过 `shine theme sync` 同步终端的明暗主题，导出 `SHINE_TERMINAL_THEME=light|dark`，并设置 bat：浅色背景使用 `GitHub`，深色背景使用 `OneHalfDark`（可用 `SHINE_BAT_LIGHT_THEME`/`SHINE_BAT_DARK_THEME` 覆盖）。解析顺序依次是：已导出的 `SHINE_TERMINAL_THEME`（包含 `shine ssh` 从本地终端注入的值，见下文）、`COLORFGBG`，最后是使用总截止时间（而非逐字节超时）读取的 OSC 11 直接查询。若用户已自行设置过 `BAT_THEME`，则保持不变。可在 `config.toml` 中设置 `sync_terminal_theme = false` 或设置 `SHINE_SYNC_TERMINAL_THEME=0`（环境变量始终优先）关闭自动同步；无论该开关如何，都可随时用 `shine theme sync` 手动同步，或通过 `shine shell install utils` 安装可选的 `shine-theme-sync` 命令。`shine ssh <host>` 会在连接前直接查询本地终端，因此完全不依赖远端的 OSC 查询——详见 [docs/terminal-theme-sync-prd.md](terminal-theme-sync-prd.md)。macOS 的 sys profile 仍仅管理 zsh，Ubuntu 支持 bash 和 zsh。
 
@@ -247,8 +272,7 @@ shine app install             # 安装全部应用类别
 shine app install ghostty     # 仅安装一个类别
 shine app install starship    # 仅安装一个类别
 shine app install --dry-run   # 预览目标写入
-shine reinstall ghostty       # 自动匹配类别的重装简写
-shine app reinstall ghostty   # 覆盖一个类别的受管文件
+shine install app/ghostty --replace-managed  # 修复一个类别的受管文件
 ```
 
 `shine app install` 会先把内置文件解包到 `~/.shine/presets/app/`，然后复制到最终目标位置。
@@ -360,8 +384,15 @@ shine app install surge
 ```
 
 该功能需要 Bun。转换器支持可兼容的 `ss://` 和 `vmess://`，并以不含凭据的摘要报告被跳过的 VLESS、未知 transport 和坏记录；用户维护的
-`local-proxies.conf` 不会被改写。`shine update` 只下载到内存并比较，
-`shine upgrade` 才应用变化并 reload Surge；刷新失败时保留上次成功生成的文件。
+`local-proxies.conf` 不会被改写。内置生成器为手动模式，常规的 `shine update`
+和 `shine upgrade` 不会消耗订阅服务商的短时访问窗口。打开窗口后可显式刷新：
+
+```bash
+shine app refresh surge subscription-proxies.conf
+```
+
+`shine app refresh surge` 会刷新该类别下所有已安装的生成文件。刷新失败时保留上次
+成功生成的文件；除非指定 `--force`，否则用户修改过的目标文件不会被覆盖。
 
 `local-proxy-groups.conf` 中提供：
 
@@ -375,12 +406,45 @@ Profile 路径后，可运行内置的幂等 artifact 完成补丁：
 
 ```bash
 shine env set SURGE_PROFILE '~/Library/Application Support/Surge/Profiles/MyProfile.conf'
-shine app build surge
+shine app artifact apply surge
 ```
 
-`shine app unbuild surge` 会移除这些本地 section include；卸载 app 时也会在
+预设还会在 `rules/` 目录安装三类默认注释、不会生效的示例：`LAN Network`、
+`LAN PROXY` 和 `Other Direct`。`local-rules.conf` 为每类流量同时展示三种可替代的
+`RULE-SET` 来源：
+
+```ini
+# RULE-SET,rules/lan.list,LAN Network
+# RULE-SET,http://127.0.0.1:8080/rules/lan.list,LAN Network,update-interval=86400
+# RULE-SET,https://rules.example.com/surge/lan.list,LAN Network,update-interval=86400
+```
+
+每类只应启用一种。推荐使用相对文件，因为 Shine 已将它与 Profile 安装在同一目录。
+localhost 写法需要在运行 Surge 的同一设备上额外启动 HTTP 服务；iOS 上的
+`localhost` 指 iOS 设备本身。HTTPS 写法则需要将示例域名换成自己的服务器。代理、
+策略组和规则列表中的示例均保持注释，只有显式取消注释后才会生效。
+
+`shine app artifact remove surge` 会移除这些本地 section include；卸载 app 时也会在
 删除托管文件前尽力执行相同的 teardown。build/unbuild 需要 Bun，并且不会在
 install 或 upgrade 时隐式执行。
+
+### Clash Verge Rev 规则 Provider 示例
+
+内置 `clash-verge` 预设使用与 Surge 相同的三类流量，并提供一份完全注释、默认不生效的
+`merge.yaml`。其 `rule-providers` 同时展示三套互斥的来源：
+
+- `type: file`：规则文件已复制到 mihomo `HomeDir` 内；
+- `type: http` + `http://127.0.0.1:8080/...`：由额外的 loopback HTTP 服务提供；
+- `type: http` + `https://rules.example.com/...`：由远程 HTTPS 服务提供。
+
+每次只选择一整套 provider，并同时取消 `LAN Network`、`LAN PROXY`、`Other Direct`
+策略组与 `prepend-rules` 的注释。mihomo 默认将 file provider 的 `path` 限制在
+`HomeDir` 内，除非额外配置 `SAFE_PATHS`；因此 Shine 不会自动指向 `~/.shine`，也不会将文件
+偷偷写入 CVR 的私有数据目录。与 Surge 相同，localhost 指运行客户端的设备，不是另一台 LAN 主机。
+HTTP 示例中的 `proxy: DIRECT` 只控制 provider 规则文件的下载，避免 loopback 或私有规则服务器
+跟随当前 `GLOBAL`/代理策略；如果远程规则服务器只能通过代理访问，则应删除或调整该字段。若私有
+provider 域名依赖系统的分流 DNS（例如 Windows NRPT），还需按实际环境修改示例中的
+`dns.nameserver-policy`，因为 mihomo 可能使用自己的 DNS 解析器。
 
 ### 卸载应用预设
 
@@ -403,6 +467,8 @@ shine app uninstall git --purge    # 卸载 git 并删除其预设目录
 
 ```bash
 shine list
+shine list --available          # 浏览所有可用资源
+shine list --available app      # 只查看一种资源类型
 ```
 
 只显示当前已经安装或配置好的内容，用于快速回答“这台机器上现在启用了什么”。未安装项会被省略，也不会展示额外状态细节。
@@ -423,12 +489,12 @@ System Configs
 ```
 
 受管系统配置来自 `sys-manifest.toml` 中当前操作系统已登记的条目；详细状态仍通过
-`shine sys status` 和 `shine sys info <ITEM>` 查看。
+`shine sys status` 和 `shine info sys/<ITEM>` 查看。
 
 如果当前没有安装任何内容，`shine list` 除了提示 shell 和 app 安装命令，也会提示运行
 `shine sys list`。
 
-### 检查已安装配置详情
+### 检查可用或已安装资源详情
 
 ```bash
 shine info git
@@ -438,23 +504,30 @@ shine info setproxy
 shine info git --verbose
 ```
 
-会显示受管应用配置或 shell 预设的元数据、彩色状态，以及在适用时显示预期内容差异。加上 `--verbose` 后，还会输出已安装或渲染后的文件内容。目标名称会与已安装类别、命令名、显示名、源文件名和目标文件 basename 进行匹配。若短名称有歧义，请使用报错中提示的规范形式：
+可用资源会显示元数据和当前安装状态；已安装的 app/shell target 还支持预期内容 diff，并可通过 `--verbose` 查看已安装或渲染后的内容。短名称只有在唯一时才会被接受；有歧义时请使用报错给出的 canonical target：
 
 ```bash
 shine info app/git
 shine info shell/proxy/setproxy
+shine info sys/split-dns
 ```
 
-对于应用配置，`shine info --verbose` 读取的是已安装目标文件。对于 shell 预设，它读取的是实际生效的脚本目标；如果脚本使用了模板渲染，则会读取 `~/.shine/rendered/` 下对应的渲染结果。
+对于应用配置，`shine info --verbose` 读取的是已安装目标文件。对于 shell 预设，它读取的是实际生效的脚本目标；如果脚本使用了模板渲染，则会读取 `~/.shine/rendered/` 下对应的渲染结果。系统项目必须使用明确的 `sys/<ITEM>` 形式，并且不接受 `--diff` 或 `--verbose`。
 
 ### 更新状态和版本检查
 
 ```bash
 shine update
+shine update --diff
+shine update shell/proxy/setproxy
 shine update --verbose
+shine upgrade app/starship       # 只应用一个已安装类别
+shine upgrade sys/split-dns      # 只收敛一个受管系统项
 ```
 
 只显示已安装配置里存在可用更新的条目，然后再检查是否有更新的 `shine` 发行版。加 `--verbose` 后，会把已是最新或需要关注的安装项一并列出：
+
+加上 `--diff` 后，会直接在每个可更新的 shell 或 app 条目下显示预期内容差异。也可以传入一个已安装的 shell/app 目标来只检查该目标；目标模式默认显示 diff、跳过 `shine` 发行版检查，并可与 `--pull` 组合，但不能与 `--verbose` 或 `--refresh-release` 组合。`shine upgrade [TARGET]` 可以应用全部待处理变更，也可以只升级指定 app 类别、shell 类别或受管系统项；若传入文件或命令 target，会在其所属类别边界上升级。需要查看当前完整内容时继续使用 `shine info <TARGET> --verbose`。受管系统资源已经显示结构化字段变化，不再额外生成内容 diff。
 
 ```
 Shell Presets
@@ -474,19 +547,47 @@ App Configs
 | `!` | 目标文件缺失（曾安装过） |
 | `✗` | 未安装 |
 
-### 导出并自定义预设
+当新版 Shine 的 runtime schema 需要清理旧状态时，可以先预览、再执行版本化迁移：
 
 ```bash
-shine export
+shine state migrate --dry-run
+shine state migrate
+```
+
+### 管理和自定义 preset 来源
+
+可以在当前目录为新 preset 生成元数据模板：
+
+```bash
+shine preset new app
+shine preset new shell
+```
+
+```bash
+shine preset export
 ```
 
 会把所有内置 shell 脚本和应用配置复制到当前配置的 `presets_dir`（默认是 `~/.shine/presets/`）。导出后你可以自由修改这些文件；后续安装时，`shine` 会优先读取文件系统中的副本，而不是二进制内置资源。
 
+如果只想把某一个内置 preset 作为 overlay 的修改起点，可以在 overlay 根目录按规范的
+`kind/name` 复制完整快照：
+
+```bash
+cd ~/dotfiles/shine-overlay
+shine preset copy app/surge
+shine preset copy app/clash-verge
+```
+
+命令会生成包含当前二进制全部内置文件的 `app/surge/` 和 `app/clash-verge/`。请删除不准备
+修改的文件：overlay 按相对路径逐文件覆盖，删除后该路径会回退到内置版本并继续获得 Shine
+更新。已有文件默认保留，只有 `--force` 才会覆盖。可通过 `shine preset overlay link .` 激活
+当前目录。
+
 如果想通过 CLI 把 `shine` 切换到自定义预设目录：
 
 ```bash
-shine link ~/dotfiles/shine-presets --create
-shine export
+shine preset link ~/dotfiles/shine-presets --create
+shine preset export
 ```
 
 也可以在 `~/.shine/config.toml` 中设置 `presets_dir`：
@@ -498,7 +599,7 @@ presets_dir = "~/dotfiles/shine-presets"
 然后把默认预设导出过去，作为初始版本：
 
 ```bash
-SHINE_PRESETS=~/dotfiles/shine-presets shine export
+SHINE_PRESETS=~/dotfiles/shine-presets shine preset export
 ```
 
 当配置了 `presets_dir` 后，所有 `install`、`update` 和 `list` 命令都会自动从外部目录读取。每个命令输出中都会显示当前激活的预设来源，避免你混淆实际使用的是哪份文件。
@@ -506,20 +607,20 @@ SHINE_PRESETS=~/dotfiles/shine-presets shine export
 如果只想做少量自定义，可以使用 presets overlay。Overlay 会按相同相对路径覆盖当前预设来源（内置或外部），例如 `app/starship/starship.toml` 或 `shell/proxy/set_proxy.sh`。同路径文件以 overlay 为准，overlay 独有的分类也会加入基础来源。
 
 ```bash
-shine overlay link ~/dotfiles/shine-overlay --create
-shine overlay show
-shine overlay unlink
+shine preset overlay link ~/dotfiles/shine-overlay --create
+shine preset overlay info
+shine preset overlay unlink
 ```
 
 如果你的 overlay 保存在 Git 仓库中，可以让 Shine 自动维护这份检出，而不必在每台机器上手动克隆。为 overlay 指定一个 Git 地址，Shine 会以 `--depth 1`（不含历史）克隆到 `~/.shine/overlay`，并始终镜像到远端最新提交：
 
 ```bash
-shine overlay link --git https://github.com/you/shine-overlay.git   # 可选：--branch main
-shine overlay show      # 显示 URL、分支、托管路径与克隆状态
-shine pull              # 首次运行时克隆，之后强制镜像到最新提交
+shine preset overlay link --git https://github.com/you/shine-overlay.git   # 可选：--branch main
+shine preset overlay info      # 显示 URL、分支、托管路径与克隆状态
+shine preset pull              # 首次运行时克隆，之后强制镜像到最新提交
 ```
 
-也可以直接在 `~/.shine/config.toml` 中写入地址，再执行 `shine pull`：
+也可以直接在 `~/.shine/config.toml` 中写入地址，再执行 `shine preset pull`：
 
 ```toml
 presets_overlay_git = "https://github.com/you/shine-overlay.git"
@@ -527,14 +628,14 @@ presets_overlay_git = "https://github.com/you/shine-overlay.git"
 ```
 
 这特别适合「一台机器维护 overlay、其余设备只消费」的场景：每台设备只需要这个地址，
-无需手动 `git clone`。由于托管检出是只读镜像，`shine pull` 始终会将其重置为与远端一致
+无需手动 `git clone`。由于托管检出是只读镜像，`shine preset pull` 始终会将其重置为与远端一致
 （可安全应对 rebase、force-push），并丢弃任何本地改动。如果拉取失败（例如远端不可达），
-之前的检出会保持不变并继续使用。手动 `overlay link <path>` 优先于 Git 地址，两者互斥。
+之前的检出会保持不变并继续使用。手动 `preset overlay link <path>` 优先于 Git 地址，两者互斥。
 
 如果当前 preset 来源或手动关联的 overlay 由 Git 管理，Shine 也会安全地快进拉取：
 
 ```bash
-shine pull             # 同步托管 overlay，并快进 preset / overlay 仓库
+shine preset pull             # 同步托管 overlay，并快进 preset / overlay 仓库
 shine update --pull    # 先拉取并重新加载配置，再检查状态
 shine upgrade --pull   # 先拉取并重新加载配置，再应用 preset
 ```
@@ -566,6 +667,8 @@ shine init
 
 ```bash
 shine update        # 显示可用配置更新，然后强制检查最新 release
+shine update --diff # 显示可更新 shell/app 的内容差异
+shine update proxy/setproxy  # 只检查一个已安装目标，并跳过 release 检查
 shine update --verbose  # 同时显示已是最新和非更新类状态
 shine update --pull  # 拉取 Git 管理的 preset 后再检查状态
 shine self upgrade  # 下载并安装当前平台的最新稳定版
@@ -576,7 +679,7 @@ shine upgrade --pull  # 拉取 Git 管理的 preset 后再应用配置
 shine upgrade --verbose  # 包含 env 模板检查以及 skipped/已是最新的明细
 ```
 
-preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。preview 二进制会在 `shine --version` 中用 SemVer build metadata 标识，例如 `0.40.0+preview.abc1234`；稳定版则继续显示 `0.40.0`。
+preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检查不会使用这个通道。如果当前已安装的 preview 与当前预发布构建一致，`shine self upgrade --channel preview` 会报告已是最新，而不会重复安装。`shine --version` 采用与 Cargo 一致的来源信息格式：稳定版显示 `shine 1.0.0 (<commit> <date>)`，preview 版显示 `shine 1.0.0-preview (<commit> <date>)`。
 
 如果 `~/.shine/` 下的缓存目录不存在，`shine` 会在保存更新检查缓存前自动重建它。
 
@@ -586,7 +689,7 @@ preview 升级来自固定的 `preview` GitHub 预发布版本，自动更新检
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.40.0 sh install.sh
+SHINE_VERSION=1.0.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -594,9 +697,25 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.40.0"; .\install.ps1
+$env:SHINE_VERSION = "1.0.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
+
+### 个人任务
+
+可以把常用命令按 argv 保存为个人任务。任务默认在调用时所在目录运行；如果希望无论从哪里调用都
+使用同一工作目录，可通过 `--cwd` 绑定一个已经存在的目录：
+
+```bash
+shine task save check -- cargo test
+shine task save build --cwd ~/work/project -- cargo build --release
+shine task run build
+shine run build                 # `shine task run build` 的简写
+shine task info build
+```
+
+`--cwd` 会在保存时展开 `~` 并解析相对路径。命令默认不经过 shell，而是直接执行 argv；需要管道、
+重定向等 shell 语法时，应显式保存 `sh -c '...'`。
 
 ### SSH 会话内文件传输
 
@@ -719,7 +838,7 @@ CLIPROXYAPI_AUTH_TOKEN = "..."
 可通过以下命令创建加密值：
 
 ```bash
-shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN
+shine env secret encrypt --from CLIPROXYAPI_AUTH_TOKEN
 ```
 
 Codex 固定连接 `http://127.0.0.1:8317`，并把 Claude Code 的 Opus、Sonnet、Haiku
@@ -745,15 +864,15 @@ DEEPSEEK_API_KEY = "..."
 用现有 GPG key 生成加密值。如果私钥托管在 YubiKey 上，`gpg-agent` 会在执行 `ccenv` 时处理 PIN / touch 提示：
 
 ```bash
-shine env encrypt --from DEEPSEEK_API_KEY
+shine env secret encrypt --from DEEPSEEK_API_KEY
 ```
 
-`shine env encrypt` 默认使用 `config.toml` 中的 `gpg_key_id`。如需单次覆盖，可传入 `-r/--recipient <key-id>`。
+`shine env secret encrypt` 默认使用 `config.toml` 中的 `gpg_key_id`。如需单次覆盖，可传入 `-r/--recipient <key-id>`。
 
 也可以直接解密当前 env 配置中的任意 base64 GPG secret：
 
 ```bash
-shine env decrypt DEEPSEEK_API_KEY_SECRET
+shine env secret decrypt DEEPSEEK_API_KEY_SECRET
 ```
 
 如需通过阿里云 Anthropic-compatible endpoint 使用 Qwen，使用相同的凭证模式并配置
@@ -767,7 +886,7 @@ QWEN_API_KEY = "..."
 可通过以下命令创建加密值：
 
 ```bash
-shine env encrypt --from QWEN_API_KEY
+shine env secret encrypt --from QWEN_API_KEY
 ```
 
 `ccenv` 提示选择 provider 时，输入 `qwen`（或选项 `3`）。Claude 子进程会收到阿里云
@@ -783,10 +902,10 @@ encrypt`/`decrypt`/`seal` 还支持第二种后端 [age](https://github.com/Filo
 brew install age age-plugin-se   # 或使用你偏好的包管理器
 
 # 生成一个绑定 Touch ID 的 Secure Enclave 身份，解密时会弹出系统 Touch ID 提示
-shine env identity init --touch-id
+shine env secret identity init --touch-id
 
 # 或者生成一个在任意系统上都可用的普通身份
-shine env identity init
+shine env secret identity init
 ```
 
 `identity init` 会打印该身份对应的 `age1...`/`age1se1...` recipient。把每位团队成员的
@@ -799,8 +918,8 @@ age_recipients = ["age1se1qexample...", "age1qteammate..."]
 ```
 
 ```bash
-shine env encrypt --backend age --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_SECRET
-shine env decrypt DEEPSEEK_API_KEY_SECRET   # 如果身份是 Secure Enclave，会弹出 Touch ID 提示
+shine env secret encrypt --backend age --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_SECRET
+shine env secret decrypt DEEPSEEK_API_KEY_SECRET   # 如果身份是 Secure Enclave，会弹出 Touch ID 提示
 ```
 
 age 后端产生的密文带有标签（`age:...`），因此 `shine` 始终能判断该用哪个后端解密——已有的、不带
@@ -811,8 +930,8 @@ age 后端产生的密文带有标签（`age:...`），因此 `shine` 始终能�
 如果要把值导出到当前 shell，可直接生成 shell 代码，也可以通过 `--as` 改用另一个变量名：
 
 ```bash
-eval "$(shine env export MY_TOKEN)"
-eval "$(shine env export MY_TOKEN --as API_TOKEN)"
+eval "$(shine env secret export MY_TOKEN)"
+eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
 ```
 
 安装 `utils` 预设后，也可以用 `shine-env-export MY_TOKEN --as API_TOKEN` 直接应用，无需手写 `eval`。
@@ -826,7 +945,7 @@ shine env run --with MY_TOKEN=API_TOKEN -- bun run build
 shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
 ```
 
-每个变量都沿用 `env export` 的规则，优先解密 `<KEY>_SECRET`，否则读取明文 `<KEY>`。
+每个变量都沿用 `env secret export` 的规则，优先解密 `<KEY>_SECRET`，否则读取明文 `<KEY>`。
 等号右侧可指定子进程看到的变量名。显式 `--with` 值会覆盖当前终端和 workspace 中的
 同名变量；只要指定了至少一个 `--with`，就不要求存在 workspace 文件。
 
@@ -871,7 +990,7 @@ data = "<由 Shine 管理的 GPG 密文>"
 封存待处理的值，再用合并后的环境运行命令：
 
 ```bash
-shine env seal
+shine env secret seal
 shine env run --mode production -- bun run build
 ```
 
@@ -965,7 +1084,7 @@ presets_dir = "/custom/presets"
 app_default_dest_root = "~/.config"
 ```
 
-为 `shine env encrypt` 设置默认 GPG recipient：
+为 `shine env secret encrypt` 设置默认 GPG recipient：
 
 ```toml
 gpg_key_id = "<key-id>"
@@ -993,7 +1112,7 @@ GHOSTTY_BG_DARK = ""
 
 环境变量按 key 依次合并：内置默认值、全局 `[env]`、项目 `[env]`、全局 `shine.env.toml`、当前 presets overlay 的 `shine.env.toml`、项目 `shine.env.toml`。
 
-`shine env show` 会显示当前 preset catalog 提供的变量说明，并默认隐藏敏感值；需要查看完整值时可使用 `--reveal`。如果需要在当前配置中覆盖说明，可以把值和说明写在同一个 inline table 中：
+`shine env list` 会显示当前 preset catalog 提供的变量说明，并默认隐藏敏感值；需要查看完整值时可使用 `--reveal`。如果需要在当前配置中覆盖说明，可以把值和说明写在同一个 inline table 中：
 
 ```toml
 [env]
@@ -1022,10 +1141,10 @@ inline description 的优先级高于 preset catalog。Catalog 只保存元数�
 v0.39 完成迁移；否则请将它移动为 `~/.shine/shine.env.toml`，若目标文件已存在则手动
 合并。旧文件仍存在时，普通配置加载命令会停止并给出恢复提示。
 
-通过 `shine overlay link <path>` 关联的有效 overlay 目录也可以包含扁平的
+通过 `shine preset overlay link <path>` 关联的有效 overlay 目录也可以包含扁平的
 `<path>/shine.env.toml`。其中的值会覆盖全局 env，并可在任意工作目录下生效；
 项目本地 `shine.env.toml` 仍拥有更高优先级。该文件会在每次运行时重新读取，
-无需项目级 `shine.config.toml`；执行 `shine overlay unlink` 后即停止生效。
+无需项目级 `shine.config.toml`；执行 `shine preset overlay unlink` 后即停止生效。
 Overlay 也可以与完整的外部 presets 来源同时使用：同路径文件以 overlay 为准，
 其余文件继续来自外部 presets。
 

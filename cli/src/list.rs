@@ -1,6 +1,7 @@
 use crate::apps::load_active_categories;
 use crate::colors;
 use crate::config::Config;
+use crate::info::UpdateDiffs;
 use crate::output;
 use crate::status::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_rows};
 use crate::sys;
@@ -8,7 +9,7 @@ use anyhow::Result;
 
 const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
 
-pub async fn handle_update_list(config: &Config) -> Result<bool> {
+pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
     let shell_rows = build_shell_rows(config).await?;
     let update_shell: Vec<&ShellRow> = shell_rows
         .iter()
@@ -31,6 +32,12 @@ pub async fn handle_update_list(config: &Config) -> Result<bool> {
         return Ok(false);
     }
 
+    let update_diffs = if diff {
+        Some(UpdateDiffs::collect(config).await?)
+    } else {
+        None
+    };
+
     crate::config::print_presets_note(config);
 
     if !update_shell.is_empty() {
@@ -52,6 +59,9 @@ pub async fn handle_update_list(config: &Config) -> Result<bool> {
                 colors::status_label(row.status_text, row.status_sym),
                 colors::dim("run `shine upgrade`"),
             );
+            if let Some(diffs) = &update_diffs {
+                diffs.print_shell_for_row(config, &row.label).await?;
+            }
         }
     }
 
@@ -80,6 +90,9 @@ pub async fn handle_update_list(config: &Config) -> Result<bool> {
                 colors::status_label(row.status_text, row.sym),
                 colors::dim("run `shine upgrade`"),
             );
+            if let Some(diffs) = &update_diffs {
+                diffs.print_app_for_row(config, &row.label).await?;
+            }
         }
     }
 
@@ -106,7 +119,7 @@ pub async fn handle_update_list(config: &Config) -> Result<bool> {
     Ok(true)
 }
 
-pub async fn handle_status_list(config: &Config) -> Result<()> {
+pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
     crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
@@ -131,6 +144,12 @@ pub async fn handle_status_list(config: &Config) -> Result<()> {
         );
         return Ok(());
     }
+
+    let update_diffs = if diff {
+        Some(UpdateDiffs::collect(config).await?)
+    } else {
+        None
+    };
 
     // ── Shell Presets ────────────────────────────────────────────────────────
     if !installed_shell.is_empty() {
@@ -157,6 +176,11 @@ pub async fn handle_status_list(config: &Config) -> Result<()> {
                 colors::status_label(row.status_text, row.status_sym),
                 run_hint,
             );
+            if row.status_sym == "↑"
+                && let Some(diffs) = &update_diffs
+            {
+                diffs.print_shell_for_row(config, &row.label).await?;
+            }
         }
     }
 
@@ -201,6 +225,12 @@ pub async fn handle_status_list(config: &Config) -> Result<()> {
                 colors::status_label(row.status_text, row.sym),
                 run_hint,
             );
+
+            if row.file_status == FileStatus::UpdateAvail
+                && let Some(diffs) = &update_diffs
+            {
+                diffs.print_app_for_row(config, &row.label).await?;
+            }
 
             match row.file_status {
                 FileStatus::Missing => missing += 1,

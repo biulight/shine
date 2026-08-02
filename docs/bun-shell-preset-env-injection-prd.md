@@ -143,7 +143,7 @@ echo "$API_TOKEN"  # remains unchanged
 ```
 
 Users who intentionally need a persistent shell export continue to opt in with
-`eval "$(shine env export API_TOKEN)"`. That broader exposure is not performed by
+`eval "$(shine env secret export API_TOKEN)"`. That broader exposure is not performed by
 Bun launchers.
 
 ## 6. Transforms and Upgrade Semantics
@@ -177,7 +177,7 @@ ownership rules remain the sole authority for overwrite and uninstall decisions.
 - Regenerate launchers deterministically and refresh **only when the resolved
   launcher content actually changes**. An entry that gains, drops, or reorders an
   `env` declaration produces different launcher bytes and refreshes on
-  install/reinstall/upgrade. An entry with no `env` declaration produces launcher
+  install (including `--replace-managed`) or upgrade. An entry with no `env` declaration produces launcher
   bytes byte-identical to v1 and stays current — it must not be needlessly rewritten.
   A user-modified launcher remains a conflict rather than becoming implicitly managed.
 - Existing Bun entries that omit `env` retain their v1 launcher behavior and do not
@@ -198,7 +198,7 @@ ownership rules remain the sole authority for overwrite and uninstall decisions.
 3. Extend generated Bun launcher content on Unix and Windows only when the entry
    declares environment values. Preserve direct argv execution, platform quoting,
    child exit status, ownership markers, and deterministic stale detection.
-4. Update `shine shell init`, README, Chinese README, and preset authoring guidance
+4. Update `shine preset new shell`, README, Chinese README, and preset authoring guidance
    to recommend `env` plus `Bun.env` for Bun helper configuration; document
    `template` as the static-rendering alternative.
 5. Update the relevant architecture data-flow documentation and launcher invariant

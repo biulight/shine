@@ -1,10 +1,10 @@
-use super::collect::{AppShowFile, ShellShowFile};
+use super::collect::{AppInfoFile, ShellInfoFile};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum ShowRef {
+pub(super) enum InfoRef {
     AppCategory(String),
     AppFile { category: String, source: PathBuf },
     ShellCategory(String),
@@ -15,12 +15,12 @@ pub(super) enum ShowRef {
 pub(super) struct TargetCandidate {
     canonical: String,
     aliases: BTreeSet<String>,
-    item: ShowRef,
+    item: InfoRef,
 }
 
 pub(super) fn build_candidates(
-    app_files: &[AppShowFile],
-    shell_files: &[ShellShowFile],
+    app_files: &[AppInfoFile],
+    shell_files: &[ShellInfoFile],
 ) -> Vec<TargetCandidate> {
     let mut candidates = Vec::new();
 
@@ -34,7 +34,7 @@ pub(super) fn build_candidates(
         candidates.push(TargetCandidate {
             canonical: format!("app/{category}"),
             aliases,
-            item: ShowRef::AppCategory(category),
+            item: InfoRef::AppCategory(category),
         });
     }
 
@@ -51,7 +51,7 @@ pub(super) fn build_candidates(
         candidates.push(TargetCandidate {
             canonical: format!("app/{}/{}", file.category.name, source),
             aliases,
-            item: ShowRef::AppFile {
+            item: InfoRef::AppFile {
                 category: file.category.name.clone(),
                 source: file.file.source_rel.clone(),
             },
@@ -68,7 +68,7 @@ pub(super) fn build_candidates(
         candidates.push(TargetCandidate {
             canonical: format!("shell/{category}"),
             aliases,
-            item: ShowRef::ShellCategory(category),
+            item: InfoRef::ShellCategory(category),
         });
     }
 
@@ -85,7 +85,7 @@ pub(super) fn build_candidates(
         candidates.push(TargetCandidate {
             canonical: format!("shell/{}/{}", file.category.name, file.file.command_name),
             aliases,
-            item: ShowRef::ShellFile {
+            item: InfoRef::ShellFile {
                 category: file.category.name.clone(),
                 command: file.file.command_name.clone(),
             },
@@ -95,7 +95,7 @@ pub(super) fn build_candidates(
     candidates
 }
 
-pub(super) fn resolve_target(target: &str, candidates: &[TargetCandidate]) -> Result<Vec<ShowRef>> {
+pub(super) fn resolve_target(target: &str, candidates: &[TargetCandidate]) -> Result<Vec<InfoRef>> {
     let trimmed = target.trim();
     if trimmed.is_empty() {
         bail!("info target must not be empty");
@@ -126,7 +126,7 @@ pub(super) fn resolve_target(target: &str, candidates: &[TargetCandidate]) -> Re
     bail!("{}", missing_target_message(trimmed, candidates));
 }
 
-fn ambiguity(target: &str, matches: Vec<&TargetCandidate>) -> Result<Vec<ShowRef>> {
+fn ambiguity(target: &str, matches: Vec<&TargetCandidate>) -> Result<Vec<InfoRef>> {
     let choices = matches
         .iter()
         .map(|c| c.canonical.as_str())
@@ -180,9 +180,9 @@ fn suggested_targets(target: &str, candidates: &[TargetCandidate]) -> Vec<String
     let matched_parents = matches
         .iter()
         .filter_map(|candidate| match &candidate.item {
-            ShowRef::AppCategory(category) => Some(("app", category.as_str())),
-            ShowRef::ShellCategory(category) => Some(("shell", category.as_str())),
-            ShowRef::AppFile { .. } | ShowRef::ShellFile { .. } => None,
+            InfoRef::AppCategory(category) => Some(("app", category.as_str())),
+            InfoRef::ShellCategory(category) => Some(("shell", category.as_str())),
+            InfoRef::AppFile { .. } | InfoRef::ShellFile { .. } => None,
         })
         .collect::<BTreeSet<_>>();
 
@@ -201,19 +201,19 @@ fn grouped_available_targets(
     let mut groups: BTreeMap<&'static str, BTreeSet<String>> = BTreeMap::new();
     for candidate in candidates {
         match &candidate.item {
-            ShowRef::AppCategory(category) => {
+            InfoRef::AppCategory(category) => {
                 groups
                     .entry("App Configs")
                     .or_default()
                     .insert(category.clone());
             }
-            ShowRef::ShellCategory(category) => {
+            InfoRef::ShellCategory(category) => {
                 groups
                     .entry("Shell Presets")
                     .or_default()
                     .insert(category.clone());
             }
-            ShowRef::AppFile { .. } | ShowRef::ShellFile { .. } => {}
+            InfoRef::AppFile { .. } | InfoRef::ShellFile { .. } => {}
         }
     }
 
@@ -228,19 +228,19 @@ fn has_matched_parent(
     matched_parents: &BTreeSet<(&str, &str)>,
 ) -> bool {
     match &candidate.item {
-        ShowRef::AppFile { category, .. } => matched_parents.contains(&("app", category.as_str())),
-        ShowRef::ShellFile { category, .. } => {
+        InfoRef::AppFile { category, .. } => matched_parents.contains(&("app", category.as_str())),
+        InfoRef::ShellFile { category, .. } => {
             matched_parents.contains(&("shell", category.as_str()))
         }
-        ShowRef::AppCategory(_) | ShowRef::ShellCategory(_) => false,
+        InfoRef::AppCategory(_) | InfoRef::ShellCategory(_) => false,
     }
 }
 
 fn display_target_name(candidate: &TargetCandidate) -> String {
     match &candidate.item {
-        ShowRef::AppCategory(category) | ShowRef::ShellCategory(category) => category.clone(),
-        ShowRef::AppFile { category, source } => format!("{category}/{}", source.display()),
-        ShowRef::ShellFile { category, command } => format!("{category}/{command}"),
+        InfoRef::AppCategory(category) | InfoRef::ShellCategory(category) => category.clone(),
+        InfoRef::AppFile { category, source } => format!("{category}/{}", source.display()),
+        InfoRef::ShellFile { category, command } => format!("{category}/{command}"),
     }
 }
 
@@ -263,8 +263,8 @@ mod tests {
     use crate::install_core::AppInstallStrategy;
     use crate::status::FileStatus;
 
-    fn app_file(category: &str, source: &str, dest: &str) -> AppShowFile {
-        AppShowFile {
+    fn app_file(category: &str, source: &str, dest: &str) -> AppInfoFile {
+        AppInfoFile {
             category: crate::apps::AppCategory {
                 name: category.to_string(),
                 description: None,
@@ -295,8 +295,8 @@ mod tests {
         }
     }
 
-    fn shell_file(category: &str, command: &str, source: &str) -> ShellShowFile {
-        ShellShowFile {
+    fn shell_file(category: &str, command: &str, source: &str) -> ShellInfoFile {
+        ShellInfoFile {
             category: crate::shells::metadata::ShellCategory {
                 name: category.to_string(),
                 description: None,
@@ -325,7 +325,7 @@ mod tests {
         let candidates = build_candidates(&[], &[shell_file("proxy", "setproxy", "set_proxy.sh")]);
         assert_eq!(
             resolve_target("setproxy", &candidates).unwrap(),
-            vec![ShowRef::ShellFile {
+            vec![InfoRef::ShellFile {
                 category: "proxy".to_string(),
                 command: "setproxy".to_string()
             }]
@@ -338,7 +338,7 @@ mod tests {
         let candidates = build_candidates(&files, &[]);
         assert_eq!(
             resolve_target("git", &candidates).unwrap(),
-            vec![ShowRef::AppCategory("git".to_string())]
+            vec![InfoRef::AppCategory("git".to_string())]
         );
     }
 
@@ -352,7 +352,7 @@ mod tests {
         let candidates = build_candidates(&files, &[]);
         assert_eq!(
             resolve_target("app/docker-desktop/settings-store.jsonc", &candidates).unwrap(),
-            vec![ShowRef::AppFile {
+            vec![InfoRef::AppFile {
                 category: "docker-desktop".to_string(),
                 source: PathBuf::from("settings-store.jsonc")
             }]
@@ -364,7 +364,7 @@ mod tests {
         let candidates = build_candidates(&[], &[shell_file("proxy", "setproxy", "set_proxy.sh")]);
         assert_eq!(
             resolve_target("shell/proxy/setproxy", &candidates).unwrap(),
-            vec![ShowRef::ShellFile {
+            vec![InfoRef::ShellFile {
                 category: "proxy".to_string(),
                 command: "setproxy".to_string()
             }]

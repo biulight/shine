@@ -12,6 +12,8 @@ mod uninstall;
 mod upgrade;
 
 pub use build::{handle_build, handle_unbuild};
+#[doc(hidden)]
+pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};
 pub use install::handle_install;
 pub use metadata::{
@@ -21,6 +23,7 @@ pub use metadata::{
 pub use refresh::handle_refresh;
 pub use uninstall::handle_uninstall;
 pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
+pub(crate) use upgrade::{handle_upgrade_installed_target, handle_upgrade_installed_with_output};
 
 use crate::config::Config;
 use crate::install_core::manifest::{self, AppEntry, AppInstallStrategy, hash_content};
@@ -471,6 +474,58 @@ mod tests {
         assert_ne!(fs::read(&dest).await.unwrap(), before);
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
+
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn targeted_upgrade_does_not_mutate_other_app_categories() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"one\"\n}\n").await;
+        let other_dir = dir.join("presets/app/other");
+        fs::create_dir_all(&other_dir).await.unwrap();
+        fs::write(
+            other_dir.join("shine.toml"),
+            "description = \"Other app\"\ndest = \"~/.config/other\"\n\n[[files]]\nsource = \"config.json\"\ntarget = \"config.json\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(other_dir.join("config.json"), b"{\"value\":1}\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        handle_install(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+        handle_install(&config, Some("other"), false, false)
+            .await
+            .unwrap();
+
+        write_external_sample_app(&dir, b"{\n  \"proxy\": \"two\"\n}\n").await;
+        fs::write(other_dir.join("config.json"), b"{\"value\":2}\n")
+            .await
+            .unwrap();
+        let other_dest = dir.join(".config/other/config.json");
+        let other_before = fs::read(&other_dest).await.unwrap();
+
+        let mut sep = crate::output::SectionSeparator::new();
+        let report =
+            handle_upgrade_installed_target(&config, Some("sample"), false, false, &mut sep)
+                .await
+                .unwrap();
+
+        assert_eq!(report.updated, 1);
+        assert_eq!(fs::read(&other_dest).await.unwrap(), other_before);
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };

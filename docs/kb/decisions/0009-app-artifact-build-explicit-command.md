@@ -1,4 +1,4 @@
-# 0009 — App artifact build scripts run only via an explicit `shine app build` command
+# 0009 — App artifact build scripts run only via an explicit `shine app artifact apply` command
 
 - **Status**: accepted (the "not auto-reversed" consequence is superseded by
   [ADR 0012](0012-app-lifecycle-post-install-and-teardown.md), which adds an optional
@@ -9,7 +9,7 @@
   canonical Surge artifact in a private overlay is superseded by
   [ADR 0017](0017-built-in-surge-profile-artifact.md).
 - **Evidence**: `cli/src/apps/build.rs`, `cli/src/apps/metadata.rs` (`[artifact]`/`AppArtifact`),
-  `shine app build <app-id>`, `presets/app/surge/build.ts`
+  `shine app artifact apply <app-id>`, `presets/app/surge/build.ts`
 
 ## Context
 
@@ -30,7 +30,7 @@ was dropped as it duplicated Surge's job and fought the subscription's expiry.)
 
 ## Decision
 
-Add a generic `[artifact].script` metadata field and a `shine app build <app-id>` command that:
+Add a generic `[artifact].script` metadata field and a `shine app artifact apply <app-id>` command that:
 
 - Resolves the category exactly like `app info`/`app install` (`metadata::load_active_categories`).
 - Resolves the script's location with the overlay directory winning over the built-in/external
@@ -49,7 +49,7 @@ Add a generic `[artifact].script` metadata field and a `shine app build <app-id>
 - Propagates a nonzero script exit as a real `anyhow::Error` — unlike `post_upgrade` hooks
   (`apps/upgrade.rs::run_post_upgrade_hooks`), which are a background side effect of `shine upgrade`
   and deliberately swallow a failing hook's error so one broken hook can't abort the whole upgrade.
-  `shine app build` is a single, explicit, user-invoked action, so its failure should be loud.
+  `shine app artifact apply` is a single, explicit, user-invoked action, so its failure should be loud.
 - Never runs implicitly from `shine upgrade` or `shine app install`.
 
 Shine core deliberately does not know what the script does with those inputs — there are no
@@ -66,7 +66,7 @@ anything else is entirely the script's own responsibility.
   retain only user-specific policy content.
 - Adding an artifact script to a new app preset requires no Shine core changes — just an
   `[artifact]` table and a script that honors the environment contract.
-- A category with no `[artifact]` section behaves exactly as before; `shine app build` on such a
+- A category with no `[artifact]` section behaves exactly as before; `shine app artifact apply` on such a
   category is a clear, immediate error rather than a silent no-op.
 - **The patch is not auto-reversed.** `shine app uninstall surge` removes the copied `local-*.conf`
   but does not un-patch the profile's `#!include` lines; the overlay `build.sh` is idempotent
@@ -106,7 +106,7 @@ This prevents global array replacement and first-apply HTTP 404 failures.
 **Opt-in auto-run via hooks.** The core principle above — Shine's install/upgrade machinery never
 runs an artifact implicitly — is unchanged: there is still no `run_on_upgrade` field and the runner
 never invokes the artifact on its own. But a preset MAY *opt in* to auto-running its build by
-declaring a `post_install`/`post_upgrade` hook that re-invokes `shine app build <id>` (a fresh shine
+declaring a `post_install`/`post_upgrade` hook that re-invokes `shine app artifact apply <id>` (a fresh shine
 process that re-enters the artifact with the full `[env]` + `SHINE_APP_*` contract that hooks
 themselves don't get). `clash-verge` does this so `shine app install`/`shine upgrade` update the
 bound subscription enhancement files when `merge.yaml` changes. This is only appropriate because
@@ -116,5 +116,5 @@ NOT do this — its artifact patches a live profile (provider-specific, order-se
 exactly the kind of side effect this ADR keeps behind an explicit command. Constraints: the hook
 needs `shine` on PATH; external presets need `allow_app_hooks = true`; it fires only when the
 preset's own files change (not on unrelated `shine upgrade` runs, and not on rule-list edits, which
-never touch `merge.yaml`); no recursion, since `shine app build` fires neither install nor upgrade
+never touch `merge.yaml`); no recursion, since `shine app artifact apply` fires neither install nor upgrade
 hooks.

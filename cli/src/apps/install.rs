@@ -382,11 +382,14 @@ source = \"file.conf\"\n",
             "post_install must not run when no file changed"
         );
 
-        // Reinstall (force) rewrites the file → post_install fires again.
+        // Replacement install (force) rewrites the file → post_install fires again.
         handle_install(&config, Some("hooktest"), false, true)
             .await
             .unwrap();
-        assert!(marker.exists(), "post_install must run on reinstall");
+        assert!(
+            marker.exists(),
+            "post_install must run on replacement install"
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

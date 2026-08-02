@@ -71,7 +71,7 @@ pub async fn handle_refresh(
     }
     if selected.is_empty() {
         bail!(
-            "app '{category}' has no installed generated files; run `shine app install {category}` first"
+            "app '{category}' has no installed generated files; run `shine install app/{category}` first"
         );
     }
 

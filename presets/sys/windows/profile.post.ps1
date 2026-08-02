@@ -1,4 +1,4 @@
-# Managed by `shine sys init` for Windows. Existing user config is left untouched.
+# Managed by `shine sys bootstrap` for Windows. Existing user config is left untouched.
 
 # Starship prompt
 if (Get-Command starship -ErrorAction SilentlyContinue) {

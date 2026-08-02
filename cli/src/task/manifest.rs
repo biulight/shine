@@ -6,7 +6,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) const TASKS_FILE: &str = "tasks.toml";
 
@@ -23,6 +23,10 @@ pub struct TaskEntry {
     /// boundaries. Executed directly (no shell) unless the user saved an
     /// explicit `sh -c ...` invocation.
     pub command: Vec<String>,
+    /// Optional fixed working directory. Missing for legacy and dynamic-cwd
+    /// tasks, which continue to run in the caller's current directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
 }
 
 impl TaskManifest {
@@ -38,8 +42,8 @@ impl TaskManifest {
         self.tasks.get(name)
     }
 
-    pub fn upsert(&mut self, name: impl Into<String>, command: Vec<String>) {
-        self.tasks.insert(name.into(), TaskEntry { command });
+    pub fn upsert(&mut self, name: impl Into<String>, command: Vec<String>, cwd: Option<PathBuf>) {
+        self.tasks.insert(name.into(), TaskEntry { command, cwd });
     }
 
     pub fn remove(&mut self, name: &str) -> bool {
@@ -74,6 +78,7 @@ mod tests {
                 "-c".to_string(),
                 "lsof -ti :3000 | xargs kill".to_string(),
             ],
+            None,
         );
         manifest.save(&dir).await.unwrap();
 
@@ -86,12 +91,36 @@ mod tests {
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[test]
+    fn legacy_entry_without_cwd_deserializes_as_dynamic() {
+        let manifest: TaskManifest =
+            toml::from_str("[tasks.build]\ncommand = [\"cargo\", \"build\"]\n").unwrap();
+        assert_eq!(manifest.get("build").unwrap().cwd, None);
+    }
+
+    #[tokio::test]
+    async fn save_then_load_roundtrips_fixed_cwd() {
+        let dir = temp_dir().await;
+        let cwd = dir.join("project");
+        let mut manifest = TaskManifest::default();
+        manifest.upsert(
+            "build",
+            vec!["cargo".to_string(), "build".to_string()],
+            Some(cwd.clone()),
+        );
+        manifest.save(&dir).await.unwrap();
+
+        let reloaded = TaskManifest::load(&dir).await.unwrap();
+        assert_eq!(reloaded.get("build").unwrap().cwd.as_ref(), Some(&cwd));
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[tokio::test]
     async fn upsert_replaces_and_remove_reports_presence() {
         let dir = temp_dir().await;
         let mut manifest = TaskManifest::default();
-        manifest.upsert("t", vec!["echo".to_string(), "one".to_string()]);
-        manifest.upsert("t", vec!["echo".to_string(), "two".to_string()]);
+        manifest.upsert("t", vec!["echo".to_string(), "one".to_string()], None);
+        manifest.upsert("t", vec!["echo".to_string(), "two".to_string()], None);
         assert_eq!(manifest.get("t").unwrap().command, ["echo", "two"]);
         assert!(manifest.remove("t"));
         assert!(!manifest.remove("t"));

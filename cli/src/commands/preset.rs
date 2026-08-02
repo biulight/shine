@@ -1,6 +1,12 @@
 use std::path::PathBuf;
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum PresetTemplateKind {
+    App,
+    Shell,
+}
 
 #[derive(Args, Debug)]
 pub struct ExportCommand {
@@ -10,6 +16,38 @@ pub struct ExportCommand {
     /// Overwrite existing files
     #[arg(long, short = 'f')]
     pub force: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CopyCommand {
+    /// Built-in preset to copy (app/name, shell/name, or sys/name)
+    #[arg(value_name = "KIND/NAME", value_parser = parse_copy_target)]
+    pub target: String,
+    /// Overwrite existing files
+    #[arg(long, short = 'f')]
+    pub force: bool,
+}
+
+pub(crate) fn parse_copy_target(value: &str) -> Result<String, String> {
+    if value.contains('\\') {
+        return Err(format!(
+            "invalid preset target '{value}': expected app/name, shell/name, or sys/name"
+        ));
+    }
+
+    let mut parts = value.split('/');
+    let kind = parts.next().unwrap_or_default();
+    let name = parts.next().unwrap_or_default();
+    if parts.next().is_some()
+        || !matches!(kind, "app" | "shell" | "sys")
+        || name.is_empty()
+        || matches!(name, "." | "..")
+    {
+        return Err(format!(
+            "invalid preset target '{value}': expected app/name, shell/name, or sys/name"
+        ));
+    }
+    Ok(value.to_string())
 }
 
 #[derive(Args, Debug)]
@@ -28,7 +66,7 @@ pub struct OverlayLinkCommand {
     #[arg(value_name = "PATH", conflicts_with = "git")]
     pub path: Option<PathBuf>,
     /// Git URL for a shine-managed overlay. shine clones it (`--depth 1`) under
-    /// `~/.shine/overlay` and keeps it mirrored to the remote tip on `shine pull`.
+    /// `~/.shine/overlay` and keeps it mirrored to the remote tip on `shine preset pull`.
     #[arg(long, value_name = "URL")]
     pub git: Option<String>,
     /// Branch to track for --git. Defaults to the remote's default branch.
@@ -45,6 +83,33 @@ pub enum OverlayCommands {
     Link(OverlayLinkCommand),
     /// Remove the presets overlay from the active config.
     Unlink,
-    /// Show the active presets overlay.
-    Show,
+    /// Show information about the active presets overlay.
+    Info,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PresetCommands {
+    /// Create a shine.toml template for a new app or shell preset
+    New {
+        #[arg(value_enum)]
+        kind: PresetTemplateKind,
+        /// Overwrite shine.toml if it already exists
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
+    /// Copy built-in presets to a directory for local customization
+    Export(ExportCommand),
+    /// Copy one built-in preset into the current directory
+    Copy(CopyCommand),
+    /// Set the external presets directory in the active config
+    Link(LinkCommand),
+    /// Remove the external presets directory from the active config
+    Unlink,
+    /// Manage the personal presets overlay directory
+    Overlay {
+        #[command(subcommand)]
+        command: OverlayCommands,
+    },
+    /// Pull Git-managed preset and overlay repositories
+    Pull,
 }

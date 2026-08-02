@@ -36,10 +36,10 @@ check_update() {
     case "$1" in
         fzf|bat) check_apt_update "$1" ;;
         astronvim) update_status "manual" "AstroNvim configuration is user-owned" "git -C ~/.config/nvim pull" ;;
-        neovim) update_status "manual" "Neovim was installed from a direct release archive" "rerun shine sys init and select neovim" ;;
+        neovim) update_status "manual" "Neovim was installed from a direct release archive" "rerun shine sys bootstrap and select neovim" ;;
         atuin) update_status "manual" "Atuin was installed by its upstream curl installer" "atuin update" ;;
-        yazi) update_status "manual" "Yazi may have been installed from a direct release package" "rerun shine sys init and select yazi" ;;
-        starship|zoxide|zsh-vi-mode|pnpm|mise|homebrew|zerotier|eza) update_status "manual" "This item has no stable source-specific non-mutating checker" "rerun shine sys init and select $1" ;;
+        yazi) update_status "manual" "Yazi may have been installed from a direct release package" "rerun shine sys bootstrap and select yazi" ;;
+        starship|zoxide|zsh-vi-mode|pnpm|mise|homebrew|zerotier|eza) update_status "manual" "This item has no stable source-specific non-mutating checker" "rerun shine sys bootstrap and select $1" ;;
         *) update_status "unsupported" "This item has no update checker" ;;
     esac
 }
@@ -426,7 +426,7 @@ run_item() {
         __shine_finalize) status "completed" "profile is managed by shine CLI" ;;
         "") return 0 ;;
         *)
-            echo "Unknown sys init item: $1" >&2
+            echo "Unknown sys bootstrap item: $1" >&2
             return 1
             ;;
     esac

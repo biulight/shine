@@ -26,4 +26,4 @@ passes a conflicting argument to Claude.
 
 Adding a provider changes one registry and its table-driven tests. Bun and shine must be available
 at execution time. Running plain `ccenv` now starts interactive Claude; users who need a general
-parent-shell export continue to use `shine env export`.
+parent-shell export continue to use `shine env secret export`.

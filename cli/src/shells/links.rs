@@ -101,12 +101,12 @@ fn describe_existing_link(path: &Path, display_path: &str) -> String {
 
 fn reinstall_command(config: &Config, category_hint: Option<&str>, source: &Path) -> String {
     if let Some(category) = category_hint {
-        return format!("shine shell reinstall {category}");
+        return format!("shine install shell/{category} --replace-managed");
     }
     if let Some(category) = infer_shell_category(config, source) {
-        return format!("shine shell reinstall {category}");
+        return format!("shine install shell/{category} --replace-managed");
     }
-    "shine shell reinstall".to_string()
+    "shine shell install --replace-managed".to_string()
 }
 
 fn infer_shell_category(config: &Config, source: &Path) -> Option<String> {
@@ -162,7 +162,7 @@ mod tests {
         assert_eq!(lines[1], "wanted:   ~/presets/shell/proxy/set_proxy.sh");
         assert_eq!(
             lines[2],
-            "fix:      remove ~/bin/setproxy or run `shine shell reinstall proxy`"
+            "fix:      remove ~/bin/setproxy or run `shine install shell/proxy --replace-managed`"
         );
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(lines[1], "wanted:   ~/presets/shell/proxy/set_proxy.sh");
         assert_eq!(
             lines[2],
-            "fix:      remove ~/bin/setproxy or run `shine shell reinstall proxy`"
+            "fix:      remove ~/bin/setproxy or run `shine install shell/proxy --replace-managed`"
         );
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();

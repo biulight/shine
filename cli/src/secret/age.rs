@@ -39,7 +39,7 @@ pub async fn decrypt_base64_age_secret(
     }
     if identities.is_empty() {
         bail!(
-            "no age identity configured; run `shine env identity init` or set age_identity in config.toml"
+            "no age identity configured; run `shine env secret identity init` or set age_identity in config.toml"
         );
     }
     let needs_plugin = any_identity_uses_secure_enclave(identities).await?;

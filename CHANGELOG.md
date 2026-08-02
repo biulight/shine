@@ -7,6 +7,45 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-08-02
+
+### Breaking Changes
+
+- Simplified the everyday CLI around canonical `app/`, `shell/`, and `sys/` targets: top-level
+  install/uninstall now share one target grammar, `list --available` provides a unified catalog,
+  `info` can inspect uninstalled presets, and `upgrade [TARGET]` applies one selected resource.
+- Replaced the `reinstall` flow with `install --replace-managed`, and grouped advanced operations
+  under `preset new`, `app artifact`, `env secret`, and `sys bootstrap`. Superseded pre-release
+  spellings are not retained as aliases.
+- Standardized read commands around `list`, `info`, `status`, and `get`: `env show` is now
+  `env list`, identity inspection is now `env secret identity list`, and overlay inspection is
+  now `preset overlay info`.
+- Grouped preset source management under `shine preset`: use `preset export`, `preset link`,
+  `preset unlink`, `preset overlay ...`, and `preset pull` instead of the former top-level
+  commands.
+- Replaced the ambiguous `shine clear` command with `shine state migrate`, and renamed
+  `update --refresh` to `update --refresh-release`.
+- Removed all compatibility aliases for the superseded command names.
+
+### Features
+
+- Standardized `shine --version` on Cargo-style provenance output
+  (`shine 1.0.0 (<commit> <date>)`) and the matching `1.0.0-preview` label for preview builds.
+- Added `shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>` with preset metadata, runtime
+  requirements, declared environment names, and installation status.
+- Added explicit `shine info sys/<ITEM>` routing for system item details.
+- Added `shine preset copy <kind>/<name>` to copy one complete built-in preset into the current
+  directory as an overlay customization starting point.
+- Added optional fixed working directories for personal tasks through `shine task save --cwd`,
+  while existing tasks continue to run from the caller's current directory.
+- Expanded dynamic shell completion to installed and canonical targets, app artifact/refresh
+  categories, recorded system-update items, and saved task names; completion path discovery is
+  shared with the config module and remains read-only.
+
+### Docs
+
+- Reworked CLI help and documentation around the 1.0 command vocabulary and hierarchy.
+
 ## [0.40.0] — 2026-08-01
 
 ### Features

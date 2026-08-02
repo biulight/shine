@@ -80,8 +80,8 @@ bugs. Check this list before changing the modules named in each entry.
   `allow_app_hooks = true`; otherwise a user-controlled presets checkout would
   gain command execution during ordinary read-oriented update checks.
 - **Manual generators never run from implicit status or upgrade paths.**
-  `generator.auto = false` leaves `list`/`info`/`show`/`update` local-only and
-  causes upgrade to preserve the manifest snapshot. Only install/reinstall or
+  `generator.auto = false` leaves `list`/`info`/`update` local-only and
+  causes upgrade to preserve the manifest snapshot. Only install (including `--replace-managed`) or
   `shine app refresh` may run it; refresh must target manifest-owned files and
   preserve user modifications unless `--force` is explicit.
 - **Generator failures never destroy the last-known-good managed file.** Status
@@ -106,6 +106,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **`shine task run` propagates the child exit code verbatim** and never runs the saved argv
   through a shell. Wrapping the failure in an anyhow error (or defaulting to exit 1) would corrupt
   the task's own exit semantics. Shell syntax is opt-in via an explicit saved `sh -c '...'`.
+- **A missing task `cwd` means dynamic caller cwd.** Legacy `tasks.toml` entries have no `cwd`, so
+  deserialization must default it to `None`; only an explicit `task save --cwd` fixes the working
+  directory. Never reinterpret missing `cwd` as the save-time directory.
 
 ## Embedded presets
 
@@ -160,6 +163,10 @@ bugs. Check this list before changing the modules named in each entry.
   commits `605fdd8`, `f033a25`). Network errors are tolerated; rate-limit cooldowns are cached.
 - **`preview` is not a release baseline.** Version comparisons and release notes must use the
   latest stable `v*` tag (see `conventions.md` § Versioning).
+- **A targeted `shine upgrade <TARGET>` must not mutate other targets.** App filtering happens
+  before stale-entry handling, shell filtering happens before link/template reconciliation, and
+  managed sys apply receives the selected item. Filtering only the report after a global upgrade
+  would violate the command's user-visible scope.
 
 ## Tests
 

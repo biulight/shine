@@ -24,7 +24,7 @@ pub async fn upgrade_to_release(
 ) -> Result<UpgradeResult> {
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .context("current package version must be valid semver")?;
-    let current_display = version::display();
+    let current_display = version::semver();
 
     let release = fetch_release(channel).await?;
     let latest = match channel {
@@ -43,7 +43,7 @@ pub async fn upgrade_to_release(
             Some(latest)
         }
         ReleaseChannel::Preview => {
-            if preview_release_version_label(&release).as_deref() == Some(current_display) {
+            if preview_release_matches_commit(&release, version::preview_commit()) {
                 return Ok(UpgradeResult::AlreadyUpToDate {
                     channel,
                     latest: current_display.to_string(),
@@ -253,17 +253,22 @@ async fn installed_version_label(current_exe: &Path, fallback: &str) -> String {
 }
 
 fn parse_binary_version_output(output: &str) -> Option<&str> {
-    output.trim().strip_prefix("shine ")
+    output
+        .trim()
+        .strip_prefix("shine ")?
+        .split_whitespace()
+        .next()
 }
 
-fn preview_release_version_label(release: &GithubRelease) -> Option<String> {
-    let commit = parse_preview_release_commit(&release.body)?;
-    let short_commit: String = commit.chars().take(7).collect();
-    if short_commit.len() != 7 {
-        return None;
-    }
+fn preview_release_matches_commit(release: &GithubRelease, current_commit: Option<&str>) -> bool {
+    let Some(release_commit) = parse_preview_release_commit(&release.body) else {
+        return false;
+    };
+    let Some(current_commit) = current_commit.filter(|commit| !commit.is_empty()) else {
+        return false;
+    };
 
-    Some(format!("{}+preview.{short_commit}", version::package()))
+    release_commit.starts_with(current_commit) || current_commit.starts_with(release_commit)
 }
 
 fn parse_preview_release_commit(body: &str) -> Option<&str> {
@@ -303,8 +308,8 @@ mod tests {
     #[test]
     fn parse_binary_version_output_reads_shine_version() {
         assert_eq!(
-            parse_binary_version_output("shine 0.21.3+preview.5ed8416\n"),
-            Some("0.21.3+preview.5ed8416")
+            parse_binary_version_output("shine 1.0.0-preview (30a34c682 2026-05-25)\n"),
+            Some("1.0.0-preview")
         );
     }
 
@@ -474,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_release_version_label_uses_package_version_and_short_commit() {
+    fn preview_release_matches_current_commit_by_prefix() {
         let release = GithubRelease {
             tag_name: "preview".to_string(),
             body:
@@ -483,9 +488,8 @@ mod tests {
             assets: vec![],
         };
 
-        assert_eq!(
-            preview_release_version_label(&release),
-            Some(format!("{}+preview.a618d4a", version::package()))
-        );
+        assert!(preview_release_matches_commit(&release, Some("a618d4af0")));
+        assert!(!preview_release_matches_commit(&release, Some("b00000000")));
+        assert!(!preview_release_matches_commit(&release, None));
     }
 }

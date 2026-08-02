@@ -128,12 +128,8 @@ pub async fn maybe_notify(config: &Config, command: &Commands) -> Result<()> {
     let skip_background_update_check = matches!(
         command,
         Commands::Update(..)
-            | Commands::Pull
-            | Commands::Export(..)
-            | Commands::Link(..)
-            | Commands::Unlink
-            | Commands::Overlay { .. }
-            | Commands::Clear(..)
+            | Commands::Preset { .. }
+            | Commands::State { .. }
             | Commands::Self_ { .. }
             | Commands::Serve { .. }
             | Commands::Env { .. }
@@ -151,14 +147,14 @@ pub async fn maybe_notify(config: &Config, command: &Commands) -> Result<()> {
             Ok(UpdateStatus::UpdateAvailable { latest }) => {
                 eprintln!(
                     "A newer version of shine is available: {} -> {}. Run `shine self upgrade` when convenient.",
-                    version::display(),
+                    version::semver(),
                     latest
                 );
             }
             Ok(UpdateStatus::UpdateRequired { latest }) => {
                 bail!(
                     "A newer patch release of shine is required: {} -> {}. Run `shine self upgrade` before continuing.",
-                    version::display(),
+                    version::semver(),
                     latest
                 );
             }

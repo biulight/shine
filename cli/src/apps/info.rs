@@ -107,14 +107,14 @@ pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
         println!(
             "{}",
             colors::dim(&format!(
-                "Installed. Run `shine app reinstall {category}` to reinstall."
+                "Installed. Run `shine install app/{category} --replace-managed` to repair managed files."
             ))
         );
     } else {
         println!(
             "{}",
             colors::dim(&format!(
-                "Not installed. Run `shine app install {category}` to install."
+                "Not installed. Run `shine install app/{category}` to install."
             ))
         );
     }
@@ -123,7 +123,17 @@ pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
 }
 
 pub async fn handle_list(config: &Config) -> Result<()> {
-    crate::config::print_presets_note(config);
+    handle_list_with_presets_note(config, true).await
+}
+
+#[doc(hidden)]
+pub async fn handle_list_with_presets_note(
+    config: &Config,
+    print_presets_note: bool,
+) -> Result<()> {
+    if print_presets_note {
+        crate::config::print_presets_note(config);
+    }
     let categories = metadata::load_active_categories(config, None).await?;
 
     if categories.is_empty() {
@@ -171,7 +181,7 @@ pub async fn handle_list(config: &Config) -> Result<()> {
     println!();
     println!(
         "{}",
-        colors::dim("Run `shine app install <CATEGORY>` to install a specific category.")
+        colors::dim("Run `shine install app/<CATEGORY>` to install a specific category.")
     );
     println!("{}", colors::dim("Run `shine app install` to install all."));
 

@@ -4,7 +4,7 @@
 - **Evidence**: `cli/src/apps/hooks.rs` (`run_app_hooks`, `HookPhase`), `cli/src/apps/build.rs`
   (`handle_unbuild`, `run_teardown_for_uninstall`), `cli/src/apps/install.rs`,
   `cli/src/apps/uninstall.rs`, `cli/src/apps/metadata.rs` (`AppCategory.post_install`,
-  `AppArtifact.teardown`), `shine app unbuild <app-id>`, `presets/app/surge/unbuild.ts`
+  `AppArtifact.teardown`), `shine app artifact remove <app-id>`, `presets/app/surge/unbuild.ts`
 - **Supersedes**: the "not auto-reversed" consequence of
   [ADR 0009](0009-app-artifact-build-explicit-command.md)
 - **Update**: [ADR 0017](0017-built-in-surge-profile-artifact.md) moves the
@@ -15,7 +15,7 @@
 
 Two gaps surfaced after [ADR 0009](0009-app-artifact-build-explicit-command.md) shipped:
 
-1. **Artifact side-effects could not be reversed.** `shine app build <id>` runs an
+1. **Artifact side-effects could not be reversed.** `shine app artifact apply <id>` runs an
    `[artifact].script` (e.g. patching the active Surge profile's `#!include` lines) but records
    nothing — no manifest entry, no receipt. So `shine app uninstall` removed only the plain
    `Copy`-installed files and left the profile patch behind; ADR 0009 accepted this as a documented
@@ -42,8 +42,8 @@ config key.
 - `run_post_upgrade_hooks` is generalized into `apps/hooks.rs::run_app_hooks(config, get_category,
   changed, HookPhase)`; `upgrade` passes `PostUpgrade`, `install` passes `PostInstall`. Identical
   semantics: run once per *changed* category, gated behind `allow_app_hooks` for external presets,
-  failures non-fatal. `reinstall` = `handle_install(force = true)`, whose forced overwrite counts as
-  a change, so `post_install` fires there too.
+  failures non-fatal. `install --replace-managed` calls `handle_install(force = true)`; its forced
+  overwrite counts as a change, so `post_install` fires there too.
 - Hooks still inherit only the parent env (no `SHINE_APP_*`/`[env]` injection) — that richer contract
   is reserved for artifact scripts, below.
 
@@ -52,7 +52,7 @@ config key.
 - `AppArtifact` gains `teardown: Option<String>` — a companion script, run with the **same** full
   `SHINE_APP_*` + `[env]` contract as `build` (so it can read the same `SURGE_PROFILE` etc.).
 - Two entry points with deliberately different semantics:
-  - **`shine app unbuild <id>`** (`handle_unbuild`) — explicit, symmetric to `build`: **not** gated
+  - **`shine app artifact remove <id>`** (`handle_unbuild`) — explicit, symmetric to `build`: **not** gated
     by `allow_app_hooks`, and a nonzero exit propagates as a real error.
   - **during `shine app uninstall`** (`run_teardown_for_uninstall`) — implicit, so like the hooks:
     **gated** by `allow_app_hooks` for external presets, and **non-fatal** (a broken teardown must
@@ -70,6 +70,6 @@ config key.
   and script-owned, not a core-tracked receipt.
 - A preset's reload/setup can run on first install via `post_install` without waiting for an upgrade.
 - `shine upgrade` and `shine app install` stay side-effect-predictable: they never run artifact
-  scripts; only the explicit `build`/`unbuild` commands and the uninstall-time teardown do.
+  scripts; only explicit `shine app artifact apply`/`remove` and the uninstall-time teardown do.
 - Adding either mechanism to a new app preset needs no Shine core change — just a `post_install`
   table and/or an `[artifact].teardown` script that honors the env contract.

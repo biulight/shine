@@ -3,8 +3,10 @@
 //! Tasks are user runtime state (stored in `<shine_dir>/tasks.toml`, see
 //! [`manifest`]), not embedded presets. Commands are saved as an argv array and
 //! executed directly with no shell (`std::process::Command`), inheriting the
-//! caller's stdio and environment. Users who need shell syntax (pipes,
-//! redirects, globbing) save an explicit `sh -c '...'` invocation.
+//! caller's stdio and environment. A task may store an optional fixed working
+//! directory; otherwise it runs in the caller's current directory. Users who
+//! need shell syntax (pipes, redirects, globbing) save an explicit
+//! `sh -c '...'` invocation.
 //!
 //! `shine run <name>` is a top-level alias for `shine task run <name>`; it has
 //! no independent semantics or storage.
@@ -14,10 +16,11 @@
 
 pub mod manifest;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use std::path::{Path, PathBuf};
 
-use crate::colors;
 use crate::config::Config;
+use crate::{colors, path_display};
 use manifest::TaskManifest;
 
 const NOT_FOUND_HINT: &str = "Run `shine task list` to see saved tasks.";
@@ -26,11 +29,14 @@ pub async fn handle_save(
     config: &Config,
     name: &str,
     force: bool,
+    cwd: Option<&Path>,
     command: Vec<String>,
 ) -> Result<()> {
     validate_task_name(name)?;
     if command.is_empty() {
-        bail!("No command provided.\n\nUsage:\n  shine task save <name> -- <command...>");
+        bail!(
+            "No command provided.\n\nUsage:\n  shine task save <name> [--cwd <dir>] -- <command...>"
+        );
     }
 
     let mut manifest = TaskManifest::load(config.shine_dir()).await?;
@@ -38,12 +44,19 @@ pub async fn handle_save(
         bail!("Task already exists: {name}\n\nUse `--force` to replace it.");
     }
 
+    let cwd = resolve_task_cwd(config, cwd)?;
     let rendered = render_command(&command);
-    manifest.upsert(name, command);
+    manifest.upsert(name, command, cwd.clone());
     manifest.save(config.shine_dir()).await?;
 
     println!("{}", colors::green(&format!("Saved task {name}")));
     println!("{rendered}");
+    if let Some(cwd) = cwd {
+        println!(
+            "Working dir: {}",
+            path_display::format_home(&cwd, &config.home_dir)
+        );
+    }
     Ok(())
 }
 
@@ -55,15 +68,24 @@ pub async fn handle_run(config: &Config, name: &str, extra: &[String]) -> Result
 
     let mut argv = entry.command.clone();
     argv.extend_from_slice(extra);
+    if let Some(cwd) = entry.cwd.as_deref() {
+        validate_run_cwd(name, cwd)?;
+    }
 
     // Announce on stderr so a task's own stdout stays clean for piping.
+    let cwd_note = entry.cwd.as_deref().map_or_else(String::new, |cwd| {
+        format!(
+            " (cwd: {})",
+            path_display::format_home(cwd, &config.home_dir)
+        )
+    });
     eprintln!(
-        "{}: {}",
+        "{}{cwd_note}: {}",
         colors::bold(&format!("Running {name}")),
         render_command(&argv)
     );
 
-    run_task_command(name, &argv)
+    run_task_command(name, &argv, entry.cwd.as_deref())
 }
 
 pub async fn handle_list(config: &Config) -> Result<()> {
@@ -93,6 +115,13 @@ pub async fn handle_info(config: &Config, name: &str) -> Result<()> {
 
     println!("{:<10} {}", "Task", name);
     println!("{:<10} {}", "Command", render_command(&entry.command));
+    if let Some(cwd) = entry.cwd.as_deref() {
+        println!(
+            "{:<10} {}",
+            "Working dir",
+            path_display::format_home(cwd, &config.home_dir)
+        );
+    }
     Ok(())
 }
 
@@ -109,14 +138,28 @@ pub async fn handle_delete(config: &Config, name: &str) -> Result<()> {
 /// Execute a saved task's argv directly, inheriting stdio and environment, and
 /// propagate the child's exit code verbatim (never wrapping it in an anyhow
 /// error) so the task's own exit semantics survive `shine` in between.
-fn run_task_command(name: &str, argv: &[String]) -> Result<()> {
+fn run_task_command(name: &str, argv: &[String], cwd: Option<&Path>) -> Result<()> {
     let Some((program, args)) = argv.split_first() else {
         bail!("Task {name} has no command to run.");
     };
 
-    let status = match std::process::Command::new(program).args(args).status() {
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+
+    let status = match command.status() {
         Ok(status) => status,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(cwd) = cwd
+                && !cwd.is_dir()
+            {
+                bail!(
+                    "Failed to run task {name}: working directory is unavailable: {}",
+                    path_display::format(cwd)
+                );
+            }
             bail!("Failed to run task {name}: command not found: {program}");
         }
         Err(e) => bail!("Failed to run task {name}: {program}: {e}"),
@@ -135,6 +178,56 @@ fn run_task_command(name: &str, argv: &[String]) -> Result<()> {
     }
     #[cfg(not(unix))]
     std::process::exit(1);
+}
+
+fn resolve_task_cwd(config: &Config, cwd: Option<&Path>) -> Result<Option<PathBuf>> {
+    let Some(cwd) = cwd else {
+        return Ok(None);
+    };
+
+    let raw = cwd.to_string_lossy();
+    let home = config.home_dir.to_string_lossy().into_owned();
+    let expanded = shellexpand::tilde_with_context(&raw, || Some(home)).into_owned();
+    let expanded = PathBuf::from(expanded);
+    let absolute = if expanded.is_absolute() {
+        expanded
+    } else {
+        std::env::current_dir()
+            .context("resolving current directory for task cwd")?
+            .join(expanded)
+    };
+    let canonical = match std::fs::canonicalize(&absolute) {
+        Ok(canonical) => canonical,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => bail!(
+            "Failed to save task: working directory does not exist: {}",
+            path_display::format(&absolute)
+        ),
+        Err(error) => bail!(
+            "Failed to save task: cannot resolve working directory: {}: {error}",
+            path_display::format(&absolute)
+        ),
+    };
+    if !canonical.is_dir() {
+        bail!(
+            "Failed to save task: working directory is not a directory: {}",
+            path_display::format(&canonical)
+        );
+    }
+    Ok(Some(canonical))
+}
+
+fn validate_run_cwd(name: &str, cwd: &Path) -> Result<()> {
+    match std::fs::metadata(cwd) {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => bail!(
+            "Failed to run task {name}: working directory is not a directory: {}",
+            path_display::format(cwd)
+        ),
+        Err(error) => bail!(
+            "Failed to run task {name}: working directory is unavailable: {}: {error}",
+            path_display::format(cwd)
+        ),
+    }
 }
 
 /// Render an argv array back into a copy-paste-safe shell command line by
@@ -238,6 +331,7 @@ mod tests {
             &config,
             "port-3000",
             false,
+            None,
             vec!["lsof".to_string(), "-i".to_string(), ":3000".to_string()],
         )
         .await
@@ -257,6 +351,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn save_resolves_and_persists_fixed_cwd() {
+        let dir = temp_dir().await;
+        let config = config_in(&dir);
+        let project = config.home_dir.join("project");
+        tokio::fs::create_dir_all(&project).await.unwrap();
+
+        handle_save(
+            &config,
+            "build",
+            false,
+            Some(Path::new("~/project")),
+            vec!["cargo".to_string(), "build".to_string()],
+        )
+        .await
+        .unwrap();
+
+        let manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
+        assert_eq!(
+            manifest.get("build").unwrap().cwd.as_ref(),
+            Some(&std::fs::canonicalize(&project).unwrap())
+        );
+        handle_info(&config, "build").await.unwrap();
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn save_resolves_relative_cwd_from_current_directory() {
+        let dir = temp_dir().await;
+        let config = config_in(&dir);
+        let expected = std::fs::canonicalize(".").unwrap();
+
+        handle_save(
+            &config,
+            "here",
+            false,
+            Some(Path::new(".")),
+            vec!["echo".to_string()],
+        )
+        .await
+        .unwrap();
+
+        let manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
+        assert_eq!(manifest.get("here").unwrap().cwd.as_ref(), Some(&expected));
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn save_rejects_missing_or_non_directory_cwd() {
+        let dir = temp_dir().await;
+        let config = config_in(&dir);
+        let file = dir.join("not-a-directory");
+        tokio::fs::write(&file, "x").await.unwrap();
+
+        let missing = handle_save(
+            &config,
+            "missing-cwd",
+            false,
+            Some(&dir.join("missing")),
+            vec!["echo".to_string()],
+        )
+        .await
+        .unwrap_err();
+        assert!(missing.to_string().contains("does not exist"));
+
+        let not_dir = handle_save(
+            &config,
+            "file-cwd",
+            false,
+            Some(&file),
+            vec!["echo".to_string()],
+        )
+        .await
+        .unwrap_err();
+        assert!(not_dir.to_string().contains("not a directory"));
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn save_rejects_duplicate_without_force_and_overwrites_with_force() {
         let dir = temp_dir().await;
         let config = config_in(&dir);
@@ -265,6 +437,7 @@ mod tests {
             &config,
             "t",
             false,
+            Some(&dir),
             vec!["echo".to_string(), "one".to_string()],
         )
         .await
@@ -274,6 +447,7 @@ mod tests {
             &config,
             "t",
             false,
+            None,
             vec!["echo".to_string(), "two".to_string()],
         )
         .await
@@ -284,12 +458,14 @@ mod tests {
             &config,
             "t",
             true,
+            None,
             vec!["echo".to_string(), "two".to_string()],
         )
         .await
         .unwrap();
         let manifest = TaskManifest::load(config.shine_dir()).await.unwrap();
         assert_eq!(manifest.get("t").unwrap().command, ["echo", "two"]);
+        assert_eq!(manifest.get("t").unwrap().cwd, None);
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -299,10 +475,12 @@ mod tests {
         let dir = temp_dir().await;
         let config = config_in(&dir);
 
-        let err = handle_save(&config, "t", false, vec![]).await.unwrap_err();
+        let err = handle_save(&config, "t", false, None, vec![])
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("No command provided"));
 
-        let err = handle_save(&config, "bad name", false, vec!["echo".to_string()])
+        let err = handle_save(&config, "bad name", false, None, vec!["echo".to_string()])
             .await
             .unwrap_err();
         assert!(err.to_string().contains("Invalid task name"));
@@ -315,7 +493,7 @@ mod tests {
         let dir = temp_dir().await;
         let config = config_in(&dir);
 
-        handle_save(&config, "t", false, vec!["echo".to_string()])
+        handle_save(&config, "t", false, None, vec!["echo".to_string()])
             .await
             .unwrap();
         handle_delete(&config, "t").await.unwrap();
@@ -346,13 +524,64 @@ mod tests {
 
         // `true` exits 0 regardless of extra args, so run_task_command returns Ok
         // without calling process::exit.
-        handle_save(&config, "ok", false, vec!["true".to_string()])
+        handle_save(&config, "ok", false, None, vec!["true".to_string()])
             .await
             .unwrap();
         handle_run(&config, "ok", &["ignored".to_string()])
             .await
             .unwrap();
 
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_executes_in_saved_working_directory() {
+        let dir = temp_dir().await;
+        let config = config_in(&dir);
+        let project = dir.join("project");
+        tokio::fs::create_dir_all(&project).await.unwrap();
+
+        handle_save(
+            &config,
+            "mark",
+            false,
+            Some(&project),
+            vec!["touch".to_string(), "ran-here".to_string()],
+        )
+        .await
+        .unwrap();
+        handle_run(&config, "mark", &[]).await.unwrap();
+
+        assert!(project.join("ran-here").exists());
+        assert!(!dir.join("ran-here").exists());
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_reports_saved_working_directory_that_disappeared() {
+        let dir = temp_dir().await;
+        let config = config_in(&dir);
+        let project = dir.join("project");
+        tokio::fs::create_dir_all(&project).await.unwrap();
+
+        handle_save(
+            &config,
+            "gone",
+            false,
+            Some(&project),
+            vec!["echo".to_string()],
+        )
+        .await
+        .unwrap();
+        tokio::fs::remove_dir(&project).await.unwrap();
+
+        let error = handle_run(&config, "gone", &[]).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("working directory is unavailable")
+        );
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -366,6 +595,7 @@ mod tests {
             &config,
             "missing-bin",
             false,
+            None,
             vec!["shine-no-such-binary-xyz".to_string()],
         )
         .await

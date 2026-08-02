@@ -5,7 +5,62 @@ use crate::commands::OverlayLinkCommand;
 use crate::config::{self, Config};
 use crate::{colors, presets};
 
-pub async fn handle_presets_export(
+pub async fn handle_preset_copy(target: &str, force: bool) -> Result<()> {
+    use anyhow::Context as _;
+
+    let current_dir = std::env::current_dir().context("reading current directory")?;
+    println!(
+        "Copying built-in preset {target} to {} ...",
+        current_dir.display()
+    );
+
+    let report = copy_embedded_preset(target, &current_dir, force).await?;
+    print_extract_report(&report);
+
+    println!();
+    println!(
+        "Tip: delete files you do not plan to customize so they continue to follow built-in updates."
+    );
+    println!(
+        "Tip: run `shine preset overlay link {}` to activate this directory.",
+        current_dir.display()
+    );
+
+    Ok(())
+}
+
+async fn copy_embedded_preset(
+    target: &str,
+    target_dir: &std::path::Path,
+    force: bool,
+) -> Result<presets::ExtractReport> {
+    crate::commands::parse_copy_target(target).map_err(anyhow::Error::msg)?;
+    if presets::embedded_asset_paths(target).is_empty() {
+        bail!("built-in preset not found: {target}");
+    }
+    presets::extract_embedded_prefix(target, target_dir, force).await
+}
+
+fn print_extract_report(report: &presets::ExtractReport) {
+    let created = report.created.len();
+    let overwritten = report.overwritten.len();
+    let skipped = report.skipped.len();
+
+    if created > 0 {
+        println!("{}", colors::green(&format!("  {created} file(s) created")));
+    }
+    if overwritten > 0 {
+        println!(
+            "{}",
+            colors::yellow(&format!("  {overwritten} file(s) updated (overwritten)"))
+        );
+    }
+    if skipped > 0 {
+        println!("  {skipped} file(s) skipped (already exist; use --force to overwrite)");
+    }
+}
+
+pub async fn handle_preset_export(
     config: &Config,
     dir: Option<PathBuf>,
     force: bool,
@@ -24,19 +79,7 @@ pub async fn handle_presets_export(
     let created = report.created.len();
     let overwritten = report.overwritten.len();
     let skipped = report.skipped.len();
-
-    if created > 0 {
-        println!("{}", colors::green(&format!("  {created} file(s) created")));
-    }
-    if overwritten > 0 {
-        println!(
-            "{}",
-            colors::yellow(&format!("  {overwritten} file(s) updated (overwritten)"))
-        );
-    }
-    if skipped > 0 {
-        println!("  {skipped} file(s) skipped (already exist; use --force to overwrite)");
-    }
+    print_extract_report(&report);
     if created == 0 && overwritten == 0 && skipped == 0 {
         println!("  No files exported (empty embedded asset set).");
     }
@@ -44,7 +87,7 @@ pub async fn handle_presets_export(
     if !config.is_external_presets {
         println!();
         println!(
-            "Tip: run `shine link {}` to activate this directory.",
+            "Tip: run `shine preset link {}` to activate this directory.",
             target.display()
         );
     }
@@ -147,7 +190,9 @@ async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKin
             println!("{}", colors::external_presets_note(&absolute));
             println!(
                 "{}",
-                colors::dim("Run `shine export` to populate the directory with built-in presets.")
+                colors::dim(
+                    "Run `shine preset export` to populate the directory with built-in presets."
+                )
             );
         }
         LinkKind::Overlay => {
@@ -162,11 +207,11 @@ async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKin
     Ok(())
 }
 
-pub async fn handle_presets_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
+pub async fn handle_preset_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
     handle_link(config, path, create, LinkKind::Presets).await
 }
 
-pub async fn handle_presets_unlink(config: &Config) -> Result<()> {
+pub async fn handle_preset_unlink(config: &Config) -> Result<()> {
     if config.presets_dir_override.is_none() {
         println!(
             "{}",
@@ -231,7 +276,7 @@ async fn handle_overlay_link_git(
     println!("  {} {}", colors::dim("managed dir:"), dir.display());
 
     // Clone (or mirror, if already present) now so the overlay is usable right
-    // away instead of waiting for the next `shine pull`.
+    // away instead of waiting for the next `shine preset pull`.
     crate::git_pull::sync_managed_overlay(url, branch, dir, false).await?;
     Ok(())
 }
@@ -273,7 +318,7 @@ pub async fn handle_overlay_unlink(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub fn handle_overlay_show(config: &Config) -> Result<()> {
+pub fn handle_overlay_info(config: &Config) -> Result<()> {
     if let Some((url, branch, dir)) = config.overlay_git_source() {
         println!("{}", colors::green(&format!("Overlay Git source: {url}")));
         if let Some(branch) = branch {
@@ -285,7 +330,7 @@ pub fn handle_overlay_show(config: &Config) -> Result<()> {
         } else {
             println!(
                 "{}",
-                colors::dim("Not cloned yet — run `shine pull` to fetch it.")
+                colors::dim("Not cloned yet — run `shine preset pull` to fetch it.")
             );
         }
         return Ok(());
@@ -308,11 +353,87 @@ mod tests {
     use tokio::fs;
 
     async fn make_temp_dir() -> PathBuf {
-        crate::test_support::make_temp_dir("shine-presets-commands-test").await
+        crate::test_support::make_temp_dir("shine-preset-commands-test").await
     }
 
     fn config_in(dir: &std::path::Path) -> Config {
         crate::test_support::test_config(dir)
+    }
+
+    #[test]
+    fn copy_target_requires_canonical_safe_category() {
+        for valid in ["app/surge", "shell/proxy", "sys/macos"] {
+            crate::commands::parse_copy_target(valid).unwrap();
+        }
+        for invalid in [
+            "surge",
+            "app",
+            "app/",
+            "/app/surge",
+            "app/../surge",
+            "app/.",
+            "app/surge/extra",
+            "other/surge",
+            "app\\surge",
+        ] {
+            assert!(
+                crate::commands::parse_copy_target(invalid).is_err(),
+                "target should be rejected: {invalid}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_one_builtin_preset_preserves_prefix_and_collision_policy() {
+        let dir = make_temp_dir().await;
+        let first = copy_embedded_preset("app/clash-verge", &dir, false)
+            .await
+            .unwrap();
+        assert!(!first.created.is_empty());
+        assert!(dir.join("app/clash-verge/shine.toml").is_file());
+        assert!(dir.join("app/clash-verge/merge.yaml").is_file());
+        assert!(!dir.join("app/surge/shine.toml").exists());
+
+        let marker_path = dir.join("app/clash-verge/merge.yaml");
+        fs::write(&marker_path, "user customization").await.unwrap();
+        let second = copy_embedded_preset("app/clash-verge", &dir, false)
+            .await
+            .unwrap();
+        assert!(second.skipped.contains(&marker_path));
+        assert_eq!(
+            fs::read_to_string(&marker_path).await.unwrap(),
+            "user customization"
+        );
+
+        let third = copy_embedded_preset("app/clash-verge", &dir, true)
+            .await
+            .unwrap();
+        assert!(third.overwritten.contains(&marker_path));
+        assert_ne!(
+            fs::read_to_string(&marker_path).await.unwrap(),
+            "user customization"
+        );
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_unknown_builtin_preset_creates_nothing() {
+        let dir = make_temp_dir().await;
+        let error = match copy_embedded_preset("app/not-a-real-preset", &dir, false).await {
+            Ok(_) => panic!("unknown preset should fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("built-in preset not found"));
+        assert!(
+            fs::read_dir(&dir)
+                .await
+                .unwrap()
+                .next_entry()
+                .await
+                .unwrap()
+                .is_none()
+        );
+        fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[allow(clippy::await_holding_lock)]
@@ -369,7 +490,7 @@ mod tests {
         let presets = make_temp_dir().await;
         let config = config_in(&dir);
 
-        handle_presets_link(&config, presets.clone(), false)
+        handle_preset_link(&config, presets.clone(), false)
             .await
             .unwrap();
 
@@ -389,7 +510,7 @@ mod tests {
         let config = config_in(&dir);
         let new_dir = dir.join("new-presets");
 
-        handle_presets_link(&config, new_dir.clone(), true)
+        handle_preset_link(&config, new_dir.clone(), true)
             .await
             .unwrap();
 
@@ -403,7 +524,7 @@ mod tests {
         let config = config_in(&dir);
         let missing = dir.join("does-not-exist");
 
-        let err = handle_presets_link(&config, missing, false).await;
+        let err = handle_preset_link(&config, missing, false).await;
         assert!(err.is_err());
         let msg = err.unwrap_err().to_string();
         assert!(
@@ -421,7 +542,7 @@ mod tests {
         let file = dir.join("not-a-dir.txt");
         fs::write(&file, b"hello").await.unwrap();
 
-        let err = handle_presets_link(&config, file, false).await;
+        let err = handle_preset_link(&config, file, false).await;
         assert!(err.is_err());
         assert!(
             err.unwrap_err().to_string().contains("not a directory"),
@@ -441,7 +562,7 @@ mod tests {
         let config = config_in(&dir).with_presets_dir_override(Some(abs.clone()));
 
         // Should return Ok without error
-        handle_presets_link(&config, presets.clone(), false)
+        handle_preset_link(&config, presets.clone(), false)
             .await
             .unwrap();
 
@@ -463,7 +584,7 @@ mod tests {
         // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
         unsafe { std::env::set_var("SHINE_PRESETS", "/some/override") };
         // Should succeed even with env var set
-        handle_presets_link(&config, presets.clone(), false)
+        handle_preset_link(&config, presets.clone(), false)
             .await
             .unwrap();
         // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
@@ -481,7 +602,7 @@ mod tests {
         // Write initial config with presets_dir set
         config.save().await.unwrap();
 
-        handle_presets_unlink(&config).await.unwrap();
+        handle_preset_unlink(&config).await.unwrap();
 
         let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
         let parsed: toml::Table = toml::from_str(&content).unwrap();
@@ -500,7 +621,7 @@ mod tests {
         let config = config_in(&dir);
 
         // Should return Ok, no file written
-        handle_presets_unlink(&config).await.unwrap();
+        handle_preset_unlink(&config).await.unwrap();
         assert!(!dir.join("config.toml").exists());
 
         fs::remove_dir_all(&dir).await.unwrap();

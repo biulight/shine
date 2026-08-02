@@ -78,7 +78,7 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
         "{}",
         colors::dim("Use `shine sys info <ITEM>` for details.")
     );
-    println!("{}", colors::dim("Init items: `shine sys init`."));
+    println!("{}", colors::dim("Bootstrap items: `shine sys bootstrap`."));
     println!(
         "{}",
         colors::dim("Managed items: `shine sys apply <ITEM>`.")
@@ -177,7 +177,10 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
     }
     println!();
     match item.mode {
-        SysItemMode::Init => println!("  Next: run `shine sys init` and select `{}`.", item.id),
+        SysItemMode::Init => println!(
+            "  Next: run `shine sys bootstrap` and select `{}`.",
+            item.id
+        ),
         SysItemMode::Managed if entry.is_some() => {
             println!("  Apply:     `shine sys apply {}`", item.id);
             println!("  Uninstall: `shine sys uninstall {}`", item.id);
@@ -200,7 +203,7 @@ pub async fn handle_status(config: &Config) -> Result<()> {
         println!(
             "{}",
             colors::dim(&format!(
-                "No system init items recorded for {os_id}. Run `shine sys init` to initialize the current system."
+                "No bootstrap items recorded for {os_id}. Run `shine sys bootstrap` to initialize the current system."
             ))
         );
         return Ok(());
@@ -263,7 +266,7 @@ pub async fn handle_update(
             .into_iter()
             .find(|entry| entry.item_id == item_id)
             .with_context(|| {
-                format!("`{item_id}` was not recorded by `shine sys init` for {os_id}")
+                format!("`{item_id}` was not recorded by `shine sys bootstrap` for {os_id}")
             })?;
         vec![entry]
     } else {
@@ -274,7 +277,7 @@ pub async fn handle_update(
         println!(
             "{}",
             colors::dim(&format!(
-                "No bootstrap software recorded for {os_id}. Run `shine sys init` first."
+                "No bootstrap software recorded for {os_id}. Run `shine sys bootstrap` first."
             ))
         );
         return Ok(());
@@ -409,7 +412,7 @@ async fn handle_init_for_os(
         println!(
             "{}",
             colors::dim(&format!(
-                "No sys init items selected for {} ({}).",
+                "No sys bootstrap items selected for {} ({}).",
                 os_id,
                 selection.source.describe()
             ))
@@ -469,7 +472,7 @@ async fn handle_init_for_os(
         .iter()
         .any(|outcome| outcome.status == SysItemStatus::Failed)
     {
-        bail!("sys init failed");
+        bail!("sys bootstrap failed");
     }
 
     Ok(())
@@ -675,7 +678,7 @@ label = "Two"
 "#,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("duplicate sys init item id"));
+        assert!(err.to_string().contains("duplicate sys bootstrap item id"));
     }
 
     #[test]
@@ -1172,7 +1175,7 @@ required_env = ["NOT-AN-ENV"]
             fs::read_to_string(profile_dir.join("ubuntu-sys.pre.sh"))
                 .await
                 .unwrap()
-                .contains("Managed by `shine sys init` for Ubuntu")
+                .contains("Managed by `shine sys bootstrap` for Ubuntu")
         );
         assert!(
             fs::read_to_string(profile_dir.join("ubuntu-sys.post.sh"))
@@ -1708,7 +1711,7 @@ required_env = ["NOT-AN-ENV"]
         ] {
             let content = crate::presets::read_asset_bytes(path)
                 .and_then(|bytes| String::from_utf8(bytes).ok())
-                .unwrap_or_else(|| panic!("missing embedded sys init script: {path}"));
+                .unwrap_or_else(|| panic!("missing embedded sys bootstrap script: {path}"));
 
             assert!(
                 content.contains(marker),
@@ -2185,7 +2188,7 @@ esac
             .await
             .unwrap_err();
 
-        assert!(err.to_string().contains("sys init failed"));
+        assert!(err.to_string().contains("sys bootstrap failed"));
         let calls = fs::read_to_string(&calls).await.unwrap();
         assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "fails"]);
         let sys_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();

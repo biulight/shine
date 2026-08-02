@@ -247,7 +247,7 @@ shine theme sync [--quiet]
 ```
 
 **没有 `--shell` 标志**：shell 类型从 `config.shell_type` 自动派发，与既有的
-`shine env export` 先例一致（`cli/src/env/commands.rs:173-194` 的 `handle_export` 正是这么做的，
+`shine env secret export` 先例一致（`cli/src/env/commands.rs:173-194` 的 `handle_export` 正是这么做的，
 它也没有 `--shell`）。原设计的 `--shell bash|zsh|fish|powershell` 与该先例相反，且其中 `fish`
 对 profile 路径是死路——sys profile 里 fish 直接落进 `unsupported_shell: true`
 （`cli/src/sys/profile_blocks.rs:38-78`），macOS 更是 zsh 硬编码（`:28-36`）。

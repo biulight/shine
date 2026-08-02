@@ -1,4 +1,4 @@
-//! Shared install-status row builders consumed by `list` and `show`.
+//! Shared install-status row builders consumed by `list` and `info`.
 //!
 //! Not a routed command itself (`shine check` was removed) — this is a
 //! status-row library: it computes per-file/per-category install status
@@ -350,7 +350,7 @@ async fn app_file_row_status(
 /// `entry.destination`, and (if unchanged) against the current preset
 /// source to detect an available update.
 ///
-/// Shared by `app_file_row_status` (used by `list`/`app info`) and `show`'s
+/// Shared by `app_file_row_status` (used by `list`/`app info`) and `info`'s
 /// `collect_app_files` — both need this exact computation once an `AppEntry`
 /// has been resolved.
 pub(crate) async fn app_entry_status(

@@ -10,9 +10,9 @@ post_install = [
   { command = "/Applications/Surge.app/Contents/Applications/surge-cli", args = ["reload"] },
 ]
 
-# `shine app build surge` runs the artifact script to patch the active profile's
+# `shine app artifact apply surge` runs the artifact script to patch the active profile's
 # per-section `#!include` lines so they also include the local files installed
-# here. `teardown` (via `shine app unbuild surge`, and best-effort on
+# here. `teardown` (via `shine app artifact remove surge`, and best-effort on
 # `shine app uninstall surge`) reverses that patch. The implementation is
 # generic; overlays provide only their local policy files and profile path.
 [artifact]
@@ -29,6 +29,21 @@ description = "Local proxy definitions (e.g. a LAN SOCKS exit) merged into [Prox
 source = "local-rules.conf"
 target = "local-rules.conf"
 description = "Local priority rules merged into [Rule] ahead of provider rules."
+
+[[files]]
+source = "rules/lan.list"
+target = "rules/lan.list"
+description = "Example local/private-network rules for the LAN Network group."
+
+[[files]]
+source = "rules/lan-socks.list"
+target = "rules/lan-socks.list"
+description = "Example rules for traffic that should prefer a LAN SOCKS exit."
+
+[[files]]
+source = "rules/other-direct.list"
+target = "rules/other-direct.list"
+description = "Example rules for destinations that should default to direct routing."
 
 [[files]]
 source = "local-proxy-groups.conf"

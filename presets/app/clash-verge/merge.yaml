@@ -12,8 +12,8 @@
 # proxies:
 #   - name: LAN-SOCKS
 #     type: socks5
-#     server: 10.0.0.2
-#     port: 7897
+#     server: 192.0.2.10
+#     port: 1080
 #
 # # Private provider domains need an explicit resolver when the OS uses split
 # # DNS (for example, Windows NRPT). This Merge policy works with CVR's DNS
@@ -21,26 +21,46 @@
 # # its Advanced > Nameserver Policy field instead and omit this block.
 # dns:
 #   nameserver-policy:
-#     "+.example.internal": 10.0.0.53
+#     "+.corp.example": 192.0.2.53
 #
 # # Selector groups; `include-all: true` == Surge `include-all-proxies=true`.
 # proxy-groups:
-#   - { name: Local Network,   type: select, include-all: true, proxies: [DIRECT] }
-#   - { name: LAN SOCKS Rules, type: select, include-all: true, proxies: [DIRECT] }
-#   - { name: Other Direct,    type: select, include-all: true, proxies: [DIRECT] }
+#   - { name: LAN Network, type: select, include-all: true, proxies: [DIRECT] }
+#   - { name: LAN PROXY, type: select, include-all: true, filter: '^(?!LAN-SOCKS$).*', proxies: [LAN-SOCKS, DIRECT] }
+#   - { name: Other Direct, type: select, include-all: true, proxies: [DIRECT] }
 #
-# # Remote rule-providers — mihomo analog of Surge's remote RULE-SET URLs. Point
-# # them at the SAME LAN server `shine task run upload_surge` publishes to, so
-# # Surge and CVR share one rule source. `behavior: classical, format: text`
-# # consumes the Surge `.list` syntax (incl. `IP-CIDR,...,no-resolve`) directly.
+# # Rule providers consume the same `behavior: classical, format: text` `.list`
+# # syntax as the Surge examples (including `IP-CIDR,...,no-resolve`). Choose
+# # exactly ONE of the three complete source blocks below.
+#
+# # Option 1 — files already copied into mihomo's HomeDir. `type: file` paths
+# # are restricted to HomeDir unless mihomo is launched with matching SAFE_PATHS;
+# # Shine does not copy these source files into CVR's private data directory.
 # rule-providers:
-#   lan:          { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: https://example.internal/surge/rules/lan.list,          path: ./ruleset/shine-lan.list }
-#   lan-socks:    { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: https://example.internal/surge/rules/lan-socks.list,    path: ./ruleset/shine-lan-socks.list }
-#   other-direct: { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: https://example.internal/surge/rules/other-direct.list, path: ./ruleset/shine-other-direct.list }
+#   lan:          { type: file, behavior: classical, format: text, path: ./ruleset/shine-source/lan.list }
+#   lan-socks:    { type: file, behavior: classical, format: text, path: ./ruleset/shine-source/lan-socks.list }
+#   other-direct: { type: file, behavior: classical, format: text, path: ./ruleset/shine-source/other-direct.list }
+#
+# # Option 2 — a separate HTTP server on the device running mihomo. `localhost`
+# # may replace `127.0.0.1`; it never means another machine on the LAN. Here
+# # `proxy: DIRECT` affects only provider downloads and prevents loopback traffic
+# # from following the currently selected GLOBAL/proxy policy.
+# rule-providers:
+#   lan:          { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: http://127.0.0.1:8080/rules/lan.list,          path: ./ruleset/shine-loopback-lan.list }
+#   lan-socks:    { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: http://127.0.0.1:8080/rules/lan-socks.list,    path: ./ruleset/shine-loopback-lan-socks.list }
+#   other-direct: { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: http://127.0.0.1:8080/rules/other-direct.list, path: ./ruleset/shine-loopback-other-direct.list }
+#
+# # Option 3 — a remote HTTPS server. Replace rules.example.com with your host.
+# # Keep `proxy: DIRECT` for LAN/private servers; remove it or select another
+# # proxy when the rule host itself is reachable only through a proxy.
+# rule-providers:
+#   lan:          { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: https://rules.example.com/surge/lan.list,          path: ./ruleset/shine-remote-lan.list }
+#   lan-socks:    { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: https://rules.example.com/surge/lan-socks.list,    path: ./ruleset/shine-remote-lan-socks.list }
+#   other-direct: { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: https://rules.example.com/surge/other-direct.list, path: ./ruleset/shine-remote-other-direct.list }
 #
 # # `prepend-rules` (CVR's real Merge key — NOT a generic `prepend:` list) puts
 # # local rules ahead of the subscription's, so they win first-match.
 # prepend-rules:
-#   - RULE-SET,lan,Local Network
-#   - RULE-SET,lan-socks,LAN SOCKS Rules
+#   - RULE-SET,lan,LAN Network
+#   - RULE-SET,lan-socks,LAN PROXY
 #   - RULE-SET,other-direct,Other Direct

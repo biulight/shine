@@ -87,9 +87,18 @@ pub async fn handle_upgrade_managed(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<SysUpgradeReport> {
+    handle_upgrade_managed_target(config, None, verbose, sep).await
+}
+
+pub async fn handle_upgrade_managed_target(
+    config: &Config,
+    item: Option<&str>,
+    verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<SysUpgradeReport> {
     run_managed(
         config,
-        None,
+        item,
         SysAction::Apply,
         false,
         ManagedOutputMode::Upgrade { verbose },

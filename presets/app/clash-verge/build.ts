@@ -185,7 +185,7 @@ async function main(): Promise<void> {
   if (!targets) {
     console.log("clash-verge: the active subscription does not have all enhancement editors bound.");
     console.log("clash-verge: open its Extend Config, Edit Rules, Edit Proxies, and Edit Groups once,");
-    console.log("clash-verge: then re-run `shine app build clash-verge`.");
+    console.log("clash-verge: then re-run `shine app artifact apply clash-verge`.");
     return;
   }
 
@@ -198,7 +198,7 @@ async function main(): Promise<void> {
   if (state === "changed") {
     console.log("clash-verge: wrote the active subscription's Merge, Rules, Proxies, and Groups enhancements");
     console.log("clash-verge: reselect the subscription in CVR once to apply the changed files;");
-    console.log("clash-verge: then re-run `shine app build clash-verge` to refresh its rule-providers.");
+    console.log("clash-verge: then re-run `shine app artifact apply clash-verge` to refresh its rule-providers.");
     return;
   }
   console.log("clash-verge: active subscription enhancements already up to date");

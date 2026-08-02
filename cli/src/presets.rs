@@ -54,6 +54,19 @@ pub struct CategoryInfo {
 
 pub fn asset_paths(prefix: &str) -> Vec<String> {
     let normalized = prefix.trim_end_matches('/');
+    let mut paths: BTreeSet<_> = embedded_asset_paths(normalized).into_iter().collect();
+    if let Some(dir) = overlay_dir() {
+        collect_overlay_paths(&dir, normalized, &mut paths);
+    }
+    paths.into_iter().collect()
+}
+
+/// Return paths from the binary's embedded preset bundle only.
+///
+/// Unlike [`asset_paths`], this deliberately excludes the active overlay. It is
+/// used when users ask for a pristine copy of what the current binary ships.
+pub fn embedded_asset_paths(prefix: &str) -> Vec<String> {
+    let normalized = prefix.trim_end_matches('/');
     let filter = if normalized.is_empty() {
         String::new()
     } else {
@@ -65,9 +78,6 @@ pub fn asset_paths(prefix: &str) -> Vec<String> {
         if filter.is_empty() || relative.starts_with(filter.as_str()) {
             paths.insert(relative.to_string());
         }
-    }
-    if let Some(dir) = overlay_dir() {
-        collect_overlay_paths(&dir, normalized, &mut paths);
     }
     paths.into_iter().collect()
 }
@@ -83,6 +93,14 @@ pub fn read_asset_bytes(path: &str) -> Option<Vec<u8>> {
         {
             return Some(bytes);
         }
+    }
+    read_embedded_asset_bytes(path)
+}
+
+/// Read a file from the binary's embedded preset bundle, ignoring overlays.
+pub fn read_embedded_asset_bytes(path: &str) -> Option<Vec<u8>> {
+    if !is_safe_asset_path(path) {
+        return None;
     }
     PresetAssets::get(path).map(|file| file.data.as_ref().to_vec())
 }
@@ -450,16 +468,50 @@ pub async fn extract_prefix(
 ) -> Result<ExtractReport> {
     let normalized = prefix.trim_end_matches('/');
     let filter = format!("{normalized}/");
-    extract_matching(|p| p.starts_with(filter.as_str()), target_dir, overwrite).await
+    extract_matching(
+        asset_paths(""),
+        |p| p.starts_with(filter.as_str()),
+        read_asset_bytes,
+        target_dir,
+        overwrite,
+    )
+    .await
+}
+
+/// Extract one prefix from the binary's embedded preset bundle only.
+pub async fn extract_embedded_prefix(
+    prefix: &str,
+    target_dir: &Path,
+    overwrite: bool,
+) -> Result<ExtractReport> {
+    let normalized = prefix.trim_end_matches('/');
+    let filter = format!("{normalized}/");
+    extract_matching(
+        embedded_asset_paths(""),
+        |p| p.starts_with(filter.as_str()),
+        read_embedded_asset_bytes,
+        target_dir,
+        overwrite,
+    )
+    .await
 }
 
 /// Extract all embedded assets.
 pub async fn extract_all(target_dir: &Path, overwrite: bool) -> Result<ExtractReport> {
-    extract_matching(|_| true, target_dir, overwrite).await
+    extract_matching(
+        asset_paths(""),
+        |_| true,
+        read_asset_bytes,
+        target_dir,
+        overwrite,
+    )
+    .await
 }
 
 async fn extract_matching(
+    paths: impl IntoIterator<Item = String>,
     predicate: impl Fn(&str) -> bool,
+    read: impl Fn(&str) -> Option<Vec<u8>>,
     target_dir: &Path,
     overwrite: bool,
 ) -> Result<ExtractReport> {
@@ -469,7 +521,7 @@ async fn extract_matching(
         overwritten: Vec::new(),
     };
 
-    for relative in asset_paths("") {
+    for relative in paths {
         let relative = relative.as_str();
 
         if !is_safe_asset_path(relative) {
@@ -493,8 +545,7 @@ async fn extract_matching(
             continue;
         }
 
-        let file = read_asset_bytes(relative)
-            .with_context(|| format!("preset asset missing: {relative}"))?;
+        let file = read(relative).with_context(|| format!("preset asset missing: {relative}"))?;
 
         let existed = dest.exists();
 
@@ -1092,5 +1143,33 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn extract_embedded_prefix_ignores_active_overlay() {
+        let _guard = overlay_lock().await;
+        let overlay = make_temp_dir().await;
+        let target = make_temp_dir().await;
+        let overlay_file = overlay.join("app/clash-verge/merge.yaml");
+        fs::create_dir_all(overlay_file.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(&overlay_file, "overlay-only marker")
+            .await
+            .unwrap();
+        set_overlay_dir(Some(&overlay));
+
+        let report = extract_embedded_prefix("app/clash-verge", &target, false)
+            .await
+            .unwrap();
+        set_overlay_dir(None);
+
+        assert!(!report.created.is_empty());
+        let copied = fs::read_to_string(target.join("app/clash-verge/merge.yaml"))
+            .await
+            .unwrap();
+        assert_ne!(copied, "overlay-only marker");
+        fs::remove_dir_all(overlay).await.unwrap();
+        fs::remove_dir_all(target).await.unwrap();
     }
 }

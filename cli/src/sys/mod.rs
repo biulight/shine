@@ -25,4 +25,7 @@ use render::sys_init_theme;
 pub use commands::{handle_info, handle_init, handle_list, handle_status, handle_update};
 pub use detect::detect_os_id;
 pub(crate) use managed::installed_managed;
-pub use managed::{handle_apply, handle_uninstall, handle_upgrade_managed, managed_updates};
+pub use managed::{
+    handle_apply, handle_uninstall, handle_upgrade_managed, handle_upgrade_managed_target,
+    managed_updates,
+};

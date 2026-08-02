@@ -86,7 +86,7 @@ pub(super) fn print_run_header(os_id: &str, sys_shell: &str, selection: &Resolve
 }
 
 /// Build the HTTP proxy environment variables injected into init scripts by
-/// `shine sys init --proxy`, from shine's preset proxy `[env]` values.
+/// `shine sys bootstrap --proxy`, from shine's preset proxy `[env]` values.
 ///
 /// Reuses the `[env]` keys already consumed by the `proxy` shell preset
 /// (`PROXY_HOST` / `HTTP_PROXY_PORT` / `PROXY_NO_PROXY`) and assembles the same

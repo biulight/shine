@@ -14,7 +14,7 @@ pub enum SysCommands {
         #[arg(value_name = "ITEM")]
         item: String,
     },
-    /// Show system init items previously initialized by shine
+    /// Show system bootstrap items previously initialized by shine
     Status,
     /// Check recorded bootstrap software for updates without upgrading it
     Update {
@@ -28,8 +28,8 @@ pub enum SysCommands {
         #[arg(long)]
         proxy: bool,
     },
-    /// Run the system init script for the current OS
-    Init {
+    /// Bootstrap software and shell integration for the current OS
+    Bootstrap {
         /// Apply a named profile without showing interactive selection
         #[arg(long, value_name = "PROFILE")]
         preset: Option<String>,

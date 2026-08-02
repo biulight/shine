@@ -52,7 +52,7 @@ Or install from source:
 cargo install --path cli
 ```
 
-Windows support covers `shine self`, `shine shell`, selected app presets in PowerShell, and a PowerShell-backed `shine sys init` preset, including profile updates for both `powershell.exe` and `pwsh.exe`.
+Windows support covers `shine self`, `shine shell`, selected app presets in PowerShell, and a PowerShell-backed `shine sys bootstrap` preset, including profile updates for both `powershell.exe` and `pwsh.exe`.
 
 Or build from source:
 
@@ -62,6 +62,21 @@ cargo build --release
 ```
 
 ## Usage
+
+The everyday interface is action-first. Resources use canonical targets such as
+`app/starship`, `shell/proxy`, and `sys/split-dns`; a bare app/shell category remains a shorthand
+when it is unique:
+
+```bash
+shine list --available
+shine info app/starship
+shine install app/starship
+shine update
+shine upgrade app/starship
+```
+
+Shine 1.0 intentionally accepts only the primary spellings documented here; superseded
+pre-release command forms are not retained as aliases.
 
 ### List available shell presets
 
@@ -87,14 +102,26 @@ Shell Preset Categories
                   ...
 ```
 
+### Inspect shell preset details
+
+Inspect a category or one of its commands before or after installation:
+
+```bash
+shine shell info proxy
+shine shell info setproxy
+shine shell info proxy/setproxy
+```
+
+The detail view reports source metadata, runtime requirements, transforms, declared environment
+variable names, and current installation status. It never prints environment values.
+
 ### Install shell presets
 
 ```bash
 shine install proxy            # shorthand for a matching shell/app category
 shine shell install            # install all categories
 shine shell install proxy      # install only the proxy category
-shine reinstall proxy          # shorthand reinstall for a matching category
-shine shell reinstall proxy    # overwrite managed files and links for proxy
+shine install shell/proxy --replace-managed  # repair managed files and links
 ```
 
 Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks or Windows shims in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, PowerShell profile, etc.):
@@ -105,9 +132,9 @@ Bin Links      4 created
 ```
 
 Installing all shell presets includes `agent`. Its default Codex provider requires `CLIPROXYAPI_AUTH_TOKEN` or `CLIPROXYAPI_AUTH_TOKEN_SECRET`; DeepSeek and Qwen use their corresponding API-key variables in the active env config.
-Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `reinstall` when you want to overwrite managed preset files, links, and the shell config entry.
+Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `--replace-managed` when you want to repair user-modified managed preset files, links, and shell integration.
 
-Top-level `install`, `reinstall`, and `uninstall` commands accept a required category and automatically route to either `shell/<category>` or `app/<category>`. If both preset types define the same category name, `shine` prompts you to choose one.
+Top-level `install` and `uninstall` accept a canonical `shell/<category>` or `app/<category>` target. A bare category is accepted when it uniquely identifies one preset type; an ambiguous name reports both canonical choices instead of prompting, so the same command is safe in scripts and terminals.
 
 Shell metadata can scope entries to `platforms = ["unix"]` or `platforms = ["windows"]`. The built-in `agent` category exposes one cross-platform `cc.ts` entry through the Bun runtime.
 
@@ -141,9 +168,11 @@ shine completions install
 
 Open a new shell, or reload your shell config once (`source ~/.zshrc` or `source ~/.bashrc`).
 
-Installing or reinstalling a specific shell preset, such as `shine shell install proxy`, also refreshes completions as part of the managed shell profile update.
+Installing or repairing a specific shell preset, such as `shine install shell/proxy --replace-managed`, also refreshes completions as part of the managed shell profile update.
 
-For manual setup or inspection, `shine completions <shell>` prints the registration script to `stdout` for `bash`, `zsh`, and `powershell`.
+Completions are dynamic: preset categories and commands follow the active built-in, external, project, and overlay sources, while installed system-update items and saved task names come from Shine's runtime manifests. Bash, Zsh, and PowerShell are supported; on Fish or Elvish, `completions install` keeps the managed PATH setup and reports that Shine completion is unavailable.
+
+For advanced manual setup or inspection, `shine completions <shell>` prints the registration script to `stdout` for `bash`, `zsh`, and `powershell`.
 
 ### List available app presets
 
@@ -179,22 +208,22 @@ shine sys info split-dns
 ### Run system init for the current OS
 
 ```bash
-shine sys init
-shine sys init --preset recommended
-shine sys init --dry-run
+shine sys bootstrap
+shine sys bootstrap --preset recommended
+shine sys bootstrap --dry-run
 shine sys status
 shine sys update
 shine sys update neovim --verbose
 ```
 
-`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After successful item work, `shine` refreshes managed shell profile integration from Rust.
+`shine sys bootstrap` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After successful item work, `shine` refreshes managed shell profile integration from Rust.
 
-- In a TTY, `shine sys init` opens an interactive multi-select with defaults taken from the preset's `default_profile`.
-- `shine sys init --preset <PROFILE>` skips the prompt and applies that named profile directly.
-- Without a TTY, `shine sys init` falls back to `default_profile`.
-- `shine sys init --dry-run` prints the resolved items, per-item script invocations, the internal profile update step, and script content without executing anything.
+- In a TTY, `shine sys bootstrap` opens an interactive multi-select with defaults taken from the preset's `default_profile`.
+- `shine sys bootstrap --preset <PROFILE>` skips the prompt and applies that named profile directly.
+- Without a TTY, `shine sys bootstrap` falls back to `default_profile`.
+- `shine sys bootstrap --dry-run` prints the resolved items, per-item script invocations, the internal profile update step, and script content without executing anything.
 - `shine sys status` shows the init items previously recorded for the current OS.
-- `shine sys update [ITEM] [--verbose] [--proxy]` is read-only: it checks only bootstrap software previously recorded by `shine sys init`, never installs or upgrades anything, and never changes the sys manifest or shell profile. `--proxy` routes checks through the preset proxy; on Windows it explicitly passes WinGet's `--proxy` option because WinGet ignores standard HTTP proxy environment variables. By default it shows verified package-manager updates and the exact upstream command to run. `--verbose` also shows current and manual-check-only items. Direct installers and user-owned Git configurations are intentionally reported as manual instead of guessed.
+- `shine sys update [ITEM] [--verbose] [--proxy]` is read-only: it checks only bootstrap software previously recorded by `shine sys bootstrap`, never installs or upgrades anything, and never changes the sys manifest or shell profile. `--proxy` routes checks through the preset proxy; on Windows it explicitly passes WinGet's `--proxy` option because WinGet ignores standard HTTP proxy environment variables. By default it shows verified package-manager updates and the exact upstream command to run. `--verbose` also shows current and manual-check-only items. Direct installers and user-owned Git configurations are intentionally reported as manual instead of guessed.
 
 `shine update` and `shine upgrade` continue to reconcile Shine-managed configuration and managed system resources. They do not upgrade third-party bootstrap software; copying and running a command printed by `shine sys update` is always the user's explicit decision.
 
@@ -227,7 +256,7 @@ Current built-in presets:
 - `macos` — offers selectable Homebrew, Rust, Yazi, Starship, Neovim, AstroNvim, ZeroTier, zsh plugin, zoxide, Atuin, fzf, bat, eza, nvm, Bun, pnpm, mise, and Fastfetch steps. The `recommended` profile includes Homebrew and the core terminal/editor tools; the `all` profile adds JavaScript runtimes, mise, and Fastfetch.
 - `windows` — offers selectable Rust, Yazi, Starship, zoxide, Atuin, fzf, bat, eza, ZeroTier, Bun, pnpm, and mise steps. The `recommended` profile includes Rust and core terminal tools; the `all` profile adds JavaScript runtime and environment manager steps.
 
-When selected tools need shell integration, sys init installs managed `pre` and `post` profile loaders. The `pre` loader runs near the top of the user profile for PATH, Homebrew, and completion search path setup; the `post` loader runs near the end for Yazi, Starship, zoxide, Atuin, fzf, mise, aliases, and shell plugins. Managed profile files are merged so user edits inside them are preserved or reported for review.
+When selected tools need shell integration, `sys bootstrap` installs managed `pre` and `post` profile loaders. The `pre` loader runs near the top of the user profile for PATH, Homebrew, and completion search path setup; the `post` loader runs near the end for Yazi, Starship, zoxide, Atuin, fzf, mise, aliases, and shell plugins. Managed profile files are merged so user edits inside them are preserved or reported for review.
 
 On Ubuntu and macOS, the managed `pre` profile also syncs the terminal's light/dark theme via `shine theme sync`, exporting `SHINE_TERMINAL_THEME=light|dark` and setting `BAT_THEME` to `GitHub` for light backgrounds and `OneHalfDark` for dark backgrounds (override with `SHINE_BAT_LIGHT_THEME`/`SHINE_BAT_DARK_THEME`). Resolution tries, in order: an already-exported `SHINE_TERMINAL_THEME` (including the value `shine ssh` injects from your local terminal — see below), `COLORFGBG`, then a direct OSC 11 query with a total (not per-byte) read deadline. A `BAT_THEME` you've already set yourself is left untouched. Disable auto-sync with `sync_terminal_theme = false` in `config.toml` or `SHINE_SYNC_TERMINAL_THEME=0` (the env var always wins); sync manually anytime with `shine theme sync` regardless of that setting, or install the optional `shine-theme-sync` command via `shine shell install utils`. `shine ssh <host>` queries your local terminal directly before connecting, so it doesn't depend on the remote OSC query at all — see [docs/terminal-theme-sync-prd.md](docs/terminal-theme-sync-prd.md). macOS sys profile management continues to target zsh, while Ubuntu supports bash and zsh.
 
@@ -249,8 +278,7 @@ shine app install             # install all app categories
 shine app install ghostty     # install only one category
 shine app install starship    # install only one category
 shine app install --dry-run   # preview destination writes
-shine reinstall ghostty       # shorthand reinstall for a matching category
-shine app reinstall ghostty   # overwrite managed files for one category
+shine install app/ghostty --replace-managed  # repair managed files for one category
 ```
 
 `shine app install` first extracts bundled files to `~/.shine/presets/app/`, then copies them to their final destinations.
@@ -391,12 +419,51 @@ the built-in, idempotent artifact once:
 
 ```bash
 shine env set SURGE_PROFILE '~/Library/Application Support/Surge/Profiles/MyProfile.conf'
-shine app build surge
+shine app artifact apply surge
 ```
 
-`shine app unbuild surge` removes those local section includes. App uninstall
+The preset also installs commented, inert examples under `rules/` for three
+traffic classes: `LAN Network`, `LAN PROXY`, and `Other Direct`. Each class in
+`local-rules.conf` shows three alternative `RULE-SET` sources:
+
+```ini
+# RULE-SET,rules/lan.list,LAN Network
+# RULE-SET,http://127.0.0.1:8080/rules/lan.list,LAN Network,update-interval=86400
+# RULE-SET,https://rules.example.com/surge/lan.list,LAN Network,update-interval=86400
+```
+
+Use exactly one form per class. The relative file is recommended because Shine
+already installs it beside the profile. A loopback URL requires a separate HTTP
+server on the same device as Surge (`localhost` on iOS is the iOS device), while
+the HTTPS form requires replacing the example host with your own server. The
+example proxy, policy groups, and list entries remain commented until explicitly
+enabled.
+
+`shine app artifact remove surge` removes those local section includes. App uninstall
 also attempts the same teardown before removing managed files. Build and
 unbuild require Bun and never run implicitly during install or upgrade.
+
+### Clash Verge Rev rule-provider examples
+
+The built-in `clash-verge` preset uses the same three traffic classes and ships
+an inert, fully commented `merge.yaml`. Its `rule-providers` section demonstrates
+three mutually exclusive source layouts:
+
+- `type: file` for rule lists already copied under mihomo's `HomeDir`;
+- `type: http` with `http://127.0.0.1:8080/...` for a separate loopback server;
+- `type: http` with `https://rules.example.com/...` for a remote server.
+
+Choose one complete provider block and uncomment the matching `LAN Network`,
+`LAN PROXY`, and `Other Direct` groups and `prepend-rules`. Mihomo restricts a
+file provider's `path` to its `HomeDir` unless `SAFE_PATHS` is configured, so
+Shine does not automatically point it at `~/.shine` or copy files into CVR's
+private data directory. As with Surge, localhost means the device running the
+client, not another LAN host. The HTTP examples use `proxy: DIRECT` only for
+provider downloads, preventing a loopback or private rule server from following
+the selected `GLOBAL`/proxy policy; remove or change it if a remote rule server
+is reachable only through a proxy. For a private provider hostname that the OS
+resolves through split DNS (for example, Windows NRPT), also adapt the example
+`dns.nameserver-policy`, because mihomo may use its own DNS resolver.
 
 ### Uninstall app presets
 
@@ -419,6 +486,8 @@ When a category is specified only that category's managed files are removed; oth
 
 ```bash
 shine list
+shine list --available          # browse every available resource
+shine list --available app      # limit the catalog to one resource kind
 ```
 
 Shows only items that are currently installed or configured — a quick "what's set up on this machine" view. Entries that are not installed are omitted and status details are not shown.
@@ -439,12 +508,12 @@ System Configs
 ```
 
 Managed system configs are read from the current OS entries recorded in `sys-manifest.toml`;
-status details remain available through `shine sys status` and `shine sys info <ITEM>`.
+status details remain available through `shine sys status` and `shine info sys/<ITEM>`.
 
 If nothing is installed yet, `shine list` also points to `shine sys list` alongside the shell and
 app install commands.
 
-### Inspect installed config details
+### Inspect available or installed resource details
 
 ```bash
 shine info git
@@ -454,23 +523,30 @@ shine info setproxy
 shine info git --verbose
 ```
 
-Shows metadata, colorized status, and when applicable an expected-content diff for a managed app config or shell preset. Add `--verbose` to also print the installed or rendered file content. The target is matched against installed categories, command names, display names, source filenames, and destination basenames. If a short target is ambiguous, use the canonical form shown in the error:
+Shows metadata and current installation status for available resources. Installed app/shell targets additionally support expected-content diffs and `--verbose` installed or rendered content. A short target is accepted when unique; otherwise use the canonical form shown in the error:
 
 ```bash
 shine info app/git
 shine info shell/proxy/setproxy
+shine info sys/split-dns
 ```
 
-For app configs, `shine info --verbose` reads the installed destination file. For shell presets, it reads the effective script target, including rendered template scripts under `~/.shine/rendered/` when applicable.
+For app configs, `shine info --verbose` reads the installed destination file. For shell presets, it reads the effective script target, including rendered template scripts under `~/.shine/rendered/` when applicable. System items require the explicit `sys/<ITEM>` form and do not accept `--diff` or `--verbose`.
 
 ### Update status and release check
 
 ```bash
 shine update
+shine update --diff
+shine update shell/proxy/setproxy
 shine update --verbose
+shine upgrade app/starship       # apply only one installed category
+shine upgrade sys/split-dns      # converge one managed system item
 ```
 
 Shows only available installed configuration updates, then checks for a newer shine release. Use `--verbose` to include installed entries that are already up-to-date or need attention:
+
+Add `--diff` to print the expected-content diff directly below each available shell or app update. Pass an installed shell/app target to inspect only that target; target mode implies diff, skips the shine release check, and can be combined with `--pull` but not `--verbose` or `--refresh-release`. `shine upgrade [TARGET]` applies either all pending managed changes or only the selected app category, shell category, or managed system item. A file/command target is intentionally upgraded at its owning category boundary. Use `shine info <TARGET> --verbose` when the complete current content is needed. Managed system resources already show structured field changes and do not produce content diffs.
 
 ```
 Shell Presets
@@ -490,19 +566,47 @@ Status symbols:
 | `!` | Destination missing (was installed) |
 | `✗` | Not installed |
 
-### Export and customize presets
+When a newer Shine runtime schema requires cleanup, inspect and apply its versioned migration with:
 
 ```bash
-shine export
+shine state migrate --dry-run
+shine state migrate
+```
+
+### Manage and customize preset sources
+
+Create metadata for a new preset in the current directory with:
+
+```bash
+shine preset new app
+shine preset new shell
+```
+
+```bash
+shine preset export
 ```
 
 Copies all built-in shell scripts and app configs into your configured `presets_dir` (default `~/.shine/presets/`). Once exported you can edit the files freely — `shine` will read from the filesystem copy instead of the embedded binary on subsequent installs.
 
+To use one built-in preset as the starting point for an overlay, copy its complete snapshot into
+the current directory using its canonical `kind/name`:
+
+```bash
+cd ~/dotfiles/shine-overlay
+shine preset copy app/surge
+shine preset copy app/clash-verge
+```
+
+This creates `app/surge/` and `app/clash-verge/` with all files shipped by the current binary.
+Delete files you do not intend to customize: overlay matching is per path, so removed files fall
+back to the built-in version and continue receiving Shine updates. Existing files are preserved by
+default; use `--force` to overwrite them. Activate the directory with `shine preset overlay link .`.
+
 To switch `shine` to a custom preset source directory with the CLI:
 
 ```bash
-shine link ~/dotfiles/shine-presets --create
-shine export
+shine preset link ~/dotfiles/shine-presets --create
+shine preset export
 ```
 
 To use a custom directory as your preset source, set `presets_dir` in `~/.shine/config.toml`:
@@ -514,7 +618,7 @@ presets_dir = "~/dotfiles/shine-presets"
 Then export the defaults there as a starting point:
 
 ```bash
-SHINE_PRESETS=~/dotfiles/shine-presets shine export
+SHINE_PRESETS=~/dotfiles/shine-presets shine preset export
 ```
 
 All `install`, `update`, and `list` commands will automatically read from the external directory when `presets_dir` is configured. The active preset source is printed in each command's output so you always know which files are being used.
@@ -522,20 +626,20 @@ All `install`, `update`, and `list` commands will automatically read from the ex
 For smaller customizations, use a presets overlay. Overlay files are merged over the active presets source—embedded or external—by matching the same relative paths, such as `app/starship/starship.toml` or `shell/proxy/set_proxy.sh`. Matching overlay files take priority, and overlay-only categories are added to the base source.
 
 ```bash
-shine overlay link ~/dotfiles/shine-overlay --create
-shine overlay show
-shine overlay unlink
+shine preset overlay link ~/dotfiles/shine-overlay --create
+shine preset overlay info
+shine preset overlay unlink
 ```
 
 If you keep your overlay in a Git repository, you can let Shine manage the checkout for you instead of cloning it on every machine. Point the overlay at a Git URL and Shine clones it (`--depth 1`, no history) under `~/.shine/overlay` and keeps it mirrored to the remote tip:
 
 ```bash
-shine overlay link --git https://github.com/you/shine-overlay.git   # optionally: --branch main
-shine overlay show      # shows the URL, branch, managed path, and clone status
-shine pull              # clones on first run, then force-mirrors to the latest commit
+shine preset overlay link --git https://github.com/you/shine-overlay.git   # optionally: --branch main
+shine preset overlay info      # shows the URL, branch, managed path, and clone status
+shine preset pull              # clones on first run, then force-mirrors to the latest commit
 ```
 
-You can also just add the URL directly to `~/.shine/config.toml` and run `shine pull`:
+You can also just add the URL directly to `~/.shine/config.toml` and run `shine preset pull`:
 
 ```toml
 presets_overlay_git = "https://github.com/you/shine-overlay.git"
@@ -544,15 +648,15 @@ presets_overlay_git = "https://github.com/you/shine-overlay.git"
 
 This is ideal when one machine maintains the overlay and the rest only consume it: each device
 just needs the URL, never a manual `git clone`. Because the managed checkout is a read-only mirror,
-`shine pull` always resets it to match the remote (surviving rebases and force-pushes) and discards
+`shine preset pull` always resets it to match the remote (surviving rebases and force-pushes) and discards
 any local edits. If a pull fails (e.g. the remote is unreachable), the previous checkout is left
-intact and stays in use. A manually linked `overlay link <path>` takes precedence over a Git URL;
+intact and stays in use. A manually linked `preset overlay link <path>` takes precedence over a Git URL;
 the two are mutually exclusive.
 
 When the active preset source or a manually linked overlay is managed by Git, Shine also safely fast-forwards it:
 
 ```bash
-shine pull             # sync managed overlay + fast-forward preset/overlay repositories
+shine preset pull             # sync managed overlay + fast-forward preset/overlay repositories
 shine update --pull    # pull first, then reload configuration and check status
 shine upgrade --pull   # pull first, then reload configuration and apply presets
 ```
@@ -585,6 +689,8 @@ Manual commands:
 
 ```bash
 shine update        # show available updates, then force-check the latest release
+shine update --diff # include content diffs for available shell/app updates
+shine update proxy/setproxy  # inspect one installed target and skip the release check
 shine update --verbose  # include up-to-date and non-update status rows
 shine update --pull  # pull Git-managed presets before checking status
 shine self install  # copy the current binary to the platform default install path
@@ -599,7 +705,7 @@ shine upgrade --verbose  # include env-template checks and skipped/current rows
 
 `shine self install` defaults to `/usr/local/bin/shine` on macOS/Linux and `%LOCALAPPDATA%\Programs\shine\shine.exe` on Windows. It detects whether the install directory is on `PATH` and prints a platform-specific hint when it is not, but it does not edit `PATH` automatically.
 
-Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. Preview binaries identify themselves with SemVer build metadata in `shine --version`, for example `0.40.0+preview.abc1234`, while stable binaries continue to report `0.40.0`.
+Preview upgrades install from the fixed `preview` GitHub prerelease and are not used by automatic update checks. If the installed preview already matches the current prerelease build, `shine self upgrade --channel preview` reports it as up to date instead of reinstalling. `shine --version` uses the same provenance layout as Cargo: stable builds report `shine 1.0.0 (<commit> <date>)`, while preview builds report `shine 1.0.0-preview (<commit> <date>)`.
 
 If the cache directory under `~/.shine/` is missing, `shine` recreates it automatically before saving the update-check cache.
 
@@ -609,7 +715,7 @@ If the cache directory under `~/.shine/` is missing, `shine` recreates it automa
 
 ```bash
 SHINE_INSTALL_DIR=/custom/bin sh install.sh
-SHINE_VERSION=0.40.0 sh install.sh
+SHINE_VERSION=1.0.0 sh install.sh
 SHINE_REPO=biulight/shine sh install.sh
 ```
 
@@ -617,9 +723,26 @@ SHINE_REPO=biulight/shine sh install.sh
 
 ```powershell
 $env:SHINE_INSTALL_DIR = "$env:USERPROFILE\bin"; .\install.ps1
-$env:SHINE_VERSION = "0.40.0"; .\install.ps1
+$env:SHINE_VERSION = "1.0.0"; .\install.ps1
 $env:SHINE_REPO = "biulight/shine"; .\install.ps1
 ```
+
+### Personal tasks
+
+Save frequently used commands as argv-based personal tasks. Tasks normally run from the directory
+where you invoke them; use `--cwd` to bind a task to an existing directory so it can be launched
+reliably from anywhere:
+
+```bash
+shine task save check -- cargo test
+shine task save build --cwd ~/work/project -- cargo build --release
+shine task run build
+shine run build                 # shorthand for `shine task run build`
+shine task info build
+```
+
+`--cwd` expands `~` and resolves relative paths when the task is saved. Commands are executed
+directly without an implicit shell; save an explicit `sh -c '...'` when shell syntax is required.
 
 ### SSH session file transfer
 
@@ -747,7 +870,7 @@ CLIPROXYAPI_AUTH_TOKEN = "..."
 Create the encrypted value with:
 
 ```bash
-shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN
+shine env secret encrypt --from CLIPROXYAPI_AUTH_TOKEN
 ```
 
 Codex connects to `http://127.0.0.1:8317` and maps Claude Code's Opus, Sonnet,
@@ -775,16 +898,16 @@ Create encrypted values with your existing GPG key. If the private key is
 backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
 
 ```bash
-shine env encrypt --from DEEPSEEK_API_KEY
+shine env secret encrypt --from DEEPSEEK_API_KEY
 ```
 
-`shine env encrypt` uses `gpg_key_id` from `config.toml` by default. Pass
+`shine env secret encrypt` uses `gpg_key_id` from `config.toml` by default. Pass
 `-r/--recipient <key-id>` to override it for a single command.
 
 You can also decrypt any base64 GPG secret from the active env config directly:
 
 ```bash
-shine env decrypt DEEPSEEK_API_KEY_SECRET
+shine env secret decrypt DEEPSEEK_API_KEY_SECRET
 ```
 
 For Qwen through Alibaba Cloud's Anthropic-compatible endpoint, use the same
@@ -798,7 +921,7 @@ QWEN_API_KEY = "..."
 Create its encrypted value with:
 
 ```bash
-shine env encrypt --from QWEN_API_KEY
+shine env secret encrypt --from QWEN_API_KEY
 ```
 
 When `ccenv` prompts for a provider, choose `qwen` (or option `3`). The Claude
@@ -808,7 +931,7 @@ process receives the Alibaba Cloud endpoint, Qwen model mapping, and the
 #### age + Apple Touch ID (Secure Enclave)
 
 For secrets that need to be shared through a repo and decrypted by every teammate — not just
-GPG users — `shine env encrypt`/`decrypt`/`seal` also support
+GPG users — `shine env secret encrypt`/`decrypt`/`seal` also support
 [age](https://github.com/FiloSottile/age) as a second backend, with optional Touch ID support on
 macOS via [age-plugin-se](https://github.com/remko/age-plugin-se):
 
@@ -816,10 +939,10 @@ macOS via [age-plugin-se](https://github.com/remko/age-plugin-se):
 brew install age age-plugin-se   # or your package manager of choice
 
 # Generate a Secure Enclave identity that prompts Touch ID on decrypt
-shine env identity init --touch-id
+shine env secret identity init --touch-id
 
 # Or a plain identity that works on any OS
-shine env identity init
+shine env secret identity init
 ```
 
 `identity init` prints the identity's `age1...`/`age1se1...` recipient. Add every teammate's
@@ -832,8 +955,8 @@ age_recipients = ["age1se1qexample...", "age1qteammate..."]
 ```
 
 ```bash
-shine env encrypt --backend age --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_SECRET
-shine env decrypt DEEPSEEK_API_KEY_SECRET   # prompts Touch ID if the identity is Secure Enclave
+shine env secret encrypt --backend age --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_SECRET
+shine env secret decrypt DEEPSEEK_API_KEY_SECRET   # prompts Touch ID if the identity is Secure Enclave
 ```
 
 Ciphertext produced by the age backend is tagged (`age:...`) so `shine` always knows which
@@ -847,12 +970,12 @@ store it as `<KEY>_SECRET` for encrypted storage or `<KEY>` for plaintext
 fallback, then evaluate the generated shell code:
 
 ```bash
-shine env encrypt --from MY_TOKEN
-eval "$(shine env export MY_TOKEN)"
-eval "$(shine env export MY_TOKEN --as API_TOKEN)"
+shine env secret encrypt --from MY_TOKEN
+eval "$(shine env secret export MY_TOKEN)"
+eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
 ```
 
-`shine env export MY_TOKEN` prefers `MY_TOKEN_SECRET`, decrypts it when present,
+`shine env secret export MY_TOKEN` prefers `MY_TOKEN_SECRET`, decrypts it when present,
 and otherwise falls back to `MY_TOKEN`. It prints shell-specific assignment code;
 the `eval` step is what applies it to the current terminal session. Pass `--as
 API_TOKEN` to use a different variable name in the shell, or install the `utils`
@@ -868,7 +991,7 @@ shine env run --with MY_TOKEN=API_TOKEN -- bun run build
 shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
 ```
 
-Each value follows the same encrypted-first lookup as `env export`. The optional
+Each value follows the same encrypted-first lookup as `env secret export`. The optional
 name after `=` is the environment variable visible to the child process. Explicit
 `--with` values override variables inherited from the shell and values loaded from
 a workspace, and no workspace file is required when at least one `--with` is used.
@@ -915,7 +1038,7 @@ data = "<managed GPG ciphertext>"
 Seal pending values, then run a command with the merged environment:
 
 ```bash
-shine env seal
+shine env secret seal
 shine env run --mode production -- bun run build
 ```
 
@@ -1016,7 +1139,7 @@ You can also change the fallback install root for app presets that do not carry 
 app_default_dest_root = "~/.config"
 ```
 
-Set a default GPG recipient for `shine env encrypt`:
+Set a default GPG recipient for `shine env secret encrypt`:
 
 ```toml
 gpg_key_id = "<key-id>"
@@ -1045,7 +1168,7 @@ GHOSTTY_BG_DARK = ""
 
 Environment values merge by key in this order: built-in defaults, global `[env]`, project `[env]`, global `shine.env.toml`, active presets-overlay `shine.env.toml`, then project `shine.env.toml`.
 
-`shine env show` displays these values with descriptions from the active preset
+`shine env list` displays these values with descriptions from the active preset
 catalog and redacts sensitive values by default. Use `--reveal` when the full
 value is required. A value can carry a config-local description without
 separating it from its key:
@@ -1084,11 +1207,11 @@ move it to `~/.shine/shine.env.toml`, or merge its values there if that file alr
 exists. A normal config-loading command stops with recovery instructions while the
 old file remains.
 
-An active directory linked with `shine overlay link <path>` may also contain a
+An active directory linked with `shine preset overlay link <path>` may also contain a
 flat `<path>/shine.env.toml`. Its values override global env values and are
 available from any working directory; project-local `shine.env.toml` values
 still take priority. The file is re-read on every run, requires no project
-`shine.config.toml`, and stops applying after `shine overlay unlink`. Overlays
+`shine.config.toml`, and stops applying after `shine preset overlay unlink`. Overlays
 also compose with a full external presets source: matching overlay paths win,
 while other files continue to come from the external source.
 

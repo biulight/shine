@@ -120,6 +120,15 @@ pub async fn handle_upgrade_installed(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<ShellUpgradeReport> {
+    handle_upgrade_installed_target(config, None, verbose, sep).await
+}
+
+pub async fn handle_upgrade_installed_target(
+    config: &Config,
+    category_filter: Option<&str>,
+    verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<ShellUpgradeReport> {
     let all_categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
     } else {
@@ -128,6 +137,7 @@ pub async fn handle_upgrade_installed(
 
     let installed_commands: Vec<(String, String)> = all_categories
         .iter()
+        .filter(|cat| category_filter.is_none_or(|filter| cat.name == filter))
         .flat_map(|cat| {
             cat.files.iter().filter_map(|file| {
                 let link = crate::bin_links::command_path_for_name(
@@ -140,6 +150,9 @@ pub async fn handle_upgrade_installed(
         .collect();
 
     if installed_commands.is_empty() {
+        if let Some(category) = category_filter {
+            anyhow::bail!("shell preset is not installed: {category}");
+        }
         if verbose {
             println!("{}", colors::dim("No installed shell presets found."));
         }
@@ -150,15 +163,6 @@ pub async fn handle_upgrade_installed(
         .iter()
         .map(|(cat_name, _)| cat_name.clone())
         .collect();
-
-    sep.begin();
-    output::summary_line(
-        "Shell Presets",
-        &[colors::dim(&format!(
-            "{} installed categories",
-            installed_categories.len()
-        ))],
-    );
 
     if !config.is_external_presets {
         for category in &installed_categories {
@@ -180,42 +184,73 @@ pub async fn handle_upgrade_installed(
 
     let script_pairs = build_script_pairs(config, &categories);
     let template_report = apply_template_to_scripts(config, &script_pairs).await?;
-    for name in &template_report.updated {
-        println!("  {} {}", colors::symbol("✓"), name);
-    }
 
     let link_specs = build_link_specs(config, &categories);
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
 
     let link_parts = upgrade_link_report_summary_parts(&link_report, verbose);
-    if !link_parts.is_empty() {
-        output::summary_line("Bin Links", &link_parts);
-    }
-    print_link_conflicts(config, &link_report.conflicts, None);
 
     let source_commands = installed_source_commands(config).await?;
 
     let shell_update = append_path_to_shell_config(config, false, &source_commands).await?;
-    let path_changed = match shell_update.config_status {
-        PathUpdateStatus::AlreadyConfigured => false,
-        PathUpdateStatus::Updated(path) => {
+    let updated_shell_config = match shell_update.config_status {
+        PathUpdateStatus::AlreadyConfigured => None,
+        PathUpdateStatus::Updated(path) => Some(path),
+    };
+
+    let has_visible_result = should_print_upgrade_section(
+        verbose,
+        !template_report.updated.is_empty(),
+        !link_parts.is_empty(),
+        updated_shell_config.is_some(),
+    );
+    if has_visible_result {
+        sep.begin();
+        if verbose {
+            output::summary_line(
+                "Shell Presets",
+                &[colors::dim(&format!(
+                    "{} installed categories",
+                    installed_categories.len()
+                ))],
+            );
+        } else {
+            println!("{}", colors::bold("Shell Presets"));
+        }
+
+        for name in &template_report.updated {
+            println!("  {} {}", colors::symbol("✓"), name);
+        }
+        if !link_parts.is_empty() {
+            output::summary_line("Bin Links", &link_parts);
+        }
+        print_link_conflicts(config, &link_report.conflicts, None);
+        if let Some(path) = &updated_shell_config {
             output::detail_line(
                 "Shell Config",
                 &colors::green("updated"),
                 Some(path.display().to_string()),
             );
-            true
         }
-    };
+    }
 
     Ok(ShellUpgradeReport {
         templates_updated: template_report.updated.len(),
         links_created: link_report.created.len(),
         links_updated: link_report.overwritten.len(),
         link_conflicts: link_report.conflicts.len(),
-        path_changed,
+        path_changed: updated_shell_config.is_some(),
     })
+}
+
+fn should_print_upgrade_section(
+    verbose: bool,
+    templates_updated: bool,
+    has_link_result: bool,
+    path_changed: bool,
+) -> bool {
+    verbose || templates_updated || has_link_result || path_changed
 }
 
 pub async fn handle_completion_install(config: &Config) -> Result<()> {
@@ -253,6 +288,15 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
                 Some(path.display().to_string()),
             );
         }
+    }
+
+    if !super::profile::supports_completion_registration(&config.shell_type) {
+        let shell: &'static str = config.shell_type.into();
+        output::detail_line(
+            "Completion",
+            &colors::yellow("unsupported"),
+            Some(format!("{shell}; PATH setup was installed")),
+        );
     }
 
     output::hint_line(
@@ -335,6 +379,15 @@ mod tests {
     use crate::config::Config;
     use std::path::PathBuf;
     use tokio::fs;
+
+    #[test]
+    fn upgrade_section_hides_no_op_by_default_and_shows_verbose_or_changes() {
+        assert!(!should_print_upgrade_section(false, false, false, false));
+        assert!(should_print_upgrade_section(true, false, false, false));
+        assert!(should_print_upgrade_section(false, true, false, false));
+        assert!(should_print_upgrade_section(false, false, true, false));
+        assert!(should_print_upgrade_section(false, false, false, true));
+    }
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-shell").await

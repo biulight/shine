@@ -4,7 +4,7 @@ use std::{ffi::OsString, path::PathBuf};
 #[derive(Subcommand, Debug)]
 pub enum EnvCommands {
     /// List all env variables
-    Show {
+    List {
         /// Show sensitive values instead of redacting them
         #[arg(long)]
         reveal: bool,
@@ -34,6 +34,20 @@ pub enum EnvCommands {
         /// Variable name
         key: String,
     },
+    /// Run a command with the workspace environment
+    Run(EnvRunCommand),
+    /// Encrypt, decrypt, export, and manage secret identities
+    Secret(EnvSecretCommand),
+}
+
+#[derive(Args, Debug)]
+pub struct EnvSecretCommand {
+    #[command(subcommand)]
+    pub command: EnvSecretSubcommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum EnvSecretSubcommand {
     /// Decode and decrypt an encrypted secret from [env] (GPG or age)
     Decrypt {
         /// Variable name containing encrypted ciphertext
@@ -51,8 +65,6 @@ pub enum EnvCommands {
     Encrypt(EnvEncryptCommand),
     /// Seal pending secrets in workspace environment files
     Seal(EnvSealCommand),
-    /// Run a command with the workspace environment
-    Run(EnvRunCommand),
     /// Manage age identities used to decrypt age-backed secrets
     Identity(EnvIdentityCommand),
 }
@@ -118,7 +130,7 @@ pub enum EnvIdentitySubcommand {
         force: bool,
     },
     /// Print the recipient(s) for the configured identity file(s)
-    Show,
+    List,
 }
 
 #[derive(Args, Debug)]

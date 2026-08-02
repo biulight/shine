@@ -43,8 +43,8 @@ cargo run -- shell install
 cargo run -- shell install proxy
 cargo run -- shell uninstall --dry-run
 cargo run -- sys list
-cargo run -- sys init --dry-run
-cargo run -- env show
+cargo run -- sys bootstrap --dry-run
+cargo run -- env list
 cargo run -- self upgrade --channel preview
 
 # Test (pre-commit uses nextest)
@@ -109,12 +109,12 @@ shine/
 │       ├── init.rs           # `shine init`: confirm + write a project-local
 │       │                     # shine.config.toml. `pub mod` in lib.rs, same
 │       │                     # lib-testability reasoning as shim.rs.
-│       ├── shim.rs           # Top-level install/reinstall/uninstall <category>:
-│       │                     # infers shell vs app preset, prompts on conflict.
+│       ├── shim.rs           # Top-level install/uninstall canonical TARGET routing;
+│       │                     # unique bare categories are shorthand, ambiguity is an error.
 │       │                     # `pub mod` in lib.rs (not bin-private), so its unit
 │       │                     # tests run under `cargo test --lib` too.
 │       ├── home.rs           # effective_home_dir (sudo-aware), tilde/full path expansion
-│       ├── presets_commands.rs # export/link/unlink, overlay link/unlink/show.
+│       ├── preset_commands.rs # preset export/copy/link/unlink/pull, overlay link/unlink/info.
 │       │                     # `pub mod` in lib.rs, same lib-testability reasoning as shim.rs.
 │       ├── self_install.rs   # update/self-upgrade/upgrade-installed-configs,
 │       │                     # atomic self-install binary copy. `pub mod` in lib.rs,
@@ -126,7 +126,8 @@ shine/
 │       │   │                 # crate since completion.rs needs them)
 │       │   ├── app.rs        # AppCommands enum
 │       │   ├── env.rs        # EnvCommands enum
-│       │   ├── preset.rs     # ExportCommand, LinkCommand structs
+│       │   ├── preset.rs     # PresetCommands + export/copy/link/overlay arg types
+│       │   ├── state.rs      # StateCommands (`state migrate`)
 │       │   ├── self_install.rs # SelfCommands enum (install, upgrade)
 │       │   ├── shell.rs      # ShellCommands enum
 │       │   └── sys.rs        # SysCommands enum
@@ -148,7 +149,7 @@ shine/
 │       │   ├── refresh.rs    # `shine app refresh`: explicit category/file generator
 │       │   │                 # refresh with manifest ownership + user-modification guard
 │       │   ├── build.rs      # handle_build/handle_unbuild: run an app preset's [artifact].script
-│       │   │                 # (`shine app build`) / [artifact].teardown (`shine app unbuild`),
+│       │   │                 # (`shine app artifact apply`) / [artifact].teardown (`shine app artifact remove`),
 │       │   │                 # never run implicitly by install/upgrade. run_teardown_for_uninstall
 │       │   │                 # runs teardown best-effort on uninstall — see ADR 0009 + 0012
 │       │   ├── metadata.rs   # shine.toml manifest parsing (AppCategory, AppFile, AppArtifact)
@@ -163,12 +164,12 @@ shine/
 │       │   └── transforms/   # File content transforms: jsonc-to-json, template
 │       ├── env/
 │       │   ├── mod.rs        # EnvConfig: [env] table in config.toml, @@VAR@@ substitution
-│       │   ├── commands.rs   # `shine env show/set/delete/get/decrypt/export/encrypt` handlers
-│       │   ├── catalog.rs    # Known env-var metadata (description, sensitive) for `env show`
-│       │   ├── identity.rs   # `shine env identity init/show`: age identity generation
+│       │   ├── commands.rs   # env list/set/delete/get + `env secret` handlers
+│       │   ├── catalog.rs    # Known env-var metadata (description, sensitive) for `env list`
+│       │   ├── identity.rs   # `shine env secret identity init/list`: age identity generation
 │       │   │                 # (age-keygen / age-plugin-se --touch-id) and recipient inspection
 │       │   ├── upgrade.rs    # Re-apply env template transforms to installed presets
-│       │   └── workspace.rs  # `shine env seal/run`: workspace env files, `--with` injection
+│       │   └── workspace.rs  # `env secret seal` / `env run`: workspace env files, `--with` injection
 │       ├── git_pull.rs       # Safe FF-only pulls for Git-managed preset sources
 │       ├── shells/
 │       │   ├── mod.rs        # Module root: ShellType, SENTINEL_*, get_shell/get_shell_config_path,
@@ -217,7 +218,7 @@ shine/
 │       ├── bin_links.rs      # ~/.shine/bin/ command management: LinkRuntime (Native symlink/shim
 │       │                     # vs Bun launcher), marker-based launcher ownership + current-ness
 │       ├── status.rs         # Shared install-status row builders used by `list`/`info`
-│       ├── clear.rs          # Clear stale runtime state after schema changes
+│       ├── state.rs          # `shine state migrate`: versioned runtime-state cleanup
 │       ├── colors.rs         # Terminal color helpers
 │       ├── serve.rs          # Local HTTP server for shine-managed resources under ~/.shine/http/
 │       ├── list.rs           # Top-level `shine list` and status views
@@ -233,11 +234,11 @@ shine/
 │       │   ├── gpg.rs        # GPG-backed encrypt/decrypt, untagged base64 ciphertext
 │       │   └── age.rs        # age-backed encrypt/decrypt, multi-recipient + Secure Enclave
 │       │                     # (age-plugin-se) identity support, `age:`-tagged ciphertext
-│       ├── show/
-│       │   ├── mod.rs        # `shine info <TARGET>`: handle_show orchestration entry point
-│       │   ├── collect.rs    # Gathers installed AppShowFile/ShellShowFile data from manifests
-│       │   ├── resolve.rs    # Resolves a TARGET string to a ShowRef via canonical/alias matching
-│       │   └── render.rs     # println!/diff formatting for app and shell show output
+│       ├── info/
+│       │   ├── mod.rs        # `shine info <TARGET>` orchestration and update diffs
+│       │   ├── collect.rs    # Gathers installed AppInfoFile/ShellInfoFile data from manifests
+│       │   ├── resolve.rs    # Resolves a TARGET string to an InfoRef via canonical/alias matching
+│       │   └── render.rs     # println!/diff formatting for app and shell info output
 │       ├── ssh/
 │       │   ├── mod.rs        # `shine ssh`: wraps system ssh, arg splitting, session
 │       │   │                 # bootstrap, wrapped remote command (env vars + EXIT trap)
@@ -251,7 +252,7 @@ shine/
 │       │   └── remote_client.rs # `shine local download/upload` handlers (run on remote host)
 │       ├── task/
 │       │   ├── mod.rs        # `shine task` save/run/list/info/delete handlers,
-│       │   │                 # direct (no-shell) argv exec + exit-code passthrough,
+│       │   │                 # optional fixed cwd, direct (no-shell) argv exec + exit-code passthrough,
 │       │   │                 # shell-quoted command rendering, task-name validation
 │       │   └── manifest.rs   # TaskManifest: <shine_dir>/tasks.toml load/save/upsert
 │       ├── theme/
@@ -279,7 +280,7 @@ shine/
 ├── utils/        # Library crate: shared helpers with no cli-crate dependencies
 │   └── src/
 │       ├── migration.rs      # TOML comment-preserving sync (utils::sync_table)
-│       └── init_template.rs  # write_shine_toml_template (shared by `app init`/`shell init`)
+│       └── init_template.rs  # write_shine_toml_template (shared by `preset new app|shell`)
 └── presets/      # Embedded assets (compiled into binary via rust-embed)
     ├── shell/
     │   ├── agent/   cc.ts, cc.test.ts, shine.toml  (cross-platform Bun `ccenv`; launches Claude with a selected provider)
@@ -287,14 +288,14 @@ shine/
     │   └── utils/   copyfile.sh, shine.toml
     ├── app/
     │   ├── archey4/    config.json, shine.toml
-    │   ├── clash-verge/ merge.yaml (inert commented composite EXAMPLE — real overlay copy is hardcoded, no templating), build.ts + build.test.ts + unbuild.ts (bun), shine.toml  (dest = ~/.shine/clash-verge; plain Copy. `shine app build clash-verge` reads profiles.yaml to resolve the current subscription's merge/rules/proxies/groups bindings; renders rule-providers to Merge and proxies/proxy-groups/prepend-rules into the three CVR 2.x `{ prepend, append, delete }` editor files; never falls back to global files or mutates profiles.yaml/bindings/cache. A changed write asks the user to reselect the profile; a later build refreshes providers through CLASH_CONTROLLER_URL/TOKEN. See docs/clash-verge-local-subscription-prd.md)
+    │   ├── clash-verge/ merge.yaml (inert commented composite EXAMPLE with file/loopback/HTTPS rule-provider alternatives — real overlay copy is hardcoded, no templating), build.ts + build.test.ts + unbuild.ts (bun), shine.toml  (dest = ~/.shine/clash-verge; plain Copy. `shine app artifact apply clash-verge` reads profiles.yaml to resolve the current subscription's merge/rules/proxies/groups bindings; renders rule-providers to Merge and proxies/proxy-groups/prepend-rules into the three CVR 2.x `{ prepend, append, delete }` editor files; never falls back to global files or mutates profiles.yaml/bindings/cache. A changed write asks the user to reselect the profile; a later build refreshes providers through CLASH_CONTROLLER_URL/TOKEN. See docs/clash-verge-local-subscription-prd.md)
     │   ├── docker-desktop/ settings-store.jsonc, shine.toml
     │   ├── docker-engine/  daemon.jsonc, shine.toml
     │   ├── fastfetch/  config.jsonc, shine.toml
     │   ├── ghostty/    config.ghostty, shine.toml
     │   ├── git/        gitconfig  (shine-dest: ~/.gitconfig; no shine.toml, uses annotation instead)
     │   ├── JetBrains/  shine.toml
-    │   ├── surge/      local-proxies.conf, local-proxy-groups.conf, local-rules.conf, subscription-proxies.conf + generate-subscription.ts/tests (Bun Base64 SS/VMess generator; VLESS skipped), build.ts + unbuild.ts + profile-artifact.ts/tests (Bun; atomic profile section-include patch/teardown), shine.toml  (dest = Surge Profiles dir; Subscription group loads generated policies through policy-path)
+    │   ├── surge/      local-proxies.conf, local-proxy-groups.conf, local-rules.conf, rules/*.list examples, subscription-proxies.conf + generate-subscription.ts/tests (Bun Base64 SS/VMess generator; VLESS skipped), build.ts + unbuild.ts + profile-artifact.ts/tests (Bun; atomic profile section-include patch/teardown), shine.toml  (dest = Surge Profiles dir; Subscription group loads generated policies through policy-path)
     │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
@@ -309,21 +310,22 @@ shine/
 
 | Top-level command | Handler module |
 |---|---|
-| `shell list/install/uninstall` | `cli/src/shells/` |
+| `shell list/info/install/uninstall` | `cli/src/shells/` |
 | `app list/install/uninstall` | `cli/src/apps/` |
-| `app build <app-id>` / `app unbuild <app-id>` | `cli/src/apps/build.rs` |
+| `install/uninstall <TARGET>` | `cli/src/shim.rs` → `apps/` or `shells/` |
+| `list [--available [KIND]]` | `cli/src/list.rs` or scoped list handlers |
+| `app artifact apply/remove <app-id>` | `cli/src/apps/build.rs` |
 | `app refresh <app-id> [file]` | `cli/src/apps/refresh.rs` |
-| `sys list/init` | `cli/src/sys/` |
-| `theme sync` | `cli/src/theme/` (bypasses `Config::load_or_init()`, like `init`/`clear`) |
-| `env show/set/get/decrypt/encrypt/identity` | `cli/src/env/` |
-| `list` | `cli/src/list.rs` |
-| `info <TARGET>` | `cli/src/show/` |
-| `export` / `link` / `unlink` / `overlay` | `cli/src/presets_commands.rs` |
-| `pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
+| `sys list/bootstrap` | `cli/src/sys/` |
+| `theme sync` | `cli/src/theme/` (bypasses `Config::load_or_init()`, like `init`/`state migrate`) |
+| `env list/set/get/delete/run` / `env secret ...` | `cli/src/env/` |
+| `info <TARGET>` | `cli/src/info/` (installed or available app/shell; `sys/` for explicit system items) |
+| `preset export/copy/link/unlink/overlay` | `cli/src/preset_commands.rs` |
+| `preset pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
 | `init` | `cli/src/init.rs` |
 | `self install/upgrade` | `cli/src/self_install.rs` + `update_check/` |
-| `update` / `upgrade` | `cli/src/self_install.rs` + `update_check/` |
-| `clear` | `cli/src/clear.rs` |
+| `update [TARGET]` / `upgrade [TARGET]` | `cli/src/self_install.rs` + filtered app/shell/sys upgrade handlers + `update_check/` |
+| `state migrate` | `cli/src/state.rs` |
 | `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
 | `ssh [--with ...] [--with-secret ...] [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
@@ -347,13 +349,13 @@ shine/
 
 `shine env set KEY VALUE` writes to the `[env]` table in `config.toml`. App (and shell) preset files that declare `transforms = ["template"]` in their `shine.toml` have `@@KEY@@` placeholders replaced at install/upgrade time. Run `shine upgrade` after changing env vars to re-apply to installed presets.
 
-`shine env encrypt`/`shine env decrypt` store secrets as base64 ciphertext in the `[env]` table,
+`shine env secret encrypt`/`shine env secret decrypt` store secrets as base64 ciphertext in the `[env]` table,
 routed through `secret::encrypt_secret`/`decrypt_secret` (`secret/mod.rs`) to either the GPG
 (`secret/gpg.rs`, untagged ciphertext) or age (`secret/age.rs`, `age:`-tagged ciphertext, with
 optional Apple Touch ID via `age-plugin-se`) backend. Decryption always routes purely on the
 ciphertext's tag, never on config — see
-[ADR 0008](docs/kb/decisions/0008-age-secret-backend-tagged-ciphertext.md). `shine env identity
-init/show` (`env/identity.rs`) manages the age identity file consulted via
+[ADR 0008](docs/kb/decisions/0008-age-secret-backend-tagged-ciphertext.md). `shine env secret identity
+init/list` (`env/identity.rs`) manages the age identity file consulted via
 `Config::age_identities()`.
 
 ### File transforms (`install_core/transforms/`)
@@ -488,7 +490,7 @@ side only — see step 8) rides on top of the macOS/Linux implementation.
     for any still-running transfer to notice the now-closed tunnel and
     finish its own cleanup rather than being abandoned mid-copy.
 
-### Sys preset flow (`shine sys init`)
+### Sys preset flow (`shine sys bootstrap`)
 
 1. `sys::detect_os_id()` — reads `std::env::consts::OS`; on Linux reads `ID=` from `/etc/os-release`.
 2. `presets::extract_prefix("sys/<os_id>", presets_dir)` — unpacks `init.sh` + `shine.toml` for the detected OS.
@@ -496,12 +498,12 @@ side only — see step 8) rides on top of the macOS/Linux implementation.
 4. In interactive mode: `dialoguer::MultiSelect` lets the user pick init items. Non-interactive mode requires `default_profile`.
 5. Calls `bash <presets_dir>/sys/<os>/init.sh <item_id>` once per selected item, then calls `bash <presets_dir>/sys/<os>/init.sh __shine_finalize` so shared shell/profile integration runs once.
 
-`shine sys init --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing. `--proxy` injects HTTP proxy env vars (`http_proxy`/`https_proxy`/`all_proxy` + uppercase = `http://$PROXY_HOST:$HTTP_PROXY_PORT`, `no_proxy` = `PROXY_NO_PROXY`, plus a shine-owned `SHINE_SYS_PROXY` = the same URL) into every init-script subprocess, built from the `[env]` preset proxy keys via `sys::execution::proxy_env_vars` — reusing the same values as the `proxy` shell preset so downloads route through the local proxy on locked-down networks. macOS/Ubuntu `curl`/`apt`/`brew`/`rustup` read the standard env vars directly. **winget ignores `http_proxy`/`https_proxy` env vars entirely**, so `presets/sys/windows/init.ps1` instead reads `SHINE_SYS_PROXY` and passes `winget install --proxy <url>`; that winget CLI option is disabled by default, so the script best-effort runs `winget settings --enable ProxyCommandLineOptions` (works only when elevated) and, on a nonzero winget exit, prints the one-time admin remediation. SOCKS5 is intentionally not injected (winget can't use it).
+`shine sys bootstrap --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing. `--proxy` injects HTTP proxy env vars (`http_proxy`/`https_proxy`/`all_proxy` + uppercase = `http://$PROXY_HOST:$HTTP_PROXY_PORT`, `no_proxy` = `PROXY_NO_PROXY`, plus a shine-owned `SHINE_SYS_PROXY` = the same URL) into every init-script subprocess, built from the `[env]` preset proxy keys via `sys::execution::proxy_env_vars` — reusing the same values as the `proxy` shell preset so downloads route through the local proxy on locked-down networks. macOS/Ubuntu `curl`/`apt`/`brew`/`rustup` read the standard env vars directly. **winget ignores `http_proxy`/`https_proxy` env vars entirely**, so `presets/sys/windows/init.ps1` instead reads `SHINE_SYS_PROXY` and passes `winget install --proxy <url>`; that winget CLI option is disabled by default, so the script best-effort runs `winget settings --enable ProxyCommandLineOptions` (works only when elevated) and, on a nonzero winget exit, prints the one-time admin remediation. SOCKS5 is intentionally not injected (winget can't use it).
 
 Ubuntu ships three profiles (`presets/sys/ubuntu/shine.toml`): `recommended` (default,
 full interactive dev setup), `all` (recommended + zerotier/pnpm/mise/homebrew), and
 `minimal` — a lean headless CLI core (`neovim`, `fzf`, `bat`, `eza`, `zoxide`) intended for
-production-server bootstrapping via `shine sys init --preset minimal`. The `minimal` profile
+production-server bootstrapping via `shine sys bootstrap --preset minimal`. The `minimal` profile
 reuses existing items only, so adding it needed no `init.sh` change.
 
 ### Personal tasks (`shine task` / `shine run`)
@@ -547,11 +549,11 @@ An overlay merges over the active presets source by matching relative paths (`Co
 configure it, both resolved by `Config::active_presets_overlay_dir()`:
 
 - **Manual** — `presets_overlay_dir` in `config.toml` points at a user-owned directory
-  (`shine overlay link <path>`). Fast-forward-pulled by `shine pull` like any Git preset source.
+  (`shine preset overlay link <path>`). Fast-forward-pulled by `shine preset pull` like any Git preset source.
 - **shine-managed Git** — `presets_overlay_git` (+ optional `presets_overlay_git_branch`) records a
-  Git URL (`shine overlay link --git <url>`). shine owns the checkout at `<shine_dir>/overlay`
+  Git URL (`shine preset overlay link --git <url>`). shine owns the checkout at `<shine_dir>/overlay`
   (`managed_overlay_dir`, resolved by `Config::resolve_managed_overlay_dir` from `shine_dir`, so it
-  follows `SHINE_CONFIG_DIR`). It is cloned `--depth 1` on first `shine pull` and **force-mirrored**
+  follows `SHINE_CONFIG_DIR`). It is cloned `--depth 1` on first `shine preset pull` and **force-mirrored**
   (`git fetch --depth 1` + `reset --hard`) to the remote tip afterward — a read-only mirror, never
   fast-forward-pulled. See `git_pull::sync_managed_overlay`. A managed overlay is only "active" once
   its checkout exists on disk; setting one via the CLI clears any manual `presets_overlay_dir`.
@@ -660,11 +662,11 @@ upgrade`) are independent and may combine. Full design:
 
 Prefer `shine.toml` metadata over legacy `shine-dest:` annotations for new categories. Place `shine.toml` in `presets/app/<category>/` with at minimum `dest = "~/<path>"`. Add `transforms = ["jsonc-to-json"]` for JSONC files or `transforms = ["template"]` for files with `@@VAR_NAME@@` env placeholders.
 
-App categories may declare `post_upgrade` and/or `post_install` hooks (each a `{ command = "...", args = ["..."] }` table or an array of them) to run a direct argv command after a category actually changes. `post_upgrade` fires when `shine upgrade` updates/installs ≥1 file in the category; `post_install` fires when `shine app install`/`reinstall` writes ≥1 file (a plain re-install with no change runs nothing, mirroring `post_upgrade`). Both share one runner (`apps/hooks.rs::run_app_hooks`): external presets require `allow_app_hooks = true` before hooks execute, and each hook may set `show_output = true` to print its stdout on success (defaults to `false`/silent). Hooks inherit only the parent env — no `SHINE_APP_*`/`[env]` injection (that is the artifact contract below). Declare `post_install` when the very first install must run a setup/reload that `post_upgrade` would otherwise only do on a later upgrade.
+App categories may declare `post_upgrade` and/or `post_install` hooks (each a `{ command = "...", args = ["..."] }` table or an array of them) to run a direct argv command after a category actually changes. `post_upgrade` fires when `shine upgrade` updates/installs ≥1 file in the category; `post_install` fires when `shine app install` writes ≥1 file (including `--replace-managed`; a plain re-install with no change runs nothing, mirroring `post_upgrade`). Both share one runner (`apps/hooks.rs::run_app_hooks`): external presets require `allow_app_hooks = true` before hooks execute, and each hook may set `show_output = true` to print its stdout on success (defaults to `false`/silent). Hooks inherit only the parent env — no `SHINE_APP_*`/`[env]` injection (that is the artifact contract below). Declare `post_install` when the very first install must run a setup/reload that `post_upgrade` would otherwise only do on a later upgrade.
 
-An app `[[files]]` entry may declare `generator = { script = "...", runtime = "native|bun", env = ["KEY", "SOURCE=TARGET"], when_env = "KEY", auto = false }`. The static `source` is mandatory and is used as the fallback plus stable manifest identity; when `when_env` exists, the generator's UTF-8 stdout becomes the effective source before transforms. `auto` defaults to true, preserving install/update/upgrade materialization. With `auto = false`, implicit status paths stay local-only and upgrade preserves the installed snapshot; install/reinstall still generate, while `shine app refresh <category> [source] [--force]` explicitly refreshes manifest-owned generated files. Only declared config env values are injected (no `_SECRET` decryption); external preset/overlay generators require `allow_app_hooks = true`. Keep stdout deterministic and put only credential-free summaries on stderr. A failed refresh keeps an existing managed file. See [ADR 0016](docs/kb/decisions/0016-generated-app-files-and-surge-subscriptions.md) and [ADR 0018](docs/kb/decisions/0018-manual-app-generator-refresh.md).
+An app `[[files]]` entry may declare `generator = { script = "...", runtime = "native|bun", env = ["KEY", "SOURCE=TARGET"], when_env = "KEY", auto = false }`. The static `source` is mandatory and is used as the fallback plus stable manifest identity; when `when_env` exists, the generator's UTF-8 stdout becomes the effective source before transforms. `auto` defaults to true, preserving install/update/upgrade materialization. With `auto = false`, implicit status paths stay local-only and upgrade preserves the installed snapshot; install (including `--replace-managed`) still generates, while `shine app refresh <category> [source] [--force]` explicitly refreshes manifest-owned generated files. Only declared config env values are injected (no `_SECRET` decryption); external preset/overlay generators require `allow_app_hooks = true`. Keep stdout deterministic and put only credential-free summaries on stderr. A failed refresh keeps an existing managed file. See [ADR 0016](docs/kb/decisions/0016-generated-app-files-and-surge-subscriptions.md) and [ADR 0018](docs/kb/decisions/0018-manual-app-generator-refresh.md).
 
-App categories may also declare `[artifact]\nscript = "build.sh"` (optionally `teardown = "unbuild.sh"`) to expose `shine app build <app-id>` / `shine app unbuild <app-id>` entry points. An artifact may set `runtime = "bun"` (default is `native`) so its script runs via `bun <script>` — cross-platform (macOS/Windows/Linux), like the bun shell presets, and requiring `bun` on PATH; `native` execs the script file directly (relying on its shebang, so Unix-only). A `bun` artifact's `script`/`teardown` must be a `.ts`/`.js`/`.mts`/`.mjs` file. The built-in `clash-verge` and `surge` presets use `runtime = "bun"`. Unlike the hooks above, these never run implicitly from `install`/`upgrade` — `build` runs only on explicit `shine app build`, and `teardown` runs on explicit `shine app unbuild` **and** best-effort during `shine app uninstall` (the reverse of `build`). Both scripts receive the fixed `SHINE_APP_*` env contract **plus the active `[env]` table passed as stored** (no decryption — `_SECRET` keys arrive as ciphertext, same as the `template` transform), so scripts can read user-configured values like `SURGE_PROFILE` without triggering a secret-decryption prompt. The explicit `build`/`unbuild` commands are not gated by `allow_app_hooks` and propagate a nonzero exit as a real error; the implicit teardown during `uninstall` **is** gated (external presets) and is non-fatal (a broken teardown never blocks file removal). An overlay artifact still takes precedence when the exact script exists. For the built-in `surge` preset, install copies the local files plus the `subscription-proxies.conf` fallback into the Surge Profiles dir; the trusted Bun file generator may replace that fallback from `SURGE_SUBSCRIPTION_URL` during install/reinstall or explicit `app refresh` only. Built-in `build.ts` atomically patches `[Proxy]`/`[Proxy Group]`/`[Rule]` includes, while `local-proxy-groups.conf` loads generated policies via `policy-path`; `unbuild.ts` reverses the section includes. See [ADR 0009](docs/kb/decisions/0009-app-artifact-build-explicit-command.md), [ADR 0012](docs/kb/decisions/0012-app-lifecycle-post-install-and-teardown.md), [ADR 0016](docs/kb/decisions/0016-generated-app-files-and-surge-subscriptions.md), [ADR 0017](docs/kb/decisions/0017-built-in-surge-profile-artifact.md), [ADR 0018](docs/kb/decisions/0018-manual-app-generator-refresh.md), and [`architecture/data-flows.md`](docs/kb/architecture/data-flows.md).
+App categories may also declare `[artifact]\nscript = "build.sh"` (optionally `teardown = "unbuild.sh"`) to expose `shine app artifact apply <app-id>` / `shine app artifact remove <app-id>` entry points. An artifact may set `runtime = "bun"` (default is `native`) so its script runs via `bun <script>` — cross-platform (macOS/Windows/Linux), like the bun shell presets, and requiring `bun` on PATH; `native` execs the script file directly (relying on its shebang, so Unix-only). A `bun` artifact's `script`/`teardown` must be a `.ts`/`.js`/`.mts`/`.mjs` file. The built-in `clash-verge` and `surge` presets use `runtime = "bun"`. Unlike the hooks above, these never run implicitly from `install`/`upgrade` — `script` runs only on explicit `shine app artifact apply`, and `teardown` runs on explicit `shine app artifact remove` **and** best-effort during `shine app uninstall`. Both scripts receive the fixed `SHINE_APP_*` env contract **plus the active `[env]` table passed as stored** (no decryption — `_SECRET` keys arrive as ciphertext, same as the `template` transform), so scripts can read user-configured values like `SURGE_PROFILE` without triggering a secret-decryption prompt. The explicit artifact commands are not gated by `allow_app_hooks` and propagate a nonzero exit as a real error; the implicit teardown during `uninstall` **is** gated (external presets) and is non-fatal (a broken teardown never blocks file removal). An overlay artifact still takes precedence when the exact script exists. For the built-in `surge` preset, install copies the local files plus the `subscription-proxies.conf` fallback into the Surge Profiles dir; the trusted Bun file generator may replace that fallback from `SURGE_SUBSCRIPTION_URL` during install (including `--replace-managed`) or explicit `app refresh` only. Built-in `build.ts` atomically patches `[Proxy]`/`[Proxy Group]`/`[Rule]` includes, while `local-proxy-groups.conf` loads generated policies via `policy-path`; `unbuild.ts` reverses the section includes. See [ADR 0009](docs/kb/decisions/0009-app-artifact-build-explicit-command.md), [ADR 0012](docs/kb/decisions/0012-app-lifecycle-post-install-and-teardown.md), [ADR 0016](docs/kb/decisions/0016-generated-app-files-and-surge-subscriptions.md), [ADR 0017](docs/kb/decisions/0017-built-in-surge-profile-artifact.md), [ADR 0018](docs/kb/decisions/0018-manual-app-generator-refresh.md), and [`architecture/data-flows.md`](docs/kb/architecture/data-flows.md).
 
 ### Sys preset (OS init)
 
@@ -683,4 +685,4 @@ App categories may also declare `[artifact]\nscript = "build.sh"` (optionally `t
    items = ["neovim"]
    ```
 3. Emit compact status events from scripts with `printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "detail"`. Supported states are `installed`, `already-installed`, `skipped`, `updated`, `needs-action`, `completed`, and `failed`; other output is rendered as indented logs.
-4. `cargo build` re-embeds. Verify with `shine sys list` and `shine sys init --dry-run`.
+4. `cargo build` re-embeds. Verify with `shine sys list` and `shine sys bootstrap --dry-run`.
