@@ -23,7 +23,7 @@ overlay 的远程共享方案。
   `rule-providers` + `prepend-rules`）。
 - **规则改动零 CVR 交互**：规则真源与 Surge 共用同一份 `rules/`，改规则后只需
   `shine task run upload_surge`，mihomo 依 `rule-providers` 的 `interval` 自动刷新；
-  `shine app build clash-verge` 可经 mihomo 外部控制器 API 立即应用（`surge-cli reload` 的等价物）。
+  `shine app artifact apply clash-verge` 可经 mihomo 外部控制器 API 立即应用（`surge-cli reload` 的等价物）。
 - 本地规则明确以 **`prepend-rules`** 置于订阅规则之前，保证本地优先（mihomo 首匹配优先）。
 - 不直接编辑或替换远端订阅 YAML，不保存订阅 URL、节点或订阅凭据。
 - `shine` 管理的文件可由 presets overlay 覆盖，支持个人私有规则仓库随 `shine preset pull` / `shine upgrade` 更新。
@@ -88,12 +88,12 @@ shine env set CLASH_CONTROLLER_TOKEN <CVR 的外部控制器 secret>
 
 安装把 `merge.yaml` 逐字写入 `~/.shine/clash-verge/merge.yaml`（`dest`，纯 Copy）。
 
-**自动跑 build**：`clash-verge` 声明了 `post_install`/`post_upgrade` = `shine app build clash-verge`，
+**自动跑 build**：`clash-verge` 声明了 `post_install`/`post_upgrade` = `shine app artifact apply clash-verge`，
 所以 `shine app install`/`shine upgrade` 在 `merge.yaml` 变化时会**自动**渲染并写当前订阅绑定的
 四个增强文件。首次写入后会提示用户重新选择订阅，且不会对尚未进入运行态的 provider 发起必然 404。
 首装时若绑定不全，会打印无害指引并跳过写入。**注意**：hook 只在本预设文件
 （`merge.yaml`/骨架）变化时触发；高频的**改规则**走 `upload_surge`、不改 `merge.yaml`，故不触发 hook——
-仍靠 provider `interval` 自动刷新或手动 `shine app build clash-verge`。
+仍靠 provider `interval` 自动刷新或手动 `shine app artifact apply clash-verge`。
 
 ### 5.2 在 CVR 中一次性登记订阅增强 editors（无需手动粘贴）
 
@@ -112,7 +112,7 @@ Edit Groups**。不要使用底部的 Global Extend Config：其数组字段是�
 
 ```bash
 shine task run upload_surge     # 推送规则到 LAN 服务器
-shine app build clash-verge     # 经 mihomo API 立即刷新 provider（可选；否则按 interval 自动生效）
+shine app artifact apply clash-verge     # 经 mihomo API 立即刷新 provider（可选；否则按 interval 自动生效）
 ```
 
 规则需引用 `merge.yaml` 中定义的策略组名称（`LAN Network` / `LAN PROXY` / `Other Direct`）；
@@ -155,7 +155,7 @@ provider 写法；真实配置放在 presets overlay 的**同名文件** `app/cl
 **不含 `rules/`**：实际 overlay 的规则真源与 Surge 共用，由 `upload_surge` 推送；
 `merge.yaml` 的 `rule-providers` 引用同一 LAN 服务器。如果选择内置的 `type: file` 示例，用户必须
 自行将 `.list` 文件放入 mihomo `HomeDir`；出于 mihomo 的路径安全限制，Shine 不会自动写入 CVR 私有目录或
-配置 `SAFE_PATHS`。base build.ts 无私密、通用可用；overlay 无需自带 build.ts（`shine app build`
+配置 `SAFE_PATHS`。base build.ts 无私密、通用可用；overlay 无需自带 build.ts（`shine app artifact apply`
 在 overlay 缺脚本时回退到 base 版）。
 
 `shine.toml`：`dest = "~/.shine/clash-verge"`（shine 自管暂存区，不碰 CVR 私有存储）；`[artifact]`
@@ -189,7 +189,7 @@ merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 用以下键（�
 
 ### 6.3 `build.ts` 行为
 
-`shine app build clash-verge` 依次做两件事：
+`shine app artifact apply clash-verge` 依次做两件事：
 
 1. **写四个订阅增强文件**：解析 overlay 胜出的组合源，再只读 `profiles.yaml` 的当前订阅
    merge/rules/proxies/groups 绑定。普通映射键（如 `rule-providers`）写 merge；proxies、proxy-groups、
@@ -197,7 +197,7 @@ merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 用以下键（�
    跳过，绝不回退全局文件。内容变化时提示重新选择订阅并结束。
 2. **刷新 rule-providers**：对每个 provider 键（`lan` / `lan-socks` / `other-direct`）向
    `CLASH_CONTROLLER_URL` 发 `PUT /providers/rules/<name>`，令 mihomo 立即重拉最新列表。`CLASH_CONTROLLER_URL`
-   未设则跳过刷新（规则仍按 interval 自动更新）；已设但不可达则以非零退出，由 `shine app build` 作为真错误上抛。
+   未设则跳过刷新（规则仍按 interval 自动更新）；已设但不可达则以非零退出，由 `shine app artifact apply` 作为真错误上抛。
    只有第 1 步判断内容已是 current 时才刷新，避免 CVR 尚未重新合成导致 provider 404。
 
 ## 7. 配置语义与约束
@@ -245,7 +245,7 @@ merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 用以下键（�
    不被删除或改写。
 4. `shine app uninstall clash-verge` 只处理 manifest 记录的文件；不删除 CVR 的 Profile、订阅或
    节点，并经 `unbuild.ts` 给出移除增强绑定的提示。
-5. `shine app build clash-verge` 对缺少订阅级绑定给出非致命指引；内容首次写入后等待 CVR 应用；
+5. `shine app artifact apply clash-verge` 对缺少订阅级绑定给出非致命指引；内容首次写入后等待 CVR 应用；
    内容已应用而控制器不可达时以清晰错误非零退出。
 
 > CVR 侧行为（规则刷新后仍前插于订阅规则、CVR 重启后仍生效）依赖 CVR 的合成实现，`shine` 无法
@@ -255,6 +255,6 @@ merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 用以下键（�
 
 - 用户能在不重新导入订阅的情况下，为一个或多个 CVR 订阅添加并长期保留本地规则。
 - **改规则零 CVR 交互**：日常规则变更只需 `shine task run upload_surge`（+ 可选
-  `shine app build clash-verge`），无需在 CVR 内操作。
+  `shine app artifact apply clash-verge`），无需在 CVR 内操作。
 - 订阅刷新后，本地规则丢失的反馈为零。
 - 不耦合 CVR 私有存储格式，也不新增后台服务、本地监听端口或自动执行的外部 hook。

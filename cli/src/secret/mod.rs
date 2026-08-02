@@ -1,4 +1,4 @@
-//! Secret storage backends for `shine env encrypt`/`decrypt`.
+//! Secret storage backends for `shine env secret encrypt`/`decrypt`.
 //!
 //! Two backends exist: GPG (the original, still the default) and age, added
 //! for multi-recipient encryption with Apple Touch ID support via

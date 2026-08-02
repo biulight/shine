@@ -1,6 +1,12 @@
 use std::path::PathBuf;
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum PresetTemplateKind {
+    App,
+    Shell,
+}
 
 #[derive(Args, Debug)]
 pub struct ExportCommand {
@@ -83,6 +89,14 @@ pub enum OverlayCommands {
 
 #[derive(Subcommand, Debug)]
 pub enum PresetCommands {
+    /// Create a shine.toml template for a new app or shell preset
+    New {
+        #[arg(value_enum)]
+        kind: PresetTemplateKind,
+        /// Overwrite shine.toml if it already exists
+        #[arg(long, short = 'f')]
+        force: bool,
+    },
     /// Copy built-in presets to a directory for local customization
     Export(ExportCommand),
     /// Copy one built-in preset into the current directory

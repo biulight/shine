@@ -1,4 +1,4 @@
-# Managed by `shine sys init` for macOS. Existing user config is left untouched.
+# Managed by `shine sys bootstrap` for macOS. Existing user config is left untouched.
 
 # nvm lazy load
 nvm() {

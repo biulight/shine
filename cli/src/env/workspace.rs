@@ -507,7 +507,7 @@ async fn load_sealed_source(path: &Path, config: &Config) -> Result<BTreeMap<Str
     for (key, state) in &source.secret {
         if !matches!(state, SecretState::Sealed(true)) {
             bail!(
-                "{key} in {} is not sealed; run `shine env seal`",
+                "{key} in {} is not sealed; run `shine env secret seal`",
                 path.display()
             );
         }

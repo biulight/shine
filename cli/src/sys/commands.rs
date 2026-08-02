@@ -78,7 +78,7 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
         "{}",
         colors::dim("Use `shine sys info <ITEM>` for details.")
     );
-    println!("{}", colors::dim("Init items: `shine sys init`."));
+    println!("{}", colors::dim("Bootstrap items: `shine sys bootstrap`."));
     println!(
         "{}",
         colors::dim("Managed items: `shine sys apply <ITEM>`.")
@@ -177,7 +177,10 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
     }
     println!();
     match item.mode {
-        SysItemMode::Init => println!("  Next: run `shine sys init` and select `{}`.", item.id),
+        SysItemMode::Init => println!(
+            "  Next: run `shine sys bootstrap` and select `{}`.",
+            item.id
+        ),
         SysItemMode::Managed if entry.is_some() => {
             println!("  Apply:     `shine sys apply {}`", item.id);
             println!("  Uninstall: `shine sys uninstall {}`", item.id);
@@ -200,7 +203,7 @@ pub async fn handle_status(config: &Config) -> Result<()> {
         println!(
             "{}",
             colors::dim(&format!(
-                "No system init items recorded for {os_id}. Run `shine sys init` to initialize the current system."
+                "No bootstrap items recorded for {os_id}. Run `shine sys bootstrap` to initialize the current system."
             ))
         );
         return Ok(());
@@ -263,7 +266,7 @@ pub async fn handle_update(
             .into_iter()
             .find(|entry| entry.item_id == item_id)
             .with_context(|| {
-                format!("`{item_id}` was not recorded by `shine sys init` for {os_id}")
+                format!("`{item_id}` was not recorded by `shine sys bootstrap` for {os_id}")
             })?;
         vec![entry]
     } else {
@@ -274,7 +277,7 @@ pub async fn handle_update(
         println!(
             "{}",
             colors::dim(&format!(
-                "No bootstrap software recorded for {os_id}. Run `shine sys init` first."
+                "No bootstrap software recorded for {os_id}. Run `shine sys bootstrap` first."
             ))
         );
         return Ok(());
@@ -1172,7 +1175,7 @@ required_env = ["NOT-AN-ENV"]
             fs::read_to_string(profile_dir.join("ubuntu-sys.pre.sh"))
                 .await
                 .unwrap()
-                .contains("Managed by `shine sys init` for Ubuntu")
+                .contains("Managed by `shine sys bootstrap` for Ubuntu")
         );
         assert!(
             fs::read_to_string(profile_dir.join("ubuntu-sys.post.sh"))

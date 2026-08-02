@@ -1,4 +1,4 @@
-//! `shine env identity init/list`: generate and inspect age identities used
+//! `shine env secret identity init/list`: generate and inspect age identities used
 //! to decrypt `age:`-tagged secrets, including Secure Enclave (Touch ID)
 //! identities minted by `age-plugin-se`.
 
@@ -95,7 +95,7 @@ pub async fn handle_identity_init(
             "{}",
             colors::dim(
                 "Set secret_backend = \"age\" in config.toml to make age the default for \
-                 `shine env encrypt`/`seal`."
+                 `shine env secret encrypt`/`shine env secret seal`."
             )
         );
     }
@@ -116,7 +116,7 @@ pub async fn handle_identity_list(config: &Config) -> Result<()> {
     if identities.is_empty() {
         println!(
             "{}",
-            colors::dim("No age identity configured. Run `shine env identity init`.")
+            colors::dim("No age identity configured. Run `shine env secret identity init`.")
         );
         return Ok(());
     }
@@ -130,7 +130,7 @@ pub async fn handle_identity_list(config: &Config) -> Result<()> {
 fn ensure_touch_id_supported(touch_id: bool, os: &str) -> Result<()> {
     if touch_id && os != "macos" {
         bail!(
-            "Secure Enclave identities require macOS; run `shine env identity init` without \
+            "Secure Enclave identities require macOS; run `shine env secret identity init` without \
              --touch-id to generate a plain age identity"
         );
     }

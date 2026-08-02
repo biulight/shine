@@ -102,16 +102,40 @@ pub(crate) async fn handle_upgrade_installed_with_output(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<AppUpgradeReport> {
+    handle_upgrade_installed_target(config, None, prune_stale, verbose, sep).await
+}
+
+pub(crate) async fn handle_upgrade_installed_target(
+    config: &Config,
+    category_filter: Option<&str>,
+    prune_stale: bool,
+    verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<AppUpgradeReport> {
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
     if manifest.entries.is_empty() {
         return Ok(AppUpgradeReport::default());
     }
 
+    let selected_entries = manifest
+        .entries
+        .iter()
+        .filter(|entry| {
+            category_filter.is_none_or(|filter| {
+                app_category_from_source(&entry.source).as_deref() == Some(filter)
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(category) = category_filter
+        && selected_entries.is_empty()
+    {
+        anyhow::bail!("app preset is not installed: {category}");
+    }
+
     let env = EnvConfig::load_or_init(config).await?;
     let env_map = env.as_map();
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let installed_categories: BTreeSet<String> = manifest
-        .entries
+    let installed_categories: BTreeSet<String> = selected_entries
         .iter()
         .filter_map(|entry| app_category_from_source(&entry.source))
         .collect();
@@ -136,7 +160,7 @@ pub(crate) async fn handle_upgrade_installed_with_output(
         }
     }
 
-    let mut section = UpgradeSection::new(sep, verbose, manifest.entries.len());
+    let mut section = UpgradeSection::new(sep, verbose, selected_entries.len());
     if verbose {
         section.begin();
     }
@@ -150,7 +174,7 @@ pub(crate) async fn handle_upgrade_installed_with_output(
     let mut pending_removals: Vec<PathBuf> = Vec::new();
     let mut updated_categories = BTreeSet::new();
 
-    for entry in &manifest.entries {
+    for entry in selected_entries {
         let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
             section.begin();
             eprintln!(

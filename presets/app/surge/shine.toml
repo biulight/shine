@@ -10,9 +10,9 @@ post_install = [
   { command = "/Applications/Surge.app/Contents/Applications/surge-cli", args = ["reload"] },
 ]
 
-# `shine app build surge` runs the artifact script to patch the active profile's
+# `shine app artifact apply surge` runs the artifact script to patch the active profile's
 # per-section `#!include` lines so they also include the local files installed
-# here. `teardown` (via `shine app unbuild surge`, and best-effort on
+# here. `teardown` (via `shine app artifact remove surge`, and best-effort on
 # `shine app uninstall surge`) reverses that patch. The implementation is
 # generic; overlays provide only their local policy files and profile path.
 [artifact]

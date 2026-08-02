@@ -2,11 +2,11 @@
 
 - **Status**: accepted
 - **Evidence**: `cli/src/secret/{mod,age,gpg,exec}.rs`, `cli/src/env/identity.rs`,
-  `shine env encrypt/decrypt/seal/identity`
+  `shine env secret encrypt/decrypt/seal/identity`
 
 ## Context
 
-`shine env encrypt`/`decrypt` only supported GPG (YubiKey worked implicitly through
+`shine env secret encrypt`/`decrypt` only supported GPG (YubiKey worked implicitly through
 `gpg-agent`). Apple Touch ID support was requested, with a hard requirement: ciphertext must be
 committable to a shared repo and decryptable by every teammate, not just the device that sealed
 it. That rules out device-local designs (e.g. a Keychain item reference) and requires
@@ -33,7 +33,7 @@ binary cannot use biometry-gated Keychain APIs without Apple entitlements, so sh
   per-instance trait object cleanly.
 - GPG encryption now also accepts a recipient list (`gpg -r` repeated), matching age's
   multi-recipient shape, so `-r/--recipient` behaves the same way regardless of backend.
-- `shine env identity init [--touch-id]` generates an age identity (`age-keygen` or
+- `shine env secret identity init [--touch-id]` generates an age identity (`age-keygen` or
   `age-plugin-se keygen`) and prints its recipient; the macOS requirement for `--touch-id` is
   checked at **runtime** (`std::env::consts::OS`), not compile time, since plain age identities
   work on every OS and the rest of the CLI is not platform-gated at compile time either.

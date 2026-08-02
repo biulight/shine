@@ -1,6 +1,6 @@
 // Artifact teardown script for the `clash-verge` app preset (runtime = "bun").
 //
-// `shine app unbuild clash-verge` (and, best-effort, `shine app uninstall
+// `shine app artifact remove clash-verge` (and, best-effort, `shine app uninstall
 // clash-verge`) runs this via `bun`. Unlike the Surge preset — where build.sh
 // patches a plain-text profile that unbuild.sh can un-patch — Clash Verge Rev
 // owns the Merge-profile binding in its private store, and shine never writes it.

@@ -1,4 +1,4 @@
-# Managed by `shine sys init` for Ubuntu. Existing user config is left untouched.
+# Managed by `shine sys bootstrap` for Ubuntu. Existing user config is left untouched.
 
 shine_ubuntu_sys_shell="${SHINE_UBUNTU_SYS_SHELL:-bash}"
 

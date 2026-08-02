@@ -6,7 +6,7 @@ use directories::BaseDirs;
 use tokio::fs;
 use tokio::process::Command;
 
-/// Runs the `[artifact].script` declared by an app preset (`shine app build <app-id>`).
+/// Runs the `[artifact].script` declared by an app preset (`shine app artifact apply <app-id>`).
 ///
 /// Unlike `post_upgrade` hooks (which are a background side effect of `shine upgrade` and
 /// swallow failures so one broken hook doesn't abort the whole upgrade), this is a single
@@ -27,7 +27,7 @@ pub async fn handle_build(config: &Config, app_id: &str) -> Result<()> {
     run_artifact_command(&mut command, app_id).await
 }
 
-/// Runs the `[artifact].teardown` script (`shine app unbuild <app-id>`), the
+/// Runs the `[artifact].teardown` script (`shine app artifact remove <app-id>`), the
 /// symmetric reverse of `build`. Like `build` and unlike the implicit teardown
 /// during `uninstall`, this is an explicit user action: it is not gated by
 /// `allow_app_hooks` and a nonzero exit propagates as a real error.
@@ -68,7 +68,7 @@ pub(crate) async fn run_teardown_for_uninstall(config: &Config, cat: &AppCategor
 
     if config.is_external_presets && !config.allow_app_hooks {
         println!(
-            "  {} {app_id}: artifact teardown skipped (set allow_app_hooks = true to allow external app hooks; manual: shine app unbuild {app_id})",
+            "  {} {app_id}: artifact teardown skipped (set allow_app_hooks = true to allow external app hooks; manual: shine app artifact remove {app_id})",
             colors::symbol("!"),
         );
         return;

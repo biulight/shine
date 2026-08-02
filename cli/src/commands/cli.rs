@@ -11,6 +11,9 @@ use super::{
 #[derive(Parser, Debug)]
 #[command(name = "shine")]
 #[command(version = version::display(), about, long_about = None)]
+#[command(
+    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>, or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, state, self, serve, completions, theme, and local are advanced tools."
+)]
 pub struct Cli {
     #[arg(long, global = true)]
     pub config_dir: Option<String>,
@@ -33,32 +36,52 @@ pub enum Commands {
         #[command(subcommand)]
         command: AppCommands,
     },
-    /// Install a shell or app preset category
+    /// Install or repair one shell or app preset
     Install {
-        /// Preset category to install (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
+        /// Preset target: app/<category>, shell/<category>, or a unique category name
+        #[arg(value_name = "TARGET")]
+        target: String,
+        /// Replace user-modified files that are already managed by shine
+        #[arg(long)]
+        replace_managed: bool,
     },
-    /// Reinstall a shell or app preset category
+    /// Reinstall a shell or app preset category (legacy alias for install --replace-managed)
+    #[command(hide = true)]
     Reinstall {
         /// Preset category to reinstall (e.g. proxy, starship)
         #[arg(value_name = "CATEGORY")]
         category: String,
     },
-    /// Uninstall a shell or app preset category
+    /// Uninstall one shell or app preset
     Uninstall {
-        /// Preset category to uninstall (e.g. proxy, starship)
-        #[arg(value_name = "CATEGORY")]
-        category: String,
+        /// Preset target: app/<category>, shell/<category>, or a unique category name
+        #[arg(value_name = "TARGET")]
+        target: String,
+        /// Remove managed files even when they were modified after installation (app only)
+        #[arg(long)]
+        force: bool,
+        /// Also remove empty managed preset directories
+        #[arg(long)]
+        purge: bool,
+        /// Print what would be removed without changing anything
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Generate or install shell completion scripts
     Completions {
         #[command(subcommand)]
         command: CompletionCommands,
     },
-    /// List installed shell presets, app configs, and managed system configs
-    List,
-    /// Show details for an installed app/shell target or `sys/<ITEM>`
+    /// List installed resources, or browse available resources with --available
+    List {
+        /// List available resources instead of installed resources
+        #[arg(long)]
+        available: bool,
+        /// Limit --available output to app, shell, or sys resources
+        #[arg(value_enum, requires = "available", value_name = "KIND")]
+        kind: Option<ResourceKind>,
+    },
+    /// Show details for an available or installed app/shell target, or `sys/<ITEM>`
     Info {
         /// Installed item to inspect (e.g. git, starship, proxy, setproxy)
         #[arg(value_name = "TARGET")]
@@ -152,6 +175,13 @@ pub enum RemoteShell {
     Windows,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ResourceKind {
+    App,
+    Shell,
+    Sys,
+}
+
 #[derive(Args, Debug)]
 pub struct InitCommand {
     /// Skip the confirmation prompt
@@ -235,6 +265,9 @@ pub struct UpdateCommand {
 
 #[derive(Parser, Debug)]
 pub struct UpgradeCommand {
+    /// Installed app, shell, or managed sys target to upgrade
+    #[arg(value_name = "TARGET")]
+    pub target: Option<String>,
     /// Pull Git-managed preset sources before upgrading installed configs
     #[arg(long)]
     pub pull: bool,

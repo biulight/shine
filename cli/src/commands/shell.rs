@@ -3,6 +3,7 @@ use clap::Subcommand;
 #[derive(Subcommand, Debug)]
 pub enum ShellCommands {
     /// Generate a shell preset shine.toml template in the current directory
+    #[command(hide = true)]
     Init {
         /// Overwrite shine.toml if it already exists
         #[arg(long, short = 'f')]
@@ -23,9 +24,13 @@ pub enum ShellCommands {
         /// Run 'shine shell list' to see available categories.
         #[arg(value_name = "CATEGORY")]
         category: Option<String>,
+        /// Replace user-modified managed files, links, and profile integration
+        #[arg(long)]
+        replace_managed: bool,
     },
     /// Reinstall shell presets, overwriting managed files, symlinks, and shell config entry.
     /// Run 'shine shell list' to see available categories.
+    #[command(hide = true)]
     Reinstall {
         /// Preset category to reinstall (e.g. "proxy"). Reinstalls all if omitted.
         /// Run 'shine shell list' to see available categories.

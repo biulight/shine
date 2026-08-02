@@ -4,7 +4,7 @@ mod resolve;
 
 use crate::config::Config;
 use crate::status::FileStatus;
-use crate::{colors, path_display};
+use crate::{apps, colors, path_display, shells};
 use anyhow::{Result, bail};
 use resolve::InfoRef;
 
@@ -169,16 +169,22 @@ fn print_app_update_row(config: &Config, file: &collect::AppInfoFile) {
 }
 
 pub async fn handle_info(config: &Config, target: &str, diff: bool, verbose: bool) -> Result<()> {
-    crate::config::print_presets_note(config);
     let app_files = collect::collect_app_files(config).await?;
     let shell_files = collect::collect_shell_files(config).await?;
 
-    if app_files.is_empty() && shell_files.is_empty() {
-        bail!("nothing installed yet. Run `shine shell install` or `shine app install`.");
-    }
-
     let candidates = resolve::build_candidates(&app_files, &shell_files);
-    let refs = resolve::resolve_target(target, &candidates)?;
+    let refs = match resolve::resolve_target(target, &candidates) {
+        Ok(refs) => refs,
+        Err(installed_error) => {
+            if diff || verbose {
+                return Err(installed_error
+                    .context("--diff and --verbose require an installed app or shell target"));
+            }
+            return handle_available_info(config, target, installed_error).await;
+        }
+    };
+
+    crate::config::print_presets_note(config);
 
     let mut first = true;
     for item in refs {
@@ -233,4 +239,47 @@ pub async fn handle_info(config: &Config, target: &str, diff: bool, verbose: boo
     }
 
     Ok(())
+}
+
+async fn handle_available_info(
+    config: &Config,
+    target: &str,
+    installed_error: anyhow::Error,
+) -> Result<()> {
+    let target = target.trim();
+    if let Some(rest) = target.strip_prefix("app/") {
+        let category = rest.split('/').next().unwrap_or_default();
+        if category.is_empty() || rest.contains('/') {
+            return Err(installed_error);
+        }
+        return Box::pin(apps::handle_info(config, category)).await;
+    }
+    if let Some(rest) = target.strip_prefix("shell/") {
+        if rest.is_empty() {
+            return Err(installed_error);
+        }
+        return Box::pin(shells::handle_info(config, rest)).await;
+    }
+
+    let app_matches = apps::load_active_categories(config, Some(target))
+        .await?
+        .into_iter()
+        .any(|category| category.name == target);
+    let shell_categories = shells::metadata::load_active_categories(config, None).await?;
+    let shell_matches = shell_categories.iter().any(|category| {
+        category.name == target
+            || category
+                .files
+                .iter()
+                .any(|file| file.command_name == target)
+    });
+
+    match (app_matches, shell_matches) {
+        (true, false) => Box::pin(apps::handle_info(config, target)).await,
+        (false, true) => Box::pin(shells::handle_info(config, target)).await,
+        (true, true) => {
+            bail!("ambiguous available target `{target}`; use `app/{target}` or `shell/{target}`")
+        }
+        (false, false) => Err(installed_error),
+    }
 }

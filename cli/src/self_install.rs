@@ -160,9 +160,13 @@ fn format_self_upgrade_message(
 
 pub async fn handle_config_upgrade(
     config: &Config,
+    target: Option<&str>,
     verbose: bool,
     prune_stale: bool,
 ) -> Result<()> {
+    if let Some(target) = target {
+        return handle_config_target_upgrade(config, target, verbose, prune_stale).await;
+    }
     if verbose {
         println!("{}", colors::bold("Upgrading installed configs"));
         config::print_presets_note(config);
@@ -219,6 +223,112 @@ pub async fn handle_config_upgrade(
         );
     }
 
+    Ok(())
+}
+
+async fn handle_config_target_upgrade(
+    config: &Config,
+    target: &str,
+    verbose: bool,
+    prune_stale: bool,
+) -> Result<()> {
+    use crate::shim::{PresetKind, resolve_preset_kind};
+
+    let target = target.trim();
+    if target.is_empty() {
+        bail!("upgrade target must not be empty");
+    }
+
+    let mut sep = if verbose {
+        println!("{}", colors::bold(&format!("Upgrading {target}")));
+        config::print_presets_note(config);
+        output::SectionSeparator::new()
+    } else {
+        output::SectionSeparator::with_preamble(colors::bold(&format!("Upgrading {target}")))
+    };
+
+    let (updated, user_modified, link_conflicts, failed, restart_hints) =
+        if let Some(item) = target.strip_prefix("sys/") {
+            if item.is_empty() || item.contains('/') {
+                bail!("invalid system target `{target}`; expected sys/<item>");
+            }
+            if prune_stale {
+                bail!("`--prune-stale` applies only to app targets");
+            }
+            let report = Box::pin(sys::handle_upgrade_managed_target(
+                config,
+                Some(item),
+                verbose,
+                &mut sep,
+            ))
+            .await?;
+            (report.updated, 0, 0, report.failed, Default::default())
+        } else {
+            let normalized = if let Some(rest) = target.strip_prefix("app/") {
+                let category = rest.split('/').next().unwrap_or_default();
+                format!("app/{category}")
+            } else if let Some(rest) = target.strip_prefix("shell/") {
+                let category = rest.split('/').next().unwrap_or_default();
+                format!("shell/{category}")
+            } else {
+                target.to_string()
+            };
+            let (kind, category) = resolve_preset_kind(config, &normalized).await?;
+            match kind {
+                PresetKind::App => {
+                    let report = Box::pin(apps::handle_upgrade_installed_target(
+                        config,
+                        Some(&category),
+                        prune_stale,
+                        verbose,
+                        &mut sep,
+                    ))
+                    .await?;
+                    (
+                        report.updated,
+                        report.user_modified,
+                        0,
+                        report.failed,
+                        report.restart_hints,
+                    )
+                }
+                PresetKind::Shell => {
+                    if prune_stale {
+                        bail!("`--prune-stale` applies only to app targets");
+                    }
+                    let report = Box::pin(shells::handle_upgrade_installed_target(
+                        config,
+                        Some(&category),
+                        verbose,
+                        &mut sep,
+                    ))
+                    .await?;
+                    (
+                        report.templates_updated
+                            + report.links_created
+                            + report.links_updated
+                            + usize::from(report.path_changed),
+                        0,
+                        report.link_conflicts,
+                        0,
+                        Default::default(),
+                    )
+                }
+            }
+        };
+
+    let summary = config_upgrade_summary_parts(updated, user_modified, link_conflicts);
+    if verbose || sep.has_printed() {
+        output::footer("Done", &summary);
+    } else {
+        println!("{}", colors::dim("Nothing to upgrade."));
+    }
+    for hint in restart_hints {
+        println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+    }
+    if failed > 0 {
+        bail!("{failed} managed configuration item(s) failed");
+    }
     Ok(())
 }
 

@@ -32,3 +32,6 @@ The former command names are removed rather than retained as aliases. `update --
   CLI contract.
 - ADR 0007's pull safety policy and ADR 0010's managed-overlay policy are unchanged; only their
   public command paths move under `shine preset`.
+
+ADR 0022 extends this vocabulary with an action-first everyday interface, canonical resource
+targets, and hidden compatibility spellings for lifecycle commands.

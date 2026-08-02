@@ -52,7 +52,7 @@ Or install from source:
 cargo install --path cli
 ```
 
-Windows support covers `shine self`, `shine shell`, selected app presets in PowerShell, and a PowerShell-backed `shine sys init` preset, including profile updates for both `powershell.exe` and `pwsh.exe`.
+Windows support covers `shine self`, `shine shell`, selected app presets in PowerShell, and a PowerShell-backed `shine sys bootstrap` preset, including profile updates for both `powershell.exe` and `pwsh.exe`.
 
 Or build from source:
 
@@ -62,6 +62,22 @@ cargo build --release
 ```
 
 ## Usage
+
+The everyday interface is action-first. Resources use canonical targets such as
+`app/starship`, `shell/proxy`, and `sys/split-dns`; a bare app/shell category remains a shorthand
+when it is unique:
+
+```bash
+shine list --available
+shine info app/starship
+shine install app/starship
+shine update
+shine upgrade app/starship
+```
+
+Previous `reinstall`, `app build`/`unbuild`, `sys init`, flat `env encrypt`/`decrypt`/`export`/
+`seal`/`identity`, and scoped `app init`/`shell init` spellings remain accepted as hidden
+compatibility aliases. New scripts should use the primary forms documented here.
 
 ### List available shell presets
 
@@ -106,8 +122,7 @@ variable names, and current installation status. It never prints environment val
 shine install proxy            # shorthand for a matching shell/app category
 shine shell install            # install all categories
 shine shell install proxy      # install only the proxy category
-shine reinstall proxy          # shorthand reinstall for a matching category
-shine shell reinstall proxy    # overwrite managed files and links for proxy
+shine install shell/proxy --replace-managed  # repair managed files and links
 ```
 
 Extracts embedded shell scripts to `~/.shine/presets/shell/`, creates symlinks or Windows shims in `~/.shine/bin/`, and appends a PATH entry to your shell config (`~/.zshrc`, `~/.bashrc`, PowerShell profile, etc.):
@@ -118,9 +133,9 @@ Bin Links      4 created
 ```
 
 Installing all shell presets includes `agent`. Its default Codex provider requires `CLIPROXYAPI_AUTH_TOKEN` or `CLIPROXYAPI_AUTH_TOKEN_SECRET`; DeepSeek and Qwen use their corresponding API-key variables in the active env config.
-Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `reinstall` when you want to overwrite managed preset files, links, and the shell config entry.
+Running `install` again is safe — existing files, correct symlinks, and an already-configured PATH entry are all skipped. Use `--replace-managed` when you want to repair user-modified managed preset files, links, and shell integration.
 
-Top-level `install`, `reinstall`, and `uninstall` commands accept a required category and automatically route to either `shell/<category>` or `app/<category>`. If both preset types define the same category name, `shine` prompts you to choose one.
+Top-level `install` and `uninstall` accept a canonical `shell/<category>` or `app/<category>` target. A bare category is accepted when it uniquely identifies one preset type; an ambiguous name reports both canonical choices instead of prompting, so the same command is safe in scripts and terminals.
 
 Shell metadata can scope entries to `platforms = ["unix"]` or `platforms = ["windows"]`. The built-in `agent` category exposes one cross-platform `cc.ts` entry through the Bun runtime.
 
@@ -154,7 +169,7 @@ shine completions install
 
 Open a new shell, or reload your shell config once (`source ~/.zshrc` or `source ~/.bashrc`).
 
-Installing or reinstalling a specific shell preset, such as `shine shell install proxy`, also refreshes completions as part of the managed shell profile update.
+Installing or repairing a specific shell preset, such as `shine install shell/proxy --replace-managed`, also refreshes completions as part of the managed shell profile update.
 
 Completions are dynamic: preset categories and commands follow the active built-in, external, project, and overlay sources, while installed system-update items and saved task names come from Shine's runtime manifests. Bash, Zsh, and PowerShell are supported; on Fish or Elvish, `completions install` keeps the managed PATH setup and reports that Shine completion is unavailable.
 
@@ -194,22 +209,22 @@ shine sys info split-dns
 ### Run system init for the current OS
 
 ```bash
-shine sys init
-shine sys init --preset recommended
-shine sys init --dry-run
+shine sys bootstrap
+shine sys bootstrap --preset recommended
+shine sys bootstrap --dry-run
 shine sys status
 shine sys update
 shine sys update neovim --verbose
 ```
 
-`shine sys init` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After successful item work, `shine` refreshes managed shell profile integration from Rust.
+`shine sys bootstrap` detects the current OS, loads `presets/sys/<os>/shine.toml`, resolves a set of install items, and then runs the platform init script once per selected item. After successful item work, `shine` refreshes managed shell profile integration from Rust.
 
-- In a TTY, `shine sys init` opens an interactive multi-select with defaults taken from the preset's `default_profile`.
-- `shine sys init --preset <PROFILE>` skips the prompt and applies that named profile directly.
-- Without a TTY, `shine sys init` falls back to `default_profile`.
-- `shine sys init --dry-run` prints the resolved items, per-item script invocations, the internal profile update step, and script content without executing anything.
+- In a TTY, `shine sys bootstrap` opens an interactive multi-select with defaults taken from the preset's `default_profile`.
+- `shine sys bootstrap --preset <PROFILE>` skips the prompt and applies that named profile directly.
+- Without a TTY, `shine sys bootstrap` falls back to `default_profile`.
+- `shine sys bootstrap --dry-run` prints the resolved items, per-item script invocations, the internal profile update step, and script content without executing anything.
 - `shine sys status` shows the init items previously recorded for the current OS.
-- `shine sys update [ITEM] [--verbose] [--proxy]` is read-only: it checks only bootstrap software previously recorded by `shine sys init`, never installs or upgrades anything, and never changes the sys manifest or shell profile. `--proxy` routes checks through the preset proxy; on Windows it explicitly passes WinGet's `--proxy` option because WinGet ignores standard HTTP proxy environment variables. By default it shows verified package-manager updates and the exact upstream command to run. `--verbose` also shows current and manual-check-only items. Direct installers and user-owned Git configurations are intentionally reported as manual instead of guessed.
+- `shine sys update [ITEM] [--verbose] [--proxy]` is read-only: it checks only bootstrap software previously recorded by `shine sys bootstrap`, never installs or upgrades anything, and never changes the sys manifest or shell profile. `--proxy` routes checks through the preset proxy; on Windows it explicitly passes WinGet's `--proxy` option because WinGet ignores standard HTTP proxy environment variables. By default it shows verified package-manager updates and the exact upstream command to run. `--verbose` also shows current and manual-check-only items. Direct installers and user-owned Git configurations are intentionally reported as manual instead of guessed.
 
 `shine update` and `shine upgrade` continue to reconcile Shine-managed configuration and managed system resources. They do not upgrade third-party bootstrap software; copying and running a command printed by `shine sys update` is always the user's explicit decision.
 
@@ -264,8 +279,7 @@ shine app install             # install all app categories
 shine app install ghostty     # install only one category
 shine app install starship    # install only one category
 shine app install --dry-run   # preview destination writes
-shine reinstall ghostty       # shorthand reinstall for a matching category
-shine app reinstall ghostty   # overwrite managed files for one category
+shine install app/ghostty --replace-managed  # repair managed files for one category
 ```
 
 `shine app install` first extracts bundled files to `~/.shine/presets/app/`, then copies them to their final destinations.
@@ -406,7 +420,7 @@ the built-in, idempotent artifact once:
 
 ```bash
 shine env set SURGE_PROFILE '~/Library/Application Support/Surge/Profiles/MyProfile.conf'
-shine app build surge
+shine app artifact apply surge
 ```
 
 The preset also installs commented, inert examples under `rules/` for three
@@ -426,7 +440,7 @@ the HTTPS form requires replacing the example host with your own server. The
 example proxy, policy groups, and list entries remain commented until explicitly
 enabled.
 
-`shine app unbuild surge` removes those local section includes. App uninstall
+`shine app artifact remove surge` removes those local section includes. App uninstall
 also attempts the same teardown before removing managed files. Build and
 unbuild require Bun and never run implicitly during install or upgrade.
 
@@ -473,6 +487,8 @@ When a category is specified only that category's managed files are removed; oth
 
 ```bash
 shine list
+shine list --available          # browse every available resource
+shine list --available app      # limit the catalog to one resource kind
 ```
 
 Shows only items that are currently installed or configured — a quick "what's set up on this machine" view. Entries that are not installed are omitted and status details are not shown.
@@ -493,12 +509,12 @@ System Configs
 ```
 
 Managed system configs are read from the current OS entries recorded in `sys-manifest.toml`;
-status details remain available through `shine sys status` and `shine sys info <ITEM>`.
+status details remain available through `shine sys status` and `shine info sys/<ITEM>`.
 
 If nothing is installed yet, `shine list` also points to `shine sys list` alongside the shell and
 app install commands.
 
-### Inspect installed config details
+### Inspect available or installed resource details
 
 ```bash
 shine info git
@@ -508,7 +524,7 @@ shine info setproxy
 shine info git --verbose
 ```
 
-Shows metadata, colorized status, and when applicable an expected-content diff for a managed app config or shell preset. Add `--verbose` to also print the installed or rendered file content. The target is matched against installed categories, command names, display names, source filenames, and destination basenames. If a short target is ambiguous, use the canonical form shown in the error:
+Shows metadata and current installation status for available resources. Installed app/shell targets additionally support expected-content diffs and `--verbose` installed or rendered content. A short target is accepted when unique; otherwise use the canonical form shown in the error:
 
 ```bash
 shine info app/git
@@ -523,13 +539,15 @@ For app configs, `shine info --verbose` reads the installed destination file. Fo
 ```bash
 shine update
 shine update --diff
-shine update proxy/setproxy
+shine update shell/proxy/setproxy
 shine update --verbose
+shine upgrade app/starship       # apply only one installed category
+shine upgrade sys/split-dns      # converge one managed system item
 ```
 
 Shows only available installed configuration updates, then checks for a newer shine release. Use `--verbose` to include installed entries that are already up-to-date or need attention:
 
-Add `--diff` to print the expected-content diff directly below each available shell or app update. Pass an installed shell/app target to inspect only that target; target mode implies diff, skips the shine release check, and can be combined with `--pull` but not `--verbose` or `--refresh-release`. Use `shine info <TARGET> --verbose` when the complete current content is needed. Managed system resources already show structured field changes and do not produce content diffs.
+Add `--diff` to print the expected-content diff directly below each available shell or app update. Pass an installed shell/app target to inspect only that target; target mode implies diff, skips the shine release check, and can be combined with `--pull` but not `--verbose` or `--refresh-release`. `shine upgrade [TARGET]` applies either all pending managed changes or only the selected app category, shell category, or managed system item. A file/command target is intentionally upgraded at its owning category boundary. Use `shine info <TARGET> --verbose` when the complete current content is needed. Managed system resources already show structured field changes and do not produce content diffs.
 
 ```
 Shell Presets
@@ -557,6 +575,13 @@ shine state migrate
 ```
 
 ### Manage and customize preset sources
+
+Create metadata for a new preset in the current directory with:
+
+```bash
+shine preset new app
+shine preset new shell
+```
 
 ```bash
 shine preset export
@@ -846,7 +871,7 @@ CLIPROXYAPI_AUTH_TOKEN = "..."
 Create the encrypted value with:
 
 ```bash
-shine env encrypt --from CLIPROXYAPI_AUTH_TOKEN
+shine env secret encrypt --from CLIPROXYAPI_AUTH_TOKEN
 ```
 
 Codex connects to `http://127.0.0.1:8317` and maps Claude Code's Opus, Sonnet,
@@ -874,16 +899,16 @@ Create encrypted values with your existing GPG key. If the private key is
 backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
 
 ```bash
-shine env encrypt --from DEEPSEEK_API_KEY
+shine env secret encrypt --from DEEPSEEK_API_KEY
 ```
 
-`shine env encrypt` uses `gpg_key_id` from `config.toml` by default. Pass
+`shine env secret encrypt` uses `gpg_key_id` from `config.toml` by default. Pass
 `-r/--recipient <key-id>` to override it for a single command.
 
 You can also decrypt any base64 GPG secret from the active env config directly:
 
 ```bash
-shine env decrypt DEEPSEEK_API_KEY_SECRET
+shine env secret decrypt DEEPSEEK_API_KEY_SECRET
 ```
 
 For Qwen through Alibaba Cloud's Anthropic-compatible endpoint, use the same
@@ -897,7 +922,7 @@ QWEN_API_KEY = "..."
 Create its encrypted value with:
 
 ```bash
-shine env encrypt --from QWEN_API_KEY
+shine env secret encrypt --from QWEN_API_KEY
 ```
 
 When `ccenv` prompts for a provider, choose `qwen` (or option `3`). The Claude
@@ -907,7 +932,7 @@ process receives the Alibaba Cloud endpoint, Qwen model mapping, and the
 #### age + Apple Touch ID (Secure Enclave)
 
 For secrets that need to be shared through a repo and decrypted by every teammate — not just
-GPG users — `shine env encrypt`/`decrypt`/`seal` also support
+GPG users — `shine env secret encrypt`/`decrypt`/`seal` also support
 [age](https://github.com/FiloSottile/age) as a second backend, with optional Touch ID support on
 macOS via [age-plugin-se](https://github.com/remko/age-plugin-se):
 
@@ -915,10 +940,10 @@ macOS via [age-plugin-se](https://github.com/remko/age-plugin-se):
 brew install age age-plugin-se   # or your package manager of choice
 
 # Generate a Secure Enclave identity that prompts Touch ID on decrypt
-shine env identity init --touch-id
+shine env secret identity init --touch-id
 
 # Or a plain identity that works on any OS
-shine env identity init
+shine env secret identity init
 ```
 
 `identity init` prints the identity's `age1...`/`age1se1...` recipient. Add every teammate's
@@ -931,8 +956,8 @@ age_recipients = ["age1se1qexample...", "age1qteammate..."]
 ```
 
 ```bash
-shine env encrypt --backend age --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_SECRET
-shine env decrypt DEEPSEEK_API_KEY_SECRET   # prompts Touch ID if the identity is Secure Enclave
+shine env secret encrypt --backend age --from DEEPSEEK_API_KEY --set DEEPSEEK_API_KEY_SECRET
+shine env secret decrypt DEEPSEEK_API_KEY_SECRET   # prompts Touch ID if the identity is Secure Enclave
 ```
 
 Ciphertext produced by the age backend is tagged (`age:...`) so `shine` always knows which
@@ -946,12 +971,12 @@ store it as `<KEY>_SECRET` for encrypted storage or `<KEY>` for plaintext
 fallback, then evaluate the generated shell code:
 
 ```bash
-shine env encrypt --from MY_TOKEN
-eval "$(shine env export MY_TOKEN)"
-eval "$(shine env export MY_TOKEN --as API_TOKEN)"
+shine env secret encrypt --from MY_TOKEN
+eval "$(shine env secret export MY_TOKEN)"
+eval "$(shine env secret export MY_TOKEN --as API_TOKEN)"
 ```
 
-`shine env export MY_TOKEN` prefers `MY_TOKEN_SECRET`, decrypts it when present,
+`shine env secret export MY_TOKEN` prefers `MY_TOKEN_SECRET`, decrypts it when present,
 and otherwise falls back to `MY_TOKEN`. It prints shell-specific assignment code;
 the `eval` step is what applies it to the current terminal session. Pass `--as
 API_TOKEN` to use a different variable name in the shell, or install the `utils`
@@ -1014,7 +1039,7 @@ data = "<managed GPG ciphertext>"
 Seal pending values, then run a command with the merged environment:
 
 ```bash
-shine env seal
+shine env secret seal
 shine env run --mode production -- bun run build
 ```
 
@@ -1115,7 +1140,7 @@ You can also change the fallback install root for app presets that do not carry 
 app_default_dest_root = "~/.config"
 ```
 
-Set a default GPG recipient for `shine env encrypt`:
+Set a default GPG recipient for `shine env secret encrypt`:
 
 ```toml
 gpg_key_id = "<key-id>"

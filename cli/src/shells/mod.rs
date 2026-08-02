@@ -8,7 +8,10 @@ mod uninstall;
 
 pub use install::{
     handle_completion_install, handle_init_template, handle_install, handle_upgrade_installed,
+    handle_upgrade_installed_target,
 };
+#[doc(hidden)]
+pub use report::handle_list_with_presets_note;
 pub use report::{ShellUpgradeReport, handle_info, handle_list};
 pub use uninstall::handle_uninstall;
 

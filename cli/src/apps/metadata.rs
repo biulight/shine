@@ -62,7 +62,7 @@ pub enum ArtifactRuntime {
 pub struct AppArtifact {
     pub script: String,
     /// Optional companion script that reverses `script`'s side-effects. Run
-    /// explicitly via `shine app unbuild <id>` and implicitly (best-effort)
+    /// explicitly via `shine app artifact remove <id>` and implicitly (best-effort)
     /// during `shine app uninstall`. Shares `build`'s full env contract.
     pub teardown: Option<String>,
     /// How `script`/`teardown` are launched. `Bun` makes the artifact
@@ -1288,14 +1288,15 @@ source = "config.toml"
         assert!(merge.contains("http://127.0.0.1:8080/rules/lan.list"));
         assert!(merge.contains("https://rules.example.com/surge/lan.list"));
 
-        // post_install/post_upgrade re-invoke `shine app build clash-verge` so the
+        // post_install/post_upgrade re-invoke `shine app artifact apply clash-verge` so the
         // artifact writes the bound CVR subscription Extend Config after an
         // install/upgrade that changes merge.yaml, then refreshes once applied.
         let build_hook = vec![AppHook {
             command: "shine".to_string(),
             args: vec![
                 "app".to_string(),
-                "build".to_string(),
+                "artifact".to_string(),
+                "apply".to_string(),
                 "clash-verge".to_string(),
             ],
             show_output: true,

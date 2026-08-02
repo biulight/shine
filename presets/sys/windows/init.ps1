@@ -21,7 +21,7 @@ function Write-UpdateStatus {
     Write-Output "SHINE_SYS_UPDATE`t$State`t$Detail`t$Command"
 }
 
-# Set by `shine sys init --proxy` (the shine-owned signal, not $env:HTTP_PROXY,
+# Set by `shine sys bootstrap --proxy` (the shine-owned signal, not $env:HTTP_PROXY,
 # so an ambient HTTP_PROXY never turns on winget proxying without the flag).
 # winget ignores http_proxy/https_proxy env vars; it only honors `--proxy <uri>`.
 $script:ProxyUri = if ($env:SHINE_SYS_PROXY) { $env:SHINE_SYS_PROXY.Trim() } else { $null }

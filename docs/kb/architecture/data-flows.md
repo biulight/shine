@@ -36,8 +36,11 @@ Reverse of install, driven entirely by the manifest — never by re-scanning pre
 
 `apps/upgrade.rs::handle_upgrade_installed` re-applies presets (including re-running transforms
 with the *current* `[env]` values) to every manifest-tracked install, and cleans up stale entries
-whose preset no longer exists. `env/upgrade.rs` does the same for env-templated content. This is
-why changing an env var requires `shine upgrade` to take effect in installed files.
+whose preset no longer exists. `shine upgrade app/<category>` selects manifest entries before the
+stale/update loop, so no other app category can be mutated. Shell and managed-sys targeted upgrades
+apply the same pre-mutation filtering at their own category/item boundaries. `env/upgrade.rs` does
+the same for env-templated content. This is why changing an env var requires `shine upgrade` to
+take effect in installed files.
 
 Managed sys resources participate in the same flow. `shine update` compares the desired built-in
 resource receipt derived from the active env against `sys-manifest.toml`; `shine upgrade` then
@@ -48,7 +51,7 @@ user can inspect the pending system change before granting administrator access 
 
 `shine update --diff` appends content diffs to stale shell/app rows, while `shine update <TARGET>`
 resolves one installed shell/app through the same aliases as `shine info` and prints only its stale
-files. Both paths reuse `show`'s effective-content renderer, so embedded versus external preset
+files. Both paths reuse `info`'s effective-content renderer, so embedded versus external preset
 selection, transforms, and manual-generator behavior stay identical to `shine info --diff` and the
 upgrade operation. Target mode returns after the config check and does not perform the binary
 release check; managed sys resources keep their structured receipt differences instead.
@@ -78,13 +81,13 @@ strategies:
 The Surge generator downloads the Base64 URI list in
 `SURGE_SUBSCRIPTION_URL`, converts supported SS/VMess nodes, and writes bare
 policy declarations to `subscription-proxies.conf`. It declares `auto = false`
-so it runs on install/reinstall or explicit refresh, not ordinary
+so it runs on install (including `--replace-managed`) or explicit refresh, not ordinary
 status/upgrade passes. Its `Subscription` group
 loads that file through `policy-path`; other groups reuse the nodes through
 `include-other-group=Subscription`. VLESS and unsupported transports are
 counted and skipped without logging credentials.
 
-## App artifact build (`shine app build <app-id>`)
+## App artifact build (`shine app artifact apply <app-id>`)
 
 `apps/build.rs::handle_build` is fully separate from install/upgrade — it never runs
 automatically; see [ADR 0009](../decisions/0009-app-artifact-build-explicit-command.md). Given an
@@ -119,7 +122,7 @@ patchable include. Subscription nodes are not added to `[Proxy]`;
 `local-proxy-groups.conf` loads the generated bare policy file through
 `policy-path`.
 
-**Teardown (`shine app unbuild <app-id>`, ADR 0012).** An `[artifact].teardown` script reverses
+**Teardown (`shine app artifact remove <app-id>`, ADR 0012).** An `[artifact].teardown` script reverses
 `build`, sharing the *identical* resolution and env contract above (steps 1–4). It has two entry
 points: `handle_unbuild` (explicit, ungated, errors propagate — symmetric to `build`) and
 `run_teardown_for_uninstall`, called best-effort from `apps/uninstall.rs` *before* the file-removal
@@ -127,7 +130,8 @@ loop (implicit, so gated by `allow_app_hooks` for external presets and non-fatal
 `--dry-run`). Surge ships a symmetric built-in Bun `unbuild.ts`; other app
 presets may still keep artifact-specific reversal logic in an overlay.
 
-**Lifecycle command hooks (`apps/hooks.rs`).** `post_install` (fired by `install`/`reinstall`) and
+**Lifecycle command hooks (`apps/hooks.rs`).** `post_install` (fired by `install`, including
+`--replace-managed`) and
 `post_upgrade` (fired by `upgrade`) share one runner, `run_app_hooks(config, get_category, changed,
 HookPhase)` — run once per *changed* category, gated by `allow_app_hooks` for external presets,
 failures non-fatal. These are plain argv commands with only the inherited parent env — distinct from
@@ -140,7 +144,7 @@ symlink executables into `~/.shine/bin/` (`bin_links.rs`) → append a sentinel-
 to the shell config (`shells/profile.rs`). Uninstall removes only shine-managed symlinks/files
 and deletes the sentinel block precisely.
 
-## Sys bootstrap (`shine sys init`)
+## Sys bootstrap (`shine sys bootstrap`)
 
 `shine sys update [ITEM] [--verbose]` is a separate, read-only bootstrap-software flow. It reads
 only `mode = "init"` entries already recorded in `sys-manifest.toml`, then invokes the current
@@ -259,14 +263,14 @@ copy-paste-safe line by shell-quoting shell-significant arguments.
 
 ## Secret backend routing (GPG / age)
 
-Every call site that decrypts a stored secret (`env decrypt`, `env export`, workspace
-`seal`/`run`) goes through `secret::decrypt_secret(ciphertext, age_identities)`, which inspects the
+Every call site that decrypts a stored secret (`env secret decrypt`, `env secret export`, workspace
+`env secret seal`/`env run`) goes through `secret::decrypt_secret(ciphertext, age_identities)`, which inspects the
 ciphertext for an `age:` prefix (`secret::parse_tagged_ciphertext`) and dispatches to
 `secret::age`/`secret::gpg` accordingly; untagged ciphertext is always GPG. Decryption never
-reads `Config::secret_backend` — only the tag decides. Encryption (`env encrypt`, workspace
-`seal`) instead resolves a `secret::EncryptRecipients` (CLI `-r`/`--backend` > workspace
+reads `Config::secret_backend` — only the tag decides. Encryption (`env secret encrypt`, workspace
+`env secret seal`) instead resolves a `secret::EncryptRecipients` (CLI `-r`/`--backend` > workspace
 `env.encryption` > `config.toml` `gpg_key_id`/`age_recipients`/`secret_backend` > GPG default)
 and calls `secret::encrypt_secret`, which tags age output and leaves GPG output untagged. See
 [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md) for the full rationale.
-`shine env identity init [--touch-id]` generates the age identity file
+`shine env secret identity init [--touch-id]` generates the age identity file
 (`age-keygen`/`age-plugin-se keygen`) consulted via `Config::age_identities()`.

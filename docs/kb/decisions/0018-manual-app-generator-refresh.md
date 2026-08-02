@@ -10,7 +10,7 @@
 
 Some subscription providers expose a configured URL only during a short access
 window. Treating such a generator as ordinary remote desired state consumes
-that window during unrelated `shine update`, `list`, `info`, `show`, and
+that window during unrelated `shine update`, `list`, and `info`, and
 `upgrade` commands. A time-based cache only postpones the same uncontrolled
 request and cannot know when the provider's window is open.
 

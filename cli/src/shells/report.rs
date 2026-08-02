@@ -141,7 +141,17 @@ fn format_file_action(count: usize, action: &str) -> String {
 }
 
 pub async fn handle_list(config: &crate::config::Config) -> anyhow::Result<()> {
-    crate::config::print_presets_note(config);
+    handle_list_with_presets_note(config, true).await
+}
+
+#[doc(hidden)]
+pub async fn handle_list_with_presets_note(
+    config: &crate::config::Config,
+    print_presets_note: bool,
+) -> anyhow::Result<()> {
+    if print_presets_note {
+        crate::config::print_presets_note(config);
+    }
     let categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
     } else {
@@ -207,7 +217,7 @@ pub async fn handle_list(config: &crate::config::Config) -> anyhow::Result<()> {
 
     println!(
         "{}",
-        colors::dim("Run `shine shell install <CATEGORY>` to install a specific category.")
+        colors::dim("Run `shine install shell/<CATEGORY>` to install a specific category.")
     );
     println!(
         "{}",
@@ -350,7 +360,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
         println!(
             "{}",
             colors::dim(&format!(
-                "Run `shine shell reinstall {}` to reinstall this category.",
+                "Run `shine install shell/{} --replace-managed` to repair this category.",
                 category.name
             ))
         );

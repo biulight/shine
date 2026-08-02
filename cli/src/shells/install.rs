@@ -120,6 +120,15 @@ pub async fn handle_upgrade_installed(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<ShellUpgradeReport> {
+    handle_upgrade_installed_target(config, None, verbose, sep).await
+}
+
+pub async fn handle_upgrade_installed_target(
+    config: &Config,
+    category_filter: Option<&str>,
+    verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<ShellUpgradeReport> {
     let all_categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
     } else {
@@ -128,6 +137,7 @@ pub async fn handle_upgrade_installed(
 
     let installed_commands: Vec<(String, String)> = all_categories
         .iter()
+        .filter(|cat| category_filter.is_none_or(|filter| cat.name == filter))
         .flat_map(|cat| {
             cat.files.iter().filter_map(|file| {
                 let link = crate::bin_links::command_path_for_name(
@@ -140,6 +150,9 @@ pub async fn handle_upgrade_installed(
         .collect();
 
     if installed_commands.is_empty() {
+        if let Some(category) = category_filter {
+            anyhow::bail!("shell preset is not installed: {category}");
+        }
         if verbose {
             println!("{}", colors::dim("No installed shell presets found."));
         }

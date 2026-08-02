@@ -130,7 +130,7 @@ bun <effective-script-path> arg1 arg2
   使用同一来源信息。
 - 安装仅在入口不存在、或现有入口可验证为同一 Bun 预设的当前/过期启动器时更新。其他普通文件、
   目录、symlink 或指向不同来源的 managed 启动器均视为冲突；仅 `--force` 可覆盖。
-- 现有 link 冲突展示继续指出占用的命令名、期望来源和 `shine shell reinstall` 修复命令。
+- 现有 link 冲突展示继续指出占用的命令名、期望来源和 `shine install shell/<category> --replace-managed` 修复命令。
 - 升级会在脚本有效来源、模板渲染结果或启动器格式变化时刷新启动器；同一目标的旧启动器需被识别为
   stale，而不是误报用户冲突。
 - 卸载仅移除能验证为 shine 管理、且其记录来源位于当前 managed preset/rendered root 的 Bun 启动器；
@@ -161,7 +161,7 @@ bun <effective-script-path> arg1 arg2
    保证是**经由加载期 `needs_source + bun` 互斥校验传递而来**，而不是直接的 runtime 判断：只要
    §7.1 的加载期拒绝到位，Bun 入口恒为 `needs_source = false`，自然落出该过滤器。可选加一道
    `runtime != bun` 的直接护栏作为双保险。
-5. 更新 `shine shell init` 模板、preset authoring 文档与 README，提供零依赖 TypeScript 示例，并明确：
+5. 更新 `shine preset new shell` 模板、preset authoring 文档与 README，提供零依赖 TypeScript 示例，并明确：
    不使用外部包、不得依赖自动安装、环境变更必须保留 shell wrapper。
 
 ## 8. 验收与测试

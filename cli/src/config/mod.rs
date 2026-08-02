@@ -142,7 +142,7 @@ pub struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub self_install_dest: Option<PathBuf>,
-    /// Default GPG recipient key used by `shine env encrypt` when the command
+    /// Default GPG recipient key used by `shine env secret encrypt` when the command
     /// does not provide `-r/--recipient`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpg_key_id: Option<String>,

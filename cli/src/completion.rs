@@ -23,6 +23,7 @@ pub fn generate_registration(shell: CompletionShell) {
 
 pub fn command() -> clap::Command {
     let all_categories = ArgValueCandidates::new(all_category_candidates);
+    let preset_targets = ArgValueCandidates::new(preset_target_candidates);
     let shell_categories = ArgValueCandidates::new(shell_category_candidates);
     let shell_targets = ArgValueCandidates::new(shell_info_candidates);
     let app_categories = ArgValueCandidates::new(app_category_candidates);
@@ -32,25 +33,29 @@ pub fn command() -> clap::Command {
     let sys_items = ArgValueCandidates::new(sys_item_candidates);
     let sys_updates = ArgValueCandidates::new(sys_update_candidates);
     let resource_targets = ArgValueCandidates::new(resource_target_candidates);
+    let upgrade_targets = ArgValueCandidates::new(upgrade_target_candidates);
     let installed_targets = ArgValueCandidates::new(installed_target_candidates);
     let task_names = ArgValueCandidates::new(task_name_candidates);
     let preset_copy_targets = ArgValueCandidates::new(preset_copy_candidates);
 
     crate::commands::Cli::command()
         .mut_subcommand("install", |cmd| {
-            cmd.mut_arg("category", |arg| arg.add(all_categories.clone()))
+            cmd.mut_arg("target", |arg| arg.add(preset_targets.clone()))
         })
         .mut_subcommand("reinstall", |cmd| {
             cmd.mut_arg("category", |arg| arg.add(all_categories.clone()))
         })
         .mut_subcommand("uninstall", |cmd| {
-            cmd.mut_arg("category", |arg| arg.add(all_categories.clone()))
+            cmd.mut_arg("target", |arg| arg.add(preset_targets.clone()))
         })
         .mut_subcommand("info", |cmd| {
             cmd.mut_arg("target", |arg| arg.add(resource_targets.clone()))
         })
         .mut_subcommand("update", |cmd| {
             cmd.mut_arg("target", |arg| arg.add(installed_targets.clone()))
+        })
+        .mut_subcommand("upgrade", |cmd| {
+            cmd.mut_arg("target", |arg| arg.add(upgrade_targets))
         })
         .mut_subcommand("shell", |cmd| {
             cmd.mut_subcommand("info", |cmd| {
@@ -90,6 +95,14 @@ pub fn command() -> clap::Command {
             })
             .mut_subcommand("unbuild", |cmd| {
                 cmd.mut_arg("app_id", |arg| arg.add(app_unbuild_categories.clone()))
+            })
+            .mut_subcommand("artifact", |cmd| {
+                cmd.mut_subcommand("apply", |cmd| {
+                    cmd.mut_arg("app_id", |arg| arg.add(app_build_categories.clone()))
+                })
+                .mut_subcommand("remove", |cmd| {
+                    cmd.mut_arg("app_id", |arg| arg.add(app_unbuild_categories.clone()))
+                })
             })
         })
         .mut_subcommand("sys", |cmd| {
@@ -147,6 +160,19 @@ fn all_category_candidates() -> Vec<CompletionCandidate> {
     categories.extend(category_names("shell"));
     categories.extend(category_names("app"));
     completion_candidates(categories)
+}
+
+fn preset_target_candidates() -> Vec<CompletionCandidate> {
+    let mut targets = BTreeSet::new();
+    for category in category_names("app") {
+        targets.insert(category.clone());
+        targets.insert(format!("app/{category}"));
+    }
+    for category in category_names("shell") {
+        targets.insert(category.clone());
+        targets.insert(format!("shell/{category}"));
+    }
+    completion_candidates(targets)
 }
 
 fn shell_category_candidates() -> Vec<CompletionCandidate> {
@@ -363,6 +389,29 @@ fn installed_target_candidates() -> Vec<CompletionCandidate> {
 }
 
 fn resource_target_candidates() -> Vec<CompletionCandidate> {
+    let mut names = installed_target_names();
+    for category in category_names("app") {
+        names.insert(category.clone());
+        names.insert(format!("app/{category}"));
+    }
+    for (category, commands) in shell_command_names() {
+        names.insert(category.clone());
+        names.insert(format!("shell/{category}"));
+        for command in commands {
+            names.insert(command.clone());
+            names.insert(format!("{category}/{command}"));
+            names.insert(format!("shell/{category}/{command}"));
+        }
+    }
+    names.extend(
+        sys_item_names()
+            .into_iter()
+            .map(|item| format!("sys/{item}")),
+    );
+    completion_candidates(names)
+}
+
+fn upgrade_target_candidates() -> Vec<CompletionCandidate> {
     let mut names = installed_target_names();
     names.extend(
         sys_item_names()
@@ -617,11 +666,13 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert!(shell_info.contains("setproxy"));
         assert!(shell_info.contains("proxy/setproxy"));
-        let build = complete_values(&["shine", "app", "build", ""], 3);
+        let build = complete_values(&["shine", "app", "artifact", "apply", ""], 4);
         assert!(build.contains("surge"));
         assert!(!build.contains("starship"));
         assert!(complete_values(&["shine", "app", "refresh", ""], 3).contains("surge"));
         assert!(complete_values(&["shine", "info", ""], 2).contains("sys/split-dns"));
+        assert!(complete_values(&["shine", "info", ""], 2).contains("app/starship"));
+        assert!(complete_values(&["shine", "install", ""], 2).contains("shell/proxy"));
         let preset_copy = complete_values(&["shine", "preset", "copy", ""], 3);
         assert!(preset_copy.contains("app/surge"));
         assert!(preset_copy.contains("shell/proxy"));
