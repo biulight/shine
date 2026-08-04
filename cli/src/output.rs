@@ -1,8 +1,11 @@
 use crate::colors;
+use console::measure_text_width;
+use std::io::IsTerminal;
 
 const SUMMARY_LABEL_WIDTH: usize = 15;
 const DETAIL_LABEL_WIDTH: usize = 15;
 const DETAIL_STATUS_WIDTH: usize = 13;
+const COLUMN_GAP: usize = 2;
 
 /// Tracks whether any upgrade section has printed content yet, so a run
 /// covering several optional sections (shell presets, app configs, managed
@@ -75,6 +78,60 @@ pub fn summary_line(label: &str, parts: &[String]) {
 pub fn footer(label: &str, parts: &[String]) {
     println!();
     summary_line(label, parts);
+}
+
+/// Prints names in Homebrew-style columns when stdout is an interactive
+/// terminal, falling back to one item per line for redirected output.
+pub fn print_columns(items: &[String]) {
+    let terminal_width = std::io::stdout().is_terminal().then(|| {
+        let width = usize::from(console::Term::stdout().size().1);
+        width.max(1)
+    });
+    print!("{}", format_columns(items, terminal_width));
+}
+
+/// Formats names in top-to-bottom, then left-to-right columns.
+///
+/// `terminal_width = None` represents non-interactive output and intentionally
+/// produces one item per line, matching Homebrew's pipe-friendly fallback.
+fn format_columns(items: &[String], terminal_width: Option<usize>) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+
+    let Some(terminal_width) = terminal_width else {
+        return items.join("\n") + "\n";
+    };
+    let max_width = items
+        .iter()
+        .map(|item| measure_text_width(item))
+        .max()
+        .unwrap_or(0);
+    let mut columns = (terminal_width + COLUMN_GAP) / (max_width + COLUMN_GAP);
+    if columns < 2 {
+        return items.join("\n") + "\n";
+    }
+
+    columns = columns.min(items.len());
+    let rows = items.len().div_ceil(columns);
+    columns = items.len().div_ceil(rows);
+    let column_width = ((terminal_width + COLUMN_GAP) / columns) - COLUMN_GAP;
+    let mut output = String::new();
+
+    for row in 0..rows {
+        let indices: Vec<usize> = (row..items.len()).step_by(rows).collect();
+        for (position, index) in indices.iter().enumerate() {
+            let item = &items[*index];
+            output.push_str(item);
+            if position + 1 < indices.len() {
+                let padding = column_width.saturating_sub(measure_text_width(item)) + COLUMN_GAP;
+                output.push_str(&" ".repeat(padding));
+            }
+        }
+        output.push('\n');
+    }
+
+    output
 }
 
 pub fn detail_line(label: &str, status: &str, detail: Option<String>) {
@@ -151,6 +208,41 @@ mod tests {
     #[test]
     fn visible_len_ignores_ansi_sequences() {
         assert_eq!(visible_len_without_ansi("\x1b[32mupdated\x1b[0m"), 7);
+    }
+
+    #[test]
+    fn columns_fall_back_to_one_item_per_line_without_a_terminal() {
+        let items = vec!["alpha".to_string(), "beta".to_string()];
+
+        assert_eq!(format_columns(&items, None), "alpha\nbeta\n");
+    }
+
+    #[test]
+    fn columns_fill_top_to_bottom_then_left_to_right() {
+        let items = ["alpha", "beta", "gamma", "delta"]
+            .map(str::to_string)
+            .to_vec();
+
+        assert_eq!(
+            format_columns(&items, Some(20)),
+            "alpha      gamma\nbeta       delta\n"
+        );
+    }
+
+    #[test]
+    fn columns_fall_back_when_the_terminal_is_too_narrow() {
+        let items = vec!["alpha".to_string(), "beta".to_string()];
+
+        assert_eq!(format_columns(&items, Some(7)), "alpha\nbeta\n");
+    }
+
+    #[test]
+    fn columns_measure_unicode_display_width_and_omit_trailing_spaces() {
+        let items = ["猫", "dog", "鸟", "fox"].map(str::to_string).to_vec();
+        let rendered = format_columns(&items, Some(12));
+
+        assert_eq!(rendered, "猫     鸟\ndog    fox\n");
+        assert!(rendered.lines().all(|line| !line.ends_with(' ')));
     }
 
     #[test]

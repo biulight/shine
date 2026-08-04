@@ -44,6 +44,9 @@ pub struct ShellRow {
 }
 
 pub struct AppRow {
+    /// App preset category owning this row. Unlike `label`, this is stable
+    /// even when a multi-file category supplies custom display names.
+    pub category: String,
     pub sym: &'static str,
     pub label: String,
     pub simple_label: String,
@@ -277,6 +280,7 @@ pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Resu
                 };
 
                 rows.push(AppRow {
+                    category: cat.name.clone(),
                     sym,
                     label,
                     simple_label,
@@ -344,6 +348,7 @@ pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Resu
             };
 
             rows.push(AppRow {
+                category: cat.name.clone(),
                 sym,
                 label: cat.name.clone(),
                 simple_label: cat.name.clone(),

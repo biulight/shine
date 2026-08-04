@@ -6,6 +6,7 @@ use crate::output;
 use crate::status::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_rows};
 use crate::sys;
 use anyhow::Result;
+use std::collections::BTreeSet;
 
 const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
 
@@ -273,21 +274,29 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
 pub async fn handle_list(config: &Config) -> Result<()> {
     crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;
-    let installed_shell: Vec<&ShellRow> = shell_rows
+    let installed_shell: Vec<String> = shell_rows
         .iter()
         .filter(|r| should_show_shell_in_simple_list(r))
+        .map(|r| r.label.clone())
         .collect();
 
     let cats_result = load_active_categories(config, None).await;
-    let app_rows = match cats_result {
-        Ok(cats) => build_app_rows(config, &cats).await?,
+    let installed_app = match cats_result {
+        Ok(cats) => {
+            let app_rows = build_app_rows(config, &cats).await?;
+            installed_app_categories(&app_rows)
+        }
         Err(_) => Vec::new(),
     };
-    let installed_app: Vec<&AppRow> = app_rows
-        .iter()
-        .filter(|r| r.file_status != FileStatus::NotInstalled)
-        .collect();
     let installed_sys = sys::installed_managed(config).await?;
+    let installed_sys: Vec<String> = installed_sys
+        .iter()
+        .map(|row| row.item_id.clone())
+        .collect();
+
+    let installed_shell = sorted_names(installed_shell);
+    let installed_app = sorted_names(installed_app);
+    let installed_sys = sorted_names(installed_sys);
 
     let any = !installed_shell.is_empty() || !installed_app.is_empty() || !installed_sys.is_empty();
 
@@ -301,46 +310,40 @@ pub async fn handle_list(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    if !installed_shell.is_empty() {
-        println!("{}", colors::bold("Shell Presets"));
-        for row in &installed_shell {
-            println!("  {}", row.label);
-        }
-    }
-
-    if !installed_app.is_empty() {
-        if !installed_shell.is_empty() {
-            println!();
-        }
-        println!("{}", colors::bold("App Configs"));
-        for row in &installed_app {
-            match row.dest.as_deref() {
-                Some(dest) => println!(
-                    "  {}  {}  {}",
-                    row.simple_label,
-                    colors::dim("→"),
-                    colors::dim(dest)
-                ),
-                None => println!("  {}", row.simple_label),
-            }
-        }
-    }
-
-    if !installed_sys.is_empty() {
-        if !installed_shell.is_empty() || !installed_app.is_empty() {
-            println!();
-        }
-        println!("{}", colors::bold("System Configs"));
-        for row in &installed_sys {
-            println!(
-                "  {}  {}",
-                row.label,
-                colors::dim(&format!("({})", row.item_id))
-            );
-        }
-    }
+    let mut separator = output::SectionSeparator::new();
+    print_name_section(&mut separator, "Shell Presets", &installed_shell);
+    print_name_section(&mut separator, "App Configs", &installed_app);
+    print_name_section(&mut separator, "System Configs", &installed_sys);
 
     Ok(())
+}
+
+fn print_name_section(separator: &mut output::SectionSeparator, title: &str, names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+
+    separator.begin();
+    println!("{} {}", colors::cyan("==>"), colors::bold(title));
+    output::print_columns(names);
+}
+
+fn installed_app_categories(rows: &[AppRow]) -> Vec<String> {
+    rows.iter()
+        .filter(|row| row.file_status != FileStatus::NotInstalled)
+        .map(|row| row.category.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn sorted_names(mut names: Vec<String>) -> Vec<String> {
+    names.sort_by(|left, right| {
+        left.to_lowercase()
+            .cmp(&right.to_lowercase())
+            .then_with(|| left.cmp(right))
+    });
+    names
 }
 
 fn should_show_shell_in_simple_list(row: &ShellRow) -> bool {
@@ -380,6 +383,18 @@ mod tests {
         }
     }
 
+    fn app_row(category: &str, file_status: FileStatus) -> AppRow {
+        AppRow {
+            category: category.to_string(),
+            sym: "✓",
+            label: category.to_string(),
+            simple_label: category.to_string(),
+            dest: None,
+            status_text: "up-to-date",
+            file_status,
+        }
+    }
+
     #[test]
     fn simple_list_hides_preset_present_when_bin_symlink_missing() {
         let row = shell_row(SHELL_PRESET_PRESENT_LINK_MISSING, true);
@@ -408,6 +423,39 @@ mod tests {
         let row = shell_row("not installed", false);
 
         assert!(!should_show_shell_in_simple_list(&row));
+    }
+
+    #[test]
+    fn simple_list_collapses_installed_app_files_to_their_category() {
+        let rows = vec![
+            app_row("surge", FileStatus::UpToDate),
+            app_row("surge", FileStatus::Missing),
+            app_row("ghostty", FileStatus::NotInstalled),
+        ];
+
+        assert_eq!(installed_app_categories(&rows), vec!["surge"]);
+    }
+
+    #[test]
+    fn simple_list_shows_partially_installed_app_categories() {
+        let rows = vec![
+            app_row("surge", FileStatus::NotInstalled),
+            app_row("surge", FileStatus::UserModified),
+        ];
+
+        assert_eq!(installed_app_categories(&rows), vec!["surge"]);
+    }
+
+    #[test]
+    fn simple_list_sorts_names_case_insensitively() {
+        assert_eq!(
+            sorted_names(vec![
+                "surge".to_string(),
+                "JetBrains".to_string(),
+                "ghostty".to_string(),
+            ]),
+            vec!["ghostty", "JetBrains", "surge"]
+        );
     }
 
     #[test]
