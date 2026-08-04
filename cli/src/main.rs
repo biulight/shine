@@ -89,11 +89,16 @@ async fn run(cli: Cli) -> Result<()> {
 
     let config = Box::pin(Config::load_or_init()).await?;
 
+    if let Commands::ShellRender { target } = &cli.command {
+        return shells::handle_render_live(&config, target).await;
+    }
+
     warn_if_runtime_schema_pending(&cli.command).await;
 
     update_check::maybe_notify(&config, &cli.command).await?;
 
     match cli.command {
+        Commands::ShellRender { .. } => unreachable!(),
         Commands::Init(_) => unreachable!(),
         Commands::Completions {
             command: CompletionCommands::Install,
@@ -208,7 +213,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
             PresetCommands::Copy(cmd) => Box::pin(handle_preset_copy(&cmd.target, cmd.force)).await,
             PresetCommands::Link(cmd) => {
-                Box::pin(handle_preset_link(&config, cmd.path, cmd.create)).await
+                Box::pin(handle_preset_link(&config, cmd.path, cmd.create, cmd.live)).await
             }
             PresetCommands::Unlink => Box::pin(handle_preset_unlink(&config)).await,
             PresetCommands::Overlay { command } => match command {
@@ -812,6 +817,15 @@ mod tests {
             cli.command,
             Commands::Preset {
                 command: PresetCommands::Link(commands::LinkCommand { create: true, .. })
+            }
+        ));
+
+        let cli =
+            Cli::try_parse_from(["shine", "preset", "link", "/tmp/presets", "--live"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Link(commands::LinkCommand { live: true, .. })
             }
         ));
 

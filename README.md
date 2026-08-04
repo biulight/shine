@@ -609,10 +609,28 @@ shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
 
+External shell presets use **snapshot mode by default**. Shine copies the effective shell category
+to `~/.shine/installed/shell/`, so editing the source follows the same lifecycle as app configs:
+`shine update` previews the change and `shine upgrade` applies it. Existing direct links from
+older Shine versions are reported by `update` and migrate during `upgrade`.
+
+Preset developers can explicitly opt into live shell execution:
+
+```bash
+shine preset link ~/dotfiles/shine-presets --live
+```
+
+In live mode, raw shell/Bun source changes apply on the next invocation. Sources with transforms
+are rendered atomically immediately before execution; `needs_source` commands are then sourced
+into the parent shell. A transform failure aborts that invocation instead of running stale output.
+Changes to deployment metadata such as `target`, `runtime`, `transforms`, or `env` declarations
+still require `shine upgrade` to rebuild the managed launcher.
+
 To use a custom directory as your preset source, set `presets_dir` in `~/.shine/config.toml`:
 
 ```toml
 presets_dir = "~/dotfiles/shine-presets"
+# external_shell_mode = "live" # optional preset-development mode; default is "snapshot"
 ```
 
 Then export the defaults there as a starting point:

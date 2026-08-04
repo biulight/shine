@@ -64,7 +64,20 @@ pub async fn handle_install(config: &Config, category: Option<&str>, force: bool
         output::summary_line("Shell Presets", &preset_extract_summary_parts(&report));
     }
 
-    let categories = metadata::load_installed_categories(config, category).await?;
+    let categories = metadata::load_active_categories(config, category).await?;
+    super::deployment::validate_snapshot_categories(config, &categories).await?;
+    let snapshots_updated =
+        super::deployment::materialize_snapshot_categories(config, &categories).await?;
+    if config.is_external_presets
+        && config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
+    {
+        let summary = if snapshots_updated > 0 {
+            colors::green(&format!("{snapshots_updated} updated"))
+        } else {
+            colors::dim("up to date")
+        };
+        output::summary_line("Shell Snapshots", &[summary]);
+    }
     // Build (template_source, rendered_dest) pairs for all scripts.
     // apply_template_to_scripts renders source → rendered_dir, never modifies presets_dir.
     let script_pairs = build_script_pairs(config, &categories);
@@ -78,6 +91,7 @@ pub async fn handle_install(config: &Config, category: Option<&str>, force: bool
     let link_specs = build_link_specs(config, &categories);
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, force).await?;
+    super::deployment::update_manifest(config, &categories).await?;
 
     output::summary_line("Bin Links", &link_report_summary_parts(&link_report));
     print_link_conflicts(config, &link_report.conflicts, category);
@@ -182,12 +196,17 @@ pub async fn handle_upgrade_installed_target(
         });
     }
 
+    super::deployment::validate_snapshot_categories(config, &categories).await?;
+    let snapshots_updated =
+        super::deployment::materialize_snapshot_categories(config, &categories).await?;
+
     let script_pairs = build_script_pairs(config, &categories);
     let template_report = apply_template_to_scripts(config, &script_pairs).await?;
 
     let link_specs = build_link_specs(config, &categories);
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
+    super::deployment::update_manifest(config, &categories).await?;
 
     let link_parts = upgrade_link_report_summary_parts(&link_report, verbose);
 
@@ -201,6 +220,7 @@ pub async fn handle_upgrade_installed_target(
 
     let has_visible_result = should_print_upgrade_section(
         verbose,
+        snapshots_updated > 0,
         !template_report.updated.is_empty(),
         !link_parts.is_empty(),
         updated_shell_config.is_some(),
@@ -219,6 +239,13 @@ pub async fn handle_upgrade_installed_target(
             println!("{}", colors::bold("Shell Presets"));
         }
 
+        if snapshots_updated > 0 {
+            println!(
+                "  {} {}",
+                colors::symbol("✓"),
+                colors::green(&format!("{snapshots_updated} snapshot(s) updated"))
+            );
+        }
         for name in &template_report.updated {
             println!("  {} {}", colors::symbol("✓"), name);
         }
@@ -236,6 +263,7 @@ pub async fn handle_upgrade_installed_target(
     }
 
     Ok(ShellUpgradeReport {
+        snapshots_updated,
         templates_updated: template_report.updated.len(),
         links_created: link_report.created.len(),
         links_updated: link_report.overwritten.len(),
@@ -246,11 +274,12 @@ pub async fn handle_upgrade_installed_target(
 
 fn should_print_upgrade_section(
     verbose: bool,
+    snapshots_updated: bool,
     templates_updated: bool,
     has_link_result: bool,
     path_changed: bool,
 ) -> bool {
-    verbose || templates_updated || has_link_result || path_changed
+    verbose || snapshots_updated || templates_updated || has_link_result || path_changed
 }
 
 pub async fn handle_completion_install(config: &Config) -> Result<()> {
@@ -327,12 +356,9 @@ fn build_script_pairs(
         .flat_map(|cat| {
             cat.files.iter().map(|file| {
                 let source =
-                    config.preset_path(Path::new("shell").join(&cat.name).join(&file.source_rel));
-                let rendered = config
-                    .rendered_dir()
-                    .join("shell")
-                    .join(&cat.name)
-                    .join(&file.source_rel);
+                    super::deployment::deployment_source_path(config, &cat.name, &file.source_rel);
+                let rendered =
+                    super::deployment::rendered_path(config, &cat.name, &file.source_rel);
                 ScriptTemplate {
                     source_path: source,
                     rendered_path: rendered,
@@ -382,11 +408,24 @@ mod tests {
 
     #[test]
     fn upgrade_section_hides_no_op_by_default_and_shows_verbose_or_changes() {
-        assert!(!should_print_upgrade_section(false, false, false, false));
-        assert!(should_print_upgrade_section(true, false, false, false));
-        assert!(should_print_upgrade_section(false, true, false, false));
-        assert!(should_print_upgrade_section(false, false, true, false));
-        assert!(should_print_upgrade_section(false, false, false, true));
+        assert!(!should_print_upgrade_section(
+            false, false, false, false, false
+        ));
+        assert!(should_print_upgrade_section(
+            true, false, false, false, false
+        ));
+        assert!(should_print_upgrade_section(
+            false, true, false, false, false
+        ));
+        assert!(should_print_upgrade_section(
+            false, false, true, false, false
+        ));
+        assert!(should_print_upgrade_section(
+            false, false, false, true, false
+        ));
+        assert!(should_print_upgrade_section(
+            false, false, false, false, true
+        ));
     }
 
     async fn make_temp_dir() -> PathBuf {
@@ -1101,7 +1140,15 @@ mod tests {
         assert!(!launcher.is_symlink(), "bun launcher is a regular file");
         let content = fs::read_to_string(&launcher).await.unwrap();
         assert!(content.contains("exec bun"));
-        assert!(content.contains(&cat_dir.join("tool.ts").display().to_string()));
+        assert!(
+            content.contains(
+                &config
+                    .installed_shell_dir()
+                    .join("custom/tool.ts")
+                    .display()
+                    .to_string()
+            )
+        );
         assert!(
             !config.bin_dir().join("tool").exists(),
             "command should use the target rename, not the .ts stem"
@@ -1204,6 +1251,216 @@ mod tests {
             "launcher must target the rendered copy: {launcher}"
         );
 
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_transformed_bun_renders_again_on_demand() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n",
+        )
+        .await
+        .unwrap();
+        let source = cat_dir.join("tool.ts");
+        fs::write(&source, b"console.log('@@PROXY_HOST@@')\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.external_shell_mode = crate::config::ExternalShellMode::Live;
+        config
+            .env
+            .insert("PROXY_HOST".into(), "first.example".into());
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        let rendered = config.rendered_dir().join("shell/custom/tool.ts");
+        assert!(
+            fs::read_to_string(&rendered)
+                .await
+                .unwrap()
+                .contains("first.example")
+        );
+        config
+            .env
+            .insert("PROXY_HOST".into(), "second.example".into());
+        crate::shells::deployment::handle_render_live(&config, "shell/custom/mytool")
+            .await
+            .unwrap();
+        assert!(
+            fs::read_to_string(&rendered)
+                .await
+                .unwrap()
+                .contains("second.example")
+        );
+        let last_good = fs::read(&rendered).await.unwrap();
+        fs::write(&source, b"console.log('@@MISSING_LIVE_VALUE@@')\n")
+            .await
+            .unwrap();
+        assert!(
+            crate::shells::deployment::handle_render_live(&config, "shell/custom/mytool")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(&rendered).await.unwrap(),
+            last_good,
+            "failed live transform must preserve the last-known-good output"
+        );
+
+        let launcher = fs::read_to_string(config.bin_dir().join("mytool"))
+            .await
+            .unwrap();
+        assert!(launcher.contains("__shell-render"));
+        assert!(launcher.contains("--config-dir"));
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn snapshot_upgrade_applies_external_raw_source_change() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+        )
+        .await
+        .unwrap();
+        let source = cat_dir.join("tool.sh");
+        fs::write(&source, b"#!/bin/sh\necho first\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+        let installed = config.installed_shell_dir().join("custom/tool.sh");
+        assert!(
+            fs::read_to_string(&installed)
+                .await
+                .unwrap()
+                .contains("first")
+        );
+
+        fs::write(&source, b"#!/bin/sh\necho second\n")
+            .await
+            .unwrap();
+        let mut separator = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut separator)
+            .await
+            .unwrap();
+        assert_eq!(report.snapshots_updated, 1);
+        assert!(
+            fs::read_to_string(&installed)
+                .await
+                .unwrap()
+                .contains("second")
+        );
+        assert_eq!(
+            fs::read_link(config.bin_dir().join("mytool"))
+                .await
+                .unwrap(),
+            installed
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upgrade_migrates_legacy_external_link_to_snapshot() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+        )
+        .await
+        .unwrap();
+        let source = cat_dir.join("tool.sh");
+        fs::write(&source, b"#!/bin/sh\necho legacy\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        fs::symlink(&source, config.bin_dir().join("mytool"))
+            .await
+            .unwrap();
+
+        let mut separator = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut separator)
+            .await
+            .unwrap();
+        assert_eq!(report.snapshots_updated, 1);
+        assert_eq!(
+            fs::read_link(config.bin_dir().join("mytool"))
+                .await
+                .unwrap(),
+            config.installed_shell_dir().join("custom/tool.sh")
+        );
+        assert!(
+            crate::shells::deployment::ShellManifest::load(&config)
+                .await
+                .unwrap()
+                .find("shell/custom/mytool")
+                .is_some()
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upgrade_switches_snapshot_raw_link_to_explicit_live_source() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+        )
+        .await
+        .unwrap();
+        let source = cat_dir.join("tool.sh");
+        fs::write(&source, b"#!/bin/sh\necho live\n").await.unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        config.external_shell_mode = crate::config::ExternalShellMode::Live;
+        let mut separator = crate::output::SectionSeparator::new();
+        handle_upgrade_installed(&config, false, &mut separator)
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read_link(config.bin_dir().join("mytool"))
+                .await
+                .unwrap(),
+            source
+        );
+        let manifest = crate::shells::deployment::ShellManifest::load(&config)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest.find("shell/custom/mytool").unwrap().mode,
+            crate::config::ExternalShellMode::Live
+        );
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }

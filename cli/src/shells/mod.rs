@@ -1,3 +1,4 @@
+pub(crate) mod deployment;
 mod install;
 mod links;
 pub mod metadata;
@@ -6,6 +7,8 @@ mod report;
 mod template;
 mod uninstall;
 
+#[doc(hidden)]
+pub use deployment::handle_render_live;
 pub use install::{
     handle_completion_install, handle_init_template, handle_install, handle_upgrade_installed,
     handle_upgrade_installed_target,

@@ -117,6 +117,19 @@ bugs. Check this list before changing the modules named in each entry.
 - **Embedded templates are the fallback** when an external/overlay presets dir lacks a file
   (commit `5606438`). External presets mode must degrade to embedded content, not error.
 
+## External shell deployment
+
+- **External source selection and installed state are separate.** Snapshot mode materializes
+  effective shell categories below `<shine_dir>/installed/shell/`; launchers must never point at
+  the user-owned external tree unless `external_shell_mode = "live"` is explicit.
+- **Live transforms are manifest-constrained.** Generated launchers may request only a canonical
+  target recorded in `shell-manifest.toml`; the renderer writes only below `rendered_dir`, stores
+  no env values in the manifest, uses atomic replacement, and fails rather than executing stale
+  output after a transform error.
+- **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
+  files, manifest entries, and managed launchers, including legacy launchers pointing into the
+  external tree. The external presets and overlay directories remain untouched.
+
 ## Secrets
 
 - **Decrypt routing is tag-based only** (`secret::parse_tagged_ciphertext`). `decrypt_secret`

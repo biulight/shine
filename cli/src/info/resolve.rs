@@ -313,6 +313,7 @@ mod tests {
                 env: vec![],
             },
             source_path: PathBuf::from(format!("/tmp/{source}")),
+            installed_source_path: PathBuf::from(format!("/tmp/{source}")),
             rendered_path: PathBuf::from(format!("/tmp/rendered/{source}")),
             link_path: PathBuf::from(format!("/tmp/bin/{command}")),
             link_target: None,

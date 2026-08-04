@@ -23,6 +23,7 @@ pub(super) struct ShellInfoFile {
     pub(super) category: ShellCategory,
     pub(super) file: crate::shells::metadata::ShellFile,
     pub(super) source_path: PathBuf,
+    pub(super) installed_source_path: PathBuf,
     pub(super) rendered_path: PathBuf,
     pub(super) link_path: PathBuf,
     pub(super) link_target: Option<PathBuf>,
@@ -87,6 +88,11 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
                     .join(&category.name)
                     .join(&file.source_rel),
             );
+            let installed_source_path = crate::shells::deployment::deployment_source_path(
+                config,
+                &category.name,
+                &file.source_rel,
+            );
             let rendered_path = config
                 .rendered_dir()
                 .join("shell")
@@ -97,7 +103,7 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
                 std::ffi::OsStr::new(&file.command_name),
             );
 
-            let source_exists = source_path.exists();
+            let source_exists = installed_source_path.exists();
             let rendered_exists = rendered_path.exists();
             let (link_exists, link_target) = read_link_target(&link_path).await?;
             if !source_exists && !rendered_exists && !link_exists {
@@ -121,6 +127,7 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
                 category: category.clone(),
                 file: file.clone(),
                 source_path,
+                installed_source_path,
                 rendered_path,
                 link_path,
                 link_target,

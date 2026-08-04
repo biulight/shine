@@ -191,6 +191,7 @@ pub async fn handle_config_upgrade(
     let sys_report = Box::pin(sys::handle_upgrade_managed(config, verbose, &mut sep)).await?;
 
     let updated = env_report.updated
+        + shell_report.snapshots_updated
         + shell_report.templates_updated
         + shell_report.links_created
         + shell_report.links_updated

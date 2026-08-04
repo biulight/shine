@@ -45,6 +45,18 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExternalShellMode {
+    #[default]
+    Snapshot,
+    Live,
+}
+
+fn is_snapshot_mode(value: &ExternalShellMode) -> bool {
+    *value == ExternalShellMode::Snapshot
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     /// Presets directory - computed at runtime, not serialized
@@ -82,6 +94,10 @@ pub struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub presets_dir_override: Option<PathBuf>,
+    /// Deployment policy for shell commands sourced from an external presets directory.
+    /// Snapshot mode is the safe default; live mode is an explicit preset-development opt-in.
+    #[serde(default, skip_serializing_if = "is_snapshot_mode")]
+    pub external_shell_mode: ExternalShellMode,
     /// Optional overlay directory merged over the active presets source.
     #[serde(
         rename = "presets_overlay_dir",
@@ -115,8 +131,8 @@ pub struct Config {
     pub app_default_dest_root_override: Option<PathBuf>,
     /// `true` when the presets directory is provided by the user (via env var or config
     /// `presets_dir` key) rather than the default `~/.shine/presets/`.
-    /// When `true`, install commands read presets from disk directly without extracting
-    /// embedded assets, and list commands enumerate the on-disk folder.
+    /// When `true`, commands resolve desired presets from disk without extracting embedded
+    /// assets. Shell deployment then follows `external_shell_mode`.
     #[serde(skip)]
     pub is_external_presets: bool,
     /// Allows app presets loaded from external preset directories to run post-upgrade hooks.
@@ -239,6 +255,11 @@ impl Config {
         self.shine_dir().join("rendered")
     }
 
+    /// Shine-owned snapshots of external shell categories.
+    pub fn installed_shell_dir(&self) -> PathBuf {
+        self.shine_dir().join("installed").join("shell")
+    }
+
     pub fn app_default_dest_root(&self) -> PathBuf {
         match &self.app_default_dest_root_override {
             Some(p) => {
@@ -262,6 +283,7 @@ impl Config {
             last_cleared_schema_version: None,
             shell_type: ShellType::default(),
             presets_dir_override: None,
+            external_shell_mode: ExternalShellMode::Snapshot,
             presets_overlay_dir_override: None,
             presets_overlay_git: None,
             presets_overlay_git_branch: None,
@@ -305,6 +327,13 @@ impl Config {
     pub fn with_presets_dir_override(self, value: Option<PathBuf>) -> Self {
         Self {
             presets_dir_override: value,
+            ..self
+        }
+    }
+
+    pub fn with_external_shell_mode(self, value: ExternalShellMode) -> Self {
+        Self {
+            external_shell_mode: value,
             ..self
         }
     }
@@ -404,6 +433,14 @@ pub fn print_presets_note(config: &Config) {
         if let Some(dir) = config.active_presets_overlay_dir() {
             println!("{}", crate::colors::presets_overlay_note(dir));
         }
+        let deployment = match config.external_shell_mode {
+            ExternalShellMode::Snapshot => "snapshot · changes require `shine upgrade`",
+            ExternalShellMode::Live => "live · content applies on next invocation",
+        };
+        println!(
+            "{}",
+            crate::colors::dim(&crate::colors::shell_deployment_note(deployment))
+        );
         println!();
     } else if let Some(dir) = config.active_presets_overlay_dir() {
         println!("{}", crate::colors::presets_overlay_note(dir));
@@ -428,6 +465,7 @@ impl Default for Config {
             last_cleared_schema_version: None,
             shell_type: ShellType::default(),
             presets_dir_override: None,
+            external_shell_mode: ExternalShellMode::Snapshot,
             presets_overlay_dir_override: None,
             presets_overlay_git: None,
             presets_overlay_git_branch: None,

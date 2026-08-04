@@ -64,19 +64,29 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
     }
 
     let bin_dir = config.bin_dir();
+    let shell_manifest = crate::shells::deployment::ShellManifest::load(config).await?;
     let mut rows: Vec<ShellRow> = Vec::new();
 
     for cat in &categories {
+        let snapshot_current =
+            crate::shells::deployment::snapshot_category_current(config, &cat.name)
+                .await
+                .unwrap_or(false);
         for script in &cat.files {
-            let script_path =
-                config.preset_path(Path::new("shell").join(&cat.name).join(&script.source_rel));
+            let desired_path = crate::shells::deployment::desired_source_path(
+                config,
+                &cat.name,
+                &script.source_rel,
+            );
+            let script_path = crate::shells::deployment::deployment_source_path(
+                config,
+                &cat.name,
+                &script.source_rel,
+            );
             let source_key = format!("shell/{}/{}", cat.name, script.source_rel.display());
             let display_name = format!("{}/{}", cat.name, script.command_name);
-            let rendered_path = config
-                .rendered_dir()
-                .join("shell")
-                .join(&cat.name)
-                .join(&script.source_rel);
+            let rendered_path =
+                crate::shells::deployment::rendered_path(config, &cat.name, &script.source_rel);
             let link_name = OsString::from(&script.command_name);
             let link_path = crate::bin_links::command_path_for_name(bin_dir, &link_name);
 
@@ -87,7 +97,11 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                     .map(|m| m.file_type().is_symlink())
                     .unwrap_or(false)
             };
-            let effective_source = if rendered_path.exists() {
+            let effective_transforms =
+                crate::shells::deployment::effective_transforms(script, &desired_path)
+                    .await
+                    .unwrap_or_else(|_| script.transforms.clone());
+            let effective_source = if !effective_transforms.is_empty() {
                 &rendered_path
             } else {
                 &script_path
@@ -98,11 +112,16 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 .map(crate::env::EnvVarSpec::to_with_arg)
                 .collect::<Vec<_>>();
             let link_current = if link_exists {
+                let render_target = (config.is_external_presets
+                    && config.external_shell_mode == crate::config::ExternalShellMode::Live
+                    && !effective_transforms.is_empty())
+                .then(|| format!("shell/{}/{}", cat.name, script.command_name));
                 crate::bin_links::link_is_current(
                     &link_path,
                     effective_source,
                     script.runtime,
                     &runtime_env,
+                    render_target.as_deref(),
                 )
                 .await?
             } else {
@@ -116,15 +135,33 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 (false, false) => ("✗", "not installed"),
             };
 
-            let (sym, status_text) = if link_exists && !link_current {
+            let canonical_target = format!("shell/{}/{}", cat.name, script.command_name);
+            let expected_runtime = match script.runtime {
+                crate::bin_links::LinkRuntime::Native => "native",
+                crate::bin_links::LinkRuntime::Bun => "bun",
+            };
+            let manifest_current = !config.is_external_presets
+                || shell_manifest.find(&canonical_target).is_some_and(|entry| {
+                    entry.mode == config.external_shell_mode
+                        && entry.source_path == script_path
+                        && entry.runtime == expected_runtime
+                        && entry.transforms == effective_transforms
+                        && entry.env == runtime_env
+                        && entry.needs_source == script.needs_source
+                });
+
+            let (sym, status_text) = if link_exists
+                && (!link_current || !manifest_current || !snapshot_current)
+            {
                 ("↑", "update available")
             } else {
                 match shell_source_status(
                     config,
                     &source_key,
+                    &desired_path,
                     &script_path,
                     &rendered_path,
-                    &script.transforms,
+                    &effective_transforms,
                 )
                 .await
                 {
@@ -132,6 +169,17 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                         ("↑", "update available")
                     }
                     Some(FileStatus::Missing) if link_exists => ("!", "rendered script missing"),
+                    _ if config.is_external_presets
+                        && config.external_shell_mode == crate::config::ExternalShellMode::Live
+                        && file_exists
+                        && link_exists =>
+                    {
+                        if effective_transforms.is_empty() {
+                            ("✓", "live source")
+                        } else {
+                            ("✓", "rendered on next run")
+                        }
+                    }
                     _ => (sym, status_text),
                 }
             };
@@ -152,33 +200,32 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
 async fn shell_source_status(
     config: &Config,
     source_key: &str,
+    desired_path: &Path,
     script_path: &Path,
     rendered_path: &Path,
     declared_transforms: &[String],
 ) -> Option<FileStatus> {
     let source_bytes = if config.is_external_presets {
-        tokio::fs::read(script_path).await.ok()?
+        tokio::fs::read(desired_path).await.ok()?
     } else {
         crate::presets::read_asset_bytes(source_key)?
     };
-    if !config.is_external_presets && !script_path.exists() {
+    if !script_path.exists() {
         return Some(FileStatus::UpdateAvail);
     }
-    let transforms = if !declared_transforms.is_empty() {
-        declared_transforms.to_vec()
-    } else if crate::presets::parse_template_annotation(&source_bytes) {
-        vec!["template".to_string()]
-    } else {
-        if config.is_external_presets {
-            return Some(FileStatus::UpToDate);
-        }
-        let current = tokio::fs::read(script_path).await.ok()?;
-        return Some(if source_bytes == current {
-            FileStatus::UpToDate
-        } else {
-            FileStatus::UpdateAvail
-        });
-    };
+    if config.is_external_presets
+        && config.external_shell_mode == crate::config::ExternalShellMode::Live
+    {
+        return Some(FileStatus::UpToDate);
+    }
+    let current_source = tokio::fs::read(script_path).await.ok()?;
+    if source_bytes != current_source {
+        return Some(FileStatus::UpdateAvail);
+    }
+    let transforms = declared_transforms.to_vec();
+    if transforms.is_empty() {
+        return Some(FileStatus::UpToDate);
+    }
 
     if !rendered_path.exists() {
         return Some(FileStatus::Missing);
@@ -706,6 +753,44 @@ mod tests {
         assert_eq!(row.status_sym, "↑");
         assert_eq!(row.status_text, "update available");
 
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_raw_shell_change_stays_live_and_current() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+        )
+        .await
+        .unwrap();
+        let source = cat_dir.join("tool.sh");
+        fs::write(&source, b"#!/bin/sh\necho first\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.external_shell_mode = crate::config::ExternalShellMode::Live;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::shells::handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+        fs::write(&source, b"#!/bin/sh\necho second\n")
+            .await
+            .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "custom/mytool")
+            .unwrap();
+        assert_eq!(row.status_sym, "✓");
+        assert_eq!(row.status_text, "live source");
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

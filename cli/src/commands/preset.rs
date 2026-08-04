@@ -58,6 +58,9 @@ pub struct LinkCommand {
     /// Create the directory if it does not already exist.
     #[arg(long)]
     pub create: bool,
+    /// Run external shell source changes on their next invocation.
+    #[arg(long)]
+    pub live: bool,
 }
 
 #[derive(Args, Debug)]

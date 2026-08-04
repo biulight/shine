@@ -174,6 +174,8 @@ shine/
 │       ├── shells/
 │       │   ├── mod.rs        # Module root: ShellType, SENTINEL_*, get_shell/get_shell_config_path,
 │       │   │                 # mod declarations + re-exports (handle_*, ShellUpgradeReport)
+│       │   ├── deployment.rs # External snapshot/live deployment, shell-manifest.toml,
+│       │   │                 # category materialization, constrained lazy live transforms
 │       │   ├── install.rs    # handle_install/handle_upgrade_installed/handle_completion_install/
 │       │   │                 # handle_init_template, script/link-spec building
 │       │   ├── uninstall.rs  # handle_uninstall
@@ -336,7 +338,9 @@ shine/
 ### Key data flow
 
 **Install** (`shine shell install [CATEGORY]`):
-1. `presets::extract_prefix("shell[/category]", presets_dir)` — unpacks embedded assets to `~/.shine/presets/shell/`
+1. Embedded mode uses `presets::extract_prefix`; external snapshot mode materializes the
+   effective category under `<shine_dir>/installed/shell/`; explicit live mode retains the
+   external source path.
 2. `bin_links::link_executables(bin_dir, sources)` — creates flat symlinks in `~/.shine/bin/`
 3. `shells::append_path_to_shell_config` — appends a sentinel-guarded `export PATH` block to `~/.zshrc` (or equivalent)
 
