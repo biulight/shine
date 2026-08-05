@@ -173,7 +173,7 @@ describe("launcher orchestration", () => {
       expect(exitCode).toBe(23);
       expect(launchedArgs).toEqual(["--run"]);
       expect(launchedEnvironment.ANTHROPIC_AUTH_TOKEN).toBe("test-token");
-      expect(launchedEnvironment.ANTHROPIC_MODEL).toBe("qwen3.8-max-preview");
+      expect(launchedEnvironment.ANTHROPIC_MODEL).toBe("qwen3.8-max");
       expect(stdout).toHaveBeenCalledWith(
         "ccenv: Claude Code environment configured for Qwen.",
       );
