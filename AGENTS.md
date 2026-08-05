@@ -4,7 +4,8 @@ This file provides guidance to AI coding agents when working with code in this r
 
 `shine` is a self-contained Rust CLI that bundles shell scripts, app config presets, and OS
 bootstrap presets into one binary (rust-embed), installs them under `~/.shine/`, and supports
-safe, manifest-tracked uninstall. Cargo workspace: `cli/` (binary + lib) and `utils/`.
+safe, manifest-tracked uninstall. The workspace root is the publishable `shine-cli` package
+(binary + `cli` library sources under `cli/`); `utils/` is the reusable `shine-core` package.
 
 ## Where knowledge lives
 
@@ -99,8 +100,9 @@ env SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine cargo run --target-dir target -- app 
 
 ```
 shine/
-├── cli/          # Main binary crate ("shine"), backed by a lib crate ("cli")
-│   ├── build.rs  # cargo:rerun-if-changed=../presets (rust-embed trigger)
+├── Cargo.toml     # shine-cli package root and workspace manifest
+├── cli/           # Main binary sources ("shine"), backed by a lib crate ("cli")
+│   ├── build.rs  # cargo:rerun-if-changed=presets (rust-embed trigger)
 │   └── src/
 │       ├── lib.rs            # Module tree root for the `cli` library crate
 │       ├── main.rs           # Bin crate root: `fn main`, `run()` dispatch; delegates
@@ -174,6 +176,8 @@ shine/
 │       ├── shells/
 │       │   ├── mod.rs        # Module root: ShellType, SENTINEL_*, get_shell/get_shell_config_path,
 │       │   │                 # mod declarations + re-exports (handle_*, ShellUpgradeReport)
+│       │   ├── deployment.rs # External snapshot/live deployment, shell-manifest.toml,
+│       │   │                 # category materialization, constrained lazy live transforms
 │       │   ├── install.rs    # handle_install/handle_upgrade_installed/handle_completion_install/
 │       │   │                 # handle_init_template, script/link-spec building
 │       │   ├── uninstall.rs  # handle_uninstall
@@ -277,7 +281,7 @@ shine/
 │       │   └── upgrade.rs    # `upgrade_to_release`: asset selection, archive download/extract,
 │       │                     # staged-swap binary install with rollback on failure
 │       └── version.rs        # Version string formatting
-├── utils/        # Library crate: shared helpers with no cli-crate dependencies
+├── utils/        # shine-core library crate: shared helpers with no CLI/Tauri dependencies
 │   └── src/
 │       ├── migration.rs      # TOML comment-preserving sync (utils::sync_table)
 │       └── init_template.rs  # write_shine_toml_template (shared by `preset new app|shell`)
@@ -336,7 +340,9 @@ shine/
 ### Key data flow
 
 **Install** (`shine shell install [CATEGORY]`):
-1. `presets::extract_prefix("shell[/category]", presets_dir)` — unpacks embedded assets to `~/.shine/presets/shell/`
+1. Embedded mode uses `presets::extract_prefix`; external snapshot mode materializes the
+   effective category under `<shine_dir>/installed/shell/`; explicit live mode retains the
+   external source path.
 2. `bin_links::link_executables(bin_dir, sources)` — creates flat symlinks in `~/.shine/bin/`
 3. `shells::append_path_to_shell_config` — appends a sentinel-guarded `export PATH` block to `~/.zshrc` (or equivalent)
 
@@ -570,7 +576,7 @@ into the Surge Profiles dir and patches the profile's `#!include` lines instead.
 
 ### rust-embed and presets
 
-`PresetAssets` (in `presets.rs`) embeds everything under `presets/` at compile time. `build.rs` registers `cargo:rerun-if-changed=../presets` so cargo recompiles when preset files change — without this, new/modified scripts won't appear in the binary.
+`PresetAssets` (in `presets.rs`) embeds everything under the workspace-root `presets/` directory at compile time. `build.rs` registers `cargo:rerun-if-changed=presets` so cargo recompiles when preset files change — without this, new/modified scripts won't appear in the binary.
 
 ### Shell config PATH injection
 

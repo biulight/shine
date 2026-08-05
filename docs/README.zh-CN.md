@@ -47,7 +47,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 或从源码安装：
 
 ```bash
-cargo install --path cli
+cargo install shine-cli
 ```
 
 Windows 支持目前覆盖 PowerShell 下的 `shine self`、`shine shell`、部分已适配的 app 预设，以及用 PowerShell 实现的 `shine sys bootstrap` 预设，并会同时更新 `powershell.exe` 与 `pwsh.exe` 对应的 profile。
@@ -590,10 +590,27 @@ shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
 
+外部 shell preset 默认使用 **snapshot 模式**。Shine 会把合并后的有效 category 复制到
+`~/.shine/installed/shell/`，因此修改源码与 app 配置遵循相同生命周期：
+`shine update` 预览变化，`shine upgrade` 才应用。旧版本留下的直接链接会由
+`update` 报告，并在 `upgrade` 时迁移。
+
+开发 preset 时可以显式启用 Live shell：
+
+```bash
+shine preset link ~/dotfiles/shine-presets --live
+```
+
+Live 模式下，原始 shell/Bun 源码会在下一次调用时生效；带 transform 的源码会在执行前
+原子渲染，`needs_source` 命令随后仍在父 shell 中 source。Transform 失败会终止本次调用，
+不会静默执行旧缓存。修改 `target`、`runtime`、`transforms` 或 `env` 声明等部署元数据
+仍需执行 `shine upgrade` 来重建 launcher。
+
 也可以在 `~/.shine/config.toml` 中设置 `presets_dir`：
 
 ```toml
 presets_dir = "~/dotfiles/shine-presets"
+# external_shell_mode = "live" # 可选的 preset 开发模式；默认为 "snapshot"
 ```
 
 然后把默认预设导出过去，作为初始版本：
@@ -1239,7 +1256,8 @@ typos
 
 ```
 shine/
-├── cli/        # binary crate — CLI 解析、命令分发、配置
+├── Cargo.toml   # shine-cli 包根与 workspace manifest
+├── cli/         # shine-cli 源码 — CLI 解析、命令分发、配置
 │   ├── build.rs               # 监听 presets/ 变化并触发 rust-embed 重新编译
 │   └── src/
 │       ├── main.rs
@@ -1250,7 +1268,7 @@ shine/
 │       ├── config/            # Config 结构、加载/保存、环境变量优先级链
 │       ├── commands/          # clap 子命令定义
 │       └── shells/            # ShellType、安装/卸载/列表、PATH 注入
-├── utils/      # library crate — 保留注释的 TOML 迁移能力
+├── utils/      # shine-core crate — 共享 TOML 与预设辅助功能
 └── presets/    # 编译时嵌入二进制的 shell/app 预设文件
     ├── app/
     └── shell/

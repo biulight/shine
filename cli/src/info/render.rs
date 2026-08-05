@@ -87,6 +87,13 @@ pub(super) async fn print_shell_file(
         colors::dim("Source"),
         path_display::format_home(&item.source_path, &config.home_dir)
     );
+    if item.installed_source_path != item.source_path {
+        println!(
+            "{}     {}",
+            colors::dim("Snapshot"),
+            path_display::format_home(&item.installed_source_path, &config.home_dir)
+        );
+    }
     println!(
         "{}     {}",
         colors::dim("Bin link"),
@@ -148,7 +155,7 @@ fn shell_content_path(item: &ShellInfoFile) -> std::path::PathBuf {
                 .exists()
                 .then(|| item.rendered_path.clone())
         })
-        .unwrap_or_else(|| item.source_path.clone())
+        .unwrap_or_else(|| item.installed_source_path.clone())
 }
 
 fn print_heading(heading: &str, path: &Path) {
@@ -210,7 +217,7 @@ fn colored_app_status(status: FileStatus) -> String {
 // status is a free-form &'static str produced by the shell subsystem; _ => "~" is intentional.
 fn shell_status_sym(status: &str) -> &'static str {
     match status {
-        "up-to-date" => "✓",
+        "up-to-date" | "live source" | "rendered on next run" => "✓",
         "update available" => "↑",
         "preset present, bin symlink missing"
         | "bin symlink present, script missing"
@@ -281,6 +288,15 @@ async fn shell_diff_output(
     item: &ShellInfoFile,
     current_path: &Path,
 ) -> Result<String> {
+    if config.is_external_presets
+        && config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
+        && !item.installed_source_path.exists()
+    {
+        return Ok(format!(
+            "Managed snapshot is missing: {}. Run `shine upgrade` to migrate the installed command.\n",
+            item.installed_source_path.display()
+        ));
+    }
     let expected = match shell_expected_bytes(config, item).await? {
         Some(bytes) => bytes,
         None => {
@@ -344,14 +360,20 @@ async fn shell_expected_bytes(config: &Config, item: &ShellInfoFile) -> Result<O
         }
     };
 
-    if !crate::presets::parse_template_annotation(&source) {
+    let transforms = if !item.file.transforms.is_empty() {
+        item.file.transforms.clone()
+    } else if crate::presets::parse_template_annotation(&source) {
+        vec!["template".to_string()]
+    } else {
+        Vec::new()
+    };
+    if transforms.is_empty() {
         return Ok(Some(source));
     }
 
     let env = EnvConfig::load_or_init(config).await?;
-    let rendered =
-        crate::install_core::apply_transforms(&["template".to_string()], &source, env.as_map())
-            .with_context(|| format!("rendering shell template: {}", item.source_path.display()))?;
+    let rendered = crate::install_core::apply_transforms(&transforms, &source, env.as_map())
+        .with_context(|| format!("rendering shell template: {}", item.source_path.display()))?;
     Ok(Some(rendered))
 }
 
@@ -419,6 +441,7 @@ mod tests {
                 env: vec![],
             },
             source_path: std::path::PathBuf::from(format!("/tmp/{source}")),
+            installed_source_path: std::path::PathBuf::from(format!("/tmp/{source}")),
             rendered_path: std::path::PathBuf::from(format!("/tmp/rendered/{source}")),
             link_path: std::path::PathBuf::from(format!("/tmp/bin/{command}")),
             link_target: None,

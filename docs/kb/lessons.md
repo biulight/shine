@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-04 — External shell sources exposed two incompatible apply models
+
+- **Symptom**: editing external `cc.ts` took effect immediately, while editing an external
+  template or app preset required `shine update` followed by `shine upgrade`.
+- **Root cause**: external preset discovery also selected the deployment location. Raw shell
+  launchers referenced the working tree, but transformed and app files used managed outputs.
+- **Fix**: separate desired source from deployment. External shell commands default to managed
+  snapshots; explicit live mode directly consumes raw content and lazily renders transforms.
+- **Rule**: source selection must not implicitly change lifecycle semantics. Keep the default
+  update/upgrade boundary uniform and make live execution an explicit, visibly reported mode.
+
 ## 2026-07-25 — Subscription values crossed the generated-config line boundary
 
 - **Symptom**: a VMess subscription field containing CR/LF could add a second Surge configuration

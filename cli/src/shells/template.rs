@@ -75,7 +75,7 @@ pub(super) async fn apply_template_to_scripts(
             })?;
         }
 
-        tokio::fs::write(&script.rendered_path, &rendered)
+        crate::persist::atomic_write(&script.rendered_path, &rendered)
             .await
             .with_context(|| {
                 format!(

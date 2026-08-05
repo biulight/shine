@@ -11,13 +11,15 @@ use super::discovery::{
     read_presets_override_from_toml, resolve_config_presets_path, resolve_runtime_config_dirs,
 };
 use super::env_layer::{deserialize_env_values, parse_env_descriptions};
-use super::{Config, GLOBAL_CONFIG_FILE, PROJECT_CONFIG_FILE, ProjectSaveState};
+use super::{Config, ExternalShellMode, GLOBAL_CONFIG_FILE, PROJECT_CONFIG_FILE, ProjectSaveState};
 use crate::home::{default_config_and_presets_dir, effective_home_dir};
 
 #[derive(Default, Deserialize)]
 struct ProjectOverrides {
     #[serde(default)]
     presets_dir: Option<PathBuf>,
+    #[serde(default)]
+    external_shell_mode: Option<ExternalShellMode>,
     #[serde(default)]
     presets_overlay_dir: Option<PathBuf>,
     #[serde(default)]
@@ -110,6 +112,9 @@ impl Config {
         if let Some(path) = overrides.presets_overlay_dir {
             config.presets_overlay_dir_override =
                 Some(resolve_config_presets_path(&path, &project_config.root));
+        }
+        if let Some(mode) = overrides.external_shell_mode {
+            config.external_shell_mode = mode;
         }
         if let Some(path) = overrides.app_default_dest_root {
             config.app_default_dest_root_override =

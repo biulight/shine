@@ -144,6 +144,12 @@ symlink executables into `~/.shine/bin/` (`bin_links.rs`) → append a sentinel-
 to the shell config (`shells/profile.rs`). Uninstall removes only shine-managed symlinks/files
 and deletes the sentinel block precisely.
 
+For external presets, `external_shell_mode = "snapshot"` first materializes the effective
+base/overlay category under `<shine_dir>/installed/shell/`; update compares that snapshot with the
+active source and upgrade refreshes it. Explicit `live` mode points raw commands at the external
+source. A transformed live launcher calls the manifest-constrained internal renderer on each
+invocation, then executes or sources the atomically refreshed file under `rendered/`.
+
 ## Sys bootstrap (`shine sys bootstrap`)
 
 `shine sys update [ITEM] [--verbose]` is a separate, read-only bootstrap-software flow. It reads

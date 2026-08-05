@@ -78,13 +78,16 @@ pub fn status_label(s: &str, sym: &str) -> String {
     }
 }
 
-/// Shared column width for the presets-note labels below, so their paths line up
-/// even though "◈ External Presets" and "◈ Presets Overlay" differ in length.
+/// Shared column width for the presets-note labels below, so their values line up.
 const PRESETS_NOTE_LABEL_WIDTH: usize = 18; // "◈ External Presets".chars().count()
 
-fn presets_note(plain_label: &str, styled_label: &str, dir: &std::path::Path) -> String {
+fn presets_note_value(plain_label: &str, styled_label: &str, value: &str) -> String {
     let pad = " ".repeat(PRESETS_NOTE_LABEL_WIDTH.saturating_sub(plain_label.chars().count()) + 2);
-    format!("{styled_label}{pad}{}", path_display::format(dir))
+    format!("{styled_label}{pad}{value}")
+}
+
+fn presets_note(plain_label: &str, styled_label: &str, dir: &std::path::Path) -> String {
+    presets_note_value(plain_label, styled_label, &path_display::format(dir))
 }
 
 /// Returns a formatted note indicating the active external presets directory.
@@ -105,6 +108,12 @@ pub fn presets_overlay_note(dir: &std::path::Path) -> String {
         .if_supports_color(Stream::Stdout, |t| t.style(Style::new().bold().yellow()))
         .to_string();
     presets_note(label, &styled, dir)
+}
+
+/// Returns a formatted note describing how external shell presets are deployed.
+pub fn shell_deployment_note(value: &str) -> String {
+    let label = "◈ Shell Deployment";
+    presets_note_value(label, label, value)
 }
 
 #[cfg(test)]
@@ -130,5 +139,15 @@ mod tests {
             note.contains("External Presets"),
             "note should include the 'External Presets' label: {note:?}"
         );
+    }
+
+    #[test]
+    fn presets_note_values_use_the_same_column() {
+        let external = external_presets_note(Path::new("/external"));
+        let overlay = presets_overlay_note(Path::new("/overlay"));
+        let deployment = shell_deployment_note("snapshot");
+
+        assert_eq!(external.find("/external"), overlay.find("/overlay"));
+        assert_eq!(external.find("/external"), deployment.find("snapshot"));
     }
 }

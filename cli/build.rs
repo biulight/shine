@@ -2,12 +2,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-changed=../presets");
+    println!("cargo:rerun-if-changed=presets");
     println!("cargo:rerun-if-env-changed=SHINE_VERSION_METADATA");
     println!("cargo:rerun-if-env-changed=SHINE_GIT_SHA");
     println!("cargo:rerun-if-env-changed=SHINE_GIT_DATE");
 
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     emit_git_rerun_paths(&repo);
 
     if let Ok(metadata) = std::env::var("SHINE_VERSION_METADATA")

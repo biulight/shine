@@ -103,7 +103,13 @@ enum LinkKind {
     Overlay,
 }
 
-async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKind) -> Result<()> {
+async fn handle_link(
+    config: &Config,
+    path: PathBuf,
+    create: bool,
+    kind: LinkKind,
+    live: bool,
+) -> Result<()> {
     use anyhow::Context as _;
 
     let raw = path.to_string_lossy();
@@ -137,11 +143,19 @@ async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKin
         config::validate_env_override_file(&absolute.join("shine.env.toml")).await?;
     }
 
+    let wanted_mode = if live {
+        config::ExternalShellMode::Live
+    } else {
+        config::ExternalShellMode::Snapshot
+    };
     let already_linked = match kind {
-        LinkKind::Presets => config
-            .presets_dir_override
-            .as_deref()
-            .is_some_and(|p| p == absolute),
+        LinkKind::Presets => {
+            config
+                .presets_dir_override
+                .as_deref()
+                .is_some_and(|p| p == absolute)
+                && config.external_shell_mode == wanted_mode
+        }
         LinkKind::Overlay => config
             .presets_overlay_dir_override
             .as_deref()
@@ -159,7 +173,8 @@ async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKin
     let updated = match kind {
         LinkKind::Presets => config
             .clone()
-            .with_presets_dir_override(Some(absolute.clone())),
+            .with_presets_dir_override(Some(absolute.clone()))
+            .with_external_shell_mode(wanted_mode),
         LinkKind::Overlay => config
             .clone()
             // Linking a local path clears any shine-managed Git overlay so the
@@ -190,6 +205,17 @@ async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKin
             println!("{}", colors::external_presets_note(&absolute));
             println!(
                 "{}",
+                colors::dim(match wanted_mode {
+                    config::ExternalShellMode::Snapshot => {
+                        "Shell mode: snapshot (run `shine upgrade` to apply source changes)."
+                    }
+                    config::ExternalShellMode::Live => {
+                        "Shell mode: live (content changes apply on the next invocation)."
+                    }
+                })
+            );
+            println!(
+                "{}",
                 colors::dim(
                     "Run `shine preset export` to populate the directory with built-in presets."
                 )
@@ -207,8 +233,13 @@ async fn handle_link(config: &Config, path: PathBuf, create: bool, kind: LinkKin
     Ok(())
 }
 
-pub async fn handle_preset_link(config: &Config, path: PathBuf, create: bool) -> Result<()> {
-    handle_link(config, path, create, LinkKind::Presets).await
+pub async fn handle_preset_link(
+    config: &Config,
+    path: PathBuf,
+    create: bool,
+    live: bool,
+) -> Result<()> {
+    handle_link(config, path, create, LinkKind::Presets, live).await
 }
 
 pub async fn handle_preset_unlink(config: &Config) -> Result<()> {
@@ -220,7 +251,10 @@ pub async fn handle_preset_unlink(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    let updated = config.clone().with_presets_dir_override(None);
+    let updated = config
+        .clone()
+        .with_presets_dir_override(None)
+        .with_external_shell_mode(config::ExternalShellMode::Snapshot);
     updated.save().await?;
 
     println!(
@@ -240,7 +274,7 @@ pub async fn handle_overlay_link(config: &Config, cmd: OverlayLinkCommand) -> Re
         return handle_overlay_link_git(config, url, cmd.branch).await;
     }
     match cmd.path {
-        Some(path) => handle_link(config, path, cmd.create, LinkKind::Overlay).await,
+        Some(path) => handle_link(config, path, cmd.create, LinkKind::Overlay, false).await,
         None => bail!("provide a local PATH or --git <URL> for the overlay"),
     }
 }
@@ -490,7 +524,7 @@ mod tests {
         let presets = make_temp_dir().await;
         let config = config_in(&dir);
 
-        handle_preset_link(&config, presets.clone(), false)
+        handle_preset_link(&config, presets.clone(), false, false)
             .await
             .unwrap();
 
@@ -505,12 +539,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_link_persists_external_shell_mode() {
+        let dir = make_temp_dir().await;
+        let presets = make_temp_dir().await;
+        let config = config_in(&dir);
+
+        handle_preset_link(&config, presets.clone(), false, true)
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
+        assert!(content.contains("external_shell_mode = \"live\""));
+        fs::remove_dir_all(&dir).await.unwrap();
+        fs::remove_dir_all(&presets).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn link_creates_dir_when_create_flag_set() {
         let dir = make_temp_dir().await;
         let config = config_in(&dir);
         let new_dir = dir.join("new-presets");
 
-        handle_preset_link(&config, new_dir.clone(), true)
+        handle_preset_link(&config, new_dir.clone(), true, false)
             .await
             .unwrap();
 
@@ -524,7 +574,7 @@ mod tests {
         let config = config_in(&dir);
         let missing = dir.join("does-not-exist");
 
-        let err = handle_preset_link(&config, missing, false).await;
+        let err = handle_preset_link(&config, missing, false, false).await;
         assert!(err.is_err());
         let msg = err.unwrap_err().to_string();
         assert!(
@@ -542,7 +592,7 @@ mod tests {
         let file = dir.join("not-a-dir.txt");
         fs::write(&file, b"hello").await.unwrap();
 
-        let err = handle_preset_link(&config, file, false).await;
+        let err = handle_preset_link(&config, file, false, false).await;
         assert!(err.is_err());
         assert!(
             err.unwrap_err().to_string().contains("not a directory"),
@@ -562,7 +612,7 @@ mod tests {
         let config = config_in(&dir).with_presets_dir_override(Some(abs.clone()));
 
         // Should return Ok without error
-        handle_preset_link(&config, presets.clone(), false)
+        handle_preset_link(&config, presets.clone(), false, false)
             .await
             .unwrap();
 
@@ -584,7 +634,7 @@ mod tests {
         // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.
         unsafe { std::env::set_var("SHINE_PRESETS", "/some/override") };
         // Should succeed even with env var set
-        handle_preset_link(&config, presets.clone(), false)
+        handle_preset_link(&config, presets.clone(), false, false)
             .await
             .unwrap();
         // SAFETY: `_guard` holds `env_lock()`, serialising SHINE_PRESETS mutations across test threads.

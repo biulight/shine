@@ -40,9 +40,26 @@ pub async fn handle_uninstall(
         crate::bin_links::unlink_managed(config.bin_dir(), &managed_presets_root, dry_run).await?;
     let unlink_rendered =
         crate::bin_links::unlink_managed(config.bin_dir(), &managed_rendered_root, dry_run).await?;
+    let managed_installed_root = match category {
+        Some(cat) => config.installed_shell_dir().join(cat),
+        None => config.installed_shell_dir(),
+    };
+    let unlink_installed =
+        crate::bin_links::unlink_managed(config.bin_dir(), &managed_installed_root, dry_run)
+            .await?;
     let unlink_report = crate::bin_links::UnlinkReport {
-        removed: [unlink_presets.removed, unlink_rendered.removed].concat(),
-        skipped: [unlink_presets.skipped, unlink_rendered.skipped].concat(),
+        removed: [
+            unlink_presets.removed,
+            unlink_rendered.removed,
+            unlink_installed.removed,
+        ]
+        .concat(),
+        skipped: [
+            unlink_presets.skipped,
+            unlink_rendered.skipped,
+            unlink_installed.skipped,
+        ]
+        .concat(),
     };
     output::summary_line("Bin Links", &unlink_report_summary_parts(&unlink_report));
 
@@ -88,6 +105,27 @@ pub async fn handle_uninstall(
             .with_context(|| {
                 format!("removing rendered dir: {}", managed_rendered_root.display())
             })?;
+    }
+
+    if !dry_run && managed_installed_root.exists() {
+        tokio::fs::remove_dir_all(&managed_installed_root)
+            .await
+            .with_context(|| {
+                format!(
+                    "removing installed shell snapshot: {}",
+                    managed_installed_root.display()
+                )
+            })?;
+    }
+
+    if !dry_run {
+        let mut manifest = super::deployment::ShellManifest::load(config).await?;
+        if let Some(category) = category {
+            manifest.remove_category(category);
+        } else {
+            manifest.entries.clear();
+        }
+        manifest.save(config).await?;
     }
 
     if !dry_run {

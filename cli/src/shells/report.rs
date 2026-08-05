@@ -3,6 +3,7 @@ use crate::colors;
 
 #[derive(Debug, Default)]
 pub struct ShellUpgradeReport {
+    pub snapshots_updated: usize,
     pub templates_updated: usize,
     pub links_created: usize,
     pub links_updated: usize,

@@ -1,8 +1,15 @@
 [package]
-name = "utils"
+name = "shine-core"
 version.workspace = true
 edition = "2024"
-license = "MIT"
+rust-version = "1.96"
+license.workspace = true
+description = "Shared configuration and preset helpers for Shine applications"
+readme = "README.md"
+repository = "https://github.com/biulight/shine"
+homepage = "https://github.com/biulight/shine"
+keywords = ["configuration", "toml", "presets"]
+categories = ["config"]
 
 [dependencies]
 anyhow = { workspace = true }

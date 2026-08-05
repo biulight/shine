@@ -24,6 +24,11 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    #[command(name = "__shell-render", hide = true)]
+    ShellRender {
+        #[arg(value_name = "TARGET")]
+        target: String,
+    },
     /// Initialize the current directory as a shine presets directory
     Init(InitCommand),
     /// Manage shell command presets

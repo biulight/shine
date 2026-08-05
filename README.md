@@ -49,7 +49,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 Or install from source:
 
 ```bash
-cargo install --path cli
+cargo install shine-cli
 ```
 
 Windows support covers `shine self`, `shine shell`, selected app presets in PowerShell, and a PowerShell-backed `shine sys bootstrap` preset, including profile updates for both `powershell.exe` and `pwsh.exe`.
@@ -609,10 +609,28 @@ shine preset link ~/dotfiles/shine-presets --create
 shine preset export
 ```
 
+External shell presets use **snapshot mode by default**. Shine copies the effective shell category
+to `~/.shine/installed/shell/`, so editing the source follows the same lifecycle as app configs:
+`shine update` previews the change and `shine upgrade` applies it. Existing direct links from
+older Shine versions are reported by `update` and migrate during `upgrade`.
+
+Preset developers can explicitly opt into live shell execution:
+
+```bash
+shine preset link ~/dotfiles/shine-presets --live
+```
+
+In live mode, raw shell/Bun source changes apply on the next invocation. Sources with transforms
+are rendered atomically immediately before execution; `needs_source` commands are then sourced
+into the parent shell. A transform failure aborts that invocation instead of running stale output.
+Changes to deployment metadata such as `target`, `runtime`, `transforms`, or `env` declarations
+still require `shine upgrade` to rebuild the managed launcher.
+
 To use a custom directory as your preset source, set `presets_dir` in `~/.shine/config.toml`:
 
 ```toml
 presets_dir = "~/dotfiles/shine-presets"
+# external_shell_mode = "live" # optional preset-development mode; default is "snapshot"
 ```
 
 Then export the defaults there as a starting point:
@@ -1307,7 +1325,8 @@ typos
 
 ```
 shine/
-├── cli/        # binary crate — CLI parsing, commands, config
+├── Cargo.toml   # shine-cli package root and workspace manifest
+├── cli/         # shine-cli sources — CLI parsing, commands, config
 │   ├── build.rs               # triggers rust-embed recompile on presets/ changes
 │   └── src/
 │       ├── main.rs
@@ -1318,7 +1337,7 @@ shine/
 │       ├── config/            # Config struct, load/save, env-var priority chain
 │       ├── commands/          # clap subcommand definitions
 │       └── shells/            # ShellType, install/uninstall/list, PATH injection
-├── utils/      # library crate — TOML comment-preserving migration
+├── utils/      # shine-core crate — shared TOML and preset helpers
 └── presets/    # bundled shell/app files embedded into the binary at compile time
     ├── app/
     └── shell/
