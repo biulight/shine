@@ -47,7 +47,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 或从源码安装：
 
 ```bash
-cargo install --path cli
+cargo install shine-cli
 ```
 
 Windows 支持目前覆盖 PowerShell 下的 `shine self`、`shine shell`、部分已适配的 app 预设，以及用 PowerShell 实现的 `shine sys bootstrap` 预设，并会同时更新 `powershell.exe` 与 `pwsh.exe` 对应的 profile。
@@ -1256,7 +1256,8 @@ typos
 
 ```
 shine/
-├── cli/        # binary crate — CLI 解析、命令分发、配置
+├── Cargo.toml   # shine-cli 包根与 workspace manifest
+├── cli/         # shine-cli 源码 — CLI 解析、命令分发、配置
 │   ├── build.rs               # 监听 presets/ 变化并触发 rust-embed 重新编译
 │   └── src/
 │       ├── main.rs
@@ -1267,7 +1268,7 @@ shine/
 │       ├── config/            # Config 结构、加载/保存、环境变量优先级链
 │       ├── commands/          # clap 子命令定义
 │       └── shells/            # ShellType、安装/卸载/列表、PATH 注入
-├── utils/      # library crate — 保留注释的 TOML 迁移能力
+├── utils/      # shine-core crate — 共享 TOML 与预设辅助功能
 └── presets/    # 编译时嵌入二进制的 shell/app 预设文件
     ├── app/
     └── shell/

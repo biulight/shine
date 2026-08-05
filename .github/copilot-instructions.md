@@ -31,12 +31,12 @@ Pre-commit runs all of the above on every commit. All must pass before committin
 
 ## Architecture
 
-Cargo workspace with two crates:
+Cargo workspace with two publishable crates:
 
-- **`cli/`** — the `shine` binary (Clap-based, async with Tokio)
-- **`utils/`** — library with `utils::migration::sync_table`, a TOML comment-preserving table updater
+- **`shine-cli`** (workspace root; sources in `cli/`) — the `shine` binary (Clap-based, async with Tokio)
+- **`shine-core`** (`utils/`) — UI-agnostic shared library with `utils::migration::sync_table`, a TOML comment-preserving table updater
 
-Preset files under `presets/` are compiled into the binary via `rust_embed` (`PresetAssets` in `cli/src/presets.rs`). `cli/build.rs` registers `cargo:rerun-if-changed=../presets` so cargo re-embeds when preset files change.
+Preset files under the workspace-root `presets/` directory are compiled into the binary via `rust_embed` (`PresetAssets` in `cli/src/presets.rs`). `cli/build.rs` registers `cargo:rerun-if-changed=presets` so cargo re-embeds when preset files change.
 
 ### Command routing
 

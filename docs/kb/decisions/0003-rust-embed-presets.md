@@ -12,7 +12,7 @@ separate files would require an installer, a download step, or a fixed filesyste
 
 Everything under `presets/` is compiled into the binary with rust-embed and extracted to the
 runtime presets dir on demand (`presets::extract_prefix`). `cli/build.rs` registers
-`cargo:rerun-if-changed=../presets` so editing a preset triggers re-embedding.
+`cargo:rerun-if-changed=presets` so editing a preset triggers re-embedding.
 
 External presets remain possible: `SHINE_PRESETS` / `presets_dir` point at a directory, and
 `presets_overlay_dir` merges user files over embedded ones (commit `3f7ac41`). Embedded content

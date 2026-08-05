@@ -49,7 +49,7 @@ irm https://github.com/biulight/shine/releases/latest/download/install.ps1 | iex
 Or install from source:
 
 ```bash
-cargo install --path cli
+cargo install shine-cli
 ```
 
 Windows support covers `shine self`, `shine shell`, selected app presets in PowerShell, and a PowerShell-backed `shine sys bootstrap` preset, including profile updates for both `powershell.exe` and `pwsh.exe`.
@@ -1325,7 +1325,8 @@ typos
 
 ```
 shine/
-├── cli/        # binary crate — CLI parsing, commands, config
+├── Cargo.toml   # shine-cli package root and workspace manifest
+├── cli/         # shine-cli sources — CLI parsing, commands, config
 │   ├── build.rs               # triggers rust-embed recompile on presets/ changes
 │   └── src/
 │       ├── main.rs
@@ -1336,7 +1337,7 @@ shine/
 │       ├── config/            # Config struct, load/save, env-var priority chain
 │       ├── commands/          # clap subcommand definitions
 │       └── shells/            # ShellType, install/uninstall/list, PATH injection
-├── utils/      # library crate — TOML comment-preserving migration
+├── utils/      # shine-core crate — shared TOML and preset helpers
 └── presets/    # bundled shell/app files embedded into the binary at compile time
     ├── app/
     └── shell/

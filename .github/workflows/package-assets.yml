@@ -58,7 +58,7 @@ jobs:
             export SHINE_VERSION_METADATA="preview"
             export SHINE_GIT_SHA="$GITHUB_SHA"
           fi
-          cargo build --release -p cli --target ${{ matrix.target }}
+          cargo build --release -p shine-cli --target ${{ matrix.target }}
       - name: Package archive
         env:
           ASSET_TARGET: ${{ matrix.asset_target }}

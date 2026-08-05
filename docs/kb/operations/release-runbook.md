@@ -14,8 +14,8 @@ How to cut a stable release. Prerequisite reading:
    ```
 2. **Decide the bump.** User-facing features since the tag → minor; only user-facing fixes →
    patch. Ignore `fix(lint|clippy|fmt|typo|build|ci|internal)` commits.
-3. **Bump versions.** Update the version in `cli/Cargo.toml` and keep `utils/Cargo.toml` in
-   sync; refresh `Cargo.lock` (`cargo check`).
+3. **Bump versions.** Update the workspace version in root `Cargo.toml`, which keeps
+   `shine-cli` and `shine-core` in sync; refresh `Cargo.lock` (`cargo check`).
 4. **Write CHANGELOG.md by hand.** New `## [x.y.z] — YYYY-MM-DD` section, entries grouped under
    Features / Bug Fixes / Internal / Docs, plain English, user-facing. Do **not** use git-cliff
    for this file.

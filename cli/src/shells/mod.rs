@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn proxy_scripts_fail_fast_when_not_sourced() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let preset_dir = manifest_dir.join("../presets/shell/proxy");
+        let preset_dir = manifest_dir.join("presets/shell/proxy");
 
         for script in ["set_proxy.sh", "uset_proxy.sh"] {
             let output = std::process::Command::new("bash")

@@ -112,7 +112,7 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Embedded presets
 
-- **`cli/build.rs` must keep `cargo:rerun-if-changed=../presets`.** Without it, preset edits
+- **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
 - **Embedded templates are the fallback** when an external/overlay presets dir lacks a file
   (commit `5606438`). External presets mode must degrade to embedded content, not error.

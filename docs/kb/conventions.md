@@ -34,7 +34,7 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 - Count/inspect the commits since that tag to decide the bump: user-facing features → minor;
   only user-facing fixes → patch.
 - Release commits use `chore(release): ...` (e.g. `chore(release): prepare v0.35.0`).
-- Keep `cli` and `utils` crate versions in sync (see commit `e14d5f9`).
+- Keep `shine-cli` and `shine-core` crate versions in sync (see commit `e14d5f9`).
 
 ## Testing
 

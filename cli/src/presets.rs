@@ -7,7 +7,7 @@ use std::sync::{Mutex, OnceLock};
 use tokio::fs;
 
 #[derive(rust_embed::RustEmbed)]
-#[folder = "$CARGO_MANIFEST_DIR/../presets"]
+#[folder = "$CARGO_MANIFEST_DIR/presets"]
 struct PresetAssets;
 
 fn overlay_dir_cell() -> &'static Mutex<Option<PathBuf>> {

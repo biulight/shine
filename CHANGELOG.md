@@ -7,6 +7,20 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-08-05
+
+### Features
+
+- Added external shell preset deployment modes and a compact `shine list` column layout.
+
+### Bug Fixes
+
+- Updated the Qwen model mapping used by the built-in agent preset.
+
+### Internal
+
+- Published the CLI as `shine-cli` and the reusable, UI-agnostic shared library as `shine-core`.
+
 ## [1.0.0] — 2026-08-02
 
 ### Breaking Changes
