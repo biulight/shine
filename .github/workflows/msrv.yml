@@ -1,0 +1,26 @@
+name: msrv
+
+on:
+  workflow_call:
+  push:
+    branches:
+      - release
+      - main
+  pull_request:
+    branches:
+      - release
+      - main
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88.0
+      - name: Check minimum supported Rust version
+        run: cargo check --locked --workspace

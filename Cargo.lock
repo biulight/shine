@@ -908,9 +908,9 @@ dependencies = [
 
 [[package]]
 name = "jsonc-parser"
-version = "0.32.4"
+version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "840785e1a8b4fdb27be18440a35a81af64820dc185c3973ff8b012d4c6282512"
+checksum = "8c2e5dea04f54739ca5694ee06e4448ffda065a55b3427d2b131bd5ea697ea2c"
 dependencies = [
  "serde",
 ]
@@ -1510,7 +1510,7 @@ dependencies = [
 
 [[package]]
 name = "shine-cli"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "anyhow",
  "base64",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "shine-core"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "anyhow",
  "directories",

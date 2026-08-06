@@ -35,6 +35,8 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   only user-facing fixes → patch.
 - Release commits use `chore(release): ...` (e.g. `chore(release): prepare v0.35.0`).
 - Keep `shine-cli` and `shine-core` crate versions in sync (see commit `e14d5f9`).
+- The minimum supported Rust version is 1.88. The `mise.toml` toolchain may be newer for
+  development, but changes to dependencies must keep the Rust 1.88 CI check passing.
 
 ## Testing
 
