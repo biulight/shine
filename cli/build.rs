@@ -10,10 +10,10 @@ fn main() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     emit_git_rerun_paths(&repo);
 
-    if let Ok(metadata) = std::env::var("SHINE_VERSION_METADATA")
-        && !metadata.trim().is_empty()
-    {
-        println!("cargo:rustc-env=SHINE_VERSION_METADATA={metadata}");
+    if let Ok(metadata) = std::env::var("SHINE_VERSION_METADATA") {
+        if !metadata.trim().is_empty() {
+            println!("cargo:rustc-env=SHINE_VERSION_METADATA={metadata}");
+        }
     }
 
     if let Some(sha) = env_or_git("SHINE_GIT_SHA", &repo, &["rev-parse", "--short=9", "HEAD"]) {
