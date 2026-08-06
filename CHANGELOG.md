@@ -7,6 +7,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-08-06
+
 ### Changed
 
 - Corrected the minimum supported Rust version to 1.88 and made release asset builds and crates.io
