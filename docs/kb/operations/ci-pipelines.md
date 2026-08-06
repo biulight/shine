@@ -5,6 +5,7 @@ All workflows live in `.github/workflows/`.
 | Workflow | Trigger | What it does |
 |---|---|---|
 | `test.yml` | `workflow_call` only (reused by the others) | fmt check → `cargo check --all` → clippy `-D warnings` → `cargo audit` → `cargo nextest run --all-features` |
+| `msrv.yml` | push/PR to `release` or `main`, version tags, manual | `cargo check --locked --workspace` with Rust 1.86 |
 | `ci.yml` | push to `release`; PRs to `release`/`main` | calls `test.yml` |
 | `release.yml` | push of a `v*` tag | test → `package-assets.yml` builds per-platform tarballs → GitHub Release with git-cliff-generated notes + `install.sh`/`install.ps1` → `open-main-pr` job opens (or reuses) the `release` → `main` sync PR |
 | `preview.yml` | daily cron (00:00 UTC) + manual dispatch | if there are new commits since the `preview` tag: test → build assets → force-move `preview` tag → delete and re-publish the `Preview` prerelease |

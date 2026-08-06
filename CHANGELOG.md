@@ -7,12 +7,15 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
-## [1.1.3] — 2026-08-06
+## [1.1.5] — 2026-08-06
 
 ### Bug Fixes
 
 - Lowered the declared minimum Rust version to 1.86 and kept the build script and shared core
   compatible with Rust 1.86, so Rust 1.94 users can install the CLI.
+- Pinned `jsonc-parser` to the Rust 1.86-compatible `0.32.3` release.
+- Moved the MSRV check into an independent workflow so dependency regressions do not block
+  the regular test and release workflows.
 
 ## [1.1.0] — 2026-08-05
 
