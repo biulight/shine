@@ -39,3 +39,12 @@ jobs:
         run: cargo audit
       - name: Execute rust tests
         run: cargo nextest run --all-features
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust 1.86
+        uses: dtolnay/rust-toolchain@1.86.0
+      - name: Check minimum supported Rust version
+        run: cargo check --locked --workspace

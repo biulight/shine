@@ -2,7 +2,7 @@
 name = "shine-core"
 version.workspace = true
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.86"
 license.workspace = true
 description = "Shared configuration and preset helpers for Shine applications"
 readme = "README.md"

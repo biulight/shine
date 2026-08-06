@@ -7,6 +7,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-08-06
+
+### Bug Fixes
+
+- Lowered the declared minimum Rust version to 1.86 so Rust 1.94 users can install the CLI.
+
 ## [1.1.0] — 2026-08-05
 
 ### Features
