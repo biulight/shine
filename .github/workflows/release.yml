@@ -16,12 +16,19 @@ jobs:
   test:
     uses: ./.github/workflows/test.yml
 
+  msrv:
+    uses: ./.github/workflows/msrv.yml
+
   build-release-assets:
-    needs: test
+    needs:
+      - test
+      - msrv
     uses: ./.github/workflows/package-assets.yml
 
   publish-crates:
-    needs: test
+    needs:
+      - test
+      - msrv
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -48,6 +55,7 @@ jobs:
   release:
     needs:
       - test
+      - msrv
       - build-release-assets
       - publish-crates
     runs-on: ubuntu-latest

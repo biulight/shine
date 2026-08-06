@@ -7,6 +7,19 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Changed
+
+- Corrected the minimum supported Rust version to 1.88 and made release asset builds and crates.io
+  publishing wait for the reusable MSRV check.
+
+## [1.1.1] — 2026-08-06
+
+### Bug Fixes
+
+- Declared Rust 1.86 as the minimum version. This was corrected to Rust 1.88 in the next release
+  after the resolved `jsonc-parser` dependency proved to require it.
+- Pinned `jsonc-parser` to `0.32.3`.
+
 ## [1.1.0] — 2026-08-05
 
 ### Features

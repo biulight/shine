@@ -4,7 +4,7 @@ default-members = ["."]
 resolver = "2"
 
 [workspace.package]
-version = "1.1.0"
+version = "1.1.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Felix Jiang <biulight007@gmail.com>"]
@@ -16,13 +16,13 @@ anyhow = "1.0.102"
 directories = "6.0.0"
 toml = "1.1.2"
 toml_edit = "0.25.11"
-utils = { package = "shine-core", path = "utils", version = "1.1.0" }
+utils = { package = "shine-core", path = "utils", version = "1.1.2" }
 
 [package]
 name = "shine-cli"
 version.workspace = true
 edition.workspace = true
-rust-version = "1.96"
+rust-version = "1.88"
 license.workspace = true
 description = "Cross-platform CLI for managed shell commands, app configs, and machine setup"
 readme = "README.md"
@@ -69,7 +69,7 @@ similar = "3.1"
 reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls", "socks"] }
 semver = "1.0.28"
 serde_json = "1.0.145"
-jsonc-parser = { version = "0.32.3", features = ["serde"] }
+jsonc-parser = { version = "=0.32.3", features = ["serde"] }
 flate2 = "1.1.4"
 tar = "0.4.44"
 glob = "0.3"
