@@ -22,24 +22,26 @@ pub fn sync_table(doc: &mut toml_edit::Table, target: &toml::Table) {
                 }
             }
             _ => {
-                if let (Some(inline), toml::Value::String(value)) = (
-                    doc.get_mut(key).and_then(|item| item.as_inline_table_mut()),
-                    target_value,
-                ) && inline.contains_key("value")
-                {
-                    let unchanged = inline
-                        .get("value")
-                        .and_then(toml_edit::Value::as_str)
-                        .is_some_and(|existing| existing == value);
-                    if !unchanged {
-                        inline.insert("value", toml_edit::Value::from(value.as_str()));
+                if let toml::Value::String(value) = target_value {
+                    if let Some(inline) =
+                        doc.get_mut(key).and_then(|item| item.as_inline_table_mut())
+                    {
+                        if inline.contains_key("value") {
+                            let unchanged = inline
+                                .get("value")
+                                .and_then(toml_edit::Value::as_str)
+                                .is_some_and(|existing| existing == value);
+                            if !unchanged {
+                                inline.insert("value", toml_edit::Value::from(value.as_str()));
+                            }
+                            continue;
+                        }
                     }
-                    continue;
                 }
-                if let Some(existing) = doc.get(key).and_then(|t| t.as_value())
-                    && values_equal(existing, target_value)
-                {
-                    continue;
+                if let Some(existing) = doc.get(key).and_then(|t| t.as_value()) {
+                    if values_equal(existing, target_value) {
+                        continue;
+                    }
                 }
                 doc.insert(
                     key,
