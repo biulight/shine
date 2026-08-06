@@ -7,7 +7,7 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
-## [1.1.5] — 2026-08-06
+## [1.1.1] — 2026-08-06
 
 ### Bug Fixes
 
