@@ -105,11 +105,19 @@ export interface CommandResult {
 
 export type CommandRunner = (args: readonly string[]) => Promise<CommandResult>;
 
+export function isSecretDecryptCommand(args: readonly string[]): boolean {
+  return args[0] === "env" && args[1] === "secret" && args[2] === "decrypt";
+}
+
 async function runShine(args: readonly string[]): Promise<CommandResult> {
   try {
+    const interactive = isSecretDecryptCommand(args);
     const child = Bun.spawn(["shine", ...args], {
+      stdin: interactive ? "inherit" : "ignore",
       stdout: "pipe",
-      stderr: "ignore",
+      // GPG/YubiKey may require a PIN and touch confirmation. Preserve the terminal
+      // only for decrypt so credential probes stay quiet but authentication remains usable.
+      stderr: interactive ? "inherit" : "ignore",
     });
     const [exitCode, stdout] = await Promise.all([
       child.exited,
@@ -133,7 +141,7 @@ async function decryptValue(
   key: string,
   runner: CommandRunner,
 ): Promise<string> {
-  const result = await runner(["env", "decrypt", key]);
+  const result = await runner(["env", "secret", "decrypt", key]);
   if (result.exitCode !== 0) {
     throw new Error(`failed to decrypt ${key}`);
   }

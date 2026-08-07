@@ -5,6 +5,7 @@ import {
   main,
   providerFromChoice,
   providers,
+  isSecretDecryptCommand,
   resolveCredential,
   type CommandRunner,
   type ProviderId,
@@ -57,14 +58,15 @@ function fakeRunner(
     calls,
     runner: async (args) => {
       calls.push([...args]);
-      const key = args[2] ?? "";
-      if (args[1] === "get" && key in values) {
-        return { exitCode: 0, stdout: `${values[key]}\n` };
+      const getKey = args[2] ?? "";
+      const decryptKey = args[3] ?? "";
+      if (args[1] === "get" && getKey in values) {
+        return { exitCode: 0, stdout: `${values[getKey]}\n` };
       }
-      if (args[1] === "decrypt" && key in values) {
-        return decryptFailures.has(key)
+      if (args[1] === "secret" && args[2] === "decrypt" && decryptKey in values) {
+        return decryptFailures.has(decryptKey)
           ? { exitCode: 1, stdout: "" }
-          : { exitCode: 0, stdout: `plain:${values[key]}` };
+          : { exitCode: 0, stdout: `plain:${values[decryptKey]}` };
       }
       return { exitCode: 1, stdout: "" };
     },
@@ -72,6 +74,13 @@ function fakeRunner(
 }
 
 describe("credential resolution", () => {
+  test("identifies the interactive secret decrypt command", () => {
+    expect(isSecretDecryptCommand(["env", "secret", "decrypt", "TOKEN_SECRET"])).toBe(
+      true,
+    );
+    expect(isSecretDecryptCommand(["env", "get", "TOKEN_SECRET"])).toBe(false);
+  });
+
   test("prefers the generic tagged secret", async () => {
     const { runner, calls } = fakeRunner({
       TOKEN_SECRET: "age:ciphertext",
@@ -81,7 +90,7 @@ describe("credential resolution", () => {
     expect(await resolveCredential("TOKEN", runner)).toBe("plain:age:ciphertext");
     expect(calls).toEqual([
       ["env", "get", "TOKEN_SECRET"],
-      ["env", "decrypt", "TOKEN_SECRET"],
+      ["env", "secret", "decrypt", "TOKEN_SECRET"],
     ]);
   });
 

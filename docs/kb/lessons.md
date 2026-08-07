@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-07 — ccenv called a retired env decrypt command
+
+- **Symptom**: selecting a provider with an encrypted credential always reported that decryption
+  failed, without invoking the configured secret backend.
+- **Root cause**: `ccenv` retained the former `shine env decrypt` command shape after secret
+  operations moved under `shine env secret`, and suppressed the child command's stderr.
+- **Fix**: invoke `shine env secret decrypt`, inherit stdin/stderr for that interactive child so
+  GPG can obtain a card PIN/touch confirmation, and assert the complete argv in the credential test.
+- **Rule**: command-wrapper tests must assert every CLI argument when invoking nested subcommands;
+  otherwise a valid-looking wrapper can silently call a retired command path.
+
 ## 2026-08-04 — External shell sources exposed two incompatible apply models
 
 - **Symptom**: editing external `cc.ts` took effect immediately, while editing an external
