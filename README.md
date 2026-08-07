@@ -1014,6 +1014,31 @@ name after `=` is the environment variable visible to the child process. Explici
 `--with` values override variables inherited from the shell and values loaded from
 a workspace, and no workspace file is required when at least one `--with` is used.
 
+For a CLI such as GitHub CLI that implicitly reads a fixed variable, install a
+transparent, allow-listed proxy once:
+
+```bash
+shine env proxy install gh --with GH_TOKEN
+gh pr list
+```
+
+This resolves `GH_TOKEN_SECRET` (or plaintext `GH_TOKEN`) only while launching
+`gh`; it does not export the secret into your shell. Add `--project` to store a
+command rule in the current `shine.config.toml`; a project rule for the same
+command replaces the user-level rule.
+
+To keep the shim but temporarily prevent any decryption or injection, toggle
+the rule:
+
+```bash
+shine env proxy disable gh
+shine env proxy enable gh
+shine env proxy disable --project gh
+```
+
+Disabled rules forward to the real command unchanged. Existing rules without
+an `enabled` field remain enabled for compatibility.
+
 ### Workspace environment runner
 
 For projects that should not keep plaintext dotenv files, add a

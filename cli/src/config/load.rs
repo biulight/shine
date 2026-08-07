@@ -11,7 +11,10 @@ use super::discovery::{
     read_presets_override_from_toml, resolve_config_presets_path, resolve_runtime_config_dirs,
 };
 use super::env_layer::{deserialize_env_values, parse_env_descriptions};
-use super::{Config, ExternalShellMode, GLOBAL_CONFIG_FILE, PROJECT_CONFIG_FILE, ProjectSaveState};
+use super::{
+    Config, EnvProxyRule, ExternalShellMode, GLOBAL_CONFIG_FILE, PROJECT_CONFIG_FILE,
+    ProjectSaveState,
+};
 use crate::home::{default_config_and_presets_dir, effective_home_dir};
 
 #[derive(Default, Deserialize)]
@@ -38,6 +41,8 @@ struct ProjectOverrides {
     age_identity: Option<String>,
     #[serde(default, deserialize_with = "deserialize_env_values")]
     env: BTreeMap<String, String>,
+    #[serde(default)]
+    env_proxy: Option<Vec<EnvProxyRule>>,
 }
 
 impl Config {
@@ -140,6 +145,14 @@ impl Config {
             config.age_identity = overrides.age_identity;
         }
         config.env.extend(overrides.env);
+        if let Some(project_rules) = overrides.env_proxy {
+            for rule in project_rules {
+                config
+                    .env_proxy
+                    .retain(|existing| existing.command != rule.command);
+                config.env_proxy.push(rule);
+            }
+        }
         config
             .env_descriptions
             .extend(parse_env_descriptions(&contents));

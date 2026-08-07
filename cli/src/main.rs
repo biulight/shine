@@ -8,9 +8,9 @@ use cli::{
 
 use commands::{
     AppArtifactCommands, AppCommands, Cli, Commands, CompletionCommands, CompletionShell,
-    EnvCommands, EnvIdentitySubcommand, EnvSecretSubcommand, LocalCommands, OverlayCommands,
-    PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands, ShellCommands,
-    StateCommands, SysCommands, TaskCommands, ThemeCommands,
+    EnvCommands, EnvIdentitySubcommand, EnvProxySubcommand, EnvSecretSubcommand, LocalCommands,
+    OverlayCommands, PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands,
+    ShellCommands, StateCommands, SysCommands, TaskCommands, ThemeCommands,
 };
 #[cfg(test)]
 use commands::{
@@ -300,6 +300,28 @@ async fn run(cli: Cli) -> Result<()> {
                 )
                 .await
             }
+            EnvCommands::Proxy(cmd) => match cmd.command {
+                EnvProxySubcommand::Install {
+                    command,
+                    with,
+                    project,
+                } => env::proxy::install(&config, &command, &with, project).await,
+                EnvProxySubcommand::List => env::proxy::list(&config).await,
+                EnvProxySubcommand::Uninstall { command } => {
+                    env::proxy::uninstall(&config, &command).await
+                }
+                EnvProxySubcommand::Enable { command, project } => {
+                    env::proxy::set_enabled(&config, &command, true, project).await
+                }
+                EnvProxySubcommand::Disable { command, project } => {
+                    env::proxy::set_enabled(&config, &command, false, project).await
+                }
+                EnvProxySubcommand::Exec {
+                    target,
+                    command,
+                    args,
+                } => env::proxy::exec(&config, &target, &command, &args).await,
+            },
             EnvCommands::Secret(cmd) => match cmd.command {
                 EnvSecretSubcommand::Decrypt { key } => {
                     env::commands::handle_decrypt(&config, &key).await
