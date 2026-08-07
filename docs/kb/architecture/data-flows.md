@@ -235,6 +235,18 @@ both workspace values and inherited process variables. Without a discovered or e
 workspace, at least one `--with` is required. The merged environment is applied only to the
 spawned child process, whose exit status is propagated by Shine.
 
+## Transparent environment proxies
+
+`shine env proxy install <command> --with KEY` places a Shine-owned PATH shim
+ahead of the real CLI. The shim records the resolved real executable and invokes
+`env::proxy::exec`, which reloads the effective global/project configuration,
+selects that command's `[[env_proxy]]` rule, and injects only its declared
+values (`KEY_SECRET` decrypted first, then `KEY`) into the child process.
+Project rules replace the global rule for the same command. The shim never
+exports values to the parent shell and never scans all `_SECRET` values.
+Each rule defaults to `enabled = true`; `shine env proxy disable <command>`
+retains the shim but bypasses config lookup and secret decryption entirely.
+
 ## SSH environment forwarding
 
 `ssh::handle_ssh` resolves each `--with KEY[=ALIAS]` from the exact plaintext key in the active

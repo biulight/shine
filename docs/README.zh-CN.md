@@ -966,6 +966,27 @@ shine env run --with TOKEN_A --with TOKEN_B=OTHER_TOKEN -- bun run build
 等号右侧可指定子进程看到的变量名。显式 `--with` 值会覆盖当前终端和 workspace 中的
 同名变量；只要指定了至少一个 `--with`，就不要求存在 workspace 文件。
 
+对于像 GitHub CLI 这样会隐式读取固定变量的工具，可以一次性安装透明的白名单代理：
+
+```bash
+shine env proxy install gh --with GH_TOKEN
+gh pr list
+```
+
+代理只会在启动 `gh` 时解析 `GH_TOKEN_SECRET`（或明文 `GH_TOKEN`），不会把密钥导出到当前
+shell。添加 `--project` 可将命令规则保存到当前的 `shine.config.toml`；同一命令的项目规则会
+覆盖用户级规则。
+
+如需保留 shim 但暂时禁止解密和注入，可切换规则状态：
+
+```bash
+shine env proxy disable gh
+shine env proxy enable gh
+shine env proxy disable --project gh
+```
+
+禁用的规则会原样转发到真实命令。未包含 `enabled` 字段的已有规则为兼容起见仍视为已启用。
+
 ### Workspace 环境运行器
 
 如果项目不希望保留明文 dotenv 文件，可以创建 `shine.workspace.toml`：

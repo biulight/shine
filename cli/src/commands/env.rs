@@ -36,8 +36,62 @@ pub enum EnvCommands {
     },
     /// Run a command with the workspace environment
     Run(EnvRunCommand),
+    /// Transparently proxy selected commands with explicitly injected values
+    Proxy(EnvProxyCommand),
     /// Encrypt, decrypt, export, and manage secret identities
     Secret(EnvSecretCommand),
+}
+
+#[derive(Args, Debug)]
+pub struct EnvProxyCommand {
+    #[command(subcommand)]
+    pub command: EnvProxySubcommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum EnvProxySubcommand {
+    /// Install a PATH shim and configure its allowed environment values
+    Install {
+        #[arg(value_name = "COMMAND")]
+        command: String,
+        #[arg(long = "with", value_name = "KEY[=ALIAS]", required = true)]
+        with: Vec<String>,
+        /// Store the rule in the current project's shine.config.toml
+        #[arg(long)]
+        project: bool,
+    },
+    /// List installed transparent command proxies
+    List,
+    /// Remove a shine-managed command proxy and its user-level rule
+    Uninstall {
+        #[arg(value_name = "COMMAND")]
+        command: String,
+    },
+    /// Enable secret injection for an installed command proxy
+    Enable {
+        #[arg(value_name = "COMMAND")]
+        command: String,
+        /// Change the rule in the current project's shine.config.toml
+        #[arg(long)]
+        project: bool,
+    },
+    /// Bypass secret injection while retaining the installed command proxy
+    Disable {
+        #[arg(value_name = "COMMAND")]
+        command: String,
+        /// Change the rule in the current project's shine.config.toml
+        #[arg(long)]
+        project: bool,
+    },
+    #[command(hide = true)]
+    Exec {
+        #[arg(long)]
+        target: PathBuf,
+        #[arg(value_name = "COMMAND")]
+        command: String,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<OsString>,
+    },
 }
 
 #[derive(Args, Debug)]

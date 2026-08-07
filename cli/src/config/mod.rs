@@ -53,6 +53,22 @@ pub enum ExternalShellMode {
     Live,
 }
 
+/// A command whose protected environment values are injected by a shine proxy.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct EnvProxyRule {
+    pub command: String,
+    #[serde(rename = "with")]
+    pub with: Vec<String>,
+    /// Whether the proxy injects its configured values. Disabled proxies still
+    /// forward to their recorded target without resolving any secret.
+    #[serde(default = "default_env_proxy_enabled", skip_serializing_if = "is_true")]
+    pub enabled: bool,
+}
+
+fn default_env_proxy_enabled() -> bool {
+    true
+}
+
 fn is_snapshot_mode(value: &ExternalShellMode) -> bool {
     *value == ExternalShellMode::Snapshot
 }
@@ -186,6 +202,9 @@ pub struct Config {
         deserialize_with = "deserialize_env_values"
     )]
     pub env: BTreeMap<String, String>,
+    /// Command-specific, explicitly allow-listed secret injection rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_proxy: Vec<EnvProxyRule>,
     /// Per-variable descriptions read from detailed `[env]` entries.
     #[serde(skip)]
     pub env_descriptions: BTreeMap<String, String>,
@@ -249,6 +268,11 @@ impl Config {
         &self.config_path
     }
 
+    /// Whether configuration was discovered from a project `shine.config.toml`.
+    pub fn is_project_config(&self) -> bool {
+        self.is_project_config
+    }
+
     /// Directory where template-rendered shell scripts are written.
     /// Always inside shine_dir so it is never confused with user-owned presets.
     pub fn rendered_dir(&self) -> PathBuf {
@@ -298,6 +322,7 @@ impl Config {
             age_recipients: Vec::new(),
             age_identity: None,
             env: default_env_map(),
+            env_proxy: Vec::new(),
             env_descriptions: BTreeMap::new(),
             env_override_sources: BTreeMap::new(),
         }
@@ -480,6 +505,7 @@ impl Default for Config {
             age_recipients: Vec::new(),
             age_identity: None,
             env: default_env_map(),
+            env_proxy: Vec::new(),
             env_descriptions: BTreeMap::new(),
             env_override_sources: BTreeMap::new(),
         }
