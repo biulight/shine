@@ -7,6 +7,19 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-08-07
+
+### Features
+
+- Added transparent, allow-listed environment proxies for commands that read fixed credential
+  variables. Proxies inject only their configured values into the child process and can be scoped
+  or disabled per project without exposing secrets in the parent shell.
+
+### Bug Fixes
+
+- Restored `ccenv` decryption of encrypted provider credentials and preserved interactive GPG or
+  hardware-token prompts while the credential is resolved.
+
 ## [1.1.2] — 2026-08-06
 
 ### Changed
