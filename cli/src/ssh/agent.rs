@@ -1,5 +1,6 @@
-//! Local transfer agent: the server side of a `shine ssh` session's transfer
-//! channel (the far end of the SSH `-R` forward). It no longer moves file
+//! Local session agent: the server side of a `shine ssh` session's control
+//! channel (the far end of the SSH `-R` forward). It serves file-transfer
+//! requests and the optional on-demand secret broker. It no longer moves file
 //! bytes itself — instead, on a `Transfer` request it spawns `rsync` (default)
 //! or `scp` on the local machine, which opens its own ssh connection back to
 //! the session host and moves the data directly, and relays the child's
@@ -19,9 +20,11 @@
 //! only, never a shell**; the remote path is only ever emitted as the single
 //! token `<host>:<remote_spec>` after a `--` separator; and the ssh
 //! reconnection options come solely from the local `SessionContext`, never the
-//! wire.
+//! wire. Secret requests additionally require an exact broker authorization;
+//! the token alone never authorizes decryption.
 
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -32,7 +35,9 @@ use tokio::net::TcpListener;
 use tokio::net::UnixListener;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinSet;
+use zeroize::Zeroize;
 
+use super::broker::BrokerSession;
 use super::protocol::{
     self, ClientMessage, Direction, LogStream, PROTOCOL_VERSION, ServerMessage, Tool,
 };
@@ -85,7 +90,13 @@ impl LocalListener {
     /// Each connection is handled on its own task tracked in `tasks` (see
     /// [`drain_connection_tasks`]); a failed connection is logged and does not
     /// bring down the agent or the session.
-    pub async fn serve(self, token: String, context: Arc<SessionContext>, tasks: ConnectionTasks) {
+    pub async fn serve(
+        self,
+        token: String,
+        context: Arc<SessionContext>,
+        broker: Option<Arc<BrokerSession>>,
+        tasks: ConnectionTasks,
+    ) {
         match self {
             #[cfg(unix)]
             LocalListener::Unix(listener) => loop {
@@ -93,14 +104,28 @@ impl LocalListener {
                     Ok((stream, _addr)) => stream,
                     Err(_) => return,
                 };
-                spawn_connection(stream, token.clone(), context.clone(), &tasks).await;
+                spawn_connection(
+                    stream,
+                    token.clone(),
+                    context.clone(),
+                    broker.clone(),
+                    &tasks,
+                )
+                .await;
             },
             LocalListener::Tcp(listener) => loop {
                 let stream = match listener.accept().await {
                     Ok((stream, _addr)) => stream,
                     Err(_) => return,
                 };
-                spawn_connection(stream, token.clone(), context.clone(), &tasks).await;
+                spawn_connection(
+                    stream,
+                    token.clone(),
+                    context.clone(),
+                    broker.clone(),
+                    &tasks,
+                )
+                .await;
             },
         }
     }
@@ -110,10 +135,11 @@ async fn spawn_connection(
     stream: impl DuplexStream,
     token: String,
     context: Arc<SessionContext>,
+    broker: Option<Arc<BrokerSession>>,
     tasks: &ConnectionTasks,
 ) {
     tasks.lock().await.spawn(async move {
-        if let Err(error) = handle_connection(stream, &token, &context).await {
+        if let Err(error) = handle_connection(stream, &token, &context, broker.as_deref()).await {
             eprintln!("shine ssh: transfer agent connection error: {error:#}");
         }
     });
@@ -123,6 +149,7 @@ async fn handle_connection(
     mut stream: impl DuplexStream,
     token: &str,
     context: &SessionContext,
+    broker: Option<&BrokerSession>,
 ) -> Result<()> {
     let hello: ClientMessage = protocol::read_message(&mut stream).await?;
     let ClientMessage::Hello { protocol_version } = hello else {
@@ -192,7 +219,94 @@ async fn handle_connection(
             )
             .await
         }
+        ClientMessage::DirectSecret {
+            token: request_token,
+            specs,
+            argv,
+            nonce,
+        } => {
+            if request_token != token {
+                return send_error(&mut stream, "invalid session token").await;
+            }
+            let Some(broker) = broker else {
+                return send_error(
+                    &mut stream,
+                    "secret broker is not enabled for this SSH session",
+                )
+                .await;
+            };
+            match broker.handle_direct(&specs, &argv, &nonce).await {
+                Ok(values) => send_secret_values(&mut stream, values).await,
+                Err(error) => send_error(&mut stream, error.to_string()).await,
+            }
+        }
+        ClientMessage::WorkspaceSecret {
+            token: request_token,
+            snapshot,
+            argv,
+            nonce,
+        } => {
+            if request_token != token {
+                return send_error(&mut stream, "invalid session token").await;
+            }
+            let Some(broker) = broker else {
+                return send_error(
+                    &mut stream,
+                    "secret broker is not enabled for this SSH session",
+                )
+                .await;
+            };
+            match broker.handle_workspace(&snapshot, &argv, &nonce).await {
+                Ok(values) => send_secret_values(&mut stream, values).await,
+                Err(error) => send_error(&mut stream, error.to_string()).await,
+            }
+        }
+        ClientMessage::DescribeWorkspace {
+            token: request_token,
+            snapshot,
+            release,
+            argv,
+            nonce,
+        } => {
+            if request_token != token {
+                return send_error(&mut stream, "invalid session token").await;
+            }
+            let Some(broker) = broker else {
+                return send_error(
+                    &mut stream,
+                    "secret broker is not enabled for this SSH session",
+                )
+                .await;
+            };
+            match broker
+                .handle_description(&snapshot, &release, &argv, &nonce)
+                .await
+            {
+                Ok(summary) => {
+                    protocol::write_message(
+                        &mut stream,
+                        &ServerMessage::DescriptionResponse { summary },
+                    )
+                    .await
+                }
+                Err(error) => send_error(&mut stream, error.to_string()).await,
+            }
+        }
     }
+}
+
+async fn send_secret_values(
+    stream: &mut impl DuplexStream,
+    values: BTreeMap<String, String>,
+) -> Result<()> {
+    let mut response = ServerMessage::SecretResponse { values };
+    let result = protocol::write_message(stream, &response).await;
+    if let ServerMessage::SecretResponse { values } = &mut response {
+        for value in values.values_mut() {
+            value.zeroize();
+        }
+    }
+    result
 }
 
 async fn send_error(stream: &mut impl DuplexStream, message: impl Into<String>) -> Result<()> {

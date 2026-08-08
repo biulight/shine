@@ -76,6 +76,7 @@ async fn start_agent(token: &str, context: SessionContext) -> PathBuf {
     tokio::spawn(agent::LocalListener::Unix(listener).serve(
         token.to_string(),
         Arc::new(context),
+        None,
         tasks,
     ));
     // Keep the socket file alive for the test's lifetime; each test uses a

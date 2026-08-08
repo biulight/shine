@@ -1,6 +1,7 @@
-//! Wire protocol spoken over the forwarded Unix socket between the remote
-//! `shine local download/upload` process (client) and the local `shine ssh`
-//! transfer agent (server). See docs/ssh-local-transfer-prd.md section 9.
+//! Wire protocol spoken over the forwarded Unix socket between remote
+//! `shine local` / `shine env run --secret-broker` clients and the local
+//! `shine ssh` session agent. See docs/ssh-local-transfer-prd.md section 9 and
+//! docs/ssh-secret-broker-prd.md.
 //!
 //! The socket carries a **control + log-relay** channel, not file bytes: the
 //! remote sends one `Transfer` request, the local agent runs `rsync`/`scp`
@@ -14,6 +15,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::{Serialize, de::DeserializeOwned};
+use std::collections::BTreeMap;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Bumped whenever `ClientMessage`/`ServerMessage` change in an
@@ -21,12 +23,13 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 ///
 /// v2: switched from custom byte-streaming (`PutFile`/`GetFile` + raw bodies)
 /// to a control channel driving a local `rsync`/`scp` (ADR 0011).
-pub const PROTOCOL_VERSION: u32 = 2;
+/// v3: added session-scoped direct/workspace secret broker requests.
+pub const PROTOCOL_VERSION: u32 = 3;
 
-/// Every message is metadata only now (no separate file-body stream), so this
-/// cap bounds memory use against a malformed/hostile peer. A `Log` chunk is
-/// read from the child in bounded pieces well under this size (see `agent`).
-const MAX_CONTROL_FRAME_BYTES: u32 = 1024 * 1024;
+/// There is no separate raw file-body stream. This cap bounds both broker
+/// workspace/source snapshots and metadata/log frames against a hostile peer;
+/// field-level broker validation applies tighter limits after deserialization.
+const MAX_CONTROL_FRAME_BYTES: u32 = 2 * 1024 * 1024;
 
 /// Which way a transfer moves relative to the machine that owns each path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -70,6 +73,31 @@ pub enum ClientMessage {
     /// Report session/connection info without transferring anything.
     Status {
         token: String,
+    },
+    /// Request explicitly session-authorized local config secrets. This path
+    /// always requires local interactive confirmation.
+    DirectSecret {
+        token: String,
+        specs: Vec<String>,
+        argv: Vec<String>,
+        nonce: String,
+    },
+    /// Request secrets from sealed workspace sources after exact local policy
+    /// matching and local recomputation of every digest.
+    WorkspaceSecret {
+        token: String,
+        snapshot: crate::env::broker::WorkspaceSnapshot,
+        argv: Vec<String>,
+        nonce: String,
+    },
+    /// Describe a workspace request for local inspect/trusted-enrollment mode.
+    /// This request never decrypts or returns secret values.
+    DescribeWorkspace {
+        token: String,
+        snapshot: crate::env::broker::WorkspaceSnapshot,
+        release: Vec<String>,
+        argv: Vec<String>,
+        nonce: String,
     },
 }
 
@@ -118,6 +146,12 @@ pub enum ServerMessage {
     StatusResponse {
         session_local_dir: String,
         host: String,
+    },
+    SecretResponse {
+        values: BTreeMap<String, String>,
+    },
+    DescriptionResponse {
+        summary: String,
     },
     Error {
         message: String,
@@ -227,6 +261,29 @@ mod tests {
             }
             other => panic!("unexpected message: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn round_trips_a_direct_secret_request_without_exposing_values() {
+        let mut buf = Vec::new();
+        write_message(
+            &mut buf,
+            &ClientMessage::DirectSecret {
+                token: "session-token".into(),
+                specs: vec!["API_TOKEN".into()],
+                argv: vec!["bun".into(), "run".into(), "build".into()],
+                nonce: "12345678-1234-1234-1234-123456789abc".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let mut cursor = std::io::Cursor::new(buf);
+        let decoded: ClientMessage = read_message(&mut cursor).await.unwrap();
+        assert!(matches!(
+            decoded,
+            ClientMessage::DirectSecret { specs, argv, .. }
+                if specs == ["API_TOKEN"] && argv == ["bun", "run", "build"]
+        ));
     }
 
     #[tokio::test]

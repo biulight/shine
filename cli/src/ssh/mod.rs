@@ -25,6 +25,7 @@
 //! Windows.
 
 mod agent;
+mod broker;
 // Drives the real agent over an in-process Unix socket pair, so it is
 // unix-only (Windows is the local side only and has no `UnixListener`).
 #[cfg(all(test, unix))]
@@ -40,6 +41,7 @@ mod session_context;
 mod remote_client;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -110,6 +112,66 @@ pub async fn handle_local_status() -> Result<()> {
     remote_client::handle_status().await
 }
 
+#[cfg(unix)]
+pub async fn request_direct_secrets(
+    specs: &[String],
+    argv: &[String],
+) -> Result<BTreeMap<String, String>> {
+    remote_client::request_direct_secrets(specs, argv).await
+}
+
+#[cfg(not(unix))]
+pub async fn request_direct_secrets(
+    _specs: &[String],
+    _argv: &[String],
+) -> Result<BTreeMap<String, String>> {
+    bail!(WINDOWS_REMOTE_UNSUPPORTED)
+}
+
+#[cfg(unix)]
+pub async fn request_workspace_secrets(
+    snapshot: crate::env::broker::WorkspaceSnapshot,
+    argv: &[String],
+) -> Result<BTreeMap<String, String>> {
+    remote_client::request_workspace_secrets(snapshot, argv).await
+}
+
+#[cfg(unix)]
+pub fn broker_session_available() -> bool {
+    remote_client::session_available()
+}
+
+#[cfg(not(unix))]
+pub fn broker_session_available() -> bool {
+    false
+}
+
+#[cfg(unix)]
+pub async fn describe_broker_workspace(
+    snapshot: crate::env::broker::WorkspaceSnapshot,
+    release: &[String],
+    argv: &[String],
+) -> Result<String> {
+    remote_client::describe_workspace(snapshot, release, argv).await
+}
+
+#[cfg(not(unix))]
+pub async fn describe_broker_workspace(
+    _snapshot: crate::env::broker::WorkspaceSnapshot,
+    _release: &[String],
+    _argv: &[String],
+) -> Result<String> {
+    bail!(WINDOWS_REMOTE_UNSUPPORTED)
+}
+
+#[cfg(not(unix))]
+pub async fn request_workspace_secrets(
+    _snapshot: crate::env::broker::WorkspaceSnapshot,
+    _argv: &[String],
+) -> Result<BTreeMap<String, String>> {
+    bail!(WINDOWS_REMOTE_UNSUPPORTED)
+}
+
 #[cfg(not(unix))]
 pub async fn handle_local_status() -> Result<()> {
     bail!(WINDOWS_REMOTE_UNSUPPORTED)
@@ -123,11 +185,19 @@ const VALUE_OPTION_LETTERS: &[char] = &[
     'W', 'w',
 ];
 
+#[allow(clippy::too_many_arguments)] // Top-level handler mirrors the independently meaningful CLI switches.
 pub async fn handle_ssh(
     config: &Config,
     remote_shell: RemoteShell,
     with: &[String],
     with_secret: &[String],
+    secret_broker: bool,
+    secret_broker_policy: &[PathBuf],
+    allow_secret: &[String],
+    trust_remote_session: bool,
+    secret_broker_inspect: bool,
+    secret_broker_enroll: bool,
+    trust_remote_metadata: bool,
     args: &[String],
 ) -> Result<()> {
     let (ssh_options, host, remote_command) = split_ssh_args(args)?;
@@ -137,6 +207,15 @@ pub async fn handle_ssh(
     // Do not create the POSIX-only transfer channel there; the encoded
     // PowerShell command has no user-controlled syntax in cmd.exe.
     if remote_shell == RemoteShell::Windows {
+        if secret_broker
+            || !secret_broker_policy.is_empty()
+            || !allow_secret.is_empty()
+            || trust_remote_session
+            || secret_broker_inspect
+            || secret_broker_enroll
+        {
+            bail!("SSH secret broker requires the POSIX remote shell mode");
+        }
         let session_id = uuid::Uuid::new_v4().to_string();
         let local_theme = theme::resolve_local_terminal_theme_for_injection();
         let wrapped_command = build_windows_wrapped_remote_command(
@@ -156,6 +235,18 @@ pub async fn handle_ssh(
 
     let session_id = uuid::Uuid::new_v4().to_string();
     let token = uuid::Uuid::new_v4().to_string();
+    let broker_session = broker::BrokerSession::prepare(
+        config,
+        &host,
+        secret_broker,
+        secret_broker_policy,
+        allow_secret,
+        trust_remote_session,
+        secret_broker_inspect,
+        secret_broker_enroll,
+        trust_remote_metadata,
+    )
+    .await?;
 
     let session_dir = config.shine_dir().join("run").join("ssh").join(&session_id);
     tokio::fs::create_dir_all(&session_dir)
@@ -187,8 +278,12 @@ pub async fn handle_ssh(
     context.save(&session_dir).await?;
 
     let connection_tasks = agent::new_connection_tasks();
-    let agent_handle =
-        tokio::spawn(listener.serve(token.clone(), context.clone(), connection_tasks.clone()));
+    let agent_handle = tokio::spawn(listener.serve(
+        token.clone(),
+        context.clone(),
+        broker_session.clone(),
+        connection_tasks.clone(),
+    ));
 
     // Query the *local* terminal — same-host, sub-millisecond round trip,
     // no fragmentation risk unlike a remote OSC query (PRD §2.2/§6.1) — so
@@ -219,7 +314,7 @@ pub async fn handle_ssh(
     // Ctrl-C no longer kills us before we get a chance to clean up. The ssh
     // child is in the same foreground process group and receives SIGINT
     // independently; we still await its exit so we don't race it.
-    let status = run_ssh_with_ctrl_c(&mut cmd).await?;
+    let status = run_ssh_with_ctrl_c_broker(&mut cmd, broker_session.as_deref()).await?;
 
     // Stop accepting new connections, then give any still-running transfer
     // a bounded chance to notice the tunnel is gone and run its own
@@ -229,6 +324,26 @@ pub async fn handle_ssh(
     let _ = tokio::fs::remove_dir_all(&session_dir).await;
 
     finish_ssh_status(status)
+}
+
+async fn run_ssh_with_ctrl_c_broker(
+    cmd: &mut tokio::process::Command,
+    broker: Option<&broker::BrokerSession>,
+) -> Result<std::process::ExitStatus> {
+    let mut child = cmd.spawn().context("failed to start ssh")?;
+    if let Some(broker) = broker {
+        broker.set_ssh_pid(child.id());
+    }
+    let mut wait = std::pin::pin!(child.wait());
+    let result = tokio::select! {
+        status = &mut wait => status,
+        _ = tokio::signal::ctrl_c() => wait.await,
+    }
+    .context("failed to run ssh");
+    if let Some(broker) = broker {
+        broker.set_ssh_pid(None);
+    }
+    result
 }
 
 async fn run_ssh_with_ctrl_c(

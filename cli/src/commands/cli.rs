@@ -1,6 +1,7 @@
 use crate::completion;
 use crate::version;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 use super::{
     AppCommands, EnvCommands, LocalCommands, PresetCommands, SelfCommands, ServeCommands,
@@ -145,6 +146,40 @@ pub enum Commands {
         /// appear before the SSH destination)
         #[arg(long = "with-secret", value_name = "KEY[=ALIAS]")]
         with_secret: Vec<String>,
+        /// Enable the session-scoped, on-demand secret broker
+        #[arg(long)]
+        secret_broker: bool,
+        /// Merge an additional local broker policy file (repeatable). The same
+        /// ownership, permission, and symlink checks apply.
+        #[arg(
+            long = "secret-broker-policy",
+            value_name = "FILE",
+            requires = "secret_broker"
+        )]
+        secret_broker_policy: Vec<PathBuf>,
+        /// Allow one encrypted local config key to be requested by a direct
+        /// broker command (repeatable; requires local confirmation per request)
+        #[arg(
+            long = "allow-secret",
+            value_name = "KEY[=ALIAS]",
+            requires = "secret_broker"
+        )]
+        allow_secret: Vec<String>,
+        /// Trust the entire remote session and auto-approve matching workspace
+        /// policies. Never applies to direct --allow-secret requests.
+        #[arg(long, requires = "secret_broker")]
+        trust_remote_session: bool,
+        /// Inspect one remote workspace broker description without writing a
+        /// policy or releasing secrets
+        #[arg(long, conflicts_with_all = ["secret_broker", "secret_broker_enroll"])]
+        secret_broker_inspect: bool,
+        /// Enroll one policy from explicitly trusted remote metadata; never
+        /// decrypts or runs the described command
+        #[arg(long, conflicts_with_all = ["secret_broker", "secret_broker_inspect"])]
+        secret_broker_enroll: bool,
+        /// Required acknowledgement that enrollment trusts remote metadata
+        #[arg(long, requires = "secret_broker_enroll")]
+        trust_remote_metadata: bool,
         /// ssh options, the destination, and an optional remote command
         /// (passed through to the system `ssh` binary; see `ssh(1)`)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]

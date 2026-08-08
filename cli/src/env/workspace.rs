@@ -1,3 +1,4 @@
+use super::broker::{SourceSnapshot, WorkspaceSnapshot};
 use crate::persist::atomic_write;
 use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{config::Config, secret};
@@ -13,6 +14,7 @@ use std::{
 };
 use tokio::process::Command;
 use toml_edit::{DocumentMut, value};
+use zeroize::Zeroize;
 
 const WORKSPACE_FILE: &str = "shine.workspace.toml";
 const FORMAT_VERSION: u32 = 1;
@@ -136,15 +138,48 @@ pub async fn handle_seal(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Command handler keeps independent Clap options explicit.
 pub async fn handle_run(
     config: &Config,
     workspace_arg: Option<&Path>,
     mode_arg: Option<&str>,
     no_workspace: bool,
     with: &[String],
+    secret_broker: bool,
+    broker_secrets: &[String],
     command: &[OsString],
 ) -> Result<()> {
     let explicit = resolve_explicit_values(config, with).await?;
+    if !secret_broker && !broker_secrets.is_empty() {
+        bail!("--secret requires --secret-broker");
+    }
+    if secret_broker {
+        let argv = broker_command_argv(command)?;
+        if no_workspace {
+            if broker_secrets.is_empty() {
+                bail!("--no-workspace --secret-broker requires at least one --secret");
+            }
+            let values = crate::ssh::request_direct_secrets(broker_secrets, &argv).await?;
+            return run_broker_command(
+                command,
+                BTreeMap::new(),
+                false,
+                merge_explicit(explicit, values)?,
+            )
+            .await;
+        }
+        if !broker_secrets.is_empty() {
+            bail!(
+                "workspace broker requests derive release keys from policy; do not pass --secret"
+            );
+        }
+        let mode = mode_arg.context("workspace --secret-broker requires --mode")?;
+        let snapshot = snapshot_for_broker(workspace_arg, mode).await?;
+        let mut values = plain_values_from_broker_snapshot(&snapshot)?;
+        let secrets = crate::ssh::request_workspace_secrets(snapshot.clone(), &argv).await?;
+        values.extend(secrets);
+        return run_broker_command(command, values, snapshot.override_process_env, explicit).await;
+    }
     // `--no-workspace` disables discovery entirely: only explicit `--with` values
     // and the inherited process environment reach the command. Generated Bun
     // launchers rely on this so a nearby shine.workspace.toml can never hijack them.
@@ -200,6 +235,29 @@ pub async fn handle_run(
     };
 
     run_command(command, &values, override_process_env, &explicit).await
+}
+
+fn broker_command_argv(command: &[OsString]) -> Result<Vec<String>> {
+    command
+        .iter()
+        .map(|arg| {
+            arg.to_str()
+                .map(str::to_string)
+                .context("secret broker command arguments must be valid UTF-8")
+        })
+        .collect()
+}
+
+fn merge_explicit(
+    mut explicit: BTreeMap<String, String>,
+    broker: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    for (key, value) in broker {
+        if explicit.insert(key.clone(), value).is_some() {
+            bail!("broker target {key} conflicts with an explicit --with target");
+        }
+    }
+    Ok(explicit)
 }
 
 async fn resolve_explicit_values(
@@ -393,6 +451,120 @@ fn validate_mode(mode: &str) -> Result<()> {
         bail!("mode must contain only letters, digits, hyphens, and underscores");
     }
     Ok(())
+}
+
+pub(crate) fn validate_broker_mode(mode: &str) -> Result<()> {
+    validate_mode(mode)
+}
+
+/// Reads one workspace/mode exactly once for SSH broker hashing and execution.
+/// The returned bytes are retained by the remote runner until the child starts,
+/// so a successful authorization never re-reads mutable files.
+pub async fn snapshot_for_broker(
+    workspace_arg: Option<&Path>,
+    mode: &str,
+) -> Result<WorkspaceSnapshot> {
+    validate_mode(mode)?;
+    let workspace_path = find_workspace_optional(workspace_arg)
+        .await?
+        .context("shine.workspace.toml was not found; pass --workspace")?;
+    let workspace_contents = tokio::fs::read_to_string(&workspace_path)
+        .await
+        .with_context(|| format!("reading {}", workspace_path.display()))?;
+    let workspace = load_workspace(&workspace_path).await?;
+    let source_paths = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
+    let root = workspace_path
+        .parent()
+        .context("workspace path has no parent directory")?;
+    let mut sources = Vec::new();
+    for source_path in source_paths {
+        if !source_path.is_file() {
+            continue;
+        }
+        let contents = tokio::fs::read_to_string(&source_path)
+            .await
+            .with_context(|| format!("reading {}", source_path.display()))?;
+        // Parse now so malformed/unsealed metadata never reaches the broker.
+        let source = parse_source(&source_path, &contents)?;
+        for (key, state) in &source.secret {
+            if !matches!(state, SecretState::Sealed(true)) {
+                bail!(
+                    "{key} in {} is not sealed; run `shine env secret seal`",
+                    source_path.display()
+                );
+            }
+        }
+        let display_path = source_path
+            .strip_prefix(root)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|_| source_path.clone())
+            .to_string_lossy()
+            .into_owned();
+        sources.push(SourceSnapshot {
+            path: display_path,
+            contents,
+        });
+    }
+    if sources.is_empty() {
+        bail!("none of the configured environment source files exist");
+    }
+    Ok(WorkspaceSnapshot {
+        workspace_path: workspace_path.to_string_lossy().into_owned(),
+        workspace_contents,
+        mode: mode.to_string(),
+        override_process_env: workspace.env.override_process_env,
+        sources,
+    })
+}
+
+pub(crate) fn declared_secrets_from_source(path: &str, contents: &str) -> Result<Vec<String>> {
+    let source = parse_source(Path::new(path), contents)?;
+    let mut keys = source.secret.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    Ok(keys)
+}
+
+pub fn plain_values_from_broker_snapshot(
+    snapshot: &WorkspaceSnapshot,
+) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
+    for source in &snapshot.sources {
+        let parsed = parse_source(Path::new(&source.path), &source.contents)?;
+        values.extend(parsed.plain);
+    }
+    Ok(values)
+}
+
+pub async fn decrypt_broker_snapshot(
+    config: &Config,
+    snapshot: &WorkspaceSnapshot,
+    release: &[String],
+) -> Result<BTreeMap<String, String>> {
+    let release = release.iter().cloned().collect::<BTreeSet<_>>();
+    let mut values = BTreeMap::new();
+    for source in &snapshot.sources {
+        let path = Path::new(&source.path);
+        let parsed = parse_source(path, &source.contents)?;
+        for (key, state) in &parsed.secret {
+            if !matches!(state, SecretState::Sealed(true)) {
+                bail!("{key} in {} is not sealed", source.path);
+            }
+        }
+        let secrets = decrypt_source_payload(path, &parsed, config).await?;
+        let expected = parsed.secret.keys().cloned().collect::<BTreeSet<_>>();
+        let actual = secrets.keys().cloned().collect::<BTreeSet<_>>();
+        if expected != actual {
+            bail!(
+                "secret key list does not match encrypted payload in {}",
+                source.path
+            );
+        }
+        values.extend(secrets.into_iter().filter(|(key, _)| release.contains(key)));
+    }
+    if values.keys().cloned().collect::<BTreeSet<_>>() != release {
+        bail!("broker response does not contain every released secret key");
+    }
+    Ok(values)
 }
 
 async fn seal_file(
@@ -659,6 +831,29 @@ async fn run_command(
     override_process_env: bool,
     explicit: &BTreeMap<String, String>,
 ) -> Result<()> {
+    let status = command_status(command, values, override_process_env, explicit).await?;
+    finish_command_status(status)
+}
+
+async fn run_broker_command(
+    command: &[OsString],
+    mut values: BTreeMap<String, String>,
+    override_process_env: bool,
+    mut explicit: BTreeMap<String, String>,
+) -> Result<()> {
+    let status = command_status(command, &values, override_process_env, &explicit).await;
+    for value in values.values_mut().chain(explicit.values_mut()) {
+        value.zeroize();
+    }
+    finish_command_status(status?)
+}
+
+async fn command_status(
+    command: &[OsString],
+    values: &BTreeMap<String, String>,
+    override_process_env: bool,
+    explicit: &BTreeMap<String, String>,
+) -> Result<std::process::ExitStatus> {
     let (program, args) = command
         .split_first()
         .context("a command is required after --")?;
@@ -674,6 +869,10 @@ async fn run_command(
         .status()
         .await
         .with_context(|| format!("running {}", program.to_string_lossy()))?;
+    Ok(status)
+}
+
+fn finish_command_status(status: std::process::ExitStatus) -> Result<()> {
     if status.success() {
         return Ok(());
     }
@@ -930,6 +1129,8 @@ mod tests {
             None,
             true,
             &["SHINE_NOWS_TOKEN".into()],
+            false,
+            &[],
             &[
                 OsString::from("sh"),
                 OsString::from("-c"),
@@ -952,6 +1153,8 @@ mod tests {
             None,
             None,
             true,
+            &[],
+            false,
             &[],
             &[
                 OsString::from("sh"),

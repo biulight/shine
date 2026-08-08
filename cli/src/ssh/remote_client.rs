@@ -5,12 +5,17 @@
 //! relays to the user's terminal (ADR 0011).
 
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
 use tokio::net::UnixStream;
 
 use super::protocol::{self, ClientMessage, Direction, LogStream, PROTOCOL_VERSION, ServerMessage};
+use crate::env::broker::WorkspaceSnapshot;
 use crate::home;
+
+const BROKER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 struct SessionEnv {
     session_id: String,
@@ -33,6 +38,12 @@ fn session_from_env() -> Result<SessionEnv> {
         token,
         remote_sock,
     })
+}
+
+pub fn session_available() -> bool {
+    std::env::var_os("SHINE_SSH_SESSION").is_some()
+        && std::env::var_os("SHINE_SSH_TOKEN").is_some()
+        && std::env::var_os("SHINE_SSH_REMOTE_SOCK").is_some()
 }
 
 async fn connect_and_handshake(remote_sock: &str) -> Result<UnixStream> {
@@ -60,6 +71,83 @@ async fn connect_and_handshake(remote_sock: &str) -> Result<UnixStream> {
         other => bail!("unexpected handshake response: {other:?}"),
     }
     Ok(stream)
+}
+
+pub async fn request_direct_secrets(
+    specs: &[String],
+    argv: &[String],
+) -> Result<BTreeMap<String, String>> {
+    let session = session_from_env()?;
+    let mut stream = connect_and_handshake(&session.remote_sock).await?;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::DirectSecret {
+            token: session.token,
+            specs: specs.to_vec(),
+            argv: argv.to_vec(),
+            nonce: uuid::Uuid::new_v4().to_string(),
+        },
+    )
+    .await?;
+    read_secret_response(&mut stream).await
+}
+
+pub async fn request_workspace_secrets(
+    snapshot: WorkspaceSnapshot,
+    argv: &[String],
+) -> Result<BTreeMap<String, String>> {
+    let session = session_from_env()?;
+    let mut stream = connect_and_handshake(&session.remote_sock).await?;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::WorkspaceSecret {
+            token: session.token,
+            snapshot,
+            argv: argv.to_vec(),
+            nonce: uuid::Uuid::new_v4().to_string(),
+        },
+    )
+    .await?;
+    read_secret_response(&mut stream).await
+}
+
+async fn read_secret_response(stream: &mut UnixStream) -> Result<BTreeMap<String, String>> {
+    match read_broker_message(stream).await? {
+        ServerMessage::SecretResponse { values } => Ok(values),
+        ServerMessage::Error { message } => bail!("{message}"),
+        other => bail!("unexpected secret broker response: {other:?}"),
+    }
+}
+
+async fn read_broker_message(stream: &mut UnixStream) -> Result<ServerMessage> {
+    tokio::time::timeout(BROKER_RESPONSE_TIMEOUT, protocol::read_message(stream))
+        .await
+        .context("timed out waiting for the local SSH secret broker")?
+}
+
+pub async fn describe_workspace(
+    snapshot: WorkspaceSnapshot,
+    release: &[String],
+    argv: &[String],
+) -> Result<String> {
+    let session = session_from_env()?;
+    let mut stream = connect_and_handshake(&session.remote_sock).await?;
+    protocol::write_message(
+        &mut stream,
+        &ClientMessage::DescribeWorkspace {
+            token: session.token,
+            snapshot,
+            release: release.to_vec(),
+            argv: argv.to_vec(),
+            nonce: uuid::Uuid::new_v4().to_string(),
+        },
+    )
+    .await?;
+    match read_broker_message(&mut stream).await? {
+        ServerMessage::DescriptionResponse { summary } => Ok(summary),
+        ServerMessage::Error { message } => bail!("{message}"),
+        other => bail!("unexpected broker description response: {other:?}"),
+    }
 }
 
 /// Anchors a remote path spec to the remote cwd without disturbing glob

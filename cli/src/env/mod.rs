@@ -1,3 +1,4 @@
+pub mod broker;
 pub mod catalog;
 pub mod commands;
 pub mod identity;

@@ -8,9 +8,10 @@ use cli::{
 
 use commands::{
     AppArtifactCommands, AppCommands, Cli, Commands, CompletionCommands, CompletionShell,
-    EnvCommands, EnvIdentitySubcommand, EnvProxySubcommand, EnvSecretSubcommand, LocalCommands,
-    OverlayCommands, PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands,
-    ShellCommands, StateCommands, SysCommands, TaskCommands, ThemeCommands,
+    EnvBrokerPolicySubcommand, EnvBrokerSubcommand, EnvCommands, EnvIdentitySubcommand,
+    EnvProxySubcommand, EnvSecretSubcommand, LocalCommands, OverlayCommands, PresetCommands,
+    PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands, ShellCommands, StateCommands,
+    SysCommands, TaskCommands, ThemeCommands,
 };
 #[cfg(test)]
 use commands::{
@@ -296,10 +297,74 @@ async fn run(cli: Cli) -> Result<()> {
                     cmd.mode.as_deref(),
                     cmd.no_workspace,
                     &cmd.with,
+                    cmd.secret_broker,
+                    &cmd.secret,
                     &cmd.command,
                 )
                 .await
             }
+            EnvCommands::Broker(cmd) => match cmd.command {
+                EnvBrokerSubcommand::Describe {
+                    workspace,
+                    mode,
+                    release,
+                    command,
+                } => {
+                    env::broker::handle_describe(workspace.as_deref(), &mode, &release, &command)
+                        .await
+                }
+                EnvBrokerSubcommand::Policy(cmd) => match cmd.command {
+                    EnvBrokerPolicySubcommand::Add(input) => {
+                        env::broker::handle_policy_add(
+                            &config,
+                            &input.name,
+                            &input.ssh_target,
+                            &input.project,
+                            &input.workspace,
+                            input.remote_workspace.as_deref(),
+                            &input.mode,
+                            &input.release,
+                            &input.command,
+                        )
+                        .await
+                    }
+                    EnvBrokerPolicySubcommand::Update(input) => {
+                        env::broker::handle_policy_update(
+                            &config,
+                            &input.name,
+                            &input.ssh_target,
+                            &input.project,
+                            &input.workspace,
+                            input.remote_workspace.as_deref(),
+                            &input.mode,
+                            &input.release,
+                            &input.command,
+                        )
+                        .await
+                    }
+                    EnvBrokerPolicySubcommand::Diff {
+                        name,
+                        workspace,
+                        mode,
+                        release,
+                        command,
+                    } => {
+                        env::broker::handle_policy_diff(
+                            &config, &name, &workspace, &mode, &release, &command,
+                        )
+                        .await
+                    }
+                    EnvBrokerPolicySubcommand::List => {
+                        env::broker::handle_policy_list(&config).await
+                    }
+                    EnvBrokerPolicySubcommand::Info { name } => {
+                        env::broker::handle_policy_info(&config, &name).await
+                    }
+                    EnvBrokerPolicySubcommand::Remove { name } => {
+                        env::broker::handle_policy_remove(&config, &name).await
+                    }
+                },
+            },
             EnvCommands::Proxy(cmd) => match cmd.command {
                 EnvProxySubcommand::Install {
                     command,
@@ -407,8 +472,31 @@ async fn run(cli: Cli) -> Result<()> {
             remote_shell,
             with,
             with_secret,
+            secret_broker,
+            secret_broker_policy,
+            allow_secret,
+            trust_remote_session,
+            secret_broker_inspect,
+            secret_broker_enroll,
+            trust_remote_metadata,
             args,
-        } => ssh::handle_ssh(&config, remote_shell, &with, &with_secret, &args).await,
+        } => {
+            ssh::handle_ssh(
+                &config,
+                remote_shell,
+                &with,
+                &with_secret,
+                secret_broker,
+                &secret_broker_policy,
+                &allow_secret,
+                trust_remote_session,
+                secret_broker_inspect,
+                secret_broker_enroll,
+                trust_remote_metadata,
+                &args,
+            )
+            .await
+        }
         Commands::Local { command } => match command {
             LocalCommands::Download(cmd) => {
                 ssh::handle_local_download(
@@ -527,6 +615,7 @@ mod tests {
                 with,
                 with_secret,
                 args,
+                ..
             } if remote_shell == RemoteShell::Posix
                 && with == ["API_URL", "LOCAL_NAME=REMOTE_NAME"]
                 && with_secret == ["API_TOKEN"]
@@ -559,6 +648,97 @@ mod tests {
                 ..
             } if with_secret == ["GH_TOKEN=TOKEN"]
                 && args == ["intel.mac.local", "cmd", "/c", "echo"]
+        ));
+    }
+
+    #[test]
+    fn cli_parses_direct_ssh_secret_broker() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "ssh",
+            "--secret-broker",
+            "--secret-broker-policy",
+            "/tmp/team-policy.toml",
+            "--allow-secret",
+            "API_TOKEN",
+            "--allow-secret",
+            "NPM_TOKEN=NODE_AUTH_TOKEN",
+            "dev",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ssh {
+                secret_broker: true,
+                secret_broker_policy,
+                allow_secret,
+                trust_remote_session: false,
+                args,
+                ..
+            } if secret_broker_policy == [std::path::PathBuf::from("/tmp/team-policy.toml")]
+                && allow_secret == ["API_TOKEN", "NPM_TOKEN=NODE_AUTH_TOKEN"]
+                && args == ["dev"]
+        ));
+    }
+
+    #[test]
+    fn cli_parses_remote_direct_broker_run() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "run",
+            "--no-workspace",
+            "--secret-broker",
+            "--secret",
+            "API_TOKEN",
+            "--",
+            "bun",
+            "run",
+            "build",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Run(cmd)
+            } if cmd.no_workspace
+                && cmd.secret_broker
+                && cmd.secret == ["API_TOKEN"]
+                && cmd.command == ["bun", "run", "build"]
+        ));
+    }
+
+    #[test]
+    fn cli_parses_broker_policy_add() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "broker",
+            "policy",
+            "add",
+            "--name",
+            "dev-api",
+            "--ssh-target",
+            "dev",
+            "--workspace",
+            "/src/api/shine.workspace.toml",
+            "--mode",
+            "development",
+            "--release",
+            "API_TOKEN",
+            "--",
+            "bun",
+            "run",
+            "build",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Broker(_)
+            }
         ));
     }
 

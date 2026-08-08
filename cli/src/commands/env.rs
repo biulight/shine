@@ -38,6 +38,8 @@ pub enum EnvCommands {
     Run(EnvRunCommand),
     /// Transparently proxy selected commands with explicitly injected values
     Proxy(EnvProxyCommand),
+    /// Manage SSH secret-broker policies and describe workspace requests
+    Broker(EnvBrokerCommand),
     /// Encrypt, decrypt, export, and manage secret identities
     Secret(EnvSecretCommand),
 }
@@ -46,6 +48,82 @@ pub enum EnvCommands {
 pub struct EnvProxyCommand {
     #[command(subcommand)]
     pub command: EnvProxySubcommand,
+}
+
+#[derive(Args, Debug)]
+pub struct EnvBrokerCommand {
+    #[command(subcommand)]
+    pub command: EnvBrokerSubcommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum EnvBrokerSubcommand {
+    /// Describe a workspace request without decrypting or running its command
+    Describe {
+        #[arg(long, value_name = "FILE")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        mode: String,
+        #[arg(long, value_name = "KEY", required = true)]
+        release: Vec<String>,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+    /// Manage local SSH secret-broker authorization policies
+    Policy(EnvBrokerPolicyCommand),
+}
+
+#[derive(Args, Debug)]
+pub struct EnvBrokerPolicyCommand {
+    #[command(subcommand)]
+    pub command: EnvBrokerPolicySubcommand,
+}
+
+#[derive(Args, Debug)]
+pub struct EnvBrokerPolicyInput {
+    #[arg(long)]
+    pub name: String,
+    #[arg(long)]
+    pub ssh_target: String,
+    #[arg(long, default_value = "")]
+    pub project: String,
+    #[arg(long, value_name = "FILE")]
+    pub workspace: PathBuf,
+    /// Optionally require the remote workspace file to have this exact path
+    #[arg(long, value_name = "REMOTE_FILE")]
+    pub remote_workspace: Option<String>,
+    #[arg(long)]
+    pub mode: String,
+    #[arg(long, value_name = "KEY", required = true)]
+    pub release: Vec<String>,
+    #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+    pub command: Vec<String>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum EnvBrokerPolicySubcommand {
+    /// Add a policy generated from a trusted local workspace checkout
+    Add(EnvBrokerPolicyInput),
+    /// Replace a policy from a trusted local workspace checkout
+    Update(EnvBrokerPolicyInput),
+    /// Show whether a trusted local workspace still matches a policy
+    Diff {
+        name: String,
+        #[arg(long, value_name = "FILE")]
+        workspace: PathBuf,
+        #[arg(long)]
+        mode: String,
+        #[arg(long, value_name = "KEY", required = true)]
+        release: Vec<String>,
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+    /// List configured policies
+    List,
+    /// Print one policy
+    Info { name: String },
+    /// Remove one policy
+    Remove { name: String },
 }
 
 #[derive(Subcommand, Debug)]
@@ -201,6 +279,17 @@ pub struct EnvRunCommand {
     /// Inject a config [env] value as KEY or KEY=ALIAS (repeatable)
     #[arg(long = "with", value_name = "KEY[=ALIAS]")]
     pub with: Vec<String>,
+    /// Request secrets from the local end of the current shine ssh session
+    #[arg(long)]
+    pub secret_broker: bool,
+    /// Request one session-authorized encrypted key as KEY or KEY=ALIAS
+    #[arg(
+        long = "secret",
+        value_name = "KEY[=ALIAS]",
+        requires = "secret_broker",
+        requires = "no_workspace"
+    )]
+    pub secret: Vec<String>,
     /// Command and arguments to run
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<OsString>,
