@@ -315,16 +315,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gpg_key_id_round_trips_through_save() {
+    async fn gpg_recipients_round_trip_through_save() {
         let dir = make_temp_dir().await;
         let mut config = config_in(&dir);
-        config.gpg_key_id = Some("alice@example.com".to_string());
+        config.gpg_recipients = vec![
+            "alice@example.com".to_string(),
+            "bob@example.com".to_string(),
+        ];
 
         config.save().await.unwrap();
 
         let content = fs::read_to_string(&config.config_path).await.unwrap();
         let loaded: Config = toml::from_str(&content).unwrap();
-        assert_eq!(loaded.gpg_key_id.as_deref(), Some("alice@example.com"));
+        assert_eq!(
+            loaded.gpg_recipients,
+            ["alice@example.com", "bob@example.com"]
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

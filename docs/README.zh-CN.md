@@ -884,7 +884,8 @@ DEEPSEEK_API_KEY = "..."
 shine env secret encrypt --from DEEPSEEK_API_KEY
 ```
 
-`shine env secret encrypt` 默认使用 `config.toml` 中的 `gpg_key_id`。如需单次覆盖，可传入 `-r/--recipient <key-id>`。
+`shine env secret encrypt` 默认使用 `config.toml` 中的 `gpg_recipients`。如需单次覆盖，可重复传入 `-r/--recipient <key-id>`。
+已有的 `gpg_key_id` 设置可通过 `shine state migrate` 迁移。
 
 也可以直接解密当前 env 配置中的任意 base64 GPG secret：
 
@@ -1005,7 +1006,7 @@ files = [
 ]
 
 [env.encryption]
-recipient = "alice@example.com"
+gpg_recipients = ["alice@example.com", "bob@example.com"]
 ```
 
 迁移 Vite 风格项目时，可一步从 `.env`、`.env.local`、`.env.<mode>` 与
@@ -1142,10 +1143,10 @@ presets_dir = "/custom/presets"
 app_default_dest_root = "~/.config"
 ```
 
-为 `shine env secret encrypt` 设置默认 GPG recipient：
+为 `shine env secret encrypt` 设置默认 GPG recipients：
 
 ```toml
-gpg_key_id = "<key-id>"
+gpg_recipients = ["<key-id>", "<team-key-id>"]
 ```
 
 或者把 age 设为默认后端，并配置其 recipient / 身份文件（参见上文 age + Apple Touch ID）：

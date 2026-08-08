@@ -314,7 +314,7 @@ ciphertext for an `age:` prefix (`secret::parse_tagged_ciphertext`) and dispatch
 `secret::age`/`secret::gpg` accordingly; untagged ciphertext is always GPG. Decryption never
 reads `Config::secret_backend` — only the tag decides. Encryption (`env secret encrypt`, workspace
 `env secret seal`) instead resolves a `secret::EncryptRecipients` (CLI `-r`/`--backend` > workspace
-`env.encryption` > `config.toml` `gpg_key_id`/`age_recipients`/`secret_backend` > GPG default)
+`env.encryption` > `config.toml` `gpg_recipients`/`age_recipients`/`secret_backend` > GPG default)
 and calls `secret::encrypt_secret`, which tags age output and leaves GPG output untagged. See
 [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md) for the full rationale.
 `shine env secret identity init [--touch-id]` generates the age identity file

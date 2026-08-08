@@ -32,7 +32,7 @@ struct ProjectOverrides {
     #[serde(default)]
     self_install_dest: Option<PathBuf>,
     #[serde(default)]
-    gpg_key_id: Option<String>,
+    gpg_recipients: Vec<String>,
     #[serde(default)]
     secret_backend: Option<String>,
     #[serde(default)]
@@ -92,6 +92,17 @@ impl Config {
         };
         // Initialize the global layer before applying the sparse project layer.
         let (mut config, global_exists) = Self::load_global_runtime_base().await?;
+        if global_exists {
+            reject_legacy_gpg_recipient(config.config_path()).await?;
+        }
+        let contents = fs::read_to_string(&project_config.path)
+            .await
+            .context("Failed to read project config file")?;
+        reject_legacy_gpg_recipient(&project_config.path).await?;
+        let original: toml::Table =
+            toml::from_str(&contents).context("Failed to parse project config file")?;
+        let overrides: ProjectOverrides =
+            toml::from_str(&contents).context("Failed to parse project config file")?;
         fs::create_dir_all(config.shine_dir()).await?;
         fs::create_dir_all(config.presets_dir()).await?;
         fs::create_dir_all(config.bin_dir()).await?;
@@ -102,14 +113,6 @@ impl Config {
             false
         };
         config.ensure_env_defaults(global_has_env).await?;
-
-        let contents = fs::read_to_string(&project_config.path)
-            .await
-            .context("Failed to read project config file")?;
-        let original: toml::Table =
-            toml::from_str(&contents).context("Failed to parse project config file")?;
-        let overrides: ProjectOverrides =
-            toml::from_str(&contents).context("Failed to parse project config file")?;
 
         let project_presets = overrides
             .presets_dir
@@ -132,8 +135,8 @@ impl Config {
             config.self_install_dest =
                 Some(resolve_config_presets_path(&path, &project_config.root));
         }
-        if overrides.gpg_key_id.is_some() {
-            config.gpg_key_id = overrides.gpg_key_id;
+        if !overrides.gpg_recipients.is_empty() {
+            config.gpg_recipients = overrides.gpg_recipients;
         }
         if overrides.secret_backend.is_some() {
             config.secret_backend = overrides.secret_backend;
@@ -202,6 +205,9 @@ impl Config {
 
     pub async fn load_global_runtime_or_init() -> Result<Self> {
         let (mut config, exists) = Self::load_global_runtime_base().await?;
+        if exists {
+            reject_legacy_gpg_recipient(config.config_path()).await?;
+        }
 
         fs::create_dir_all(config.shine_dir())
             .await
@@ -320,6 +326,21 @@ fn config_toml_has_env_table(contents: &str) -> bool {
     toml::from_str::<toml::Table>(contents)
         .map(|table| table.contains_key("env"))
         .unwrap_or(false)
+}
+
+async fn reject_legacy_gpg_recipient(path: &std::path::Path) -> Result<()> {
+    let contents = fs::read_to_string(path)
+        .await
+        .with_context(|| format!("reading {}", path.display()))?;
+    let table: toml::Table =
+        toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
+    if table.contains_key("gpg_key_id") {
+        bail!(
+            "{} uses retired gpg_key_id; run `shine state migrate` to convert it to gpg_recipients",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -809,7 +830,7 @@ mod tests {
         fs::create_dir_all(&global_presets).await.unwrap();
         fs::write(
             state_dir.join("config.toml"),
-            "presets_dir = \"shared-presets\"\ngpg_key_id = \"global-key\"\n",
+            "presets_dir = \"shared-presets\"\ngpg_recipients = [\"global-key\"]\n",
         )
         .await
         .unwrap();
@@ -830,7 +851,7 @@ mod tests {
             fs::canonicalize(config.presets_dir()).await.unwrap(),
             fs::canonicalize(&global_presets).await.unwrap()
         );
-        assert_eq!(config.gpg_key_id.as_deref(), Some("global-key"));
+        assert_eq!(config.gpg_recipients, ["global-key"]);
         assert!(config.is_external_presets);
 
         restore_current_dir(&original_dir);
@@ -854,7 +875,7 @@ mod tests {
             .unwrap();
         fs::write(
             state_dir.join("config.toml"),
-            "presets_dir = \"global-presets\"\ngpg_key_id = \"global-key\"\n[env]\nGLOBAL = \"config\"\nSHARED = \"global-config\"\n",
+            "presets_dir = \"global-presets\"\ngpg_recipients = [\"global-key\"]\n[env]\nGLOBAL = \"config\"\nSHARED = \"global-config\"\n",
         )
         .await
         .unwrap();
@@ -916,7 +937,7 @@ mod tests {
             table.get("presets_dir").and_then(toml::Value::as_str),
             Some("project-presets")
         );
-        assert!(!table.contains_key("gpg_key_id"));
+        assert!(!table.contains_key("gpg_recipients"));
         let env = table.get("env").and_then(toml::Value::as_table).unwrap();
         assert_eq!(env.get("ADDED").and_then(toml::Value::as_str), Some("new"));
         assert!(!env.contains_key("GLOBAL"));

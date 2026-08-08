@@ -68,11 +68,9 @@ async fn run(cli: Cli) -> Result<()> {
         command: StateCommands::Migrate(cmd),
     } = &cli.command
     {
-        let config = if cmd.dry_run {
-            Box::pin(Config::load_global_runtime_for_dry_run()).await?
-        } else {
-            Box::pin(Config::load_global_runtime_or_init()).await?
-        };
+        // State migration must be able to read retired config fields before
+        // normal config loading rejects them, and applies its own writes.
+        let config = Box::pin(Config::load_global_runtime_for_dry_run()).await?;
         return Box::pin(state::handle_migrate(&config, cmd.dry_run)).await;
     }
 

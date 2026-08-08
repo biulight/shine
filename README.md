@@ -919,8 +919,9 @@ backed by a YubiKey, `gpg-agent` will handle PIN/touch prompts during `ccenv`:
 shine env secret encrypt --from DEEPSEEK_API_KEY
 ```
 
-`shine env secret encrypt` uses `gpg_key_id` from `config.toml` by default. Pass
-`-r/--recipient <key-id>` to override it for a single command.
+`shine env secret encrypt` uses `gpg_recipients` from `config.toml` by default.
+Pass `-r/--recipient <key-id>` repeatedly to override it for a single command.
+Existing `gpg_key_id` settings are migrated by `shine state migrate`.
 
 You can also decrypt any base64 GPG secret from the active env config directly:
 
@@ -1058,7 +1059,7 @@ files = [
 ]
 
 [env.encryption]
-recipient = "alice@example.com"
+gpg_recipients = ["alice@example.com", "bob@example.com"]
 ```
 
 To migrate a Vite-style project, create the workspace and TOML sources from
@@ -1205,10 +1206,10 @@ You can also change the fallback install root for app presets that do not carry 
 app_default_dest_root = "~/.config"
 ```
 
-Set a default GPG recipient for `shine env secret encrypt`:
+Set default GPG recipients for `shine env secret encrypt`:
 
 ```toml
-gpg_key_id = "<key-id>"
+gpg_recipients = ["<key-id>", "<team-key-id>"]
 ```
 
 Or make age the default backend and configure its recipients/identity (see

@@ -168,9 +168,9 @@ fn render_workspace(modes: &[String]) -> String {
            \".env.{{mode}}.shine.toml\", # mode-specific values\n\
            \".env.{{mode}}.local.shine.toml\", # local mode overrides; do not commit\n\
          ]\n\n\
-         # Add an encryption recipient before sealing values in [secret].\n\
+         # Add GPG recipients before sealing values in [secret].\n\
          # [env.encryption]\n\
-         # recipient = \"alice@example.com\"\n",
+         # gpg_recipients = [\"alice@example.com\", \"bob@example.com\"]\n",
         modes = rendered_modes,
     )
 }
@@ -294,7 +294,10 @@ pub struct WorkspaceEnv {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct Encryption {
-    recipient: Option<String>,
+    #[serde(rename = "recipient")]
+    legacy_recipient: Option<String>,
+    #[serde(default)]
+    gpg_recipients: Vec<String>,
     #[serde(default)]
     backend: Option<String>,
     #[serde(default)]
@@ -553,6 +556,12 @@ async fn load_workspace(path: &Path) -> Result<Workspace> {
         .with_context(|| format!("reading {}", path.display()))?;
     let workspace: Workspace =
         toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
+    if workspace.env.encryption.legacy_recipient.is_some() {
+        bail!(
+            "{} uses retired env.encryption.recipient; run `shine state migrate` to convert it to gpg_recipients",
+            path.display()
+        );
+    }
     if workspace.version != FORMAT_VERSION {
         bail!(
             "unsupported workspace version {} in {}",
@@ -592,11 +601,15 @@ fn resolve_seal_encryption(
 
     match backend {
         BackendKind::Gpg => {
-            let recipient = resolve_recipient_optional(
-                workspace_encryption.and_then(|encryption| encryption.recipient.as_deref()),
-                config.gpg_key_id.as_deref(),
-            );
-            Ok(recipient.map(|value| EncryptRecipients::Gpg(vec![value.to_string()])))
+            let workspace_recipients = workspace_encryption
+                .map(|encryption| clean_recipients(&encryption.gpg_recipients))
+                .unwrap_or_default();
+            let recipients = if !workspace_recipients.is_empty() {
+                workspace_recipients
+            } else {
+                clean_recipients(&config.gpg_recipients)
+            };
+            Ok((!recipients.is_empty()).then_some(EncryptRecipients::Gpg(recipients)))
         }
         BackendKind::Age => {
             let workspace_recipients = workspace_encryption
@@ -631,16 +644,6 @@ fn clean_recipients(recipients: &[String]) -> Vec<String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect()
-}
-
-fn resolve_recipient_optional<'a>(
-    first: Option<&'a str>,
-    second: Option<&'a str>,
-) -> Option<&'a str> {
-    first
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| second.map(str::trim).filter(|value| !value.is_empty()))
 }
 
 async fn existing_workspace_sources(path: &Path, workspace: &Workspace) -> Result<Vec<PathBuf>> {
@@ -852,7 +855,7 @@ async fn seal_file(
         String::new()
     } else {
         let encryption = encryption.context(
-            "recipients are required; pass --recipient/--backend, set env.encryption in shine.workspace.toml, or set gpg_key_id/age_recipients",
+            "recipients are required; pass --recipient/--backend, set env.encryption in shine.workspace.toml, or set gpg_recipients/age_recipients",
         )?;
         let plaintext = toml::to_string(&SecretPayload {
             version: FORMAT_VERSION,
@@ -1252,7 +1255,7 @@ mod tests {
                 < workspace.find(".env.{mode}.shine.toml").unwrap()
         );
         assert!(workspace.contains("Managed by `shine env workspace init --from-dotenv`"));
-        assert!(workspace.contains("Add an encryption recipient"));
+        assert!(workspace.contains("Add GPG recipients"));
         let base = tokio::fs::read_to_string(directory.join(".env.shine.toml"))
             .await
             .unwrap();
@@ -1303,12 +1306,13 @@ mod tests {
     }
 
     #[test]
-    fn seal_encryption_gpg_recipient_priority_is_cli_workspace_config() {
+    fn seal_encryption_gpg_recipients_priority_is_cli_workspace_config() {
         let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
         let mut config = Config::new_for_test(&dir);
-        config.gpg_key_id = Some("global".to_string());
+        config.gpg_recipients = vec!["global-one".to_string(), "global-two".to_string()];
         let workspace_encryption = Encryption {
-            recipient: Some("workspace".to_string()),
+            legacy_recipient: None,
+            gpg_recipients: vec!["workspace-one".to_string(), "workspace-two".to_string()],
             backend: None,
             age_recipients: Vec::new(),
         };
@@ -1325,11 +1329,13 @@ mod tests {
         let workspace =
             resolve_seal_encryption(None, &[], Some(&workspace_encryption), &config).unwrap();
         assert!(
-            matches!(workspace, Some(EncryptRecipients::Gpg(values)) if values == ["workspace"])
+            matches!(workspace, Some(EncryptRecipients::Gpg(values)) if values == ["workspace-one", "workspace-two"])
         );
 
         let global = resolve_seal_encryption(None, &[], None, &config).unwrap();
-        assert!(matches!(global, Some(EncryptRecipients::Gpg(values)) if values == ["global"]));
+        assert!(
+            matches!(global, Some(EncryptRecipients::Gpg(values)) if values == ["global-one", "global-two"])
+        );
     }
 
     #[test]
@@ -1351,7 +1357,8 @@ mod tests {
         config.secret_backend = Some("age".to_string());
         config.age_recipients = vec!["age1config".to_string()];
         let workspace_encryption = Encryption {
-            recipient: None,
+            legacy_recipient: None,
+            gpg_recipients: Vec::new(),
             backend: None,
             age_recipients: vec!["age1workspace".to_string()],
         };
@@ -1366,7 +1373,8 @@ mod tests {
             None,
             &[],
             Some(&Encryption {
-                recipient: None,
+                legacy_recipient: None,
+                gpg_recipients: Vec::new(),
                 backend: None,
                 age_recipients: Vec::new(),
             }),
@@ -1383,9 +1391,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
         let mut config = Config::new_for_test(&dir);
         config.secret_backend = Some("age".to_string());
-        config.gpg_key_id = Some("global".to_string());
+        config.gpg_recipients = vec!["global".to_string()];
         let workspace_encryption = Encryption {
-            recipient: Some("workspace".to_string()),
+            legacy_recipient: None,
+            gpg_recipients: vec!["workspace".to_string()],
             backend: Some("gpg".to_string()),
             age_recipients: Vec::new(),
         };
