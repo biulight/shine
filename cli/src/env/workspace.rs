@@ -19,6 +19,259 @@ use zeroize::Zeroize;
 const WORKSPACE_FILE: &str = "shine.workspace.toml";
 const FORMAT_VERSION: u32 = 1;
 
+/// Initialize a workspace by copying conventional dotenv sources into Shine's
+/// explicit TOML source format. The original dotenv files are never modified.
+pub async fn handle_init_from_dotenv(
+    from_dotenv: bool,
+    requested_modes: &[String],
+    secrets: &[String],
+    force: bool,
+    dry_run: bool,
+) -> Result<()> {
+    if !from_dotenv {
+        bail!("pass --from-dotenv to initialize from conventional dotenv files");
+    }
+
+    let root = std::env::current_dir().context("resolving current directory")?;
+    init_from_dotenv_at(&root, requested_modes, secrets, force, dry_run).await
+}
+
+async fn init_from_dotenv_at(
+    root: &Path,
+    requested_modes: &[String],
+    secrets: &[String],
+    force: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let modes = dotenv_modes(root, requested_modes)?;
+    let sources = dotenv_sources(root, &modes);
+    let mut planned = Vec::new();
+    let requested_secrets: BTreeSet<_> = secrets.iter().cloned().collect();
+    for key in &requested_secrets {
+        super::validate_env_key(key)?;
+    }
+    let mut seen_keys = BTreeSet::new();
+
+    for (input, output) in sources {
+        if !input.is_file() {
+            continue;
+        }
+        let contents = tokio::fs::read_to_string(&input)
+            .await
+            .with_context(|| format!("reading {}", input.display()))?;
+        let values = parse_dotenv(&input, &contents)?;
+        seen_keys.extend(values.keys().cloned());
+        planned.push((output, render_source(&input, &values, &requested_secrets)));
+    }
+    if planned.is_empty() {
+        bail!("no dotenv files found; expected .env, .env.local, or .env.<mode>");
+    }
+    for key in &requested_secrets {
+        if !seen_keys.contains(key) {
+            bail!("--secret {key} was not found in an imported dotenv file");
+        }
+    }
+
+    let workspace = root.join(WORKSPACE_FILE);
+    planned.push((workspace, render_workspace(&modes)));
+    for (path, _) in &planned {
+        if path.exists() && !force {
+            bail!(
+                "{} already exists; rerun with --force to replace generated files",
+                path.display()
+            );
+        }
+    }
+
+    for (path, contents) in &planned {
+        let display = path.strip_prefix(root).unwrap_or(path).display();
+        if dry_run {
+            println!("Would create {display}");
+        } else {
+            atomic_write(path, contents.as_bytes()).await?;
+            println!("Created {display}");
+        }
+    }
+    if !requested_secrets.is_empty() {
+        println!("Run `shine env secret seal` after configuring an encryption recipient.");
+    }
+    Ok(())
+}
+
+fn dotenv_modes(root: &Path, requested: &[String]) -> Result<Vec<String>> {
+    let mut modes: BTreeSet<String> = requested.iter().cloned().collect();
+    for mode in &modes {
+        validate_mode(mode)?;
+    }
+    if modes.is_empty() {
+        for entry in
+            std::fs::read_dir(root).with_context(|| format!("reading {}", root.display()))?
+        {
+            let name = entry?.file_name();
+            let name = name.to_string_lossy();
+            let Some(suffix) = name.strip_prefix(".env.") else {
+                continue;
+            };
+            if suffix == "local" || suffix.ends_with(".shine.toml") {
+                continue;
+            }
+            let mode = suffix.strip_suffix(".local").unwrap_or(suffix);
+            if mode.is_empty() || mode.contains('.') {
+                continue;
+            }
+            validate_mode(mode)?;
+            modes.insert(mode.to_owned());
+        }
+    }
+    if modes.is_empty() {
+        modes.insert("development".to_owned());
+    }
+    Ok(modes.into_iter().collect())
+}
+
+fn dotenv_sources(root: &Path, modes: &[String]) -> Vec<(PathBuf, PathBuf)> {
+    let mut files = vec![
+        (root.join(".env"), root.join(".env.shine.toml")),
+        (root.join(".env.local"), root.join(".env.local.shine.toml")),
+    ];
+    for mode in modes {
+        files.push((
+            root.join(format!(".env.{mode}")),
+            root.join(format!(".env.{mode}.shine.toml")),
+        ));
+        files.push((
+            root.join(format!(".env.{mode}.local")),
+            root.join(format!(".env.{mode}.local.shine.toml")),
+        ));
+    }
+    files
+}
+
+fn render_workspace(modes: &[String]) -> String {
+    let default_mode = &modes[0];
+    let rendered_modes = modes
+        .iter()
+        .map(|mode| format!("\"{mode}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "# Managed by `shine env workspace init --from-dotenv`.\n\
+         # Edit the source files below; later files override earlier ones.\n\
+         version = {FORMAT_VERSION}\n\n\
+         [env]\n\
+         # Run with: shine env run --mode {default_mode} -- <command>\n\
+         modes = [{modes}]\n\
+         default_mode = \"{default_mode}\"\n\
+         files = [\n\
+           \".env.shine.toml\", # shared defaults\n\
+           \".env.local.shine.toml\", # local-only overrides; do not commit\n\
+           \".env.{{mode}}.shine.toml\", # mode-specific values\n\
+           \".env.{{mode}}.local.shine.toml\", # local mode overrides; do not commit\n\
+         ]\n\n\
+         # Add an encryption recipient before sealing values in [secret].\n\
+         # [env.encryption]\n\
+         # recipient = \"alice@example.com\"\n",
+        modes = rendered_modes,
+    )
+}
+
+fn render_source(
+    input: &Path,
+    values: &BTreeMap<String, String>,
+    secrets: &BTreeSet<String>,
+) -> String {
+    let mut document = DocumentMut::new();
+    document["version"] = value(FORMAT_VERSION as i64);
+    let mut plain = toml_edit::Table::new();
+    let mut secret = toml_edit::Table::new();
+    for (key, value_text) in values {
+        if secrets.contains(key) {
+            secret[key] = value(value_text);
+        } else {
+            plain[key] = value(value_text);
+        }
+    }
+    if !plain.is_empty() {
+        document["plain"] = toml_edit::Item::Table(plain);
+    }
+    if !secret.is_empty() {
+        document["secret"] = toml_edit::Item::Table(secret);
+    }
+    let source_name = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("dotenv file");
+    let mut contents = format!(
+        "# Imported from {source_name}. Keep non-sensitive values in [plain].\n\
+         # Move sensitive values to [secret], then run `shine env secret seal`.\n"
+    );
+    contents.push_str(&document.to_string());
+    if secrets.is_empty() {
+        contents.push_str(
+            "\n# Optional: move sensitive values here, then run `shine env secret seal`.\n[secret]\n",
+        );
+    }
+    contents
+}
+
+fn parse_dotenv(path: &Path, contents: &str) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
+    for (index, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        let Some((key, raw_value)) = line.split_once('=') else {
+            bail!(
+                "{}:{} is not a KEY=VALUE dotenv entry",
+                path.display(),
+                index + 1
+            );
+        };
+        let key = key.trim();
+        super::validate_env_key(key)
+            .with_context(|| format!("{}:{}", path.display(), index + 1))?;
+        let value_text = parse_dotenv_value(path, index + 1, raw_value)?;
+        values.insert(key.to_owned(), value_text);
+    }
+    Ok(values)
+}
+
+fn parse_dotenv_value(path: &Path, line: usize, raw: &str) -> Result<String> {
+    let raw = raw.trim();
+    if raw.starts_with("${") || raw.contains("${") {
+        bail!(
+            "{}:{line} uses dotenv interpolation; resolve it before importing",
+            path.display()
+        );
+    }
+    if let Some(value) = raw.strip_prefix('\'') {
+        return value
+            .strip_suffix('\'')
+            .map(str::to_owned)
+            .context("unterminated single-quoted dotenv value");
+    }
+    if let Some(value) = raw.strip_prefix('"') {
+        let value = value
+            .strip_suffix('"')
+            .context("unterminated double-quoted dotenv value")?;
+        if value.contains('\\') {
+            bail!(
+                "{}:{line} uses escaped double-quoted dotenv content; resolve it before importing",
+                path.display()
+            );
+        }
+        return Ok(value.to_owned());
+    }
+    Ok(raw
+        .split_once(" #")
+        .map(|(value, _)| value)
+        .unwrap_or(raw)
+        .trim_end()
+        .to_owned())
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Workspace {
     #[serde(default = "format_version")]
@@ -901,6 +1154,123 @@ fn absolute_from_current(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dotenv_import_parses_common_frontend_entries() {
+        let values = parse_dotenv(
+            Path::new(".env"),
+            "# base\nexport VITE_NAME = \"Shine\"\nVITE_URL=https://example.test # note\nEMPTY=\n",
+        )
+        .unwrap();
+
+        assert_eq!(values.get("VITE_NAME").map(String::as_str), Some("Shine"));
+        assert_eq!(
+            values.get("VITE_URL").map(String::as_str),
+            Some("https://example.test")
+        );
+        assert_eq!(values.get("EMPTY").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn dotenv_import_rejects_interpolation() {
+        let error = parse_dotenv(Path::new(".env"), "VITE_URL=${BASE_URL}/api\n").unwrap_err();
+        assert!(error.to_string().contains("dotenv interpolation"));
+    }
+
+    #[test]
+    fn dotenv_mode_discovery_ignores_generated_sources() {
+        let directory = std::env::temp_dir().join(format!("shine-dotenv-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(".env.development"), "VITE_A=1\n").unwrap();
+        std::fs::write(directory.join(".env.production.local"), "VITE_A=2\n").unwrap();
+        std::fs::write(directory.join(".env.development.shine.toml"), "version=1\n").unwrap();
+
+        assert_eq!(
+            dotenv_modes(&directory, &[]).unwrap(),
+            vec!["development", "production"]
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rendered_source_marks_only_requested_keys_secret() {
+        let source = render_source(
+            Path::new(".env"),
+            &BTreeMap::from([
+                ("PUBLIC".to_owned(), "yes".to_owned()),
+                ("TOKEN".to_owned(), "secret".to_owned()),
+            ]),
+            &BTreeSet::from(["TOKEN".to_owned()]),
+        );
+        let parsed: SourceFile = toml::from_str(&source).unwrap();
+        assert!(source.contains("Imported from .env"));
+        assert_eq!(parsed.plain.get("PUBLIC").map(String::as_str), Some("yes"));
+        assert!(
+            matches!(parsed.secret.get("TOKEN"), Some(SecretState::Plain(value)) if value == "secret")
+        );
+    }
+
+    #[test]
+    fn rendered_source_includes_an_empty_secret_template() {
+        let source = render_source(
+            Path::new(".env"),
+            &BTreeMap::from([("PUBLIC".to_owned(), "yes".to_owned())]),
+            &BTreeSet::new(),
+        );
+        assert!(source.contains("Optional: move sensitive values"));
+        let parsed: SourceFile = toml::from_str(&source).unwrap();
+        assert!(parsed.secret.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dotenv_init_creates_vite_ordered_workspace_without_touching_sources() {
+        let directory =
+            std::env::temp_dir().join(format!("shine-dotenv-init-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        tokio::fs::write(
+            directory.join(".env"),
+            "VITE_API=https://api.example.test\nTOKEN=unsealed\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            directory.join(".env.development"),
+            "VITE_API=http://localhost:3000\n",
+        )
+        .await
+        .unwrap();
+
+        init_from_dotenv_at(&directory, &[], &["TOKEN".to_owned()], false, false)
+            .await
+            .unwrap();
+
+        let workspace = tokio::fs::read_to_string(directory.join(WORKSPACE_FILE))
+            .await
+            .unwrap();
+        assert!(
+            workspace.find(".env.local.shine.toml").unwrap()
+                < workspace.find(".env.{mode}.shine.toml").unwrap()
+        );
+        assert!(workspace.contains("Managed by `shine env workspace init --from-dotenv`"));
+        assert!(workspace.contains("Add an encryption recipient"));
+        let base = tokio::fs::read_to_string(directory.join(".env.shine.toml"))
+            .await
+            .unwrap();
+        assert!(base.contains("[secret]"));
+        assert!(base.contains("TOKEN = \"unsealed\""));
+        assert_eq!(
+            tokio::fs::read_to_string(directory.join(".env"))
+                .await
+                .unwrap(),
+            "VITE_API=https://api.example.test\nTOKEN=unsealed\n"
+        );
+        assert!(
+            init_from_dotenv_at(&directory, &[], &[], false, false)
+                .await
+                .is_err()
+        );
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
 
     #[test]
     fn resolves_vite_style_layers_in_declared_order() {

@@ -1061,6 +1061,29 @@ files = [
 recipient = "alice@example.com"
 ```
 
+To migrate a Vite-style project, create the workspace and TOML sources from
+`.env`, `.env.local`, `.env.<mode>`, and `.env.<mode>.local` in one step:
+
+```bash
+shine env workspace init --from-dotenv
+```
+
+The original dotenv files are left untouched. The command discovers modes and
+uses Vite's layer order shown above. Preview the files with `--dry-run`; it
+refuses to replace an existing generated file unless `--force` is supplied.
+Mark known sensitive keys explicitly during import, then configure a recipient
+and seal them:
+
+```bash
+shine env workspace init --from-dotenv --secret DATABASE_URL
+shine env secret seal
+```
+
+Dotenv interpolation (such as `${BASE_URL}`) and escaped double-quoted values
+are rejected rather than silently changing their meaning; resolve them first.
+Generated source files include an empty, documented `[secret]` table so the
+encryption path remains discoverable even when no key is selected at import.
+
 Each environment source may mix plaintext and encrypted values:
 
 ```toml

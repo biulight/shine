@@ -9,9 +9,9 @@ use cli::{
 use commands::{
     AppArtifactCommands, AppCommands, Cli, Commands, CompletionCommands, CompletionShell,
     EnvBrokerPolicySubcommand, EnvBrokerSubcommand, EnvCommands, EnvIdentitySubcommand,
-    EnvProxySubcommand, EnvSecretSubcommand, LocalCommands, OverlayCommands, PresetCommands,
-    PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands, ShellCommands, StateCommands,
-    SysCommands, TaskCommands, ThemeCommands,
+    EnvProxySubcommand, EnvSecretSubcommand, EnvWorkspaceSubcommand, LocalCommands,
+    OverlayCommands, PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands,
+    ShellCommands, StateCommands, SysCommands, TaskCommands, ThemeCommands,
 };
 #[cfg(test)]
 use commands::{
@@ -303,6 +303,18 @@ async fn run(cli: Cli) -> Result<()> {
                 )
                 .await
             }
+            EnvCommands::Workspace(cmd) => match cmd.command {
+                EnvWorkspaceSubcommand::Init(cmd) => {
+                    env::workspace::handle_init_from_dotenv(
+                        cmd.from_dotenv,
+                        &cmd.mode,
+                        &cmd.secret,
+                        cmd.force,
+                        cmd.dry_run,
+                    )
+                    .await
+                }
+            },
             EnvCommands::Broker(cmd) => match cmd.command {
                 EnvBrokerSubcommand::Describe {
                     workspace,
@@ -1264,6 +1276,34 @@ mod tests {
                 })
             } if cmd.file.as_deref() == Some(std::path::Path::new(".env.production.shine.toml"))
                 && cmd.recipients == ["alice@example.com"]
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_workspace_dotenv_init() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "workspace",
+            "init",
+            "--from-dotenv",
+            "--mode",
+            "development",
+            "--secret",
+            "DATABASE_URL",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Workspace(commands::EnvWorkspaceCommand {
+                    command: EnvWorkspaceSubcommand::Init(cmd)
+                })
+            } if cmd.from_dotenv
+                && cmd.mode == ["development"]
+                && cmd.secret == ["DATABASE_URL"]
+                && cmd.dry_run
         ));
     }
 

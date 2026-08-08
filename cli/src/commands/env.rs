@@ -36,12 +36,45 @@ pub enum EnvCommands {
     },
     /// Run a command with the workspace environment
     Run(EnvRunCommand),
+    /// Create and manage workspace environment definitions
+    Workspace(EnvWorkspaceCommand),
     /// Transparently proxy selected commands with explicitly injected values
     Proxy(EnvProxyCommand),
     /// Manage SSH secret-broker policies and describe workspace requests
     Broker(EnvBrokerCommand),
     /// Encrypt, decrypt, export, and manage secret identities
     Secret(EnvSecretCommand),
+}
+
+#[derive(Args, Debug)]
+pub struct EnvWorkspaceCommand {
+    #[command(subcommand)]
+    pub command: EnvWorkspaceSubcommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum EnvWorkspaceSubcommand {
+    /// Create a workspace from conventional dotenv files
+    Init(EnvWorkspaceInitCommand),
+}
+
+#[derive(Args, Debug)]
+pub struct EnvWorkspaceInitCommand {
+    /// Import .env, .env.local, .env.<mode>, and .env.<mode>.local files
+    #[arg(long)]
+    pub from_dotenv: bool,
+    /// Mode to import (repeatable); modes are discovered when omitted
+    #[arg(long, value_name = "MODE")]
+    pub mode: Vec<String>,
+    /// Import this key as an encrypted workspace secret (repeatable)
+    #[arg(long, value_name = "KEY")]
+    pub secret: Vec<String>,
+    /// Replace generated workspace files that already exist
+    #[arg(long)]
+    pub force: bool,
+    /// Print planned files without writing them
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Args, Debug)]

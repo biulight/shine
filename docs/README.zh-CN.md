@@ -1008,6 +1008,26 @@ files = [
 recipient = "alice@example.com"
 ```
 
+迁移 Vite 风格项目时，可一步从 `.env`、`.env.local`、`.env.<mode>` 与
+`.env.<mode>.local` 创建 workspace 和 TOML 环境源：
+
+```bash
+shine env workspace init --from-dotenv
+```
+
+原 dotenv 文件不会被修改。该命令会自动发现 mode，并采用上方所示的 Vite 覆盖顺序；用
+`--dry-run` 预览，已有生成文件时必须显式传 `--force` 才会覆盖。导入时可明确标记敏感键，
+然后配置收件人并封存：
+
+```bash
+shine env workspace init --from-dotenv --secret DATABASE_URL
+shine env secret seal
+```
+
+为避免静默改变语义，dotenv 插值（如 `${BASE_URL}`）和带转义的双引号值会被拒绝；请先将其
+解析为最终值。即使导入时未选择任何敏感键，生成的源文件也会包含带说明的空 `[secret]` 表，
+便于发现加密工作流。
+
 每个环境源文件可以同时包含明文值和加密值：
 
 ```toml
