@@ -20,6 +20,17 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
 
     let steps = pending_steps(schema_version);
     if steps.is_empty() {
+        if let Some(path) = find_workspace_from_current_dir()
+            && workspace_needs_migration(&path).await?
+        {
+            if dry_run {
+                println!("[dry-run] migrate workspace format in {}", path.display());
+            } else {
+                migrate_workspace_gpg_recipient(&path).await?;
+                println!("Migrated workspace format in {}", path.display());
+            }
+            return Ok(());
+        }
         if !dry_run && config.last_cleared_schema_version != Some(CURRENT_RUNTIME_SCHEMA_VERSION) {
             let mut updated = config.clone();
             updated.last_cleared_schema_version = Some(CURRENT_RUNTIME_SCHEMA_VERSION);
@@ -62,6 +73,7 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
     if let Some(recipients) = gpg_recipients_from_config(config.config_path()).await? {
         updated.gpg_recipients = recipients;
     }
+    updated.legacy_gpg_key_id = None;
     updated.schema_version = CURRENT_RUNTIME_SCHEMA_VERSION;
     updated.last_cleared_schema_version = Some(CURRENT_RUNTIME_SCHEMA_VERSION);
     updated.save().await?;
@@ -137,7 +149,9 @@ fn migration_actions<'a>(config: &'a Config) -> Vec<CleanupAction<'a>> {
         );
         actions.push(CleanupAction {
             description,
-            apply: Box::pin(async move { migrate_workspace_gpg_recipient(&path).await }),
+            apply: Box::pin(
+                async move { migrate_workspace_gpg_recipient(&path).await.map(|_| ()) },
+            ),
         });
     }
     actions
@@ -166,15 +180,29 @@ async fn migrate_config_gpg_recipient(path: &Path) -> Result<()> {
         migrate_key(document, "gpg_key_id", "gpg_recipients")
     })
     .await
+    .map(|_| ())
 }
 
-async fn migrate_workspace_gpg_recipient(path: &Path) -> Result<()> {
+async fn migrate_workspace_gpg_recipient(path: &Path) -> Result<bool> {
     migrate_recipient_key(path, |document| {
-        let encryption = document["env"]["encryption"].as_table_mut();
-        match encryption {
-            Some(table) => migrate_table_key(table, "recipient", "gpg_recipients"),
-            None => Ok(false),
+        let version = document
+            .as_table()
+            .get("version")
+            .and_then(toml_edit::Item::as_integer)
+            .unwrap_or(1);
+        if version > 2 {
+            bail!("workspace version {version} is newer than this shine supports (2)");
         }
+        let mut changed = false;
+        let encryption = document["env"]["encryption"].as_table_mut();
+        if let Some(table) = encryption {
+            changed |= migrate_table_key(table, "recipient", "gpg_recipients")?;
+        }
+        if version < 2 {
+            document["version"] = toml_edit::value(2);
+            changed = true;
+        }
+        Ok(changed)
     })
     .await
 }
@@ -182,7 +210,7 @@ async fn migrate_workspace_gpg_recipient(path: &Path) -> Result<()> {
 async fn migrate_recipient_key(
     path: &Path,
     mutate: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<bool>,
-) -> Result<()> {
+) -> Result<bool> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
@@ -193,8 +221,25 @@ async fn migrate_recipient_key(
         crate::persist::atomic_write(path, document.to_string().as_bytes())
             .await
             .with_context(|| format!("writing {}", path.display()))?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
+}
+
+async fn workspace_needs_migration(path: &Path) -> Result<bool> {
+    let contents = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("reading {}", path.display()))?;
+    let document = contents
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    Ok(document
+        .as_table()
+        .get("version")
+        .and_then(toml_edit::Item::as_integer)
+        .unwrap_or(1)
+        < 2
+        || document["env"]["encryption"]["recipient"].is_value())
 }
 
 fn migrate_key(document: &mut toml_edit::DocumentMut, old: &str, new: &str) -> Result<bool> {
@@ -349,6 +394,7 @@ mod tests {
         assert!(!content.contains("recipient ="));
         assert!(content.contains("# deployment key"));
         assert!(content.contains("gpg_recipients = [\"alice@example.com\"]"));
+        assert!(content.contains("version = 2"));
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

@@ -17,7 +17,10 @@ use toml_edit::{DocumentMut, value};
 use zeroize::Zeroize;
 
 const WORKSPACE_FILE: &str = "shine.workspace.toml";
-const FORMAT_VERSION: u32 = 1;
+const WORKSPACE_FORMAT_VERSION: u32 = 2;
+const ENV_SOURCE_FORMAT_VERSION: u32 = 1;
+const SECRET_PAYLOAD_VERSION: u32 = 1;
+const CACHE_FORMAT_VERSION: u32 = 1;
 
 /// Initialize a workspace by copying conventional dotenv sources into Shine's
 /// explicit TOML source format. The original dotenv files are never modified.
@@ -157,7 +160,7 @@ fn render_workspace(modes: &[String]) -> String {
     format!(
         "# Managed by `shine env workspace init --from-dotenv`.\n\
          # Edit the source files below; later files override earlier ones.\n\
-         version = {FORMAT_VERSION}\n\n\
+         version = {WORKSPACE_FORMAT_VERSION}\n\n\
          [env]\n\
          # Run with: shine env run --mode {default_mode} -- <command>\n\
          modes = [{modes}]\n\
@@ -181,7 +184,7 @@ fn render_source(
     secrets: &BTreeSet<String>,
 ) -> String {
     let mut document = DocumentMut::new();
-    document["version"] = value(FORMAT_VERSION as i64);
+    document["version"] = value(ENV_SOURCE_FORMAT_VERSION as i64);
     let mut plain = toml_edit::Table::new();
     let mut secret = toml_edit::Table::new();
     for (key, value_text) in values {
@@ -274,7 +277,7 @@ fn parse_dotenv_value(path: &Path, line: usize, raw: &str) -> Result<String> {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Workspace {
-    #[serde(default = "format_version")]
+    #[serde(default = "workspace_format_version")]
     version: u32,
     pub env: WorkspaceEnv,
 }
@@ -306,7 +309,7 @@ struct Encryption {
 
 #[derive(Clone, Debug, Deserialize)]
 struct SourceFile {
-    #[serde(default = "format_version")]
+    #[serde(default = "env_source_format_version")]
     version: u32,
     #[serde(default)]
     plain: BTreeMap<String, String>,
@@ -349,8 +352,12 @@ struct CachedMode {
     data: String,
 }
 
-fn format_version() -> u32 {
-    FORMAT_VERSION
+fn workspace_format_version() -> u32 {
+    WORKSPACE_FORMAT_VERSION
+}
+
+fn env_source_format_version() -> u32 {
+    ENV_SOURCE_FORMAT_VERSION
 }
 
 pub async fn handle_seal(
@@ -556,16 +563,23 @@ async fn load_workspace(path: &Path) -> Result<Workspace> {
         .with_context(|| format!("reading {}", path.display()))?;
     let workspace: Workspace =
         toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
-    if workspace.env.encryption.legacy_recipient.is_some() {
+    if workspace.version < WORKSPACE_FORMAT_VERSION {
         bail!(
-            "{} uses retired env.encryption.recipient; run `shine state migrate` to convert it to gpg_recipients",
+            "workspace version {} in {} is retired; run `shine state migrate`",
+            workspace.version,
             path.display()
         );
     }
-    if workspace.version != FORMAT_VERSION {
+    if workspace.version != WORKSPACE_FORMAT_VERSION {
         bail!(
             "unsupported workspace version {} in {}",
             workspace.version,
+            path.display()
+        );
+    }
+    if workspace.env.encryption.legacy_recipient.is_some() {
+        bail!(
+            "{} uses retired env.encryption.recipient; run `shine state migrate` to convert it to gpg_recipients",
             path.display()
         );
     }
@@ -858,7 +872,7 @@ async fn seal_file(
             "recipients are required; pass --recipient/--backend, set env.encryption in shine.workspace.toml, or set gpg_recipients/age_recipients",
         )?;
         let plaintext = toml::to_string(&SecretPayload {
-            version: FORMAT_VERSION,
+            version: SECRET_PAYLOAD_VERSION,
             values: new_values,
         })?;
         secret::encrypt_secret(plaintext.as_bytes(), encryption).await?
@@ -885,7 +899,7 @@ async fn seal_file(
 fn parse_source(path: &Path, contents: &str) -> Result<SourceFile> {
     let source: SourceFile = toml::from_str(contents)
         .with_context(|| format!("parsing environment source {}", path.display()))?;
-    if source.version != FORMAT_VERSION {
+    if source.version != ENV_SOURCE_FORMAT_VERSION {
         bail!(
             "unsupported environment source version {} in {}",
             source.version,
@@ -921,7 +935,7 @@ async fn decrypt_source_payload(
         .with_context(|| format!("decrypting {}", path.display()))?;
     let payload: SecretPayload = toml::from_str(&plaintext)
         .with_context(|| format!("parsing decrypted payload from {}", path.display()))?;
-    if payload.version != FORMAT_VERSION {
+    if payload.version != SECRET_PAYLOAD_VERSION {
         bail!("unsupported encrypted payload version {}", payload.version);
     }
     Ok(payload.values)
@@ -976,7 +990,7 @@ async fn calculate_input_hash(
     sources: &[PathBuf],
 ) -> Result<String> {
     let mut hash = Sha256::new();
-    hash.update(FORMAT_VERSION.to_le_bytes());
+    hash.update(CACHE_FORMAT_VERSION.to_le_bytes());
     hash.update(mode.as_bytes());
     hash.update(
         tokio::fs::read(workspace_path)
@@ -1029,13 +1043,13 @@ async fn read_valid_cache(
     let Some(cached) = cache.modes.get(mode) else {
         return Ok(None);
     };
-    if cache.version != FORMAT_VERSION || cached.input_hash != input_hash {
+    if cache.version != CACHE_FORMAT_VERSION || cached.input_hash != input_hash {
         return Ok(None);
     }
     let plaintext = secret::decrypt_secret(&cached.data, &config.age_identities()).await?;
     let payload: SecretPayload = toml::from_str(&plaintext)?;
     let keys: Vec<_> = payload.values.keys().cloned().collect();
-    if payload.version != FORMAT_VERSION || keys != cached.keys {
+    if payload.version != SECRET_PAYLOAD_VERSION || keys != cached.keys {
         bail!("compiled environment cache failed integrity validation");
     }
     Ok(Some(payload.values))
@@ -1050,7 +1064,7 @@ async fn write_cache(
     recipients: &EncryptRecipients,
 ) -> Result<()> {
     let plaintext = toml::to_string(&SecretPayload {
-        version: FORMAT_VERSION,
+        version: SECRET_PAYLOAD_VERSION,
         values: values.clone(),
     })?;
     let data = secret::encrypt_secret(plaintext.as_bytes(), recipients).await?;
@@ -1064,7 +1078,7 @@ async fn write_cache(
         },
     );
     let cache = CacheFile {
-        version: FORMAT_VERSION,
+        version: CACHE_FORMAT_VERSION,
         project_root: workspace_path
             .parent()
             .unwrap_or_else(|| Path::new("."))

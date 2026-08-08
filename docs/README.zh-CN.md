@@ -993,7 +993,7 @@ shine env proxy disable --project gh
 如果项目不希望保留明文 dotenv 文件，可以创建 `shine.workspace.toml`：
 
 ```toml
-version = 1
+version = 2
 
 [env]
 modes = ["development", "production"]
@@ -1008,6 +1008,9 @@ files = [
 [env.encryption]
 gpg_recipients = ["alice@example.com", "bob@example.com"]
 ```
+
+workspace 格式 v1 可按需通过 `shine state migrate` 迁移；`env run` 和 `env secret seal`
+遇到旧格式时会提示执行迁移。
 
 迁移 Vite 风格项目时，可一步从 `.env`、`.env.local`、`.env.<mode>` 与
 `.env.<mode>.local` 创建 workspace 和 TOML 环境源：

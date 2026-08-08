@@ -1046,7 +1046,7 @@ For projects that should not keep plaintext dotenv files, add a
 `shine.workspace.toml`:
 
 ```toml
-version = 1
+version = 2
 
 [env]
 modes = ["development", "production"]
@@ -1061,6 +1061,9 @@ files = [
 [env.encryption]
 gpg_recipients = ["alice@example.com", "bob@example.com"]
 ```
+
+Workspace format v1 is migrated on demand with `shine state migrate`; `env run`
+and `env secret seal` will prompt for that migration when they encounter it.
 
 To migrate a Vite-style project, create the workspace and TOML sources from
 `.env`, `.env.local`, `.env.<mode>`, and `.env.<mode>.local` in one step:

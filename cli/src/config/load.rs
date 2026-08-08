@@ -33,6 +33,8 @@ struct ProjectOverrides {
     self_install_dest: Option<PathBuf>,
     #[serde(default)]
     gpg_recipients: Vec<String>,
+    #[serde(rename = "gpg_key_id")]
+    legacy_gpg_key_id: Option<String>,
     #[serde(default)]
     secret_backend: Option<String>,
     #[serde(default)]
@@ -92,13 +94,9 @@ impl Config {
         };
         // Initialize the global layer before applying the sparse project layer.
         let (mut config, global_exists) = Self::load_global_runtime_base().await?;
-        if global_exists {
-            reject_legacy_gpg_recipient(config.config_path()).await?;
-        }
         let contents = fs::read_to_string(&project_config.path)
             .await
             .context("Failed to read project config file")?;
-        reject_legacy_gpg_recipient(&project_config.path).await?;
         let original: toml::Table =
             toml::from_str(&contents).context("Failed to parse project config file")?;
         let overrides: ProjectOverrides =
@@ -137,6 +135,9 @@ impl Config {
         }
         if !overrides.gpg_recipients.is_empty() {
             config.gpg_recipients = overrides.gpg_recipients;
+        }
+        if overrides.legacy_gpg_key_id.is_some() {
+            config.legacy_gpg_key_id = overrides.legacy_gpg_key_id;
         }
         if overrides.secret_backend.is_some() {
             config.secret_backend = overrides.secret_backend;
@@ -205,9 +206,6 @@ impl Config {
 
     pub async fn load_global_runtime_or_init() -> Result<Self> {
         let (mut config, exists) = Self::load_global_runtime_base().await?;
-        if exists {
-            reject_legacy_gpg_recipient(config.config_path()).await?;
-        }
 
         fs::create_dir_all(config.shine_dir())
             .await
@@ -326,21 +324,6 @@ fn config_toml_has_env_table(contents: &str) -> bool {
     toml::from_str::<toml::Table>(contents)
         .map(|table| table.contains_key("env"))
         .unwrap_or(false)
-}
-
-async fn reject_legacy_gpg_recipient(path: &std::path::Path) -> Result<()> {
-    let contents = fs::read_to_string(path)
-        .await
-        .with_context(|| format!("reading {}", path.display()))?;
-    let table: toml::Table =
-        toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
-    if table.contains_key("gpg_key_id") {
-        bail!(
-            "{} uses retired gpg_key_id; run `shine state migrate` to convert it to gpg_recipients",
-            path.display()
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]

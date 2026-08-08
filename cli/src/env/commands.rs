@@ -483,6 +483,11 @@ fn resolve_encrypt_recipients(
 
     match backend {
         BackendKind::Gpg => {
+            if config.legacy_gpg_key_id.is_some() {
+                bail!(
+                    "gpg_key_id is retired; run `shine state migrate` to convert it to gpg_recipients"
+                );
+            }
             let recipients = clean_recipients(&config.gpg_recipients);
             if recipients.is_empty() {
                 bail!(

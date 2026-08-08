@@ -180,6 +180,12 @@ pub struct Config {
     /// neither `-r/--recipient` nor a workspace GPG recipient list is given.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gpg_recipients: Vec<String>,
+    #[serde(
+        rename = "gpg_key_id",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub legacy_gpg_key_id: Option<String>,
     /// Selects the default [`crate::secret::BackendKind`] used by `shine env
     /// encrypt`/`seal` when neither `-r/--recipient` nor a workspace backend
     /// override is given. Absent means GPG. Decryption never consults this
@@ -320,6 +326,7 @@ impl Config {
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_recipients: Vec::new(),
+            legacy_gpg_key_id: None,
             secret_backend: None,
             age_recipients: Vec::new(),
             age_identity: None,
@@ -503,6 +510,7 @@ impl Default for Config {
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_recipients: Vec::new(),
+            legacy_gpg_key_id: None,
             secret_backend: None,
             age_recipients: Vec::new(),
             age_identity: None,
