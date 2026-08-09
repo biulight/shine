@@ -36,6 +36,13 @@ default. Remote metadata can only be enrolled through a separate, explicitly tru
 local confirmation. The policy file is local-only security state, rejected if symlinked,
 wrong-owned, or broader than `0600`, and replaced atomically.
 
+`--release-all-declared` is generation-time shorthand only. Shine expands the immutable source
+snapshot's complete declared-secret set into the policy's ordinary explicit `release` array; it
+never persists a wildcard. A later declared-secret or source change therefore invalidates the
+exact policy. Trusted remote enrollment may update a specifically named existing policy only after
+showing a local diff, preserving its identity fields, matching exactly one mode/argv allow, and
+verifying that the policy did not change between preview and atomic write.
+
 ## Consequences
 
 - Hardware-backed decryption stays on the local machine and occurs only when requested.
@@ -43,6 +50,8 @@ wrong-owned, or broader than `0600`, and replaced atomically.
   narrower exposure, not protection from a compromised remote kernel or privileged process.
 - Exact hashes intentionally make source changes fail closed until the local policy is reviewed and
   updated.
+- Releasing every currently declared secret is concise without granting future secrets
+  automatically; project secret changes require a new explicit policy snapshot.
 - The broker is POSIX-remote-only in this version because secure confirmation and the reverse Unix
   socket lifecycle are not yet implemented for Windows remote shells.
 - Existing eager `--with-secret` behavior remains available and unchanged for simple trusted uses.

@@ -33,6 +33,7 @@ pub struct BrokerSession {
     direct: Vec<DirectSecret>,
     trust_remote_session: bool,
     mode: BrokerMode,
+    enroll_update_policy: Option<String>,
     used_nonces: tokio::sync::Mutex<BTreeSet<String>>,
     operation_lock: tokio::sync::Mutex<()>,
     ssh_pid: Mutex<Option<u32>>,
@@ -59,6 +60,7 @@ impl BrokerSession {
         inspect: bool,
         enroll: bool,
         trust_remote_metadata: bool,
+        enroll_update_policy: Option<&str>,
     ) -> Result<Option<Arc<Self>>> {
         let active = enabled || inspect || enroll;
         if !active {
@@ -71,6 +73,9 @@ impl BrokerSession {
             bail!(
                 "--secret-broker-enroll requires the explicit --trust-remote-metadata acknowledgement"
             );
+        }
+        if enroll_update_policy.is_some() && !enroll {
+            bail!("--update-policy requires --secret-broker-enroll");
         }
         if (inspect || enroll) && (!allow_secret.is_empty() || trust_remote_session) {
             bail!("inspect/enroll sessions cannot release secrets");
@@ -122,6 +127,7 @@ impl BrokerSession {
             direct,
             trust_remote_session,
             mode,
+            enroll_update_policy: enroll_update_policy.map(str::to_string),
             used_nonces: tokio::sync::Mutex::new(BTreeSet::new()),
             operation_lock: tokio::sync::Mutex::new(()),
             ssh_pid: Mutex::new(None),
@@ -232,7 +238,7 @@ impl BrokerSession {
         let values =
             broker::decrypt_workspace_snapshot(&self.config, snapshot, &matched.release).await?;
         let argv_sha256 = format!("{:x}", Sha256::digest(argv.join("\0").as_bytes()));
-        eprintln!(
+        let audit = format!(
             "shine ssh broker: released policy {} project={} argv_sha256={} approval={}",
             matched.policy_name,
             sanitize_label(&matched.project),
@@ -243,6 +249,11 @@ impl BrokerSession {
                 "interactive"
             }
         );
+        if self.trust_remote_session {
+            raw_tty_safe_log(&audit);
+        } else {
+            eprintln!("{audit}");
+        }
         Ok(values)
     }
 
@@ -273,35 +284,21 @@ impl BrokerSession {
                 .collect::<Vec<_>>()
                 .join(",")
         );
-        let mut details = format!(
-            "  ssh target: {}\n  workspace:  {}\n  mode:       {}\n  argv:       {}\n  release:    {}",
-            sanitize_label(&self.ssh_target),
-            sanitize_label(&snapshot.workspace_path),
-            sanitize_label(&snapshot.mode),
-            argv.iter()
-                .map(|value| escape_display(value))
-                .collect::<Vec<_>>()
-                .join(" "),
-            release
-                .iter()
-                .map(|value| sanitize_label(value))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        for source in &allow.sources {
-            details.push_str(&format!(
-                "\n  source:     {} sha256={} declared={}",
-                sanitize_label(&source.path),
-                source.sha256,
-                source
-                    .declared_secrets
-                    .iter()
-                    .map(|value| sanitize_label(value))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ));
-        }
-        let policy_comparison =
+        let enrollment_plan = if self.mode == BrokerMode::EnrollTrusted {
+            Some(broker::plan_remote_enrollment(
+                &self.policies,
+                &self.ssh_target,
+                snapshot,
+                release,
+                argv,
+                self.enroll_update_policy.as_deref(),
+            )?)
+        } else {
+            None
+        };
+        let policy_comparison = if let Some(plan) = &enrollment_plan {
+            plan.action_label()
+        } else {
             match broker::match_workspace_request(&self.policies, &self.ssh_target, snapshot, argv)
             {
                 Ok(matched) if matched.release == release => {
@@ -321,27 +318,35 @@ impl BrokerSession {
                         .join(",")
                 ),
                 Err(_) => "no exact local policy selector match".to_string(),
-            };
-        details.push_str(&format!("\n  comparison: {policy_comparison}"));
+            }
+        };
+        let details =
+            format_description_details(&self.ssh_target, snapshot, &allow, &policy_comparison);
         match self.mode {
             BrokerMode::Inspect => {
-                eprintln!("shine ssh broker inspect:\n{details}");
+                self.display_local(format!("Shine secret broker inspection\n\n{details}\n"))
+                    .await?;
                 Ok(format!("inspected remote broker request: {summary}"))
             }
             BrokerMode::EnrollTrusted => {
-                eprintln!("shine ssh broker trusted remote enrollment candidate:\n{details}");
+                let plan = enrollment_plan.expect("enrollment mode has a prepared plan");
+                let diff = plan
+                    .diff()?
+                    .filter(|value| !value.trim().is_empty())
+                    .map(|value| format!("\n\nPolicy diff:\n{}", escape_multiline(&value)))
+                    .unwrap_or_default();
                 let _confirmation = self
-                    .confirm("trusted-remote-enrollment", argv, release)
+                    .confirm_prompt(format!(
+                        "Shine secret broker trusted remote enrollment\n\n{details}{diff}\n\nApprove enrollment? [y/N] "
+                    ))
                     .await?;
-                let name = broker::add_policy_from_remote_snapshot(
-                    &self.config,
-                    &self.ssh_target,
-                    snapshot,
-                    release,
-                    argv,
-                )
-                .await?;
-                Ok(format!("enrolled local SSH secret broker policy {name}"))
+                let updated = plan.previous.is_some();
+                let name = broker::apply_remote_enrollment(&self.config, &plan).await?;
+                Ok(if updated {
+                    format!("updated local SSH secret broker policy {name}")
+                } else {
+                    format!("enrolled local SSH secret broker policy {name}")
+                })
             }
             BrokerMode::Serve => unreachable!(),
         }
@@ -364,10 +369,15 @@ impl BrokerSession {
             .map(|value| escape_display(value))
             .collect::<Vec<_>>();
         let prompt = format!(
-            "Shine secret request\n  ssh target: {target}\n  policy:     {policy}\n  command:    {}\n  secrets:    {}\nApprove? [y/N] ",
-            argv.join(" "),
-            refs.join(", ")
+            "Shine secret request\n\nSSH target: {target}\nPolicy: {policy}\nCommand argv:\n{}\nSecrets ({}):\n{}\n\nApprove? [y/N] ",
+            format_indexed(&argv),
+            refs.len(),
+            format_bullets(&refs),
         );
+        self.confirm_prompt(prompt).await
+    }
+
+    async fn confirm_prompt(&self, prompt: String) -> Result<LocalConfirmation> {
         let pid = *self.ssh_pid.lock().expect("ssh pid mutex poisoned");
         #[cfg(unix)]
         {
@@ -384,6 +394,103 @@ impl BrokerSession {
             bail!("interactive SSH secret confirmation is not supported on this platform")
         }
     }
+
+    async fn display_local(&self, contents: String) -> Result<()> {
+        let pid = *self.ssh_pid.lock().expect("ssh pid mutex poisoned");
+        #[cfg(unix)]
+        {
+            let original = self.original_termios.context(
+                "local TTY display is unavailable; run inspect from an interactive terminal",
+            )?;
+            tokio::task::spawn_blocking(move || display_on_tty(pid, original, &contents))
+                .await
+                .context("joining local broker display")?
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (pid, contents);
+            bail!("interactive SSH broker display is not supported on this platform")
+        }
+    }
+}
+
+fn format_description_details(
+    ssh_target: &str,
+    snapshot: &WorkspaceSnapshot,
+    allow: &broker::BrokerAllow,
+    policy_comparison: &str,
+) -> String {
+    let release = allow
+        .release
+        .iter()
+        .map(|value| sanitize_label(value))
+        .collect::<Vec<_>>();
+    let argv = allow
+        .argv
+        .iter()
+        .map(|value| escape_display(value))
+        .collect::<Vec<_>>();
+    let mut details = format!(
+        "SSH target: {}\nWorkspace: {}\nMode: {}\nCommand argv:\n{}\nRelease secrets ({}):\n{}\nSources ({}):",
+        sanitize_label(ssh_target),
+        sanitize_label(&snapshot.workspace_path),
+        sanitize_label(&snapshot.mode),
+        format_indexed(&argv),
+        release.len(),
+        format_bullets(&release),
+        allow.sources.len(),
+    );
+    for source in &allow.sources {
+        let declared = source
+            .declared_secrets
+            .iter()
+            .map(|value| sanitize_label(value))
+            .collect::<Vec<_>>();
+        details.push_str(&format!(
+            "\n  - Path: {}\n    SHA-256: {}\n    Declared secrets ({}):\n{}",
+            sanitize_label(&source.path),
+            source.sha256,
+            declared.len(),
+            indent_lines(&format_bullets(&declared), 4),
+        ));
+    }
+    details.push_str(&format!(
+        "\nPolicy comparison: {}",
+        sanitize_label(policy_comparison)
+    ));
+    details
+}
+
+fn format_indexed(values: &[String]) -> String {
+    if values.is_empty() {
+        return "  (none)".to_string();
+    }
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| format!("  [{index}] {value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_bullets(values: &[String]) -> String {
+    if values.is_empty() {
+        return "  (none)".to_string();
+    }
+    values
+        .iter()
+        .map(|value| format!("  - {value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn indent_lines(value: &str, spaces: usize) -> String {
+    let prefix = " ".repeat(spaces);
+    value
+        .lines()
+        .map(|line| format!("{prefix}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(unix)]
@@ -431,6 +538,14 @@ fn escape_display(value: &str) -> String {
         .collect()
 }
 
+fn escape_multiline(value: &str) -> String {
+    value
+        .lines()
+        .map(escape_display)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(unix)]
 fn capture_tty_termios() -> Option<libc::termios> {
     use std::os::fd::AsRawFd;
@@ -451,13 +566,35 @@ fn confirm_on_tty(
     prompt: &str,
 ) -> Result<LocalConfirmation> {
     use std::io::{BufRead, Write};
+    let mut restore = enter_local_tty(pid, original)?;
+    restore.tty.write_all(prompt.as_bytes())?;
+    restore.tty.flush()?;
+    let mut answer = String::new();
+    std::io::BufReader::new(restore.tty.try_clone()?).read_line(&mut answer)?;
+    if !confirmation_approved(&answer) {
+        bail!("secret request rejected by the local user");
+    }
+    Ok(LocalConfirmation { _restore: restore })
+}
+
+#[cfg(unix)]
+fn display_on_tty(pid: Option<u32>, original: libc::termios, contents: &str) -> Result<()> {
+    use std::io::Write;
+    let mut restore = enter_local_tty(pid, original)?;
+    restore.tty.write_all(contents.as_bytes())?;
+    restore.tty.flush()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn enter_local_tty(pid: Option<u32>, original: libc::termios) -> Result<TtyRestore> {
     use std::os::fd::AsRawFd;
     let pid = pid.context("SSH child is not running")?;
     let tty = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open("/dev/tty")
-        .context("opening /dev/tty for local confirmation")?;
+        .context("opening /dev/tty for local broker interaction")?;
     let fd = tty.as_raw_fd();
     let mut ssh_termios = std::mem::MaybeUninit::<libc::termios>::uninit();
     if unsafe { libc::tcgetattr(fd, ssh_termios.as_mut_ptr()) } != 0 {
@@ -465,22 +602,89 @@ fn confirm_on_tty(
     }
     let ssh_termios = unsafe { ssh_termios.assume_init() };
     if unsafe { libc::kill(pid as i32, libc::SIGSTOP) } != 0 {
-        bail!("pausing SSH for local secret confirmation");
+        bail!("pausing SSH for local broker interaction");
     }
-    let mut restore = TtyRestore {
+    let restore = TtyRestore {
         tty,
         pid,
         termios: ssh_termios,
     };
     if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) } != 0 {
-        bail!("restoring canonical TTY state for local confirmation");
+        bail!("restoring canonical TTY state for local broker interaction");
     }
-    restore.tty.write_all(prompt.as_bytes())?;
-    restore.tty.flush()?;
-    let mut answer = String::new();
-    std::io::BufReader::new(restore.tty.try_clone()?).read_line(&mut answer)?;
-    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-        bail!("secret request rejected by the local user");
+    Ok(restore)
+}
+
+fn confirmation_approved(answer: &str) -> bool {
+    const PASTE_START: &str = "\u{1b}[200~";
+    const PASTE_END: &str = "\u{1b}[201~";
+
+    let answer = answer.trim();
+    let answer = if let Some(pasted) = answer.strip_prefix(PASTE_START) {
+        let Some(pasted) = pasted.strip_suffix(PASTE_END) else {
+            return false;
+        };
+        pasted.trim()
+    } else {
+        answer
+    };
+    matches!(answer.to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+fn raw_tty_safe_log(message: &str) {
+    use std::io::{IsTerminal, Write};
+    let mut stderr = std::io::stderr();
+    if stderr.is_terminal() {
+        let _ = write!(stderr, "\r{message}\r\n");
+    } else {
+        let _ = writeln!(stderr, "{message}");
     }
-    Ok(LocalConfirmation { _restore: restore })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confirmation_accepts_plain_and_bracketed_paste_yes() {
+        assert!(confirmation_approved("y\n"));
+        assert!(confirmation_approved(" YES \r\n"));
+        assert!(confirmation_approved("\u{1b}[200~y\u{1b}[201~\n"));
+    }
+
+    #[test]
+    fn confirmation_rejects_other_or_decorated_input() {
+        assert!(!confirmation_approved(""));
+        assert!(!confirmation_approved("n\n"));
+        assert!(!confirmation_approved("y please\n"));
+        assert!(!confirmation_approved("\u{1b}[200~yes\n"));
+        assert!(!confirmation_approved("\u{1b}[31my\u{1b}[0m\n"));
+    }
+
+    #[test]
+    fn enrollment_details_use_bounded_vertical_lists() {
+        let snapshot = WorkspaceSnapshot {
+            workspace_path: "/srv/api/shine.workspace.toml".into(),
+            workspace_contents: "version = 1".into(),
+            mode: "production".into(),
+            override_process_env: false,
+            sources: vec![],
+        };
+        let allow = broker::BrokerAllow {
+            mode: "production".into(),
+            argv: vec!["bun".into(), "start".into()],
+            release: vec!["FIRST_SECRET".into(), "SECOND_SECRET".into()],
+            sources: vec![broker::BrokerSource {
+                path: ".env.shine.toml".into(),
+                sha256: "a".repeat(64),
+                declared_secrets: vec!["FIRST_SECRET".into(), "SECOND_SECRET".into()],
+            }],
+        };
+
+        let rendered = format_description_details("dev", &snapshot, &allow, "no exact match");
+        assert!(rendered.contains("Command argv:\n  [0] bun\n  [1] start"));
+        assert!(rendered.contains("Release secrets (2):\n  - FIRST_SECRET\n  - SECOND_SECRET"));
+        assert!(rendered.contains("Declared secrets (2):\n      - FIRST_SECRET"));
+        assert!(!rendered.contains("FIRST_SECRET, SECOND_SECRET"));
+    }
 }

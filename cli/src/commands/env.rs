@@ -97,8 +97,16 @@ pub enum EnvBrokerSubcommand {
         workspace: Option<PathBuf>,
         #[arg(long)]
         mode: String,
-        #[arg(long, value_name = "KEY", required = true)]
+        #[arg(
+            long,
+            value_name = "KEY",
+            required_unless_present = "release_all_declared",
+            conflicts_with = "release_all_declared"
+        )]
         release: Vec<String>,
+        /// Release every secret declared by the selected source snapshot
+        #[arg(long)]
+        release_all_declared: bool,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
@@ -127,8 +135,16 @@ pub struct EnvBrokerPolicyInput {
     pub remote_workspace: Option<String>,
     #[arg(long)]
     pub mode: String,
-    #[arg(long, value_name = "KEY", required = true)]
+    #[arg(
+        long,
+        value_name = "KEY",
+        required_unless_present = "release_all_declared",
+        conflicts_with = "release_all_declared"
+    )]
     pub release: Vec<String>,
+    /// Release every secret declared by the selected source snapshot
+    #[arg(long)]
+    pub release_all_declared: bool,
     #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
     pub command: Vec<String>,
 }
@@ -146,8 +162,16 @@ pub enum EnvBrokerPolicySubcommand {
         workspace: PathBuf,
         #[arg(long)]
         mode: String,
-        #[arg(long, value_name = "KEY", required = true)]
+        #[arg(
+            long,
+            value_name = "KEY",
+            required_unless_present = "release_all_declared",
+            conflicts_with = "release_all_declared"
+        )]
         release: Vec<String>,
+        /// Release every secret declared by the selected source snapshot
+        #[arg(long)]
+        release_all_declared: bool,
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },

@@ -169,6 +169,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **Workspace authorization binds the whole request.** Matching includes SSH target, workspace
   bytes/hash, every source path and byte hash, mode, complete declared-secret set, exact release
   mapping, and exact argv. The local agent must reject rather than partially match any difference.
+- **All-declared release is expansion, never a wildcard.** `--release-all-declared` resolves the
+  current immutable snapshot into a sorted explicit release list before policy creation or update.
+  A future declared secret/source change must invalidate the old policy and require review; runtime
+  matching must never reinterpret the stored list as “whatever exists now.”
 - **Workspace files are read once per broker run.** The remote snapshot sent for authorization and
   the values later merged into the child environment derive from the same in-memory bytes; never
   re-open a source after the local agent approves its hash.
@@ -181,6 +185,11 @@ bugs. Check this list before changing the modules named in each entry.
   then an RAII guard restores raw termios and resumes SSH on success or every error path. Dropping
   the guard immediately after the yes/no prompt breaks terminal pinentry and permits concurrent
   requests to corrupt each other's TTY interaction.
+- **Broker UI is rendered only inside the local-TTY guard.** OpenSSH raw mode disables normal LF
+  cursor handling, so inspect/enrollment details printed before termios restoration form a
+  staircase and can interleave with the remote shell. Confirmation accepts plain `y`/`yes` and
+  those exact values inside the standard bracketed-paste wrapper; arbitrary ANSI/control-decorated
+  input remains a rejection.
 
 ## Local HTTP server
 

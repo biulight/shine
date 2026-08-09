@@ -354,6 +354,7 @@ pub async fn policy_from_workspace(
     remote_workspace: Option<&str>,
     mode: &str,
     release: &[String],
+    release_all_declared: bool,
     argv: &[String],
 ) -> Result<BrokerPolicy> {
     validate_name(name, "policy name")?;
@@ -364,7 +365,8 @@ pub async fn policy_from_workspace(
         }
     }
     let snapshot = workspace::snapshot_for_broker(Some(workspace_path), mode).await?;
-    let allow = allow_from_snapshot(&snapshot, release, argv)?;
+    let release = resolve_release(&snapshot, release, release_all_declared)?;
+    let allow = allow_from_snapshot(&snapshot, &release, argv)?;
     Ok(BrokerPolicy {
         name: name.to_string(),
         ssh_target: ssh_target.to_string(),
@@ -405,6 +407,34 @@ pub fn allow_from_snapshot(
         release: release.to_vec(),
         sources,
     })
+}
+
+pub fn resolve_release(
+    snapshot: &WorkspaceSnapshot,
+    requested: &[String],
+    release_all_declared: bool,
+) -> Result<Vec<String>> {
+    if release_all_declared {
+        if !requested.is_empty() {
+            bail!("--release and --release-all-declared are mutually exclusive");
+        }
+        let mut declared = BTreeSet::new();
+        for source in &snapshot.sources {
+            declared.extend(workspace::declared_secrets_from_source(
+                &source.path,
+                &source.contents,
+            )?);
+        }
+        if declared.is_empty() {
+            bail!("--release-all-declared found no declared workspace secrets");
+        }
+        return Ok(declared.into_iter().collect());
+    }
+    if requested.is_empty() {
+        bail!("pass at least one --release KEY or --release-all-declared");
+    }
+    validate_release(requested)?;
+    Ok(requested.to_vec())
 }
 
 pub fn match_workspace_request(
@@ -489,6 +519,7 @@ pub async fn handle_policy_add(
     remote_workspace: Option<&str>,
     mode: &str,
     release: &[String],
+    release_all_declared: bool,
     argv: &[String],
 ) -> Result<()> {
     let policy = policy_from_workspace(
@@ -499,6 +530,7 @@ pub async fn handle_policy_add(
         remote_workspace,
         mode,
         release,
+        release_all_declared,
         argv,
     )
     .await?;
@@ -522,6 +554,7 @@ pub async fn handle_policy_update(
     remote_workspace: Option<&str>,
     mode: &str,
     release: &[String],
+    release_all_declared: bool,
     argv: &[String],
 ) -> Result<()> {
     let policy = policy_from_workspace(
@@ -532,6 +565,7 @@ pub async fn handle_policy_update(
         remote_workspace,
         mode,
         release,
+        release_all_declared,
         argv,
     )
     .await?;
@@ -608,6 +642,7 @@ pub async fn handle_policy_diff(
     workspace_path: &Path,
     mode: &str,
     release: &[String],
+    release_all_declared: bool,
     argv: &[String],
 ) -> Result<()> {
     let store = load_store(config).await?;
@@ -624,6 +659,7 @@ pub async fn handle_policy_diff(
         existing.remote_workspace.as_deref(),
         mode,
         release,
+        release_all_declared,
         argv,
     )
     .await?;
@@ -644,12 +680,14 @@ pub async fn handle_describe(
     workspace_path: Option<&Path>,
     mode: &str,
     release: &[String],
+    release_all_declared: bool,
     argv: &[String],
 ) -> Result<()> {
     let snapshot = workspace::snapshot_for_broker(workspace_path, mode).await?;
-    let allow = allow_from_snapshot(&snapshot, release, argv)?;
+    let release = resolve_release(&snapshot, release, release_all_declared)?;
+    let allow = allow_from_snapshot(&snapshot, &release, argv)?;
     if crate::ssh::broker_session_available() {
-        let summary = crate::ssh::describe_broker_workspace(snapshot, release, argv).await?;
+        let summary = crate::ssh::describe_broker_workspace(snapshot, &release, argv).await?;
         println!("{summary}");
         return Ok(());
     }
@@ -673,14 +711,97 @@ fn print_description(snapshot: &WorkspaceSnapshot, allow: &BrokerAllow) {
     }
 }
 
-pub async fn add_policy_from_remote_snapshot(
-    config: &Config,
+#[derive(Clone, Debug)]
+pub struct RemoteEnrollmentPlan {
+    pub name: String,
+    pub candidate: BrokerPolicy,
+    pub previous: Option<BrokerPolicy>,
+}
+
+impl RemoteEnrollmentPlan {
+    pub fn action_label(&self) -> String {
+        if self.previous.is_some() {
+            format!("update local policy {}", self.name)
+        } else {
+            format!("create local policy {}", self.name)
+        }
+    }
+
+    pub fn diff(&self) -> Result<Option<String>> {
+        let Some(previous) = &self.previous else {
+            return Ok(None);
+        };
+        let old = toml::to_string_pretty(previous)?;
+        let new = toml::to_string_pretty(&self.candidate)?;
+        Ok(Some(
+            similar::TextDiff::from_lines(&old, &new)
+                .unified_diff()
+                .to_string(),
+        ))
+    }
+}
+
+pub fn plan_remote_enrollment(
+    store: &PolicyStore,
     ssh_target: &str,
     snapshot: &WorkspaceSnapshot,
     release: &[String],
     argv: &[String],
-) -> Result<String> {
+    update_policy: Option<&str>,
+) -> Result<RemoteEnrollmentPlan> {
     let allow = allow_from_snapshot(snapshot, release, argv)?;
+    if let Some(name) = update_policy {
+        validate_name(name, "policy name")?;
+        let existing = store
+            .policies
+            .iter()
+            .find(|policy| policy.name == name)
+            .with_context(|| format!("policy {name} does not exist"))?;
+        if existing.ssh_target != ssh_target {
+            bail!(
+                "policy {name} targets {}, not the current SSH target {ssh_target}",
+                existing.ssh_target
+            );
+        }
+        if let Some(expected) = &existing.remote_workspace
+            && expected != &snapshot.workspace_path
+        {
+            bail!(
+                "policy {name} requires remote workspace {expected}, but the request came from {}",
+                snapshot.workspace_path
+            );
+        }
+        let matching = existing
+            .allow
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.mode == snapshot.mode && item.argv == argv)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let [index] = matching.as_slice() else {
+            bail!(
+                "policy {name} must contain exactly one allow entry with mode {} and the requested argv before it can be updated from remote metadata",
+                snapshot.mode
+            );
+        };
+        let mut candidate = existing.clone();
+        candidate.workspace_sha256 = sha256(snapshot.workspace_contents.as_bytes());
+        candidate.allow[*index] = allow;
+        let mut proposed = store.clone();
+        let target = proposed
+            .policies
+            .iter_mut()
+            .find(|policy| policy.name == name)
+            .expect("existing policy was cloned");
+        *target = candidate.clone();
+        validate_store(&proposed)?;
+        return Ok(RemoteEnrollmentPlan {
+            name: name.to_string(),
+            candidate,
+            previous: Some(existing.clone()),
+        });
+    }
+
     let project = Path::new(&snapshot.workspace_path)
         .parent()
         .and_then(Path::file_name)
@@ -707,13 +828,48 @@ pub async fn add_policy_from_remote_snapshot(
         remote_workspace: None,
         allow: vec![allow],
     };
-    let mut store = load_store(config).await?;
     if store.policies.iter().any(|item| item.name == name) {
         bail!("policy {name} already exists; inspect or update it explicitly");
     }
-    store.policies.push(policy);
+    let mut proposed = store.clone();
+    proposed.policies.push(policy.clone());
+    validate_store(&proposed)?;
+    Ok(RemoteEnrollmentPlan {
+        name,
+        candidate: policy,
+        previous: None,
+    })
+}
+
+pub async fn apply_remote_enrollment(
+    config: &Config,
+    plan: &RemoteEnrollmentPlan,
+) -> Result<String> {
+    let mut store = load_store(config).await?;
+    if let Some(previous) = &plan.previous {
+        let current = store
+            .policies
+            .iter_mut()
+            .find(|policy| policy.name == plan.name)
+            .with_context(|| format!("policy {} no longer exists", plan.name))?;
+        if current != previous {
+            bail!(
+                "policy {} changed after the enrollment preview; inspect and retry",
+                plan.name
+            );
+        }
+        *current = plan.candidate.clone();
+    } else {
+        if store.policies.iter().any(|item| item.name == plan.name) {
+            bail!(
+                "policy {} was created after the enrollment preview; inspect it explicitly",
+                plan.name
+            );
+        }
+        store.policies.push(plan.candidate.clone());
+    }
     save_store(config, &store).await?;
-    Ok(name)
+    Ok(plan.name.clone())
 }
 
 pub fn decrypt_workspace_snapshot<'a>(
@@ -756,6 +912,125 @@ mod tests {
             allow.sources[0].declared_secrets,
             ["API_TOKEN", "NPM_TOKEN"]
         );
+    }
+
+    #[test]
+    fn all_declared_release_expands_to_a_stable_explicit_list() {
+        let snapshot = snapshot();
+        let release = resolve_release(&snapshot, &[], true).unwrap();
+        assert_eq!(release, ["API_TOKEN", "NPM_TOKEN"]);
+
+        assert!(resolve_release(&snapshot, &["API_TOKEN".into()], true).is_err());
+        assert!(resolve_release(&snapshot, &[], false).is_err());
+    }
+
+    #[test]
+    fn trusted_remote_update_replaces_one_allow_and_preserves_policy_identity() {
+        let original = snapshot();
+        let allow = allow_from_snapshot(
+            &original,
+            &["API_TOKEN".into()],
+            &["bun".into(), "test".into()],
+        )
+        .unwrap();
+        let store = PolicyStore {
+            version: POLICY_VERSION,
+            policies: vec![BrokerPolicy {
+                name: "dev-api".into(),
+                ssh_target: "dev".into(),
+                project: "friendly-api-name".into(),
+                workspace_sha256: sha256(original.workspace_contents.as_bytes()),
+                remote_workspace: Some(original.workspace_path.clone()),
+                allow: vec![allow],
+            }],
+        };
+        let mut changed = original.clone();
+        changed
+            .workspace_contents
+            .push_str("# new workspace revision\n");
+        changed.sources[0].contents = changed.sources[0]
+            .contents
+            .replace("[payload]", "NEW_TOKEN = true\n[payload]");
+        let release = resolve_release(&changed, &[], true).unwrap();
+
+        let plan = plan_remote_enrollment(
+            &store,
+            "dev",
+            &changed,
+            &release,
+            &["bun".into(), "test".into()],
+            Some("dev-api"),
+        )
+        .unwrap();
+
+        assert!(plan.previous.is_some());
+        assert_eq!(plan.candidate.project, "friendly-api-name");
+        assert_eq!(
+            plan.candidate.remote_workspace.as_deref(),
+            Some("/srv/api/shine.workspace.toml")
+        );
+        assert_eq!(
+            plan.candidate.allow[0].release,
+            ["API_TOKEN", "NEW_TOKEN", "NPM_TOKEN"]
+        );
+        assert!(plan.diff().unwrap().unwrap().contains("NEW_TOKEN"));
+        assert!(
+            plan_remote_enrollment(
+                &store,
+                "other-host",
+                &changed,
+                &release,
+                &["bun".into(), "test".into()],
+                Some("dev-api"),
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn trusted_remote_update_applies_once_and_rejects_a_stale_preview() {
+        let dir = crate::test_support::make_temp_dir("shine-broker-remote-update").await;
+        let config = Config::new_for_test(&dir);
+        let original = snapshot();
+        let allow = allow_from_snapshot(
+            &original,
+            &["API_TOKEN".into()],
+            &["bun".into(), "test".into()],
+        )
+        .unwrap();
+        let store = PolicyStore {
+            version: POLICY_VERSION,
+            policies: vec![BrokerPolicy {
+                name: "dev-api".into(),
+                ssh_target: "dev".into(),
+                project: "api".into(),
+                workspace_sha256: sha256(original.workspace_contents.as_bytes()),
+                remote_workspace: None,
+                allow: vec![allow],
+            }],
+        };
+        save_store(&config, &store).await.unwrap();
+
+        let mut changed = original;
+        changed.sources[0].contents = changed.sources[0]
+            .contents
+            .replace("[payload]", "NEW_TOKEN = true\n[payload]");
+        let release = resolve_release(&changed, &[], true).unwrap();
+        let plan = plan_remote_enrollment(
+            &store,
+            "dev",
+            &changed,
+            &release,
+            &["bun".into(), "test".into()],
+            Some("dev-api"),
+        )
+        .unwrap();
+
+        apply_remote_enrollment(&config, &plan).await.unwrap();
+        let loaded = load_store(&config).await.unwrap();
+        assert_eq!(loaded.policies[0], plan.candidate);
+        assert!(apply_remote_enrollment(&config, &plan).await.is_err());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[test]

@@ -198,6 +198,7 @@ pub async fn handle_ssh(
     secret_broker_inspect: bool,
     secret_broker_enroll: bool,
     trust_remote_metadata: bool,
+    secret_broker_update_policy: Option<&str>,
     args: &[String],
 ) -> Result<()> {
     let (ssh_options, host, remote_command) = split_ssh_args(args)?;
@@ -213,6 +214,7 @@ pub async fn handle_ssh(
             || trust_remote_session
             || secret_broker_inspect
             || secret_broker_enroll
+            || secret_broker_update_policy.is_some()
         {
             bail!("SSH secret broker requires the POSIX remote shell mode");
         }
@@ -245,6 +247,7 @@ pub async fn handle_ssh(
         secret_broker_inspect,
         secret_broker_enroll,
         trust_remote_metadata,
+        secret_broker_update_policy,
     )
     .await?;
 

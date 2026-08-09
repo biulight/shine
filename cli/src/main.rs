@@ -318,10 +318,17 @@ async fn run(cli: Cli) -> Result<()> {
                     workspace,
                     mode,
                     release,
+                    release_all_declared,
                     command,
                 } => {
-                    env::broker::handle_describe(workspace.as_deref(), &mode, &release, &command)
-                        .await
+                    env::broker::handle_describe(
+                        workspace.as_deref(),
+                        &mode,
+                        &release,
+                        release_all_declared,
+                        &command,
+                    )
+                    .await
                 }
                 EnvBrokerSubcommand::Policy(cmd) => match cmd.command {
                     EnvBrokerPolicySubcommand::Add(input) => {
@@ -334,6 +341,7 @@ async fn run(cli: Cli) -> Result<()> {
                             input.remote_workspace.as_deref(),
                             &input.mode,
                             &input.release,
+                            input.release_all_declared,
                             &input.command,
                         )
                         .await
@@ -348,6 +356,7 @@ async fn run(cli: Cli) -> Result<()> {
                             input.remote_workspace.as_deref(),
                             &input.mode,
                             &input.release,
+                            input.release_all_declared,
                             &input.command,
                         )
                         .await
@@ -357,10 +366,17 @@ async fn run(cli: Cli) -> Result<()> {
                         workspace,
                         mode,
                         release,
+                        release_all_declared,
                         command,
                     } => {
                         env::broker::handle_policy_diff(
-                            &config, &name, &workspace, &mode, &release, &command,
+                            &config,
+                            &name,
+                            &workspace,
+                            &mode,
+                            &release,
+                            release_all_declared,
+                            &command,
                         )
                         .await
                     }
@@ -489,6 +505,7 @@ async fn run(cli: Cli) -> Result<()> {
             secret_broker_inspect,
             secret_broker_enroll,
             trust_remote_metadata,
+            secret_broker_update_policy,
             args,
         } => {
             ssh::handle_ssh(
@@ -503,6 +520,7 @@ async fn run(cli: Cli) -> Result<()> {
                 secret_broker_inspect,
                 secret_broker_enroll,
                 trust_remote_metadata,
+                secret_broker_update_policy.as_deref(),
                 &args,
             )
             .await
@@ -749,6 +767,98 @@ mod tests {
             Commands::Env {
                 command: EnvCommands::Broker(_)
             }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_all_declared_broker_release() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "broker",
+            "describe",
+            "--mode",
+            "production",
+            "--release-all-declared",
+            "--",
+            "bun",
+            "start",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Broker(cmd)
+            } if matches!(
+                &cmd.command,
+                EnvBrokerSubcommand::Describe {
+                    release,
+                    release_all_declared: true,
+                    command,
+                    ..
+                } if release.is_empty() && command.as_slice() == ["bun", "start"]
+            )
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_mixed_or_missing_broker_release_selection() {
+        assert!(
+            Cli::try_parse_from([
+                "shine",
+                "env",
+                "broker",
+                "describe",
+                "--mode",
+                "production",
+                "--release",
+                "TOKEN",
+                "--release-all-declared",
+                "--",
+                "bun",
+                "start",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "shine",
+                "env",
+                "broker",
+                "describe",
+                "--mode",
+                "production",
+                "--",
+                "bun",
+                "start",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cli_parses_trusted_remote_policy_update() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "ssh",
+            "--secret-broker-enroll",
+            "--trust-remote-metadata",
+            "--update-policy",
+            "intel-shine-bot-production",
+            "intel.mac.local",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ssh {
+                secret_broker_enroll: true,
+                trust_remote_metadata: true,
+                secret_broker_update_policy: Some(name),
+                args,
+                ..
+            } if name == "intel-shine-bot-production" && args == ["intel.mac.local"]
         ));
     }
 

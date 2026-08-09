@@ -211,14 +211,19 @@ shine env broker policy add \
   --ssh-target dev \
   --workspace ~/src/acme-api/shine.workspace.toml \
   --mode development \
-  --release API_TOKEN \
-  --release NPM_TOKEN \
+  --release-all-declared \
   -- bun run build
 ```
 
 该命令自行解析 workspace 和 mode 的有效 source，计算摘要并写入默认策略库；用户不需要
 手工复制 hash。若本机没有 checkout，等价的可信输入是由已钉住的发布密钥验证通过的 manifest
 （包含 workspace/source 的内容摘要）。这是最简单的日常流程。
+
+`--release-all-declared` 是登记期便捷选项：它从本次不可变 source 快照收集、排序并去重全部
+`declared_secrets`，然后把结果作为普通显式 `release = [...]` 写入策略。它与重复的
+`--release KEY` 互斥，且不会在策略中保存通配符。后续新增 secret 会改变 declared 集合和
+source 摘要，使旧策略 fail closed；新 secret 只有经过 `policy diff/update` 或可信远端更新的
+再次确认后才会进入显式 release 列表。
 
 策略管理同时提供 `policy list`、`policy info <NAME>`、`policy diff <NAME> --workspace ...`、
 `policy update <NAME> ...` 和 `policy remove <NAME>`。`add` 遇到重名或相同匹配条件时拒绝并
@@ -235,7 +240,7 @@ shine ssh --secret-broker-enroll --trust-remote-metadata dev
 # 远端项目目录：只描述有效 workspace/source，不执行 build，也不解密。
 cd /srv/acme-api
 shine env broker describe --mode development \
-  --release API_TOKEN --release NPM_TOKEN \
+  --release-all-declared \
   -- bun run build
 ```
 
@@ -245,11 +250,28 @@ declared/release secret 名和摘要，要求一次
 GPG、age 或 YubiKey，也不会释放 secret。`--trust-remote-metadata` 的名称必须保留，且帮助与
 确认提示必须说明：它把远端报告当作策略真源，只适用于用户已在带外确认完整性的主机。
 
+已有策略因新增/删除 secret 或 source 内容变化而失配时，推荐从可信本地 checkout 执行
+`policy diff` 与 `policy update --release-all-declared`。只有远端副本可用且用户仍明确相信其
+元数据时，可指定已有策略进行原子更新：
+
+```bash
+shine ssh --secret-broker-enroll --trust-remote-metadata \
+  --update-policy dev-api-build dev
+
+# 远端
+shine env broker describe --mode development \
+  --release-all-declared -- bun run build
+```
+
+本机要求指定策略属于当前 SSH target，并且恰好存在一条 mode + argv 相同的 allow；预览会
+显示完整 TOML diff，确认后只替换该 allow、刷新 workspace/source 摘要，并保留策略的 name、
+project、remote_workspace 与其他 allow。策略在预览后若又被修改则拒绝写入，要求重新检查。
+
 对于未确认可信的远端，可用 inspect 模式提供**未可信候选**，仅用于诊断或与本机策略比较：
 
 ```bash
 shine ssh --secret-broker-inspect dev
-# 远端：shine env broker describe --mode development --release API_TOKEN -- bun run build
+# 远端：shine env broker describe --mode development --release-all-declared -- bun run build
 ```
 
 inspect 永远不释放 secret、不会创建或修改策略。它显示远端实际提供的 bytes 摘要与本机策略
@@ -322,7 +344,10 @@ pinentry、请求超时及异常恢复。无本机 TTY 时，所有需要确认�
 
 所有显示字段均视为远端不可信输入：协议限制字符串/argv/source 数量及总字节数，拒绝 NUL
 和非预期控制字符；本机 UI 以带界限、不可解释 ANSI 的转义形式显示，绝不把远端字符串直接
-写入 TTY。超限或非法输入在策略匹配、显示和解密前拒绝。
+写入 TTY。inspect 候选与 enrollment 候选/确认必须在恢复 canonical termios 后统一显示；argv、
+release 和 declared secret 使用逐项纵向列表，避免长行折叠及重复摘要。确认允许纯 `y`/`yes`
+及仅由标准 bracketed-paste wrapper 包裹的相同值，其他控制序列继续拒绝。超限或非法输入在
+策略匹配、显示和解密前拒绝。
 
 ## 5. 技术方案
 
@@ -417,6 +442,8 @@ SSH 反向 Unix socket / Windows 后续 loopback 通道
     不受项目配置、overlay 或远端路径影响。
 14. `--allow-secret` 在会话中途修改本机配置后仍只解密会话启动时冻结的 ciphertext；下一次
     新 SSH 会话才读取更新值。
+15. `--release-all-declared` 仅在登记/比对时展开并在策略中保存显式 release 列表；新增 secret
+    使旧策略失配，未经 diff/update 或指定策略的可信远端更新确认不得自动释放。
 
 ## 8. 后续候选能力
 

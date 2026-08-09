@@ -292,6 +292,14 @@ when the operator explicitly trusts the remote. The safer normal path is
 [ADR 0024](../decisions/0024-ssh-on-demand-secret-broker.md) and the
 [secret-broker PRD](../../ssh-secret-broker-prd.md).
 
+Policy describe/add/update/diff accept either explicit repeated `--release KEY` or
+`--release-all-declared`. The latter expands the current snapshot into a sorted explicit release
+array; no wildcard reaches disk or the wire. Any new declared secret changes the source identity
+and fails closed until policy update. When no trusted local checkout exists,
+`--secret-broker-enroll --trust-remote-metadata --update-policy NAME` previews a full diff and may
+replace exactly one same-mode/same-argv allow while preserving the named policy's local identity
+fields; a concurrent local policy edit aborts the write.
+
 ## Personal task runner (`shine task run` / `shine run`)
 
 `task::handle_run` loads `<shine_dir>/tasks.toml` (`task::manifest::TaskManifest`), looks up the

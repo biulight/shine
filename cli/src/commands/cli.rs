@@ -180,6 +180,14 @@ pub enum Commands {
         /// Required acknowledgement that enrollment trusts remote metadata
         #[arg(long, requires = "secret_broker_enroll")]
         trust_remote_metadata: bool,
+        /// Replace this existing local policy from the trusted remote
+        /// description instead of creating a new policy
+        #[arg(
+            long = "update-policy",
+            value_name = "NAME",
+            requires = "secret_broker_enroll"
+        )]
+        secret_broker_update_policy: Option<String>,
         /// ssh options, the destination, and an optional remote command
         /// (passed through to the system `ssh` binary; see `ssh(1)`)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
