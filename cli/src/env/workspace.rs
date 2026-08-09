@@ -243,36 +243,41 @@ fn parse_dotenv(path: &Path, contents: &str) -> Result<BTreeMap<String, String>>
 
 fn parse_dotenv_value(path: &Path, line: usize, raw: &str) -> Result<String> {
     let raw = raw.trim();
-    if raw.starts_with("${") || raw.contains("${") {
-        bail!(
-            "{}:{line} uses dotenv interpolation; resolve it before importing",
-            path.display()
-        );
-    }
-    if let Some(value) = raw.strip_prefix('\'') {
-        return value
-            .strip_suffix('\'')
-            .map(str::to_owned)
-            .context("unterminated single-quoted dotenv value");
-    }
-    if let Some(value) = raw.strip_prefix('"') {
-        let value = value
-            .strip_suffix('"')
-            .context("unterminated double-quoted dotenv value")?;
+    let value = if let Some(value) = raw.strip_prefix('\'') {
+        parse_quoted_dotenv_value(value, '\'', "single")?
+    } else if let Some(value) = raw.strip_prefix('"') {
+        let value = parse_quoted_dotenv_value(value, '"', "double")?;
         if value.contains('\\') {
             bail!(
                 "{}:{line} uses escaped double-quoted dotenv content; resolve it before importing",
                 path.display()
             );
         }
-        return Ok(value.to_owned());
+        value
+    } else {
+        raw.split_once(" #")
+            .map(|(value, _)| value)
+            .unwrap_or(raw)
+            .trim_end()
+    };
+    if value.contains("${") {
+        bail!(
+            "{}:{line} uses dotenv interpolation; resolve it before importing",
+            path.display()
+        );
     }
-    Ok(raw
-        .split_once(" #")
-        .map(|(value, _)| value)
-        .unwrap_or(raw)
-        .trim_end()
-        .to_owned())
+    Ok(value.to_owned())
+}
+
+fn parse_quoted_dotenv_value<'a>(raw: &'a str, quote: char, style: &str) -> Result<&'a str> {
+    let closing = raw
+        .find(quote)
+        .with_context(|| format!("unterminated {style}-quoted dotenv value"))?;
+    let trailing = raw[closing + quote.len_utf8()..].trim_start();
+    if !trailing.is_empty() && !trailing.starts_with('#') {
+        bail!("unexpected content after {style}-quoted dotenv value");
+    }
+    Ok(&raw[..closing])
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -561,8 +566,12 @@ async fn load_workspace(path: &Path) -> Result<Workspace> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
+    parse_workspace(path, &contents)
+}
+
+fn parse_workspace(path: &Path, contents: &str) -> Result<Workspace> {
     let workspace: Workspace =
-        toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
+        toml::from_str(contents).with_context(|| format!("parsing {}", path.display()))?;
     if workspace.version < WORKSPACE_FORMAT_VERSION {
         bail!(
             "workspace version {} in {} is retired; run `shine state migrate`",
@@ -741,7 +750,7 @@ pub async fn snapshot_for_broker(
     let workspace_contents = tokio::fs::read_to_string(&workspace_path)
         .await
         .with_context(|| format!("reading {}", workspace_path.display()))?;
-    let workspace = load_workspace(&workspace_path).await?;
+    let workspace = parse_workspace(&workspace_path, &workspace_contents)?;
     let source_paths = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
     let root = workspace_path
         .parent()
@@ -1176,11 +1185,15 @@ mod tests {
     fn dotenv_import_parses_common_frontend_entries() {
         let values = parse_dotenv(
             Path::new(".env"),
-            "# base\nexport VITE_NAME = \"Shine\"\nVITE_URL=https://example.test # note\nEMPTY=\n",
+            "# base\nexport VITE_NAME = \"Shine\" # display name\nVITE_OWNER='Shine team' # owner\nVITE_URL=https://example.test # note\nEMPTY=\n",
         )
         .unwrap();
 
         assert_eq!(values.get("VITE_NAME").map(String::as_str), Some("Shine"));
+        assert_eq!(
+            values.get("VITE_OWNER").map(String::as_str),
+            Some("Shine team")
+        );
         assert_eq!(
             values.get("VITE_URL").map(String::as_str),
             Some("https://example.test")

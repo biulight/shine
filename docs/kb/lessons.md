@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-09 — Migration and authorization snapshots crossed lifecycle boundaries
+
+- **Symptom**: a broker policy could hash one workspace revision but execute another revision's
+  settings; separately, a legacy project config stayed unmigrated once the global schema was
+  already current.
+- **Root cause**: broker setup parsed the workspace through a second filesystem read, and state
+  migration treated the global schema version as proof that every independently discovered
+  project config had already been migrated.
+- **Fix**: parse the captured workspace text used by the broker snapshot, and inspect the active
+  project config for retired keys even when no global schema steps remain.
+- **Rule**: immutable authorization snapshots must parse their captured bytes, and a global
+  migration marker must not suppress migrations of project-local state discovered later.
+
 ## 2026-08-09 — SSH broker enrollment printed in raw mode and rejected pasted approval
 
 - **Symptom**: a trusted broker enrollment candidate rendered as a diagonal staircase, duplicated
