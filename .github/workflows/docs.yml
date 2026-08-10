@@ -1,0 +1,77 @@
+name: docs
+
+on:
+  pull_request:
+    branches:
+      - release
+      - main
+    paths:
+      - docs/manual/**
+      - website/**
+      - .github/workflows/docs.yml
+  push:
+    branches:
+      - release
+    paths:
+      - docs/manual/**
+      - website/**
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: website/pnpm-lock.yaml
+      - name: Install documentation dependencies
+        working-directory: website
+        run: pnpm install --frozen-lockfile
+      - name: Type-check documentation site
+        working-directory: website
+        run: pnpm typecheck
+      - name: Check locale content parity
+        working-directory: website
+        run: pnpm check:locales
+      - name: Build all locales
+        working-directory: website
+        run: pnpm build
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: website/build
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

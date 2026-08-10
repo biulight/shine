@@ -19,10 +19,13 @@ How to cut a stable release. Prerequisite reading:
 4. **Write CHANGELOG.md by hand.** New `## [x.y.z] — YYYY-MM-DD` section, entries grouped under
    Features / Bug Fixes / Internal / Docs, plain English, user-facing. Do **not** use git-cliff
    for this file.
-5. **Commit** as `chore(release): prepare vX.Y.Z` (pre-commit gates must pass).
-6. **Get explicit user approval before pushing anything** (Git Push Policy). Then push the
+5. **Verify public documentation** when the release changes user-visible behavior: update both the
+   English default manual and Simplified Chinese locale, then run `pnpm check:locales`,
+   `pnpm typecheck`, and `pnpm build` from `website/`.
+6. **Commit** as `chore(release): prepare vX.Y.Z` (pre-commit gates must pass).
+7. **Get explicit user approval before pushing anything** (Git Push Policy). Then push the
    branch, tag `vX.Y.Z`, and push the tag.
-7. **`release.yml` takes over**: tests → asset build → GitHub Release (git-cliff notes) →
+8. **`release.yml` takes over**: tests → asset build → GitHub Release (git-cliff notes) →
    automatic `release` → `main` sync PR.
 
 ## Post-release checks
