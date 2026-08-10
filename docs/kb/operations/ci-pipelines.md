@@ -10,6 +10,7 @@ All workflows live in `.github/workflows/`.
 | `release.yml` | push of a `v*` tag | test + MSRV → `package-assets.yml` builds per-platform tarballs and crates.io publish → GitHub Release with git-cliff-generated notes + `install.sh`/`install.ps1` → `open-main-pr` job opens (or reuses) the `release` → `main` sync PR |
 | `preview.yml` | daily cron (00:00 UTC) + manual dispatch | if there are new commits since the `preview` tag: test → build assets → force-move `preview` tag → delete and re-publish the `Preview` prerelease |
 | `package-assets.yml` | `workflow_call` | builds the release tarballs consumed by `release.yml`/`preview.yml` |
+| `docs.yml` | documentation changes pushed to `release`, matching PRs, or manual dispatch | type-checks, checks locale parity, and builds the documentation; non-PR runs deploy to GitHub Pages and, when enabled, the configured documentation server |
 | `setup-labels.yml` | (repo maintenance) | syncs GitHub issue labels |
 
 Notes:
@@ -19,3 +20,23 @@ Notes:
 - The `Preview` release is overwritten daily and marked prerelease with `make_latest: legacy`,
   so it never becomes the "latest" release that `shine update` resolves.
 - `test.yml` installs `cargo-llvm-cov`/llvm-tools; coverage tooling is available in CI runs.
+
+## Documentation server deployment
+
+`docs.yml` always keeps GitHub Pages deployment enabled. A second deployment uploads the same
+`website/build` artifact to a server over SSH and rsync when the repository variable
+`SERVER_DEPLOY_ENABLED` is exactly `true`. Configure the `docs-server` GitHub environment with:
+
+| Kind | Name | Purpose |
+|---|---|---|
+| Variable | `SERVER_HOST` | SSH hostname or IP address |
+| Variable | `SERVER_USER` | SSH login user |
+| Variable | `SERVER_PORT` | SSH port; defaults to `22` |
+| Variable | `SERVER_PATH` | Absolute destination directory; `/` is rejected |
+| Variable | `SERVER_URL` | Optional deployment URL shown by GitHub |
+| Secret | `SERVER_SSH_KEY` | Private SSH key used only for this deployment |
+| Secret | `SERVER_KNOWN_HOSTS` | Pre-verified `known_hosts` line for the server |
+
+Set the repository-level `SERVER_DEPLOY_ENABLED=true` only after the environment configuration is
+complete. The deploy uses `rsync --delete-delay`, so files removed from the documentation build are
+also removed from `SERVER_PATH`; the SSH account should be restricted to that destination.
