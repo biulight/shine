@@ -17,6 +17,15 @@ const config = {
       onBrokenMarkdownLinks: 'throw',
     },
   },
+  headTags: [
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'algolia-site-verification',
+        content: '9AB35D512F56BC26',
+      },
+    },
+  ],
   i18n: {
     defaultLocale: 'en',
     locales: ['en', 'zh-Hans'],
