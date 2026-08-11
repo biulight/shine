@@ -11,7 +11,7 @@ Shine is a cross-platform command-line tool that packages common shell scripts, 
 configuration, and system initialization steps as presets you can install, inspect, upgrade, and
 safely uninstall.
 
-This manual applies to **Shine 1.2.0**.
+This manual applies to **Shine 1.3.0**.
 
 ## What you can do with Shine
 

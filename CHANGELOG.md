@@ -7,6 +7,30 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-08-11
+
+### Features
+
+- Added an on-demand SSH secret broker that keeps decryption keys on the local machine, supports
+  direct per-secret approval and exact workspace policies, and provides inspect and enrollment
+  workflows for remote projects.
+- Added `shine env workspace init --from-dotenv` to import dotenv files into mode-aware workspace
+  sources while selecting which values should be sealed as secrets.
+- Added multi-recipient GPG encryption for global and workspace configuration, including migration
+  from the legacy single-recipient fields.
+
+### Bug Fixes
+
+- Made legacy workspace-recipient migration lazy so unrelated read operations do not rewrite
+  project configuration.
+- Preserved the authorized workspace snapshot throughout broker execution and made state migration
+  consistent across dry-run and apply modes.
+
+### Docs
+
+- Published the searchable English and Simplified Chinese manuals as the authoritative command,
+  configuration, guide, and troubleshooting reference.
+
 ## [1.2.0] — 2026-08-07
 
 ### Features

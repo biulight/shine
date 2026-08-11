@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页已审阅至未发布提交 `e228922`（基于 Shine 1.2.0）。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
+本页适用于 Shine 1.3.0。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
 
 ## 1.0 target 规则
 
@@ -192,4 +192,4 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-`shine --version` 在稳定版显示 `shine 1.2.0 (<commit> <date>)`；preview 构建使用 `1.2.0-preview` 形式的版本标签。
+`shine --version` 在稳定版显示 `shine 1.3.0 (<commit> <date>)`；preview 构建使用 `1.3.0-preview` 形式的版本标签。
