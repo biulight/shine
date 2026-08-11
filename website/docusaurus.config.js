@@ -120,6 +120,13 @@ const config = {
         darkTheme: themes.dracula,
         additionalLanguages: ['powershell', 'toml'],
       },
+      algolia: {
+        appId: 'YHLGHU6YJW',
+        apiKey: 'f98ead6d66fcf033336e3bafed29ea76',
+        indexName: 'shine',
+        contextualSearch: true,
+        searchPagePath: 'search',
+      },
     }),
 };
 
