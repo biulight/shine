@@ -265,6 +265,41 @@ necessarily exposed in process argv/environments on the local and remote hosts; 
 [ADR 0014](../decisions/0014-explicit-ssh-env-forwarding.md) and
 [ADR 0015](../decisions/0015-windows-ssh-environment-forwarding.md).
 
+## SSH on-demand secret broker
+
+`shine ssh --secret-broker` attaches a local `ssh::broker::BrokerSession` to the existing reverse
+control channel. The local process freezes the active config, encrypted direct-secret inputs, and
+the policy file for the lifetime of that SSH session; private-key operations remain local.
+
+For a direct remote request, `shine env run --no-workspace --secret-broker --secret KEY[=ALIAS]
+-- <argv>` sends only the requested mapping and argv. The local agent checks the SSH session's
+`--allow-secret` list, pauses the interactive SSH child, restores the local TTY for an explicit
+confirmation, decrypts only `KEY_SECRET`, and returns the selected values. Direct requests always
+confirm, including in a trusted workspace session.
+
+For a workspace request, `env/workspace.rs` reads the workspace and all selected source files once
+into a bounded `WorkspaceSnapshot`. The request carries the exact bytes and SHA-256 identities,
+mode, complete declared-secret set, requested release mapping, and argv. `env/broker.rs` accepts
+only an exact match in `<shine_dir>/ssh-secret-broker.toml`; the local agent then confirms unless
+`--trust-remote-session` was explicitly set, decrypts only the policy-approved release subset, and
+sends values back. The remote merges those values with non-secret entries parsed from the same
+snapshot bytes and injects them only into the child process.
+
+`shine ssh --secret-broker-inspect` displays one remote description without decrypting or writing.
+`--secret-broker-enroll --trust-remote-metadata` may create a local policy after local confirmation
+when the operator explicitly trusts the remote. The safer normal path is
+`shine env broker policy add`, generated from a trusted local workspace checkout. See
+[ADR 0024](../decisions/0024-ssh-on-demand-secret-broker.md) and the
+[secret-broker PRD](../../ssh-secret-broker-prd.md).
+
+Policy describe/add/update/diff accept either explicit repeated `--release KEY` or
+`--release-all-declared`. The latter expands the current snapshot into a sorted explicit release
+array; no wildcard reaches disk or the wire. Any new declared secret changes the source identity
+and fails closed until policy update. When no trusted local checkout exists,
+`--secret-broker-enroll --trust-remote-metadata --update-policy NAME` previews a full diff and may
+replace exactly one same-mode/same-argv allow while preserving the named policy's local identity
+fields; a concurrent local policy edit aborts the write.
+
 ## Personal task runner (`shine task run` / `shine run`)
 
 `task::handle_run` loads `<shine_dir>/tasks.toml` (`task::manifest::TaskManifest`), looks up the
@@ -287,7 +322,7 @@ ciphertext for an `age:` prefix (`secret::parse_tagged_ciphertext`) and dispatch
 `secret::age`/`secret::gpg` accordingly; untagged ciphertext is always GPG. Decryption never
 reads `Config::secret_backend` — only the tag decides. Encryption (`env secret encrypt`, workspace
 `env secret seal`) instead resolves a `secret::EncryptRecipients` (CLI `-r`/`--backend` > workspace
-`env.encryption` > `config.toml` `gpg_key_id`/`age_recipients`/`secret_backend` > GPG default)
+`env.encryption` > `config.toml` `gpg_recipients`/`age_recipients`/`secret_backend` > GPG default)
 and calls `secret::encrypt_secret`, which tags age output and leaves GPG output untagged. See
 [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md) for the full rationale.
 `shine env secret identity init [--touch-id]` generates the age identity file

@@ -1,7 +1,9 @@
 use crate::colors;
 use crate::config::{CURRENT_RUNTIME_SCHEMA_VERSION, Config};
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeSet;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 const UPDATE_CACHE_FILE: &str = "update-check.json";
@@ -18,6 +20,35 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
 
     let steps = pending_steps(schema_version);
     if steps.is_empty() {
+        let mut migrated_local_state = false;
+        for path in config_migration_paths(config) {
+            if config_needs_migration(&path).await? {
+                if dry_run {
+                    println!(
+                        "[dry-run] migrate GPG recipient configuration in {}",
+                        path.display()
+                    );
+                } else {
+                    migrate_config_gpg_recipient(&path).await?;
+                    println!("Migrated GPG recipient configuration in {}", path.display());
+                }
+                migrated_local_state = true;
+            }
+        }
+        if let Some(path) = find_workspace_from_current_dir()
+            && workspace_needs_migration(&path).await?
+        {
+            if dry_run {
+                println!("[dry-run] migrate workspace format in {}", path.display());
+            } else {
+                migrate_workspace_gpg_recipient(&path).await?;
+                println!("Migrated workspace format in {}", path.display());
+            }
+            migrated_local_state = true;
+        }
+        if migrated_local_state {
+            return Ok(());
+        }
         if !dry_run && config.last_cleared_schema_version != Some(CURRENT_RUNTIME_SCHEMA_VERSION) {
             let mut updated = config.clone();
             updated.last_cleared_schema_version = Some(CURRENT_RUNTIME_SCHEMA_VERSION);
@@ -57,6 +88,10 @@ pub async fn handle_migrate(config: &Config, dry_run: bool) -> Result<()> {
     }
 
     let mut updated = config.clone();
+    if let Some(recipients) = gpg_recipients_from_config(config.config_path()).await? {
+        updated.gpg_recipients = recipients;
+    }
+    updated.legacy_gpg_key_id = None;
     updated.schema_version = CURRENT_RUNTIME_SCHEMA_VERSION;
     updated.last_cleared_schema_version = Some(CURRENT_RUNTIME_SCHEMA_VERSION);
     updated.save().await?;
@@ -111,8 +146,191 @@ fn actions_for_step<'a>(config: &'a Config, step: &CleanupStep) -> Vec<CleanupAc
                 }),
             }]
         }
+        2 => migration_actions(config),
         _ => Vec::new(),
     }
+}
+
+fn migration_actions<'a>(config: &'a Config) -> Vec<CleanupAction<'a>> {
+    let mut actions = Vec::new();
+    for path in config_migration_paths(config) {
+        let description = format!("migrate GPG recipient configuration in {}", path.display());
+        actions.push(CleanupAction {
+            description,
+            apply: Box::pin(async move { migrate_config_gpg_recipient(&path).await }),
+        });
+    }
+    if let Some(path) = find_workspace_from_current_dir() {
+        let description = format!(
+            "migrate GPG workspace recipient configuration in {}",
+            path.display()
+        );
+        actions.push(CleanupAction {
+            description,
+            apply: Box::pin(
+                async move { migrate_workspace_gpg_recipient(&path).await.map(|_| ()) },
+            ),
+        });
+    }
+    actions
+}
+
+fn config_migration_paths(config: &Config) -> Vec<PathBuf> {
+    let mut paths = BTreeSet::from([config.config_path().to_path_buf()]);
+    if let Ok(current_dir) = std::env::current_dir()
+        && let Some(project) = crate::config::find_project_config(&current_dir)
+    {
+        paths.insert(project.path);
+    }
+    paths.into_iter().filter(|path| path.is_file()).collect()
+}
+
+fn find_workspace_from_current_dir() -> Option<PathBuf> {
+    let current_dir = std::env::current_dir().ok()?;
+    current_dir
+        .ancestors()
+        .map(|dir| dir.join("shine.workspace.toml"))
+        .find(|path| path.is_file())
+}
+
+async fn migrate_config_gpg_recipient(path: &Path) -> Result<()> {
+    migrate_recipient_key(path, |document| {
+        migrate_key(document, "gpg_key_id", "gpg_recipients")
+    })
+    .await
+    .map(|_| ())
+}
+
+async fn migrate_workspace_gpg_recipient(path: &Path) -> Result<bool> {
+    migrate_recipient_key(path, |document| {
+        let version = document
+            .as_table()
+            .get("version")
+            .and_then(toml_edit::Item::as_integer)
+            .unwrap_or(1);
+        if version > 2 {
+            bail!("workspace version {version} is newer than this shine supports (2)");
+        }
+        let mut changed = false;
+        let encryption = document["env"]["encryption"].as_table_mut();
+        if let Some(table) = encryption {
+            changed |= migrate_table_key(table, "recipient", "gpg_recipients")?;
+        }
+        if version < 2 {
+            document["version"] = toml_edit::value(2);
+            changed = true;
+        }
+        Ok(changed)
+    })
+    .await
+}
+
+async fn migrate_recipient_key(
+    path: &Path,
+    mutate: impl FnOnce(&mut toml_edit::DocumentMut) -> Result<bool>,
+) -> Result<bool> {
+    let contents = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("reading {}", path.display()))?;
+    let mut document = contents
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    if mutate(&mut document)? {
+        crate::persist::atomic_write(path, document.to_string().as_bytes())
+            .await
+            .with_context(|| format!("writing {}", path.display()))?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+async fn workspace_needs_migration(path: &Path) -> Result<bool> {
+    let contents = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("reading {}", path.display()))?;
+    let document = contents
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    Ok(document
+        .as_table()
+        .get("version")
+        .and_then(toml_edit::Item::as_integer)
+        .unwrap_or(1)
+        < 2
+        || document["env"]["encryption"]["recipient"].is_value())
+}
+
+async fn config_needs_migration(path: &Path) -> Result<bool> {
+    let contents = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("reading {}", path.display()))?;
+    let document = contents
+        .parse::<toml_edit::DocumentMut>()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    Ok(document.as_table().contains_key("gpg_key_id"))
+}
+
+fn migrate_key(document: &mut toml_edit::DocumentMut, old: &str, new: &str) -> Result<bool> {
+    migrate_table_key(document.as_table_mut(), old, new)
+}
+
+fn migrate_table_key(table: &mut toml_edit::Table, old: &str, new: &str) -> Result<bool> {
+    let Some(old_item) = table.get(old) else {
+        return Ok(false);
+    };
+    if table.contains_key(new) {
+        bail!("configuration contains both {old} and {new}; resolve the conflict before migrating");
+    }
+    let recipient = old_item
+        .as_str()
+        .context("legacy GPG recipient must be a string")?
+        .to_owned();
+    let key_decor = table.key(old).map(|key| key.leaf_decor().clone());
+    let decor = old_item.as_value().map(|value| value.decor().clone());
+    table.remove(old);
+    let mut recipients = toml_edit::Array::new();
+    recipients.push(recipient);
+    table.insert(
+        new,
+        toml_edit::Item::Value(toml_edit::Value::Array(recipients)),
+    );
+    if let (Some(decor), Some(value)) = (
+        decor,
+        table.get_mut(new).and_then(toml_edit::Item::as_value_mut),
+    ) {
+        *value.decor_mut() = decor;
+    }
+    if let (Some(decor), Some(mut key)) = (key_decor, table.key_mut(new)) {
+        *key.leaf_decor_mut() = decor;
+    }
+    Ok(true)
+}
+
+async fn gpg_recipients_from_config(path: &Path) -> Result<Option<Vec<String>>> {
+    let contents = match tokio::fs::read_to_string(path).await {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
+    let table: toml::Table =
+        toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
+    let Some(value) = table.get("gpg_recipients") else {
+        return Ok(None);
+    };
+    let recipients = value
+        .as_array()
+        .context("gpg_recipients must be an array")?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .context("gpg_recipients entries must be strings")
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    Ok(Some(recipients))
 }
 
 #[cfg(test)]
@@ -127,7 +345,7 @@ mod tests {
     #[test]
     fn pending_schema_warning_reports_old_schema() {
         let warning = pending_schema_warning(0).unwrap();
-        assert!(warning.contains("0 -> 1"));
+        assert!(warning.contains("0 -> 2"));
         assert!(pending_schema_warning(CURRENT_RUNTIME_SCHEMA_VERSION).is_none());
     }
 
@@ -154,6 +372,57 @@ mod tests {
             Some(CURRENT_RUNTIME_SCHEMA_VERSION.into())
         );
 
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn migrate_converts_legacy_gpg_recipient_to_a_list() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.schema_version = 1;
+        fs::write(
+            config.config_path(),
+            "# team encryption key\ngpg_key_id = \"alice@example.com\"\n",
+        )
+        .await
+        .unwrap();
+
+        handle_migrate(&config, false).await.unwrap();
+
+        let content = fs::read_to_string(config.config_path()).await.unwrap();
+        assert!(!content.contains("gpg_key_id"));
+        assert!(content.contains("# team encryption key"));
+        let parsed: toml::Table = toml::from_str(&content).unwrap();
+        assert_eq!(
+            parsed["gpg_recipients"].as_array().unwrap(),
+            &[toml::Value::String("alice@example.com".to_string())]
+        );
+        assert_eq!(
+            parsed["schema_version"].as_integer(),
+            Some(CURRENT_RUNTIME_SCHEMA_VERSION.into())
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workspace_migration_converts_legacy_recipient() {
+        let dir = make_temp_dir().await;
+        let workspace = dir.join("shine.workspace.toml");
+        fs::write(
+            &workspace,
+            "[env.encryption]\n# deployment key\nrecipient = \"alice@example.com\"\n",
+        )
+        .await
+        .unwrap();
+
+        migrate_workspace_gpg_recipient(&workspace).await.unwrap();
+
+        let content = fs::read_to_string(&workspace).await.unwrap();
+        assert!(!content.contains("recipient ="));
+        assert!(content.contains("# deployment key"));
+        assert!(content.contains("gpg_recipients = [\"alice@example.com\"]"));
+        assert!(content.contains("version = 2"));
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -191,6 +460,36 @@ mod tests {
             parsed["last_cleared_schema_version"].as_integer(),
             Some(CURRENT_RUNTIME_SCHEMA_VERSION.into())
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn migrate_current_schema_converts_legacy_project_config() {
+        let _lock = crate::test_support::env_lock();
+        let original_dir = std::env::current_dir().unwrap();
+        let dir = make_temp_dir().await;
+        let project_dir = dir.join("project");
+        fs::create_dir_all(&project_dir).await.unwrap();
+        let project_config = project_dir.join("shine.config.toml");
+        fs::write(
+            &project_config,
+            "# project key\ngpg_key_id = \"project@example.com\"\n",
+        )
+        .await
+        .unwrap();
+        std::env::set_current_dir(&project_dir).unwrap();
+        let config = Config::new_for_test(&dir);
+
+        let result = handle_migrate(&config, false).await;
+        crate::test_support::restore_current_dir(&original_dir);
+        result.unwrap();
+
+        let content = fs::read_to_string(&project_config).await.unwrap();
+        assert!(!content.contains("gpg_key_id"));
+        assert!(content.contains("# project key"));
+        assert!(content.contains("gpg_recipients = [\"project@example.com\"]"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

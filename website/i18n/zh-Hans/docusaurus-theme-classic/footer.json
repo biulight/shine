@@ -1,0 +1,46 @@
+{
+  "link.title.Documentation": {
+    "message": "文档",
+    "description": "The title of the footer links column with title=Documentation in the footer"
+  },
+  "link.title.Project": {
+    "message": "项目",
+    "description": "The title of the footer links column with title=Project in the footer"
+  },
+  "link.title.Biulight": {
+    "message": "Biulight",
+    "description": "The title of the footer links column with title=Biulight in the footer"
+  },
+  "link.item.label.Installation": {
+    "message": "安装",
+    "description": "The label of footer link with label=Installation linking to /installation"
+  },
+  "link.item.label.Quick start": {
+    "message": "快速开始",
+    "description": "The label of footer link with label=Quick start linking to /quick-start"
+  },
+  "link.item.label.Command reference": {
+    "message": "命令参考",
+    "description": "The label of footer link with label=Command reference linking to /reference/commands"
+  },
+  "link.item.label.GitHub": {
+    "message": "GitHub",
+    "description": "The label of footer link with label=GitHub linking to https://github.com/biulight/shine"
+  },
+  "link.item.label.Releases": {
+    "message": "发布版本",
+    "description": "The label of footer link with label=Releases linking to https://github.com/biulight/shine/releases"
+  },
+  "link.item.label.Report an issue": {
+    "message": "报告问题",
+    "description": "The label of footer link with label=Report an issue linking to https://github.com/biulight/shine/issues"
+  },
+  "link.item.label.Knowledge base": {
+    "message": "知识库",
+    "description": "The label of footer link with label=Knowledge base linking to https://blog.biulight.top/timeline/knowledge"
+  },
+  "copyright": {
+    "message": "Copyright © 2026 Biulight。由 Docusaurus 构建。",
+    "description": "The footer copyright"
+  }
+}

@@ -8,7 +8,8 @@ use cli::{
 
 use commands::{
     AppArtifactCommands, AppCommands, Cli, Commands, CompletionCommands, CompletionShell,
-    EnvCommands, EnvIdentitySubcommand, EnvProxySubcommand, EnvSecretSubcommand, LocalCommands,
+    EnvBrokerPolicySubcommand, EnvBrokerSubcommand, EnvCommands, EnvIdentitySubcommand,
+    EnvProxySubcommand, EnvSecretSubcommand, EnvWorkspaceSubcommand, LocalCommands,
     OverlayCommands, PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands,
     ShellCommands, StateCommands, SysCommands, TaskCommands, ThemeCommands,
 };
@@ -67,11 +68,9 @@ async fn run(cli: Cli) -> Result<()> {
         command: StateCommands::Migrate(cmd),
     } = &cli.command
     {
-        let config = if cmd.dry_run {
-            Box::pin(Config::load_global_runtime_for_dry_run()).await?
-        } else {
-            Box::pin(Config::load_global_runtime_or_init()).await?
-        };
+        // State migration must be able to read retired config fields before
+        // normal config loading rejects them, and applies its own writes.
+        let config = Box::pin(Config::load_global_runtime_for_dry_run()).await?;
         return Box::pin(state::handle_migrate(&config, cmd.dry_run)).await;
     }
 
@@ -296,10 +295,102 @@ async fn run(cli: Cli) -> Result<()> {
                     cmd.mode.as_deref(),
                     cmd.no_workspace,
                     &cmd.with,
+                    cmd.secret_broker,
+                    &cmd.secret,
                     &cmd.command,
                 )
                 .await
             }
+            EnvCommands::Workspace(cmd) => match cmd.command {
+                EnvWorkspaceSubcommand::Init(cmd) => {
+                    env::workspace::handle_init_from_dotenv(
+                        cmd.from_dotenv,
+                        &cmd.mode,
+                        &cmd.secret,
+                        cmd.force,
+                        cmd.dry_run,
+                    )
+                    .await
+                }
+            },
+            EnvCommands::Broker(cmd) => match cmd.command {
+                EnvBrokerSubcommand::Describe {
+                    workspace,
+                    mode,
+                    release,
+                    release_all_declared,
+                    command,
+                } => {
+                    env::broker::handle_describe(
+                        workspace.as_deref(),
+                        &mode,
+                        &release,
+                        release_all_declared,
+                        &command,
+                    )
+                    .await
+                }
+                EnvBrokerSubcommand::Policy(cmd) => match cmd.command {
+                    EnvBrokerPolicySubcommand::Add(input) => {
+                        env::broker::handle_policy_add(
+                            &config,
+                            &input.name,
+                            &input.ssh_target,
+                            &input.project,
+                            &input.workspace,
+                            input.remote_workspace.as_deref(),
+                            &input.mode,
+                            &input.release,
+                            input.release_all_declared,
+                            &input.command,
+                        )
+                        .await
+                    }
+                    EnvBrokerPolicySubcommand::Update(input) => {
+                        env::broker::handle_policy_update(
+                            &config,
+                            &input.name,
+                            &input.ssh_target,
+                            &input.project,
+                            &input.workspace,
+                            input.remote_workspace.as_deref(),
+                            &input.mode,
+                            &input.release,
+                            input.release_all_declared,
+                            &input.command,
+                        )
+                        .await
+                    }
+                    EnvBrokerPolicySubcommand::Diff {
+                        name,
+                        workspace,
+                        mode,
+                        release,
+                        release_all_declared,
+                        command,
+                    } => {
+                        env::broker::handle_policy_diff(
+                            &config,
+                            &name,
+                            &workspace,
+                            &mode,
+                            &release,
+                            release_all_declared,
+                            &command,
+                        )
+                        .await
+                    }
+                    EnvBrokerPolicySubcommand::List => {
+                        env::broker::handle_policy_list(&config).await
+                    }
+                    EnvBrokerPolicySubcommand::Info { name } => {
+                        env::broker::handle_policy_info(&config, &name).await
+                    }
+                    EnvBrokerPolicySubcommand::Remove { name } => {
+                        env::broker::handle_policy_remove(&config, &name).await
+                    }
+                },
+            },
             EnvCommands::Proxy(cmd) => match cmd.command {
                 EnvProxySubcommand::Install {
                     command,
@@ -407,8 +498,33 @@ async fn run(cli: Cli) -> Result<()> {
             remote_shell,
             with,
             with_secret,
+            secret_broker,
+            secret_broker_policy,
+            allow_secret,
+            trust_remote_session,
+            secret_broker_inspect,
+            secret_broker_enroll,
+            trust_remote_metadata,
+            secret_broker_update_policy,
             args,
-        } => ssh::handle_ssh(&config, remote_shell, &with, &with_secret, &args).await,
+        } => {
+            ssh::handle_ssh(
+                &config,
+                remote_shell,
+                &with,
+                &with_secret,
+                secret_broker,
+                &secret_broker_policy,
+                &allow_secret,
+                trust_remote_session,
+                secret_broker_inspect,
+                secret_broker_enroll,
+                trust_remote_metadata,
+                secret_broker_update_policy.as_deref(),
+                &args,
+            )
+            .await
+        }
         Commands::Local { command } => match command {
             LocalCommands::Download(cmd) => {
                 ssh::handle_local_download(
@@ -527,6 +643,7 @@ mod tests {
                 with,
                 with_secret,
                 args,
+                ..
             } if remote_shell == RemoteShell::Posix
                 && with == ["API_URL", "LOCAL_NAME=REMOTE_NAME"]
                 && with_secret == ["API_TOKEN"]
@@ -559,6 +676,189 @@ mod tests {
                 ..
             } if with_secret == ["GH_TOKEN=TOKEN"]
                 && args == ["intel.mac.local", "cmd", "/c", "echo"]
+        ));
+    }
+
+    #[test]
+    fn cli_parses_direct_ssh_secret_broker() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "ssh",
+            "--secret-broker",
+            "--secret-broker-policy",
+            "/tmp/team-policy.toml",
+            "--allow-secret",
+            "API_TOKEN",
+            "--allow-secret",
+            "NPM_TOKEN=NODE_AUTH_TOKEN",
+            "dev",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ssh {
+                secret_broker: true,
+                secret_broker_policy,
+                allow_secret,
+                trust_remote_session: false,
+                args,
+                ..
+            } if secret_broker_policy == [std::path::PathBuf::from("/tmp/team-policy.toml")]
+                && allow_secret == ["API_TOKEN", "NPM_TOKEN=NODE_AUTH_TOKEN"]
+                && args == ["dev"]
+        ));
+    }
+
+    #[test]
+    fn cli_parses_remote_direct_broker_run() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "run",
+            "--no-workspace",
+            "--secret-broker",
+            "--secret",
+            "API_TOKEN",
+            "--",
+            "bun",
+            "run",
+            "build",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Run(cmd)
+            } if cmd.no_workspace
+                && cmd.secret_broker
+                && cmd.secret == ["API_TOKEN"]
+                && cmd.command == ["bun", "run", "build"]
+        ));
+    }
+
+    #[test]
+    fn cli_parses_broker_policy_add() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "broker",
+            "policy",
+            "add",
+            "--name",
+            "dev-api",
+            "--ssh-target",
+            "dev",
+            "--workspace",
+            "/src/api/shine.workspace.toml",
+            "--mode",
+            "development",
+            "--release",
+            "API_TOKEN",
+            "--",
+            "bun",
+            "run",
+            "build",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Broker(_)
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_all_declared_broker_release() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "broker",
+            "describe",
+            "--mode",
+            "production",
+            "--release-all-declared",
+            "--",
+            "bun",
+            "start",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Broker(cmd)
+            } if matches!(
+                &cmd.command,
+                EnvBrokerSubcommand::Describe {
+                    release,
+                    release_all_declared: true,
+                    command,
+                    ..
+                } if release.is_empty() && command.as_slice() == ["bun", "start"]
+            )
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_mixed_or_missing_broker_release_selection() {
+        assert!(
+            Cli::try_parse_from([
+                "shine",
+                "env",
+                "broker",
+                "describe",
+                "--mode",
+                "production",
+                "--release",
+                "TOKEN",
+                "--release-all-declared",
+                "--",
+                "bun",
+                "start",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "shine",
+                "env",
+                "broker",
+                "describe",
+                "--mode",
+                "production",
+                "--",
+                "bun",
+                "start",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cli_parses_trusted_remote_policy_update() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "ssh",
+            "--secret-broker-enroll",
+            "--trust-remote-metadata",
+            "--update-policy",
+            "intel-shine-bot-production",
+            "intel.mac.local",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Ssh {
+                secret_broker_enroll: true,
+                trust_remote_metadata: true,
+                secret_broker_update_policy: Some(name),
+                args,
+                ..
+            } if name == "intel-shine-bot-production" && args == ["intel.mac.local"]
         ));
     }
 
@@ -1084,6 +1384,34 @@ mod tests {
                 })
             } if cmd.file.as_deref() == Some(std::path::Path::new(".env.production.shine.toml"))
                 && cmd.recipients == ["alice@example.com"]
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_workspace_dotenv_init() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "workspace",
+            "init",
+            "--from-dotenv",
+            "--mode",
+            "development",
+            "--secret",
+            "DATABASE_URL",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Workspace(commands::EnvWorkspaceCommand {
+                    command: EnvWorkspaceSubcommand::Init(cmd)
+                })
+            } if cmd.from_dotenv
+                && cmd.mode == ["development"]
+                && cmd.secret == ["DATABASE_URL"]
+                && cmd.dry_run
         ));
     }
 

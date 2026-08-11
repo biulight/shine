@@ -11,6 +11,7 @@ safe, manifest-tracked uninstall. The workspace root is the publishable `shine-c
 
 | Need | Read |
 |---|---|
+| Public user manual (English default + Simplified Chinese) | [`docs/manual/`](docs/manual/), [`website/i18n/zh-Hans/`](website/i18n/zh-Hans/) |
 | Build/test/lint commands, module map, command routing, preset authoring | this file |
 | Cross-module data flows | [`docs/kb/architecture/data-flows.md`](docs/kb/architecture/data-flows.md) |
 | Invariants that must not be broken | [`docs/kb/architecture/invariants.md`](docs/kb/architecture/invariants.md) |
@@ -26,6 +27,13 @@ Keep the KB alive by updating it **in the same change** that makes it stale: bug
 non-obvious cause → `lessons.md`; design choice → numbered ADR in `decisions/`; changed data
 flow or invariant → the matching file under `architecture/`; moved/renamed modules → sync this
 file. Full protocol: [`docs/kb/README.md`](docs/kb/README.md).
+
+User-visible behavior changes must update the matching English and Simplified Chinese manual pages
+in the same release change. English is the default locale under `docs/manual/`; Simplified Chinese
+lives under `website/i18n/zh-Hans/docusaurus-plugin-content-docs/current/`. Keep doc IDs and page sets
+aligned, preserve commands and identifiers verbatim, and do not publish `docs/kb/`, PRDs, or release
+runbooks through the public site. The root READMEs are summaries and must not grow back into a second
+complete command or configuration reference.
 
 ## Commands
 
@@ -64,6 +72,13 @@ cargo deny check bans licenses sources
 typos                          # spell-check
 bun run typecheck              # strict TypeScript check
 bun run check:ts               # type-check + Bun tests
+
+# Public documentation
+cd website
+pnpm install --frozen-lockfile
+pnpm check:locales
+pnpm typecheck
+pnpm build
 ```
 
 Rust and Bun versions are pinned in `mise.toml`; run `mise install` once and activate mise in your
@@ -166,6 +181,8 @@ shine/
 │       │   └── transforms/   # File content transforms: jsonc-to-json, template
 │       ├── env/
 │       │   ├── mod.rs        # EnvConfig: [env] table in config.toml, @@VAR@@ substitution
+│       │   ├── broker.rs     # SSH secret-broker workspace snapshots, local policy store,
+│       │   │                 # exact policy matching, inspect/trusted enrollment
 │       │   ├── commands.rs   # env list/set/delete/get + `env secret` handlers
 │       │   ├── catalog.rs    # Known env-var metadata (description, sensitive) for `env list`
 │       │   ├── identity.rs   # `shine env secret identity init/list`: age identity generation
@@ -246,6 +263,8 @@ shine/
 │       ├── ssh/
 │       │   ├── mod.rs        # `shine ssh`: wraps system ssh, arg splitting, session
 │       │   │                 # bootstrap, wrapped remote command (env vars + EXIT trap)
+│       │   ├── broker.rs     # Local-only broker session: authorization, TTY confirmation,
+│       │   │                 # replay protection, decrypt-on-demand
 │       │   ├── protocol.rs   # Wire format (control + log relay): Transfer request,
 │       │   │                 # Starting/Log/Done frames. Shared by agent.rs and remote_client.rs
 │       │   ├── agent.rs      # Local transfer server: spawns rsync/scp (build_transfer_argv,
@@ -322,7 +341,7 @@ shine/
 | `app refresh <app-id> [file]` | `cli/src/apps/refresh.rs` |
 | `sys list/bootstrap` | `cli/src/sys/` |
 | `theme sync` | `cli/src/theme/` (bypasses `Config::load_or_init()`, like `init`/`state migrate`) |
-| `env list/set/get/delete/run` / `env secret ...` | `cli/src/env/` |
+| `env list/set/get/delete/run` / `env secret ...` / `env broker ...` | `cli/src/env/` |
 | `info <TARGET>` | `cli/src/info/` (installed or available app/shell; `sys/` for explicit system items) |
 | `preset export/copy/link/unlink/overlay` | `cli/src/preset_commands.rs` |
 | `preset pull` / `update --pull` / `upgrade --pull` | `cli/src/git_pull.rs` + `main.rs` routing |
@@ -332,7 +351,7 @@ shine/
 | `state migrate` | `cli/src/state.rs` |
 | `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `completions` | `main.rs` inline (clap_complete) |
-| `ssh [--with ...] [--with-secret ...] [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
+| `ssh [--with ...] [--with-secret ...] [--secret-broker ...] [SSH_ARGS]... <HOST> [COMMAND]` | `cli/src/ssh/mod.rs` |
 | `local download/upload/status` | `cli/src/ssh/remote_client.rs` |
 | `task save/run/list/info/delete` | `cli/src/task/` |
 | `run <NAME>` (alias for `task run`) | `cli/src/task/` |

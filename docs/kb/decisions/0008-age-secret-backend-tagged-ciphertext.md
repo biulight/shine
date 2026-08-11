@@ -38,7 +38,7 @@ binary cannot use biometry-gated Keychain APIs without Apple entitlements, so sh
   checked at **runtime** (`std::env::consts::OS`), not compile time, since plain age identities
   work on every OS and the rest of the CLI is not platform-gated at compile time either.
 - Recipient/backend precedence for `encrypt`/`seal`: CLI flag > workspace `env.encryption` >
-  `config.toml` (`gpg_key_id`/`age_recipients`/`secret_backend`) > default (GPG). Resolution
+  `config.toml` (`gpg_recipients`/`age_recipients`/`secret_backend`) > default (GPG). Resolution
   helpers return `Option`, not `Result`, when used for `seal`, so sealing a file with no `[secret]`
   entries never requires a recipient to be configured.
 

@@ -5,12 +5,12 @@ use super::{GLOBAL_CONFIG_FILE, PROJECT_CONFIG_FILE, tilde_expand};
 use crate::home::default_config_and_presets_dir;
 
 #[derive(Clone, Debug)]
-pub(super) struct ProjectConfig {
-    pub(super) path: PathBuf,
-    pub(super) root: PathBuf,
+pub(crate) struct ProjectConfig {
+    pub(crate) path: PathBuf,
+    pub(crate) root: PathBuf,
 }
 
-pub(super) fn find_project_config(start: &Path) -> Option<ProjectConfig> {
+pub(crate) fn find_project_config(start: &Path) -> Option<ProjectConfig> {
     find_ancestor_file(start, PROJECT_CONFIG_FILE).and_then(|path| {
         let root = path.parent()?.to_path_buf();
         Some(ProjectConfig { root, path })

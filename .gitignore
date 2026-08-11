@@ -1,6 +1,9 @@
 /target
 /target-review
 /node_modules
+/website/node_modules
+/website/build
+/website/.docusaurus
 /mise.local.toml
 .idea
 .DS_Store

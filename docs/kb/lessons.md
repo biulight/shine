@@ -3,6 +3,36 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-09 — Migration and authorization snapshots crossed lifecycle boundaries
+
+- **Symptom**: a broker policy could hash one workspace revision but execute another revision's
+  settings; separately, a legacy project config stayed unmigrated once the global schema was
+  already current.
+- **Root cause**: broker setup parsed the workspace through a second filesystem read, and state
+  migration treated the global schema version as proof that every independently discovered
+  project config had already been migrated.
+- **Fix**: parse the captured workspace text used by the broker snapshot, and inspect the active
+  project config for retired keys even when no global schema steps remain.
+- **Rule**: immutable authorization snapshots must parse their captured bytes, and a global
+  migration marker must not suppress migrations of project-local state discovered later.
+
+## 2026-08-09 — SSH broker enrollment printed in raw mode and rejected pasted approval
+
+- **Symptom**: a trusted broker enrollment candidate rendered as a diagonal staircase, duplicated
+  its command/secret summary in a second confirmation block, and could display `y` while still
+  returning `secret request rejected by the local user`.
+- **Root cause**: candidate details were written to stderr before the broker paused OpenSSH and
+  restored the pre-SSH canonical termios, so raw-mode LF did not return the cursor to column zero.
+  The confirmation parser also compared the complete input line only with `y`/`yes`; a terminal
+  with bracketed paste enabled wrapped a pasted answer in invisible control sequences.
+- **Fix**: perform inspect display and enrollment display/confirmation only inside the guarded
+  local-TTY window, render long argv/secret/source collections as vertical lists, avoid the
+  duplicate generic prompt, and accept only `y`/`yes` after removing the exact bracketed-paste
+  wrapper while continuing to reject every other decorated input.
+- **Rule**: every local message emitted during an interactive SSH session must be written only
+  after restoring local termios (or use raw-safe CRLF deliberately). Confirmation parsing must
+  account for terminal protocol wrappers without broadly stripping arbitrary control sequences.
+
 ## 2026-08-07 — ccenv called a retired env decrypt command
 
 - **Symptom**: selecting a provider with an encrypted credential always reported that decryption

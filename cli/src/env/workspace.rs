@@ -1,3 +1,4 @@
+use super::broker::{SourceSnapshot, WorkspaceSnapshot};
 use crate::persist::atomic_write;
 use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{config::Config, secret};
@@ -13,13 +14,275 @@ use std::{
 };
 use tokio::process::Command;
 use toml_edit::{DocumentMut, value};
+use zeroize::Zeroize;
 
 const WORKSPACE_FILE: &str = "shine.workspace.toml";
-const FORMAT_VERSION: u32 = 1;
+const WORKSPACE_FORMAT_VERSION: u32 = 2;
+const ENV_SOURCE_FORMAT_VERSION: u32 = 1;
+const SECRET_PAYLOAD_VERSION: u32 = 1;
+const CACHE_FORMAT_VERSION: u32 = 1;
+
+/// Initialize a workspace by copying conventional dotenv sources into Shine's
+/// explicit TOML source format. The original dotenv files are never modified.
+pub async fn handle_init_from_dotenv(
+    from_dotenv: bool,
+    requested_modes: &[String],
+    secrets: &[String],
+    force: bool,
+    dry_run: bool,
+) -> Result<()> {
+    if !from_dotenv {
+        bail!("pass --from-dotenv to initialize from conventional dotenv files");
+    }
+
+    let root = std::env::current_dir().context("resolving current directory")?;
+    init_from_dotenv_at(&root, requested_modes, secrets, force, dry_run).await
+}
+
+async fn init_from_dotenv_at(
+    root: &Path,
+    requested_modes: &[String],
+    secrets: &[String],
+    force: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let modes = dotenv_modes(root, requested_modes)?;
+    let sources = dotenv_sources(root, &modes);
+    let mut planned = Vec::new();
+    let requested_secrets: BTreeSet<_> = secrets.iter().cloned().collect();
+    for key in &requested_secrets {
+        super::validate_env_key(key)?;
+    }
+    let mut seen_keys = BTreeSet::new();
+
+    for (input, output) in sources {
+        if !input.is_file() {
+            continue;
+        }
+        let contents = tokio::fs::read_to_string(&input)
+            .await
+            .with_context(|| format!("reading {}", input.display()))?;
+        let values = parse_dotenv(&input, &contents)?;
+        seen_keys.extend(values.keys().cloned());
+        planned.push((output, render_source(&input, &values, &requested_secrets)));
+    }
+    if planned.is_empty() {
+        bail!("no dotenv files found; expected .env, .env.local, or .env.<mode>");
+    }
+    for key in &requested_secrets {
+        if !seen_keys.contains(key) {
+            bail!("--secret {key} was not found in an imported dotenv file");
+        }
+    }
+
+    let workspace = root.join(WORKSPACE_FILE);
+    planned.push((workspace, render_workspace(&modes)));
+    for (path, _) in &planned {
+        if path.exists() && !force {
+            bail!(
+                "{} already exists; rerun with --force to replace generated files",
+                path.display()
+            );
+        }
+    }
+
+    for (path, contents) in &planned {
+        let display = path.strip_prefix(root).unwrap_or(path).display();
+        if dry_run {
+            println!("Would create {display}");
+        } else {
+            atomic_write(path, contents.as_bytes()).await?;
+            println!("Created {display}");
+        }
+    }
+    if !requested_secrets.is_empty() {
+        println!("Run `shine env secret seal` after configuring an encryption recipient.");
+    }
+    Ok(())
+}
+
+fn dotenv_modes(root: &Path, requested: &[String]) -> Result<Vec<String>> {
+    let mut modes: BTreeSet<String> = requested.iter().cloned().collect();
+    for mode in &modes {
+        validate_mode(mode)?;
+    }
+    if modes.is_empty() {
+        for entry in
+            std::fs::read_dir(root).with_context(|| format!("reading {}", root.display()))?
+        {
+            let name = entry?.file_name();
+            let name = name.to_string_lossy();
+            let Some(suffix) = name.strip_prefix(".env.") else {
+                continue;
+            };
+            if suffix == "local" || suffix.ends_with(".shine.toml") {
+                continue;
+            }
+            let mode = suffix.strip_suffix(".local").unwrap_or(suffix);
+            if mode.is_empty() || mode.contains('.') {
+                continue;
+            }
+            validate_mode(mode)?;
+            modes.insert(mode.to_owned());
+        }
+    }
+    if modes.is_empty() {
+        modes.insert("development".to_owned());
+    }
+    Ok(modes.into_iter().collect())
+}
+
+fn dotenv_sources(root: &Path, modes: &[String]) -> Vec<(PathBuf, PathBuf)> {
+    let mut files = vec![
+        (root.join(".env"), root.join(".env.shine.toml")),
+        (root.join(".env.local"), root.join(".env.local.shine.toml")),
+    ];
+    for mode in modes {
+        files.push((
+            root.join(format!(".env.{mode}")),
+            root.join(format!(".env.{mode}.shine.toml")),
+        ));
+        files.push((
+            root.join(format!(".env.{mode}.local")),
+            root.join(format!(".env.{mode}.local.shine.toml")),
+        ));
+    }
+    files
+}
+
+fn render_workspace(modes: &[String]) -> String {
+    let default_mode = &modes[0];
+    let rendered_modes = modes
+        .iter()
+        .map(|mode| format!("\"{mode}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "# Managed by `shine env workspace init --from-dotenv`.\n\
+         # Edit the source files below; later files override earlier ones.\n\
+         version = {WORKSPACE_FORMAT_VERSION}\n\n\
+         [env]\n\
+         # Run with: shine env run --mode {default_mode} -- <command>\n\
+         modes = [{modes}]\n\
+         default_mode = \"{default_mode}\"\n\
+         files = [\n\
+           \".env.shine.toml\", # shared defaults\n\
+           \".env.local.shine.toml\", # local-only overrides; do not commit\n\
+           \".env.{{mode}}.shine.toml\", # mode-specific values\n\
+           \".env.{{mode}}.local.shine.toml\", # local mode overrides; do not commit\n\
+         ]\n\n\
+         # Add GPG recipients before sealing values in [secret].\n\
+         # [env.encryption]\n\
+         # gpg_recipients = [\"alice@example.com\", \"bob@example.com\"]\n",
+        modes = rendered_modes,
+    )
+}
+
+fn render_source(
+    input: &Path,
+    values: &BTreeMap<String, String>,
+    secrets: &BTreeSet<String>,
+) -> String {
+    let mut document = DocumentMut::new();
+    document["version"] = value(ENV_SOURCE_FORMAT_VERSION as i64);
+    let mut plain = toml_edit::Table::new();
+    let mut secret = toml_edit::Table::new();
+    for (key, value_text) in values {
+        if secrets.contains(key) {
+            secret[key] = value(value_text);
+        } else {
+            plain[key] = value(value_text);
+        }
+    }
+    if !plain.is_empty() {
+        document["plain"] = toml_edit::Item::Table(plain);
+    }
+    if !secret.is_empty() {
+        document["secret"] = toml_edit::Item::Table(secret);
+    }
+    let source_name = input
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("dotenv file");
+    let mut contents = format!(
+        "# Imported from {source_name}. Keep non-sensitive values in [plain].\n\
+         # Move sensitive values to [secret], then run `shine env secret seal`.\n"
+    );
+    contents.push_str(&document.to_string());
+    if secrets.is_empty() {
+        contents.push_str(
+            "\n# Optional: move sensitive values here, then run `shine env secret seal`.\n[secret]\n",
+        );
+    }
+    contents
+}
+
+fn parse_dotenv(path: &Path, contents: &str) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
+    for (index, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        let Some((key, raw_value)) = line.split_once('=') else {
+            bail!(
+                "{}:{} is not a KEY=VALUE dotenv entry",
+                path.display(),
+                index + 1
+            );
+        };
+        let key = key.trim();
+        super::validate_env_key(key)
+            .with_context(|| format!("{}:{}", path.display(), index + 1))?;
+        let value_text = parse_dotenv_value(path, index + 1, raw_value)?;
+        values.insert(key.to_owned(), value_text);
+    }
+    Ok(values)
+}
+
+fn parse_dotenv_value(path: &Path, line: usize, raw: &str) -> Result<String> {
+    let raw = raw.trim();
+    let value = if let Some(value) = raw.strip_prefix('\'') {
+        parse_quoted_dotenv_value(value, '\'', "single")?
+    } else if let Some(value) = raw.strip_prefix('"') {
+        let value = parse_quoted_dotenv_value(value, '"', "double")?;
+        if value.contains('\\') {
+            bail!(
+                "{}:{line} uses escaped double-quoted dotenv content; resolve it before importing",
+                path.display()
+            );
+        }
+        value
+    } else {
+        raw.split_once(" #")
+            .map(|(value, _)| value)
+            .unwrap_or(raw)
+            .trim_end()
+    };
+    if value.contains("${") {
+        bail!(
+            "{}:{line} uses dotenv interpolation; resolve it before importing",
+            path.display()
+        );
+    }
+    Ok(value.to_owned())
+}
+
+fn parse_quoted_dotenv_value<'a>(raw: &'a str, quote: char, style: &str) -> Result<&'a str> {
+    let closing = raw
+        .find(quote)
+        .with_context(|| format!("unterminated {style}-quoted dotenv value"))?;
+    let trailing = raw[closing + quote.len_utf8()..].trim_start();
+    if !trailing.is_empty() && !trailing.starts_with('#') {
+        bail!("unexpected content after {style}-quoted dotenv value");
+    }
+    Ok(&raw[..closing])
+}
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Workspace {
-    #[serde(default = "format_version")]
+    #[serde(default = "workspace_format_version")]
     version: u32,
     pub env: WorkspaceEnv,
 }
@@ -39,7 +302,10 @@ pub struct WorkspaceEnv {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 struct Encryption {
-    recipient: Option<String>,
+    #[serde(rename = "recipient")]
+    legacy_recipient: Option<String>,
+    #[serde(default)]
+    gpg_recipients: Vec<String>,
     #[serde(default)]
     backend: Option<String>,
     #[serde(default)]
@@ -48,7 +314,7 @@ struct Encryption {
 
 #[derive(Clone, Debug, Deserialize)]
 struct SourceFile {
-    #[serde(default = "format_version")]
+    #[serde(default = "env_source_format_version")]
     version: u32,
     #[serde(default)]
     plain: BTreeMap<String, String>,
@@ -91,8 +357,12 @@ struct CachedMode {
     data: String,
 }
 
-fn format_version() -> u32 {
-    FORMAT_VERSION
+fn workspace_format_version() -> u32 {
+    WORKSPACE_FORMAT_VERSION
+}
+
+fn env_source_format_version() -> u32 {
+    ENV_SOURCE_FORMAT_VERSION
 }
 
 pub async fn handle_seal(
@@ -136,15 +406,48 @@ pub async fn handle_seal(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Command handler keeps independent Clap options explicit.
 pub async fn handle_run(
     config: &Config,
     workspace_arg: Option<&Path>,
     mode_arg: Option<&str>,
     no_workspace: bool,
     with: &[String],
+    secret_broker: bool,
+    broker_secrets: &[String],
     command: &[OsString],
 ) -> Result<()> {
     let explicit = resolve_explicit_values(config, with).await?;
+    if !secret_broker && !broker_secrets.is_empty() {
+        bail!("--secret requires --secret-broker");
+    }
+    if secret_broker {
+        let argv = broker_command_argv(command)?;
+        if no_workspace {
+            if broker_secrets.is_empty() {
+                bail!("--no-workspace --secret-broker requires at least one --secret");
+            }
+            let values = crate::ssh::request_direct_secrets(broker_secrets, &argv).await?;
+            return run_broker_command(
+                command,
+                BTreeMap::new(),
+                false,
+                merge_explicit(explicit, values)?,
+            )
+            .await;
+        }
+        if !broker_secrets.is_empty() {
+            bail!(
+                "workspace broker requests derive release keys from policy; do not pass --secret"
+            );
+        }
+        let mode = mode_arg.context("workspace --secret-broker requires --mode")?;
+        let snapshot = snapshot_for_broker(workspace_arg, mode).await?;
+        let mut values = plain_values_from_broker_snapshot(&snapshot)?;
+        let secrets = crate::ssh::request_workspace_secrets(snapshot.clone(), &argv).await?;
+        values.extend(secrets);
+        return run_broker_command(command, values, snapshot.override_process_env, explicit).await;
+    }
     // `--no-workspace` disables discovery entirely: only explicit `--with` values
     // and the inherited process environment reach the command. Generated Bun
     // launchers rely on this so a nearby shine.workspace.toml can never hijack them.
@@ -202,6 +505,29 @@ pub async fn handle_run(
     run_command(command, &values, override_process_env, &explicit).await
 }
 
+fn broker_command_argv(command: &[OsString]) -> Result<Vec<String>> {
+    command
+        .iter()
+        .map(|arg| {
+            arg.to_str()
+                .map(str::to_string)
+                .context("secret broker command arguments must be valid UTF-8")
+        })
+        .collect()
+}
+
+fn merge_explicit(
+    mut explicit: BTreeMap<String, String>,
+    broker: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    for (key, value) in broker {
+        if explicit.insert(key.clone(), value).is_some() {
+            bail!("broker target {key} conflicts with an explicit --with target");
+        }
+    }
+    Ok(explicit)
+}
+
 async fn resolve_explicit_values(
     config: &Config,
     specs: &[String],
@@ -240,12 +566,29 @@ async fn load_workspace(path: &Path) -> Result<Workspace> {
     let contents = tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("reading {}", path.display()))?;
+    parse_workspace(path, &contents)
+}
+
+fn parse_workspace(path: &Path, contents: &str) -> Result<Workspace> {
     let workspace: Workspace =
-        toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))?;
-    if workspace.version != FORMAT_VERSION {
+        toml::from_str(contents).with_context(|| format!("parsing {}", path.display()))?;
+    if workspace.version < WORKSPACE_FORMAT_VERSION {
+        bail!(
+            "workspace version {} in {} is retired; run `shine state migrate`",
+            workspace.version,
+            path.display()
+        );
+    }
+    if workspace.version != WORKSPACE_FORMAT_VERSION {
         bail!(
             "unsupported workspace version {} in {}",
             workspace.version,
+            path.display()
+        );
+    }
+    if workspace.env.encryption.legacy_recipient.is_some() {
+        bail!(
+            "{} uses retired env.encryption.recipient; run `shine state migrate` to convert it to gpg_recipients",
             path.display()
         );
     }
@@ -281,11 +624,15 @@ fn resolve_seal_encryption(
 
     match backend {
         BackendKind::Gpg => {
-            let recipient = resolve_recipient_optional(
-                workspace_encryption.and_then(|encryption| encryption.recipient.as_deref()),
-                config.gpg_key_id.as_deref(),
-            );
-            Ok(recipient.map(|value| EncryptRecipients::Gpg(vec![value.to_string()])))
+            let workspace_recipients = workspace_encryption
+                .map(|encryption| clean_recipients(&encryption.gpg_recipients))
+                .unwrap_or_default();
+            let recipients = if !workspace_recipients.is_empty() {
+                workspace_recipients
+            } else {
+                clean_recipients(&config.gpg_recipients)
+            };
+            Ok((!recipients.is_empty()).then_some(EncryptRecipients::Gpg(recipients)))
         }
         BackendKind::Age => {
             let workspace_recipients = workspace_encryption
@@ -320,16 +667,6 @@ fn clean_recipients(recipients: &[String]) -> Vec<String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect()
-}
-
-fn resolve_recipient_optional<'a>(
-    first: Option<&'a str>,
-    second: Option<&'a str>,
-) -> Option<&'a str> {
-    first
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| second.map(str::trim).filter(|value| !value.is_empty()))
 }
 
 async fn existing_workspace_sources(path: &Path, workspace: &Workspace) -> Result<Vec<PathBuf>> {
@@ -395,6 +732,120 @@ fn validate_mode(mode: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn validate_broker_mode(mode: &str) -> Result<()> {
+    validate_mode(mode)
+}
+
+/// Reads one workspace/mode exactly once for SSH broker hashing and execution.
+/// The returned bytes are retained by the remote runner until the child starts,
+/// so a successful authorization never re-reads mutable files.
+pub async fn snapshot_for_broker(
+    workspace_arg: Option<&Path>,
+    mode: &str,
+) -> Result<WorkspaceSnapshot> {
+    validate_mode(mode)?;
+    let workspace_path = find_workspace_optional(workspace_arg)
+        .await?
+        .context("shine.workspace.toml was not found; pass --workspace")?;
+    let workspace_contents = tokio::fs::read_to_string(&workspace_path)
+        .await
+        .with_context(|| format!("reading {}", workspace_path.display()))?;
+    let workspace = parse_workspace(&workspace_path, &workspace_contents)?;
+    let source_paths = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
+    let root = workspace_path
+        .parent()
+        .context("workspace path has no parent directory")?;
+    let mut sources = Vec::new();
+    for source_path in source_paths {
+        if !source_path.is_file() {
+            continue;
+        }
+        let contents = tokio::fs::read_to_string(&source_path)
+            .await
+            .with_context(|| format!("reading {}", source_path.display()))?;
+        // Parse now so malformed/unsealed metadata never reaches the broker.
+        let source = parse_source(&source_path, &contents)?;
+        for (key, state) in &source.secret {
+            if !matches!(state, SecretState::Sealed(true)) {
+                bail!(
+                    "{key} in {} is not sealed; run `shine env secret seal`",
+                    source_path.display()
+                );
+            }
+        }
+        let display_path = source_path
+            .strip_prefix(root)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|_| source_path.clone())
+            .to_string_lossy()
+            .into_owned();
+        sources.push(SourceSnapshot {
+            path: display_path,
+            contents,
+        });
+    }
+    if sources.is_empty() {
+        bail!("none of the configured environment source files exist");
+    }
+    Ok(WorkspaceSnapshot {
+        workspace_path: workspace_path.to_string_lossy().into_owned(),
+        workspace_contents,
+        mode: mode.to_string(),
+        override_process_env: workspace.env.override_process_env,
+        sources,
+    })
+}
+
+pub(crate) fn declared_secrets_from_source(path: &str, contents: &str) -> Result<Vec<String>> {
+    let source = parse_source(Path::new(path), contents)?;
+    let mut keys = source.secret.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    Ok(keys)
+}
+
+pub fn plain_values_from_broker_snapshot(
+    snapshot: &WorkspaceSnapshot,
+) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
+    for source in &snapshot.sources {
+        let parsed = parse_source(Path::new(&source.path), &source.contents)?;
+        values.extend(parsed.plain);
+    }
+    Ok(values)
+}
+
+pub async fn decrypt_broker_snapshot(
+    config: &Config,
+    snapshot: &WorkspaceSnapshot,
+    release: &[String],
+) -> Result<BTreeMap<String, String>> {
+    let release = release.iter().cloned().collect::<BTreeSet<_>>();
+    let mut values = BTreeMap::new();
+    for source in &snapshot.sources {
+        let path = Path::new(&source.path);
+        let parsed = parse_source(path, &source.contents)?;
+        for (key, state) in &parsed.secret {
+            if !matches!(state, SecretState::Sealed(true)) {
+                bail!("{key} in {} is not sealed", source.path);
+            }
+        }
+        let secrets = decrypt_source_payload(path, &parsed, config).await?;
+        let expected = parsed.secret.keys().cloned().collect::<BTreeSet<_>>();
+        let actual = secrets.keys().cloned().collect::<BTreeSet<_>>();
+        if expected != actual {
+            bail!(
+                "secret key list does not match encrypted payload in {}",
+                source.path
+            );
+        }
+        values.extend(secrets.into_iter().filter(|(key, _)| release.contains(key)));
+    }
+    if values.keys().cloned().collect::<BTreeSet<_>>() != release {
+        bail!("broker response does not contain every released secret key");
+    }
+    Ok(values)
+}
+
 async fn seal_file(
     path: &Path,
     config: &Config,
@@ -427,10 +878,10 @@ async fn seal_file(
         String::new()
     } else {
         let encryption = encryption.context(
-            "recipients are required; pass --recipient/--backend, set env.encryption in shine.workspace.toml, or set gpg_key_id/age_recipients",
+            "recipients are required; pass --recipient/--backend, set env.encryption in shine.workspace.toml, or set gpg_recipients/age_recipients",
         )?;
         let plaintext = toml::to_string(&SecretPayload {
-            version: FORMAT_VERSION,
+            version: SECRET_PAYLOAD_VERSION,
             values: new_values,
         })?;
         secret::encrypt_secret(plaintext.as_bytes(), encryption).await?
@@ -457,7 +908,7 @@ async fn seal_file(
 fn parse_source(path: &Path, contents: &str) -> Result<SourceFile> {
     let source: SourceFile = toml::from_str(contents)
         .with_context(|| format!("parsing environment source {}", path.display()))?;
-    if source.version != FORMAT_VERSION {
+    if source.version != ENV_SOURCE_FORMAT_VERSION {
         bail!(
             "unsupported environment source version {} in {}",
             source.version,
@@ -493,7 +944,7 @@ async fn decrypt_source_payload(
         .with_context(|| format!("decrypting {}", path.display()))?;
     let payload: SecretPayload = toml::from_str(&plaintext)
         .with_context(|| format!("parsing decrypted payload from {}", path.display()))?;
-    if payload.version != FORMAT_VERSION {
+    if payload.version != SECRET_PAYLOAD_VERSION {
         bail!("unsupported encrypted payload version {}", payload.version);
     }
     Ok(payload.values)
@@ -548,7 +999,7 @@ async fn calculate_input_hash(
     sources: &[PathBuf],
 ) -> Result<String> {
     let mut hash = Sha256::new();
-    hash.update(FORMAT_VERSION.to_le_bytes());
+    hash.update(CACHE_FORMAT_VERSION.to_le_bytes());
     hash.update(mode.as_bytes());
     hash.update(
         tokio::fs::read(workspace_path)
@@ -601,13 +1052,13 @@ async fn read_valid_cache(
     let Some(cached) = cache.modes.get(mode) else {
         return Ok(None);
     };
-    if cache.version != FORMAT_VERSION || cached.input_hash != input_hash {
+    if cache.version != CACHE_FORMAT_VERSION || cached.input_hash != input_hash {
         return Ok(None);
     }
     let plaintext = secret::decrypt_secret(&cached.data, &config.age_identities()).await?;
     let payload: SecretPayload = toml::from_str(&plaintext)?;
     let keys: Vec<_> = payload.values.keys().cloned().collect();
-    if payload.version != FORMAT_VERSION || keys != cached.keys {
+    if payload.version != SECRET_PAYLOAD_VERSION || keys != cached.keys {
         bail!("compiled environment cache failed integrity validation");
     }
     Ok(Some(payload.values))
@@ -622,7 +1073,7 @@ async fn write_cache(
     recipients: &EncryptRecipients,
 ) -> Result<()> {
     let plaintext = toml::to_string(&SecretPayload {
-        version: FORMAT_VERSION,
+        version: SECRET_PAYLOAD_VERSION,
         values: values.clone(),
     })?;
     let data = secret::encrypt_secret(plaintext.as_bytes(), recipients).await?;
@@ -636,7 +1087,7 @@ async fn write_cache(
         },
     );
     let cache = CacheFile {
-        version: FORMAT_VERSION,
+        version: CACHE_FORMAT_VERSION,
         project_root: workspace_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
@@ -659,6 +1110,29 @@ async fn run_command(
     override_process_env: bool,
     explicit: &BTreeMap<String, String>,
 ) -> Result<()> {
+    let status = command_status(command, values, override_process_env, explicit).await?;
+    finish_command_status(status)
+}
+
+async fn run_broker_command(
+    command: &[OsString],
+    mut values: BTreeMap<String, String>,
+    override_process_env: bool,
+    mut explicit: BTreeMap<String, String>,
+) -> Result<()> {
+    let status = command_status(command, &values, override_process_env, &explicit).await;
+    for value in values.values_mut().chain(explicit.values_mut()) {
+        value.zeroize();
+    }
+    finish_command_status(status?)
+}
+
+async fn command_status(
+    command: &[OsString],
+    values: &BTreeMap<String, String>,
+    override_process_env: bool,
+    explicit: &BTreeMap<String, String>,
+) -> Result<std::process::ExitStatus> {
     let (program, args) = command
         .split_first()
         .context("a command is required after --")?;
@@ -674,6 +1148,10 @@ async fn run_command(
         .status()
         .await
         .with_context(|| format!("running {}", program.to_string_lossy()))?;
+    Ok(status)
+}
+
+fn finish_command_status(status: std::process::ExitStatus) -> Result<()> {
     if status.success() {
         return Ok(());
     }
@@ -702,6 +1180,127 @@ fn absolute_from_current(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dotenv_import_parses_common_frontend_entries() {
+        let values = parse_dotenv(
+            Path::new(".env"),
+            "# base\nexport VITE_NAME = \"Shine\" # display name\nVITE_OWNER='Shine team' # owner\nVITE_URL=https://example.test # note\nEMPTY=\n",
+        )
+        .unwrap();
+
+        assert_eq!(values.get("VITE_NAME").map(String::as_str), Some("Shine"));
+        assert_eq!(
+            values.get("VITE_OWNER").map(String::as_str),
+            Some("Shine team")
+        );
+        assert_eq!(
+            values.get("VITE_URL").map(String::as_str),
+            Some("https://example.test")
+        );
+        assert_eq!(values.get("EMPTY").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn dotenv_import_rejects_interpolation() {
+        let error = parse_dotenv(Path::new(".env"), "VITE_URL=${BASE_URL}/api\n").unwrap_err();
+        assert!(error.to_string().contains("dotenv interpolation"));
+    }
+
+    #[test]
+    fn dotenv_mode_discovery_ignores_generated_sources() {
+        let directory = std::env::temp_dir().join(format!("shine-dotenv-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(".env.development"), "VITE_A=1\n").unwrap();
+        std::fs::write(directory.join(".env.production.local"), "VITE_A=2\n").unwrap();
+        std::fs::write(directory.join(".env.development.shine.toml"), "version=1\n").unwrap();
+
+        assert_eq!(
+            dotenv_modes(&directory, &[]).unwrap(),
+            vec!["development", "production"]
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rendered_source_marks_only_requested_keys_secret() {
+        let source = render_source(
+            Path::new(".env"),
+            &BTreeMap::from([
+                ("PUBLIC".to_owned(), "yes".to_owned()),
+                ("TOKEN".to_owned(), "secret".to_owned()),
+            ]),
+            &BTreeSet::from(["TOKEN".to_owned()]),
+        );
+        let parsed: SourceFile = toml::from_str(&source).unwrap();
+        assert!(source.contains("Imported from .env"));
+        assert_eq!(parsed.plain.get("PUBLIC").map(String::as_str), Some("yes"));
+        assert!(
+            matches!(parsed.secret.get("TOKEN"), Some(SecretState::Plain(value)) if value == "secret")
+        );
+    }
+
+    #[test]
+    fn rendered_source_includes_an_empty_secret_template() {
+        let source = render_source(
+            Path::new(".env"),
+            &BTreeMap::from([("PUBLIC".to_owned(), "yes".to_owned())]),
+            &BTreeSet::new(),
+        );
+        assert!(source.contains("Optional: move sensitive values"));
+        let parsed: SourceFile = toml::from_str(&source).unwrap();
+        assert!(parsed.secret.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dotenv_init_creates_vite_ordered_workspace_without_touching_sources() {
+        let directory =
+            std::env::temp_dir().join(format!("shine-dotenv-init-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        tokio::fs::write(
+            directory.join(".env"),
+            "VITE_API=https://api.example.test\nTOKEN=unsealed\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            directory.join(".env.development"),
+            "VITE_API=http://localhost:3000\n",
+        )
+        .await
+        .unwrap();
+
+        init_from_dotenv_at(&directory, &[], &["TOKEN".to_owned()], false, false)
+            .await
+            .unwrap();
+
+        let workspace = tokio::fs::read_to_string(directory.join(WORKSPACE_FILE))
+            .await
+            .unwrap();
+        assert!(
+            workspace.find(".env.local.shine.toml").unwrap()
+                < workspace.find(".env.{mode}.shine.toml").unwrap()
+        );
+        assert!(workspace.contains("Managed by `shine env workspace init --from-dotenv`"));
+        assert!(workspace.contains("Add GPG recipients"));
+        let base = tokio::fs::read_to_string(directory.join(".env.shine.toml"))
+            .await
+            .unwrap();
+        assert!(base.contains("[secret]"));
+        assert!(base.contains("TOKEN = \"unsealed\""));
+        assert_eq!(
+            tokio::fs::read_to_string(directory.join(".env"))
+                .await
+                .unwrap(),
+            "VITE_API=https://api.example.test\nTOKEN=unsealed\n"
+        );
+        assert!(
+            init_from_dotenv_at(&directory, &[], &[], false, false)
+                .await
+                .is_err()
+        );
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
 
     #[test]
     fn resolves_vite_style_layers_in_declared_order() {
@@ -734,12 +1333,13 @@ mod tests {
     }
 
     #[test]
-    fn seal_encryption_gpg_recipient_priority_is_cli_workspace_config() {
+    fn seal_encryption_gpg_recipients_priority_is_cli_workspace_config() {
         let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
         let mut config = Config::new_for_test(&dir);
-        config.gpg_key_id = Some("global".to_string());
+        config.gpg_recipients = vec!["global-one".to_string(), "global-two".to_string()];
         let workspace_encryption = Encryption {
-            recipient: Some("workspace".to_string()),
+            legacy_recipient: None,
+            gpg_recipients: vec!["workspace-one".to_string(), "workspace-two".to_string()],
             backend: None,
             age_recipients: Vec::new(),
         };
@@ -756,11 +1356,13 @@ mod tests {
         let workspace =
             resolve_seal_encryption(None, &[], Some(&workspace_encryption), &config).unwrap();
         assert!(
-            matches!(workspace, Some(EncryptRecipients::Gpg(values)) if values == ["workspace"])
+            matches!(workspace, Some(EncryptRecipients::Gpg(values)) if values == ["workspace-one", "workspace-two"])
         );
 
         let global = resolve_seal_encryption(None, &[], None, &config).unwrap();
-        assert!(matches!(global, Some(EncryptRecipients::Gpg(values)) if values == ["global"]));
+        assert!(
+            matches!(global, Some(EncryptRecipients::Gpg(values)) if values == ["global-one", "global-two"])
+        );
     }
 
     #[test]
@@ -782,7 +1384,8 @@ mod tests {
         config.secret_backend = Some("age".to_string());
         config.age_recipients = vec!["age1config".to_string()];
         let workspace_encryption = Encryption {
-            recipient: None,
+            legacy_recipient: None,
+            gpg_recipients: Vec::new(),
             backend: None,
             age_recipients: vec!["age1workspace".to_string()],
         };
@@ -797,7 +1400,8 @@ mod tests {
             None,
             &[],
             Some(&Encryption {
-                recipient: None,
+                legacy_recipient: None,
+                gpg_recipients: Vec::new(),
                 backend: None,
                 age_recipients: Vec::new(),
             }),
@@ -814,9 +1418,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("shine-seal-enc-{}", uuid::Uuid::new_v4()));
         let mut config = Config::new_for_test(&dir);
         config.secret_backend = Some("age".to_string());
-        config.gpg_key_id = Some("global".to_string());
+        config.gpg_recipients = vec!["global".to_string()];
         let workspace_encryption = Encryption {
-            recipient: Some("workspace".to_string()),
+            legacy_recipient: None,
+            gpg_recipients: vec!["workspace".to_string()],
             backend: Some("gpg".to_string()),
             age_recipients: Vec::new(),
         };
@@ -930,6 +1535,8 @@ mod tests {
             None,
             true,
             &["SHINE_NOWS_TOKEN".into()],
+            false,
+            &[],
             &[
                 OsString::from("sh"),
                 OsString::from("-c"),
@@ -952,6 +1559,8 @@ mod tests {
             None,
             None,
             true,
+            &[],
+            false,
             &[],
             &[
                 OsString::from("sh"),

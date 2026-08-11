@@ -9,7 +9,9 @@ mod load;
 mod save;
 
 use discovery::resolve_config_presets_path;
-pub(crate) use discovery::{ReadOnlyRuntimePaths, discover_runtime_paths_read_only};
+pub(crate) use discovery::{
+    ReadOnlyRuntimePaths, discover_runtime_paths_read_only, find_project_config,
+};
 use env_layer::deserialize_env_values;
 
 pub use crate::home::{full_expand, full_expand_with_home, tilde_expand};
@@ -19,7 +21,7 @@ const GLOBAL_CONFIG_FILE: &str = "config.toml";
 const PROJECT_CONFIG_FILE: &str = "shine.config.toml";
 const PROJECT_ENV_FILE: &str = "shine.env.toml";
 
-pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_RUNTIME_SCHEMA_VERSION: u32 = 2;
 
 pub const DEFAULT_ENV_VARS: &[(&str, &str)] = &[
     ("HTTP_PROXY_PORT", "6152"),
@@ -174,10 +176,16 @@ pub struct Config {
         skip_serializing_if = "Option::is_none"
     )]
     pub self_install_dest: Option<PathBuf>,
-    /// Default GPG recipient key used by `shine env secret encrypt` when the command
-    /// does not provide `-r/--recipient`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gpg_key_id: Option<String>,
+    /// Default GPG recipients used by `shine env secret encrypt`/`seal` when
+    /// neither `-r/--recipient` nor a workspace GPG recipient list is given.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gpg_recipients: Vec<String>,
+    #[serde(
+        rename = "gpg_key_id",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub legacy_gpg_key_id: Option<String>,
     /// Selects the default [`crate::secret::BackendKind`] used by `shine env
     /// encrypt`/`seal` when neither `-r/--recipient` nor a workspace backend
     /// override is given. Absent means GPG. Decryption never consults this
@@ -317,7 +325,8 @@ impl Config {
             allow_app_hooks: false,
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
-            gpg_key_id: None,
+            gpg_recipients: Vec::new(),
+            legacy_gpg_key_id: None,
             secret_backend: None,
             age_recipients: Vec::new(),
             age_identity: None,
@@ -500,7 +509,8 @@ impl Default for Config {
             allow_app_hooks: false,
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
-            gpg_key_id: None,
+            gpg_recipients: Vec::new(),
+            legacy_gpg_key_id: None,
             secret_backend: None,
             age_recipients: Vec::new(),
             age_identity: None,
