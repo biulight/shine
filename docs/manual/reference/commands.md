@@ -31,15 +31,21 @@ compatibility aliases.
 | Command | Purpose |
 | --- | --- |
 | `shine init [--yes]` | Create project `shine.config.toml` in the current directory |
+| `shine shell <SUBCOMMAND>` | Manage shell command presets |
+| `shine app <SUBCOMMAND>` | Manage application configuration presets |
 | `shine install <TARGET> [--replace-managed]` | Install or repair an app/shell target |
 | `shine uninstall <TARGET> [--force] [--purge] [--dry-run]` | Uninstall an app/shell target |
+| `shine completions <SUBCOMMAND>` | Generate or install shell completions |
 | `shine list [--available [KIND]]` | List installed resources, or browse available `app`, `shell`, and `sys` catalogs |
 | `shine info <TARGET> [--diff] [--verbose]` | Inspect an available or installed app/shell target or `sys/<ITEM>` |
 | `shine update [TARGET]` | Check managed content and stable Shine updates |
 | `shine upgrade [TARGET]` | Apply all or selected app, shell, and managed-system updates |
 | `shine preset <SUBCOMMAND>` | Manage sources, overlays, exports, and Git synchronization |
 | `shine state migrate [--dry-run]` | Migrate and clean legacy runtime state |
+| `shine self <SUBCOMMAND>` | Install or upgrade the Shine binary |
 | `shine serve <SUBCOMMAND>` | Publish resources under `~/.shine/http/` through a local HTTP service |
+| `shine env <SUBCOMMAND>` | Manage preset variables, workspace environments, proxies, and secrets |
+| `shine sys <SUBCOMMAND>` | Manage system bootstrap and managed system configuration |
 | `shine theme sync` | Detect light/dark terminal appearance and print shell exports |
 | `shine ssh ...` / `shine local ...` | Open SSH, broker secrets, and transfer files with POSIX remotes |
 | `shine task <SUBCOMMAND>` / `shine run <NAME>` | Save and run personal commands |
@@ -133,7 +139,7 @@ shine env delete <KEY> [--force]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env broker describe [--workspace <FILE>] --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
-shine env broker policy <add|update> --name <NAME> --ssh-target <TARGET> --workspace <FILE> --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
+shine env broker policy <add|update> --name <NAME> --ssh-target <TARGET> [--project <PROJECT>] --workspace <FILE> [--remote-workspace <REMOTE_FILE>] --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
 shine env broker policy diff <NAME> --workspace <FILE> --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
 shine env broker policy list
 shine env broker policy info <NAME>
@@ -156,6 +162,10 @@ environment only and conflicts with `--workspace` and `--mode`. Workspace initia
 requires `--from-dotenv` and supports `--dry-run`. Broker policy creation chooses one or more explicit
 `--release` keys or freezes every currently declared key with `--release-all-declared`; the forms are
 mutually exclusive. Touch ID identities are macOS-only and require `age-plugin-se`.
+
+For broker policies, `--project` stores a human-readable project label. `--remote-workspace`
+requires remote requests to report that exact absolute workspace path in addition to matching the
+workspace contents and other policy fields.
 
 An environment proxy creates a same-name shim under `~/.shine/bin/` and injects only declared values
 into its child, preferring `<KEY>_SECRET` over `<KEY>`. Disable retains the shim without injection.

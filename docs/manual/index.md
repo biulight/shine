@@ -48,7 +48,7 @@ This manual applies to **Shine 1.2.0**.
    [system initialization](./guides/system-init.md),
    [terminal theme synchronization](./guides/terminal-theme-sync.md),
    [tasks and the local service](./guides/tasks-and-serve.md), or
-   [SSH sessions, key forwarding, and file transfer](./guides/ssh-transfer.md).
+   [SSH sessions, secret brokering, and file transfer](./guides/ssh-transfer.md).
 
 If something is already failing, go directly to [Troubleshooting](./troubleshooting.md). See the
 [command reference](./reference/commands.md) for the complete command surface.

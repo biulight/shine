@@ -62,6 +62,6 @@ shine self upgrade --channel preview
 
 `preview` 是持续滚动的预发布通道，不参与日常自动更新检查。运行 `shine update` 可以同时检查已安装配置和稳定版程序更新。
 
-在 Unix 系统上，如果 `shine self install` 或 `shine self upgrade` 需要写入当前用户不可写的位置，Shine 会自动通过 `sudo` 重新执行复制步骤。Windows 仍需要在有权限的终端中完成受保护位置的安装。
+在 Unix 系统上，如果 `shine self install` 要把二进制文件复制到当前用户不可写的位置，Shine 会交互式请求授权，并通过 `sudo` 完成安装。`shine self upgrade` 成功后同步另一个已记录的安装目标时，也会采用相同方式。不过，如果当前运行的 Shine 本身位于受保护目录，Shine 暂时无法自动提权替换该二进制文件；请改为安装并运行用户可写位置中的 Shine。Windows 在受保护位置安装或升级时，仍需使用具备相应权限的终端。
 
 下一步：[完成第一次预设安装](./quick-start.md)。

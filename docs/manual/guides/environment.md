@@ -203,7 +203,7 @@ shine env run --no-workspace --secret-broker --secret API_TOKEN -- bun run build
 The broker never transfers the decryption key or puts plaintext in the remote login shell. The target
 child, remote administrator, or malicious same-account process can still read plaintext. Fixed
 projects should use a local policy bound to the workspace digest, mode, full command, and releasable
-keys. See [SSH sessions, key forwarding, and file transfer](./ssh-transfer.md#provide-secrets-to-remote-commands-on-demand).
+keys. See [SSH sessions, secret brokering, and file transfer](./ssh-transfer.md#provide-secrets-to-remote-commands-on-demand).
 
 ## Install a transparent wrapper for fixed credential variables
 

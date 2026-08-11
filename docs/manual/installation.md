@@ -66,8 +66,11 @@ shine self upgrade --channel preview
 `preview` is a continuously updated prerelease channel and is not included in routine automatic
 update checks. `shine update` checks both installed configuration and stable Shine releases.
 
-On Unix, if `shine self install` or `shine self upgrade` needs to write to a location the current
-user cannot modify, Shine automatically reruns the copy step through `sudo`. On Windows, installing
-to a protected location still requires a terminal with the necessary permissions.
+On Unix, if `shine self install` copies the binary to a location the current user cannot modify,
+Shine interactively requests authorization and completes the installation through `sudo`. After a
+successful `shine self upgrade`, the same behavior applies when syncing a separate recorded install
+destination. Shine cannot currently elevate to replace the running binary itself when that binary
+is in a protected directory; install and run it from a user-writable location instead. On Windows,
+installing or upgrading in a protected location requires a terminal with the necessary permissions.
 
 Next: [Complete your first preset installation](./quick-start.md).

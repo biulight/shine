@@ -90,14 +90,20 @@ Shine 0.40.0 也不再自动迁移旧的全局 `~/.shine/env.toml`。升级前�
 
 ## 目录与来源优先级
 
-预设目录按以下顺序选择：
+`SHINE_CONFIG_DIR` 的优先级最高。它会改变全局配置和运行时状态目录；不在 Shine 项目中时，
+预设目录也固定为 `$SHINE_CONFIG_DIR/presets/`，此时 `SHINE_PRESETS` 和全局 `presets_dir`
+都不能覆盖它。
+
+如果当前目录存在生效的项目 `shine.config.toml`，`SHINE_CONFIG_DIR` 仍决定运行时状态目录，
+但显式设置的 `SHINE_PRESETS` 或项目 `presets_dir` 可以选择预设来源；从全局配置继承的
+`presets_dir` 不能覆盖 `$SHINE_CONFIG_DIR/presets/`。
+
+未设置 `SHINE_CONFIG_DIR` 时，基础预设目录按以下顺序选择：
 
 1. `SHINE_PRESETS`
 2. 项目 `shine.config.toml` 中的 `presets_dir`
 3. 全局 `config.toml` 中的 `presets_dir`
 4. 默认 `~/.shine/presets/`
-
-`SHINE_CONFIG_DIR` 会改变全局配置和运行时状态目录；未另行指定预设来源时，预设目录为 `$SHINE_CONFIG_DIR/presets/`。
 
 使用外部 `presets_dir` 时，Shell 类别默认以 `snapshot` 模式复制到
 `~/.shine/installed/shell/` 后再运行。修改来源文件后，先用 `shine update` 检查，再用

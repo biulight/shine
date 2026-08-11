@@ -26,15 +26,21 @@ shine upgrade app/starship
 | 命令 | 作用 |
 | --- | --- |
 | `shine init [--yes]` | 在当前项目创建 `shine.config.toml` |
+| `shine shell <SUBCOMMAND>` | 管理 Shell 命令预设 |
+| `shine app <SUBCOMMAND>` | 管理应用配置预设 |
 | `shine install <TARGET> [--replace-managed]` | 安装或修复一个 app/shell target |
 | `shine uninstall <TARGET> [--force] [--purge] [--dry-run]` | 卸载一个 app/shell target |
+| `shine completions <SUBCOMMAND>` | 生成或安装 Shell 补全 |
 | `shine list [--available [KIND]]` | 列出已安装资源，或用 `app`、`shell`、`sys` 浏览可用资源目录 |
 | `shine info <TARGET> [--diff] [--verbose]` | 查看可用或已安装的 app/shell target，或 `sys/<ITEM>` |
 | `shine update [TARGET]` | 检查受管内容和 Shine 稳定版更新 |
 | `shine upgrade [TARGET]` | 应用全部或指定 app、shell、受管 sys 更新 |
 | `shine preset <SUBCOMMAND>` | 管理预设来源、overlay、导出和 Git 同步 |
 | `shine state migrate [--dry-run]` | 迁移并清理旧版 Shine 运行时状态 |
+| `shine self <SUBCOMMAND>` | 安装或升级 Shine 程序 |
 | `shine serve <SUBCOMMAND>` | 通过本地 HTTP 服务发布 `~/.shine/http/` 下的资源 |
+| `shine env <SUBCOMMAND>` | 管理预设变量、workspace 环境、代理与密钥 |
+| `shine sys <SUBCOMMAND>` | 管理系统引导与受管系统配置 |
 | `shine theme sync` | 解析终端明暗主题并输出 shell `export` 语句 |
 | `shine ssh ...` / `shine local ...` | 开启 SSH 会话、按需代理密钥并在 POSIX 远端传输文件 |
 | `shine task <SUBCOMMAND>` / `shine run <NAME>` | 保存和运行个人快捷命令 |
@@ -120,7 +126,7 @@ shine env delete <KEY> [--force]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
 shine env broker describe [--workspace <FILE>] --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
-shine env broker policy <add|update> --name <NAME> --ssh-target <TARGET> --workspace <FILE> --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
+shine env broker policy <add|update> --name <NAME> --ssh-target <TARGET> [--project <PROJECT>] --workspace <FILE> [--remote-workspace <REMOTE_FILE>] --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
 shine env broker policy diff <NAME> --workspace <FILE> --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
 shine env broker policy list
 shine env broker policy info <NAME>
@@ -139,6 +145,9 @@ shine env secret identity list
 ```
 
 `--with` 可重复使用，写成 `KEY=ALIAS` 可改变子进程看到的变量名。`--no-workspace` 只使用显式值和已有进程环境，不能与 `--workspace` 或 `--mode` 同时使用。`workspace init` 只接受 `--from-dotenv`，可先用 `--dry-run` 预览生成文件。broker 策略必须用一个或多个 `--release` 选择密钥，或用 `--release-all-declared` 固化当前环境源声明的全部密钥；二者不能组合。Touch ID identity 只适用于 macOS，并依赖 `age-plugin-se`。
+
+创建 broker 策略时，`--project` 用于保存便于识别的项目标签；`--remote-workspace` 要求远端
+请求除了匹配 workspace 内容和其它策略字段外，还必须报告这个完全一致的绝对 workspace 路径。
 
 `env proxy install` 在 `~/.shine/bin/` 创建同名 PATH shim，按规则仅向目标子进程注入 `--with` 指定的值；每个值优先读取 `<KEY>_SECRET`，否则读取 `<KEY>`。`disable` 保留 shim 但跳过解密和注入；项目规则需在当前目录或其祖先存在 `shine.config.toml`，并覆盖同名全局规则。`uninstall` 移除 Shine 管理的 shim 和用户级规则。
 

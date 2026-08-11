@@ -101,15 +101,20 @@ instead of silently dropping active values.
 
 ## Directory and source precedence
 
-The base preset directory is selected in this order:
+`SHINE_CONFIG_DIR` has the highest priority. It changes the global configuration and runtime root
+and, outside a project, fixes the preset directory at `$SHINE_CONFIG_DIR/presets/`; `SHINE_PRESETS`
+and a global `presets_dir` do not override it.
+
+When a project `shine.config.toml` is active, `SHINE_CONFIG_DIR` still selects the runtime root, but
+an explicit `SHINE_PRESETS` or project `presets_dir` can select the preset source. An inherited
+global `presets_dir` cannot override `$SHINE_CONFIG_DIR/presets/`.
+
+Without `SHINE_CONFIG_DIR`, the base preset directory is selected in this order:
 
 1. `SHINE_PRESETS`;
 2. project `shine.config.toml` `presets_dir`;
 3. global `config.toml` `presets_dir`;
 4. default `~/.shine/presets/`.
-
-`SHINE_CONFIG_DIR` changes the global configuration and runtime root. Without another preset source,
-presets then use `$SHINE_CONFIG_DIR/presets/`.
 
 External shell categories default to `snapshot`: Shine copies them to
 `~/.shine/installed/shell/`. After source edits, inspect with `shine update` and apply with
