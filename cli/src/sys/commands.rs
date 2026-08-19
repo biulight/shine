@@ -1745,6 +1745,26 @@ required_env = ["NOT-AN-ENV"]
     }
 
     #[test]
+    fn embedded_ubuntu_manual_update_guidance_avoids_noop_bootstrap() {
+        let content = crate::presets::read_asset_bytes("sys/ubuntu/init.sh")
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .expect("missing embedded Ubuntu init script");
+
+        assert!(content.contains("mise)"));
+        assert!(content.contains(
+            "Installation source is not recorded; standalone mise.run installs use 'mise self-update', while package-managed installs use their original package manager"
+        ));
+        assert!(
+            content.contains("neovim|yazi|starship|zoxide|zsh-vi-mode|pnpm|homebrew|zerotier|eza")
+        );
+        assert!(content.contains(
+            "Installation source is not recorded; use the updater for the existing installation source"
+        ));
+        assert!(!content.contains("rerun shine sys bootstrap and select"));
+        assert!(!content.contains("git -C ~/.config/nvim pull"));
+    }
+
+    #[test]
     fn embedded_macos_init_installs_managed_profile_loader() {
         let content = crate::presets::read_asset_bytes("sys/macos/init.sh")
             .and_then(|bytes| String::from_utf8(bytes).ok())

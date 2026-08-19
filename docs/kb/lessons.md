@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-19 — Ubuntu manual update guidance pointed to no-op bootstrap reruns
+
+- **Symptom**: manual results from `shine sys update --verbose` told users to rerun bootstrap for
+  `mise` and several other Ubuntu items, suggesting that doing so would update them.
+- **Root cause**: the update checker reused a generic remediation even though each corresponding
+  installer deliberately returns `already-installed` as soon as it finds an existing installation.
+  The same audit found a `git pull` suggestion for Shine's AstroNvim clone even though bootstrap
+  removes that clone's `.git` directory.
+- **Fix**: keep the check manual because bootstrap state does not record installation provenance,
+  remove remediation that cannot work, and give conditional source-specific guidance only where
+  it is valid, such as `mise self-update` for standalone `mise.run` installs.
+- **Rule**: validate every remediation against the implementation it invokes. Never recommend
+  rerunning an idempotent installer as an upgrade path when its existing-install guard is a no-op.
+
 ## 2026-08-19 — Clash Verge provider refresh drifted from its composite source
 
 - **Symptom**: renaming, adding, or removing a `rule-providers` entry in an overlay `merge.yaml`

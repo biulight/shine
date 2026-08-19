@@ -67,6 +67,11 @@ shine sys update --proxy
 配置会标记为需要手动检查，不会根据不可靠的信息猜测版本。`--proxy` 使用与
 `sys bootstrap --proxy` 使用相同的代理配置；Windows 上会显式传递 winget 的 `--proxy` 参数。
 
+在 Ubuntu 上，Shine 不会记录已检测到的软件原本通过何种来源安装。因此手动检查结果不会
+猜测更新方式，只在安全时提供按来源区分的建议。例如，通过独立 `mise.run` 安装的 `mise`
+使用 `mise self-update`，通过包管理器安装则使用原包管理器更新。重新运行
+`shine sys bootstrap` 只会确认现有软件已存在，不会升级它。
+
 `shine update` 和 `shine upgrade` 仍只处理 Shine 管理的配置和受管系统资源，不会升级这些
 第三方软件。是否执行 `shine sys update` 输出的升级命令始终由用户决定。
 
