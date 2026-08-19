@@ -216,6 +216,7 @@ pub async fn handle_install(
             |name| categories.iter().find(|c| c.name == name),
             &changed_categories,
             super::hooks::HookPhase::PostInstall,
+            true,
         )
         .await;
     }

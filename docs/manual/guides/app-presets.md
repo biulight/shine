@@ -237,6 +237,7 @@ Hooks and generators in external presets require explicit permission:
 allow_app_hooks = true
 ```
 
-Hooks hide stdout by default. Successful output is shown only when the preset sets
-`show_output = true`. A hook failure prints a warning but does not interrupt installation or upgrades
-for other categories.
+Hooks hide stdout by default. When a preset sets `show_output = true`, successful output is shown
+during installation and refresh; `shine upgrade` reserves successful hook completion and output for
+`--verbose`. A hook failure or permission block is always shown and does not interrupt installation
+or upgrades for other categories.

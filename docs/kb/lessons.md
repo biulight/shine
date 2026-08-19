@@ -3,6 +3,21 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-20 — App update and upgrade exposed different reporting identities
+
+- **Symptom**: `shine update` could list only one changed file while `shine upgrade` installed
+  additional files, printed every physical destination and successful hook line, then counted files
+  rather than the app category the user had selected.
+- **Root cause**: status treated a file without its own manifest entry as not installed even when its
+  category was installed, while upgrade intentionally adds new category files. Both commands then
+  rendered the underlying file operations instead of sharing a category-level reporting identity.
+- **Fix**: classify installable new files and destination moves as available updates, render default
+  targets through the shared horizontal column presentation with one action hint, and reserve file
+  destinations and successful hook details for `--diff` or `--verbose`. Keep failures, conflicts,
+  user-modified warnings, and permission blocks visible.
+- **Rule**: update discovery and upgrade execution must agree on the full pending change set and use
+  the same user-selected target as their default reporting and counting unit.
+
 ## 2026-08-19 — Shell upgrade counted deployment operations instead of updated targets
 
 - **Symptom**: `shine update` listed two Shell targets with available updates, but `shine upgrade`

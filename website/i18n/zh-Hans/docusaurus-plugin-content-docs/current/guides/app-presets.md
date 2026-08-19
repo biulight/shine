@@ -166,4 +166,4 @@ Shine 只读取 `profiles.yaml` 定位这些绑定文件，不会修改订阅、
 allow_app_hooks = true
 ```
 
-钩子默认不显示 stdout；只有预设将 `show_output` 设为 `true` 时，成功输出才会作为提示显示。钩子失败会显示警告，但不会中断其它类别的安装或升级。
+钩子默认不显示 stdout。预设将 `show_output` 设为 `true` 后，安装和 refresh 会显示成功输出；`shine upgrade` 仅在 `--verbose` 下显示成功完成信息和输出。钩子失败或权限拦截始终可见，但不会中断其它类别的安装或升级。

@@ -6,7 +6,7 @@ use crate::output;
 use crate::status::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_rows};
 use crate::sys;
 use anyhow::Result;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink missing";
 
@@ -26,6 +26,7 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
         .iter()
         .filter(|r| r.file_status == FileStatus::UpdateAvail)
         .collect();
+    let update_app = app_update_categories(&update_app);
     let update_sys = sys::managed_updates(config).await.unwrap_or_default();
 
     let any = !update_shell.is_empty() || !update_app.is_empty() || !update_sys.is_empty();
@@ -33,13 +34,25 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
         return Ok(false);
     }
 
-    let update_diffs = if diff {
-        Some(UpdateDiffs::collect(config).await?)
-    } else {
-        None
-    };
-
     crate::config::print_presets_note(config);
+
+    if !diff {
+        let shell_names = sorted_names(update_shell.iter().map(|row| row.label.clone()).collect());
+        let app_names = update_app
+            .keys()
+            .map(|category| (*category).to_string())
+            .collect::<Vec<_>>();
+        let sys_names = sorted_names(update_sys.iter().map(|row| row.item_id.clone()).collect());
+
+        let mut separator = output::SectionSeparator::new();
+        print_name_section(&mut separator, "Shell Presets", &shell_names);
+        print_name_section(&mut separator, "App Configs", &app_names);
+        print_name_section(&mut separator, "System Configs", &sys_names);
+        print_update_hint();
+        return Ok(true);
+    }
+
+    let update_diffs = UpdateDiffs::collect(config).await?;
 
     if !update_shell.is_empty() {
         println!("{}", colors::bold("Shell Presets"));
@@ -53,16 +66,13 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
         for row in &update_shell {
             let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
             println!(
-                "  {}  {}{}  {}  {}",
+                "  {}  {}{}  {}",
                 row.symbol,
                 row.label,
                 pad,
                 colors::status_label(row.status_text, row.status_sym),
-                colors::dim("run `shine upgrade`"),
             );
-            if let Some(diffs) = &update_diffs {
-                diffs.print_shell_for_row(config, &row.label).await?;
-            }
+            update_diffs.print_shell_for_row(config, &row.label).await?;
         }
     }
 
@@ -72,27 +82,24 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
         }
         println!("{}", colors::bold("App Configs"));
 
-        let label_width = update_app.iter().map(|r| r.label.len()).max().unwrap_or(0);
+        let label_width = update_app
+            .keys()
+            .map(|category| category.len())
+            .max()
+            .unwrap_or(0);
 
-        for row in &update_app {
-            let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
-            let dest_part = row
-                .dest
-                .as_deref()
-                .map(|d| format!("  {}  {}", colors::dim("→"), colors::dim(d)))
-                .unwrap_or_default();
-
+        for (category, rows) in &update_app {
+            let pad = " ".repeat(label_width.saturating_sub(category.len()));
             println!(
-                "  {}  {}{}{}  {}  {}",
-                colors::symbol(row.sym),
-                row.label,
+                "  {}  {}{}  {}",
+                colors::symbol("↑"),
+                category,
                 pad,
-                dest_part,
-                colors::status_label(row.status_text, row.sym),
-                colors::dim("run `shine upgrade`"),
+                colors::status_label("update available", "↑"),
             );
-            if let Some(diffs) = &update_diffs {
-                diffs.print_app_for_row(config, &row.label).await?;
+            for row in rows {
+                print_app_update_detail(row);
+                update_diffs.print_app_for_row(config, &row.label).await?;
             }
         }
     }
@@ -104,12 +111,11 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
         println!("{}", colors::bold("System Configs"));
         for row in &update_sys {
             println!(
-                "  {}  {}  {}  {}  {}",
+                "  {}  {}  {}  {}",
                 colors::symbol("↑"),
                 row.label,
                 colors::dim(&format!("({})", row.item_id)),
                 colors::status_label("update available", "↑"),
-                colors::dim("run `shine upgrade`"),
             );
             for detail in &row.details {
                 println!("     {}", colors::dim(detail));
@@ -117,7 +123,40 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
         }
     }
 
+    print_update_hint();
+
     Ok(true)
+}
+
+fn print_update_hint() {
+    println!();
+    println!("{}", colors::dim("Run `shine upgrade` to apply updates."));
+}
+
+fn app_update_categories<'a>(rows: &[&'a AppRow]) -> BTreeMap<&'a str, Vec<&'a AppRow>> {
+    let mut categories = BTreeMap::new();
+    for row in rows {
+        categories
+            .entry(row.category.as_str())
+            .or_insert_with(Vec::new)
+            .push(*row);
+    }
+    categories
+}
+
+fn print_app_update_detail(row: &AppRow) {
+    let destination = row
+        .dest
+        .as_deref()
+        .map(|dest| format!("  {}  {}", colors::dim("→"), colors::dim(dest)))
+        .unwrap_or_default();
+    println!(
+        "     {}  {}{}  {}",
+        colors::symbol("↑"),
+        row.label,
+        destination,
+        colors::status_label("update available", "↑"),
+    );
 }
 
 pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
@@ -393,6 +432,19 @@ mod tests {
             status_text: "up-to-date",
             file_status,
         }
+    }
+
+    #[test]
+    fn update_rows_group_app_files_by_category() {
+        let first = app_row("clash-verge", FileStatus::UpdateAvail);
+        let mut second = app_row("clash-verge", FileStatus::UpdateAvail);
+        second.label = "clash-verge/rules/lan.list".to_string();
+        let other = app_row("surge", FileStatus::UpdateAvail);
+        let grouped = app_update_categories(&[&first, &second, &other]);
+
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped["clash-verge"].len(), 2);
+        assert_eq!(grouped["surge"].len(), 1);
     }
 
     #[test]

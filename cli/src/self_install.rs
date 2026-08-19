@@ -193,7 +193,7 @@ pub async fn handle_config_upgrade(
     let updated = env_report.updated
         + shell_report.updated_targets.len()
         + usize::from(shell_report.path_changed)
-        + app_report.updated
+        + app_report.updated_categories
         + sys_report.updated;
     let user_modified = env_report.user_modified + app_report.user_modified;
 
@@ -283,7 +283,7 @@ async fn handle_config_target_upgrade(
                     ))
                     .await?;
                     (
-                        report.updated,
+                        report.updated_categories,
                         report.user_modified,
                         0,
                         report.failed,

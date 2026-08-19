@@ -184,6 +184,7 @@ pub async fn handle_refresh(
             |name| categories.iter().find(|cat| cat.name == name),
             &BTreeSet::from([category.to_string()]),
             HookPhase::PostUpgrade,
+            true,
         )
         .await;
     }

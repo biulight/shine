@@ -24,7 +24,10 @@ use super::{
 
 #[derive(Debug, Default)]
 pub struct AppUpgradeReport {
+    /// Physical files changed, retained for diagnostics and tests.
     pub updated: usize,
+    /// User-facing app targets changed. Default summaries count this value.
+    pub updated_categories: usize,
     pub skipped: usize,
     pub failed: usize,
     pub user_modified: usize,
@@ -84,6 +87,28 @@ impl<'a> UpgradeSection<'a> {
             println!(
                 "  {} {source}: manual refresh only (shine app refresh {category} {file})",
                 colors::symbol("•")
+            );
+        }
+    }
+
+    fn print_file_updated(&mut self, display_name: &str, destination: &Path, config: &Config) {
+        if self.verbose {
+            self.begin();
+            print_install_success(display_name, "", destination, config);
+        }
+    }
+
+    fn print_category_updates(&mut self, updated_files: &BTreeMap<String, usize>) {
+        if self.verbose || updated_files.is_empty() {
+            return;
+        }
+        self.begin();
+        for (category, count) in updated_files {
+            let noun = if *count == 1 { "file" } else { "files" };
+            println!(
+                "  {} {category}  {}",
+                colors::symbol("✓"),
+                colors::dim(&format!("{count} {noun} updated"))
             );
         }
     }
@@ -175,6 +200,7 @@ pub(crate) async fn handle_upgrade_installed_target(
     let mut restart_hints = BTreeSet::new();
     let mut pending_removals: Vec<PathBuf> = Vec::new();
     let mut updated_categories = BTreeSet::new();
+    let mut updated_files_by_category = BTreeMap::<String, usize>::new();
 
     for entry in selected_entries {
         let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
@@ -190,6 +216,7 @@ pub(crate) async fn handle_upgrade_installed_target(
 
         let Some(cat) = categories_by_name.get(cat_name) else {
             section.begin();
+            let previous_updated = updated;
             handle_stale_entry(
                 config,
                 entry,
@@ -203,6 +230,12 @@ pub(crate) async fn handle_upgrade_installed_target(
                 },
             )
             .await?;
+            if updated > previous_updated {
+                updated_categories.insert(cat_name.to_string());
+                *updated_files_by_category
+                    .entry(cat_name.to_string())
+                    .or_default() += updated - previous_updated;
+            }
             continue;
         };
         let Some(file) = cat
@@ -211,6 +244,7 @@ pub(crate) async fn handle_upgrade_installed_target(
             .find(|file| file.source_rel.to_string_lossy().as_ref() == file_rel)
         else {
             section.begin();
+            let previous_updated = updated;
             handle_stale_entry(
                 config,
                 entry,
@@ -224,6 +258,12 @@ pub(crate) async fn handle_upgrade_installed_target(
                 },
             )
             .await?;
+            if updated > previous_updated {
+                updated_categories.insert(cat_name.to_string());
+                *updated_files_by_category
+                    .entry(cat_name.to_string())
+                    .or_default() += updated - previous_updated;
+            }
             continue;
         };
 
@@ -240,6 +280,9 @@ pub(crate) async fn handle_upgrade_installed_target(
         match try_upgrade_entry(config, &manifest, entry, cat, file, env_map, &mut section).await {
             EntryUpgradeResult::Updated(new_entry) => {
                 updated_categories.insert(cat.name.clone());
+                *updated_files_by_category
+                    .entry(cat.name.clone())
+                    .or_default() += 1;
                 pending_upserts.push(new_entry);
                 updated += 1;
                 if let Some(hint) = &file.restart_hint {
@@ -281,6 +324,9 @@ pub(crate) async fn handle_upgrade_installed_target(
     for entry in &new_upserts {
         if let Some(category) = app_category_from_source(&entry.source) {
             updated_categories.insert(category.to_string());
+            *updated_files_by_category
+                .entry(category.to_string())
+                .or_default() += 1;
         }
     }
     pending_upserts.extend(new_upserts);
@@ -291,16 +337,20 @@ pub(crate) async fn handle_upgrade_installed_target(
     }
     manifest.save(config.shine_dir()).await?;
 
+    section.print_category_updates(&updated_files_by_category);
+
     super::hooks::run_app_hooks(
         config,
         |name| categories_by_name.get(name),
         &updated_categories,
         super::hooks::HookPhase::PostUpgrade,
+        verbose,
     )
     .await;
 
     Ok(AppUpgradeReport {
         updated,
+        updated_categories: updated_categories.len(),
         skipped,
         failed: failed + new_failed,
         user_modified,
@@ -423,8 +473,7 @@ async fn try_upgrade_entry(
                 .as_deref()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-            section.begin();
-            print_install_success(&display_name, "", &entry.destination, config);
+            section.print_file_updated(&display_name, &entry.destination, config);
             EntryUpgradeResult::Updated(AppEntry {
                 source: entry.source.clone(),
                 destination: entry.destination.clone(),
@@ -565,8 +614,7 @@ async fn relocate_upgrade_entry(
         .as_deref()
         .map(str::to_owned)
         .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-    section.begin();
-    print_install_success(&display_name, "", &desired_destination, config);
+    section.print_file_updated(&display_name, &desired_destination, config);
     EntryUpgradeResult::Updated(AppEntry {
         source: entry.source.clone(),
         destination: desired_destination,
@@ -726,8 +774,7 @@ async fn install_new_category_files(
                         .as_deref()
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-                    section.begin();
-                    print_install_success(&display_name, "", &destination, config);
+                    section.print_file_updated(&display_name, &destination, config);
                     new_upserts.push(AppEntry {
                         source,
                         destination,

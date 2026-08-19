@@ -803,6 +803,7 @@ mod tests {
 
         let new_dest = dir.join(".config/sample/themes/theme.conf");
         assert_eq!(report.updated, 1, "new app file should be installed");
+        assert_eq!(report.updated_categories, 1);
         assert_eq!(
             report.skipped, 1,
             "existing up-to-date file should be skipped"
@@ -1075,6 +1076,7 @@ mod tests {
             report.updated, 2,
             "cleanup plus reinstall should change state"
         );
+        assert_eq!(report.updated_categories, 1);
         assert_eq!(report.skipped, 0);
         assert_eq!(
             fs::read(&dest).await.unwrap(),
