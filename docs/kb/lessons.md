@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-20 — Refreshed Clash rules left browser connections on their old route
+
+- **Symptom**: after `shine app artifact apply clash-verge` refreshed every rule-provider, browser
+  traffic did not follow the new rules until the browser was closed and reopened.
+- **Root cause**: a provider refresh updates matching for new connections but does not reroute
+  already-established HTTP/2, QUIC, WebSocket, or other long-lived mihomo connections.
+- **Fix**: after every declared provider refresh succeeds, call the controller's
+  `DELETE /connections` endpoint so applications reconnect and rematch; surface a close failure as
+  an artifact failure and document the brief disruption to active proxied sessions.
+- **Rule**: when a network-policy update promises immediate effect, distinguish refreshing policy
+  data from rematching existing flows; explicitly drain old flows when the public controller API
+  supports it, and disclose the disruption.
+
 ## 2026-08-20 — App update and upgrade exposed different reporting identities
 
 - **Symptom**: `shine update` could list only one changed file while `shine upgrade` installed

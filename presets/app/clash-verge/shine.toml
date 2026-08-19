@@ -5,6 +5,8 @@ list_mode = "files"
 # `shine app artifact apply clash-verge` runs the artifact script to refresh the mihomo
 # rule-providers via the external controller — the analog of `surge-cli reload`.
 # HTTP providers re-pull their source; file providers reload their local file.
+# After every provider refresh succeeds, the artifact closes current mihomo
+# connections so long-lived browser sessions reconnect under the new rules.
 # `teardown` (via
 # `shine app artifact remove clash-verge`, and best-effort on `shine app uninstall`)
 # just prints how to clear the subscription enhancements in CVR, since CVR owns

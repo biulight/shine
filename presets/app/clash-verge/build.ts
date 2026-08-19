@@ -23,6 +23,8 @@ export type BoundFiles = Record<BindingKind, string>;
 export type RenderedPayload = Record<BindingKind, string>;
 export type RenderedSource = { payload: RenderedPayload; providers: string[] };
 export type RefreshResult = "refreshed" | "skipped" | "failed";
+export type ConnectionCloseResult = "closed" | "failed";
+type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
 function expandTilde(path: string): string {
   const home = Bun.env.HOME ?? Bun.env.USERPROFILE ?? "";
@@ -168,6 +170,25 @@ export function providerRefreshUrl(controllerUrl: string, name: string): string 
   return `${controllerUrl}/providers/rules/${encodeURIComponent(name)}`;
 }
 
+export async function closeConnections(
+  controllerUrl: string,
+  token: string,
+  fetcher: FetchLike = fetch,
+): Promise<ConnectionCloseResult> {
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  try {
+    const response = await fetcher(`${controllerUrl}/connections`, { method: "DELETE", headers });
+    if (response.ok) {
+      console.log("clash-verge: closed active mihomo connections so applications use the refreshed rules");
+      return "closed";
+    }
+    console.error(`clash-verge: failed to close active connections (HTTP ${response.status}) via ${controllerUrl}`);
+  } catch (error) {
+    console.error(`clash-verge: could not close active connections via ${controllerUrl}: ${error}`);
+  }
+  return "failed";
+}
+
 export async function refreshProviders(providers: string[]): Promise<RefreshResult> {
   if (providers.length === 0) {
     console.log("clash-verge: merge.yaml defines no rule-providers — skipping the immediate refresh");
@@ -234,6 +255,9 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   } else if (refresh === "refreshed") {
     console.log("clash-verge: all rule-providers refreshed.");
+    const url = (Bun.env.CLASH_CONTROLLER_URL ?? "").replace(/\/+$/, "");
+    const closed = await closeConnections(url, Bun.env.CLASH_CONTROLLER_TOKEN ?? "");
+    if (closed === "failed") process.exitCode = 1;
   }
 }
 

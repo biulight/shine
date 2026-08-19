@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
+  closeConnections,
   installPayload,
   providerRefreshUrl,
   refreshProviders,
@@ -174,6 +175,29 @@ test("providerRefreshUrl encodes provider names as one path segment", () => {
 
 test("refreshProviders skips an empty provider set", async () => {
   expect(await refreshProviders([])).toBe("skipped");
+});
+
+test("closeConnections drops existing traffic through the authenticated controller", async () => {
+  const requests: Array<{ input: string; init: RequestInit }> = [];
+  const result = await closeConnections("http://127.0.0.1:9097", "controller-secret", async (input, init) => {
+    requests.push({ input, init });
+    return new Response(null, { status: 204 });
+  });
+
+  expect(result).toBe("closed");
+  expect(requests).toEqual([
+    {
+      input: "http://127.0.0.1:9097/connections",
+      init: { method: "DELETE", headers: { Authorization: "Bearer controller-secret" } },
+    },
+  ]);
+});
+
+test("closeConnections reports a controller rejection", async () => {
+  const result = await closeConnections("http://127.0.0.1:9097", "", async () =>
+    new Response(null, { status: 401 }),
+  );
+  expect(result).toBe("failed");
 });
 
 test("installPayload is idempotent and marks every managed copy", () => {

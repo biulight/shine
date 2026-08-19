@@ -219,8 +219,11 @@ This artifact uses Bun, which must be installed on the machine. Preset hooks rer
 the URL, only that immediate refresh is skipped; providers still update on their own intervals. The
 artifact refreshes every name declared by the effective `merge.yaml` `rule-providers` mapping, so
 custom provider names need no matching script change. A missing, null, or empty mapping skips the
-refresh; a non-mapping value is reported as invalid configuration. Never put controller tokens in an
-overlay or documentation.
+refresh; a non-mapping value is reported as invalid configuration. After every declared provider
+refreshes successfully, the artifact closes all active mihomo connections so browsers and other
+applications reconnect under the new rules without being restarted. This can briefly interrupt
+downloads or other long-lived proxied sessions. Never put controller tokens in an overlay or
+documentation.
 
 `shine app artifact remove clash-verge` does not clear subscription bindings stored by Clash Verge
 Rev. Clear the four editors manually when removing the integration completely.

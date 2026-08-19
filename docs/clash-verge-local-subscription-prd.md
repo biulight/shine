@@ -209,6 +209,9 @@ merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 用以下键（�
    若存在但不是映射则报告配置错误。`CLASH_CONTROLLER_URL` 未设也跳过刷新（规则仍按 interval 自动更新）；
    已设但不可达则以非零退出，由 `shine app artifact apply` 作为真错误上抛。
    只有第 1 步判断内容已是 current 时才刷新，避免 CVR 尚未重新合成导致 provider 404。
+3. **切断旧连接**：所有 provider 刷新成功后向同一控制器发送 `DELETE /connections`。mihomo 只会让新连接
+   按刷新后的规则匹配；关闭现有连接可让浏览器等应用自行重连，无需重启应用。关闭失败以非零退出；该操作
+   会短暂中断下载和其它经 mihomo 转发的长连接。
 
 ## 7. 配置语义与约束
 
