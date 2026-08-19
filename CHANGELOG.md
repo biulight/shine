@@ -7,6 +7,29 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-08-20
+
+### Features
+
+- Added per-file application preset destinations, including platform-aware user data directories,
+  duplicate-destination validation, and safe relocation of existing managed files during upgrades.
+
+### Bug Fixes
+
+- Aligned `shine update` and `shine upgrade` around the same user-facing app categories and Shell
+  targets, with accurate counts and detailed file or deployment output available through verbose
+  modes.
+- Improved the Clash Verge preset with managed local rule references, provider discovery from the
+  effective merge configuration, and automatic connection rematching after a successful refresh.
+- Corrected Ubuntu system-update guidance so existing software is not described as upgradeable by
+  rerunning the no-op bootstrap installer.
+
+### Docs
+
+- Documented per-file destinations, Clash Verge local rule layouts and refresh behavior, compact
+  update/upgrade reporting, and source-aware Ubuntu update guidance in English and Simplified
+  Chinese.
+
 ## [1.3.0] — 2026-08-11
 
 ### Features
