@@ -94,6 +94,10 @@ shine completions <bash|zsh|powershell>
 - A targeted update cannot combine with `--verbose` or `--refresh-release`.
 - `update/upgrade --pull` synchronizes Git-managed sources and reloads configuration first.
 - `upgrade --prune-stale` removes old managed app files no longer present in the source.
+- By default, `upgrade` prints each app file, Shell target, or managed-system item it actually
+  updates and counts a Shell target once even when several deployment layers change. `--verbose`
+  also shows current/skipped items and Shell deployment details such as snapshots, templates, and
+  Bin Links.
 - `shell info` and top-level `info` inspect uninstalled presets; `list --available` filters by kind.
 
 ## System presets

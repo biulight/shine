@@ -84,6 +84,9 @@ shine completions <bash|zsh|powershell>
 - 为 `update` 指定 target 后不能同时使用 `--verbose` 或 `--refresh-release`。
 - `update/upgrade --pull` 会先同步 Git 管理的来源并重新加载配置。
 - `upgrade --prune-stale` 移除预设来源中已不存在的旧受管 app 文件。
+- `upgrade` 默认逐项显示实际更新的 app 文件、Shell target 或受管系统项；即使一个 Shell
+  target 同时变更了多个部署层，也只计数一次。`--verbose` 还会显示已是最新或跳过的项目，
+  以及 snapshot、template、Bin Link 等 Shell 部署细节。
 - `shell info` 和顶层 `info` 可以检查尚未安装的预设；`list --available` 可按资源类型过滤。
 
 ## 系统预设

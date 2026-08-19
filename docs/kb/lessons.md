@@ -3,6 +3,21 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-19 — Shell upgrade counted deployment operations instead of updated targets
+
+- **Symptom**: `shine update` listed two Shell targets with available updates, but `shine upgrade`
+  printed only `Bin Links 1 updated` and finished with `1 updated`, even though both targets were
+  brought current.
+- **Root cause**: embedded/overlay preset extraction discarded its report, while the global footer
+  summed template, snapshot, launcher, and profile operations. A raw source rewrite was therefore
+  invisible, and one target could conversely be counted more than once when several deployment
+  layers changed together.
+- **Fix**: carry the pending target identities from the shared status model through upgrade,
+  confirm which targets converged, print those target names by default, and reserve Bin Link and
+  other deployment-layer counts for `--verbose`.
+- **Rule**: status and mutation reports must use the same user-facing identity. Count each updated
+  target once; expose the lower-level operations that implemented it only as diagnostic detail.
+
 ## 2026-08-19 — Ubuntu manual update guidance pointed to no-op bootstrap reruns
 
 - **Symptom**: manual results from `shine sys update --verbose` told users to rerun bootstrap for
