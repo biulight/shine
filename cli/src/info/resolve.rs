@@ -280,6 +280,7 @@ mod tests {
             file: crate::apps::AppFile {
                 source_rel: PathBuf::from(source),
                 target_rel: PathBuf::from(source),
+                destination_root: None,
                 description: None,
                 display_name: None,
                 legacy_dest_annotation: None,

@@ -20,8 +20,9 @@ list_mode = "files"
 # re-invoke `shine app artifact apply clash-verge` so it runs automatically after
 # `shine app install`/`shine upgrade` changes merge.yaml. (No recursion: build
 # fires neither install nor upgrade hooks.) Requires `shine` on PATH; external
-# presets need allow_app_hooks = true. Note this only fires when merge.yaml
-# changes — rule edits go through `upload_surge`, not this preset's files.
+# presets need allow_app_hooks = true. The built-in local rule references below
+# are ordinary managed files, so their updates trigger the same hook and
+# provider refresh as merge.yaml updates.
 post_install = [
   { command = "shine", args = ["app", "artifact", "apply", "clash-verge"], show_output = true },
 ]
@@ -46,3 +47,25 @@ runtime = "bun"
 source = "merge.yaml"
 target = "merge.yaml"
 description = "CVR subscription enhancements (proxies + proxy-groups + file/loopback/remote rule-provider examples + prepend-rules), rendered into the active profile's four bound editor files."
+
+# Local `type: file` provider references. `data-dir` resolves to the platform's
+# application data directory (%APPDATA%, Application Support, or XDG data),
+# which is CVR's default mihomo HomeDir. HTTP/HTTPS providers do not reference
+# these files, so installing them does not change Option 2 or Option 3 behavior.
+[[files]]
+source = "rules/lan.list"
+target = "ruleset/shine-source/lan.list"
+dest = { base = "data-dir", path = "io.github.clash-verge-rev.clash-verge-rev" }
+description = "Reference local/private-network rules for the Option 1 file provider."
+
+[[files]]
+source = "rules/lan-socks.list"
+target = "ruleset/shine-source/lan-socks.list"
+dest = { base = "data-dir", path = "io.github.clash-verge-rev.clash-verge-rev" }
+description = "Reference rules for traffic that should prefer a LAN SOCKS exit."
+
+[[files]]
+source = "rules/other-direct.list"
+target = "ruleset/shine-source/other-direct.list"
+dest = { base = "data-dir", path = "io.github.clash-verge-rev.clash-verge-rev" }
+description = "Reference rules for destinations that should default to direct routing."

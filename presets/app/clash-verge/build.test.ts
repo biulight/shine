@@ -113,6 +113,37 @@ test("renderPayload derives arbitrary provider names from the composite source",
   expect(renderPayload(source).providers).toEqual(["renamed-provider", "office / lab"]);
 });
 
+test("HTTP mode remains remote and does not reference built-in local files", () => {
+  const dir = tempDir();
+  const source = join(dir, "merge.yaml");
+  writeFileSync(
+    source,
+    `rule-providers:
+  lan:
+    type: http
+    proxy: DIRECT
+    behavior: classical
+    format: text
+    interval: 86400
+    url: https://rules.example.com/lan.list
+    path: ./ruleset/shine-remote-lan.list
+`,
+  );
+
+  const merge = Bun.YAML.parse(renderPayload(source).payload.merge) as {
+    "rule-providers": Record<string, Record<string, unknown>>;
+  };
+  expect(merge["rule-providers"].lan).toEqual({
+    type: "http",
+    proxy: "DIRECT",
+    behavior: "classical",
+    format: "text",
+    interval: 86400,
+    url: "https://rules.example.com/lan.list",
+    path: "./ruleset/shine-remote-lan.list",
+  });
+});
+
 test("renderPayload treats missing, null, or empty rule-providers as empty", () => {
   const dir = tempDir();
   const missing = join(dir, "missing.yaml");
@@ -174,6 +205,10 @@ test("the example exposes the composite source keys", () => {
   expect(example).toContain("name: LAN Network, type: select");
   expect(example).toContain("name: LAN PROXY, type: select");
   expect(example).toContain("type: file, behavior: classical, format: text");
+  for (const name of ["lan.list", "lan-socks.list", "other-direct.list"]) {
+    expect(readFileSync(join(import.meta.dir, "rules", name), "utf8")).toStartWith("#");
+    expect(example).toContain(`./ruleset/shine-source/${name}`);
+  }
   expect(example).toContain("http://127.0.0.1:8080/rules/lan.list");
   expect(example).toContain("https://rules.example.com/surge/lan.list");
   expect(example).toContain('"+.corp.example": 192.0.2.53');

@@ -74,6 +74,9 @@ pub struct AppArtifact {
 pub struct AppFile {
     pub source_rel: PathBuf,
     pub target_rel: PathBuf,
+    /// Optional per-file destination root. When present, this overrides the
+    /// category-level `dest` while retaining the same path validation rules.
+    pub destination_root: Option<AppDestinationRoot>,
     pub description: Option<String>,
     pub display_name: Option<String>,
     pub legacy_dest_annotation: Option<String>,
@@ -82,6 +85,12 @@ pub struct AppFile {
     pub requires_admin: bool,
     pub restart_hint: Option<String>,
     pub generator: Option<AppGenerator>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppDestinationRoot {
+    Path(String),
+    DataDir(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +152,20 @@ struct HookToml {
 #[serde(untagged)]
 enum DestToml {
     Single(String),
+    Rooted(RootedDestToml),
     Platforms(PlatformDestToml),
+}
+
+#[derive(Debug, Deserialize)]
+struct RootedDestToml {
+    base: DestBaseToml,
+    path: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum DestBaseToml {
+    DataDir,
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,6 +201,7 @@ impl From<ListModeToml> for AppListMode {
 struct FileToml {
     source: String,
     target: Option<String>,
+    dest: Option<DestToml>,
     description: Option<String>,
     display_name: Option<String>,
     #[serde(default)]
@@ -443,7 +466,9 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
             Some(files) => {
                 let mut filtered = Vec::new();
                 for file in files {
-                    if file_matches_current_platform(name, &file)? {
+                    if file_matches_current_platform(name, &file)?
+                        && file_destination_matches_current_platform(name, &file)?
+                    {
                         filtered.push(file);
                     }
                 }
@@ -459,9 +484,11 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                         let transforms = resolve_transforms(&file, &context)?;
                         let install_strategy = resolve_install_strategy(&file, &context)?;
                         let generator = resolve_generator(file.generator.clone(), &context)?;
+                        let destination_root = selected_file_destination(name, &file)?;
                         Ok(AppFile {
                             source_rel,
                             target_rel,
+                            destination_root,
                             description: file.description,
                             display_name: file.display_name,
                             legacy_dest_annotation: None,
@@ -479,6 +506,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                 .map(|rel| AppFile {
                     source_rel: rel.clone(),
                     target_rel: rel,
+                    destination_root: None,
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
@@ -523,6 +551,7 @@ fn load_embedded_category(name: &str) -> Result<Option<AppCategory>> {
                 AppFile {
                     source_rel: rel.clone(),
                     target_rel: rel,
+                    destination_root: None,
                     description: parse_legacy_description(&bytes),
                     display_name: None,
                     legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
@@ -571,7 +600,9 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
             Some(files) => {
                 let mut filtered = Vec::new();
                 for file in files {
-                    if file_matches_current_platform(name, &file)? {
+                    if file_matches_current_platform(name, &file)?
+                        && file_destination_matches_current_platform(name, &file)?
+                    {
                         filtered.push(file);
                     }
                 }
@@ -587,9 +618,11 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                         let transforms = resolve_transforms(&file, &context)?;
                         let install_strategy = resolve_install_strategy(&file, &context)?;
                         let generator = resolve_generator(file.generator.clone(), &context)?;
+                        let destination_root = selected_file_destination(name, &file)?;
                         Ok(AppFile {
                             source_rel,
                             target_rel,
+                            destination_root,
                             description: file.description,
                             display_name: file.display_name,
                             legacy_dest_annotation: None,
@@ -608,6 +641,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
                 .map(|rel| AppFile {
                     source_rel: rel.clone(),
                     target_rel: rel,
+                    destination_root: None,
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
@@ -668,6 +702,7 @@ async fn load_installed_category(config: &Config, name: &str) -> Result<Option<A
         files.push(AppFile {
             source_rel: rel.clone(),
             target_rel: rel,
+            destination_root: None,
             description: parse_legacy_description(&bytes),
             display_name: None,
             legacy_dest_annotation: presets::parse_dest_annotation(&bytes),
@@ -739,6 +774,9 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
     if let Some(files) = &parsed.files {
         for file in files {
             file_matches_current_platform(name, file)?;
+            if let Some(AppDestinationRoot::Path(dest)) = selected_file_destination(name, file)? {
+                validate_dest(name, &dest)?;
+            }
             let context = format!("app/{name}/shine.toml");
             resolve_transforms(file, &context)?;
             resolve_install_strategy(file, &context)?;
@@ -780,8 +818,52 @@ impl DestToml {
     fn select_for_platform(&self, category: &str, current: &str) -> Result<Option<String>> {
         match self {
             Self::Single(dest) => Ok(Some(dest.clone())),
+            Self::Rooted(_) => bail!(
+                "app/{category}/shine.toml rooted destinations are supported only in [[files]]"
+            ),
             Self::Platforms(dest) => dest.select_for_platform(category, current),
         }
+    }
+
+    fn select_file_for_current_platform(
+        &self,
+        category: &str,
+    ) -> Result<Option<AppDestinationRoot>> {
+        match self {
+            Self::Single(dest) => Ok(Some(AppDestinationRoot::Path(dest.clone()))),
+            Self::Rooted(dest) => Ok(Some(dest.resolve(category)?)),
+            Self::Platforms(dest) => Ok(dest
+                .select_for_platform(category, current_platform())?
+                .map(AppDestinationRoot::Path)),
+        }
+    }
+}
+
+impl RootedDestToml {
+    fn resolve(&self, category: &str) -> Result<AppDestinationRoot> {
+        let relative = normalize_relative(&self.path)
+            .with_context(|| format!("invalid rooted dest path in app/{category}/shine.toml"))?;
+        Ok(match self.base {
+            DestBaseToml::DataDir => AppDestinationRoot::DataDir(relative),
+        })
+    }
+}
+
+fn selected_file_destination(
+    category: &str,
+    file: &FileToml,
+) -> Result<Option<AppDestinationRoot>> {
+    file.dest
+        .as_ref()
+        .map(|dest| dest.select_file_for_current_platform(category))
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn file_destination_matches_current_platform(category: &str, file: &FileToml) -> Result<bool> {
+    match &file.dest {
+        None => Ok(true),
+        Some(dest) => Ok(dest.select_file_for_current_platform(category)?.is_some()),
     }
 }
 
@@ -1262,7 +1344,7 @@ source = "config.toml"
     }
 
     #[test]
-    fn embedded_clash_verge_installs_plain_merge_profile() {
+    fn embedded_clash_verge_installs_merge_and_local_rule_references() {
         let categories = load_embedded_categories(Some("clash-verge")).unwrap();
         let clash = categories.iter().find(|c| c.name == "clash-verge").unwrap();
         assert!(clash.uses_metadata);
@@ -1271,7 +1353,7 @@ source = "config.toml"
             Some("~/.shine/clash-verge")
         );
 
-        assert_eq!(clash.files.len(), 1);
+        assert_eq!(clash.files.len(), 4);
         let file = &clash.files[0];
         assert_eq!(file.source_rel, std::path::Path::new("merge.yaml"));
         assert_eq!(file.target_rel, std::path::Path::new("merge.yaml"));
@@ -1279,6 +1361,31 @@ source = "config.toml"
         // stays valid YAML. Real values are hardcoded in the overlay copy.
         assert!(file.transforms.is_empty());
         assert_eq!(file.install_strategy, AppInstallStrategy::Copy);
+
+        for (source, target) in [
+            ("rules/lan.list", "ruleset/shine-source/lan.list"),
+            (
+                "rules/lan-socks.list",
+                "ruleset/shine-source/lan-socks.list",
+            ),
+            (
+                "rules/other-direct.list",
+                "ruleset/shine-source/other-direct.list",
+            ),
+        ] {
+            let rule = clash
+                .files
+                .iter()
+                .find(|candidate| candidate.source_rel == Path::new(source))
+                .unwrap();
+            assert_eq!(rule.target_rel, Path::new(target));
+            assert_eq!(
+                rule.destination_root,
+                Some(AppDestinationRoot::DataDir(PathBuf::from(
+                    "io.github.clash-verge-rev.clash-verge-rev"
+                )))
+            );
+        }
 
         let merge = include_str!("../../../presets/app/clash-verge/merge.yaml");
         assert!(merge.contains("# proxies:"));
@@ -1311,6 +1418,57 @@ source = "config.toml"
                 runtime: ArtifactRuntime::Bun,
             })
         );
+    }
+
+    #[test]
+    fn file_dest_supports_absolute_platform_and_data_dir_roots() {
+        let parsed = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[[files]]
+source = "default.toml"
+
+[[files]]
+source = "absolute.toml"
+dest = "~/.absolute"
+
+[[files]]
+source = "data.toml"
+dest = { base = "data-dir", path = "sample/files" }
+"#,
+        )
+        .unwrap();
+        let files = parsed.files.unwrap();
+        assert_eq!(
+            selected_file_destination("sample", &files[0]).unwrap(),
+            None
+        );
+        assert_eq!(
+            selected_file_destination("sample", &files[1]).unwrap(),
+            Some(AppDestinationRoot::Path("~/.absolute".to_string()))
+        );
+        assert_eq!(
+            selected_file_destination("sample", &files[2]).unwrap(),
+            Some(AppDestinationRoot::DataDir(PathBuf::from("sample/files")))
+        );
+    }
+
+    #[test]
+    fn rooted_file_dest_rejects_parent_traversal() {
+        let error = parse_category_toml(
+            "sample",
+            br#"
+dest = "~/.config/sample"
+
+[[files]]
+source = "config.toml"
+dest = { base = "data-dir", path = "../escape" }
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid rooted dest path"));
     }
 
     #[test]
@@ -1601,6 +1759,7 @@ install_mode = "json-merge"
                 let file = FileToml {
                     source: "f".to_string(),
                     target: None,
+                    dest: None,
                     description: None,
                     display_name: None,
                     platforms: None,
@@ -1622,6 +1781,7 @@ install_mode = "json-merge"
         let file = FileToml {
             source: "f".to_string(),
             target: None,
+            dest: None,
             description: None,
             display_name: None,
             platforms: None,

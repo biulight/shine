@@ -1,0 +1,5 @@
+# Rules for destinations that should use the example `Other Direct` group.
+# Replace the documentation domains and uncomment only the entries you need.
+#
+# DOMAIN,api.example.com
+# DOMAIN-SUFFIX,static.example.net

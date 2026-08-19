@@ -53,7 +53,7 @@ See [Manage shell presets](../guides/shell-presets.md) and
 | Category | Platform and destination | Managed content and notes |
 | --- | --- | --- |
 | `archey4` | Unix; `~/.config/archey4/` | Archey4 system-information configuration. |
-| `clash-verge` | macOS, Linux, Windows; `~/.shine/clash-verge/` | Clash Verge Rev subscription enhancement example. Apply and teardown require Bun; see the [complete workflow](../guides/app-presets.md#clash-verge-rev). |
+| `clash-verge` | macOS, Linux, Windows; merge source under `~/.shine/clash-verge/`, local rule references under CVR's user data directory | Clash Verge Rev subscription enhancement example. Option 1 uses managed HomeDir rule files; HTTP/HTTPS modes ignore them. Apply and teardown require Bun; see the [complete workflow](../guides/app-presets.md#clash-verge-rev). |
 | `docker-desktop` | Windows; `~/AppData/Roaming/Docker/settings-store.json` | JSON-merge manages only `proxy` and `containersProxy`; restart Docker Desktop afterward. |
 | `docker-engine` | Unix: `/etc/docker/daemon.json`; Windows: `~/.docker/daemon.json` | Template plus JSONC conversion. Unix needs administrator access; restart Docker Engine afterward. |
 | `fastfetch` | `~/.config/fastfetch/` | Fastfetch system-information configuration. |

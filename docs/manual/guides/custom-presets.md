@@ -134,6 +134,34 @@ shine preset new shell
 Existing files require `--force`. Category metadata is a preset-author interface; after editing it,
 validate with the relevant `list`, `info`, and installation `--dry-run` commands.
 
+### Give an application file its own destination
+
+An application category has a default `dest`, but an explicit `[[files]]` entry may override that
+root. `target` stays relative to the selected root:
+
+```toml
+dest = "~/.config/my-app"
+
+[[files]]
+source = "config.toml"
+target = "config.toml"
+
+[[files]]
+source = "shared/rules.list"
+target = "rules/provider.list"
+dest = { base = "data-dir", path = "com.example.my-app" }
+```
+
+The override accepts the same absolute string or `{ windows = "...", unix = "..." }` mapping as
+category destinations. The structured `data-dir` form is file-only and resolves the platform's user
+application-data root: `%APPDATA%` on Windows, Application Support on macOS, and `XDG_DATA_HOME`
+(or `~/.local/share`) on Linux. `path` and `target` must be relative and cannot contain `..`.
+
+Shine rejects two entries that resolve to the same destination before writing anything. If a later
+metadata revision moves an already managed source, `shine upgrade` moves it only when the old copy
+is unmodified and the new destination is free. Otherwise both locations are left untouched for the
+user to resolve.
+
 ## Shell entries with an optional runtime
 
 `runtime` selects the runtime for a shell preset command entry; it does not add an interactive shell.

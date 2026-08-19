@@ -379,6 +379,7 @@ mod tests {
         let file = AppFile {
             source_rel: PathBuf::from("fallback.txt"),
             target_rel: PathBuf::from("generated.txt"),
+            destination_root: None,
             description: None,
             display_name: None,
             legacy_dest_annotation: None,

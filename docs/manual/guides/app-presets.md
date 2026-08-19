@@ -202,15 +202,19 @@ subscription in Clash Verge Rev; running the build again can request an immediat
 refresh.
 
 The example uses the same three traffic classes and offers three mutually exclusive provider layouts:
-a mihomo `type: file` path inside `HomeDir`, loopback HTTP on the same device, or remote HTTPS. After
-choosing one complete provider set, enable its matching policy groups and `prepend-rules`. Mihomo
-normally restricts file-provider paths, so Shine does not copy rules secretly into Clash Verge Rev's
-private directory. `proxy: DIRECT` on loopback or private services affects only provider downloads;
+a mihomo `type: file` path inside `HomeDir`, loopback HTTP on the same device, or remote HTTPS. Shine
+installs three inert reference lists under `HomeDir/ruleset/shine-source/` through ordinary managed
+app-file entries; customize those files in an overlay only when choosing the file-provider layout.
+The loopback and remote HTTP layouts do not reference these local files, so their URLs, intervals,
+and provider cache paths are unchanged. The first upgrade that adds the managed references may run
+the preset's existing immediate-refresh hook once, without changing the active provider definitions.
+After choosing one complete provider set, enable its matching
+policy groups and `prepend-rules`. `proxy: DIRECT` on loopback or private services affects only provider downloads;
 remove or change it when the server requires a proxy. Private domains that rely on system split DNS
 also require mihomo `dns.nameserver-policy` configuration.
 
 This artifact uses Bun, which must be installed on the machine. Preset hooks rerun the build after
-`merge.yaml` changes; external presets require `allow_app_hooks`. Optional
+`merge.yaml` or a managed local reference list changes; external presets require `allow_app_hooks`. Optional
 `CLASH_CONTROLLER_URL` and `CLASH_CONTROLLER_TOKEN` values can request an immediate refresh. Without
 the URL, only that immediate refresh is skipped; providers still update on their own intervals. The
 artifact refreshes every name declared by the effective `merge.yaml` `rule-providers` mapping, so

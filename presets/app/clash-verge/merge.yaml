@@ -35,7 +35,8 @@
 #
 # # Option 1 — files already copied into mihomo's HomeDir. `type: file` paths
 # # are restricted to HomeDir unless mihomo is launched with matching SAFE_PATHS;
-# # Shine does not copy these source files into CVR's private data directory.
+# # Shine installs the three built-in reference files below into this dedicated
+# # HomeDir subdirectory. An overlay may replace them by the same relative paths.
 # rule-providers:
 #   lan:          { type: file, behavior: classical, format: text, path: ./ruleset/shine-source/lan.list }
 #   lan-socks:    { type: file, behavior: classical, format: text, path: ./ruleset/shine-source/lan-socks.list }
@@ -51,6 +52,7 @@
 #   other-direct: { type: http, proxy: DIRECT, behavior: classical, format: text, interval: 86400, url: http://127.0.0.1:8080/rules/other-direct.list, path: ./ruleset/shine-loopback-other-direct.list }
 #
 # # Option 3 — a remote HTTPS server. Replace rules.example.com with your host.
+# # The installed Option 1 reference files are not used by these HTTP providers.
 # # Keep `proxy: DIRECT` for LAN/private servers; remove it or select another
 # # proxy when the rule host itself is reachable only through a proxy.
 # rule-providers:

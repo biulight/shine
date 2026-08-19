@@ -17,8 +17,8 @@ pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};
 pub use install::handle_install;
 pub use metadata::{
-    AppCategory, AppFile, AppGenerator, AppHook, AppListMode, load_active_categories,
-    load_embedded_categories, load_installed_categories,
+    AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
+    load_active_categories, load_embedded_categories, load_installed_categories,
 };
 pub use refresh::handle_refresh;
 pub use uninstall::handle_uninstall;
@@ -39,6 +39,8 @@ dest = "~/.config/my-app"
 [[files]]
 source = "config.toml"
 target = "config.toml"
+# Optional per-file override:
+# dest = { base = "data-dir", path = "com.example.my-app" }
 description = "Main application config"
 display_name = "config.toml"
 # Known transforms: "template", "jsonc-to-json".
@@ -194,19 +196,19 @@ pub fn resolve_install_destination(
     file: &metadata::AppFile,
     config: &Config,
 ) -> Result<PathBuf> {
-    if let Some(dest_root) = &category.destination_root {
-        let expanded = crate::config::full_expand_with_home(dest_root, &config.home_dir)
-            .with_context(|| format!("failed to expand destination root: {dest_root}"))?;
-        let root = PathBuf::from(&expanded);
-        if !is_install_destination_root_absolute(&expanded, &root) {
-            anyhow::bail!("destination root must be absolute after expansion");
-        }
-        if root
-            .components()
-            .any(|c| c == std::path::Component::ParentDir)
-        {
-            anyhow::bail!("destination root must not contain '..'");
-        }
+    if let Some(file_root) = &file.destination_root {
+        let root = match file_root {
+            metadata::AppDestinationRoot::Path(dest_root) => {
+                expand_destination_root(dest_root, config)?
+            }
+            metadata::AppDestinationRoot::DataDir(relative) => {
+                data_dir_for_config(config)?.join(relative)
+            }
+        };
+        return Ok(root.join(&file.target_rel));
+    }
+    if let Some(dest_root) = category.destination_root.as_ref() {
+        let root = expand_destination_root(dest_root, config)?;
         return Ok(root.join(&file.target_rel));
     }
 
@@ -216,6 +218,61 @@ pub fn resolve_install_destination(
         &file.target_rel.display().to_string(),
         config,
     )
+}
+
+fn expand_destination_root(dest_root: &str, config: &Config) -> Result<PathBuf> {
+    let expanded = crate::config::full_expand_with_home(dest_root, &config.home_dir)
+        .with_context(|| format!("failed to expand destination root: {dest_root}"))?;
+    let root = PathBuf::from(&expanded);
+    if !is_install_destination_root_absolute(&expanded, &root) {
+        anyhow::bail!("destination root must be absolute after expansion");
+    }
+    if root
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        anyhow::bail!("destination root must not contain '..'");
+    }
+    Ok(root)
+}
+
+fn data_dir_for_config(config: &Config) -> Result<PathBuf> {
+    if config.home_dir == crate::home::effective_home_dir() {
+        return directories::BaseDirs::new()
+            .context("resolving system data directory")
+            .map(|dirs| dirs.data_dir().to_path_buf());
+    }
+    if cfg!(windows) {
+        Ok(config.home_dir.join("AppData/Roaming"))
+    } else if cfg!(target_os = "macos") {
+        Ok(config.home_dir.join("Library/Application Support"))
+    } else {
+        Ok(config.home_dir.join(".local/share"))
+    }
+}
+
+fn validate_unique_install_destinations<'a>(
+    categories: impl IntoIterator<Item = &'a metadata::AppCategory>,
+    config: &Config,
+) -> Result<()> {
+    let mut destinations = BTreeMap::<String, String>::new();
+    for category in categories {
+        for file in &category.files {
+            let destination = resolve_install_destination(category, file, config)?;
+            let mut key = destination.to_string_lossy().into_owned();
+            if cfg!(windows) {
+                key.make_ascii_lowercase();
+            }
+            let source = format!("app/{}/{}", category.name, file.source_rel.display());
+            if let Some(existing) = destinations.insert(key, source.clone()) {
+                anyhow::bail!(
+                    "app preset destinations collide: '{existing}' and '{source}' both resolve to {}",
+                    destination.display()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -399,6 +456,51 @@ mod tests {
             destination,
             PathBuf::from("/etc/docker").join("daemon.json")
         );
+    }
+
+    #[test]
+    fn per_file_destination_overrides_category_root() {
+        let dir = std::env::temp_dir().join("shine-apps-file-dest");
+        let config = Config::new_for_test(&dir);
+        let categories = metadata::load_embedded_categories(Some("clash-verge")).unwrap();
+        let clash = categories.first().unwrap();
+        let merge = clash
+            .files
+            .iter()
+            .find(|file| file.source_rel == Path::new("merge.yaml"))
+            .unwrap();
+        let local_rule = clash
+            .files
+            .iter()
+            .find(|file| file.source_rel == Path::new("rules/lan.list"))
+            .unwrap();
+
+        assert_eq!(
+            resolve_install_destination(clash, merge, &config).unwrap(),
+            dir.join(".shine/clash-verge/merge.yaml")
+        );
+        assert_eq!(
+            resolve_install_destination(clash, local_rule, &config).unwrap(),
+            data_dir_for_config(&config)
+                .unwrap()
+                .join("io.github.clash-verge-rev.clash-verge-rev")
+                .join("ruleset/shine-source/lan.list")
+        );
+    }
+
+    #[test]
+    fn duplicate_effective_destinations_are_rejected() {
+        let dir = std::env::temp_dir().join("shine-apps-collision");
+        let config = Config::new_for_test(&dir);
+        let mut category = metadata::load_embedded_categories(Some("clash-verge"))
+            .unwrap()
+            .remove(0);
+        let mut duplicate = category.files[0].clone();
+        duplicate.source_rel = PathBuf::from("duplicate.yaml");
+        category.files.push(duplicate);
+
+        let error = validate_unique_install_destinations([&category], &config).unwrap_err();
+        assert!(error.to_string().contains("destinations collide"));
     }
 
     #[cfg(unix)]

@@ -113,6 +113,27 @@ shine preset new shell
 
 已有文件时只有加上 `--force` 才会覆盖。类别格式属于预设作者接口，修改后应先使用对应的 `list`、`info` 和安装 `--dry-run` 验证。
 
+### 为单个 App 文件指定目标目录
+
+App 类别的顶层 `dest` 是默认目标根目录；显式 `[[files]]` 条目可以用自己的 `dest` 覆盖它，`target` 仍然是相对于最终根目录的路径：
+
+```toml
+dest = "~/.config/my-app"
+
+[[files]]
+source = "config.toml"
+target = "config.toml"
+
+[[files]]
+source = "shared/rules.list"
+target = "rules/provider.list"
+dest = { base = "data-dir", path = "com.example.my-app" }
+```
+
+文件级覆盖既支持类别已有的绝对路径字符串，也支持 `{ windows = "...", unix = "..." }` 平台映射。仅文件级可使用结构化 `data-dir`：它在 Windows 解析为 `%APPDATA%`，在 macOS 解析为 Application Support，在 Linux 解析为 `XDG_DATA_HOME`（未设置时为 `~/.local/share`）。`path` 和 `target` 必须是相对路径，且不能包含 `..`。
+
+如果两个条目最终指向同一路径，Shine 会在写入前拒绝整个操作。后续 metadata 若移动已受管 source，`shine upgrade` 只会在旧文件未被修改且新目标不存在时迁移；否则保留两端现状并提示用户处理。
+
 ## 可选运行时的 Shell 入口
 
 `runtime` 用于选择 Shell 预设命令入口的运行时，而不是新增交互式 shell。未声明时使用原生 `.sh` 或 `.ps1` 入口；当前唯一可选值是 `bun`。请在类别的 `shine.toml` 中显式声明：

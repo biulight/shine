@@ -44,7 +44,7 @@ shine sys info split-dns
 | 类别 | 平台与目标 | 管理内容与注意事项 |
 | --- | --- | --- |
 | `archey4` | Unix；`~/.config/archey4/` | Archey4 系统信息配置。 |
-| `clash-verge` | macOS、Linux、Windows；`~/.shine/clash-verge/` | Clash Verge Rev 的订阅增强示例。构建与清理需要 Bun；实际订阅编辑器绑定与完整流程见[应用配置指南](../guides/app-presets.md#clash-verge-rev)。 |
+| `clash-verge` | macOS、Linux、Windows；merge 源位于 `~/.shine/clash-verge/`，本地参考规则位于 CVR 用户数据目录 | Clash Verge Rev 的订阅增强示例。模式 1 使用受管 HomeDir 规则文件，HTTP/HTTPS 模式不会引用它们。构建与清理需要 Bun；实际订阅编辑器绑定与完整流程见[应用配置指南](../guides/app-presets.md#clash-verge-rev)。 |
 | `docker-desktop` | Windows；`~/AppData/Roaming/Docker/settings-store.json` | 仅 JSON 合并管理 `proxy` 与 `containersProxy` 键；使用模板渲染，完成后重启 Docker Desktop。 |
 | `docker-engine` | Unix：`/etc/docker/daemon.json`；Windows：`~/.docker/daemon.json` | Docker daemon 配置，使用模板和 JSONC 转 JSON；Unix 目标需要管理员权限，完成后重启 Docker Engine。 |
 | `fastfetch` | `~/.config/fastfetch/` | Fastfetch 系统信息配置。 |

@@ -476,6 +476,7 @@ mod tests {
         AppFile {
             source_rel: PathBuf::from("dest.txt"),
             target_rel: PathBuf::from("dest.txt"),
+            destination_root: None,
             description: None,
             display_name: None,
             legacy_dest_annotation: None,
@@ -970,6 +971,7 @@ mod tests {
                 AppFile {
                     source_rel: PathBuf::from("config.ghostty"),
                     target_rel: PathBuf::from("config.ghostty"),
+                    destination_root: None,
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
@@ -982,6 +984,7 @@ mod tests {
                 AppFile {
                     source_rel: PathBuf::from("themes/shine-light"),
                     target_rel: PathBuf::from("themes/shine-light"),
+                    destination_root: None,
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
@@ -1025,6 +1028,7 @@ mod tests {
                 AppFile {
                     source_rel: PathBuf::from("config.toml"),
                     target_rel: PathBuf::from("config.toml"),
+                    destination_root: None,
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
@@ -1037,6 +1041,7 @@ mod tests {
                 AppFile {
                     source_rel: PathBuf::from("theme.toml"),
                     target_rel: PathBuf::from("theme.toml"),
+                    destination_root: None,
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
