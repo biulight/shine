@@ -212,8 +212,11 @@ also require mihomo `dns.nameserver-policy` configuration.
 This artifact uses Bun, which must be installed on the machine. Preset hooks rerun the build after
 `merge.yaml` changes; external presets require `allow_app_hooks`. Optional
 `CLASH_CONTROLLER_URL` and `CLASH_CONTROLLER_TOKEN` values can request an immediate refresh. Without
-the URL, only that immediate refresh is skipped; providers still update on their own intervals. Never
-put controller tokens in an overlay or documentation.
+the URL, only that immediate refresh is skipped; providers still update on their own intervals. The
+artifact refreshes every name declared by the effective `merge.yaml` `rule-providers` mapping, so
+custom provider names need no matching script change. A missing, null, or empty mapping skips the
+refresh; a non-mapping value is reported as invalid configuration. Never put controller tokens in an
+overlay or documentation.
 
 `shine app artifact remove clash-verge` does not clear subscription bindings stored by Clash Verge
 Rev. Clear the four editors manually when removing the integration completely.

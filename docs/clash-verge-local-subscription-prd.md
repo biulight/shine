@@ -195,9 +195,11 @@ merge.yaml 无模板，故不消费任何 env；仅 `build.ts` 用以下键（�
    merge/rules/proxies/groups 绑定。普通映射键（如 `rule-providers`）写 merge；proxies、proxy-groups、
    prepend-rules 分别转换为对应 editor 文件的 `prepend`。绑定不全或文件名越出 `profiles/` 时非致命
    跳过，绝不回退全局文件。内容变化时提示重新选择订阅并结束。
-2. **刷新 rule-providers**：对每个 provider 键（`lan` / `lan-socks` / `other-direct`）向
-   `CLASH_CONTROLLER_URL` 发 `PUT /providers/rules/<name>`，令 mihomo 立即重拉最新列表。`CLASH_CONTROLLER_URL`
-   未设则跳过刷新（规则仍按 interval 自动更新）；已设但不可达则以非零退出，由 `shine app artifact apply` 作为真错误上抛。
+2. **刷新 rule-providers**：从最终生效的组合源 `rule-providers` 映射动态取得全部 provider 键，逐个向
+   `CLASH_CONTROLLER_URL` 发 `PUT /providers/rules/<name>`，令 mihomo 立即重拉最新列表。名称作为单个 URL
+   path segment 编码；不扫描远端订阅继承的 provider。`rule-providers` 缺失、为 null 或为空时明确跳过；
+   若存在但不是映射则报告配置错误。`CLASH_CONTROLLER_URL` 未设也跳过刷新（规则仍按 interval 自动更新）；
+   已设但不可达则以非零退出，由 `shine app artifact apply` 作为真错误上抛。
    只有第 1 步判断内容已是 current 时才刷新，避免 CVR 尚未重新合成导致 provider 404。
 
 ## 7. 配置语义与约束

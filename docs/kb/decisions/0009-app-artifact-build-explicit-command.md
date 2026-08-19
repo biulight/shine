@@ -90,6 +90,8 @@ metadata-load time). The `native` path is unchanged.
 external-controller `PUT /providers/rules/<name>`) is generic and secret-free, so — unlike surge's
 provider-specific patch — it can ship in shine core; the user-specific pieces (real `merge.yaml`
 values, `CLASH_CONTROLLER_URL/TOKEN`) still live in the overlay, preserving this ADR's principle.
+The provider names come from the effective composite source's `rule-providers` mapping; the script
+does not maintain a second allow-list or scan providers inherited from the remote subscription.
 
 `clash-verge`'s `build.ts` writes the **active subscription's four bound enhancement files**, not
 CVR's global `profiles/Merge.yaml`. It reads `profiles.yaml` only to follow `current` through

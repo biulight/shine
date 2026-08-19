@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-19 — Clash Verge provider refresh drifted from its composite source
+
+- **Symptom**: renaming, adding, or removing a `rule-providers` entry in an overlay `merge.yaml`
+  left the artifact refreshing the original three provider names, causing missed refreshes or 404s.
+- **Root cause**: rendering parsed the effective composite source, but refresh used a separate
+  hard-coded provider list copied from the inert example.
+- **Fix**: derive refresh targets from the same parsed `rule-providers` mapping, encode each name as
+  one URL path segment, and distinguish skipped refreshes from successful ones.
+- **Rule**: when an artifact already owns and parses a declarative source, downstream actions must
+  derive their targets from that parse rather than maintaining a parallel list.
+
 ## 2026-08-09 — Migration and authorization snapshots crossed lifecycle boundaries
 
 - **Symptom**: a broker policy could hash one workspace revision but execute another revision's

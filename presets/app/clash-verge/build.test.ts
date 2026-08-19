@@ -3,7 +3,14 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { installPayload, renderPayload, resolveBoundFiles, type BoundFiles } from "./build";
+import {
+  installPayload,
+  providerRefreshUrl,
+  refreshProviders,
+  renderPayload,
+  resolveBoundFiles,
+  type BoundFiles,
+} from "./build";
 
 const tempDirs: string[] = [];
 function tempDir(): string {
@@ -79,16 +86,63 @@ prepend-rules:
   );
 
   const rendered = renderPayload(source);
-  expect(Bun.YAML.parse(rendered.merge)).toEqual({
+  expect(rendered.providers).toEqual(["lan"]);
+  expect(Bun.YAML.parse(rendered.payload.merge)).toEqual({
     "rule-providers": { lan: { type: "http", url: "https://example.test/lan.list" } },
   });
-  expect(Bun.YAML.parse(rendered.rules)).toEqual({
+  expect(Bun.YAML.parse(rendered.payload.rules)).toEqual({
     prepend: ["RULE-SET,lan,Local"],
     append: [],
     delete: [],
   });
-  expect((Bun.YAML.parse(rendered.proxies) as { prepend: unknown[] }).prepend).toHaveLength(1);
-  expect((Bun.YAML.parse(rendered.groups) as { prepend: unknown[] }).prepend).toHaveLength(1);
+  expect((Bun.YAML.parse(rendered.payload.proxies) as { prepend: unknown[] }).prepend).toHaveLength(1);
+  expect((Bun.YAML.parse(rendered.payload.groups) as { prepend: unknown[] }).prepend).toHaveLength(1);
+});
+
+test("renderPayload derives arbitrary provider names from the composite source", () => {
+  const dir = tempDir();
+  const source = join(dir, "merge.yaml");
+  writeFileSync(
+    source,
+    `rule-providers:
+  renamed-provider: { type: file, path: ./renamed.list }
+  office / lab: { type: http, url: https://example.test/office.list }
+`,
+  );
+
+  expect(renderPayload(source).providers).toEqual(["renamed-provider", "office / lab"]);
+});
+
+test("renderPayload treats missing, null, or empty rule-providers as empty", () => {
+  const dir = tempDir();
+  const missing = join(dir, "missing.yaml");
+  const nullMapping = join(dir, "null.yaml");
+  const emptyMapping = join(dir, "empty.yaml");
+  writeFileSync(missing, "dns: {}\n");
+  writeFileSync(nullMapping, "rule-providers: null\n");
+  writeFileSync(emptyMapping, "rule-providers: {}\n");
+
+  expect(renderPayload(missing).providers).toEqual([]);
+  expect(renderPayload(nullMapping).providers).toEqual([]);
+  expect(renderPayload(emptyMapping).providers).toEqual([]);
+});
+
+test.each(["[]", "provider-name"])("renderPayload rejects non-mapping rule-providers: %s", (value) => {
+  const dir = tempDir();
+  const source = join(dir, "merge.yaml");
+  writeFileSync(source, `rule-providers: ${value}\n`);
+
+  expect(() => renderPayload(source)).toThrow("'rule-providers' must be a YAML mapping");
+});
+
+test("providerRefreshUrl encodes provider names as one path segment", () => {
+  expect(providerRefreshUrl("http://127.0.0.1:9090", "office / lab")).toBe(
+    "http://127.0.0.1:9090/providers/rules/office%20%2F%20lab",
+  );
+});
+
+test("refreshProviders skips an empty provider set", async () => {
+  expect(await refreshProviders([])).toBe("skipped");
 });
 
 test("installPayload is idempotent and marks every managed copy", () => {

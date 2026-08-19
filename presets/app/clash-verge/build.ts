@@ -9,7 +9,6 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 const CVR_ID = "io.github.clash-verge-rev.clash-verge-rev";
-const PROVIDERS = ["lan", "lan-socks", "other-direct"];
 const BINDING_KINDS = ["merge", "rules", "proxies", "groups"] as const;
 
 type BindingKind = (typeof BINDING_KINDS)[number];
@@ -22,6 +21,8 @@ type ProfileItem = {
 type ProfilesConfig = { current?: unknown; items?: unknown };
 export type BoundFiles = Record<BindingKind, string>;
 export type RenderedPayload = Record<BindingKind, string>;
+export type RenderedSource = { payload: RenderedPayload; providers: string[] };
+export type RefreshResult = "refreshed" | "skipped" | "failed";
 
 function expandTilde(path: string): string {
   const home = Bun.env.HOME ?? Bun.env.USERPROFILE ?? "";
@@ -97,21 +98,33 @@ function renderEditorFile(values: unknown[]): string {
   return Bun.YAML.stringify({ prepend: values, append: [], delete: [] });
 }
 
-export function renderPayload(source: string): RenderedPayload {
+export function renderPayload(source: string): RenderedSource {
   const parsed = Bun.YAML.parse(readFileSync(source, "utf8"));
   if (parsed !== null && (typeof parsed !== "object" || Array.isArray(parsed))) {
     throw new Error("clash-verge: merge.yaml must contain a YAML mapping");
   }
   const merge = { ...((parsed ?? {}) as Record<string, unknown>) };
+  const ruleProviders = merge["rule-providers"];
+  if (
+    ruleProviders !== undefined &&
+    ruleProviders !== null &&
+    (typeof ruleProviders !== "object" || Array.isArray(ruleProviders))
+  ) {
+    throw new Error("clash-verge: 'rule-providers' must be a YAML mapping");
+  }
+  const providers = ruleProviders ? Object.keys(ruleProviders as Record<string, unknown>) : [];
   const proxies = takeArray(merge, "proxies");
   const groups = takeArray(merge, "proxy-groups");
   const rules = takeArray(merge, "prepend-rules");
 
   return {
-    merge: Bun.YAML.stringify(merge),
-    rules: renderEditorFile(rules),
-    proxies: renderEditorFile(proxies),
-    groups: renderEditorFile(groups),
+    payload: {
+      merge: Bun.YAML.stringify(merge),
+      rules: renderEditorFile(rules),
+      proxies: renderEditorFile(proxies),
+      groups: renderEditorFile(groups),
+    },
+    providers,
   };
 }
 
@@ -151,20 +164,29 @@ export function installPayload(payload: RenderedPayload, targets: BoundFiles): "
   return changed ? "changed" : "current";
 }
 
-async function refreshProviders(): Promise<boolean> {
+export function providerRefreshUrl(controllerUrl: string, name: string): string {
+  return `${controllerUrl}/providers/rules/${encodeURIComponent(name)}`;
+}
+
+export async function refreshProviders(providers: string[]): Promise<RefreshResult> {
+  if (providers.length === 0) {
+    console.log("clash-verge: merge.yaml defines no rule-providers — skipping the immediate refresh");
+    return "skipped";
+  }
+
   const url = (Bun.env.CLASH_CONTROLLER_URL ?? "").replace(/\/+$/, "");
   if (!url) {
     console.log("clash-verge: CLASH_CONTROLLER_URL not set — skipping the immediate rule-provider refresh");
     console.log("clash-verge: (rules still refresh on their interval).");
-    return true;
+    return "skipped";
   }
 
   const token = Bun.env.CLASH_CONTROLLER_TOKEN ?? "";
   const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   let succeeded = true;
-  for (const name of PROVIDERS) {
+  for (const name of providers) {
     try {
-      const response = await fetch(`${url}/providers/rules/${name}`, { method: "PUT", headers });
+      const response = await fetch(providerRefreshUrl(url, name), { method: "PUT", headers });
       if (response.ok) {
         console.log(`clash-verge: refreshed rule-provider '${name}'`);
       } else {
@@ -176,7 +198,7 @@ async function refreshProviders(): Promise<boolean> {
       succeeded = false;
     }
   }
-  return succeeded;
+  return succeeded ? "refreshed" : "failed";
 }
 
 async function main(): Promise<void> {
@@ -194,7 +216,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  const state = installPayload(renderPayload(resolvedPayloadSource()), targets);
+  const { payload, providers } = renderPayload(resolvedPayloadSource());
+  const state = installPayload(payload, targets);
   if (state === "changed") {
     console.log("clash-verge: wrote the active subscription's Merge, Rules, Proxies, and Groups enhancements");
     console.log("clash-verge: reselect the subscription in CVR once to apply the changed files;");
@@ -203,12 +226,13 @@ async function main(): Promise<void> {
   }
   console.log("clash-verge: active subscription enhancements already up to date");
 
-  if (!(await refreshProviders())) {
+  const refresh = await refreshProviders(providers);
+  if (refresh === "failed") {
     console.error(
       "clash-verge: is Clash Verge Rev running, the subscription enhancements applied, and CLASH_CONTROLLER_URL/TOKEN correct?",
     );
     process.exitCode = 1;
-  } else {
+  } else if (refresh === "refreshed") {
     console.log("clash-verge: all rule-providers refreshed.");
   }
 }
