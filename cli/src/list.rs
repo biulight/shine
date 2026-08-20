@@ -419,6 +419,7 @@ mod tests {
             status_sym: "~",
             status_text,
             is_installed,
+            changes: Vec::new(),
         }
     }
 

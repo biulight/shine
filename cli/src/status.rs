@@ -16,7 +16,7 @@ use crate::path_display;
 use anyhow::Result;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
 // Shared row types
@@ -34,6 +34,40 @@ pub enum FileStatus {
     Missing,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum UpdateChange {
+    ContentChanged,
+    SourceRelocated {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    DestinationRelocated {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    NewFile {
+        destination: PathBuf,
+    },
+    DeploymentChanged {
+        field: &'static str,
+        from: String,
+        to: String,
+    },
+    CommandEntryChanged,
+}
+
+impl UpdateChange {
+    pub(crate) fn includes_content(changes: &[Self]) -> bool {
+        changes.contains(&Self::ContentChanged)
+    }
+}
+
+pub(crate) struct AppFileAssessment {
+    pub(crate) destination: Option<PathBuf>,
+    pub(crate) status: FileStatus,
+    pub(crate) changes: Vec<UpdateChange>,
+}
+
 pub struct ShellRow {
     pub symbol: String,
     pub label: String,
@@ -41,6 +75,7 @@ pub struct ShellRow {
     pub status_text: &'static str,
     /// `true` when at least one of preset-file or bin-symlink exists.
     pub is_installed: bool,
+    pub(crate) changes: Vec<UpdateChange>,
 }
 
 pub struct AppRow {
@@ -133,7 +168,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
 
             let (sym, status_text) = match (file_exists, link_exists) {
                 (true, true) => ("✓", "up-to-date"),
-                (true, false) => ("~", "preset present, bin symlink missing"),
+                (true, false) => ("↑", "update available"),
                 (false, true) => ("~", "bin symlink present, preset missing"),
                 (false, false) => ("✗", "not installed"),
             };
@@ -143,8 +178,9 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 crate::bin_links::LinkRuntime::Native => "native",
                 crate::bin_links::LinkRuntime::Bun => "bun",
             };
+            let manifest_entry = shell_manifest.find(&canonical_target);
             let manifest_current = !config.is_external_presets
-                || shell_manifest.find(&canonical_target).is_some_and(|entry| {
+                || manifest_entry.is_some_and(|entry| {
                     entry.mode == config.external_shell_mode
                         && entry.source_path == script_path
                         && entry.runtime == expected_runtime
@@ -153,21 +189,89 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                         && entry.needs_source == script.needs_source
                 });
 
+            let source_status = shell_source_status(
+                config,
+                &source_key,
+                &desired_path,
+                &script_path,
+                &rendered_path,
+                &effective_transforms,
+            )
+            .await;
+            let mut changes = Vec::new();
+            if source_status == Some(FileStatus::UpdateAvail) {
+                changes.push(UpdateChange::ContentChanged);
+            }
+            if let Some(entry) = manifest_entry {
+                if entry.source_path != script_path {
+                    changes.push(UpdateChange::SourceRelocated {
+                        from: entry.source_path.clone(),
+                        to: script_path.clone(),
+                    });
+                    if !UpdateChange::includes_content(&changes)
+                        && tokio::fs::read(&script_path).await.is_ok_and(|bytes| {
+                            crate::install_core::hash_content(&bytes) != entry.content_hash
+                        })
+                    {
+                        changes.push(UpdateChange::ContentChanged);
+                    }
+                }
+                push_deployment_change(
+                    &mut changes,
+                    "mode",
+                    format!("{:?}", entry.mode).to_lowercase(),
+                    format!("{:?}", config.external_shell_mode).to_lowercase(),
+                );
+                push_deployment_change(
+                    &mut changes,
+                    "runtime",
+                    entry.runtime.clone(),
+                    expected_runtime.to_string(),
+                );
+                push_deployment_change(
+                    &mut changes,
+                    "transforms",
+                    format_list(&entry.transforms),
+                    format_list(&effective_transforms),
+                );
+                push_deployment_change(
+                    &mut changes,
+                    "env",
+                    format_list(&entry.env),
+                    format_list(&runtime_env),
+                );
+                push_deployment_change(
+                    &mut changes,
+                    "needs source",
+                    entry.needs_source.to_string(),
+                    script.needs_source.to_string(),
+                );
+            } else if config.is_external_presets && link_exists {
+                changes.push(UpdateChange::CommandEntryChanged);
+            }
+            if file_exists && !link_exists {
+                changes.push(UpdateChange::CommandEntryChanged);
+            }
+            if !snapshot_current
+                && source_status != Some(FileStatus::UpdateAvail)
+                && config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
+            {
+                changes.push(UpdateChange::DeploymentChanged {
+                    field: "snapshot",
+                    from: "installed layout".to_string(),
+                    to: "active preset layout".to_string(),
+                });
+            }
+            if !link_current && link_exists && changes.is_empty() {
+                changes.push(UpdateChange::CommandEntryChanged);
+            }
+
             let (sym, status_text) = if link_exists
                 && (!link_current || !manifest_current || !snapshot_current)
             {
                 ("↑", "update available")
             } else {
-                match shell_source_status(
-                    config,
-                    &source_key,
-                    &desired_path,
-                    &script_path,
-                    &rendered_path,
-                    &effective_transforms,
-                )
-                .await
-                {
+                match source_status {
                     Some(FileStatus::UpdateAvail) if file_exists || link_exists => {
                         ("↑", "update available")
                     }
@@ -193,11 +297,31 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 status_sym: sym,
                 status_text,
                 is_installed: file_exists || link_exists,
+                changes,
             });
         }
     }
 
     Ok(rows)
+}
+
+fn format_list(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".to_string()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn push_deployment_change(
+    changes: &mut Vec<UpdateChange>,
+    field: &'static str,
+    from: String,
+    to: String,
+) {
+    if from != to {
+        changes.push(UpdateChange::DeploymentChanged { field, from, to });
+    }
 }
 
 async fn shell_source_status(
@@ -369,8 +493,23 @@ pub(crate) async fn app_file_row_status(
     manifest: &AppManifest,
     env: &BTreeMap<String, String>,
 ) -> (Option<std::path::PathBuf>, FileStatus) {
+    let assessment = assess_app_file(config, cat, file, manifest, env).await;
+    (assessment.destination, assessment.status)
+}
+
+pub(crate) async fn assess_app_file(
+    config: &Config,
+    cat: &AppCategory,
+    file: &crate::apps::AppFile,
+    manifest: &AppManifest,
+    env: &BTreeMap<String, String>,
+) -> AppFileAssessment {
     match resolve_install_destination(cat, file, config) {
-        Err(_) => (None, FileStatus::NotInstalled),
+        Err(_) => AppFileAssessment {
+            destination: None,
+            status: FileStatus::NotInstalled,
+            changes: Vec::new(),
+        },
         Ok(dest) => {
             let source = format!("app/{}/{}", cat.name, file.source_rel.display());
             let installed_category = manifest.entries.iter().any(|entry| {
@@ -380,18 +519,33 @@ pub(crate) async fn app_file_row_status(
                     .and_then(|source| source.split_once('/'))
                     .is_some_and(|(category, _)| category == cat.name)
             });
+            let mut changes = Vec::new();
             let status = match manifest.find_by_dest(&dest) {
-                Some(entry) => app_entry_status(config, cat, file, entry, env).await,
+                Some(entry) => {
+                    let status = app_entry_status(config, cat, file, entry, env).await;
+                    if status == FileStatus::UpdateAvail {
+                        changes.push(UpdateChange::ContentChanged);
+                    }
+                    status
+                }
                 None => match manifest.find_by_source(&source) {
-                    Some(entry)
+                    Some(entry) => {
+                        changes.push(UpdateChange::DestinationRelocated {
+                            from: entry.destination.clone(),
+                            to: dest.clone(),
+                        });
                         if file
                             .generator
                             .as_ref()
-                            .is_some_and(|generator| !generator.auto) =>
-                    {
-                        app_entry_status(config, cat, file, entry, env).await
+                            .is_none_or(|generator| generator.auto)
+                            && source_hash_for_file(config, cat, file, env)
+                                .await
+                                .is_some_and(|hash| hash != entry.content_hash)
+                        {
+                            changes.push(UpdateChange::ContentChanged);
+                        }
+                        FileStatus::UpdateAvail
                     }
-                    Some(_) => FileStatus::UpdateAvail,
                     None if installed_category
                         && file
                             .generator
@@ -399,6 +553,9 @@ pub(crate) async fn app_file_row_status(
                             .is_none_or(|generator| generator.auto) =>
                     {
                         if source_hash_for_file(config, cat, file, env).await.is_some() {
+                            changes.push(UpdateChange::NewFile {
+                                destination: dest.clone(),
+                            });
                             FileStatus::UpdateAvail
                         } else {
                             FileStatus::NotInstalled
@@ -407,7 +564,11 @@ pub(crate) async fn app_file_row_status(
                     None => FileStatus::NotInstalled,
                 },
             };
-            (Some(dest), status)
+            AppFileAssessment {
+                destination: Some(dest),
+                status,
+                changes,
+            }
         }
     }
 }
@@ -613,16 +774,23 @@ mod tests {
         fs::write(&dest, b"hello").await.unwrap();
         let entry = sample_app_entry(dest, crate::install_core::hash_content(b"hello"));
 
-        let status = app_entry_status(
+        let category = AppCategory {
+            destination_root: Some(dir.display().to_string()),
+            ..sample_app_category()
+        };
+        let assessment = assess_app_file(
             &config,
-            &sample_app_category(),
+            &category,
             &sample_app_file(),
-            &entry,
+            &AppManifest {
+                entries: vec![entry],
+            },
             &BTreeMap::new(),
         )
         .await;
 
-        assert_eq!(status, FileStatus::UpdateAvail);
+        assert_eq!(assessment.status, FileStatus::UpdateAvail);
+        assert_eq!(assessment.changes, vec![UpdateChange::ContentChanged]);
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -674,10 +842,16 @@ mod tests {
             )],
         };
 
-        let (_, status) =
-            app_file_row_status(&config, &category, &file, &manifest, &BTreeMap::new()).await;
+        let assessment =
+            assess_app_file(&config, &category, &file, &manifest, &BTreeMap::new()).await;
 
-        assert_eq!(status, FileStatus::UpdateAvail);
+        assert_eq!(assessment.status, FileStatus::UpdateAvail);
+        assert_eq!(
+            assessment.changes,
+            vec![UpdateChange::NewFile {
+                destination: dir.join("dest/new.txt")
+            }]
+        );
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -704,7 +878,7 @@ mod tests {
             )],
         };
 
-        let (_, status) = app_file_row_status(
+        let assessment = assess_app_file(
             &config,
             &category,
             &category.files[0],
@@ -713,7 +887,59 @@ mod tests {
         )
         .await;
 
-        assert_eq!(status, FileStatus::UpdateAvail);
+        assert_eq!(assessment.status, FileStatus::UpdateAvail);
+        assert_eq!(
+            assessment.changes,
+            vec![UpdateChange::DestinationRelocated {
+                from: dir.join("old/dest.txt"),
+                to: dir.join("new/dest.txt"),
+            }]
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn app_destination_move_can_also_report_content_change() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let source_dir = config.preset_path(Path::new("app/sample"));
+        fs::create_dir_all(&source_dir).await.unwrap();
+        fs::write(source_dir.join("dest.txt"), b"new content")
+            .await
+            .unwrap();
+
+        let category = AppCategory {
+            destination_root: Some(dir.join("new").display().to_string()),
+            ..sample_app_category()
+        };
+        let manifest = AppManifest {
+            entries: vec![sample_app_entry(
+                dir.join("old/dest.txt"),
+                crate::install_core::hash_content(b"old content"),
+            )],
+        };
+
+        let assessment = assess_app_file(
+            &config,
+            &category,
+            &category.files[0],
+            &manifest,
+            &BTreeMap::new(),
+        )
+        .await;
+
+        assert_eq!(assessment.status, FileStatus::UpdateAvail);
+        assert_eq!(
+            assessment.changes,
+            vec![
+                UpdateChange::DestinationRelocated {
+                    from: dir.join("old/dest.txt"),
+                    to: dir.join("new/dest.txt"),
+                },
+                UpdateChange::ContentChanged,
+            ]
+        );
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -793,6 +1019,43 @@ mod tests {
 
         assert_eq!(row.status_sym, "✓");
         assert_eq!(row.status_text, "up-to-date");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn missing_shell_command_entry_is_an_update_reason() {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("tool.sh"), b"#!/bin/sh\necho same\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::shells::handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+        fs::remove_file(config.bin_dir().join("mytool"))
+            .await
+            .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "custom/mytool")
+            .unwrap();
+        assert_eq!(row.status_text, "update available");
+        assert_eq!(row.changes, vec![UpdateChange::CommandEntryChanged]);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -879,6 +1142,203 @@ mod tests {
             .unwrap();
         assert_eq!(row.status_sym, "✓");
         assert_eq!(row.status_text, "live source");
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn live_overlay_root_rename_reports_source_relocation_without_content_change() {
+        let dir = make_temp_dir().await;
+        let old_overlay = dir.join("shineOverlay");
+        let new_overlay = dir.join("shineOverlayTest");
+        let old_category = old_overlay.join("shell/custom");
+        fs::create_dir_all(&old_category).await.unwrap();
+        fs::write(
+            old_category.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(old_category.join("tool.sh"), b"#!/bin/sh\necho same\n")
+            .await
+            .unwrap();
+
+        let mut old_config =
+            Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(old_overlay.clone()));
+        old_config.is_external_presets = true;
+        old_config.external_shell_mode = crate::config::ExternalShellMode::Live;
+        fs::create_dir_all(old_config.bin_dir()).await.unwrap();
+        crate::shells::handle_install(&old_config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        fs::rename(&old_overlay, &new_overlay).await.unwrap();
+        let mut new_config =
+            Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(new_overlay.clone()));
+        new_config.is_external_presets = true;
+        new_config.external_shell_mode = crate::config::ExternalShellMode::Live;
+
+        let rows = build_shell_rows(&new_config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "custom/mytool")
+            .unwrap();
+        assert_eq!(row.status_text, "update available");
+        assert_eq!(
+            row.changes,
+            vec![UpdateChange::SourceRelocated {
+                from: old_overlay.join("shell/custom/tool.sh"),
+                to: new_overlay.join("shell/custom/tool.sh"),
+            }]
+        );
+
+        fs::write(
+            new_overlay.join("shell/custom/tool.sh"),
+            b"#!/bin/sh\necho changed\n",
+        )
+        .await
+        .unwrap();
+        let rows = build_shell_rows(&new_config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "custom/mytool")
+            .unwrap();
+        assert_eq!(
+            row.changes,
+            vec![
+                UpdateChange::SourceRelocated {
+                    from: old_overlay.join("shell/custom/tool.sh"),
+                    to: new_overlay.join("shell/custom/tool.sh"),
+                },
+                UpdateChange::ContentChanged,
+            ]
+        );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn snapshot_overlay_root_rename_with_same_bytes_stays_current() {
+        let dir = make_temp_dir().await;
+        let old_overlay = dir.join("shineOverlay");
+        let new_overlay = dir.join("shineOverlayTest");
+        let old_category = old_overlay.join("shell/custom");
+        fs::create_dir_all(&old_category).await.unwrap();
+        fs::write(
+            old_category.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(old_category.join("tool.sh"), b"#!/bin/sh\necho same\n")
+            .await
+            .unwrap();
+
+        let mut old_config =
+            Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(old_overlay.clone()));
+        old_config.is_external_presets = true;
+        fs::create_dir_all(old_config.bin_dir()).await.unwrap();
+        crate::shells::handle_install(&old_config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        fs::rename(&old_overlay, &new_overlay).await.unwrap();
+        let mut new_config =
+            Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(new_overlay));
+        new_config.is_external_presets = true;
+
+        let rows = build_shell_rows(&new_config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "custom/mytool")
+            .unwrap();
+        assert_eq!(row.status_text, "up-to-date");
+        assert!(row.changes.is_empty());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_manifest_metadata_changes_are_reported_field_by_field() {
+        use crate::shells::deployment::{ShellManifest, ShellManifestEntry};
+        use std::os::unix::fs::symlink;
+
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+        )
+        .await
+        .unwrap();
+        let source = category.join("tool.sh");
+        let bytes = b"#!/bin/sh\necho same\n";
+        fs::write(&source, bytes).await.unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.external_shell_mode = crate::config::ExternalShellMode::Live;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        symlink(&source, config.bin_dir().join("mytool")).unwrap();
+
+        ShellManifest {
+            entries: vec![ShellManifestEntry {
+                category: "custom".to_string(),
+                command: "mytool".to_string(),
+                mode: crate::config::ExternalShellMode::Snapshot,
+                source_path: source.clone(),
+                rendered_path: config.rendered_dir().join("shell/custom/tool.sh"),
+                runtime: "bun".to_string(),
+                transforms: vec!["template".to_string()],
+                env: vec!["OLD_KEY".to_string()],
+                needs_source: true,
+                content_hash: crate::install_core::hash_content(bytes),
+            }],
+        }
+        .save(&config)
+        .await
+        .unwrap();
+
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "custom/mytool")
+            .unwrap();
+        assert_eq!(row.status_text, "update available");
+        assert_eq!(
+            row.changes,
+            vec![
+                UpdateChange::DeploymentChanged {
+                    field: "mode",
+                    from: "snapshot".to_string(),
+                    to: "live".to_string(),
+                },
+                UpdateChange::DeploymentChanged {
+                    field: "runtime",
+                    from: "bun".to_string(),
+                    to: "native".to_string(),
+                },
+                UpdateChange::DeploymentChanged {
+                    field: "transforms",
+                    from: "template".to_string(),
+                    to: "none".to_string(),
+                },
+                UpdateChange::DeploymentChanged {
+                    field: "env",
+                    from: "OLD_KEY".to_string(),
+                    to: "none".to_string(),
+                },
+                UpdateChange::DeploymentChanged {
+                    field: "needs source",
+                    from: "true".to_string(),
+                    to: "false".to_string(),
+                },
+            ]
+        );
+
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

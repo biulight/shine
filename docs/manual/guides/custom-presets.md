@@ -80,6 +80,11 @@ than executing stale output. Changes to entry metadata such as `target`, `runtim
 `env` still require `shine upgrade` to rebuild the managed entry. Restore snapshot mode by running
 `shine preset link <PATH>` without `--live`, or use `shine preset unlink`.
 
+If a linked overlay or live preset directory is moved, link the new path and run `shine update`.
+Snapshot deployments stay current when their effective relative files and bytes are unchanged.
+Live deployments report the old and new source paths because `shine upgrade` must repoint their
+managed command entries; this relocation is shown separately from content changes.
+
 You can also select the source through an environment variable:
 
 ```bash

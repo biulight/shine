@@ -4,7 +4,7 @@ use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
 use crate::path_display;
-use crate::status::FileStatus;
+use crate::status::{FileStatus, UpdateChange};
 use anyhow::{Context, Result};
 use similar::TextDiff;
 use std::collections::BTreeMap;
@@ -63,7 +63,7 @@ pub(super) async fn print_app_file(
     }
     if diff {
         let diff_output = app_diff_output(config, item).await?;
-        print_block("Diff", &item.destination, &diff_output);
+        print_block("Diff", &app_current_path(item), &diff_output);
     }
     if verbose {
         print_file_content(&item.destination, "Content").await?;
@@ -133,16 +133,64 @@ pub(super) async fn print_shell_file(
 }
 
 pub(super) async fn print_app_update_diff(config: &Config, item: &AppInfoFile) -> Result<()> {
-    let diff_output = app_diff_output(config, item).await?;
-    print_block("Diff", &item.destination, &diff_output);
+    print_update_changes(config, &item.changes);
+    if UpdateChange::includes_content(&item.changes) {
+        let diff_output = app_diff_output(config, item).await?;
+        print_block("Diff", &app_current_path(item), &diff_output);
+    }
     Ok(())
 }
 
 pub(super) async fn print_shell_update_diff(config: &Config, item: &ShellInfoFile) -> Result<()> {
-    let content_path = shell_content_path(item);
-    let diff_output = shell_diff_output(config, item, &content_path).await?;
-    print_block("Diff", &content_path, &diff_output);
+    print_update_changes(config, &item.changes);
+    if UpdateChange::includes_content(&item.changes) {
+        let content_path = shell_content_path(item);
+        let diff_output = shell_diff_output(config, item, &content_path).await?;
+        print_block("Diff", &content_path, &diff_output);
+    }
     Ok(())
+}
+
+fn print_update_changes(config: &Config, changes: &[UpdateChange]) {
+    for change in changes {
+        match change {
+            UpdateChange::ContentChanged => {
+                println!("     {}", colors::dim("content: changed"));
+            }
+            UpdateChange::SourceRelocated { from, to } => {
+                print_path_change(config, "source", from, to);
+            }
+            UpdateChange::DestinationRelocated { from, to } => {
+                print_path_change(config, "destination", from, to);
+            }
+            UpdateChange::NewFile { destination } => {
+                println!(
+                    "     {}",
+                    colors::dim(&format!(
+                        "new file: {}",
+                        path_display::format_home(destination, &config.home_dir)
+                    ))
+                );
+            }
+            UpdateChange::DeploymentChanged { field, from, to } => {
+                println!("     {}", colors::dim(&format!("{field}: {from} -> {to}")));
+            }
+            UpdateChange::CommandEntryChanged => {
+                println!("     {}", colors::dim("command entry: refresh required"));
+            }
+        }
+    }
+}
+
+fn print_path_change(config: &Config, field: &str, from: &Path, to: &Path) {
+    println!(
+        "     {}",
+        colors::dim(&format!(
+            "{field}: {} -> {}",
+            path_display::format_home(from, &config.home_dir),
+            path_display::format_home(to, &config.home_dir)
+        ))
+    );
 }
 
 fn shell_content_path(item: &ShellInfoFile) -> std::path::PathBuf {
@@ -154,6 +202,12 @@ fn shell_content_path(item: &ShellInfoFile) -> std::path::PathBuf {
             item.rendered_path
                 .exists()
                 .then(|| item.rendered_path.clone())
+        })
+        .or_else(|| {
+            item.changes.iter().find_map(|change| match change {
+                UpdateChange::SourceRelocated { from, .. } => Some(from.clone()),
+                _ => None,
+            })
         })
         .unwrap_or_else(|| item.installed_source_path.clone())
 }
@@ -255,18 +309,19 @@ async fn app_diff_output(config: &Config, item: &AppInfoFile) -> Result<String> 
         }
     };
 
-    let current = match tokio::fs::read(&item.destination).await {
+    let current_path = app_current_path(item);
+    let current = match tokio::fs::read(&current_path).await {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Ok(format!(
                 "Current file is missing: {}.\n",
-                item.destination.display()
+                current_path.display()
             ));
         }
         Err(err) => {
             return Ok(format!(
                 "Unable to read current file {}: {err}\n",
-                item.destination.display()
+                current_path.display()
             ));
         }
     };
@@ -274,13 +329,20 @@ async fn app_diff_output(config: &Config, item: &AppInfoFile) -> Result<String> 
     Ok(render_diff_or_note(
         &current,
         &expected,
-        &item.destination.to_string_lossy(),
+        &current_path.to_string_lossy(),
         &format!(
             "expected: app/{}/{}",
             item.category.name,
             item.file.source_rel.display()
         ),
     ))
+}
+
+fn app_current_path(item: &AppInfoFile) -> std::path::PathBuf {
+    item.manifest_entry
+        .as_ref()
+        .map(|entry| entry.destination.clone())
+        .unwrap_or_else(|| item.destination.clone())
 }
 
 async fn shell_diff_output(
@@ -383,13 +445,37 @@ fn render_diff_or_note(
     current_label: &str,
     expected_label: &str,
 ) -> String {
+    const MAX_INLINE_DIFF_BYTES: usize = 256 * 1024;
+
     if current == expected {
         return "No content differences.\n".to_string();
     }
 
-    let current_text = String::from_utf8_lossy(current);
-    let expected_text = String::from_utf8_lossy(expected);
-    let unified = TextDiff::from_lines(current_text.as_ref(), expected_text.as_ref())
+    if current.len() > MAX_INLINE_DIFF_BYTES || expected.len() > MAX_INLINE_DIFF_BYTES {
+        return format!(
+            "Content diff omitted: inline diff limit is 256 KiB (current: {} bytes, expected: {} bytes).\n",
+            current.len(),
+            expected.len()
+        );
+    }
+    if current.contains(&0) || expected.contains(&0) {
+        return format!(
+            "Content diff omitted: binary content contains NUL bytes (current: {} bytes, expected: {} bytes).\n",
+            current.len(),
+            expected.len()
+        );
+    }
+
+    let (Ok(current_text), Ok(expected_text)) =
+        (std::str::from_utf8(current), std::str::from_utf8(expected))
+    else {
+        return format!(
+            "Content diff omitted: content is not valid UTF-8 (current: {} bytes, expected: {} bytes).\n",
+            current.len(),
+            expected.len()
+        );
+    };
+    let unified = TextDiff::from_lines(current_text, expected_text)
         .unified_diff()
         .context_radius(3)
         .header(current_label, expected_label)
@@ -446,6 +532,7 @@ mod tests {
             link_path: std::path::PathBuf::from(format!("/tmp/bin/{command}")),
             link_target: None,
             status: "up-to-date",
+            changes: Vec::new(),
         }
     }
 
@@ -485,6 +572,40 @@ mod tests {
         assert!(diff.contains("expected"));
         assert!(diff.contains("-old"));
         assert!(diff.contains("+new"));
+    }
+
+    #[test]
+    fn diff_at_inline_limit_is_rendered() {
+        let mut current = vec![b'a'; 256 * 1024];
+        let mut expected = current.clone();
+        current[0] = b'b';
+        expected[0] = b'c';
+
+        let diff = render_diff_or_note(&current, &expected, "current", "expected");
+        assert!(diff.contains("--- current"));
+        assert!(!diff.contains("omitted"));
+    }
+
+    #[test]
+    fn oversized_diff_is_omitted() {
+        let current = vec![b'a'; 256 * 1024 + 1];
+        let expected = vec![b'b'; 256 * 1024 + 1];
+
+        let diff = render_diff_or_note(&current, &expected, "current", "expected");
+        assert!(diff.contains("inline diff limit is 256 KiB"));
+        assert!(diff.contains("262145 bytes"));
+    }
+
+    #[test]
+    fn nul_byte_diff_is_omitted() {
+        let diff = render_diff_or_note(b"old\0", b"new\0", "current", "expected");
+        assert!(diff.contains("binary content contains NUL bytes"));
+    }
+
+    #[test]
+    fn invalid_utf8_diff_is_omitted() {
+        let diff = render_diff_or_note(&[0xff], &[0xfe], "current", "expected");
+        assert!(diff.contains("content is not valid UTF-8"));
     }
 
     #[tokio::test]

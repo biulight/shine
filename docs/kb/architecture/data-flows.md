@@ -58,12 +58,15 @@ the receipt comparison includes the normalized domain, DNS servers, and platform
 Update and sys-info output render those receipt differences field by field (`old -> new`) so the
 user can inspect the pending system change before granting administrator access to upgrade.
 
-`shine update --diff` appends content diffs to stale shell/app rows, while `shine update <TARGET>`
-resolves one installed shell/app through the same aliases as `shine info` and prints only its stale
-files. Both paths reuse `info`'s effective-content renderer, so embedded versus external preset
-selection, transforms, and manual-generator behavior stay identical to `shine info --diff` and the
-upgrade operation. Target mode returns after the config check and does not perform the binary
-release check; managed sys resources keep their structured receipt differences instead.
+`shine update --diff` expands stale shell/app rows, while `shine update <TARGET>` resolves one
+installed shell/app through the same aliases as `shine info` and prints only its stale files. Each
+row carries structured pending changes: content, source/destination relocation, a new file,
+deployment metadata, or command-entry refresh. Only content changes invoke `info`'s effective-
+content renderer; structural changes are rendered field by field. Inline diffs require valid UTF-8
+without NUL bytes and are capped at 256 KiB per side. Embedded versus external preset selection,
+transforms, and manual-generator behavior stay identical to `shine info --diff` and the upgrade
+operation. Target mode returns after the config check and does not perform the binary release check;
+managed sys resources keep their structured receipt differences instead.
 
 ## Generated app files
 

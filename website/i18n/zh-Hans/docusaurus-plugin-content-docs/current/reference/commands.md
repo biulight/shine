@@ -82,8 +82,12 @@ shine completions <bash|zsh|powershell>
 
 - `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
   Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示
-  一次 `shine upgrade`。App 文件按类别折叠。`update --diff` 会改用纵向详细行，展开受
-  影响的文件并显示可用内容差异。
+  一次 `shine upgrade`。App 文件按类别折叠。`update --diff` 会改用纵向详细行并展开受
+  影响的文件；来源或目标迁移、新文件、部署元数据和命令入口刷新等结构性变更会逐字段
+  显示，只有内容确实变化时才输出 unified diff。定向的 `update <TARGET>` 使用相同明细。
+- 内联 diff 要求两侧都是不含 NUL 字节的有效 UTF-8 文本，并且每侧不超过 256 KiB。
+  二进制、无效 UTF-8 或更大的内容只显示字节数摘要，不会整段写入终端；`info --diff`
+  使用相同保护。
 - 为 `update` 指定 target 后不能同时使用 `--verbose` 或 `--refresh-release`。
 - `update/upgrade --pull` 会先同步 Git 管理的来源并重新加载配置。
 - `upgrade --prune-stale` 移除预设来源中已不存在的旧受管 app 文件。

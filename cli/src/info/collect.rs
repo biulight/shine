@@ -4,7 +4,7 @@ use crate::env::EnvConfig;
 use crate::install_core::AppManifest;
 use crate::shells::metadata::ShellCategory;
 use crate::shells::metadata::load_active_categories as load_active_shells;
-use crate::status::{FileStatus, app_file_row_status, build_shell_rows};
+use crate::status::{FileStatus, UpdateChange, assess_app_file, build_shell_rows};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,6 +16,7 @@ pub(super) struct AppInfoFile {
     pub(super) destination: PathBuf,
     pub(super) status: FileStatus,
     pub(super) manifest_entry: Option<crate::install_core::AppEntry>,
+    pub(super) changes: Vec<UpdateChange>,
 }
 
 #[derive(Clone)]
@@ -28,6 +29,7 @@ pub(super) struct ShellInfoFile {
     pub(super) link_path: PathBuf,
     pub(super) link_target: Option<PathBuf>,
     pub(super) status: &'static str,
+    pub(super) changes: Vec<UpdateChange>,
 }
 
 pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile>> {
@@ -51,11 +53,11 @@ pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile
                 }
                 continue;
             }
-            let (Some(destination), status) =
-                app_file_row_status(config, &category, file, &manifest, env_map).await
-            else {
+            let assessment = assess_app_file(config, &category, file, &manifest, env_map).await;
+            let Some(destination) = assessment.destination else {
                 continue;
             };
+            let status = assessment.status;
             if status == FileStatus::NotInstalled {
                 continue;
             }
@@ -69,6 +71,7 @@ pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile
                 destination,
                 status,
                 manifest_entry,
+                changes: assessment.changes,
             });
         }
     }
@@ -117,11 +120,9 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
                 (false, false) => "not installed",
             };
             let label = format!("{}/{}", category.name, file.command_name);
-            let status = shell_rows
-                .iter()
-                .find(|row| row.label == label)
-                .map(|row| row.status_text)
-                .unwrap_or(fallback_status);
+            let row = shell_rows.iter().find(|row| row.label == label);
+            let status = row.map(|row| row.status_text).unwrap_or(fallback_status);
+            let changes = row.map(|row| row.changes.clone()).unwrap_or_default();
 
             files.push(ShellInfoFile {
                 category: category.clone(),
@@ -132,6 +133,7 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
                 link_path,
                 link_target,
                 status,
+                changes,
             });
         }
     }

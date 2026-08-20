@@ -67,6 +67,10 @@ live 模式下，普通 Shell/Bun 源文件内容在下一次调用时直接生�
 `transforms` 或 `env` 等入口元数据时，仍必须执行 `shine upgrade` 重建受管入口。要恢复默认行为，
 重新执行不带 `--live` 的 `shine preset link <PATH>`，或执行 `shine preset unlink`。
 
+如果移动了已关联的 overlay 或 live preset 目录，请关联新路径后运行 `shine update`。只要有效的
+相对文件集合与字节没有变化，snapshot 部署仍保持最新；live 部署则会显示旧、新来源路径，因为
+`shine upgrade` 必须重新指向受管命令入口。该来源迁移会与内容变化分开显示。
+
 也可以直接设置环境变量：
 
 ```bash

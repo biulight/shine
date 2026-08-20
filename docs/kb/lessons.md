@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-20 — Structural preset updates were rendered as content replacements
+
+- **Symptom**: renaming a live overlay root, for example `shineOverlay` to `shineOverlayTest`,
+  correctly required command entries to be repointed but `shine update <TARGET>` presented the
+  change as a whole-file diff. New files and destination moves had the same misleading path.
+- **Root cause**: status collapsed content, manifest, path, and launcher differences into one
+  `UpdateAvail` value; targeted and `--diff` output then unconditionally invoked the text renderer.
+- **Fix**: retain structured update causes through status collection and render relocations and
+  deployment fields directly. Generate a unified diff only for an actual content change, and omit
+  inline output for binary, invalid UTF-8, NUL-containing, or over-256-KiB inputs.
+- **Rule**: update availability and content difference are not synonyms. Preserve the reason for a
+  pending reconciliation step, and never feed arbitrary bytes or unbounded files to a terminal diff.
+
 ## 2026-08-20 — Refreshed Clash rules left browser connections on their old route
 
 - **Symptom**: after `shine app artifact apply clash-verge` refreshed every rule-provider, browser

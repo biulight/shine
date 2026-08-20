@@ -93,8 +93,13 @@ shine completions <bash|zsh|powershell>
 - `update --refresh-release` bypasses the 24-hour cache. By default, `update` groups targets under
   the same Homebrew-style sections as `shine list`: interactive terminals use horizontal columns,
   while redirected output stays one target per line. It then prints the `shine upgrade` action once.
-  App files collapse to their category. `update --diff` switches to detailed vertical rows, expands
-  affected files, and shows available content changes.
+  App files collapse to their category. `update --diff` switches to detailed vertical rows and
+  expands affected files. Structural changes such as source or destination relocation, new files,
+  deployment metadata, and command-entry refreshes are shown field by field; a unified diff is
+  printed only when content changed. Targeted `update <TARGET>` uses the same details.
+- Inline diffs require valid UTF-8 text without NUL bytes and are limited to 256 KiB per side.
+  Binary, invalid UTF-8, and larger content is summarized with byte counts instead of being dumped
+  to the terminal. `info --diff` uses the same protection.
 - A targeted update cannot combine with `--verbose` or `--refresh-release`.
 - `update/upgrade --pull` synchronizes Git-managed sources and reloads configuration first.
 - `upgrade --prune-stale` removes old managed app files no longer present in the source.
