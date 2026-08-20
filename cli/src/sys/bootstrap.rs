@@ -166,11 +166,56 @@ pub(super) fn require_external_code_permission(
         .active_presets_overlay_dir()
         .is_some_and(|overlay| path.starts_with(overlay));
     if (config.is_external_presets || overlay_code) && !config.allow_sys_code {
-        bail!(
-            "external sys {label} is disabled; set `allow_sys_code = true` to allow persistent or install-time sys preset code"
-        );
+        return Err(external_code_permission_error(
+            config,
+            &format!("executable sys {label}"),
+            Some(path),
+        ));
     }
     Ok(())
+}
+
+pub(super) fn external_code_permission_error(
+    config: &Config,
+    capability: &str,
+    code_path: Option<&Path>,
+) -> anyhow::Error {
+    let overlay = config.active_presets_overlay_dir();
+    let (reason, remediation) = match (config.is_external_presets, overlay.is_some()) {
+        (true, true) => (
+            "an external preset source and preset overlay are active",
+            "disable both the external preset source and preset overlay",
+        ),
+        (true, false) => (
+            "an external preset source is active",
+            "disable the external preset source",
+        ),
+        (false, true) => ("a preset overlay is active", "disable the preset overlay"),
+        (false, false) => {
+            unreachable!("external code permission error created without an external source")
+        }
+    };
+    let mut source_details = String::new();
+    if config.is_external_presets {
+        source_details.push_str(&format!(
+            "Preset source:  {}\n",
+            config.presets_dir().display()
+        ));
+    }
+    if let Some(path) = overlay {
+        source_details.push_str(&format!("Preset overlay: {}\n", path.display()));
+    }
+    if let Some(path) = code_path {
+        source_details.push_str(&format!("Code path:      {}\n", path.display()));
+    }
+
+    anyhow::anyhow!(
+        "{capability} is blocked because {reason}.\n\n\
+{source_details}\
+Global config:  {}\n\n\
+After reviewing the active preset sources, set `allow_sys_code = true` in the global config, or {remediation}.",
+        config.global_config_path().display()
+    )
 }
 
 fn resolve_preset_file(loaded: &LoadedSysPreset, relative: &str) -> Result<PathBuf> {
@@ -635,6 +680,37 @@ mod tests {
             logs.first().unwrap(),
             "installer output truncated at 64 KiB; showing final output"
         );
+    }
+
+    #[test]
+    fn permission_error_identifies_all_external_layers_and_config() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-sys-permission-{}", uuid::Uuid::new_v4()));
+        let overlay = dir.join("overlay");
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let config = config.with_presets_overlay_dir_override(Some(overlay.clone()));
+        let code_path = config.presets_dir().join("sys/ubuntu/init.sh");
+
+        let error =
+            require_external_code_permission(&config, &code_path, "legacy bootstrap script")
+                .unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains(
+            "executable sys legacy bootstrap script is blocked because an external preset source and preset overlay are active"
+        ));
+        assert!(message.contains(&format!(
+            "Preset source:  {}",
+            config.presets_dir().display()
+        )));
+        assert!(message.contains(&format!("Preset overlay: {}", overlay.display())));
+        assert!(message.contains(&format!("Code path:      {}", code_path.display())));
+        assert!(message.contains(&format!(
+            "Global config:  {}",
+            config.global_config_path().display()
+        )));
+        assert!(message.contains("or disable both the external preset source and preset overlay"));
     }
 
     #[cfg(unix)]

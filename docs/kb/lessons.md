@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-21 — External-code errors hid the active trust boundary
+
+- **Symptom**: `shine sys bootstrap` reported external profile or legacy bootstrap code without
+  explaining which external preset layers created the trust boundary, which file would execute, or
+  where the global-only permission had to be configured.
+- **Root cause**: the permission check correctly treated the overlay as an external trust boundary,
+  but its one-line diagnostic described only the blocked item and flag.
+- **Fix**: identify the executable integration kind, every active external preset layer, and the
+  resolved global config path; also state that bootstrap preflight made no system changes.
+- **Rule**: permission errors must name both the blocked capability and the active trust boundary,
+  then point to the configuration layer that can actually grant access. Alternative remediation
+  must remove every active trust boundary, not imply that removing only one of several layers is
+  sufficient.
+
 ## 2026-08-20 — Redundant detail flags should remain composable
 
 - **Symptom**: `shine update <TARGET> --verbose` failed during argument parsing even though the

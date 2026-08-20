@@ -281,6 +281,11 @@ impl Config {
         &self.config_path
     }
 
+    /// Global configuration path, even when a project configuration is active.
+    pub fn global_config_path(&self) -> PathBuf {
+        self.shine_dir.join(GLOBAL_CONFIG_FILE)
+    }
+
     /// Whether configuration was discovered from a project `shine.config.toml`.
     pub fn is_project_config(&self) -> bool {
         self.is_project_config

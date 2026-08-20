@@ -255,8 +255,10 @@ content or disable integrations outside the selection.
 
 External sys install scripts and executable profile content (`eval`, `source`, fragments, and base
 files) require the user to review the source and set `allow_sys_code = true` in the global config;
-the project config cannot authorize itself. Static detection,
-package metadata, PATH, env, and aliases remain available without that opt-in. Validate with
+the project config cannot authorize itself. If executable sys code is blocked during bootstrap
+preflight, the error identifies the code kind and path when available, each active external preset
+layer, and the global config path; no installer has run yet. Static detection, package metadata,
+PATH, env, and aliases remain available without that opt-in. Validate with
 `shine sys list`, `shine sys info <ITEM>`, and `shine sys bootstrap <ITEM> --dry-run`.
 
 ## Application artifact runtimes

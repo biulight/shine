@@ -211,8 +211,10 @@ Shell integration 必须且只能声明 `path`、`env`、`eval`、`source`、`al
 命名 `[profiles.*]` 表只选择 bootstrap items，不定义 shell 内容，也不会禁用选择之外的集成。
 
 外部 sys 安装脚本和可执行 profile 内容（`eval`、`source`、fragment 与 base 文件）要求用户先审查
-来源并在全局配置中设置 `allow_sys_code = true`；项目配置不能授权自身。静态 detection、package metadata、PATH、env 和 aliases 无需该
-授权。使用 `shine sys list`、`shine sys info <ITEM>` 和
+来源并在全局配置中设置 `allow_sys_code = true`；项目配置不能授权自身。如果可执行 sys 代码在
+bootstrap 预检阶段被拦截，错误会指出可用的代码类型和路径、当前每一层外部 preset 来源以及全局
+配置路径；此时尚未运行任何安装器。静态 detection、package metadata、PATH、env 和 aliases 无需该授权。使用
+`shine sys list`、`shine sys info <ITEM>` 和
 `shine sys bootstrap <ITEM> --dry-run` 完成验证。
 
 ## App 构建脚本运行时

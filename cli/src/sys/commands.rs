@@ -8,8 +8,8 @@ use crate::colors;
 use crate::config::Config;
 
 use super::bootstrap::{
-    preflight_standard_bootstrap_item, require_external_code_permission,
-    run_standard_bootstrap_item,
+    external_code_permission_error, preflight_standard_bootstrap_item,
+    require_external_code_permission, run_standard_bootstrap_item,
 };
 use super::detect::detect_os_id;
 use super::execution::{
@@ -556,15 +556,12 @@ async fn handle_init_for_os(
                 missing_env.join(", ")
             );
         }
-        if item.install.is_some() {
-            preflight_standard_bootstrap_item(config, &loaded, item)?;
+        let permission = if item.install.is_some() {
+            preflight_standard_bootstrap_item(config, &loaded, item)
         } else {
-            require_external_code_permission(
-                config,
-                &loaded.script_path,
-                "legacy bootstrap script",
-            )?;
-        }
+            require_external_code_permission(config, &loaded.script_path, "legacy bootstrap script")
+        };
+        permission.map_err(bootstrap_preflight_error)?;
     }
     if loaded.manifest.profile_composition {
         let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
@@ -581,11 +578,17 @@ async fn handle_init_for_os(
                 preflight_enabled.insert(item_id.clone());
             }
         }
-        compose_sys_profiles(config, os_id, &loaded, &preflight_enabled, sys_shell).await?;
+        compose_sys_profiles(config, os_id, &loaded, &preflight_enabled, sys_shell)
+            .await
+            .map_err(bootstrap_preflight_error)?;
     } else if (config.is_external_presets || config.active_presets_overlay_dir().is_some())
         && !config.allow_sys_code
     {
-        anyhow::bail!("external sys legacy profile is disabled; set `allow_sys_code = true`");
+        return Err(bootstrap_preflight_error(external_code_permission_error(
+            config,
+            "executable sys legacy profile",
+            None,
+        )));
     }
 
     print_run_header(os_id, sys_shell, &selection);
@@ -661,9 +664,11 @@ async fn handle_init_for_os(
             if (config.is_external_presets || config.active_presets_overlay_dir().is_some())
                 && !config.allow_sys_code
             {
-                anyhow::bail!(
-                    "external sys legacy profile is disabled; set `allow_sys_code = true`"
-                );
+                return Err(external_code_permission_error(
+                    config,
+                    "executable sys legacy profile",
+                    None,
+                ));
             }
             install_sys_profile_loader(config, os_id, script_dir, sys_shell, force_profile).await?
         };
@@ -683,6 +688,10 @@ async fn handle_init_for_os(
     }
 
     Ok(())
+}
+
+fn bootstrap_preflight_error(error: anyhow::Error) -> anyhow::Error {
+    anyhow::anyhow!("{error}\n\nNo system changes were made.")
 }
 
 async fn record_sys_item_outcomes(
@@ -2628,5 +2637,14 @@ esac
         handle_status(&config).await.unwrap();
 
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn bootstrap_preflight_error_reports_no_changes() {
+        let error = bootstrap_preflight_error(anyhow::anyhow!("permission denied"));
+        assert_eq!(
+            error.to_string(),
+            "permission denied\n\nNo system changes were made."
+        );
     }
 }

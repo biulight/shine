@@ -6,7 +6,7 @@ use crate::config::Config;
 
 use super::{
     LoadedSysPreset, SysManifest, SysProfilePhase, SysShellIntegration, SysShellKind,
-    bootstrap::require_external_code_permission,
+    bootstrap::{external_code_permission_error, require_external_code_permission},
 };
 
 pub(super) struct ComposedSysProfiles {
@@ -121,7 +121,7 @@ async fn render_integration(
         && (config.is_external_presets || config.active_presets_overlay_dir().is_some())
         && !config.allow_sys_code
     {
-        bail!("external sys profile code for `{item_id}` is disabled; set `allow_sys_code = true`");
+        return Err(external_profile_code_error(config, item_id, integration));
     }
 
     if let Some(fragment) = &integration.fragment {
@@ -151,6 +151,25 @@ async fn render_integration(
         SysShellKind::Powershell => render_powershell(integration)?,
     };
     Ok(guard_body(body, integration.when_command.as_deref(), shell))
+}
+
+fn external_profile_code_error(
+    config: &Config,
+    item_id: &str,
+    integration: &SysShellIntegration,
+) -> anyhow::Error {
+    let code_kind = if !integration.eval_argv.is_empty() {
+        "eval"
+    } else if integration.source.is_some() {
+        "source"
+    } else {
+        "fragment"
+    };
+    external_code_permission_error(
+        config,
+        &format!("executable sys profile code for `{item_id}` (`{code_kind}`)"),
+        None,
+    )
 }
 
 fn render_posix(integration: &SysShellIntegration, shell: SysShellKind) -> Result<String> {
@@ -380,5 +399,35 @@ mod tests {
         value.shells = vec![SysShellKind::Powershell];
         let rendered = render_powershell(&value).unwrap();
         assert!(rendered.contains("'mise' 'activate' 'pwsh'"));
+    }
+
+    #[tokio::test]
+    async fn overlay_permission_error_identifies_cause_and_global_config() {
+        let dir =
+            std::env::temp_dir().join(format!("shine-profile-permission-{}", uuid::Uuid::new_v4()));
+        let overlay = dir.join("overlay");
+        let config =
+            Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(overlay.clone()));
+
+        let error = render_integration(
+            &config,
+            "ubuntu",
+            "atuin",
+            &integration(),
+            SysShellKind::Zsh,
+        )
+        .await
+        .unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains(
+            "executable sys profile code for `atuin` (`eval`) is blocked because a preset overlay is active"
+        ));
+        assert!(message.contains(&format!("Preset overlay: {}", overlay.display())));
+        assert!(message.contains(&format!(
+            "Global config:  {}",
+            dir.join("config.toml").display()
+        )));
+        assert!(message.contains("set `allow_sys_code = true` in the global config"));
     }
 }
