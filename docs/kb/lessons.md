@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-20 — Redundant detail flags should remain composable
+
+- **Symptom**: `shine update <TARGET> --verbose` failed during argument parsing even though the
+  target form was already detailed and accepting the flag would not make the request ambiguous.
+- **Root cause**: the targeted update implementation intentionally bypassed the global verbose
+  listing, and that internal no-op was exposed as a Clap argument conflict.
+- **Fix**: accept `--verbose` with a target as a compatibility no-op while retaining the meaningful
+  conflict between targeted checks and `--refresh-release`.
+- **Rule**: when a shared CLI option is redundant in a more specific mode, accept it if its meaning
+  is already satisfied; reserve argument conflicts for combinations with incompatible semantics.
+
 ## 2026-08-20 — Shell source presence was mistaken for command installation
 
 - **Symptom**: `shine shell install utils/shine-env-export` was parsed as a nonexistent category,

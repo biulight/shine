@@ -296,8 +296,8 @@ pub struct UpdateCommand {
     /// Show content differences for all updates (targeted checks are already detailed)
     #[arg(long)]
     pub diff: bool,
-    /// Show installed entries that are already current or need attention
-    #[arg(long, conflicts_with = "target")]
+    /// Show installed entries that are already current or need attention (targeted checks are already detailed)
+    #[arg(long)]
     pub verbose: bool,
     /// Bypass the 24-hour version cache and check GitHub now
     #[arg(long, conflicts_with = "target")]

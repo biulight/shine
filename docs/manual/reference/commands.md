@@ -108,7 +108,9 @@ shine completions <bash|zsh|powershell>
 - Inline diffs require valid UTF-8 text without NUL bytes and are limited to 256 KiB per side.
   Binary, invalid UTF-8, and larger content is summarized with byte counts instead of being dumped
   to the terminal. `info --diff` uses the same protection.
-- A targeted update cannot combine with `--verbose` or `--refresh-release`.
+- A targeted update can accept `--verbose` for command-line compatibility, but targeted output is
+  already detailed, so the flag does not add more rows. It cannot combine with `--refresh-release`
+  because targeted checks do not perform a Shine release check.
 - `update/upgrade --pull` synchronizes Git-managed sources and reloads configuration first.
 - `upgrade --prune-stale` removes old managed app files no longer present in the source.
 - By default, `upgrade` prints each app category, Shell category, or managed-system item it actually

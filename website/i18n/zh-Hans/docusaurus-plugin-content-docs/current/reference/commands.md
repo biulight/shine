@@ -97,7 +97,9 @@ shine completions <bash|zsh|powershell>
 - 内联 diff 要求两侧都是不含 NUL 字节的有效 UTF-8 文本，并且每侧不超过 256 KiB。
   二进制、无效 UTF-8 或更大的内容只显示字节数摘要，不会整段写入终端；`info --diff`
   使用相同保护。
-- 为 `update` 指定 target 后不能同时使用 `--verbose` 或 `--refresh-release`。
+- 为 `update` 指定 target 后仍可同时传入 `--verbose` 以兼容通用命令行调用，但定向输出本身
+  已包含详细信息，因此不会增加更多条目。定向检查不会检查 Shine 版本，仍不能与
+  `--refresh-release` 组合使用。
 - `update/upgrade --pull` 会先同步 Git 管理的来源并重新加载配置。
 - `upgrade --prune-stale` 移除预设来源中已不存在的旧受管 app 文件。
 - `upgrade` 默认逐项显示实际更新的 App 类别、Shell 类别或受管系统项，并按用户可见

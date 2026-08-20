@@ -993,7 +993,18 @@ mod tests {
             }) if target == "proxy/setproxy"
         ));
 
-        assert!(Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--verbose"]).is_err());
+        let cli = Cli::try_parse_from(["shine", "update", "utils/shine-theme-sync", "--verbose"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                target: Some(ref target),
+                pull: false,
+                diff: false,
+                verbose: true,
+                refresh_release: false
+            }) if target == "utils/shine-theme-sync"
+        ));
         assert!(
             Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--refresh-release"])
                 .is_err()
