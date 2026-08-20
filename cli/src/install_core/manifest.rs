@@ -63,15 +63,10 @@ impl AppManifest {
     }
 
     pub fn upsert(&mut self, entry: AppEntry) {
-        if let Some(existing) = self
-            .entries
-            .iter_mut()
-            .find(|e| e.destination == entry.destination)
-        {
-            *existing = entry;
-        } else {
-            self.entries.push(entry);
-        }
+        self.entries.retain(|existing| {
+            existing.destination != entry.destination && existing.source != entry.source
+        });
+        self.entries.push(entry);
     }
 
     pub fn remove_by_dest(&mut self, dest: &Path) -> Option<AppEntry> {
@@ -84,6 +79,10 @@ impl AppManifest {
 
     pub fn find_by_dest(&self, dest: &Path) -> Option<&AppEntry> {
         self.entries.iter().find(|e| e.destination == dest)
+    }
+
+    pub fn find_by_source(&self, source: &str) -> Option<&AppEntry> {
+        self.entries.iter().find(|entry| entry.source == source)
     }
 }
 
@@ -98,7 +97,10 @@ mod tests {
 
     fn sample_entry(dest: &str) -> AppEntry {
         AppEntry {
-            source: "app/test/foo.toml".to_string(),
+            source: format!(
+                "app/test/{}",
+                Path::new(dest).file_name().unwrap().to_string_lossy()
+            ),
             destination: PathBuf::from(dest),
             backup: None,
             content_hash: 42,
@@ -168,6 +170,19 @@ mod tests {
         });
         assert_eq!(manifest.entries.len(), 1);
         assert_eq!(manifest.entries[0].content_hash, 2);
+    }
+
+    #[test]
+    fn upsert_relocates_existing_entry_by_source() {
+        let mut manifest = AppManifest::default();
+        let old = sample_entry("/tmp/old.toml");
+        let mut relocated = sample_entry("/tmp/new.toml");
+        relocated.source = old.source.clone();
+        manifest.upsert(old.clone());
+        manifest.upsert(relocated);
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].destination, Path::new("/tmp/new.toml"));
+        assert!(manifest.find_by_source(&old.source).is_some());
     }
 
     #[test]

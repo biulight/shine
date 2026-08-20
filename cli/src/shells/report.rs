@@ -3,6 +3,10 @@ use crate::colors;
 
 #[derive(Debug, Default)]
 pub struct ShellUpgradeReport {
+    /// User-facing shell targets that were brought up to date. A target is
+    /// counted once even when upgrading it also rewrites a preset source,
+    /// rendered template, and bin launcher.
+    pub updated_targets: Vec<String>,
     pub snapshots_updated: usize,
     pub templates_updated: usize,
     pub links_created: usize,

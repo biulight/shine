@@ -13,6 +13,7 @@ use crate::colors;
 use crate::config::Config;
 use crate::output;
 use anyhow::{Context, Result};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 const SHELL_TEMPLATE: &str = r#"# Shell preset metadata for shine.
@@ -178,6 +179,8 @@ pub async fn handle_upgrade_installed_target(
         .map(|(cat_name, _)| cat_name.clone())
         .collect();
 
+    let pending_targets = pending_upgrade_targets(config, &installed_commands).await?;
+
     if !config.is_external_presets {
         for category in &installed_categories {
             let prefix = format!("shell/{category}");
@@ -218,11 +221,29 @@ pub async fn handle_upgrade_installed_target(
         PathUpdateStatus::Updated(path) => Some(path),
     };
 
+    let remaining_targets = pending_upgrade_targets(config, &installed_commands).await?;
+    let mut updated_targets = pending_targets
+        .difference(&remaining_targets)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    updated_targets.extend(template_report.updated.iter().cloned());
+    for link in link_report.created.iter().chain(&link_report.overwritten) {
+        let Some(command) = link.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        updated_targets.extend(
+            installed_commands
+                .iter()
+                .filter(|(_, installed_command)| installed_command == command)
+                .map(|(category, installed_command)| format!("{category}/{installed_command}")),
+        );
+    }
+    let updated_targets = updated_targets.into_iter().collect::<Vec<_>>();
+
     let has_visible_result = should_print_upgrade_section(
         verbose,
-        snapshots_updated > 0,
-        !template_report.updated.is_empty(),
-        !link_parts.is_empty(),
+        !updated_targets.is_empty(),
+        !link_report.conflicts.is_empty(),
         updated_shell_config.is_some(),
     );
     if has_visible_result {
@@ -239,18 +260,37 @@ pub async fn handle_upgrade_installed_target(
             println!("{}", colors::bold("Shell Presets"));
         }
 
-        if snapshots_updated > 0 {
+        for target in &updated_targets {
+            println!("  {} {target}", colors::symbol("✓"));
+        }
+        if verbose && snapshots_updated > 0 {
             println!(
                 "  {} {}",
                 colors::symbol("✓"),
                 colors::green(&format!("{snapshots_updated} snapshot(s) updated"))
             );
         }
-        for name in &template_report.updated {
-            println!("  {} {}", colors::symbol("✓"), name);
+        if verbose && !template_report.updated.is_empty() {
+            output::summary_line(
+                "Templates",
+                &[colors::green(&format!(
+                    "{} rendered",
+                    template_report.updated.len()
+                ))],
+            );
         }
-        if !link_parts.is_empty() {
-            output::summary_line("Bin Links", &link_parts);
+        if should_print_link_summary(verbose, link_report.conflicts.len()) {
+            if verbose && !link_parts.is_empty() {
+                output::summary_line("Bin Links", &link_parts);
+            } else if !link_report.conflicts.is_empty() {
+                output::summary_line(
+                    "Bin Links",
+                    &[colors::yellow(&format!(
+                        "{} conflicts",
+                        link_report.conflicts.len()
+                    ))],
+                );
+            }
         }
         print_link_conflicts(config, &link_report.conflicts, None);
         if let Some(path) = &updated_shell_config {
@@ -263,6 +303,7 @@ pub async fn handle_upgrade_installed_target(
     }
 
     Ok(ShellUpgradeReport {
+        updated_targets,
         snapshots_updated,
         templates_updated: template_report.updated.len(),
         links_created: link_report.created.len(),
@@ -274,12 +315,31 @@ pub async fn handle_upgrade_installed_target(
 
 fn should_print_upgrade_section(
     verbose: bool,
-    snapshots_updated: bool,
-    templates_updated: bool,
-    has_link_result: bool,
+    targets_updated: bool,
+    has_link_conflict: bool,
     path_changed: bool,
 ) -> bool {
-    verbose || snapshots_updated || templates_updated || has_link_result || path_changed
+    verbose || targets_updated || has_link_conflict || path_changed
+}
+
+fn should_print_link_summary(verbose: bool, conflict_count: usize) -> bool {
+    verbose || conflict_count > 0
+}
+
+async fn pending_upgrade_targets(
+    config: &Config,
+    installed_commands: &[(String, String)],
+) -> Result<BTreeSet<String>> {
+    let installed_targets = installed_commands
+        .iter()
+        .map(|(category, command)| format!("{category}/{command}"))
+        .collect::<BTreeSet<_>>();
+    Ok(crate::status::build_shell_rows(config)
+        .await?
+        .into_iter()
+        .filter(|row| row.status_sym == "↑" && installed_targets.contains(&row.label))
+        .map(|row| row.label)
+        .collect())
 }
 
 pub async fn handle_completion_install(config: &Config) -> Result<()> {
@@ -408,24 +468,18 @@ mod tests {
 
     #[test]
     fn upgrade_section_hides_no_op_by_default_and_shows_verbose_or_changes() {
-        assert!(!should_print_upgrade_section(
-            false, false, false, false, false
-        ));
-        assert!(should_print_upgrade_section(
-            true, false, false, false, false
-        ));
-        assert!(should_print_upgrade_section(
-            false, true, false, false, false
-        ));
-        assert!(should_print_upgrade_section(
-            false, false, true, false, false
-        ));
-        assert!(should_print_upgrade_section(
-            false, false, false, true, false
-        ));
-        assert!(should_print_upgrade_section(
-            false, false, false, false, true
-        ));
+        assert!(!should_print_upgrade_section(false, false, false, false));
+        assert!(should_print_upgrade_section(true, false, false, false));
+        assert!(should_print_upgrade_section(false, true, false, false));
+        assert!(should_print_upgrade_section(false, false, true, false));
+        assert!(should_print_upgrade_section(false, false, false, true));
+    }
+
+    #[test]
+    fn bin_link_summary_is_verbose_only_unless_there_is_a_conflict() {
+        assert!(!should_print_link_summary(false, 0));
+        assert!(should_print_link_summary(true, 0));
+        assert!(should_print_link_summary(false, 1));
     }
 
     async fn make_temp_dir() -> PathBuf {
@@ -1045,6 +1099,41 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn embedded_source_and_link_upgrade_report_target_once() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.presets_dir()).await.unwrap();
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        handle_install(&config, Some("utils"), false).await.unwrap();
+
+        let source = config.presets_dir().join("shell/utils/copyfile.sh");
+        fs::write(&source, b"#!/bin/sh\necho stale\n")
+            .await
+            .unwrap();
+        make_executable(&source).await;
+
+        let stale_source = dir.join("stale-copyfile.sh");
+        fs::write(&stale_source, b"#!/bin/sh\necho stale link\n")
+            .await
+            .unwrap();
+        make_executable(&stale_source).await;
+        let link = config.bin_dir().join("copyfile");
+        fs::remove_file(&link).await.unwrap();
+        fs::symlink(&stale_source, &link).await.unwrap();
+
+        let mut separator = crate::output::SectionSeparator::new();
+        let report = handle_upgrade_installed(&config, false, &mut separator)
+            .await
+            .unwrap();
+
+        assert_eq!(report.updated_targets, vec!["utils/copyfile"]);
+        assert_eq!(report.links_updated, 1);
+        assert_eq!(fs::read_link(&link).await.unwrap(), source);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn external_presets_upgrade_does_not_install_preset_only_scripts() {
         let dir = make_temp_dir().await;
         let proxy_dir = dir.join("presets/shell/proxy");
@@ -1101,6 +1190,7 @@ mod tests {
             report.templates_updated, 1,
             "changed shell template should be reported under shell presets"
         );
+        assert_eq!(report.updated_targets, vec!["proxy/setproxy"]);
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(
             !config.bin_dir().join("extra_tool").exists(),
@@ -1363,6 +1453,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(report.snapshots_updated, 1);
+        assert_eq!(report.updated_targets, vec!["custom/mytool"]);
         assert!(
             fs::read_to_string(&installed)
                 .await

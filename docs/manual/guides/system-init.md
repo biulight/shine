@@ -79,6 +79,12 @@ user-maintained Git configuration are marked for manual review rather than assig
 version. `--proxy` uses the same configuration as `sys bootstrap --proxy`; on Windows, it explicitly
 passes winget's `--proxy` option.
 
+On Ubuntu, Shine does not record the installation source of software it finds already present.
+Manual-check results therefore avoid guessing an updater and give source-specific guidance only
+when it is safe to do so: for example, standalone `mise.run` installs use `mise self-update`, while
+package-managed installs use their original package manager. Rerunning `shine sys bootstrap` only
+verifies that existing software is present and does not upgrade it.
+
 `shine update` and `shine upgrade` still manage only Shine configuration and managed system
 resources. They never upgrade this third-party software. You decide whether to execute commands
 printed by `shine sys update`.

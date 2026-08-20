@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 1.3.0. Use `--help` on any subcommand for the exact interface of the
+This page reflects Shine 1.4.0. Use `--help` on any subcommand for the exact interface of the
 installed version.
 
 ## 1.0 target rules
@@ -90,10 +90,19 @@ shine completions install
 shine completions <bash|zsh|powershell>
 ```
 
-- `update --refresh-release` bypasses the 24-hour cache; `--diff` shows available content changes.
+- `update --refresh-release` bypasses the 24-hour cache. By default, `update` groups targets under
+  the same Homebrew-style sections as `shine list`: interactive terminals use horizontal columns,
+  while redirected output stays one target per line. It then prints the `shine upgrade` action once.
+  App files collapse to their category. `update --diff` switches to detailed vertical rows, expands
+  affected files, and shows available content changes.
 - A targeted update cannot combine with `--verbose` or `--refresh-release`.
 - `update/upgrade --pull` synchronizes Git-managed sources and reloads configuration first.
 - `upgrade --prune-stale` removes old managed app files no longer present in the source.
+- By default, `upgrade` prints each app category, Shell target, or managed-system item it actually
+  updates and counts each user-facing target once. App rows include the number of changed files.
+  `--verbose` expands app files and successful hook output, and also shows current/skipped items and
+  Shell deployment details such as snapshots, templates, and Bin Links. Failures, conflicts,
+  user-modified warnings, and blocked hooks remain visible without `--verbose`.
 - `shell info` and top-level `info` inspect uninstalled presets; `list --available` filters by kind.
 
 ## System presets
@@ -218,5 +227,5 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-Stable `shine --version` output is `shine 1.3.0 (<commit> <date>)`; preview builds use a label such as
-`1.3.0-preview`.
+Stable `shine --version` output is `shine 1.4.0 (<commit> <date>)`; preview builds use a label such as
+`1.4.0-preview`.

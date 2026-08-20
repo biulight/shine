@@ -362,7 +362,7 @@ pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Resu
     Ok(rows)
 }
 
-async fn app_file_row_status(
+pub(crate) async fn app_file_row_status(
     config: &Config,
     cat: &AppCategory,
     file: &crate::apps::AppFile,
@@ -372,25 +372,40 @@ async fn app_file_row_status(
     match resolve_install_destination(cat, file, config) {
         Err(_) => (None, FileStatus::NotInstalled),
         Ok(dest) => {
+            let source = format!("app/{}/{}", cat.name, file.source_rel.display());
+            let installed_category = manifest.entries.iter().any(|entry| {
+                entry
+                    .source
+                    .strip_prefix("app/")
+                    .and_then(|source| source.split_once('/'))
+                    .is_some_and(|(category, _)| category == cat.name)
+            });
             let status = match manifest.find_by_dest(&dest) {
-                None if file.generator.as_ref().is_some_and(|generator| {
-                    generator.auto && env.contains_key(&generator.when_env)
-                }) && manifest.entries.iter().any(|entry| {
-                    entry
-                        .source
-                        .strip_prefix("app/")
-                        .and_then(|source| source.split_once('/'))
-                        .is_some_and(|(category, _)| category == cat.name)
-                }) =>
-                {
-                    if source_hash_for_file(config, cat, file, env).await.is_some() {
-                        FileStatus::UpdateAvail
-                    } else {
-                        FileStatus::NotInstalled
-                    }
-                }
-                None => FileStatus::NotInstalled,
                 Some(entry) => app_entry_status(config, cat, file, entry, env).await,
+                None => match manifest.find_by_source(&source) {
+                    Some(entry)
+                        if file
+                            .generator
+                            .as_ref()
+                            .is_some_and(|generator| !generator.auto) =>
+                    {
+                        app_entry_status(config, cat, file, entry, env).await
+                    }
+                    Some(_) => FileStatus::UpdateAvail,
+                    None if installed_category
+                        && file
+                            .generator
+                            .as_ref()
+                            .is_none_or(|generator| generator.auto) =>
+                    {
+                        if source_hash_for_file(config, cat, file, env).await.is_some() {
+                            FileStatus::UpdateAvail
+                        } else {
+                            FileStatus::NotInstalled
+                        }
+                    }
+                    None => FileStatus::NotInstalled,
+                },
             };
             (Some(dest), status)
         }
@@ -476,6 +491,7 @@ mod tests {
         AppFile {
             source_rel: PathBuf::from("dest.txt"),
             target_rel: PathBuf::from("dest.txt"),
+            destination_root: None,
             description: None,
             display_name: None,
             legacy_dest_annotation: None,
@@ -631,6 +647,73 @@ mod tests {
 
         assert!(dest.is_some());
         assert_eq!(status, FileStatus::NotInstalled);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn app_file_row_status_reports_new_file_in_installed_category_as_update() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let source_dir = config.preset_path(Path::new("app/sample"));
+        fs::create_dir_all(&source_dir).await.unwrap();
+        fs::write(source_dir.join("new.txt"), b"new").await.unwrap();
+
+        let mut file = sample_app_file();
+        file.source_rel = PathBuf::from("new.txt");
+        file.target_rel = PathBuf::from("new.txt");
+        let category = AppCategory {
+            destination_root: Some(dir.join("dest").display().to_string()),
+            files: vec![file.clone()],
+            ..sample_app_category()
+        };
+        let manifest = AppManifest {
+            entries: vec![sample_app_entry(
+                dir.join("dest/old.txt"),
+                crate::install_core::hash_content(b"old"),
+            )],
+        };
+
+        let (_, status) =
+            app_file_row_status(&config, &category, &file, &manifest, &BTreeMap::new()).await;
+
+        assert_eq!(status, FileStatus::UpdateAvail);
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn app_file_row_status_reports_destination_move_as_update() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let source_dir = config.preset_path(Path::new("app/sample"));
+        fs::create_dir_all(&source_dir).await.unwrap();
+        fs::write(source_dir.join("dest.txt"), b"managed")
+            .await
+            .unwrap();
+
+        let old_destination = dir.join("old/dest.txt");
+        let category = AppCategory {
+            destination_root: Some(dir.join("new").display().to_string()),
+            ..sample_app_category()
+        };
+        let manifest = AppManifest {
+            entries: vec![sample_app_entry(
+                old_destination,
+                crate::install_core::hash_content(b"managed"),
+            )],
+        };
+
+        let (_, status) = app_file_row_status(
+            &config,
+            &category,
+            &category.files[0],
+            &manifest,
+            &BTreeMap::new(),
+        )
+        .await;
+
+        assert_eq!(status, FileStatus::UpdateAvail);
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -970,6 +1053,7 @@ mod tests {
                 AppFile {
                     source_rel: PathBuf::from("config.ghostty"),
                     target_rel: PathBuf::from("config.ghostty"),
+                    destination_root: None,
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
@@ -982,6 +1066,7 @@ mod tests {
                 AppFile {
                     source_rel: PathBuf::from("themes/shine-light"),
                     target_rel: PathBuf::from("themes/shine-light"),
+                    destination_root: None,
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
@@ -1025,6 +1110,7 @@ mod tests {
                 AppFile {
                     source_rel: PathBuf::from("config.toml"),
                     target_rel: PathBuf::from("config.toml"),
+                    destination_root: None,
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,
@@ -1037,6 +1123,7 @@ mod tests {
                 AppFile {
                     source_rel: PathBuf::from("theme.toml"),
                     target_rel: PathBuf::from("theme.toml"),
+                    destination_root: None,
                     description: None,
                     display_name: None,
                     legacy_dest_annotation: None,

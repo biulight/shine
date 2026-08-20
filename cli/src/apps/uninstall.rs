@@ -234,7 +234,7 @@ mod tests {
     #![allow(clippy::await_holding_lock)]
     use super::super::install::handle_install;
     use super::*;
-    use crate::apps::metadata::{AppCategory, AppFile, AppListMode};
+    use crate::apps::metadata::{AppCategory, AppDestinationRoot, AppFile, AppListMode};
     use crate::install_core::manifest::AppInstallStrategy;
     #[cfg(unix)]
     use crate::test_support::env_lock;
@@ -308,6 +308,9 @@ mod tests {
             files: vec![AppFile {
                 source_rel: PathBuf::from("daemon.jsonc"),
                 target_rel: PathBuf::from("daemon.json"),
+                destination_root: Some(AppDestinationRoot::Path(
+                    destination_root.display().to_string(),
+                )),
                 description: None,
                 display_name: None,
                 legacy_dest_annotation: None,

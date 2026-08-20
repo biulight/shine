@@ -40,13 +40,15 @@ impl HookPhase {
 /// order. External presets are gated behind `allow_app_hooks` (a skipped
 /// category prints a copy-pasteable manual command). Hook failures are
 /// non-fatal: the failure is printed and that category's remaining hooks are
-/// skipped, but the caller's command still succeeds. Returns the accumulated
-/// `show_output` notes so a caller can surface them in its own summary.
+/// skipped, but the caller's command still succeeds. `show_success` controls
+/// successful completion lines and `show_output` notes only; blocked and failed
+/// hooks are always reported. Returns any notes that were shown.
 pub(crate) async fn run_app_hooks<'a>(
     config: &Config,
     get_category: impl Fn(&str) -> Option<&'a AppCategory>,
     changed: &BTreeSet<String>,
     phase: HookPhase,
+    show_success: bool,
 ) -> Vec<String> {
     let label = phase.label();
     let mut all_notes: Vec<String> = Vec::new();
@@ -71,7 +73,7 @@ pub(crate) async fn run_app_hooks<'a>(
         for hook in hooks {
             match Command::new(&hook.command).args(&hook.args).output().await {
                 Ok(output) if output.status.success() => {
-                    if hook.show_output {
+                    if show_success && hook.show_output {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         let trimmed = stdout.trim();
                         if !trimmed.is_empty() {
@@ -101,14 +103,16 @@ pub(crate) async fn run_app_hooks<'a>(
                 }
             }
         }
-        if completed {
+        if completed && show_success {
             println!(
                 "  {} {category}: {label} hook completed",
                 colors::symbol("✓")
             );
         }
         for note in &notes {
-            println!("     {}", colors::dim(note));
+            for line in note.lines() {
+                println!("     {}", colors::dim(line));
+            }
         }
         all_notes.extend(notes);
     }
@@ -183,6 +187,7 @@ mod tests {
             |name| categories.get(name),
             &updated,
             HookPhase::PostUpgrade,
+            true,
         )
         .await;
         assert!(!marker.exists(), "external hook must be skipped by default");
@@ -193,6 +198,7 @@ mod tests {
             |name| categories.get(name),
             &updated,
             HookPhase::PostUpgrade,
+            true,
         )
         .await;
         assert_eq!(tokio::fs::read_to_string(&marker).await.unwrap(), "ran");
@@ -227,6 +233,7 @@ mod tests {
             |name| categories.get(name),
             &changed,
             HookPhase::PostUpgrade,
+            true,
         )
         .await;
         assert!(
@@ -239,6 +246,7 @@ mod tests {
             |name| categories.get(name),
             &changed,
             HookPhase::PostInstall,
+            true,
         )
         .await;
         assert_eq!(tokio::fs::read_to_string(&marker).await.unwrap(), "ran");
@@ -267,6 +275,7 @@ mod tests {
             |name| categories.get(name),
             &updated,
             HookPhase::PostUpgrade,
+            true,
         )
         .await;
         assert_eq!(notes, vec!["hello from hook".to_string()]);
@@ -295,6 +304,7 @@ mod tests {
             |name| categories.get(name),
             &updated,
             HookPhase::PostUpgrade,
+            true,
         )
         .await;
         assert!(
@@ -302,6 +312,33 @@ mod tests {
             "hook stdout must stay silent by default: {notes:?}"
         );
 
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn quiet_upgrade_suppresses_success_output_notes() {
+        let dir = std::env::temp_dir().join(format!("shine-hook-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.allow_app_hooks = true;
+
+        let categories = BTreeMap::from([(
+            "sample".to_string(),
+            sample_hook_category("echo hidden detail", true, HookPhase::PostUpgrade),
+        )]);
+        let updated = BTreeSet::from(["sample".to_string()]);
+        let notes = run_app_hooks(
+            &config,
+            |name| categories.get(name),
+            &updated,
+            HookPhase::PostUpgrade,
+            false,
+        )
+        .await;
+
+        assert!(notes.is_empty());
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 

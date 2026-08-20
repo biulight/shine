@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 1.3.0。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
+本页适用于 Shine 1.4.0。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
 
 ## 1.0 target 规则
 
@@ -80,10 +80,17 @@ shine completions install
 shine completions <bash|zsh|powershell>
 ```
 
-- `update --refresh-release` 跳过 24 小时版本检查缓存；`update --diff` 显示可用内容差异。
+- `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
+  Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示
+  一次 `shine upgrade`。App 文件按类别折叠。`update --diff` 会改用纵向详细行，展开受
+  影响的文件并显示可用内容差异。
 - 为 `update` 指定 target 后不能同时使用 `--verbose` 或 `--refresh-release`。
 - `update/upgrade --pull` 会先同步 Git 管理的来源并重新加载配置。
 - `upgrade --prune-stale` 移除预设来源中已不存在的旧受管 app 文件。
+- `upgrade` 默认逐项显示实际更新的 app 类别、Shell target 或受管系统项，并按用户可见
+  target 各计数一次；app 行会附带变更文件数。`--verbose` 会展开 app 文件和成功 hook 的
+  输出，还会显示已是最新或跳过的项目，以及 snapshot、template、Bin Link 等 Shell
+  部署细节。失败、冲突、用户修改警告和被拦截的 hook 无需 `--verbose` 也会显示。
 - `shell info` 和顶层 `info` 可以检查尚未安装的预设；`list --available` 可按资源类型过滤。
 
 ## 系统预设
@@ -192,4 +199,4 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-`shine --version` 在稳定版显示 `shine 1.3.0 (<commit> <date>)`；preview 构建使用 `1.3.0-preview` 形式的版本标签。
+`shine --version` 在稳定版显示 `shine 1.4.0 (<commit> <date>)`；preview 构建使用 `1.4.0-preview` 形式的版本标签。

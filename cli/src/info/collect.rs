@@ -4,7 +4,7 @@ use crate::env::EnvConfig;
 use crate::install_core::AppManifest;
 use crate::shells::metadata::ShellCategory;
 use crate::shells::metadata::load_active_categories as load_active_shells;
-use crate::status::{FileStatus, build_shell_rows};
+use crate::status::{FileStatus, app_file_row_status, build_shell_rows};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -41,34 +41,34 @@ pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile
     for category in categories {
         for file in &category.files {
             let source_key = format!("app/{}/{}", category.name, file.source_rel.display());
-            let destination = match resolve_install_destination(&category, file, config) {
-                Ok(dest) => dest,
-                Err(e) => {
-                    if manifest
-                        .entries
-                        .iter()
-                        .any(|entry| entry.source == source_key)
-                    {
-                        eprintln!(
-                            "warning: skipping {}/{}: {e:#}",
-                            category.name,
-                            file.source_rel.display()
-                        );
-                    }
-                    continue;
+            if let Err(error) = resolve_install_destination(&category, file, config) {
+                if manifest.find_by_source(&source_key).is_some() {
+                    eprintln!(
+                        "warning: skipping {}/{}: {error:#}",
+                        category.name,
+                        file.source_rel.display()
+                    );
                 }
-            };
-            let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
+                continue;
+            }
+            let (Some(destination), status) =
+                app_file_row_status(config, &category, file, &manifest, env_map).await
+            else {
                 continue;
             };
-            let status =
-                crate::status::app_entry_status(config, &category, file, &entry, env_map).await;
+            if status == FileStatus::NotInstalled {
+                continue;
+            }
+            let manifest_entry = manifest
+                .find_by_dest(&destination)
+                .or_else(|| manifest.find_by_source(&source_key))
+                .cloned();
             files.push(AppInfoFile {
                 category: category.clone(),
                 file: file.clone(),
                 destination,
                 status,
-                manifest_entry: Some(entry),
+                manifest_entry,
             });
         }
     }

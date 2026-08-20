@@ -4,6 +4,7 @@ use super::report::{
 };
 use super::{
     install_prepared_content, materialize_file_content, metadata, resolve_install_destination,
+    validate_unique_install_destinations,
 };
 use crate::colors;
 use crate::config::Config;
@@ -50,6 +51,7 @@ pub async fn handle_install(
     {
         anyhow::bail!("app preset category not found: {category}");
     }
+    validate_unique_install_destinations(&categories, config)?;
     let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
     output::summary_line(
         "App Configs",
@@ -214,6 +216,7 @@ pub async fn handle_install(
             |name| categories.iter().find(|c| c.name == name),
             &changed_categories,
             super::hooks::HookPhase::PostInstall,
+            true,
         )
         .await;
     }

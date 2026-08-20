@@ -150,9 +150,9 @@ shine app artifact apply clash-verge
 
 Shine 只读取 `profiles.yaml` 定位这些绑定文件，不会修改订阅、创建绑定或写入远端订阅 YAML。构建写入新内容后，在 Clash Verge Rev 中重新选择一次订阅，再运行构建即可请求立即刷新 rule-provider。
 
-示例沿用上述三类流量，并为 rule-provider 提供三套互斥布局：mihomo `HomeDir` 内的 `type: file`、同设备的 loopback HTTP 服务，或远程 HTTPS 服务。选择一整套 provider 后，还需同步启用对应策略组与 `prepend-rules`。mihomo 默认限制 file provider 路径，Shine 不会把规则偷偷复制进 Clash Verge Rev 的私有目录；loopback 或私有服务的 `proxy: DIRECT` 只控制 provider 下载，如服务器只能经代理访问，应删除或调整它。私有域名依赖系统 split DNS 时，还需配置 mihomo 自己的 `dns.nameserver-policy`。
+示例沿用上述三类流量，并为 rule-provider 提供三套互斥布局：mihomo `HomeDir` 内的 `type: file`、同设备的 loopback HTTP 服务，或远程 HTTPS 服务。Shine 会通过普通受管 app 文件把三份默认不生效的参考规则安装到 `HomeDir/ruleset/shine-source/`；只有选择 file provider 时才需要在 overlay 中覆盖这些文件。loopback 和远程 HTTP 布局不会引用它们，因此 URL、interval 与 provider 缓存路径保持不变。首次升级加入这些受管文件时，可能执行一次预设已有的即时刷新 hook，但不会改变当前 provider 定义。选择一整套 provider 后，还需同步启用对应策略组与 `prepend-rules`。loopback 或私有服务的 `proxy: DIRECT` 只控制 provider 下载，如服务器只能经代理访问，应删除或调整它。私有域名依赖系统 split DNS 时，还需配置 mihomo 自己的 `dns.nameserver-policy`。
 
-该 artifact 使用 Bun，运行机器必须已安装 Bun。预设的安装和升级钩子会在 `merge.yaml` 发生变化后自动再次调用构建；外部预设需要启用 `allow_app_hooks`。即时刷新还可使用 `[env]` 中的 `CLASH_CONTROLLER_URL` 和 `CLASH_CONTROLLER_TOKEN`；未配置 URL 时只跳过立即刷新，provider 仍按自身 interval 更新。控制器令牌不要写入 overlay 或文档。
+该 artifact 使用 Bun，运行机器必须已安装 Bun。预设的安装和升级钩子会在 `merge.yaml` 或受管本地参考规则发生变化后自动再次调用构建；外部预设需要启用 `allow_app_hooks`。即时刷新还可使用 `[env]` 中的 `CLASH_CONTROLLER_URL` 和 `CLASH_CONTROLLER_TOKEN`；未配置 URL 时只跳过立即刷新，provider 仍按自身 interval 更新。artifact 会刷新最终生效的 `merge.yaml` 中 `rule-providers` 映射声明的全部名称，自定义 provider 名称无需同步修改脚本。该映射缺失、为 null 或为空时跳过刷新；存在但不是映射时报告配置错误。所有已声明 provider 都刷新成功后，artifact 还会关闭当前全部 mihomo 连接，使浏览器和其它应用自动重连并立即按新规则匹配，无需重启应用；正在进行的下载或其它长连接可能会短暂中断。控制器令牌不要写入 overlay 或文档。
 
 `shine app artifact remove clash-verge` 不会清除 Clash Verge Rev 自己保存的订阅绑定；完全移除时还需在应用中手动清空上述四个编辑器。
 
@@ -166,4 +166,4 @@ Shine 只读取 `profiles.yaml` 定位这些绑定文件，不会修改订阅、
 allow_app_hooks = true
 ```
 
-钩子默认不显示 stdout；只有预设将 `show_output` 设为 `true` 时，成功输出才会作为提示显示。钩子失败会显示警告，但不会中断其它类别的安装或升级。
+钩子默认不显示 stdout。预设将 `show_output` 设为 `true` 后，安装和 refresh 会显示成功输出；`shine upgrade` 仅在 `--verbose` 下显示成功完成信息和输出。钩子失败或权限拦截始终可见，但不会中断其它类别的安装或升级。

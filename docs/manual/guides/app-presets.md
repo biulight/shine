@@ -202,18 +202,28 @@ subscription in Clash Verge Rev; running the build again can request an immediat
 refresh.
 
 The example uses the same three traffic classes and offers three mutually exclusive provider layouts:
-a mihomo `type: file` path inside `HomeDir`, loopback HTTP on the same device, or remote HTTPS. After
-choosing one complete provider set, enable its matching policy groups and `prepend-rules`. Mihomo
-normally restricts file-provider paths, so Shine does not copy rules secretly into Clash Verge Rev's
-private directory. `proxy: DIRECT` on loopback or private services affects only provider downloads;
+a mihomo `type: file` path inside `HomeDir`, loopback HTTP on the same device, or remote HTTPS. Shine
+installs three inert reference lists under `HomeDir/ruleset/shine-source/` through ordinary managed
+app-file entries; customize those files in an overlay only when choosing the file-provider layout.
+The loopback and remote HTTP layouts do not reference these local files, so their URLs, intervals,
+and provider cache paths are unchanged. The first upgrade that adds the managed references may run
+the preset's existing immediate-refresh hook once, without changing the active provider definitions.
+After choosing one complete provider set, enable its matching
+policy groups and `prepend-rules`. `proxy: DIRECT` on loopback or private services affects only provider downloads;
 remove or change it when the server requires a proxy. Private domains that rely on system split DNS
 also require mihomo `dns.nameserver-policy` configuration.
 
 This artifact uses Bun, which must be installed on the machine. Preset hooks rerun the build after
-`merge.yaml` changes; external presets require `allow_app_hooks`. Optional
+`merge.yaml` or a managed local reference list changes; external presets require `allow_app_hooks`. Optional
 `CLASH_CONTROLLER_URL` and `CLASH_CONTROLLER_TOKEN` values can request an immediate refresh. Without
-the URL, only that immediate refresh is skipped; providers still update on their own intervals. Never
-put controller tokens in an overlay or documentation.
+the URL, only that immediate refresh is skipped; providers still update on their own intervals. The
+artifact refreshes every name declared by the effective `merge.yaml` `rule-providers` mapping, so
+custom provider names need no matching script change. A missing, null, or empty mapping skips the
+refresh; a non-mapping value is reported as invalid configuration. After every declared provider
+refreshes successfully, the artifact closes all active mihomo connections so browsers and other
+applications reconnect under the new rules without being restarted. This can briefly interrupt
+downloads or other long-lived proxied sessions. Never put controller tokens in an overlay or
+documentation.
 
 `shine app artifact remove clash-verge` does not clear subscription bindings stored by Clash Verge
 Rev. Clear the four editors manually when removing the integration completely.
@@ -230,6 +240,7 @@ Hooks and generators in external presets require explicit permission:
 allow_app_hooks = true
 ```
 
-Hooks hide stdout by default. Successful output is shown only when the preset sets
-`show_output = true`. A hook failure prints a warning but does not interrupt installation or upgrades
-for other categories.
+Hooks hide stdout by default. When a preset sets `show_output = true`, successful output is shown
+during installation and refresh; `shine upgrade` reserves successful hook completion and output for
+`--verbose`. A hook failure or permission block is always shown and does not interrupt installation
+or upgrades for other categories.

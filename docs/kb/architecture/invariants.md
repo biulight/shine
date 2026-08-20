@@ -24,6 +24,11 @@ bugs. Check this list before changing the modules named in each entry.
   `env`.
 - **Backups use the `<name>.shine.bak` suffix** (`install_core/file_ops.rs::backup_path`).
   Uninstall restores from that exact name; changing the suffix orphans existing backups.
+- **An app source has exactly one manifest destination.** A per-file `dest` overrides the category
+  root, but changing that effective destination must relocate by manifest `source`: verify the old
+  copy is unmodified and the new path is free, then replace the manifest entry. Never update the old
+  path and separately install the new one; that leaves two owned copies for one source. Duplicate
+  effective destinations within the active metadata fail before any install or upgrade writes.
 - **`requires_admin` must persist on every manifest entry** (`install_core/manifest.rs::AppEntry`).
   Uninstall routes to the sudo removal path based on the stored flag, not by re-checking the
   path. Dropping it during (de)serialization silently breaks privileged uninstall (commit

@@ -3,6 +3,74 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-20 — Refreshed Clash rules left browser connections on their old route
+
+- **Symptom**: after `shine app artifact apply clash-verge` refreshed every rule-provider, browser
+  traffic did not follow the new rules until the browser was closed and reopened.
+- **Root cause**: a provider refresh updates matching for new connections but does not reroute
+  already-established HTTP/2, QUIC, WebSocket, or other long-lived mihomo connections.
+- **Fix**: after every declared provider refresh succeeds, call the controller's
+  `DELETE /connections` endpoint so applications reconnect and rematch; surface a close failure as
+  an artifact failure and document the brief disruption to active proxied sessions.
+- **Rule**: when a network-policy update promises immediate effect, distinguish refreshing policy
+  data from rematching existing flows; explicitly drain old flows when the public controller API
+  supports it, and disclose the disruption.
+
+## 2026-08-20 — App update and upgrade exposed different reporting identities
+
+- **Symptom**: `shine update` could list only one changed file while `shine upgrade` installed
+  additional files, printed every physical destination and successful hook line, then counted files
+  rather than the app category the user had selected.
+- **Root cause**: status treated a file without its own manifest entry as not installed even when its
+  category was installed, while upgrade intentionally adds new category files. Both commands then
+  rendered the underlying file operations instead of sharing a category-level reporting identity.
+- **Fix**: classify installable new files and destination moves as available updates, render default
+  targets through the shared horizontal column presentation with one action hint, and reserve file
+  destinations and successful hook details for `--diff` or `--verbose`. Keep failures, conflicts,
+  user-modified warnings, and permission blocks visible.
+- **Rule**: update discovery and upgrade execution must agree on the full pending change set and use
+  the same user-selected target as their default reporting and counting unit.
+
+## 2026-08-19 — Shell upgrade counted deployment operations instead of updated targets
+
+- **Symptom**: `shine update` listed two Shell targets with available updates, but `shine upgrade`
+  printed only `Bin Links 1 updated` and finished with `1 updated`, even though both targets were
+  brought current.
+- **Root cause**: embedded/overlay preset extraction discarded its report, while the global footer
+  summed template, snapshot, launcher, and profile operations. A raw source rewrite was therefore
+  invisible, and one target could conversely be counted more than once when several deployment
+  layers changed together.
+- **Fix**: carry the pending target identities from the shared status model through upgrade,
+  confirm which targets converged, print those target names by default, and reserve Bin Link and
+  other deployment-layer counts for `--verbose`.
+- **Rule**: status and mutation reports must use the same user-facing identity. Count each updated
+  target once; expose the lower-level operations that implemented it only as diagnostic detail.
+
+## 2026-08-19 — Ubuntu manual update guidance pointed to no-op bootstrap reruns
+
+- **Symptom**: manual results from `shine sys update --verbose` told users to rerun bootstrap for
+  `mise` and several other Ubuntu items, suggesting that doing so would update them.
+- **Root cause**: the update checker reused a generic remediation even though each corresponding
+  installer deliberately returns `already-installed` as soon as it finds an existing installation.
+  The same audit found a `git pull` suggestion for Shine's AstroNvim clone even though bootstrap
+  removes that clone's `.git` directory.
+- **Fix**: keep the check manual because bootstrap state does not record installation provenance,
+  remove remediation that cannot work, and give conditional source-specific guidance only where
+  it is valid, such as `mise self-update` for standalone `mise.run` installs.
+- **Rule**: validate every remediation against the implementation it invokes. Never recommend
+  rerunning an idempotent installer as an upgrade path when its existing-install guard is a no-op.
+
+## 2026-08-19 — Clash Verge provider refresh drifted from its composite source
+
+- **Symptom**: renaming, adding, or removing a `rule-providers` entry in an overlay `merge.yaml`
+  left the artifact refreshing the original three provider names, causing missed refreshes or 404s.
+- **Root cause**: rendering parsed the effective composite source, but refresh used a separate
+  hard-coded provider list copied from the inert example.
+- **Fix**: derive refresh targets from the same parsed `rule-providers` mapping, encode each name as
+  one URL path segment, and distinguish skipped refreshes from successful ones.
+- **Rule**: when an artifact already owns and parses a declarative source, downstream actions must
+  derive their targets from that parse rather than maintaining a parallel list.
+
 ## 2026-08-09 — Migration and authorization snapshots crossed lifecycle boundaries
 
 - **Symptom**: a broker policy could hash one workspace revision but execute another revision's

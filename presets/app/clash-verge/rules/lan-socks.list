@@ -1,0 +1,6 @@
+# Rules for traffic that should use the example `LAN PROXY` group.
+# Replace the documentation domains and uncomment only the entries you need.
+#
+# DOMAIN,smtp.example.com
+# DOMAIN-SUFFIX,services.example.com
+# AND,((DOMAIN,smtp.example.com),(DEST-PORT,465))

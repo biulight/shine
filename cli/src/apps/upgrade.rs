@@ -19,11 +19,15 @@ use super::report::{
 use super::{
     app_category_from_source, app_source_parts, desired_content_hash, install_prepared_content,
     installed_content_hash, resolve_install_destination, uninstall_app_entry,
+    validate_unique_install_destinations,
 };
 
 #[derive(Debug, Default)]
 pub struct AppUpgradeReport {
+    /// Physical files changed, retained for diagnostics and tests.
     pub updated: usize,
+    /// User-facing app targets changed. Default summaries count this value.
+    pub updated_categories: usize,
     pub skipped: usize,
     pub failed: usize,
     pub user_modified: usize,
@@ -83,6 +87,28 @@ impl<'a> UpgradeSection<'a> {
             println!(
                 "  {} {source}: manual refresh only (shine app refresh {category} {file})",
                 colors::symbol("•")
+            );
+        }
+    }
+
+    fn print_file_updated(&mut self, display_name: &str, destination: &Path, config: &Config) {
+        if self.verbose {
+            self.begin();
+            print_install_success(display_name, "", destination, config);
+        }
+    }
+
+    fn print_category_updates(&mut self, updated_files: &BTreeMap<String, usize>) {
+        if self.verbose || updated_files.is_empty() {
+            return;
+        }
+        self.begin();
+        for (category, count) in updated_files {
+            let noun = if *count == 1 { "file" } else { "files" };
+            println!(
+                "  {} {category}  {}",
+                colors::symbol("✓"),
+                colors::dim(&format!("{count} {noun} updated"))
             );
         }
     }
@@ -159,6 +185,7 @@ pub(crate) async fn handle_upgrade_installed_target(
             categories_by_name.insert(cat_name.clone(), cat);
         }
     }
+    validate_unique_install_destinations(categories_by_name.values(), config)?;
 
     let mut section = UpgradeSection::new(sep, verbose, selected_entries.len());
     if verbose {
@@ -173,6 +200,7 @@ pub(crate) async fn handle_upgrade_installed_target(
     let mut restart_hints = BTreeSet::new();
     let mut pending_removals: Vec<PathBuf> = Vec::new();
     let mut updated_categories = BTreeSet::new();
+    let mut updated_files_by_category = BTreeMap::<String, usize>::new();
 
     for entry in selected_entries {
         let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
@@ -188,6 +216,7 @@ pub(crate) async fn handle_upgrade_installed_target(
 
         let Some(cat) = categories_by_name.get(cat_name) else {
             section.begin();
+            let previous_updated = updated;
             handle_stale_entry(
                 config,
                 entry,
@@ -201,6 +230,12 @@ pub(crate) async fn handle_upgrade_installed_target(
                 },
             )
             .await?;
+            if updated > previous_updated {
+                updated_categories.insert(cat_name.to_string());
+                *updated_files_by_category
+                    .entry(cat_name.to_string())
+                    .or_default() += updated - previous_updated;
+            }
             continue;
         };
         let Some(file) = cat
@@ -209,6 +244,7 @@ pub(crate) async fn handle_upgrade_installed_target(
             .find(|file| file.source_rel.to_string_lossy().as_ref() == file_rel)
         else {
             section.begin();
+            let previous_updated = updated;
             handle_stale_entry(
                 config,
                 entry,
@@ -222,6 +258,12 @@ pub(crate) async fn handle_upgrade_installed_target(
                 },
             )
             .await?;
+            if updated > previous_updated {
+                updated_categories.insert(cat_name.to_string());
+                *updated_files_by_category
+                    .entry(cat_name.to_string())
+                    .or_default() += updated - previous_updated;
+            }
             continue;
         };
 
@@ -235,9 +277,12 @@ pub(crate) async fn handle_upgrade_installed_target(
             continue;
         }
 
-        match try_upgrade_entry(config, entry, cat, file, env_map, &mut section).await {
+        match try_upgrade_entry(config, &manifest, entry, cat, file, env_map, &mut section).await {
             EntryUpgradeResult::Updated(new_entry) => {
                 updated_categories.insert(cat.name.clone());
+                *updated_files_by_category
+                    .entry(cat.name.clone())
+                    .or_default() += 1;
                 pending_upserts.push(new_entry);
                 updated += 1;
                 if let Some(hint) = &file.restart_hint {
@@ -279,6 +324,9 @@ pub(crate) async fn handle_upgrade_installed_target(
     for entry in &new_upserts {
         if let Some(category) = app_category_from_source(&entry.source) {
             updated_categories.insert(category.to_string());
+            *updated_files_by_category
+                .entry(category.to_string())
+                .or_default() += 1;
         }
     }
     pending_upserts.extend(new_upserts);
@@ -289,16 +337,20 @@ pub(crate) async fn handle_upgrade_installed_target(
     }
     manifest.save(config.shine_dir()).await?;
 
+    section.print_category_updates(&updated_files_by_category);
+
     super::hooks::run_app_hooks(
         config,
         |name| categories_by_name.get(name),
         &updated_categories,
         super::hooks::HookPhase::PostUpgrade,
+        verbose,
     )
     .await;
 
     Ok(AppUpgradeReport {
         updated,
+        updated_categories: updated_categories.len(),
         skipped,
         failed: failed + new_failed,
         user_modified,
@@ -316,12 +368,36 @@ enum EntryUpgradeResult {
 
 async fn try_upgrade_entry(
     config: &Config,
+    manifest: &AppManifest,
     entry: &AppEntry,
     cat: &metadata::AppCategory,
     file: &metadata::AppFile,
     env_map: &BTreeMap<String, String>,
     section: &mut UpgradeSection<'_>,
 ) -> EntryUpgradeResult {
+    let desired_destination = match resolve_install_destination(cat, file, config) {
+        Ok(destination) => destination,
+        Err(error) => {
+            section.begin();
+            print_install_error(&entry.source, &error);
+            return EntryUpgradeResult::Failed;
+        }
+    };
+
+    if desired_destination != entry.destination {
+        return relocate_upgrade_entry(
+            config,
+            manifest,
+            entry,
+            cat,
+            file,
+            env_map,
+            desired_destination,
+            section,
+        )
+        .await;
+    }
+
     let content = match upgrade_file_content(config, cat, file, env_map).await {
         Ok(c) => c,
         Err(e) => {
@@ -397,8 +473,7 @@ async fn try_upgrade_entry(
                 .as_deref()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-            section.begin();
-            print_install_success(&display_name, "", &entry.destination, config);
+            section.print_file_updated(&display_name, &entry.destination, config);
             EntryUpgradeResult::Updated(AppEntry {
                 source: entry.source.clone(),
                 destination: entry.destination.clone(),
@@ -418,6 +493,141 @@ async fn try_upgrade_entry(
             EntryUpgradeResult::Failed
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn relocate_upgrade_entry(
+    config: &Config,
+    manifest: &AppManifest,
+    entry: &AppEntry,
+    cat: &metadata::AppCategory,
+    file: &metadata::AppFile,
+    env_map: &BTreeMap<String, String>,
+    desired_destination: PathBuf,
+    section: &mut UpgradeSection<'_>,
+) -> EntryUpgradeResult {
+    if let Some(conflict) = manifest.find_by_dest(&desired_destination) {
+        section.begin();
+        eprintln!(
+            "  {} {}: destination move blocked; {} is already managed by {}",
+            colors::symbol("!"),
+            entry.source,
+            path_display::format_home(&desired_destination, &config.home_dir),
+            conflict.source
+        );
+        return EntryUpgradeResult::UserModified;
+    }
+    if desired_destination.exists() {
+        section.begin();
+        eprintln!(
+            "  {} {}: destination move blocked; {} already exists and is not managed",
+            colors::symbol("!"),
+            entry.source,
+            path_display::format_home(&desired_destination, &config.home_dir)
+        );
+        return EntryUpgradeResult::UserModified;
+    }
+
+    match tokio::fs::read(&entry.destination).await {
+        Ok(current) => match installed_content_hash(file, &current) {
+            Ok(Some(hash)) if hash == entry.content_hash => {}
+            Ok(_) | Err(_) => {
+                section.begin();
+                eprintln!(
+                    "  {} {}: destination move blocked; installed file is user-modified",
+                    colors::symbol("!"),
+                    entry.source
+                );
+                return EntryUpgradeResult::UserModified;
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            section.begin();
+            print_install_error(&entry.source, &anyhow::Error::from(error));
+            return EntryUpgradeResult::Failed;
+        }
+    }
+
+    let content = match upgrade_file_content(config, cat, file, env_map).await {
+        Ok(content) => content,
+        Err(error) => {
+            section.begin();
+            print_install_error(&entry.source, &error);
+            return EntryUpgradeResult::Failed;
+        }
+    };
+    let outcome =
+        match install_prepared_content(file, &content, &desired_destination, false, false, false)
+            .await
+        {
+            Ok(outcome @ InstallOutcome::Installed { .. })
+            | Ok(outcome @ InstallOutcome::BackedUpAndInstalled { .. }) => outcome,
+            Ok(InstallOutcome::AlreadyManaged | InstallOutcome::DryRun) => {
+                return EntryUpgradeResult::Skipped;
+            }
+            Err(error) => {
+                section.begin();
+                print_install_error(&entry.source, &error);
+                return EntryUpgradeResult::Failed;
+            }
+        };
+    let (backup, hash) = match outcome {
+        InstallOutcome::Installed { hash } => (None, hash),
+        InstallOutcome::BackedUpAndInstalled { backup, hash } => (Some(backup), hash),
+        InstallOutcome::AlreadyManaged | InstallOutcome::DryRun => unreachable!(),
+    };
+
+    match uninstall_app_entry(entry, false, false).await {
+        Ok(
+            UninstallOutcome::Removed
+            | UninstallOutcome::RestoredBackup { .. }
+            | UninstallOutcome::NotFound,
+        ) => {}
+        Ok(_) | Err(_) => {
+            let rollback = AppEntry {
+                source: entry.source.clone(),
+                destination: desired_destination.clone(),
+                backup: backup.clone(),
+                content_hash: hash,
+                install_strategy: file.install_strategy.clone(),
+                uses_env: file
+                    .transforms
+                    .iter()
+                    .any(|transform| transform == "template")
+                    || file.generator.is_some(),
+                requires_admin: file.requires_admin,
+            };
+            let _ = uninstall_app_entry(&rollback, false, true).await;
+            section.begin();
+            eprintln!(
+                "  {} {}: destination move could not remove the old managed file; new copy rolled back",
+                colors::symbol("!"),
+                entry.source
+            );
+            return EntryUpgradeResult::Failed;
+        }
+    }
+
+    let display_name = file
+        .display_name
+        .as_deref()
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
+    section.print_file_updated(&display_name, &desired_destination, config);
+    EntryUpgradeResult::Updated(AppEntry {
+        source: entry.source.clone(),
+        destination: desired_destination,
+        backup,
+        content_hash: hash,
+        install_strategy: file.install_strategy.clone(),
+        uses_env: file
+            .transforms
+            .iter()
+            .any(|transform| transform == "template")
+            || file.generator.is_some(),
+        requires_admin: file.requires_admin,
+    })
 }
 
 enum StaleCleanupOutcome {
@@ -520,6 +730,10 @@ async fn install_new_category_files(
 
             let source = format!("app/{}/{}", cat.name, file.source_rel.display());
 
+            if manifest.find_by_source(&source).is_some() {
+                continue;
+            }
+
             if destination.exists() && file.install_strategy.is_copy() {
                 section.begin();
                 eprintln!(
@@ -560,8 +774,7 @@ async fn install_new_category_files(
                         .as_deref()
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
-                    section.begin();
-                    print_install_success(&display_name, "", &destination, config);
+                    section.print_file_updated(&display_name, &destination, config);
                     new_upserts.push(AppEntry {
                         source,
                         destination,
@@ -684,6 +897,92 @@ async fn upgrade_file_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::apps::{AppFile, AppListMode};
+    use crate::config::Config;
+    use crate::install_core::manifest::{AppInstallStrategy, hash_content};
+    use tokio::fs;
+
+    async fn relocation_fixture(
+        user_modified: bool,
+        destination_conflict: bool,
+    ) -> (
+        Config,
+        AppManifest,
+        AppEntry,
+        metadata::AppCategory,
+        PathBuf,
+        PathBuf,
+    ) {
+        let dir = crate::test_support::make_temp_dir("shine-upgrade-relocation").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        let source_dir = config.presets_dir().join("app/sample");
+        fs::create_dir_all(&source_dir).await.unwrap();
+        fs::write(source_dir.join("config.toml"), b"managed\n")
+            .await
+            .unwrap();
+        let old_destination = dir.join("old/config.toml");
+        let new_root = dir.join("new");
+        fs::create_dir_all(old_destination.parent().unwrap())
+            .await
+            .unwrap();
+        let old_content: &[u8] = if user_modified {
+            b"modified\n"
+        } else {
+            b"managed\n"
+        };
+        fs::write(&old_destination, old_content).await.unwrap();
+        if destination_conflict {
+            fs::create_dir_all(&new_root).await.unwrap();
+            fs::write(new_root.join("config.toml"), b"mine\n")
+                .await
+                .unwrap();
+        }
+        let entry = AppEntry {
+            source: "app/sample/config.toml".to_string(),
+            destination: old_destination.clone(),
+            backup: None,
+            content_hash: hash_content(b"managed\n"),
+            install_strategy: AppInstallStrategy::Copy,
+            uses_env: false,
+            requires_admin: false,
+        };
+        let manifest = AppManifest {
+            entries: vec![entry.clone()],
+        };
+        let category = metadata::AppCategory {
+            name: "sample".to_string(),
+            description: None,
+            destination_root: Some(new_root.display().to_string()),
+            files: vec![AppFile {
+                source_rel: PathBuf::from("config.toml"),
+                target_rel: PathBuf::from("config.toml"),
+                destination_root: None,
+                description: None,
+                display_name: None,
+                legacy_dest_annotation: None,
+                transforms: Vec::new(),
+                install_strategy: AppInstallStrategy::Copy,
+                requires_admin: false,
+                restart_hint: None,
+                generator: None,
+            }],
+            list_mode: AppListMode::Files,
+            post_upgrade: Vec::new(),
+            post_install: Vec::new(),
+            uses_metadata: true,
+            has_explicit_files: true,
+            artifact: None,
+        };
+        (
+            config,
+            manifest,
+            entry,
+            category,
+            old_destination,
+            new_root.join("config.toml"),
+        )
+    }
 
     #[test]
     fn no_op_rows_only_start_the_app_section_in_verbose_mode() {
@@ -697,5 +996,80 @@ mod tests {
         let mut verbose = UpgradeSection::new(&mut verbose_separator, true, 1);
         verbose.print_up_to_date("app/sample/config.toml");
         assert!(verbose.started);
+    }
+
+    #[tokio::test]
+    async fn relocation_moves_an_unmodified_managed_file() {
+        let (config, manifest, entry, category, old_destination, new_destination) =
+            relocation_fixture(false, false).await;
+        let mut separator = crate::output::SectionSeparator::new();
+        let mut section = UpgradeSection::new(&mut separator, false, 1);
+        let result = relocate_upgrade_entry(
+            &config,
+            &manifest,
+            &entry,
+            &category,
+            &category.files[0],
+            &BTreeMap::new(),
+            new_destination.clone(),
+            &mut section,
+        )
+        .await;
+
+        let EntryUpgradeResult::Updated(updated) = result else {
+            panic!("expected relocation to update")
+        };
+        assert_eq!(updated.destination, new_destination);
+        assert_eq!(fs::read(&updated.destination).await.unwrap(), b"managed\n");
+        assert!(!old_destination.exists());
+        fs::remove_dir_all(config.home_dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn relocation_keeps_a_user_modified_old_file() {
+        let (config, manifest, entry, category, old_destination, new_destination) =
+            relocation_fixture(true, false).await;
+        let mut separator = crate::output::SectionSeparator::new();
+        let mut section = UpgradeSection::new(&mut separator, false, 1);
+        let result = relocate_upgrade_entry(
+            &config,
+            &manifest,
+            &entry,
+            &category,
+            &category.files[0],
+            &BTreeMap::new(),
+            new_destination.clone(),
+            &mut section,
+        )
+        .await;
+
+        assert!(matches!(result, EntryUpgradeResult::UserModified));
+        assert_eq!(fs::read(old_destination).await.unwrap(), b"modified\n");
+        assert!(!new_destination.exists());
+        fs::remove_dir_all(config.home_dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn relocation_does_not_overwrite_an_unmanaged_new_destination() {
+        let (config, manifest, entry, category, old_destination, new_destination) =
+            relocation_fixture(false, true).await;
+        let mut separator = crate::output::SectionSeparator::new();
+        let mut section = UpgradeSection::new(&mut separator, false, 1);
+        let result = relocate_upgrade_entry(
+            &config,
+            &manifest,
+            &entry,
+            &category,
+            &category.files[0],
+            &BTreeMap::new(),
+            new_destination.clone(),
+            &mut section,
+        )
+        .await;
+
+        assert!(matches!(result, EntryUpgradeResult::UserModified));
+        assert_eq!(fs::read(old_destination).await.unwrap(), b"managed\n");
+        assert_eq!(fs::read(new_destination).await.unwrap(), b"mine\n");
+        fs::remove_dir_all(config.home_dir).await.unwrap();
     }
 }

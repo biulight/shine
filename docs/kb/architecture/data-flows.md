@@ -8,9 +8,12 @@ records the cross-module sequences and their gotchas.
 
 `cli/src/apps/mod.rs` orchestrates:
 
-1. **Metadata** — `apps/metadata.rs` parses `presets/app/<category>/shine.toml` (`dest`,
-   `transforms`, `requires_admin`, …). Legacy categories without `shine.toml` (git, starship)
-   use `apps/annotation.rs` to read a `shine-dest:` comment from the file itself.
+1. **Metadata** — `apps/metadata.rs` parses `presets/app/<category>/shine.toml` (category `dest`,
+   optional per-`[[files]]` `dest`, `transforms`, `requires_admin`, …). A file destination overrides
+   the category root; `{ base = "data-dir", path = "..." }` remains structured until a `Config`
+   resolves the current user's platform data directory. Duplicate effective destinations fail
+   before any writes. Legacy categories without `shine.toml` (git, starship) use
+   `apps/annotation.rs` to read a `shine-dest:` comment from the file itself.
 2. **Transforms** — `install_core/transforms/` applies `jsonc-to-json` and/or `template`
    (`@@VAR@@` substitution from the `[env]` config table) in declaration order, in memory, before
    writing.
@@ -41,6 +44,12 @@ stale/update loop, so no other app category can be mutated. Shell and managed-sy
 apply the same pre-mutation filtering at their own category/item boundaries. `env/upgrade.rs` does
 the same for env-templated content. This is why changing an env var requires `shine upgrade` to
 take effect in installed files.
+
+Manifest identity for app files is the preset `source`, while ownership checks remain destination-
+based. If metadata changes a source's effective destination, upgrade installs the new copy and
+removes/restores the old one only after verifying the old content is still manifest-current and the
+new destination is free. A modified old copy or occupied new destination blocks relocation without
+creating a duplicate manifest entry.
 
 Managed sys resources participate in the same flow. `shine update` compares the desired built-in
 resource receipt derived from the active env against `sys-manifest.toml`; `shine upgrade` then

@@ -90,6 +90,8 @@ metadata-load time). The `native` path is unchanged.
 external-controller `PUT /providers/rules/<name>`) is generic and secret-free, so — unlike surge's
 provider-specific patch — it can ship in shine core; the user-specific pieces (real `merge.yaml`
 values, `CLASH_CONTROLLER_URL/TOKEN`) still live in the overlay, preserving this ADR's principle.
+The provider names come from the effective composite source's `rule-providers` mapping; the script
+does not maintain a second allow-list or scan providers inherited from the remote subscription.
 
 `clash-verge`'s `build.ts` writes the **active subscription's four bound enhancement files**, not
 CVR's global `profiles/Merge.yaml`. It reads `profiles.yaml` only to follow `current` through
@@ -103,6 +105,13 @@ separate Proxies/Groups/Rules documents as `{ prepend, append: [], delete: [] }`
 write, build asks the user to reselect the profile; a later build performs the provider refresh.
 This prevents global array replacement and first-apply HTTP 404 failures.
 
+The preset also ships three inert `rules/*.list` references for its HomeDir `type: file` example.
+They are not artifact side effects: ordinary `[[files]]` entries override the category destination
+with `{ base = "data-dir", path = "io.github.clash-verge-rev.clash-verge-rev" }`, so the standard
+app manifest installs, updates, backs up, and uninstalls them under `ruleset/shine-source/`. HTTP and
+HTTPS provider examples do not reference these files; their URLs, intervals, and cache paths remain
+unchanged.
+
 **Opt-in auto-run via hooks.** The core principle above — Shine's install/upgrade machinery never
 runs an artifact implicitly — is unchanged: there is still no `run_on_upgrade` field and the runner
 never invokes the artifact on its own. But a preset MAY *opt in* to auto-running its build by
@@ -115,6 +124,6 @@ has applied it); surge does
 NOT do this — its artifact patches a live profile (provider-specific, order-sensitive), which is
 exactly the kind of side effect this ADR keeps behind an explicit command. Constraints: the hook
 needs `shine` on PATH; external presets need `allow_app_hooks = true`; it fires only when the
-preset's own files change (not on unrelated `shine upgrade` runs, and not on rule-list edits, which
-never touch `merge.yaml`); no recursion, since `shine app artifact apply` fires neither install nor upgrade
+preset's own files change (not on unrelated `shine upgrade` runs; managed local rule-reference
+edits now count as preset changes); no recursion, since `shine app artifact apply` fires neither install nor upgrade
 hooks.
