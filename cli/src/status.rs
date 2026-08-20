@@ -564,6 +564,18 @@ pub(crate) async fn assess_app_file(
                     status
                 }
                 None => match manifest.find_by_source(&source) {
+                    Some(entry)
+                        if file
+                            .generator
+                            .as_ref()
+                            .is_some_and(|generator| !generator.auto) =>
+                    {
+                        return AppFileAssessment {
+                            destination: Some(entry.destination.clone()),
+                            status: app_entry_status(config, cat, file, entry, env).await,
+                            changes: Vec::new(),
+                        };
+                    }
                     Some(entry) => {
                         changes.push(UpdateChange::DestinationRelocated {
                             from: entry.destination.clone(),
@@ -930,6 +942,59 @@ mod tests {
                 to: dir.join("new/dest.txt"),
             }]
         );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_generator_destination_move_preserves_installed_snapshot() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let source_dir = config.preset_path(Path::new("app/sample"));
+        fs::create_dir_all(&source_dir).await.unwrap();
+        fs::write(source_dir.join("dest.txt"), b"static fallback")
+            .await
+            .unwrap();
+        fs::write(source_dir.join("generate.sh"), b"#!/bin/sh\n")
+            .await
+            .unwrap();
+        fs::write(
+            source_dir.join("shine.toml"),
+            format!(
+                "dest = {:?}\n\n[[files]]\nsource = \"dest.txt\"\ntarget = \"dest.txt\"\ngenerator = {{ script = \"generate.sh\", env = [\"SOURCE_URL\"], when_env = \"SOURCE_URL\", auto = false }}\n",
+                dir.join("new").display().to_string()
+            ),
+        )
+        .await
+        .unwrap();
+
+        let old_destination = dir.join("old/dest.txt");
+        fs::create_dir_all(old_destination.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(&old_destination, b"generated snapshot")
+            .await
+            .unwrap();
+
+        let mut categories = crate::apps::load_active_categories(&config, Some("sample"))
+            .await
+            .unwrap();
+        let category = categories.remove(0);
+        let file = category.files[0].clone();
+        let manifest = AppManifest {
+            entries: vec![sample_app_entry(
+                old_destination.clone(),
+                crate::install_core::hash_content(b"generated snapshot"),
+            )],
+        };
+
+        let assessment =
+            assess_app_file(&config, &category, &file, &manifest, &BTreeMap::new()).await;
+
+        assert_eq!(assessment.destination, Some(old_destination));
+        assert_eq!(assessment.status, FileStatus::UpToDate);
+        assert!(assessment.changes.is_empty());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

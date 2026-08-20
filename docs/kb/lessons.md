@@ -23,8 +23,9 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
   files and full external snapshots as installation evidence even though the manifest and launchers
   were already command-granular.
 - **Fix**: accept explicit `category/command` install and uninstall targets, update manifest entries
-  incrementally at that scope, and treat category source material as a shared cache rather than an
-  activation receipt.
+  incrementally at that scope, treat category source material as a shared cache rather than an
+  activation receipt, filter info through command installation status, and retain shared rendered
+  files until the final referencing command is uninstalled.
 - **Rule**: when deployment material is broader than the user-selected lifecycle unit, installed
   state must come from the unit's receipt or managed entry—not incidental source presence.
 
@@ -68,7 +69,8 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Fix**: classify installable new files and destination moves as available updates, render default
   targets through the shared horizontal column presentation with one action hint, and reserve file
   destinations and successful hook details for `--diff` or `--verbose`. Keep failures, conflicts,
-  user-modified warnings, and permission blocks visible.
+  user-modified warnings, and permission blocks visible. Exclude manual-generator destination moves
+  because implicit upgrade intentionally preserves those manifest snapshots.
 - **Rule**: update discovery and upgrade execution must agree on the full pending change set and use
   the same user-selected target as their default reporting and counting unit.
 

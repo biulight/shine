@@ -249,6 +249,10 @@ async fn handle_uninstall_command(
             });
         if let Some(path) = rendered_path
             && path.starts_with(config.rendered_dir())
+            && !manifest.entries.iter().any(|entry| {
+                (entry.category != category || entry.command != command)
+                    && entry.rendered_path == path
+            })
         {
             remove_file_if_present(&path).await?;
         }
@@ -352,6 +356,54 @@ mod tests {
             .unwrap();
         assert!(!profile.contains(&wrapper_marker("shine-env-export", &config.shell_type)));
         assert!(profile.contains(&wrapper_marker("shine-theme-sync", &config.shell_type)));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn command_scoped_uninstall_preserves_shared_rendered_file() {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            b"[[files]]\nsource = \"shared.sh\"\ntarget = \"one\"\ntransforms = [\"template\"]\n\n[[files]]\nsource = \"shared.sh\"\ntarget = \"two\"\ntransforms = [\"template\"]\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("shared.sh"), b"#!/bin/sh\necho shared\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("custom/one"), false)
+            .await
+            .unwrap();
+        handle_install(&config, Some("custom/two"), false)
+            .await
+            .unwrap();
+        let rendered = config.rendered_dir().join("shell/custom/shared.sh");
+        assert!(rendered.exists());
+
+        handle_uninstall(&config, Some("custom/one"), false, false)
+            .await
+            .unwrap();
+
+        assert!(
+            rendered.exists(),
+            "installed sibling still uses rendered file"
+        );
+        assert!(config.bin_dir().join("two").exists());
+        let manifest = crate::shells::deployment::ShellManifest::load(&config)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/custom/one").is_none());
+        assert_eq!(
+            manifest.find("shell/custom/two").unwrap().rendered_path,
+            rendered
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
