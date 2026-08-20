@@ -5,7 +5,8 @@ sidebar_position: 3
 
 # 初始化与管理系统
 
-系统预设为 macOS、Ubuntu 和 Windows 提供可选择的开发环境初始化步骤。实际可用项目以当前版本的 `shine sys list` 为准。
+系统预设为 macOS、Ubuntu 和 Windows 提供可选择的开发环境初始化步骤，以及少量可逆的受管系统
+资源；它不是通用的机器配置或包版本管理器。实际可用项目以当前版本的 `shine sys list` 为准。
 
 各平台 profile 的项目清单，以及 `split-dns` 所需的环境变量和安全预览步骤见[内置预设](../reference/built-in-presets.md#系统预设)。
 
@@ -49,6 +50,10 @@ winget settings --enable ProxyCommandLineOptions
 shine sys status
 ```
 
+这里展示的是执行记录：`installed`、`already installed` 或 `completed` 描述上一次 bootstrap
+调用观察到的结果，并不会实时探测第三方软件当前是否仍存在或已是最新版。受支持的实时检查请使用
+下一节的只读更新命令。
+
 ## 检查引导软件更新
 
 初始化完成后，可只读检查当时记录的软件是否有可用更新：
@@ -71,6 +76,10 @@ shine sys update --proxy
 猜测更新方式，只在安全时提供按来源区分的建议。例如，通过独立 `mise.run` 安装的 `mise`
 使用 `mise self-update`，通过包管理器安装则使用原包管理器更新。重新运行
 `shine sys bootstrap` 只会确认现有软件已存在，不会升级它。
+
+内置 mise 步骤遵循同一边界：它可以安装 mise，并把激活内容加入 Shine 管理的 Shell profile，
+但不会创建或更新 mise 配置，也不会管理 runtime 版本。`mise.toml`、工具安装与版本升级仍由 mise
+负责。
 
 `shine update` 和 `shine upgrade` 仍只处理 Shine 管理的配置和受管系统资源，不会升级这些
 第三方软件。是否执行 `shine sys update` 输出的升级命令始终由用户决定。

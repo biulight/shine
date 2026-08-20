@@ -6,8 +6,9 @@ sidebar_position: 3
 # Initialize and manage a system
 
 System presets provide selectable development-environment initialization steps for macOS, Ubuntu,
-and Windows. Use `shine sys list` from the installed version as the authoritative list of available
-items.
+and Windows, plus a small set of reversible managed system resources. They are not a general machine
+configuration or package-version manager. Use `shine sys list` from the installed version as the
+authoritative list of available items.
 
 See [built-in presets](../reference/built-in-presets.md#system-presets) for each platform's profiles
 and for `split-dns` environment variables and safe preview steps.
@@ -59,6 +60,10 @@ After initialization, inspect the recorded state:
 shine sys status
 ```
 
+This view is a run record: `installed`, `already installed`, or `completed` describes what the last
+bootstrap invocation observed. It does not probe whether third-party software is still present or
+current. Use the read-only update command below for the supported live checks.
+
 ## Check bootstrap software updates
 
 Read-only update checks are available for software recorded during initialization:
@@ -84,6 +89,10 @@ Manual-check results therefore avoid guessing an updater and give source-specifi
 when it is safe to do so: for example, standalone `mise.run` installs use `mise self-update`, while
 package-managed installs use their original package manager. Rerunning `shine sys bootstrap` only
 verifies that existing software is present and does not upgrade it.
+
+The built-in mise step follows the same boundary: it can install mise and add activation to managed
+shell profile content, but it does not create or update mise configuration and does not manage
+runtime versions. Use mise for `mise.toml`, tool installation, and version upgrades.
 
 `shine update` and `shine upgrade` still manage only Shine configuration and managed system
 resources. They never upgrade this third-party software. You decide whether to execute commands

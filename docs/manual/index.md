@@ -2,40 +2,57 @@
 title: Shine
 slug: /
 sidebar_position: 1
-description: Manage shell commands, application configuration, and system initialization presets with Shine.
+description: Keep a development environment portable, usable, and safe across machines and remote sessions.
 ---
 
 # Shine
 
-Shine is a cross-platform command-line tool that packages common shell scripts, application
-configuration, and system initialization steps as presets you can install, inspect, upgrade, and
-safely uninstall.
+Shine keeps a development environment portable, usable, and safe across machines and remote
+sessions. It gives shell commands, application configuration, bootstrap steps, environment values,
+tasks, and SSH workflows explicit ownership and reviewable lifecycle operations.
 
 This manual applies to **Shine 1.4.0**.
 
-## What you can do with Shine
+## Four connected workflows
 
-- Install shell commands such as `setproxy` and `copyfile`, including automatic command-path setup.
-- Install configuration for applications such as Git, Starship, Ghostty, Vim, and Docker.
-- Select and run system initialization steps on macOS, Ubuntu, and Windows.
-- Check, without modifying the system, whether software installed by system initialization has
-  updates, then decide whether to upgrade it yourself.
-- Export built-in presets and keep customizations in an external directory or overlay.
-- Deploy external shell presets as snapshots by default, with an explicit live mode for preset
-  development.
-- Manage configuration values and sensitive workspace environment variables with GPG.
-- Install transparent wrappers for commands that need fixed environment variables, injecting only
-  allow-listed secrets into that command's child process.
-- Manage shared team secrets with `age` and optional macOS Touch ID support.
-- Transfer files or directories between the local and remote hosts in a `shine ssh` session.
-- Save personal commands and generate helper resources that application presets can expose through
-  a local HTTP service.
-- Explicitly refresh supported URI subscriptions into Shine-managed Surge policy files without
-  consuming short-lived access windows during routine status checks.
-- Detect the terminal light or dark appearance and provide consistent theme variables to `bat` and
-  remote SSH sessions.
-- Compare installed files with their presets and upgrade only content managed by Shine.
-- Browse, inspect, and update resources through consistent `app/`, `shell/`, and `sys/` targets.
+### Set up and reconcile
+
+Install shell and application presets, inspect pending changes, and safely upgrade or uninstall only
+the content Shine manages. Bootstrap scripts help initialize a new macOS, Ubuntu, or Windows machine.
+
+System bootstrap is intentionally not package-version management. It records what a bootstrap run
+did and can perform read-only update checks, but third-party tools and package managers remain the
+authority for versions and upgrades. A built-in step may install and activate mise; it does not
+configure mise or manage runtime versions on mise's behalf.
+
+### Keep terminal work repeatable
+
+Install portable commands such as `setproxy` and `copyfile`, save argv-based personal tasks,
+synchronize light/dark terminal themes, and serve generated resources required by managed app
+configuration.
+
+### Continue work across SSH
+
+`shine ssh` can forward explicitly selected values, keep terminal theme context, and transfer files
+or directories over the authenticated session. The remote side asks the local agent to perform the
+transfer, so there is no separate file-transfer daemon to expose.
+
+### Release secrets deliberately
+
+Store workspace secrets with GPG or age, optionally backed by macOS Touch ID. For remote AI and
+tooling workflows, the SSH secret broker keeps decryption local and matches requests against an exact
+workspace, host, command, and secret policy before releasing values.
+
+## Presets are products and extension points
+
+Built-in presets provide usable defaults, including provider-specific Surge and Clash Verge Rev
+artifacts that remove application-specific assembly work. Treat them as starting points: copy one
+category, override selected paths with an overlay, or maintain a complete external preset source.
+Command output identifies the effective base source and overlay.
+
+Lifecycle commands operate on `app/<category>`, `shell/<category>`, and `sys/<item>`. Individual app
+files, shell commands, scripts, drivers, and receipts remain visible through `info`, status details,
+and `--diff`; they are not separate default install/upgrade units.
 
 ## Start here
 

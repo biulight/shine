@@ -82,20 +82,27 @@ shine completions <bash|zsh|powershell>
 
 - `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
   Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示
-  一次 `shine upgrade`。App 文件按类别折叠。`update --diff` 会改用纵向详细行并展开受
-  影响的文件；来源或目标迁移、新文件、部署元数据和命令入口刷新等结构性变更会逐字段
-  显示，只有内容确实变化时才输出 unified diff。定向的 `update <TARGET>` 使用相同明细。
+  一次 `shine upgrade`。App 文件与 Shell 命令都按类别折叠。`update --diff` 会改用纵向
+  详细行并展开受影响的文件与命令；来源或目标迁移、新文件、部署元数据和命令入口刷新等
+  结构性变更会逐字段显示，只有内容确实变化时才输出 unified diff。定向的
+  `update <TARGET>` 使用相同明细。
+  只有结构变化时，Shine 会分别指出缺失或不匹配的命令入口与缺失的 Shell manifest 记录，
+  并显示 `content: unchanged`，而不是输出空 diff。
+  定向的 `update <TARGET>` 本身已经显示详情，因此 `--diff` 只会把不带 target 的 update 从
+  类别摘要切换为展开行。
 - 内联 diff 要求两侧都是不含 NUL 字节的有效 UTF-8 文本，并且每侧不超过 256 KiB。
   二进制、无效 UTF-8 或更大的内容只显示字节数摘要，不会整段写入终端；`info --diff`
   使用相同保护。
 - 为 `update` 指定 target 后不能同时使用 `--verbose` 或 `--refresh-release`。
 - `update/upgrade --pull` 会先同步 Git 管理的来源并重新加载配置。
 - `upgrade --prune-stale` 移除预设来源中已不存在的旧受管 app 文件。
-- `upgrade` 默认逐项显示实际更新的 app 类别、Shell target 或受管系统项，并按用户可见
+- `upgrade` 默认逐项显示实际更新的 App 类别、Shell 类别或受管系统项，并按用户可见
   target 各计数一次；app 行会附带变更文件数。`--verbose` 会展开 app 文件和成功 hook 的
   输出，还会显示已是最新或跳过的项目，以及 snapshot、template、Bin Link 等 Shell
   部署细节。失败、冲突、用户修改警告和被拦截的 hook 无需 `--verbose` 也会显示。
 - `shell info` 和顶层 `info` 可以检查尚未安装的预设；`list --available` 可按资源类型过滤。
+- 默认的 list、update 与 upgrade 摘要使用类别级生命周期身份；`info`、`--diff` 与
+  verbose 部署区段仍保留文件、命令、入口和 receipt 明细。
 
 ## 系统预设
 

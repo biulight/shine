@@ -456,8 +456,9 @@ impl Config {
     }
 }
 
-/// Print a note showing the active external presets directory.
-/// No-op when the embedded presets are in use.
+/// Print the effective base preset source, optional overlay, and external
+/// shell deployment mode. This makes built-in, external, and overlay-backed
+/// runs report provenance with the same vocabulary.
 pub fn print_presets_note(config: &Config) {
     if config.is_external_presets {
         println!(
@@ -476,8 +477,11 @@ pub fn print_presets_note(config: &Config) {
             crate::colors::dim(&crate::colors::shell_deployment_note(deployment))
         );
         println!();
-    } else if let Some(dir) = config.active_presets_overlay_dir() {
-        println!("{}", crate::colors::presets_overlay_note(dir));
+    } else {
+        println!("{}", crate::colors::presets_source_note("built-in"));
+        if let Some(dir) = config.active_presets_overlay_dir() {
+            println!("{}", crate::colors::presets_overlay_note(dir));
+        }
         println!();
     }
 }

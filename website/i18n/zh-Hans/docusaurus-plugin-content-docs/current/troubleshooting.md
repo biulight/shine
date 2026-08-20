@@ -23,7 +23,9 @@ shine list
 shine info proxy
 ```
 
-如果源脚本存在但命令入口缺失，`shine list` 不会把它显示为可用。可使用 `shine shell install <CATEGORY> --replace-managed` 重建受管文件和入口。
+如果源脚本存在但命令入口缺失，`shine list` 不会把该命令作为独立生命周期资源列出；包含多个命令
+的类别仍可能以 partial 状态出现。先用 `shine info shell/<CATEGORY>` 查看命令级详情，再执行
+`shine shell install <CATEGORY> --replace-managed` 重建受管文件和入口。
 
 ## 应用配置显示为用户修改
 
@@ -37,7 +39,8 @@ shine info app/starship --diff
 
 ## 使用的不是预期预设
 
-外部目录、项目配置和环境变量可能改变当前来源。检查命令输出显示的 active source，并按[配置参考](./reference/configuration.md)核对优先级。
+外部目录、项目配置和环境变量可能改变当前来源。检查命令输出中的 `Preset Source` 与
+`Presets Overlay`，并按[配置参考](./reference/configuration.md)核对优先级。
 
 临时排除配置干扰时，可使用独立目录：
 

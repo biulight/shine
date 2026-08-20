@@ -191,7 +191,7 @@ pub async fn handle_config_upgrade(
     let sys_report = Box::pin(sys::handle_upgrade_managed(config, verbose, &mut sep)).await?;
 
     let updated = env_report.updated
-        + shell_report.updated_targets.len()
+        + shell_report.updated_categories.len()
         + usize::from(shell_report.path_changed)
         + app_report.updated_categories
         + sys_report.updated;
@@ -302,7 +302,7 @@ async fn handle_config_target_upgrade(
                     ))
                     .await?;
                     (
-                        report.updated_targets.len() + usize::from(report.path_changed),
+                        report.updated_categories.len() + usize::from(report.path_changed),
                         0,
                         report.link_conflicts,
                         0,

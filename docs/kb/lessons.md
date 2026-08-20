@@ -12,9 +12,12 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
   `UpdateAvail` value; targeted and `--diff` output then unconditionally invoked the text renderer.
 - **Fix**: retain structured update causes through status collection and render relocations and
   deployment fields directly. Generate a unified diff only for an actual content change, and omit
-  inline output for binary, invalid UTF-8, NUL-containing, or over-256-KiB inputs.
+  inline output for binary, invalid UTF-8, NUL-containing, or over-256-KiB inputs. Keep command-entry
+  absence, command-entry mismatch, and missing manifest state distinct; for a structural-only update,
+  say explicitly that content is unchanged.
 - **Rule**: update availability and content difference are not synonyms. Preserve the reason for a
-  pending reconciliation step, and never feed arbitrary bytes or unbounded files to a terminal diff.
+  pending reconciliation step at the most actionable safe granularity, and never feed arbitrary
+  bytes or unbounded files to a terminal diff.
 
 ## 2026-08-20 — Refreshed Clash rules left browser connections on their old route
 

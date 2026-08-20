@@ -8,7 +8,7 @@ use super::{
     ShellCommands, StateCommands, SysCommands, TaskCommands, TaskRunCommand, ThemeCommands,
 };
 
-/// Manage shell presets, app configs, system setup, and personal tools
+/// Keep development environments portable across machines and remote sessions
 #[derive(Parser, Debug)]
 #[command(name = "shine")]
 #[command(version = version::display(), about, long_about = None)]
@@ -287,13 +287,13 @@ impl CompletionShell {
 
 #[derive(Parser, Debug)]
 pub struct UpdateCommand {
-    /// Installed shell or app target to inspect (shows pending content differences)
+    /// Installed shell or app target to inspect (shows reconciliation details)
     #[arg(value_name = "TARGET")]
     pub target: Option<String>,
     /// Pull Git-managed preset sources before checking status
     #[arg(long)]
     pub pull: bool,
-    /// Show content differences for available shell and app updates
+    /// Show content differences for all updates (targeted checks are already detailed)
     #[arg(long)]
     pub diff: bool,
     /// Show installed entries that are already current or need attention

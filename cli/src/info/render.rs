@@ -137,6 +137,8 @@ pub(super) async fn print_app_update_diff(config: &Config, item: &AppInfoFile) -
     if UpdateChange::includes_content(&item.changes) {
         let diff_output = app_diff_output(config, item).await?;
         print_block("Diff", &app_current_path(item), &diff_output);
+    } else if !item.changes.is_empty() {
+        println!("     {}", colors::dim("content: unchanged"));
     }
     Ok(())
 }
@@ -147,6 +149,8 @@ pub(super) async fn print_shell_update_diff(config: &Config, item: &ShellInfoFil
         let content_path = shell_content_path(item);
         let diff_output = shell_diff_output(config, item, &content_path).await?;
         print_block("Diff", &content_path, &diff_output);
+    } else if !item.changes.is_empty() {
+        println!("     {}", colors::dim("content: unchanged"));
     }
     Ok(())
 }
@@ -175,8 +179,29 @@ fn print_update_changes(config: &Config, changes: &[UpdateChange]) {
             UpdateChange::DeploymentChanged { field, from, to } => {
                 println!("     {}", colors::dim(&format!("{field}: {from} -> {to}")));
             }
-            UpdateChange::CommandEntryChanged => {
-                println!("     {}", colors::dim("command entry: refresh required"));
+            UpdateChange::CommandEntryMissing { path } => {
+                println!(
+                    "     {}",
+                    colors::dim(&format!(
+                        "command entry: missing ({})",
+                        path_display::format_home(path, &config.home_dir)
+                    ))
+                );
+            }
+            UpdateChange::CommandEntryOutdated { path } => {
+                println!(
+                    "     {}",
+                    colors::dim(&format!(
+                        "command entry: does not match expected ({})",
+                        path_display::format_home(path, &config.home_dir)
+                    ))
+                );
+            }
+            UpdateChange::ManifestEntryMissing { target } => {
+                println!(
+                    "     {}",
+                    colors::dim(&format!("manifest entry: missing ({target})"))
+                );
             }
         }
     }

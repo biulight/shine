@@ -119,8 +119,12 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
-- **Embedded templates are the fallback** when an external/overlay presets dir lacks a file
-  (commit `5606438`). External presets mode must degrade to embedded content, not error.
+- **Fallback depends on the selected preset mode.** In built-in mode, an overlay replaces matching
+  paths and unmatched paths continue to read embedded assets. A full external preset source is
+  authoritative for app and shell category discovery: a missing category or file is not silently
+  borrowed from the binary. Sys profile installation has a narrower compatibility fallback to its
+  embedded template when a selected external sys preset omits a previously-known profile file
+  (commit `5606438`). Do not generalize that compatibility path into cross-source category fallback.
 
 ## External shell deployment
 

@@ -209,7 +209,13 @@ pub async fn handle_status(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    println!("{}\n", colors::bold("Initialized System Items"));
+    println!("{}\n", colors::bold("Recorded Bootstrap Results"));
+    println!(
+        "{}\n",
+        colors::dim(
+            "These are results recorded by the last bootstrap run, not live version checks."
+        )
+    );
 
     let label_width = entries
         .iter()

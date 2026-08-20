@@ -7,6 +7,14 @@ sidebar_position: 4
 
 少量个性化优先使用 overlay；需要完全维护一套预设时，再使用外部 `presets_dir`。
 
+两种模式的 fallback 规则不同：
+
+- 使用内置基础来源时，overlay 覆盖同路径内容，其余路径继续来自二进制内嵌预设；
+- 完整外部 `presets_dir` 是 App 与 Shell 类别的权威来源，缺少的内容不会悄悄从二进制补齐。
+
+Shine 会输出 `Preset Source`、可选的 `Presets Overlay`，以及外部 Shell 的部署模式，便于在解释
+`list`、`update` 或安装结果前确认当前模型。
+
 ## 使用 Overlay 覆盖少量文件
 
 Overlay 按相同相对路径覆盖基础预设，也可以增加新类别：

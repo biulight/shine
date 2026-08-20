@@ -5,7 +5,10 @@ sidebar_position: 3
 
 # 内置预设
 
-Shine 将这些预设编译进 CLI。它们用于安装或管理**配置和开发环境项目**，不会自动安装对应的桌面应用。执行前先查看详情与预览，确认目标路径、备份和权限范围：
+Shine 将这些预设编译进 CLI。它们既是可直接使用的默认体验，也是可以复制修改的起点，并不代表
+Shine 只能支持表中的工具。Shell 与 App 预设管理声明的命令和配置；系统预设负责初始化选定的
+开发工具，或管理少量可逆的系统资源。App 预设不会自动安装对应的桌面应用。执行前先查看详情与
+预览，确认目标路径、备份和权限范围：
 
 ```bash
 shine shell list
@@ -39,6 +42,10 @@ shine sys info split-dns
 
 ## App 预设
 
+大多数类别只安装配置文件。Surge 与 Clash Verge Rev 会有意多做一步：provider-specific
+artifact 脚本负责组装应用特有的 include/editor 文件，免去用户手工连接这些部分。通用 App
+生命周期仍只管理声明的文件，artifact 则是显式调用的类别专用能力。
+
 <div className="built-in-presets-app-table" aria-hidden="true" />
 
 | 类别 | 平台与目标 | 管理内容与注意事项 |
@@ -59,7 +66,14 @@ shine sys info split-dns
 
 ## 系统预设
 
-系统预设通过 `shine sys bootstrap` 安装开发环境项目。交互模式可逐项选择；非交互模式使用该平台的默认 profile。先运行 `shine sys bootstrap --dry-run`，因为包管理器、网络下载或 profile 合并可能需要权限或改变本机环境。
+系统预设通过 `shine sys bootstrap` 为选定的开发环境项目执行初始化脚本。交互模式可逐项选择；
+非交互模式使用该平台的默认 profile。“已记录”只表示该引导步骤执行过，不代表软件当前仍存在或
+已是最新版；重新运行 bootstrap 只检查是否存在，不升级第三方软件。先运行
+`shine sys bootstrap --dry-run`，因为包管理器、网络下载或 profile 合并可能需要权限或改变本机环境。
+
+`mise` 项目负责安装 mise，并通过 Shine 管理的 Shell profile 激活它。Shine 不写入 mise 配置，
+也不接管 runtime 版本；这些操作仍应使用 mise。`shine sys update` 是独立的只读检查，可能输出
+上游升级命令。
 
 <div className="built-in-presets-system-table" aria-hidden="true" />
 

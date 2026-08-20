@@ -8,6 +8,16 @@ sidebar_position: 4
 Use an overlay for a small number of customizations. Use an external `presets_dir` when you need to
 maintain a complete preset collection.
 
+These modes have different fallback rules:
+
+- with the built-in base, an overlay replaces matching paths and every unmatched path still comes
+  from the embedded preset;
+- a full external `presets_dir` is authoritative for app and shell categories. Missing content is
+  not silently borrowed from the binary.
+
+Shine prints `Preset Source`, optional `Presets Overlay`, and external shell deployment mode so you
+can tell which model is active before interpreting `list`, `update`, or install output.
+
 ## Override selected files with an overlay
 
 An overlay replaces base-preset files at the same relative path and can add new categories:

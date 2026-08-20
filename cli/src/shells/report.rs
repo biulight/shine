@@ -7,6 +7,9 @@ pub struct ShellUpgradeReport {
     /// counted once even when upgrading it also rewrites a preset source,
     /// rendered template, and bin launcher.
     pub updated_targets: Vec<String>,
+    /// Category-level lifecycle identities corresponding to `updated_targets`.
+    /// Summary counts use these so discovery and upgrade reporting agree.
+    pub updated_categories: Vec<String>,
     pub snapshots_updated: usize,
     pub templates_updated: usize,
     pub links_created: usize,

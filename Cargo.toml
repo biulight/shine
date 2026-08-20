@@ -24,11 +24,11 @@ version.workspace = true
 edition.workspace = true
 rust-version = "1.88"
 license.workspace = true
-description = "Cross-platform CLI for managed shell commands, app configs, and machine setup"
+description = "Keep development environments portable across machines and remote sessions"
 readme = "README.md"
 repository = "https://github.com/biulight/shine"
 homepage = "https://github.com/biulight/shine"
-keywords = ["cli", "dotfiles", "configuration", "bootstrap", "shell"]
+keywords = ["cli", "environment", "configuration", "bootstrap", "shell"]
 categories = ["command-line-utilities", "config"]
 include = [
     "Cargo.toml",

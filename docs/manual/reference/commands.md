@@ -93,22 +93,29 @@ shine completions <bash|zsh|powershell>
 - `update --refresh-release` bypasses the 24-hour cache. By default, `update` groups targets under
   the same Homebrew-style sections as `shine list`: interactive terminals use horizontal columns,
   while redirected output stays one target per line. It then prints the `shine upgrade` action once.
-  App files collapse to their category. `update --diff` switches to detailed vertical rows and
-  expands affected files. Structural changes such as source or destination relocation, new files,
-  deployment metadata, and command-entry refreshes are shown field by field; a unified diff is
+  App files and Shell commands collapse to their category. `update --diff` switches to detailed
+  vertical rows and expands affected files and commands. Structural changes such as source or
+  destination relocation, new files, deployment metadata, and command-entry refreshes are shown
+  field by field; a unified diff is
   printed only when content changed. Targeted `update <TARGET>` uses the same details.
+  For structural-only updates, Shine identifies a missing or mismatched command entry and a missing
+  Shell manifest record separately, then prints `content: unchanged` instead of an empty diff.
+  A targeted `update <TARGET>` is already detailed, so adding `--diff` changes only an untargeted
+  update from category summaries to expanded rows.
 - Inline diffs require valid UTF-8 text without NUL bytes and are limited to 256 KiB per side.
   Binary, invalid UTF-8, and larger content is summarized with byte counts instead of being dumped
   to the terminal. `info --diff` uses the same protection.
 - A targeted update cannot combine with `--verbose` or `--refresh-release`.
 - `update/upgrade --pull` synchronizes Git-managed sources and reloads configuration first.
 - `upgrade --prune-stale` removes old managed app files no longer present in the source.
-- By default, `upgrade` prints each app category, Shell target, or managed-system item it actually
+- By default, `upgrade` prints each app category, Shell category, or managed-system item it actually
   updates and counts each user-facing target once. App rows include the number of changed files.
   `--verbose` expands app files and successful hook output, and also shows current/skipped items and
   Shell deployment details such as snapshots, templates, and Bin Links. Failures, conflicts,
   user-modified warnings, and blocked hooks remain visible without `--verbose`.
 - `shell info` and top-level `info` inspect uninstalled presets; `list --available` filters by kind.
+- Default list, update, and upgrade summaries use category-level lifecycle identities.
+  `info`, `--diff`, and verbose deployment sections retain file, command, link, and receipt details.
 
 ## System presets
 

@@ -53,7 +53,15 @@ pub(crate) enum UpdateChange {
         from: String,
         to: String,
     },
-    CommandEntryChanged,
+    CommandEntryMissing {
+        path: PathBuf,
+    },
+    CommandEntryOutdated {
+        path: PathBuf,
+    },
+    ManifestEntryMissing {
+        target: String,
+    },
 }
 
 impl UpdateChange {
@@ -69,6 +77,9 @@ pub(crate) struct AppFileAssessment {
 }
 
 pub struct ShellRow {
+    /// Shell preset category owning this command row. Lifecycle commands act
+    /// on this category; `label` remains the command-level diagnostic target.
+    pub category: String,
     pub symbol: String,
     pub label: String,
     pub status_sym: &'static str,
@@ -246,11 +257,19 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                     entry.needs_source.to_string(),
                     script.needs_source.to_string(),
                 );
-            } else if config.is_external_presets && link_exists {
-                changes.push(UpdateChange::CommandEntryChanged);
             }
             if file_exists && !link_exists {
-                changes.push(UpdateChange::CommandEntryChanged);
+                changes.push(UpdateChange::CommandEntryMissing {
+                    path: link_path.clone(),
+                });
+            }
+            if config.is_external_presets
+                && manifest_entry.is_none()
+                && (file_exists || link_exists)
+            {
+                changes.push(UpdateChange::ManifestEntryMissing {
+                    target: canonical_target.clone(),
+                });
             }
             if !snapshot_current
                 && source_status != Some(FileStatus::UpdateAvail)
@@ -262,8 +281,18 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                     to: "active preset layout".to_string(),
                 });
             }
-            if !link_current && link_exists && changes.is_empty() {
-                changes.push(UpdateChange::CommandEntryChanged);
+            let entry_rebuild_already_explained = changes.iter().any(|change| {
+                matches!(
+                    change,
+                    UpdateChange::SourceRelocated { .. }
+                        | UpdateChange::DeploymentChanged { .. }
+                        | UpdateChange::CommandEntryMissing { .. }
+                )
+            });
+            if !link_current && link_exists && !entry_rebuild_already_explained {
+                changes.push(UpdateChange::CommandEntryOutdated {
+                    path: link_path.clone(),
+                });
             }
 
             let (sym, status_text) = if link_exists
@@ -292,6 +321,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
             };
 
             rows.push(ShellRow {
+                category: cat.name.clone(),
                 symbol: colors::symbol(sym),
                 label: display_name,
                 status_sym: sym,
@@ -1055,7 +1085,32 @@ mod tests {
             .find(|row| row.label == "custom/mytool")
             .unwrap();
         assert_eq!(row.status_text, "update available");
-        assert_eq!(row.changes, vec![UpdateChange::CommandEntryChanged]);
+        assert_eq!(
+            row.changes,
+            vec![UpdateChange::CommandEntryMissing {
+                path: config.bin_dir().join("mytool"),
+            }]
+        );
+
+        fs::remove_file(config.shine_dir().join("shell-manifest.toml"))
+            .await
+            .unwrap();
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "custom/mytool")
+            .unwrap();
+        assert_eq!(
+            row.changes,
+            vec![
+                UpdateChange::CommandEntryMissing {
+                    path: config.bin_dir().join("mytool"),
+                },
+                UpdateChange::ManifestEntryMissing {
+                    target: "shell/custom/mytool".to_string(),
+                },
+            ]
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

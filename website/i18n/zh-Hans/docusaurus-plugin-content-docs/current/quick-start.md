@@ -44,7 +44,8 @@ shine list
 shine info shell/proxy
 ```
 
-`shine list` 显示当前已安装且可用的内容；`shine info` 也能检查尚未安装的预设。脚本中优先使用 `shell/proxy` 这类完整 target，裸名称只在 app 与 shell 之间唯一时才可使用。
+`shine list` 显示已安装的生命周期单元 `proxy`；`shine info shell/proxy` 再展开它管理的命令、
+入口与来源详情。脚本中使用完整 target `shell/proxy`，裸名称只在 app 与 shell 类别之间唯一时才可使用。
 
 取消当前终端会话中的代理：
 
@@ -60,4 +61,9 @@ shine shell uninstall proxy --dry-run
 
 确认输出后去掉 `--dry-run` 即可执行。Shine 只移除自身管理的脚本、命令入口和相关 profile 片段。
 
-接下来可以安装[应用配置](./guides/app-presets.md)，或使用[系统初始化预设](./guides/system-init.md)。
+接下来可按实际目标继续：
+
+- 安装[应用配置](./guides/app-presets.md)，包括 Surge 与 Clash Verge Rev 的专用 artifact 工作流；
+- 使用边界明确的[系统引导](./guides/system-init.md)初始化机器；
+- 保存[可重复任务](./guides/tasks-and-serve.md)；或
+- 通过 [SSH 环境转发、文件传输与本地 secret broker](./guides/ssh-transfer.md)延续工作。

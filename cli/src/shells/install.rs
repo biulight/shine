@@ -239,10 +239,11 @@ pub async fn handle_upgrade_installed_target(
         );
     }
     let updated_targets = updated_targets.into_iter().collect::<Vec<_>>();
+    let updated_categories = lifecycle_categories(&updated_targets);
 
     let has_visible_result = should_print_upgrade_section(
         verbose,
-        !updated_targets.is_empty(),
+        !updated_categories.is_empty(),
         !link_report.conflicts.is_empty(),
         updated_shell_config.is_some(),
     );
@@ -260,8 +261,8 @@ pub async fn handle_upgrade_installed_target(
             println!("{}", colors::bold("Shell Presets"));
         }
 
-        for target in &updated_targets {
-            println!("  {} {target}", colors::symbol("✓"));
+        for category in &updated_categories {
+            println!("  {} {category}", colors::symbol("✓"));
         }
         if verbose && snapshots_updated > 0 {
             println!(
@@ -304,6 +305,7 @@ pub async fn handle_upgrade_installed_target(
 
     Ok(ShellUpgradeReport {
         updated_targets,
+        updated_categories,
         snapshots_updated,
         templates_updated: template_report.updated.len(),
         links_created: link_report.created.len(),
@@ -324,6 +326,19 @@ fn should_print_upgrade_section(
 
 fn should_print_link_summary(verbose: bool, conflict_count: usize) -> bool {
     verbose || conflict_count > 0
+}
+
+fn lifecycle_categories(targets: &[String]) -> Vec<String> {
+    targets
+        .iter()
+        .filter_map(|target| {
+            target
+                .split_once('/')
+                .map(|(category, _)| category.to_string())
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 async fn pending_upgrade_targets(
@@ -480,6 +495,17 @@ mod tests {
         assert!(!should_print_link_summary(false, 0));
         assert!(should_print_link_summary(true, 0));
         assert!(should_print_link_summary(false, 1));
+    }
+
+    #[test]
+    fn lifecycle_categories_count_each_shell_category_once() {
+        let targets = vec![
+            "proxy/setproxy".to_string(),
+            "proxy/usetproxy".to_string(),
+            "utils/copyfile".to_string(),
+        ];
+
+        assert_eq!(lifecycle_categories(&targets), vec!["proxy", "utils"]);
     }
 
     async fn make_temp_dir() -> PathBuf {
@@ -1127,6 +1153,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.updated_targets, vec!["utils/copyfile"]);
+        assert_eq!(report.updated_categories, vec!["utils"]);
         assert_eq!(report.links_updated, 1);
         assert_eq!(fs::read_link(&link).await.unwrap(), source);
         fs::remove_dir_all(&dir).await.unwrap();
@@ -1191,6 +1218,7 @@ mod tests {
             "changed shell template should be reported under shell presets"
         );
         assert_eq!(report.updated_targets, vec!["proxy/setproxy"]);
+        assert_eq!(report.updated_categories, vec!["proxy"]);
         assert!(config.bin_dir().join("setproxy").exists());
         assert!(
             !config.bin_dir().join("extra_tool").exists(),
@@ -1454,6 +1482,7 @@ mod tests {
             .unwrap();
         assert_eq!(report.snapshots_updated, 1);
         assert_eq!(report.updated_targets, vec!["custom/mytool"]);
+        assert_eq!(report.updated_categories, vec!["custom"]);
         assert!(
             fs::read_to_string(&installed)
                 .await
