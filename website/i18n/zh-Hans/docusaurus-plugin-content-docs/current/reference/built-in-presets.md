@@ -66,10 +66,14 @@ artifact 脚本负责组装应用特有的 include/editor 文件，免去用户�
 
 ## 系统预设
 
-系统预设通过 `shine sys bootstrap` 为选定的开发环境项目执行初始化脚本。交互模式可逐项选择；
-非交互模式使用该平台的默认 profile。“已记录”只表示该引导步骤执行过，不代表软件当前仍存在或
+系统预设通过 `shine sys bootstrap` 为选定的开发环境项目运行标准化 package provider 或隔离的
+兼容脚本。交互模式可逐项选择，位置参数 ID 只运行指定项目；非交互模式使用该平台的默认
+profile。“已记录”只表示该引导步骤执行过，不代表软件当前仍存在或
 已是最新版；重新运行 bootstrap 只检查是否存在，不升级第三方软件。先运行
 `shine sys bootstrap --dry-run`，因为包管理器、网络下载或 profile 合并可能需要权限或改变本机环境。
+
+Shell integration 归各 item 所有：成功的 targeted bootstrap 只启用该 item 的生成内容，不会带入
+未选择软件的集成。之前启用的集成会保持生效，直到明确运行 `shine sys profile disable <ITEM>`。
 
 `mise` 项目负责安装 mise，并通过 Shine 管理的 Shell profile 激活它。Shine 不写入 mise 配置，
 也不接管 runtime 版本；这些操作仍应使用 mise。`shine sys update` 是独立的只读检查，可能输出

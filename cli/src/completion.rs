@@ -93,6 +93,17 @@ pub fn command() -> clap::Command {
             cmd.mut_subcommand("info", |cmd| {
                 cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
             })
+            .mut_subcommand("bootstrap", |cmd| {
+                cmd.mut_arg("items", |arg| arg.add(sys_items.clone()))
+            })
+            .mut_subcommand("profile", |cmd| {
+                cmd.mut_subcommand("enable", |cmd| {
+                    cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
+                })
+                .mut_subcommand("disable", |cmd| {
+                    cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
+                })
+            })
             .mut_subcommand("apply", |cmd| {
                 cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
             })

@@ -507,6 +507,9 @@ mod tests {
             required_env: vec!["DOMAIN".to_string(), "SERVERS".to_string()],
             driver: SysDriverKind::SplitDns,
             config: driver_config,
+            detect: None,
+            install: None,
+            shell: Vec::new(),
         };
         let env = BTreeMap::from([
             ("DOMAIN".to_string(), "Home.Example.COM.".to_string()),
@@ -561,6 +564,9 @@ mod tests {
             required_env: vec!["DOMAIN".to_string(), "SERVERS".to_string()],
             driver: SysDriverKind::SplitDns,
             config: driver_config,
+            detect: None,
+            install: None,
+            shell: Vec::new(),
         };
         let env = BTreeMap::from([
             ("DOMAIN".to_string(), "home.example.com".to_string()),
@@ -686,6 +692,9 @@ mod tests {
             required_env: vec!["DOMAIN".to_string(), "SERVERS".to_string()],
             driver: SysDriverKind::SplitDns,
             config: driver_config,
+            detect: None,
+            install: None,
+            shell: Vec::new(),
         };
         let original_env = BTreeMap::from([
             ("DOMAIN".to_string(), "private.example".to_string()),

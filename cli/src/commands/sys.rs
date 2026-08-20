@@ -1,6 +1,24 @@
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
+pub enum SysProfileCommands {
+    /// Enable one item's Shine-managed shell integration without installing software
+    Enable {
+        #[arg(value_name = "ITEM")]
+        item: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Disable one item's Shine-managed shell integration without uninstalling software
+    Disable {
+        #[arg(value_name = "ITEM")]
+        item: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 pub enum SysCommands {
     /// List available system items
     List {
@@ -30,8 +48,11 @@ pub enum SysCommands {
     },
     /// Bootstrap software and shell integration for the current OS
     Bootstrap {
+        /// Bootstrap only these system items, in the given order
+        #[arg(value_name = "ITEM", conflicts_with = "preset")]
+        items: Vec<String>,
         /// Apply a named profile without showing interactive selection
-        #[arg(long, value_name = "PROFILE")]
+        #[arg(long, value_name = "PROFILE", conflicts_with = "items")]
         preset: Option<String>,
         /// Print what would run without executing
         #[arg(long)]
@@ -42,6 +63,11 @@ pub enum SysCommands {
         /// Route init-script downloads through shine's preset proxy ([env] PROXY_HOST/HTTP_PROXY_PORT)
         #[arg(long)]
         proxy: bool,
+    },
+    /// Manage Shine-owned shell integrations for bootstrap items
+    Profile {
+        #[command(subcommand)]
+        command: SysProfileCommands,
     },
     /// Reapply enabled managed system configuration items
     Apply {

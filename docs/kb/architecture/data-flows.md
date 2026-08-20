@@ -179,6 +179,23 @@ invocation, then executes or sources the atomically refreshed file under `render
 
 ## Sys bootstrap (`shine sys bootstrap`)
 
+Selection resolves explicit ordered items, a named selection profile, or the existing
+interactive/default path through `sys/selection.rs`. Explicit items accept only `mode = "init"`,
+deduplicate by first occurrence, and never widen to sibling items.
+
+Items with `[items.detect]` plus `[items.install]` run through `sys/bootstrap.rs`. Rust performs the
+read-only detection, invokes a fixed Homebrew/APT/Winget provider argv or one per-item script, limits
+runtime/output, detects again, and produces the canonical `sys/<item>` outcome. Items without
+`[items.install]` use the legacy platform dispatcher during builtin migration; the paths are
+mutually exclusive per item.
+
+For a manifest with `profile_composition = true`, successful bootstrap items set
+`profile_enabled` in `sys-manifest.toml`. `sys/profile_compose.rs` combines base pre/post content
+with all enabled item integrations in stable manifest order. `sys/profile.rs` reconciles the two
+generated files before `sys/profile_blocks.rs` updates the existing pre/post sentinels. Composition
+happens once after item execution, and render failure leaves the last installed profile intact.
+`sys profile enable/disable` changes only this activation state and generated profile content.
+
 `shine sys update [ITEM] [--verbose]` is a separate, read-only bootstrap-software flow. It reads
 only `mode = "init"` entries already recorded in `sys-manifest.toml`, then invokes the current
 platform preset as `<item> check-update`. Platform scripts emit `SHINE_SYS_UPDATE` events with a
@@ -187,10 +204,10 @@ that command. This flow does not write the run manifest, invoke elevation, or up
 profiles. Global `shine update` / `shine upgrade` remain limited to Shine configuration and
 managed sys resources.
 
-Documented in `AGENTS.md` § "Sys preset flow". Key cross-module point: `sys/execution.rs` runs
-`init.sh <item_id>` once per selected item and parses `SHINE_SYS_STATUS\t<state>\t<detail>` lines
-from script stdout into the run report; anything else is rendered as indented logs. A final
-`init.sh __shine_finalize` call performs shared profile integration exactly once.
+Legacy items still use `sys/execution.rs`, which runs `init.sh <item_id>` and parses
+`SHINE_SYS_STATUS\t<state>\t<detail>` lines. New standard items and per-item scripts do not use that
+wire protocol. The platform script remains the update-check compatibility source until its items
+are fully migrated.
 
 Top-level `shine list` reads current-OS entries with `managed = true` directly from
 `sys-manifest.toml` for its installed-only `System Configs` section. It does not call the live

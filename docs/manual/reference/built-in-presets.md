@@ -78,12 +78,17 @@ Surge, Starship, or another application.
 
 ## System presets
 
-`shine sys bootstrap` runs initialization scripts for selected development-environment items.
-Interactive mode selects individual items; non-interactive mode uses the platform default profile.
+`shine sys bootstrap` runs standardized package providers or isolated compatibility scripts for
+selected development-environment items. Interactive mode selects items, positional IDs run only
+those items, and non-interactive mode uses the platform default profile.
 The recorded result means that the bootstrap step ran; it is not a live assertion that a package is
 still installed or current. Rerunning bootstrap checks presence but does not upgrade third-party
 software. Run `--dry-run` first because package managers, downloads, and profile merging may require
 privileges or change the machine.
+
+Shell integration is item-owned: a successful targeted bootstrap enables that item's generated
+content without pulling in integrations for unselected software. Earlier enabled integrations stay
+active until explicitly disabled with `shine sys profile disable <ITEM>`.
 
 The `mise` item installs mise and activates it through Shine-managed shell profile content. Shine
 does not write mise configuration or manage runtime versions; use mise itself for those operations.

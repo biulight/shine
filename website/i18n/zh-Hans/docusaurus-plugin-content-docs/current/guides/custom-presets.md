@@ -167,6 +167,54 @@ env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
 
 后续支持的运行时会在本节逐项记录其支持值、文件类型、前提条件和限制。Python、Node 与 Deno 目前均不可配置为 `runtime`。
 
+## 编写系统 Bootstrap Item
+
+一个 sys 类别对应一个操作系统目录，例如 `sys/ubuntu/`。先在 `shine.toml` 中设置
+`profile_composition = true`，再用 detection 和固定 provider 描述普通的 ensure-present 软件：
+
+```toml
+profile_composition = true
+
+[[items]]
+id = "mise"
+label = "mise"
+description = "Install mise without managing its versions."
+
+[items.detect]
+kind = "command"
+command = "mise"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew" # 也支持 homebrew-cask、apt 或 winget
+package = "mise"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "mise"
+eval = ["mise", "activate", "{shell}"]
+
+[profiles.recommended]
+items = ["mise"]
+```
+
+Detection 支持 `command`、`path`，以及由 command/path probes 组成的 `any`。包安装是固定的
+ensure-present 操作：Shine 负责 argv、提权、代理、超时、输出限制和安装后检测，但不会升级包。
+复杂 item 可使用 `[items.install] kind = "script", path = "install/<item>.sh"`；脚本只处理该
+item，以普通 exit code 返回结果，不应输出旧版 `SHINE_SYS_STATUS` 协议。
+
+Shell integration 必须且只能声明 `path`、`env`、`eval`、`source`、`aliases` 或 `fragment` 之一。
+`profile/base.pre.sh` 与 `profile/base.post.sh` 只放操作系统公共内容；复杂的 item 逻辑放入
+`profile/<item>.sh`。phase、可选 priority、manifest 顺序和声明顺序共同决定稳定的组合顺序。
+命名 `[profiles.*]` 表只选择 bootstrap items，不定义 shell 内容，也不会禁用选择之外的集成。
+
+外部 sys 安装脚本和可执行 profile 内容（`eval`、`source`、fragment 与 base 文件）要求用户先审查
+来源并在全局配置中设置 `allow_sys_code = true`；项目配置不能授权自身。静态 detection、package metadata、PATH、env 和 aliases 无需该
+授权。使用 `shine sys list`、`shine sys info <ITEM>` 和
+`shine sys bootstrap <ITEM> --dry-run` 完成验证。
+
 ## App 构建脚本运行时
 
 App 类别的 `[artifact]` 也可选择 Bun，使 `build` 与 `unbuild` 脚本跨平台运行：

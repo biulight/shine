@@ -71,6 +71,11 @@ bugs. Check this list before changing the modules named in each entry.
 - **PowerShell profiles: preserve a leading BOM** when rewriting the file
   (`cli/src/sys/profile_blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
   `Documents/WindowsPowerShell/` profile files so pwsh and Windows PowerShell stay in sync.
+- **Sys profile composition is activation-additive, not selection-replacing.** A targeted item or
+  named selection profile enables successful item integrations but never disables previously
+  enabled ones. Only `shine sys profile disable <ITEM>` removes that item's generated content.
+  Composition order is phase, explicit priority, manifest order, then integration order; failures
+  must leave the last installed profile intact.
 
 ## Config files
 
@@ -84,6 +89,12 @@ bugs. Check this list before changing the modules named in each entry.
   run implicitly, but external preset or overlay code must be gated by
   `allow_app_hooks = true`; otherwise a user-controlled presets checkout would
   gain command execution during ordinary read-oriented update checks.
+- **External sys executable code is separately opt-in.** Static detection/provider metadata and
+  declarative PATH/env/aliases are safe to inspect, but external or overlay bootstrap/managed scripts,
+  guarded eval/source, fragments, and base profile code require `allow_sys_code = true`. Read-only
+  status paths must never execute sys code, and update-check scripts require the same permission.
+  This permission is global-only: a project
+  config must never be able to authorize its own executable preset content.
 - **Manual generators never run from implicit status or upgrade paths.**
   `generator.auto = false` leaves `list`/`info`/`update` local-only and
   causes upgrade to preserve the manifest snapshot. Only install (including `--replace-managed`) or

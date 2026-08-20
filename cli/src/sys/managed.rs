@@ -87,7 +87,24 @@ pub async fn handle_upgrade_managed(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<SysUpgradeReport> {
-    handle_upgrade_managed_target(config, None, verbose, sep).await
+    let mut report = handle_upgrade_managed_target(config, None, verbose, sep).await?;
+    if let Some(outcome) = super::profile_commands::sync_composed_profile(config).await? {
+        let changed = matches!(
+            outcome.status,
+            SysItemStatus::Updated | SysItemStatus::NeedsAction
+        );
+        if changed || verbose {
+            sep.begin();
+            println!("{}", colors::bold("System Shell Profile"));
+            print_item_outcome(&outcome, 14);
+        }
+        if changed {
+            report.updated += 1;
+        } else {
+            report.skipped += 1;
+        }
+    }
+    Ok(report)
 }
 
 pub async fn handle_upgrade_managed_target(
@@ -400,6 +417,17 @@ async fn run_managed_for_os(
         });
     }
 
+    if selected
+        .iter()
+        .any(|item| item.driver == SysDriverKind::Script)
+    {
+        super::bootstrap::require_external_code_permission(
+            config,
+            &loaded.script_path,
+            "managed script driver",
+        )?;
+    }
+
     let mut needs_admin = false;
     for item in &selected {
         if !item.requires_admin {
@@ -589,6 +617,7 @@ async fn run_managed_for_os(
                 detail: outcome.detail.clone(),
                 updated_at: current_unix_timestamp().to_string(),
                 managed: true,
+                profile_enabled: false,
                 receipt: next_receipt,
             });
         }
@@ -679,6 +708,7 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
         let action_log = dir.join("actions");
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
+        config.allow_sys_code = true;
         config
             .env
             .insert("ACTION_LOG".to_string(), action_log.display().to_string());

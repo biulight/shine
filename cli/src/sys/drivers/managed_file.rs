@@ -224,6 +224,9 @@ mod tests {
             required_env: Vec::new(),
             driver: SysDriverKind::ManagedFile,
             config,
+            detect: None,
+            install: None,
+            shell: Vec::new(),
         }
     }
 

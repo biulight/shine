@@ -208,6 +208,57 @@ names in metadata—never values or ciphertext.
 Future runtimes will be documented here with their values, file types, prerequisites, and limits.
 Python, Node, and Deno are not currently valid `runtime` values.
 
+## Author a system bootstrap item
+
+A sys category is one OS directory such as `sys/ubuntu/`. Set `profile_composition = true` in its
+`shine.toml`, then describe ordinary ensure-present software with detection and a fixed provider:
+
+```toml
+profile_composition = true
+
+[[items]]
+id = "mise"
+label = "mise"
+description = "Install mise without managing its versions."
+
+[items.detect]
+kind = "command"
+command = "mise"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew" # homebrew-cask, apt, or winget are also supported
+package = "mise"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "mise"
+eval = ["mise", "activate", "{shell}"]
+
+[profiles.recommended]
+items = ["mise"]
+```
+
+Detection supports `command`, `path`, and `any` command/path probes. Package installs are fixed
+ensure-present actions: Shine owns argv, elevation, proxy handling, timeout, output limits, and the
+post-install detection, but never upgrades the package. A complex item may use
+`[items.install] kind = "script", path = "install/<item>.sh"`; the script handles only that item,
+returns a normal exit code, and must not emit the legacy `SHINE_SYS_STATUS` protocol.
+
+Shell integrations accept exactly one of `path`, `env`, `eval`, `source`, `aliases`, or `fragment`.
+Use `profile/base.pre.sh` and `profile/base.post.sh` only for OS-wide content; put complex item logic
+in `profile/<item>.sh`. Phase, optional `priority`, manifest order, and declaration order determine
+stable composition. Named `[profiles.*]` tables select bootstrap items; they do not define shell
+content or disable integrations outside the selection.
+
+External sys install scripts and executable profile content (`eval`, `source`, fragments, and base
+files) require the user to review the source and set `allow_sys_code = true` in the global config;
+the project config cannot authorize itself. Static detection,
+package metadata, PATH, env, and aliases remain available without that opt-in. Validate with
+`shine sys list`, `shine sys info <ITEM>`, and `shine sys bootstrap <ITEM> --dry-run`.
+
 ## Application artifact runtimes
 
 An application's `[artifact]` can also use Bun for cross-platform apply and teardown scripts:

@@ -4,7 +4,10 @@ use std::path::Path;
 
 use crate::config::Config;
 
-use super::{LoadedSysPreset, SysDriverKind, SysItem, SysItemMode, SysManifest};
+use super::{
+    LoadedSysPreset, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall, SysItem,
+    SysItemMode, SysItemStatus, SysManifest,
+};
 
 pub(super) async fn load_sys_preset(config: &Config, os_id: &str) -> Result<LoadedSysPreset> {
     if os_id.contains('/') || os_id.contains('\\') || os_id.contains("..") {
@@ -17,20 +20,23 @@ pub(super) async fn load_sys_preset(config: &Config, os_id: &str) -> Result<Load
 
     let root = Path::new("sys").join(os_id);
     let script_path = config.preset_path(root.join(sys_init_script_name(os_id)));
-    if !script_path.exists() {
-        bail!(
-            "No init script found for '{}'. Expected: {}",
-            os_id,
-            script_path.display()
-        );
-    }
-
     let manifest_path = config.preset_path(root.join("shine.toml"));
     let content = tokio::fs::read_to_string(&manifest_path)
         .await
         .with_context(|| format!("reading {}", manifest_path.display()))?;
     let manifest = parse_and_validate_manifest(&content)
         .with_context(|| format!("parsing {}", manifest_path.display()))?;
+    if !script_path.exists()
+        && manifest
+            .items
+            .iter()
+            .any(|item| item.mode == SysItemMode::Init && item.install.is_none())
+    {
+        bail!(
+            "legacy sys items for `{os_id}` require an init script at {}",
+            script_path.display()
+        );
+    }
 
     Ok(LoadedSysPreset {
         manifest,
@@ -80,6 +86,12 @@ fn validate_manifest(manifest: &SysManifest) -> Result<()> {
             }
         }
         validate_driver_config(item)?;
+        validate_bootstrap_config(item)?;
+        validate_shell_integrations(item)?;
+    }
+
+    if !manifest.profile_composition && manifest.items.iter().any(|item| !item.shell.is_empty()) {
+        bail!("sys items with shell integrations require `profile_composition = true`");
     }
 
     if let Some(default_profile) = &manifest.default_profile
@@ -106,6 +118,212 @@ fn validate_manifest(manifest: &SysManifest) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn validate_bootstrap_config(item: &SysItem) -> Result<()> {
+    if item.mode == SysItemMode::Managed {
+        if item.detect.is_some() || item.install.is_some() || !item.shell.is_empty() {
+            bail!(
+                "managed sys item `{}` cannot declare bootstrap detect/install/shell fields",
+                item.id
+            );
+        }
+        return Ok(());
+    }
+
+    if item.install.is_some() && item.detect.is_none() {
+        bail!(
+            "standard sys bootstrap item `{}` must declare `detect` when `install` is present",
+            item.id
+        );
+    }
+    if let Some(detect) = &item.detect {
+        validate_detection(&item.id, detect)?;
+    }
+    if let Some(install) = &item.install {
+        match install {
+            SysInstall::Package {
+                package,
+                success_status,
+                success_hint,
+                ..
+            } => {
+                validate_plain_value(&item.id, "package", package)?;
+                if package.starts_with('-')
+                    || !package
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
+                {
+                    bail!(
+                        "sys item `{}` has invalid package identifier `{package}`",
+                        item.id
+                    );
+                }
+                validate_success_status(&item.id, *success_status)?;
+                if !success_hint.is_empty() {
+                    validate_plain_value(&item.id, "success hint", success_hint)?;
+                }
+            }
+            SysInstall::Script {
+                path,
+                success_status,
+                success_hint,
+            } => {
+                validate_relative_preset_path(&item.id, "install script", path)?;
+                validate_success_status(&item.id, *success_status)?;
+                if !success_hint.is_empty() {
+                    validate_plain_value(&item.id, "success hint", success_hint)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_detection(item_id: &str, detect: &SysDetection) -> Result<()> {
+    match detect {
+        SysDetection::Command {
+            command,
+            version_args,
+        } => {
+            validate_command_name(item_id, command)?;
+            for arg in version_args {
+                validate_plain_value(item_id, "version argument", arg)?;
+            }
+        }
+        SysDetection::Path { path } => validate_plain_value(item_id, "detection path", path)?,
+        SysDetection::Any { probes } => {
+            if probes.is_empty() {
+                bail!("sys item `{item_id}` detection `any` requires at least one probe");
+            }
+            for probe in probes {
+                match probe {
+                    SysDetectionProbe::Command { command } => {
+                        validate_command_name(item_id, command)?
+                    }
+                    SysDetectionProbe::Path { path } => {
+                        validate_plain_value(item_id, "detection path", path)?
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_success_status(item_id: &str, status: Option<SysItemStatus>) -> Result<()> {
+    if status.is_some_and(|status| {
+        !matches!(
+            status,
+            SysItemStatus::Installed | SysItemStatus::NeedsAction
+        )
+    }) {
+        bail!("sys item `{item_id}` install success_status must be installed or needs-action");
+    }
+    Ok(())
+}
+
+fn validate_shell_integrations(item: &SysItem) -> Result<()> {
+    for (index, integration) in item.shell.iter().enumerate() {
+        if integration.shells.is_empty() {
+            bail!(
+                "sys item `{}` shell integration {} requires at least one shell",
+                item.id,
+                index + 1
+            );
+        }
+        if let Some(command) = &integration.when_command {
+            validate_command_name(&item.id, command)?;
+        }
+        let action_count = usize::from(integration.path.is_some())
+            + usize::from(!integration.env.is_empty())
+            + usize::from(!integration.eval_argv.is_empty())
+            + usize::from(integration.source.is_some())
+            + usize::from(!integration.aliases.is_empty())
+            + usize::from(integration.fragment.is_some());
+        if action_count != 1 {
+            bail!(
+                "sys item `{}` shell integration {} must declare exactly one of path, env, eval, source, aliases, or fragment",
+                item.id,
+                index + 1
+            );
+        }
+        if let Some(path) = &integration.path {
+            validate_plain_value(&item.id, "profile path", path)?;
+        }
+        for (key, value) in &integration.env {
+            validate_env_key(&item.id, key)?;
+            validate_plain_value(&item.id, "profile env value", value)?;
+        }
+        for arg in &integration.eval_argv {
+            validate_plain_value(&item.id, "profile eval argument", arg)?;
+        }
+        if let Some(source) = &integration.source {
+            validate_plain_value(&item.id, "profile source", source)?;
+        }
+        for (name, value) in &integration.aliases {
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+            {
+                bail!("sys item `{}` has invalid alias name `{name}`", item.id);
+            }
+            validate_plain_value(&item.id, "profile alias", value)?;
+        }
+        if let Some(fragment) = &integration.fragment {
+            validate_relative_preset_path(&item.id, "profile fragment", fragment)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_command_name(item_id: &str, command: &str) -> Result<()> {
+    if command.is_empty()
+        || !command
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '+'))
+    {
+        bail!("sys item `{item_id}` has invalid command name `{command}`");
+    }
+    Ok(())
+}
+
+fn validate_env_key(item_id: &str, key: &str) -> Result<()> {
+    let mut chars = key.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        bail!("sys item `{item_id}` has invalid profile env key `{key}`");
+    }
+    Ok(())
+}
+
+fn validate_plain_value(item_id: &str, label: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() || value.chars().any(char::is_control) {
+        bail!("sys item `{item_id}` has invalid {label}");
+    }
+    Ok(())
+}
+
+fn validate_relative_preset_path(item_id: &str, label: &str, value: &str) -> Result<()> {
+    validate_plain_value(item_id, label, value)?;
+    let path = Path::new(value);
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        bail!("sys item `{item_id}` {label} must stay inside the preset: `{value}`");
+    }
     Ok(())
 }
 

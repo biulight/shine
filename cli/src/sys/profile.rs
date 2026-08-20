@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::install_core::{eol_eq, normalize_eol};
 
 use super::profile_blocks::update_sys_shell_profiles;
+use super::profile_compose::ComposedSysProfiles;
 use super::{SYS_PROFILE_PHASES, SysItemOutcome, SysItemStatus, SysProfilePhase};
 
 pub(super) async fn install_sys_profile_loader(
@@ -17,7 +18,33 @@ pub(super) async fn install_sys_profile_loader(
     sys_shell: &str,
     force_profile: bool,
 ) -> Result<SysItemOutcome> {
-    let update = install_sys_profile_files(config, os_id, script_dir, force_profile).await?;
+    install_sys_profile_loader_with_templates(
+        config,
+        os_id,
+        script_dir,
+        sys_shell,
+        force_profile,
+        None,
+    )
+    .await
+}
+
+pub(super) async fn install_sys_profile_loader_with_templates(
+    config: &Config,
+    os_id: &str,
+    script_dir: &Path,
+    sys_shell: &str,
+    force_profile: bool,
+    templates: Option<&ComposedSysProfiles>,
+) -> Result<SysItemOutcome> {
+    let update = install_sys_profile_files_with_templates(
+        config,
+        os_id,
+        script_dir,
+        force_profile,
+        templates,
+    )
+    .await?;
     let shell_update = update_sys_shell_profiles(config, os_id, sys_shell).await?;
     let status = if update.needs_action {
         SysItemStatus::NeedsAction
@@ -57,11 +84,22 @@ pub(super) struct SysShellProfileUpdate {
     pub(super) detail: String,
 }
 
+#[cfg(test)]
 pub(super) async fn install_sys_profile_files(
     config: &Config,
     os_id: &str,
     script_dir: &Path,
     force_profile: bool,
+) -> Result<SysProfileFileUpdate> {
+    install_sys_profile_files_with_templates(config, os_id, script_dir, force_profile, None).await
+}
+
+async fn install_sys_profile_files_with_templates(
+    config: &Config,
+    os_id: &str,
+    script_dir: &Path,
+    force_profile: bool,
+    templates: Option<&ComposedSysProfiles>,
 ) -> Result<SysProfileFileUpdate> {
     let ext = if os_id == "windows" { "ps1" } else { "sh" };
     let profile_dir = config.home_dir.join(".shine/profile");
@@ -74,9 +112,20 @@ pub(super) async fn install_sys_profile_files(
     let mut details = Vec::new();
 
     for phase in SYS_PROFILE_PHASES {
-        let phase_update =
-            install_sys_profile_phase(&profile_dir, os_id, script_dir, phase, ext, force_profile)
-                .await?;
+        let template = templates.map(|templates| match phase {
+            SysProfilePhase::Pre => templates.pre.as_slice(),
+            SysProfilePhase::Post => templates.post.as_slice(),
+        });
+        let phase_update = install_sys_profile_phase_with_template(
+            &profile_dir,
+            os_id,
+            script_dir,
+            phase,
+            ext,
+            force_profile,
+            template,
+        )
+        .await?;
 
         updated |= phase_update.updated;
         needs_action |= phase_update.needs_action;
@@ -90,6 +139,7 @@ pub(super) async fn install_sys_profile_files(
     })
 }
 
+#[cfg(test)]
 async fn install_sys_profile_phase(
     profile_dir: &Path,
     os_id: &str,
@@ -98,8 +148,32 @@ async fn install_sys_profile_phase(
     ext: &str,
     force_profile: bool,
 ) -> Result<SysProfileFileUpdate> {
+    install_sys_profile_phase_with_template(
+        profile_dir,
+        os_id,
+        script_dir,
+        phase,
+        ext,
+        force_profile,
+        None,
+    )
+    .await
+}
+
+async fn install_sys_profile_phase_with_template(
+    profile_dir: &Path,
+    os_id: &str,
+    script_dir: &Path,
+    phase: SysProfilePhase,
+    ext: &str,
+    force_profile: bool,
+    template_override: Option<&[u8]>,
+) -> Result<SysProfileFileUpdate> {
     let template_path = script_dir.join(format!("profile.{}.{ext}", phase.as_str()));
-    let template_raw = read_sys_profile_template(&template_path, os_id, phase, ext).await?;
+    let template_raw = match template_override {
+        Some(template) => template.to_vec(),
+        None => read_sys_profile_template(&template_path, os_id, phase, ext).await?,
+    };
     // Normalize line endings for all comparisons/merges so a pure CRLF↔LF
     // difference (e.g. a Windows editor re-saving an installed file) is not
     // treated as a real change. Files are only ever *written* as the LF
@@ -160,7 +234,10 @@ async fn install_sys_profile_phase(
     // If any on-disk input carried non-LF endings, `git merge-file` (which reads
     // the raw files) would see spurious per-line differences, so fall back to the
     // pure-Rust three-way merge over the already-normalized bytes instead.
-    let allow_git_merge = active == active_raw && base == base_raw && template == template_raw;
+    let allow_git_merge = template_override.is_none()
+        && active == active_raw
+        && base == base_raw
+        && template == template_raw;
 
     apply_merge_result(MergeInputs {
         active_path: &active_path,

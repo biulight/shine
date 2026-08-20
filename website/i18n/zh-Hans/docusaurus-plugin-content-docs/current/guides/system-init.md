@@ -19,19 +19,23 @@ shine sys info split-dns
 shine sys bootstrap --dry-run
 ```
 
-`--dry-run` 会显示选择结果、脚本调用和受管 profile 更新，但不执行变更。某些初始化项目需要管理员权限或额外环境变量，`shine sys info <ITEM>` 会列出要求。
+`--dry-run` 会显示选择结果、provider/脚本调用，以及每个将持久加载的 item-owned shell 集成，但不执行变更。某些初始化项目需要管理员权限或额外环境变量，`shine sys info <ITEM>` 会列出要求。
 
 ## 交互选择或应用 Profile
 
 ```bash
 shine sys bootstrap
+shine sys bootstrap mise
+shine sys bootstrap rust mise
 shine sys bootstrap --preset recommended
 shine sys bootstrap --preset minimal
 shine sys bootstrap --proxy --dry-run
 ```
 
 - 在交互式终端中，`shine sys bootstrap` 会打开多选界面。
+- 位置参数 item ID 只引导这些项目，保留输入顺序，并忽略重复项。
 - 指定 `--preset` 时直接应用命名 profile。
+- 位置参数与 `--preset` 不能组合；受管资源使用 `sys apply`，而不是 `sys bootstrap`。
 - 非交互环境没有指定 profile 时使用预设的默认 profile。
 
 Ubuntu 还提供 `minimal` profile，适合生产服务器：仅安装 Neovim、fzf、bat、eza 和 zoxide，不包含 shell 历史同步、提示符、Node.js 工具链或 Homebrew。运行前仍应先执行 `shine sys bootstrap --preset minimal --dry-run` 复核当前版本的实际步骤。
@@ -80,6 +84,20 @@ shine sys update --proxy
 内置 mise 步骤遵循同一边界：它可以安装 mise，并把激活内容加入 Shine 管理的 Shell profile，
 但不会创建或更新 mise 配置，也不会管理 runtime 版本。`mise.toml`、工具安装与版本升级仍由 mise
 负责。
+
+## 管理 shell 集成状态
+
+成功的 bootstrap 只启用本次选中 item 声明的 shell 集成，不会禁用之前运行已启用的集成。命名
+selection profile 也不是软件或 shell 配置的 desired-state 替换集合。
+
+```bash
+shine sys profile disable mise --dry-run
+shine sys profile disable mise
+shine sys profile enable mise
+```
+
+这些命令只修改 Shine 自己生成的 profile 内容。disable 不卸载软件；enable 会先执行 item 声明的
+检测，缺失时提示先 bootstrap。`shine upgrade` 会重新渲染当前已启用的集成，但不会升级其软件。
 
 `shine update` 和 `shine upgrade` 仍只处理 Shine 管理的配置和受管系统资源，不会升级这些
 第三方软件。是否执行 `shine sys update` 输出的升级命令始终由用户决定。

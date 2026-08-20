@@ -129,13 +129,18 @@ shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
 shine sys update [ITEM] [--verbose] [--proxy]
-shine sys bootstrap [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
+shine sys bootstrap [ITEM]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
+shine sys profile enable <ITEM> [--dry-run]
+shine sys profile disable <ITEM> [--dry-run]
 shine sys apply [ITEM] [--dry-run]
 shine sys uninstall <ITEM> [--dry-run]
 ```
 
-`sys bootstrap` installs software and shell integration. `sys update` only checks recorded bootstrap
-software and never upgrades it. `shine upgrade sys/<ITEM>` converges an independent managed item.
+Positional items and `--preset` are mutually exclusive. `sys bootstrap` ensures only the selected
+software is present and enables its declared shell integration; rerunning it never upgrades the
+software. `sys profile enable/disable` changes only Shine-owned integration content. `sys update`
+only checks recorded bootstrap software, and `shine upgrade sys/<ITEM>` converges an independent
+managed item.
 
 ## Preset sources and customization
 

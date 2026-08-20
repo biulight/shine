@@ -18,6 +18,7 @@ presets_overlay_git = "https://example.com/team/shine-overlay.git"
 presets_overlay_git_branch = "main"
 app_default_dest_root = "~/.config"
 allow_app_hooks = true
+allow_sys_code = true
 sync_terminal_theme = true
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 
@@ -47,6 +48,7 @@ enabled = false
 | `presets_overlay_git_branch` | Tracked overlay branch; omit for the remote default branch |
 | `app_default_dest_root` | Default root for legacy application presets without a destination |
 | `allow_app_hooks` | Permit lifecycle hooks in external application presets |
+| `allow_sys_code` | Global-only permission for external sys scripts and persistent executable profile code; project config cannot enable it |
 | `sync_terminal_theme` | Enable automatic terminal theme synchronization in managed Unix profiles; defaults on |
 | `gpg_recipients` | Default GPG recipients for `shine env secret encrypt` |
 | `secret_backend` | Default secret backend; `gpg` when omitted |

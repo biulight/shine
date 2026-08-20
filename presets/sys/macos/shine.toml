@@ -1,40 +1,116 @@
 description = "Initialize macOS with selectable Homebrew, Rust, terminal tools, editor, network, and JavaScript runtime setup steps."
 default_profile = "recommended"
+profile_composition = true
 
 [[items]]
 id = "homebrew"
 label = "Homebrew"
 description = "Install or verify the Homebrew package manager."
 
+[items.detect]
+kind = "command"
+command = "brew"
+version_args = ["--version"]
+
+[[items.shell]]
+shells = ["zsh"]
+phase = "pre"
+fragment = "profile/homebrew.sh"
+
 [[items]]
 id = "rust"
 label = "Rust"
 description = "Install Rustup and the Rust toolchain."
+
+[items.detect]
+kind = "command"
+command = "rustup"
+version_args = ["--version"]
 
 [[items]]
 id = "yazi"
 label = "Yazi"
 description = "Install the Yazi terminal file manager."
 
+[items.detect]
+kind = "command"
+command = "yazi"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "yazi"
+
+[[items.shell]]
+shells = ["zsh"]
+phase = "post"
+when_command = "yazi"
+fragment = "profile/yazi.sh"
+
 [[items]]
 id = "starship"
 label = "Starship"
 description = "Install the Starship shell prompt."
+
+[items.detect]
+kind = "command"
+command = "starship"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "starship"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "starship"
+eval = ["starship", "init", "{shell}"]
 
 [[items]]
 id = "neovim"
 label = "Neovim"
 description = "Install Neovim with Homebrew."
 
+[items.detect]
+kind = "command"
+command = "nvim"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "neovim"
+
 [[items]]
 id = "astronvim"
 label = "AstroNvim"
 description = "Install the AstroNvim template into ~/.config/nvim when no config exists."
 
+[items.detect]
+kind = "path"
+path = "$HOME/.config/nvim"
+
 [[items]]
 id = "zerotier"
 label = "ZeroTier"
 description = "Install the ZeroTier One macOS client."
+
+[items.detect]
+kind = "any"
+probes = [
+  { kind = "command", command = "zerotier-cli" },
+  { kind = "path", path = "/Applications/ZeroTier One.app" },
+]
+
+[items.install]
+kind = "package"
+provider = "homebrew-cask"
+package = "zerotier-one"
+success_status = "needs-action"
+success_hint = "open ZeroTier and join a network"
 
 [[items]]
 id = "split-dns"
@@ -54,65 +130,277 @@ id = "zsh-autosuggestions"
 label = "zsh-autosuggestions"
 description = "Install zsh command autosuggestions."
 
+[items.detect]
+kind = "any"
+probes = [
+  { kind = "path", path = "/opt/homebrew/share/zsh-autosuggestions/zsh-autosuggestions.zsh" },
+  { kind = "path", path = "/usr/local/share/zsh-autosuggestions/zsh-autosuggestions.zsh" },
+]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "zsh-autosuggestions"
+
+[[items.shell]]
+shells = ["zsh"]
+phase = "post"
+priority = 90
+fragment = "profile/zsh-autosuggestions.sh"
+
 [[items]]
 id = "zsh-syntax-highlighting"
 label = "zsh-syntax-highlighting"
 description = "Install zsh command syntax highlighting."
+
+[items.detect]
+kind = "any"
+probes = [
+  { kind = "path", path = "/opt/homebrew/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" },
+  { kind = "path", path = "/usr/local/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh" },
+]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "zsh-syntax-highlighting"
+
+[[items.shell]]
+shells = ["zsh"]
+phase = "post"
+priority = 100
+fragment = "profile/zsh-syntax-highlighting.sh"
 
 [[items]]
 id = "zsh-vi-mode"
 label = "zsh-vi-mode"
 description = "Install vi-style zsh editing mode."
 
+[items.detect]
+kind = "any"
+probes = [
+  { kind = "path", path = "/opt/homebrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" },
+  { kind = "path", path = "/usr/local/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" },
+]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "zsh-vi-mode"
+
+[[items.shell]]
+shells = ["zsh"]
+phase = "post"
+fragment = "profile/zsh-vi-mode.sh"
+
 [[items]]
 id = "zoxide"
 label = "zoxide"
 description = "Install smarter directory jumping."
+
+[items.detect]
+kind = "command"
+command = "zoxide"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "zoxide"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "zoxide"
+eval = ["zoxide", "init", "{shell}"]
 
 [[items]]
 id = "atuin"
 label = "Atuin"
 description = "Install the Atuin shell history sync client."
 
+[items.detect]
+kind = "command"
+command = "atuin"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "atuin"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "atuin"
+eval = ["atuin", "init", "{shell}"]
+
 [[items]]
 id = "fzf"
 label = "fzf"
 description = "Install the fzf command-line fuzzy finder."
+
+[items.detect]
+kind = "command"
+command = "fzf"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "fzf"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "fzf"
+eval = ["fzf", "--{shell}"]
 
 [[items]]
 id = "bat"
 label = "bat"
 description = "Install the bat command-line file viewer."
 
+[items.detect]
+kind = "command"
+command = "bat"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "bat"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "bat"
+aliases = { cat = "bat" }
+
 [[items]]
 id = "eza"
 label = "eza"
 description = "Install the eza modern ls replacement."
+
+[items.detect]
+kind = "command"
+command = "eza"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "eza"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "eza"
+aliases = { ls = "eza --icons", ll = "eza -la --icons", lt = "eza --tree" }
 
 [[items]]
 id = "nvm"
 label = "nvm"
 description = "Install Node Version Manager with Homebrew."
 
+[items.detect]
+kind = "any"
+probes = [
+  { kind = "path", path = "/opt/homebrew/opt/nvm/nvm.sh" },
+  { kind = "path", path = "/usr/local/opt/nvm/nvm.sh" },
+  { kind = "path", path = "$HOME/.nvm/nvm.sh" },
+]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "nvm"
+
+[[items.shell]]
+shells = ["zsh"]
+phase = "pre"
+fragment = "profile/nvm.pre.sh"
+
+[[items.shell]]
+shells = ["zsh"]
+phase = "post"
+fragment = "profile/nvm.post.sh"
+
 [[items]]
 id = "bun"
 label = "Bun"
 description = "Install the Bun JavaScript runtime."
+
+[items.detect]
+kind = "command"
+command = "bun"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "bun"
+
+[[items.shell]]
+shells = ["zsh"]
+phase = "pre"
+fragment = "profile/bun.sh"
 
 [[items]]
 id = "pnpm"
 label = "pnpm"
 description = "Install the pnpm package manager."
 
+[items.detect]
+kind = "command"
+command = "pnpm"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "pnpm"
+
+[[items.shell]]
+shells = ["zsh"]
+phase = "pre"
+fragment = "profile/pnpm.sh"
+
 [[items]]
 id = "mise"
 label = "mise"
 description = "Install the mise development environment manager."
 
+[items.detect]
+kind = "command"
+command = "mise"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "mise"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "mise"
+eval = ["mise", "activate", "{shell}"]
+
 [[items]]
 id = "fastfetch"
 label = "Fastfetch"
 description = "Install Fastfetch for manual system summaries."
+
+[items.detect]
+kind = "command"
+command = "fastfetch"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "fastfetch"
 
 [profiles.required]
 items = ["homebrew", "yazi", "starship"]

@@ -1,75 +1,219 @@
 description = "Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza, pnpm, mise, Homebrew, and ZeroTier setup steps."
 default_profile = "recommended"
+profile_composition = true
 
 [[items]]
 id = "neovim"
 label = "Neovim"
 description = "Install the latest stable Neovim release (v0.10+)."
 
+[items.detect]
+kind = "command"
+command = "nvim"
+version_args = ["--version"]
+
 [[items]]
 id = "astronvim"
 label = "AstroNvim"
 description = "Install the AstroNvim template into ~/.config/nvim."
+
+[items.detect]
+kind = "path"
+path = "$HOME/.config/nvim"
 
 [[items]]
 id = "atuin"
 label = "Atuin"
 description = "Install the Atuin shell history sync client."
 
+[items.detect]
+kind = "command"
+command = "atuin"
+version_args = ["--version"]
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "pre"
+fragment = "profile/atuin.pre.sh"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "atuin"
+eval = ["atuin", "init", "{shell}"]
+
 [[items]]
 id = "yazi"
 label = "Yazi"
 description = "Install Yazi plus its preview/runtime dependencies."
+
+[items.detect]
+kind = "command"
+command = "yazi"
+version_args = ["--version"]
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "yazi"
+fragment = "profile/yazi.sh"
 
 [[items]]
 id = "starship"
 label = "Starship"
 description = "Install the Starship shell prompt."
 
+[items.detect]
+kind = "command"
+command = "starship"
+version_args = ["--version"]
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "starship"
+eval = ["starship", "init", "{shell}"]
+
 [[items]]
 id = "zoxide"
 label = "zoxide"
 description = "Install smarter directory jumping."
+
+[items.detect]
+kind = "command"
+command = "zoxide"
+version_args = ["--version"]
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "zoxide"
+eval = ["zoxide", "init", "{shell}"]
 
 [[items]]
 id = "zsh-vi-mode"
 label = "zsh-vi-mode"
 description = "Install vi-style zsh editing mode."
 
+[items.detect]
+kind = "any"
+probes = [
+  { kind = "path", path = "/home/linuxbrew/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" },
+  { kind = "path", path = "$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" },
+  { kind = "path", path = "$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" },
+]
+
+[[items.shell]]
+shells = ["zsh"]
+phase = "post"
+fragment = "profile/zsh-vi-mode.sh"
+
 [[items]]
 id = "fzf"
 label = "fzf"
 description = "Install the fzf command-line fuzzy finder."
+
+[items.detect]
+kind = "command"
+command = "fzf"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "apt"
+package = "fzf"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "fzf"
+fragment = "profile/fzf.sh"
 
 [[items]]
 id = "bat"
 label = "bat"
 description = "Install the bat command-line file viewer."
 
+[items.detect]
+kind = "command"
+command = "bat"
+version_args = ["--version"]
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "bat"
+aliases = { cat = "bat" }
+
 [[items]]
 id = "eza"
 label = "eza"
 description = "Install the eza modern ls replacement."
+
+[items.detect]
+kind = "command"
+command = "eza"
+version_args = ["--version"]
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "eza"
+aliases = { ls = "eza --icons", ll = "eza -la --icons", lt = "eza --tree" }
 
 [[items]]
 id = "pnpm"
 label = "pnpm"
 description = "Install the pnpm package manager."
 
+[items.detect]
+kind = "command"
+command = "pnpm"
+version_args = ["--version"]
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "pre"
+fragment = "profile/pnpm.sh"
+
 [[items]]
 id = "mise"
 label = "mise"
 description = "Install the mise development environment manager."
+
+[items.detect]
+kind = "command"
+command = "mise"
+version_args = ["--version"]
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+fragment = "profile/mise.sh"
 
 [[items]]
 id = "homebrew"
 label = "Homebrew"
 description = "Install or verify Homebrew on Linux."
 
+[items.detect]
+kind = "command"
+command = "brew"
+version_args = ["--version"]
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "pre"
+fragment = "profile/homebrew.sh"
+
 [[items]]
 id = "zerotier"
 label = "ZeroTier"
 description = "Install the ZeroTier Linux client for optional private network access."
+
+[items.detect]
+kind = "command"
+command = "zerotier-cli"
 
 [[items]]
 id = "split-dns"

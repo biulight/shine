@@ -157,6 +157,11 @@ pub struct Config {
     /// Embedded presets may run hooks without this opt-in.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_app_hooks: bool,
+    /// Global-only opt-in allowing external sys presets and overlays to execute install scripts or
+    /// install persistent shell-profile code. Declarative package providers,
+    /// detection, PATH, env, and aliases do not require this opt-in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_sys_code: bool,
     /// Whether the managed sys `pre` profile auto-syncs the terminal theme
     /// (`shine theme sync --auto`) on interactive shell startup. Defaults to
     /// `true`. The `SHINE_SYNC_TERMINAL_THEME` env var overrides this at
@@ -323,6 +328,7 @@ impl Config {
             app_default_dest_root_override: None,
             is_external_presets: false,
             allow_app_hooks: false,
+            allow_sys_code: false,
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_recipients: Vec::new(),
@@ -511,6 +517,7 @@ impl Default for Config {
             app_default_dest_root_override: None,
             is_external_presets: false,
             allow_app_hooks: false,
+            allow_sys_code: false,
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_recipients: Vec::new(),
