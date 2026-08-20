@@ -22,3 +22,21 @@
 .theme-doc-markdown code {
   overflow-wrap: anywhere;
 }
+
+.theme-doc-markdown #common-built-in-commands + table :is(th, td):first-child,
+.theme-doc-markdown #内置常用命令 + table :is(th, td):first-child,
+.theme-doc-markdown .built-in-presets-shell-table + table :is(th, td):first-child,
+.theme-doc-markdown .built-in-presets-app-table + table :is(th, td):first-child {
+  min-width: 6rem;
+  white-space: nowrap;
+}
+
+.theme-doc-markdown .built-in-presets-shell-table + table :is(th, td):nth-child(2) {
+  min-width: 11rem;
+  white-space: nowrap;
+}
+
+.theme-doc-markdown .built-in-presets-system-table + table :is(th, td):nth-child(2) {
+  min-width: 13rem;
+  white-space: nowrap;
+}
