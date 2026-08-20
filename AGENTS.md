@@ -195,9 +195,10 @@ shine/
 │       │   │                 # mod declarations + re-exports (handle_*, ShellUpgradeReport)
 │       │   ├── deployment.rs # External snapshot/live deployment, shell-manifest.toml,
 │       │   │                 # category materialization, constrained lazy live transforms
-│       │   ├── install.rs    # handle_install/handle_upgrade_installed/handle_completion_install/
+│       │   ├── install.rs    # category or category/command handle_install,
+│       │                     # handle_upgrade_installed/handle_completion_install/
 │       │   │                 # handle_init_template, script/link-spec building
-│       │   ├── uninstall.rs  # handle_uninstall
+│       │   ├── uninstall.rs  # category or category/command handle_uninstall
 │       │   ├── links.rs      # Bin-symlink spec building, link-conflict detail/printing
 │       │   ├── report.rs     # handle_list, ShellUpgradeReport, install/uninstall summary formatting
 │       │   ├── profile.rs    # Managed profile file/PATH/sentinel-block install+removal
@@ -358,16 +359,19 @@ shine/
 
 ### Key data flow
 
-**Install** (`shine shell install [CATEGORY]`):
+**Install** (`shine shell install [CATEGORY[/COMMAND]]`):
 1. Embedded mode uses `presets::extract_prefix`; external snapshot mode materializes the
    effective category under `<shine_dir>/installed/shell/`; explicit live mode retains the
-   external source path.
-2. `bin_links::link_executables(bin_dir, sources)` — creates flat symlinks in `~/.shine/bin/`
+   external source path. Category sources are shared deployment material even for a command target.
+2. `bin_links::link_executables(bin_dir, sources)` creates flat entries in `~/.shine/bin/` only for
+   the selected commands; `shell-manifest.toml` records the same command-scoped activation.
 3. `shells::append_path_to_shell_config` — appends a sentinel-guarded `export PATH` block to `~/.zshrc` (or equivalent)
 
 **Uninstall**:
-1. `bin_links::unlink_managed` — removes only symlinks pointing into the managed presets dir
-2. `presets::remove_prefix` — removes only embedded-asset files (user files are never touched)
+1. `bin_links::unlink_managed` removes a category, while command targets remove only their selected
+   managed entry and manifest receipt; foreign entries are never touched.
+2. `presets::remove_prefix` removes only embedded-asset files after the last installed command no
+   longer needs the shared category material (user files are never touched).
 3. `shells::remove_path_from_shell_config` — removes the sentinel block; skipped on `--dry-run`
 
 ### Env variable substitution

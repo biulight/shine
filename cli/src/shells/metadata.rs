@@ -36,6 +36,52 @@ pub struct ShellFile {
     pub env: Vec<crate::env::EnvVarSpec>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShellTarget<'a> {
+    pub category: &'a str,
+    pub command: Option<&'a str>,
+}
+
+/// Parse the scoped shell lifecycle grammar: `category` or `category/command`.
+/// Bare command aliases remain inspection-only so mutation targets stay unambiguous.
+pub fn parse_lifecycle_target(target: &str) -> Result<ShellTarget<'_>> {
+    let target = target.trim();
+    if target.is_empty() {
+        bail!("shell preset target must not be empty");
+    }
+    let mut parts = target.split('/');
+    let category = parts.next().unwrap_or_default();
+    let command = parts.next();
+    if category.is_empty() || command.is_some_and(str::is_empty) || parts.next().is_some() {
+        bail!(
+            "invalid shell preset target `{target}`; expected <category> or <category>/<command>"
+        );
+    }
+    Ok(ShellTarget { category, command })
+}
+
+/// Select and validate one shell lifecycle target from the active preset namespace.
+pub async fn load_active_target(
+    config: &Config,
+    target: ShellTarget<'_>,
+) -> Result<Vec<ShellCategory>> {
+    let mut categories = load_active_categories(config, Some(target.category)).await?;
+    let Some(category) = categories.first_mut() else {
+        bail!("shell preset category not found: {}", target.category);
+    };
+    if let Some(command) = target.command {
+        category.files.retain(|file| file.command_name == command);
+        if category.files.is_empty() {
+            bail!(
+                "shell preset command not found: {}/{}",
+                target.category,
+                command
+            );
+        }
+    }
+    Ok(categories)
+}
+
 #[derive(Debug, Deserialize)]
 struct CategoryToml {
     description: Option<String>,

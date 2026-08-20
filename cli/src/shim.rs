@@ -25,6 +25,14 @@ pub async fn handle_install_shim(
     replace_managed: bool,
 ) -> Result<()> {
     let (explicit_kind, category) = parse_preset_target(target)?;
+    if explicit_kind == Some(PresetKind::Shell) && category.contains('/') {
+        return Box::pin(shells::handle_install(
+            config,
+            Some(category),
+            replace_managed,
+        ))
+        .await;
+    }
     match resolve_shim_target(config, explicit_kind, category).await? {
         ShimResolution::Found(PresetKind::Shell) => {
             Box::pin(shells::handle_install(
@@ -56,6 +64,18 @@ pub async fn handle_uninstall_shim(
     dry_run: bool,
 ) -> Result<()> {
     let (explicit_kind, category) = parse_preset_target(target)?;
+    if explicit_kind == Some(PresetKind::Shell) && category.contains('/') {
+        if force {
+            bail!("`--force` applies only to app presets");
+        }
+        return Box::pin(shells::handle_uninstall(
+            config,
+            Some(category),
+            purge,
+            dry_run,
+        ))
+        .await;
+    }
     match resolve_shim_target(config, explicit_kind, category).await? {
         ShimResolution::Found(PresetKind::Shell) => {
             if force {
@@ -88,7 +108,12 @@ pub(crate) async fn resolve_preset_kind(
     config: &Config,
     target: &str,
 ) -> Result<(PresetKind, String)> {
-    let (explicit_kind, category) = parse_preset_target(target)?;
+    let (explicit_kind, target) = parse_preset_target(target)?;
+    let category = if explicit_kind == Some(PresetKind::Shell) {
+        target.split('/').next().unwrap_or_default()
+    } else {
+        target
+    };
     match resolve_shim_target(config, explicit_kind, category).await? {
         ShimResolution::Found(kind) => Ok((kind, category.to_string())),
         ShimResolution::Conflict => bail_ambiguous(category),
@@ -105,13 +130,22 @@ fn parse_preset_target(target: &str) -> Result<(Option<PresetKind>, &str)> {
         Some(("app", category)) => (Some(PresetKind::App), category),
         Some(("shell", category)) => (Some(PresetKind::Shell), category),
         Some((kind, _)) => bail!(
-            "unsupported preset target kind `{kind}`; expected app/<category> or shell/<category>"
+            "unsupported preset target kind `{kind}`; expected app/<category> or shell/<category>[/<command>]"
         ),
         None => (None, target),
     };
-    if category.is_empty() || category.contains('/') {
+    let valid = match kind {
+        Some(PresetKind::Shell) => {
+            let mut parts = category.split('/');
+            parts.next().is_some_and(|part| !part.is_empty())
+                && parts.next().is_none_or(|part| !part.is_empty())
+                && parts.next().is_none()
+        }
+        Some(PresetKind::App) | None => !category.is_empty() && !category.contains('/'),
+    };
+    if !valid {
         bail!(
-            "invalid preset target `{target}`; expected app/<category>, shell/<category>, or a unique category name"
+            "invalid preset target `{target}`; expected app/<category>, shell/<category>[/<command>], or a unique category name"
         );
     }
     Ok((kind, category))
@@ -235,9 +269,14 @@ mod tests {
             parse_preset_target("shell/proxy").unwrap(),
             (Some(PresetKind::Shell), "proxy")
         );
+        assert_eq!(
+            parse_preset_target("shell/utils/shine-env-export").unwrap(),
+            (Some(PresetKind::Shell), "utils/shine-env-export")
+        );
         assert_eq!(parse_preset_target("proxy").unwrap(), (None, "proxy"));
         assert!(parse_preset_target("sys/split-dns").is_err());
         assert!(parse_preset_target("app/surge/file").is_err());
+        assert!(parse_preset_target("shell/utils/tool/extra").is_err());
     }
 
     #[tokio::test]
@@ -272,6 +311,34 @@ mod tests {
             .unwrap();
 
         assert_eq!(resolution, ShimResolution::Missing);
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn canonical_shell_command_target_installs_and_uninstalls_one_command() {
+        let dir = make_temp_dir().await;
+        let config = config_in(&dir);
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install_shim(&config, "shell/utils/shine-env-export", false)
+            .await
+            .unwrap();
+        let selected = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("shine-env-export"),
+        );
+        let sibling = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("shine-theme-sync"),
+        );
+        assert!(selected.exists());
+        assert!(!sibling.exists());
+
+        handle_uninstall_shim(&config, "shell/utils/shine-env-export", false, false, false)
+            .await
+            .unwrap();
+        assert!(!selected.exists());
+
         fs::remove_dir_all(dir).await.unwrap();
     }
 }

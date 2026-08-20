@@ -295,6 +295,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
     };
 
     let rows = crate::status::build_shell_rows(config).await?;
+    let selected_command = (files.len() == 1).then(|| files[0].command_name.clone());
     println!("{}", colors::bold(&category.name));
     if let Some(description) = &category.description {
         println!("  {}", colors::dim(description));
@@ -365,19 +366,25 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
 
     println!();
     if any_installed {
+        let repair_target = selected_command.as_ref().map_or_else(
+            || format!("shell/{}", category.name),
+            |command| format!("shell/{}/{command}", category.name),
+        );
         println!(
             "{}",
             colors::dim(&format!(
-                "Run `shine install shell/{} --replace-managed` to repair this category.",
-                category.name
+                "Run `shine install {repair_target} --replace-managed` to repair this target."
             ))
         );
     } else {
+        let install_target = selected_command.as_ref().map_or_else(
+            || category.name.clone(),
+            |command| format!("{}/{command}", category.name),
+        );
         println!(
             "{}",
             colors::dim(&format!(
-                "Run `shine shell install {}` to install this category.",
-                category.name
+                "Run `shine shell install {install_target}` to install this target."
             ))
         );
     }

@@ -52,10 +52,20 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn handle_install(config: &Config, category: Option<&str>, force: bool) -> Result<()> {
+pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) -> Result<()> {
     crate::config::print_presets_note(config);
-    let prefix = match category {
-        Some(cat) => format!("shell/{cat}"),
+    let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
+    let category_filter = selection.map(|target| target.category);
+    let mut categories = match selection {
+        Some(target) => metadata::load_active_target(config, target).await?,
+        None => metadata::load_active_categories(config, None).await?,
+    };
+    if categories.is_empty() {
+        anyhow::bail!("no shell preset categories found");
+    }
+
+    let prefix = match category_filter {
+        Some(category) => format!("shell/{category}"),
         None => "shell".to_string(),
     };
 
@@ -65,7 +75,11 @@ pub async fn handle_install(config: &Config, category: Option<&str>, force: bool
         output::summary_line("Shell Presets", &preset_extract_summary_parts(&report));
     }
 
-    let categories = metadata::load_active_categories(config, category).await?;
+    // Embedded extraction populates the installed preset cache but must not expand a
+    // command-scoped selection into every command in its category.
+    if let Some(selection) = selection {
+        categories = metadata::load_active_target(config, selection).await?;
+    }
     super::deployment::validate_snapshot_categories(config, &categories).await?;
     let snapshots_updated =
         super::deployment::materialize_snapshot_categories(config, &categories).await?;
@@ -92,10 +106,15 @@ pub async fn handle_install(config: &Config, category: Option<&str>, force: bool
     let link_specs = build_link_specs(config, &categories);
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, force).await?;
-    super::deployment::update_manifest(config, &categories).await?;
+    let manifest_scope = if selection.is_some_and(|target| target.command.is_some()) {
+        super::deployment::ManifestUpdateScope::Commands
+    } else {
+        super::deployment::ManifestUpdateScope::Categories
+    };
+    super::deployment::update_manifest(config, &categories, manifest_scope).await?;
 
     output::summary_line("Bin Links", &link_report_summary_parts(&link_report));
-    print_link_conflicts(config, &link_report.conflicts, category);
+    print_link_conflicts(config, &link_report.conflicts, category_filter);
 
     let source_commands = installed_source_commands(config).await?;
     let installed_commands = installed_source_commands_for_categories(config, &categories).await?;
@@ -149,6 +168,7 @@ pub async fn handle_upgrade_installed_target(
     } else {
         metadata::load_embedded_categories(None)?
     };
+    let shell_manifest = super::deployment::ShellManifest::load(config).await?;
 
     let installed_commands: Vec<(String, String)> = all_categories
         .iter()
@@ -159,7 +179,9 @@ pub async fn handle_upgrade_installed_target(
                     config.bin_dir(),
                     std::ffi::OsStr::new(&file.command_name),
                 );
-                shell_link_exists(&link).then(|| (cat.name.clone(), file.command_name.clone()))
+                let canonical = format!("shell/{}/{}", cat.name, file.command_name);
+                (shell_link_exists(&link) || shell_manifest.find(&canonical).is_some())
+                    .then(|| (cat.name.clone(), file.command_name.clone()))
             })
         })
         .collect();
@@ -209,7 +231,12 @@ pub async fn handle_upgrade_installed_target(
     let link_specs = build_link_specs(config, &categories);
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
-    super::deployment::update_manifest(config, &categories).await?;
+    super::deployment::update_manifest(
+        config,
+        &categories,
+        super::deployment::ManifestUpdateScope::Categories,
+    )
+    .await?;
 
     let link_parts = upgrade_link_report_summary_parts(&link_report, verbose);
 
@@ -510,6 +537,162 @@ mod tests {
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-shell").await
+    }
+
+    #[tokio::test]
+    async fn command_scoped_install_activates_only_selected_command() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("utils/shine-env-export"), false)
+            .await
+            .unwrap();
+
+        let selected = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("shine-env-export"),
+        );
+        let sibling = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("shine-theme-sync"),
+        );
+        assert!(selected.exists());
+        assert!(!sibling.exists());
+
+        let manifest = crate::shells::deployment::ShellManifest::load(&config)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/utils/shine-env-export").is_some());
+        assert!(manifest.find("shell/utils/shine-theme-sync").is_none());
+
+        let rows = crate::status::build_shell_rows(&config).await.unwrap();
+        let selected_row = rows
+            .iter()
+            .find(|row| row.label == "utils/shine-env-export")
+            .unwrap();
+        let sibling_row = rows
+            .iter()
+            .find(|row| row.label == "utils/shine-theme-sync")
+            .unwrap();
+        assert!(selected_row.is_installed);
+        assert!(!sibling_row.is_installed);
+        assert_eq!(sibling_row.status_text, "not installed");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn command_scoped_install_preserves_sibling_manifest_entries() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("utils/shine-env-export"), false)
+            .await
+            .unwrap();
+        handle_install(&config, Some("utils/shine-theme-sync"), false)
+            .await
+            .unwrap();
+
+        let manifest = crate::shells::deployment::ShellManifest::load(&config)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/utils/shine-env-export").is_some());
+        assert!(manifest.find("shell/utils/shine-theme-sync").is_some());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn command_scoped_install_rejects_unknown_targets_before_writing() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+
+        let error = handle_install(&config, Some("utils/not-a-command"), false)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("shell preset command not found: utils/not-a-command"));
+        assert!(!config.bin_dir().exists());
+        assert!(!config.presets_dir().join("shell/utils").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn category_upgrade_repairs_only_installed_commands() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        handle_install(&config, Some("utils/shine-env-export"), false)
+            .await
+            .unwrap();
+        let selected = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("shine-env-export"),
+        );
+        let sibling = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new("shine-theme-sync"),
+        );
+        crate::bin_links::unlink_managed_command(
+            config.bin_dir(),
+            std::ffi::OsStr::new("shine-env-export"),
+            &[config.presets_dir().join("shell/utils")],
+            false,
+        )
+        .await
+        .unwrap();
+
+        let mut separator = crate::output::SectionSeparator::new();
+        handle_upgrade_installed_target(&config, Some("utils"), false, &mut separator)
+            .await
+            .unwrap();
+
+        assert!(selected.exists());
+        assert!(!sibling.exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn external_snapshot_is_shared_but_only_selected_command_is_installed() {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("one.sh"), b"#!/bin/sh\necho one\n")
+            .await
+            .unwrap();
+        fs::write(category.join("two.sh"), b"#!/bin/sh\necho two\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("custom/one"), false)
+            .await
+            .unwrap();
+
+        assert!(config.installed_shell_dir().join("custom/one.sh").exists());
+        assert!(config.installed_shell_dir().join("custom/two.sh").exists());
+        assert!(config.bin_dir().join("one").exists());
+        assert!(!config.bin_dir().join("two").exists());
+        let rows = crate::status::build_shell_rows(&config).await.unwrap();
+        let sibling = rows.iter().find(|row| row.label == "custom/two").unwrap();
+        assert!(!sibling.is_installed);
+        assert_eq!(sibling.status_text, "not installed");
+        assert!(sibling.changes.is_empty());
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[cfg(unix)]

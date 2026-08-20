@@ -154,6 +154,48 @@ pub async fn unlink_managed(
     Ok(report)
 }
 
+/// Remove one command entry only when it is owned by Shine and points below one
+/// of `managed_roots`. This is the command-scoped counterpart to
+/// [`unlink_managed`]; foreign files and links are reported as skipped.
+pub async fn unlink_managed_command(
+    bin_dir: &Path,
+    command: &OsStr,
+    managed_roots: &[PathBuf],
+    dry_run: bool,
+) -> Result<UnlinkReport> {
+    let path = command_path_for_name(bin_dir, command);
+    let mut report = UnlinkReport {
+        removed: Vec::new(),
+        skipped: Vec::new(),
+    };
+    let meta = match tokio::fs::symlink_metadata(&path).await {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(report),
+        Err(error) => return Err(error).with_context(|| format!("stat failed: {path:?}")),
+    };
+
+    let target = if meta.file_type().is_symlink() {
+        tokio::fs::read_link(&path).await.ok()
+    } else {
+        launcher_target(&path).await?
+    };
+    let managed = target.is_some_and(|target| {
+        managed_roots
+            .iter()
+            .any(|root| target_is_managed(&target, root, bin_dir))
+    });
+    if !managed {
+        report.skipped.push(path);
+        return Ok(report);
+    }
+
+    if !dry_run {
+        remove_link(&path).await?;
+    }
+    report.removed.push(path);
+    Ok(report)
+}
+
 /// Create flat symlinks in `bin_dir` for each executable file in `sources`.
 ///
 /// - Existing correct symlinks are skipped (idempotent).

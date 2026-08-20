@@ -13,10 +13,10 @@ pub enum ShellCommands {
     /// Install shell presets and create bin symlinks.
     /// Run 'shine shell list' to see available categories.
     Install {
-        /// Preset category to install (e.g. "proxy"). Installs all if omitted.
+        /// Category or category/command to install (e.g. "proxy" or "utils/shine-env-export"). Installs all if omitted.
         /// Run 'shine shell list' to see available categories.
-        #[arg(value_name = "CATEGORY")]
-        category: Option<String>,
+        #[arg(value_name = "TARGET")]
+        target: Option<String>,
         /// Replace user-modified managed files, links, and profile integration
         #[arg(long)]
         replace_managed: bool,
@@ -24,10 +24,10 @@ pub enum ShellCommands {
     /// Uninstall shell presets and remove bin symlinks.
     /// Run 'shine shell list' to see installed categories.
     Uninstall {
-        /// Preset category to uninstall (e.g. "proxy"). Uninstalls all if omitted.
+        /// Category or category/command to uninstall. Uninstalls all if omitted.
         /// Run 'shine shell list' to see installed categories.
-        #[arg(value_name = "CATEGORY")]
-        category: Option<String>,
+        #[arg(value_name = "TARGET")]
+        target: Option<String>,
         /// Also remove empty managed directories after uninstall
         #[arg(long)]
         purge: bool,

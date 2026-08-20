@@ -44,9 +44,10 @@ SSH secret broker 始终在本地解密，并按精确的工作区、主机、�
 artifact 会承担应用特有的组装工作，减少用户心智负担。也可以把它们当作起点：复制一个类别、
 用 overlay 覆盖少量路径，或维护完整的外部预设来源。命令输出会标明实际基础来源与 overlay。
 
-生命周期命令以 `app/<category>`、`shell/<category>` 和 `sys/<item>` 为操作单元。App 文件、
-Shell 命令、脚本、driver 与 receipt 仍可通过 `info`、状态详情和 `--diff` 查看，但不是默认的
-独立安装或升级单元。
+生命周期命令以 `app/<category>`、`shell/<category>` 和 `sys/<item>` 为操作单元。Shell 命令
+也可以通过 `shell/<category>/<command>` 单独安装或卸载。App 文件、脚本、driver 与 receipt
+仍可通过 `info`、状态详情和 `--diff` 查看；App 文件不是独立安装单元，Shell 升级仍在类别
+边界内协调已安装命令。
 
 ## 从这里开始
 

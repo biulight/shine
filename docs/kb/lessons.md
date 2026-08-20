@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-20 — Shell source presence was mistaken for command installation
+
+- **Symptom**: `shine shell install utils/shine-env-export` was parsed as a nonexistent category,
+  completed successfully with `0 linked`, and could not express the user's intent to activate only
+  one independent command from `utils`.
+- **Root cause**: lifecycle parsing stopped at categories, while status treated extracted source
+  files and full external snapshots as installation evidence even though the manifest and launchers
+  were already command-granular.
+- **Fix**: accept explicit `category/command` install and uninstall targets, update manifest entries
+  incrementally at that scope, and treat category source material as a shared cache rather than an
+  activation receipt.
+- **Rule**: when deployment material is broader than the user-selected lifecycle unit, installed
+  state must come from the unit's receipt or managed entry—not incidental source presence.
+
 ## 2026-08-20 — Structural preset updates were rendered as content replacements
 
 - **Symptom**: renaming a live overlay root, for example `shineOverlay` to `shineOverlayTest`,

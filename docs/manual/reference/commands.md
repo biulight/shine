@@ -10,9 +10,12 @@ installed version.
 
 ## 1.0 target rules
 
-Canonical targets are `app/<category>`, `shell/<category>`, and `sys/<item>`. Installation and
-uninstall also accept a bare category when it is unique across app and shell presets. Prefer complete
-targets in scripts and documentation to avoid future ambiguity.
+Canonical targets are `app/<category>`, `shell/<category>`,
+`shell/<category>/<command>`, and `sys/<item>`. Shell command targets are supported by install and
+uninstall; upgrade reconciles the commands already installed in their owning category. Installation
+and uninstall also accept a bare category when it is unique across app and shell presets. Bare shell
+command names are inspection-only. Prefer complete targets in scripts and documentation to avoid
+future ambiguity.
 
 ```bash
 shine list --available
@@ -58,8 +61,8 @@ directory temporarily.
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [CATEGORY] [--replace-managed]
-shine shell uninstall [CATEGORY] [--purge] [--dry-run]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--replace-managed]
+shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run]
 
 shine app list
 shine app info <CATEGORY>

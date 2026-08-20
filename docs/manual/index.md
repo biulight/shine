@@ -50,9 +50,11 @@ artifacts that remove application-specific assembly work. Treat them as starting
 category, override selected paths with an overlay, or maintain a complete external preset source.
 Command output identifies the effective base source and overlay.
 
-Lifecycle commands operate on `app/<category>`, `shell/<category>`, and `sys/<item>`. Individual app
-files, shell commands, scripts, drivers, and receipts remain visible through `info`, status details,
-and `--diff`; they are not separate default install/upgrade units.
+Lifecycle commands operate on `app/<category>`, `shell/<category>`, and `sys/<item>`. Shell commands
+can also be installed or uninstalled independently with `shell/<category>/<command>`. Individual app
+files, scripts, drivers, and receipts remain visible through `info`, status details, and `--diff`;
+app files are not separate install units, and shell upgrade continues to reconcile installed commands
+at their category boundary.
 
 ## Start here
 

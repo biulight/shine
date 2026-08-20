@@ -9,7 +9,11 @@ sidebar_position: 1
 
 ## 1.0 target 规则
 
-日常命令使用 `app/<category>`、`shell/<category>` 和 `sys/<item>` 作为规范 target。名称在 app 与 shell 间唯一时，安装和卸载也接受裸类别名；脚本和文档中建议始终写完整 target，避免以后新增同名类别后产生歧义。
+日常命令使用 `app/<category>`、`shell/<category>`、`shell/<category>/<command>` 和
+`sys/<item>` 作为规范 target。install 与 uninstall 支持 Shell 命令 target；upgrade 则在所属
+类别内协调已经安装的命令。名称在 app 与 shell 间唯一时，安装和卸载也接受裸类别名；裸
+Shell 命令名只用于查看。脚本和文档中建议始终写完整 target，避免以后新增同名类别后产生
+歧义。
 
 ```bash
 shine list --available
@@ -52,8 +56,8 @@ shine upgrade app/starship
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [CATEGORY] [--replace-managed]
-shine shell uninstall [CATEGORY] [--purge] [--dry-run]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--replace-managed]
+shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run]
 
 shine app list
 shine app info <CATEGORY>

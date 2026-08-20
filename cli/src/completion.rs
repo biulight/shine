@@ -23,7 +23,7 @@ pub fn generate_registration(shell: CompletionShell) {
 
 pub fn command() -> clap::Command {
     let preset_targets = ArgValueCandidates::new(preset_target_candidates);
-    let shell_categories = ArgValueCandidates::new(shell_category_candidates);
+    let shell_lifecycle_targets = ArgValueCandidates::new(shell_lifecycle_candidates);
     let shell_targets = ArgValueCandidates::new(shell_info_candidates);
     let app_categories = ArgValueCandidates::new(app_category_candidates);
     let app_build_categories = ArgValueCandidates::new(app_build_candidates);
@@ -58,10 +58,10 @@ pub fn command() -> clap::Command {
                 cmd.mut_arg("target", |arg| arg.add(shell_targets.clone()))
             })
             .mut_subcommand("install", |cmd| {
-                cmd.mut_arg("category", |arg| arg.add(shell_categories.clone()))
+                cmd.mut_arg("target", |arg| arg.add(shell_lifecycle_targets.clone()))
             })
             .mut_subcommand("uninstall", |cmd| {
-                cmd.mut_arg("category", |arg| arg.add(shell_categories.clone()))
+                cmd.mut_arg("target", |arg| arg.add(shell_lifecycle_targets.clone()))
             })
         })
         .mut_subcommand("app", |cmd| {
@@ -149,11 +149,24 @@ fn preset_target_candidates() -> Vec<CompletionCandidate> {
         targets.insert(category.clone());
         targets.insert(format!("shell/{category}"));
     }
+    for (category, commands) in shell_command_names() {
+        for command in commands {
+            targets.insert(format!("shell/{category}/{command}"));
+        }
+    }
     completion_candidates(targets)
 }
 
-fn shell_category_candidates() -> Vec<CompletionCandidate> {
-    completion_candidates(category_names("shell"))
+fn shell_lifecycle_candidates() -> Vec<CompletionCandidate> {
+    let mut names = shell_category_names();
+    for (category, commands) in shell_command_names() {
+        names.extend(
+            commands
+                .into_iter()
+                .map(|command| format!("{category}/{command}")),
+        );
+    }
+    completion_candidates(names)
 }
 
 fn shell_info_candidates() -> Vec<CompletionCandidate> {
@@ -650,6 +663,13 @@ mod tests {
         assert!(complete_values(&["shine", "info", ""], 2).contains("sys/split-dns"));
         assert!(complete_values(&["shine", "info", ""], 2).contains("app/starship"));
         assert!(complete_values(&["shine", "install", ""], 2).contains("shell/proxy"));
+        assert!(
+            complete_values(&["shine", "install", ""], 2).contains("shell/utils/shine-env-export")
+        );
+        assert!(
+            complete_values(&["shine", "shell", "install", ""], 3)
+                .contains("utils/shine-env-export")
+        );
         let preset_copy = complete_values(&["shine", "preset", "copy", ""], 3);
         assert!(preset_copy.contains("app/surge"));
         assert!(preset_copy.contains("shell/proxy"));

@@ -190,6 +190,11 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 crate::bin_links::LinkRuntime::Bun => "bun",
             };
             let manifest_entry = shell_manifest.find(&canonical_target);
+            // Extracted preset files and category snapshots are shared deployment
+            // caches, not proof that every command in the category was installed.
+            // A command is active when it has a manifest receipt or a launcher
+            // (the latter preserves compatibility with pre-manifest installs).
+            let is_installed = manifest_entry.is_some() || link_exists;
             let manifest_current = !config.is_external_presets
                 || manifest_entry.is_some_and(|entry| {
                     entry.mode == config.external_shell_mode
@@ -258,15 +263,12 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                     script.needs_source.to_string(),
                 );
             }
-            if file_exists && !link_exists {
+            if is_installed && file_exists && !link_exists {
                 changes.push(UpdateChange::CommandEntryMissing {
                     path: link_path.clone(),
                 });
             }
-            if config.is_external_presets
-                && manifest_entry.is_none()
-                && (file_exists || link_exists)
-            {
+            if config.is_external_presets && manifest_entry.is_none() && link_exists {
                 changes.push(UpdateChange::ManifestEntryMissing {
                     target: canonical_target.clone(),
                 });
@@ -294,10 +296,13 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                     path: link_path.clone(),
                 });
             }
+            if !is_installed {
+                changes.clear();
+            }
 
-            let (sym, status_text) = if link_exists
-                && (!link_current || !manifest_current || !snapshot_current)
-            {
+            let (sym, status_text) = if !is_installed {
+                ("✗", "not installed")
+            } else if link_exists && (!link_current || !manifest_current || !snapshot_current) {
                 ("↑", "update available")
             } else {
                 match source_status {
@@ -326,7 +331,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 label: display_name,
                 status_sym: sym,
                 status_text,
-                is_installed: file_exists || link_exists,
+                is_installed,
                 changes,
             });
         }
@@ -1100,17 +1105,9 @@ mod tests {
             .iter()
             .find(|row| row.label == "custom/mytool")
             .unwrap();
-        assert_eq!(
-            row.changes,
-            vec![
-                UpdateChange::CommandEntryMissing {
-                    path: config.bin_dir().join("mytool"),
-                },
-                UpdateChange::ManifestEntryMissing {
-                    target: "shell/custom/mytool".to_string(),
-                },
-            ]
-        );
+        assert!(!row.is_installed);
+        assert_eq!(row.status_text, "not installed");
+        assert!(row.changes.is_empty());
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

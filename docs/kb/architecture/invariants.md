@@ -128,6 +128,12 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## External shell deployment
 
+- **Shell command activation is command-scoped even though deployment is category-scoped.**
+  Embedded extraction and external snapshots may materialize every source file in a category so
+  commands can use sibling resources, but source-file presence alone never means that a command is
+  installed. `shell-manifest.toml` entries and compatible legacy launchers are the activation
+  receipts. Command-scoped install must upsert only its selected receipt; command-scoped uninstall
+  must remove only its selected managed launcher/receipt and preserve installed siblings.
 - **External source selection and installed state are separate.** Snapshot mode materializes
   effective shell categories below `<shine_dir>/installed/shell/`; launchers must never point at
   the user-owned external tree unless `external_shell_mode = "live"` is explicit.

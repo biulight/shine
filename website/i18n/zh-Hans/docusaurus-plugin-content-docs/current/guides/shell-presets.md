@@ -14,6 +14,7 @@ Shell 预设把脚本安装到 Shine 的受管目录，并在 `~/.shine/bin/` �
 ```bash
 shine shell list
 shine shell install proxy
+shine shell install utils/shine-env-export # 只安装这一个命令
 shine shell install            # 安装当前平台可用的全部类别
 ```
 
@@ -21,7 +22,11 @@ shine shell install            # 安装当前平台可用的全部类别
 
 ```bash
 shine install proxy
+shine install shell/utils/shine-env-export
 ```
+
+类别 target 会启用当前平台可用的全部命令；只需要其中一个命令时，使用明确的
+`category/command` target。修改型命令不接受裸命令名，因为不同类别可能出现同名命令。
 
 安装后需打开新终端或重新加载 shell profile。需要补全时运行：
 
@@ -45,10 +50,13 @@ shine install shell/proxy --replace-managed
 ```bash
 shine shell uninstall proxy --dry-run
 shine shell uninstall proxy
+shine shell uninstall utils/shine-env-export
 shine shell uninstall proxy --purge
 ```
 
-`--purge` 会额外删除目标类别的预设目录；未指定类别时会处理整棵 shell 预设目录。它不会删除 `~/.shine/config.toml`。
+按命令卸载会保留同类别下其他已安装命令；只要兄弟命令仍需要，共享 preset 或 snapshot 文件
+就可能继续保留。`--purge` 会额外删除空的受管预设目录；未指定 target 时会处理整棵 shell
+预设目录。它不会删除 `~/.shine/config.toml`。
 
 ## 内置常用命令
 

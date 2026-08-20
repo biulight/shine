@@ -4,6 +4,21 @@ End-to-end flows that span multiple modules and are not visible in any single fi
 module map and per-command routing table, see [`AGENTS.md`](../../../AGENTS.md) — this file only
 records the cross-module sequences and their gotchas.
 
+## Shell install and uninstall
+
+Shell lifecycle targets are either a category (`utils`) or one command in a category
+(`utils/shine-env-export`). Embedded sources and external snapshots remain category-scoped shared
+deployment material so a command can consume sibling resources, while launchers and
+`shell-manifest.toml` receipts are command-scoped.
+
+Command install filters metadata before transforms and launcher creation, then upserts only the
+selected manifest target. Category install retains the existing replace-category reconciliation.
+Status treats a manifest receipt or a compatible legacy launcher as installed; extracted source
+files alone are only cache state. Command uninstall removes only the selected managed launcher,
+rendered output, and receipt, rebuilds source-command profile wrappers from the remaining launchers,
+and removes shared category material only after the last installed command is gone. Foreign command
+entries are never removed.
+
 ## App install (`shine app install <category>`)
 
 `cli/src/apps/mod.rs` orchestrates:

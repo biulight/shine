@@ -255,24 +255,24 @@ async fn run(cli: Cli) -> Result<()> {
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
             ShellCommands::Info { target } => Box::pin(shells::handle_info(&config, &target)).await,
             ShellCommands::Install {
-                category,
+                target,
                 replace_managed,
             } => {
                 Box::pin(shells::handle_install(
                     &config,
-                    category.as_deref(),
+                    target.as_deref(),
                     replace_managed,
                 ))
                 .await
             }
             ShellCommands::Uninstall {
-                category,
+                target,
                 purge,
                 dry_run,
             } => {
                 Box::pin(shells::handle_uninstall(
                     &config,
-                    category.as_deref(),
+                    target.as_deref(),
                     purge,
                     dry_run,
                 ))
