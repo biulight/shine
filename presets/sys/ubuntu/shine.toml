@@ -1,35 +1,30 @@
+version = 2
 description = "Initialize Ubuntu system with selectable Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza, pnpm, mise, Homebrew, and ZeroTier setup steps."
 default_profile = "recommended"
-profile_composition = true
 
 [[items]]
 id = "neovim"
 label = "Neovim"
 description = "Install the latest stable Neovim release (v0.10+)."
 
-[items.detect]
-kind = "command"
-command = "nvim"
-version_args = ["--version"]
+detect = { kind = "command", command = "nvim", version_args = ["--version"] }
+install = { kind = "package", provider = "apt", package = "neovim" }
 
 [[items]]
 id = "astronvim"
 label = "AstroNvim"
 description = "Install the AstroNvim template into ~/.config/nvim."
 
-[items.detect]
-kind = "path"
-path = "$HOME/.config/nvim"
+detect = { kind = "path", path = "$HOME/.config/nvim" }
+install = { kind = "script", path = "install/astronvim.sh" }
 
 [[items]]
 id = "atuin"
 label = "Atuin"
 description = "Install the Atuin shell history sync client."
 
-[items.detect]
-kind = "command"
-command = "atuin"
-version_args = ["--version"]
+detect = { kind = "command", command = "atuin", version_args = ["--version"] }
+install = { kind = "script", path = "install/atuin.sh" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -47,10 +42,8 @@ id = "yazi"
 label = "Yazi"
 description = "Install Yazi plus its preview/runtime dependencies."
 
-[items.detect]
-kind = "command"
-command = "yazi"
-version_args = ["--version"]
+detect = { kind = "command", command = "yazi", version_args = ["--version"] }
+install = { kind = "script", path = "install/yazi.sh" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -63,10 +56,8 @@ id = "starship"
 label = "Starship"
 description = "Install the Starship shell prompt."
 
-[items.detect]
-kind = "command"
-command = "starship"
-version_args = ["--version"]
+detect = { kind = "command", command = "starship", version_args = ["--version"] }
+install = { kind = "script", path = "install/starship.sh" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -79,10 +70,8 @@ id = "zoxide"
 label = "zoxide"
 description = "Install smarter directory jumping."
 
-[items.detect]
-kind = "command"
-command = "zoxide"
-version_args = ["--version"]
+detect = { kind = "command", command = "zoxide", version_args = ["--version"] }
+install = { kind = "script", path = "install/zoxide.sh" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -102,6 +91,9 @@ probes = [
   { kind = "path", path = "$HOME/.linuxbrew/opt/zsh-vi-mode/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" },
   { kind = "path", path = "$HOME/.local/share/zsh-vi-mode/zsh-vi-mode.plugin.zsh" },
 ]
+[items.install]
+kind = "script"
+path = "install/zsh-vi-mode.sh"
 
 [[items.shell]]
 shells = ["zsh"]
@@ -113,15 +105,8 @@ id = "fzf"
 label = "fzf"
 description = "Install the fzf command-line fuzzy finder."
 
-[items.detect]
-kind = "command"
-command = "fzf"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "apt"
-package = "fzf"
+detect = { kind = "command", command = "fzf", version_args = ["--version"] }
+install = { kind = "package", provider = "apt", package = "fzf" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -134,10 +119,8 @@ id = "bat"
 label = "bat"
 description = "Install the bat command-line file viewer."
 
-[items.detect]
-kind = "command"
-command = "bat"
-version_args = ["--version"]
+detect = { kind = "command", command = "bat", version_args = ["--version"] }
+install = { kind = "script", path = "install/bat.sh" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -150,10 +133,8 @@ id = "eza"
 label = "eza"
 description = "Install the eza modern ls replacement."
 
-[items.detect]
-kind = "command"
-command = "eza"
-version_args = ["--version"]
+detect = { kind = "command", command = "eza", version_args = ["--version"] }
+install = { kind = "script", path = "install/eza.sh" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -166,10 +147,8 @@ id = "pnpm"
 label = "pnpm"
 description = "Install the pnpm package manager."
 
-[items.detect]
-kind = "command"
-command = "pnpm"
-version_args = ["--version"]
+detect = { kind = "command", command = "pnpm", version_args = ["--version"] }
+install = { kind = "script", path = "install/pnpm.sh" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -181,10 +160,8 @@ id = "mise"
 label = "mise"
 description = "Install the mise development environment manager."
 
-[items.detect]
-kind = "command"
-command = "mise"
-version_args = ["--version"]
+detect = { kind = "command", command = "mise", version_args = ["--version"] }
+install = { kind = "script", path = "install/mise.sh" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -196,10 +173,8 @@ id = "homebrew"
 label = "Homebrew"
 description = "Install or verify Homebrew on Linux."
 
-[items.detect]
-kind = "command"
-command = "brew"
-version_args = ["--version"]
+detect = { kind = "command", command = "brew", version_args = ["--version"] }
+install = { kind = "script", path = "install/homebrew.sh" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -211,9 +186,8 @@ id = "zerotier"
 label = "ZeroTier"
 description = "Install the ZeroTier Linux client for optional private network access."
 
-[items.detect]
-kind = "command"
-command = "zerotier-cli"
+detect = { kind = "command", command = "zerotier-cli" }
+install = { kind = "script", path = "install/zerotier.sh" }
 
 [[items]]
 id = "split-dns"

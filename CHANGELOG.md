@@ -7,6 +7,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Breaking changes
+
+- System presets now require `version = 2`, with explicit `detect` and `install` metadata for
+  every bootstrap item. The monolithic `init.sh` / `init.ps1` dispatcher and `shine sys update`
+  have been removed; use the owning package manager or upstream tool to upgrade bootstrap software.
+  Existing sys run records remain readable. See the system preset v2 migration guide.
+
 ## [1.4.0] — 2026-08-20
 
 ### Features

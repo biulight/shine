@@ -169,11 +169,11 @@ env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
 
 ## 编写系统 Bootstrap Item
 
-一个 sys 类别对应一个操作系统目录，例如 `sys/ubuntu/`。先在 `shine.toml` 中设置
-`profile_composition = true`，再用 detection 和固定 provider 描述普通的 ensure-present 软件：
+一个 sys 类别对应一个操作系统目录，例如 `sys/ubuntu/`。每个可执行 sys 预设都要声明
+`version = 2`，再用 detection 和固定 provider 描述普通的 ensure-present 软件：
 
 ```toml
-profile_composition = true
+version = 2
 
 [[items]]
 id = "mise"
@@ -203,7 +203,7 @@ items = ["mise"]
 Detection 支持 `command`、`path`，以及由 command/path probes 组成的 `any`。包安装是固定的
 ensure-present 操作：Shine 负责 argv、提权、代理、超时、输出限制和安装后检测，但不会升级包。
 复杂 item 可使用 `[items.install] kind = "script", path = "install/<item>.sh"`；脚本只处理该
-item，以普通 exit code 返回结果，不应输出旧版 `SHINE_SYS_STATUS` 协议。
+item，并以普通 exit code 返回结果。每个 init item 都必须同时声明 `detect` 与 `install`，不会再回退到平台级 dispatcher。version 1 manifest 会在 detection 或 profile 写入前被拒绝；请参阅 [v2 迁移指南](sys-preset-v2-migration.md)。
 
 Shell integration 必须且只能声明 `path`、`env`、`eval`、`source`、`aliases` 或 `fragment` 之一。
 `profile/base.pre.sh` 与 `profile/base.post.sh` 只放操作系统公共内容；复杂的 item 逻辑放入

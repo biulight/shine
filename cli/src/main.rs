@@ -467,11 +467,6 @@ async fn run(cli: Cli) -> Result<()> {
             SysCommands::List { all } => Box::pin(sys::handle_list(&config, all)).await,
             SysCommands::Info { item } => Box::pin(sys::handle_info(&config, &item)).await,
             SysCommands::Status => Box::pin(sys::handle_status(&config)).await,
-            SysCommands::Update {
-                item,
-                verbose,
-                proxy,
-            } => Box::pin(sys::handle_update(&config, item.as_deref(), verbose, proxy)).await,
             SysCommands::Bootstrap {
                 items,
                 preset,
@@ -2028,23 +2023,8 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_sys_update_options() {
-        let cli = Cli::try_parse_from(["shine", "sys", "update"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Sys {
-                command: SysCommands::Update {
-                    item: None,
-                    verbose: false,
-                    proxy: false
-                }
-            }
-        ));
-        let cli = Cli::try_parse_from(["shine", "sys", "update", "neovim", "--verbose", "--proxy"])
-            .unwrap();
-        assert!(
-            matches!(cli.command, Commands::Sys { command: SysCommands::Update { item: Some(ref item), verbose: true, proxy: true } } if item == "neovim")
-        );
+    fn cli_rejects_removed_sys_update_command() {
+        assert!(Cli::try_parse_from(["shine", "sys", "update"]).is_err());
     }
 
     #[test]

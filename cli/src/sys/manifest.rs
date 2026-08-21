@@ -19,37 +19,18 @@ pub(super) async fn load_sys_preset(config: &Config, os_id: &str) -> Result<Load
     }
 
     let root = Path::new("sys").join(os_id);
-    let script_path = config.preset_path(root.join(sys_init_script_name(os_id)));
-    let manifest_path = config.preset_path(root.join("shine.toml"));
+    let preset_root = config.preset_path(&root);
+    let manifest_path = preset_root.join("shine.toml");
     let content = tokio::fs::read_to_string(&manifest_path)
         .await
         .with_context(|| format!("reading {}", manifest_path.display()))?;
     let manifest = parse_and_validate_manifest(&content)
         .with_context(|| format!("parsing {}", manifest_path.display()))?;
-    if !script_path.exists()
-        && manifest
-            .items
-            .iter()
-            .any(|item| item.mode == SysItemMode::Init && item.install.is_none())
-    {
-        bail!(
-            "legacy sys items for `{os_id}` require an init script at {}",
-            script_path.display()
-        );
-    }
-
     Ok(LoadedSysPreset {
         manifest,
-        script_path,
+        root: std::fs::canonicalize(&preset_root)
+            .with_context(|| format!("resolving sys preset root {}", preset_root.display()))?,
     })
-}
-
-pub(super) fn sys_init_script_name(os_id: &str) -> &'static str {
-    if os_id == "windows" {
-        "init.ps1"
-    } else {
-        "init.sh"
-    }
 }
 
 pub(super) fn parse_and_validate_manifest(content: &str) -> Result<SysManifest> {
@@ -59,6 +40,15 @@ pub(super) fn parse_and_validate_manifest(content: &str) -> Result<SysManifest> 
 }
 
 fn validate_manifest(manifest: &SysManifest) -> Result<()> {
+    match manifest.version {
+        Some(2) => {}
+        None | Some(1) => bail!(
+            "sys preset v1 is unsupported; migrate it to version = 2 by removing the monolithic dispatcher, adding detect/install to every init item, and moving software-specific profile code to item integrations. See docs/manual/guides/sys-preset-v2-migration.md"
+        ),
+        Some(version) => {
+            bail!("sys preset version {version} is not supported by this Shine release")
+        }
+    }
     let mut ids = BTreeSet::new();
     for item in &manifest.items {
         validate_item_id(&item.id)?;
@@ -88,10 +78,6 @@ fn validate_manifest(manifest: &SysManifest) -> Result<()> {
         validate_driver_config(item)?;
         validate_bootstrap_config(item)?;
         validate_shell_integrations(item)?;
-    }
-
-    if !manifest.profile_composition && manifest.items.iter().any(|item| !item.shell.is_empty()) {
-        bail!("sys items with shell integrations require `profile_composition = true`");
     }
 
     if let Some(default_profile) = &manifest.default_profile
@@ -132,16 +118,16 @@ fn validate_bootstrap_config(item: &SysItem) -> Result<()> {
         return Ok(());
     }
 
-    if item.install.is_some() && item.detect.is_none() {
-        bail!(
-            "standard sys bootstrap item `{}` must declare `detect` when `install` is present",
-            item.id
-        );
-    }
-    if let Some(detect) = &item.detect {
-        validate_detection(&item.id, detect)?;
-    }
-    if let Some(install) = &item.install {
+    let detect = item
+        .detect
+        .as_ref()
+        .with_context(|| format!("sys bootstrap item `{}` must declare `detect`", item.id))?;
+    let install = item
+        .install
+        .as_ref()
+        .with_context(|| format!("sys bootstrap item `{}` must declare `install`", item.id))?;
+    validate_detection(&item.id, detect)?;
+    {
         match install {
             SysInstall::Package {
                 package,
@@ -411,4 +397,54 @@ fn validate_item_id(item_id: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_and_validate_manifest;
+
+    const ITEM: &str = r#"
+[[items]]
+id = "tool"
+label = "Tool"
+detect = { kind = "command", command = "tool" }
+install = { kind = "package", provider = "apt", package = "tool" }
+"#;
+
+    #[test]
+    fn rejects_missing_or_unknown_sys_preset_versions() {
+        let missing = parse_and_validate_manifest(ITEM).unwrap_err();
+        assert!(missing.to_string().contains("v1 is unsupported"));
+        let unknown = parse_and_validate_manifest(&format!("version = 3\n{ITEM}")).unwrap_err();
+        assert!(unknown.to_string().contains("version 3 is not supported"));
+    }
+
+    #[test]
+    fn v2_requires_detection_and_installer_for_init_items() {
+        let missing_detect = parse_and_validate_manifest(
+            "version = 2\n[[items]]\nid = 'tool'\nlabel = 'Tool'\ninstall = { kind = 'package', provider = 'apt', package = 'tool' }",
+        )
+        .unwrap_err();
+        assert!(missing_detect.to_string().contains("must declare `detect`"));
+        let missing_install = parse_and_validate_manifest(
+            "version = 2\n[[items]]\nid = 'tool'\nlabel = 'Tool'\ndetect = { kind = 'command', command = 'tool' }",
+        )
+        .unwrap_err();
+        assert!(
+            missing_install
+                .to_string()
+                .contains("must declare `install`")
+        );
+    }
+
+    #[test]
+    fn built_in_sys_presets_are_all_executable_v2_manifests() {
+        for manifest in [
+            include_str!("../../../presets/sys/macos/shine.toml"),
+            include_str!("../../../presets/sys/ubuntu/shine.toml"),
+            include_str!("../../../presets/sys/windows/shine.toml"),
+        ] {
+            parse_and_validate_manifest(manifest).unwrap();
+        }
+    }
 }

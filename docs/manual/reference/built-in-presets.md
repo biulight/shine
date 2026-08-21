@@ -92,7 +92,8 @@ active until explicitly disabled with `shine sys profile disable <ITEM>`.
 
 The `mise` item installs mise and activates it through Shine-managed shell profile content. Shine
 does not write mise configuration or manage runtime versions; use mise itself for those operations.
-`shine sys update` is a separate read-only check that may print an upstream upgrade command.
+Shine does not check or upgrade third-party bootstrap software; use Homebrew, apt, winget, mise,
+rustup, or the upstream tool that owns the software.
 
 <div className="built-in-presets-system-table" aria-hidden="true" />
 

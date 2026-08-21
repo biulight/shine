@@ -210,11 +210,11 @@ Python, Node, and Deno are not currently valid `runtime` values.
 
 ## Author a system bootstrap item
 
-A sys category is one OS directory such as `sys/ubuntu/`. Set `profile_composition = true` in its
-`shine.toml`, then describe ordinary ensure-present software with detection and a fixed provider:
+A sys category is one OS directory such as `sys/ubuntu/`. Every executable sys preset declares
+`version = 2`, then describes ordinary ensure-present software with detection and a fixed provider:
 
 ```toml
-profile_composition = true
+version = 2
 
 [[items]]
 id = "mise"
@@ -245,7 +245,9 @@ Detection supports `command`, `path`, and `any` command/path probes. Package ins
 ensure-present actions: Shine owns argv, elevation, proxy handling, timeout, output limits, and the
 post-install detection, but never upgrades the package. A complex item may use
 `[items.install] kind = "script", path = "install/<item>.sh"`; the script handles only that item,
-returns a normal exit code, and must not emit the legacy `SHINE_SYS_STATUS` protocol.
+returns a normal exit code. Every init item must declare both `detect` and `install`; there is no
+platform-wide dispatcher fallback. Version 1 manifests are rejected before detection or profile
+writes; see [the v2 migration guide](sys-preset-v2-migration.md).
 
 Shell integrations accept exactly one of `path`, `env`, `eval`, `source`, `aliases`, or `fragment`.
 Use `profile/base.pre.sh` and `profile/base.post.sh` only for OS-wide content; put complex item logic

@@ -76,8 +76,7 @@ Shell integration 归各 item 所有：成功的 targeted bootstrap 只启用该
 未选择软件的集成。之前启用的集成会保持生效，直到明确运行 `shine sys profile disable <ITEM>`。
 
 `mise` 项目负责安装 mise，并通过 Shine 管理的 Shell profile 激活它。Shine 不写入 mise 配置，
-也不接管 runtime 版本；这些操作仍应使用 mise。`shine sys update` 是独立的只读检查，可能输出
-上游升级命令。
+也不接管 runtime 版本；这些操作仍应使用 mise。Shine 不会检查或升级第三方引导软件，请使用管理该软件的 Homebrew、apt、winget、mise、rustup 或上游工具。
 
 <div className="built-in-presets-system-table" aria-hidden="true" />
 

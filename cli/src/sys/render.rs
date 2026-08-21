@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use console::{Style, style};
 use dialoguer::theme::ColorfulTheme;
 
 use crate::colors;
-use crate::sys::execution::{format_command_preview, status_symbol, status_text, sys_init_command};
+use crate::sys::execution::{status_symbol, status_text};
 use crate::sys::run_manifest::SysRunEntry;
 use crate::sys::{LoadedSysPreset, ResolvedSelection, SysDriverKind, SysItem, SysItemMode};
 
@@ -97,22 +97,19 @@ pub(in crate::sys) async fn print_dry_run(
             selection.item_ids.join(", ")
         }
     );
-    println!("  Script: {}", loaded.script_path.display());
-    let command = sys_init_command(os_id);
     println!("  Commands:");
-    let mut has_legacy_item = false;
     for item_id in &selection.item_ids {
         let item = loaded
             .manifest
             .items
             .iter()
             .find(|item| item.id == *item_id);
-        let preview = if let Some(item) = item.filter(|item| item.install.is_some()) {
-            crate::sys::bootstrap::standard_install_preview(config, os_id, loaded, item)?
-        } else {
-            has_legacy_item = true;
-            format_command_preview(&command, &loaded.script_path, std::slice::from_ref(item_id))
-        };
+        let preview = crate::sys::bootstrap::standard_install_preview(
+            config,
+            os_id,
+            loaded,
+            item.expect("selection was validated against the manifest"),
+        )?;
         println!("    {preview}");
     }
     let integrations = selection
@@ -160,12 +157,5 @@ pub(in crate::sys) async fn print_dry_run(
         println!("    shine internal sys profile pre/post update");
     }
     println!();
-    if has_legacy_item {
-        let content = tokio::fs::read_to_string(&loaded.script_path)
-            .await
-            .with_context(|| format!("reading {}", loaded.script_path.display()))?;
-        println!("{}", colors::dim("--- legacy script content ---"));
-        print!("{content}");
-    }
     Ok(())
 }

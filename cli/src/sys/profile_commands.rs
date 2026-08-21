@@ -25,22 +25,15 @@ pub(super) async fn sync_composed_profile(
 ) -> Result<Option<super::SysItemOutcome>> {
     let os_id = detect_os_id().await?;
     let loaded = load_sys_preset(config, &os_id).await?;
-    if !loaded.manifest.profile_composition {
-        return Ok(None);
-    }
     let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
     let enabled_items = enabled_profile_items(&loaded.manifest, &run_manifest.entries, &os_id);
     let sys_shell: &'static str = config.shell_type.into();
     let templates =
         compose_sys_profiles(config, &os_id, &loaded, &enabled_items, sys_shell).await?;
-    let script_dir = loaded
-        .script_path
-        .parent()
-        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
     install_sys_profile_loader_with_templates(
         config,
         &os_id,
-        script_dir,
+        &loaded.root,
         sys_shell,
         false,
         Some(&templates),
@@ -58,11 +51,6 @@ async fn handle_profile_state(
     crate::config::print_presets_note(config);
     let os_id = detect_os_id().await?;
     let loaded = load_sys_preset(config, &os_id).await?;
-    if !loaded.manifest.profile_composition {
-        bail!(
-            "the `{os_id}` sys preset still uses a legacy platform profile and does not support item integration state"
-        );
-    }
     let item = loaded
         .manifest
         .items
@@ -115,14 +103,10 @@ async fn handle_profile_state(
         return Ok(());
     }
 
-    let script_dir = loaded
-        .script_path
-        .parent()
-        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
     let outcome = install_sys_profile_loader_with_templates(
         config,
         &os_id,
-        script_dir,
+        &loaded.root,
         sys_shell,
         false,
         Some(&templates),

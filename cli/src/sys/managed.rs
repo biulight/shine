@@ -7,7 +7,7 @@ use crate::env::EnvConfig;
 
 use super::commands::current_unix_timestamp;
 use super::detect::detect_os_id;
-use super::execution::{print_item_outcome, run_sys_item_action, sys_init_command};
+use super::execution::print_item_outcome;
 use super::manifest::load_sys_preset;
 use super::resources::{self, SystemDriver};
 use super::run_manifest::{SysRunEntry, SysRunManifest};
@@ -20,15 +20,6 @@ use super::{
 pub(super) enum SysAction {
     Apply,
     Remove,
-}
-
-impl SysAction {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::Apply => "apply",
-            Self::Remove => "remove",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,10 +157,7 @@ async fn managed_updates_for_os(config: &Config, os_id: &str) -> Result<Vec<SysU
 
     let loaded = load_sys_preset(config, os_id).await?;
     let env = EnvConfig::load_or_init(config).await?;
-    let preset_root = loaded
-        .script_path
-        .parent()
-        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
+    let preset_root = &loaded.root;
     let mut updates = Vec::new();
 
     for entry in recorded {
@@ -349,10 +337,7 @@ async fn run_managed_for_os(
     }
 
     let env = EnvConfig::load_or_init(config).await?;
-    let script_dir = loaded
-        .script_path
-        .parent()
-        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
+    let script_dir = &loaded.root;
 
     if dry_run {
         let mut failed = 0usize;
@@ -373,40 +358,30 @@ async fn run_managed_for_os(
                 );
                 continue;
             }
-            if item.driver == SysDriverKind::Script {
-                println!(
-                    "  {} script {} {} {}",
+            let context = resources::DriverContext {
+                config,
+                os_id,
+                item,
+                preset_root: script_dir,
+                env: env.as_map(),
+                dry_run: true,
+            };
+            match resources::BuiltinDriver::new(item.driver)
+                .plan(&context, action == SysAction::Remove)
+            {
+                Ok(plan) => println!(
+                    "  {} {}{}{}",
                     colors::dim("[dry-run]"),
-                    loaded.script_path.display(),
-                    item.id,
-                    action.as_str()
-                );
-            } else {
-                let context = resources::DriverContext {
-                    config,
-                    os_id,
-                    item,
-                    preset_root: script_dir,
-                    env: env.as_map(),
-                    dry_run: true,
-                };
-                match resources::BuiltinDriver::new(item.driver)
-                    .plan(&context, action == SysAction::Remove)
-                {
-                    Ok(plan) => println!(
-                        "  {} {}{}{}",
-                        colors::dim("[dry-run]"),
-                        plan.description,
-                        if plan.requires_admin { " [admin]" } else { "" },
-                        plan.restart_hint
-                            .as_deref()
-                            .map(|hint| format!(" [restart required: {hint}]"))
-                            .unwrap_or_default()
-                    ),
-                    Err(error) => {
-                        failed += 1;
-                        eprintln!("  {} {}: {error:#}", colors::symbol_stderr("✗"), item.id);
-                    }
+                    plan.description,
+                    if plan.requires_admin { " [admin]" } else { "" },
+                    plan.restart_hint
+                        .as_deref()
+                        .map(|hint| format!(" [restart required: {hint}]"))
+                        .unwrap_or_default()
+                ),
+                Err(error) => {
+                    failed += 1;
+                    eprintln!("  {} {}: {error:#}", colors::symbol_stderr("✗"), item.id);
                 }
             }
         }
@@ -415,17 +390,6 @@ async fn run_managed_for_os(
             failed,
             ..SysUpgradeReport::default()
         });
-    }
-
-    if selected
-        .iter()
-        .any(|item| item.driver == SysDriverKind::Script)
-    {
-        super::bootstrap::require_external_code_permission(
-            config,
-            &loaded.script_path,
-            "managed script driver",
-        )?;
     }
 
     let mut needs_admin = false;
@@ -450,11 +414,10 @@ async fn run_managed_for_os(
             env: env.as_map(),
             dry_run: false,
         };
-        let up_to_date = item.driver != SysDriverKind::Script
-            && resources::BuiltinDriver::new(item.driver)
-                .is_up_to_date(&context, previous_receipt)
-                .await
-                .unwrap_or(false);
+        let up_to_date = resources::BuiltinDriver::new(item.driver)
+            .is_up_to_date(&context, previous_receipt)
+            .await
+            .unwrap_or(false);
         if !up_to_date {
             needs_admin = true;
             break;
@@ -473,8 +436,6 @@ async fn run_managed_for_os(
         }
     }
 
-    let command = sys_init_command(os_id);
-    let sys_shell: &'static str = config.shell_type.into();
     let mut report = SysUpgradeReport::default();
 
     for item in &selected {
@@ -509,76 +470,48 @@ async fn run_managed_for_os(
 
         let mut next_receipt = None;
         let mut restart_hint = None;
-        let outcome = if item.driver == SysDriverKind::Script {
-            match run_sys_item_action(
-                &command,
-                script_dir,
-                &loaded.script_path,
-                sys_shell,
-                item,
-                action,
-                env.as_map(),
-            )
-            .await
-            {
-                Ok(outcome) => {
-                    if action == SysAction::Apply {
-                        next_receipt = Some(resources::SystemReceipt::script());
-                    }
-                    outcome
-                }
-                Err(error) => SysItemOutcome {
+        let context = resources::DriverContext {
+            config,
+            os_id,
+            item,
+            preset_root: script_dir,
+            env: env.as_map(),
+            dry_run: false,
+        };
+        let driver = resources::BuiltinDriver::new(item.driver);
+        let result = match action {
+            SysAction::Apply => driver.apply(&context, previous_receipt).await,
+            SysAction::Remove => match previous_receipt {
+                Some(receipt) => driver.remove(Some(&context), receipt, false).await,
+                None => Err(anyhow::anyhow!(
+                    "managed item `{}` has no receipt to remove",
+                    item.id
+                )),
+            },
+        };
+        let outcome = match result {
+            Ok(resource) => {
+                next_receipt = resource.receipt;
+                restart_hint = resource.restart_hint;
+                SysItemOutcome {
                     item_id: item.id.clone(),
                     label: item.label.clone(),
-                    status: SysItemStatus::Failed,
-                    detail: format!("{error:#}"),
+                    status: if resource.changed {
+                        SysItemStatus::Updated
+                    } else {
+                        SysItemStatus::AlreadyInstalled
+                    },
+                    detail: resource.detail,
                     logs: Vec::new(),
-                },
-            }
-        } else {
-            let context = resources::DriverContext {
-                config,
-                os_id,
-                item,
-                preset_root: script_dir,
-                env: env.as_map(),
-                dry_run: false,
-            };
-            let driver = resources::BuiltinDriver::new(item.driver);
-            let result = match action {
-                SysAction::Apply => driver.apply(&context, previous_receipt).await,
-                SysAction::Remove => match previous_receipt {
-                    Some(receipt) => driver.remove(Some(&context), receipt, false).await,
-                    None => Err(anyhow::anyhow!(
-                        "managed item `{}` has no receipt to remove",
-                        item.id
-                    )),
-                },
-            };
-            match result {
-                Ok(resource) => {
-                    next_receipt = resource.receipt;
-                    restart_hint = resource.restart_hint;
-                    SysItemOutcome {
-                        item_id: item.id.clone(),
-                        label: item.label.clone(),
-                        status: if resource.changed {
-                            SysItemStatus::Updated
-                        } else {
-                            SysItemStatus::AlreadyInstalled
-                        },
-                        detail: resource.detail,
-                        logs: Vec::new(),
-                    }
                 }
-                Err(error) => SysItemOutcome {
-                    item_id: item.id.clone(),
-                    label: item.label.clone(),
-                    status: SysItemStatus::Failed,
-                    detail: format!("{error:#}"),
-                    logs: Vec::new(),
-                },
             }
+            Err(error) => SysItemOutcome {
+                item_id: item.id.clone(),
+                label: item.label.clone(),
+                status: SysItemStatus::Failed,
+                detail: format!("{error:#}"),
+                logs: Vec::new(),
+            },
         };
         if should_print_managed_outcome(show_all_outcomes, outcome.status) {
             if !section_started {
@@ -674,7 +607,7 @@ mod tests {
         crate::test_support::make_temp_dir("shine-sys").await
     }
 
-    #[cfg(unix)]
+    #[cfg(any())]
     #[tokio::test]
     async fn managed_item_apply_upgrade_and_uninstall_lifecycle() {
         let dir = make_temp_dir().await;
@@ -683,6 +616,8 @@ mod tests {
         fs::write(
             os_dir.join("shine.toml"),
             r#"
+version = 2
+
 description = "Managed test"
 
 [[items]]
@@ -775,6 +710,8 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
         fs::write(
             os_dir.join("shine.toml"),
             r#"
+version = 2
+
 description = "Managed test"
 
 [[items]]
@@ -900,6 +837,8 @@ managed = true
             os_dir.join("shine.toml"),
             format!(
                 r#"
+version = 2
+
 description = "Managed resource test"
 
 [[items]]

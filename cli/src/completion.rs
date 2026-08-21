@@ -30,7 +30,6 @@ pub fn command() -> clap::Command {
     let app_unbuild_categories = ArgValueCandidates::new(app_unbuild_candidates);
     let app_refresh_categories = ArgValueCandidates::new(app_refresh_candidates);
     let sys_items = ArgValueCandidates::new(sys_item_candidates);
-    let sys_updates = ArgValueCandidates::new(sys_update_candidates);
     let resource_targets = ArgValueCandidates::new(resource_target_candidates);
     let upgrade_targets = ArgValueCandidates::new(upgrade_target_candidates);
     let installed_targets = ArgValueCandidates::new(installed_target_candidates);
@@ -106,9 +105,6 @@ pub fn command() -> clap::Command {
             })
             .mut_subcommand("apply", |cmd| {
                 cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
-            })
-            .mut_subcommand("update", |cmd| {
-                cmd.mut_arg("item", |arg| arg.add(sys_updates.clone()))
             })
             .mut_subcommand("uninstall", |cmd| {
                 cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
@@ -491,34 +487,6 @@ fn sys_item_names() -> BTreeSet<String> {
         collect_fs_sys_item_names(&overlay_dir.join("sys"), &mut names);
     }
     names
-}
-
-fn sys_update_candidates() -> Vec<CompletionCandidate> {
-    #[derive(serde::Deserialize)]
-    struct Manifest {
-        #[serde(default)]
-        entries: Vec<Entry>,
-    }
-    #[derive(serde::Deserialize)]
-    struct Entry {
-        item_id: String,
-        #[serde(default)]
-        managed: bool,
-    }
-
-    let names = runtime_paths()
-        .and_then(|paths| std::fs::read_to_string(paths.shine_dir.join("sys-manifest.toml")).ok())
-        .and_then(|content| toml::from_str::<Manifest>(&content).ok())
-        .map(|manifest| {
-            manifest
-                .entries
-                .into_iter()
-                .filter(|entry| !entry.managed)
-                .map(|entry| entry.item_id)
-                .collect()
-        })
-        .unwrap_or_default();
-    completion_candidates(names)
 }
 
 fn task_name_candidates() -> Vec<CompletionCandidate> {

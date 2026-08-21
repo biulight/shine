@@ -1,16 +1,14 @@
+version = 2
 description = "Initialize macOS with selectable Homebrew, Rust, terminal tools, editor, network, and JavaScript runtime setup steps."
 default_profile = "recommended"
-profile_composition = true
 
 [[items]]
 id = "homebrew"
 label = "Homebrew"
 description = "Install or verify the Homebrew package manager."
 
-[items.detect]
-kind = "command"
-command = "brew"
-version_args = ["--version"]
+detect = { kind = "command", command = "brew", version_args = ["--version"] }
+install = { kind = "script", path = "install/homebrew.sh" }
 
 [[items.shell]]
 shells = ["zsh"]
@@ -22,25 +20,16 @@ id = "rust"
 label = "Rust"
 description = "Install Rustup and the Rust toolchain."
 
-[items.detect]
-kind = "command"
-command = "rustup"
-version_args = ["--version"]
+detect = { kind = "command", command = "rustup", version_args = ["--version"] }
+install = { kind = "script", path = "install/rust.sh" }
 
 [[items]]
 id = "yazi"
 label = "Yazi"
 description = "Install the Yazi terminal file manager."
 
-[items.detect]
-kind = "command"
-command = "yazi"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "yazi"
+detect = { kind = "command", command = "yazi", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "yazi" }
 
 [[items.shell]]
 shells = ["zsh"]
@@ -53,15 +42,8 @@ id = "starship"
 label = "Starship"
 description = "Install the Starship shell prompt."
 
-[items.detect]
-kind = "command"
-command = "starship"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "starship"
+detect = { kind = "command", command = "starship", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "starship" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -74,24 +56,16 @@ id = "neovim"
 label = "Neovim"
 description = "Install Neovim with Homebrew."
 
-[items.detect]
-kind = "command"
-command = "nvim"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "neovim"
+detect = { kind = "command", command = "nvim", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "neovim" }
 
 [[items]]
 id = "astronvim"
 label = "AstroNvim"
 description = "Install the AstroNvim template into ~/.config/nvim when no config exists."
 
-[items.detect]
-kind = "path"
-path = "$HOME/.config/nvim"
+detect = { kind = "path", path = "$HOME/.config/nvim" }
+install = { kind = "script", path = "install/astronvim.sh" }
 
 [[items]]
 id = "zerotier"
@@ -198,15 +172,8 @@ id = "zoxide"
 label = "zoxide"
 description = "Install smarter directory jumping."
 
-[items.detect]
-kind = "command"
-command = "zoxide"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "zoxide"
+detect = { kind = "command", command = "zoxide", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "zoxide" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -219,15 +186,8 @@ id = "atuin"
 label = "Atuin"
 description = "Install the Atuin shell history sync client."
 
-[items.detect]
-kind = "command"
-command = "atuin"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "atuin"
+detect = { kind = "command", command = "atuin", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "atuin" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -240,15 +200,8 @@ id = "fzf"
 label = "fzf"
 description = "Install the fzf command-line fuzzy finder."
 
-[items.detect]
-kind = "command"
-command = "fzf"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "fzf"
+detect = { kind = "command", command = "fzf", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "fzf" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -261,15 +214,8 @@ id = "bat"
 label = "bat"
 description = "Install the bat command-line file viewer."
 
-[items.detect]
-kind = "command"
-command = "bat"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "bat"
+detect = { kind = "command", command = "bat", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "bat" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -282,15 +228,8 @@ id = "eza"
 label = "eza"
 description = "Install the eza modern ls replacement."
 
-[items.detect]
-kind = "command"
-command = "eza"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "eza"
+detect = { kind = "command", command = "eza", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "eza" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -331,15 +270,8 @@ id = "bun"
 label = "Bun"
 description = "Install the Bun JavaScript runtime."
 
-[items.detect]
-kind = "command"
-command = "bun"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "bun"
+detect = { kind = "command", command = "bun", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "bun" }
 
 [[items.shell]]
 shells = ["zsh"]
@@ -351,15 +283,8 @@ id = "pnpm"
 label = "pnpm"
 description = "Install the pnpm package manager."
 
-[items.detect]
-kind = "command"
-command = "pnpm"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "pnpm"
+detect = { kind = "command", command = "pnpm", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "pnpm" }
 
 [[items.shell]]
 shells = ["zsh"]
@@ -371,15 +296,8 @@ id = "mise"
 label = "mise"
 description = "Install the mise development environment manager."
 
-[items.detect]
-kind = "command"
-command = "mise"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "mise"
+detect = { kind = "command", command = "mise", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "mise" }
 
 [[items.shell]]
 shells = ["bash", "zsh"]
@@ -392,15 +310,8 @@ id = "fastfetch"
 label = "Fastfetch"
 description = "Install Fastfetch for manual system summaries."
 
-[items.detect]
-kind = "command"
-command = "fastfetch"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "fastfetch"
+detect = { kind = "command", command = "fastfetch", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "fastfetch" }
 
 [profiles.required]
 items = ["homebrew", "yazi", "starship"]

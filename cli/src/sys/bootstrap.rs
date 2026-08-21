@@ -7,8 +7,8 @@ use std::time::Duration;
 use crate::{colors, config::Config};
 
 use super::{
-    LoadedSysPreset, SysDetection, SysDetectionProbe, SysInitCommand, SysInstall, SysItem,
-    SysItemOutcome, SysItemStatus, SysPackageProvider,
+    LoadedSysPreset, SysDetection, SysDetectionProbe, SysInstall, SysItem, SysItemOutcome,
+    SysItemStatus, SysPackageProvider,
 };
 
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -66,10 +66,7 @@ pub(super) async fn run_standard_bootstrap_item(
                 config,
                 os_id,
                 &script_path,
-                loaded
-                    .script_path
-                    .parent()
-                    .context("sys preset script path has no parent")?,
+                &loaded.root,
                 sys_shell,
                 item,
                 proxy_env,
@@ -224,15 +221,13 @@ After reviewing the active preset sources, choose one:\n\n\
 }
 
 fn resolve_preset_file(loaded: &LoadedSysPreset, relative: &str) -> Result<PathBuf> {
-    let root = loaded
-        .script_path
-        .parent()
-        .context("sys preset script path has no parent")?;
-    let candidate = root.join(relative);
-    if !candidate.starts_with(root) {
+    let candidate = loaded.root.join(relative);
+    let canonical = std::fs::canonicalize(&candidate)
+        .with_context(|| format!("resolving sys preset resource {}", candidate.display()))?;
+    if !canonical.starts_with(&loaded.root) {
         bail!("sys preset path escapes its root: {relative}");
     }
-    Ok(candidate)
+    Ok(canonical)
 }
 
 async fn detect_item(config: &Config, detect: &SysDetection) -> Result<DetectionResult> {
@@ -492,10 +487,16 @@ async fn run_item_script(
             script_path.display()
         );
     }
-    let SysInitCommand {
-        program,
-        fixed_args,
-    } = super::execution::sys_init_command(os_id);
+    let (program, fixed_args): (&str, &[&str]) = if os_id == "windows" {
+        (
+            "powershell.exe",
+            &["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"],
+        )
+    } else if os_id == "macos" {
+        ("zsh", &[])
+    } else {
+        ("bash", &[])
+    };
     let requires_unix_admin = item.requires_admin && os_id != "windows";
     if requires_unix_admin && !crate::privilege::ensure_admin(1).await? {
         return Ok(ExecutionResult {
@@ -741,6 +742,8 @@ chmod +x "$SHINE_TARGET_HOME/.local/bin/test-sys-tool"
         .unwrap();
         let manifest = parse_and_validate_manifest(
             r#"
+version = 2
+
 [[items]]
 id = "tool"
 label = "Tool"
@@ -757,7 +760,7 @@ path = "install/tool.sh"
         .unwrap();
         let loaded = LoadedSysPreset {
             manifest,
-            script_path: preset_root.join("init.sh"),
+            root: std::fs::canonicalize(&preset_root).unwrap(),
         };
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;

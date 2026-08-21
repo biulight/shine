@@ -67,33 +67,14 @@ shine sys status
 
 This view is a run record: `installed`, `already installed`, or `completed` describes what the last
 bootstrap invocation observed. It does not probe whether third-party software is still present or
-current. Use the read-only update command below for the supported live checks.
+current.
 
-## Check bootstrap software updates
+## Upgrade bootstrap software with its owner
 
-Read-only update checks are available for software recorded during initialization:
-
-```bash
-shine sys update
-shine sys update neovim --verbose
-shine sys update --proxy
-```
-
-This command checks only software recorded by `shine sys bootstrap`. It does not install or upgrade
-software and does not modify the system manifest or shell profile. By default it shows only packages
-that a package manager confirms have updates, together with copyable upstream upgrade commands.
-`--verbose` also shows current packages and items that require a manual check.
-
-Built-in presets currently check through Homebrew, apt, and winget. Direct installers and
-user-maintained Git configuration are marked for manual review rather than assigned a guessed
-version. `--proxy` uses the same configuration as `sys bootstrap --proxy`; on Windows, it explicitly
-passes winget's `--proxy` option.
-
-On Ubuntu, Shine does not record the installation source of software it finds already present.
-Manual-check results therefore avoid guessing an updater and give source-specific guidance only
-when it is safe to do so: for example, standalone `mise.run` installs use `mise self-update`, while
-package-managed installs use their original package manager. Rerunning `shine sys bootstrap` only
-verifies that existing software is present and does not upgrade it.
+`shine sys bootstrap` is an ensure-present initializer, not a software update manager. Shine does
+not check or upgrade bootstrap software. Use the package manager or upstream tool that owns each
+item—such as Homebrew, apt, winget, mise, or rustup—to check for and install updates. Rerunning
+`shine sys bootstrap` only verifies that the selected software is present and does not upgrade it.
 
 The built-in mise step follows the same boundary: it can install mise and add activation to managed
 shell profile content, but it does not create or update mise configuration and does not manage
@@ -117,8 +98,7 @@ is missing. `shine upgrade` re-renders the currently enabled integrations but do
 software.
 
 `shine update` and `shine upgrade` still manage only Shine configuration and managed system
-resources. They never upgrade this third-party software. You decide whether to execute commands
-printed by `shine sys update`.
+resources. They never upgrade this third-party software.
 
 Top-level `shine list` includes managed system configuration recorded for the current operating
 system. Use `shine sys status` and `shine sys info <ITEM>` for details. `update --verbose` and

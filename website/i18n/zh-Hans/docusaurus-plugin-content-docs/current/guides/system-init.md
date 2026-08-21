@@ -55,31 +55,13 @@ shine sys status
 ```
 
 这里展示的是执行记录：`installed`、`already installed` 或 `completed` 描述上一次 bootstrap
-调用观察到的结果，并不会实时探测第三方软件当前是否仍存在或已是最新版。受支持的实时检查请使用
-下一节的只读更新命令。
+调用观察到的结果，并不会实时探测第三方软件当前是否仍存在或已是最新版。
 
-## 检查引导软件更新
+## 用软件自己的工具升级
 
-初始化完成后，可只读检查当时记录的软件是否有可用更新：
-
-```bash
-shine sys update
-shine sys update neovim --verbose
-shine sys update --proxy
-```
-
-该命令只检查 `shine sys bootstrap` 已记录的引导软件，不安装或升级软件，也不修改 sys manifest
-或 shell profile。默认只显示包管理器确认有更新的项目和可复制的上游升级命令；
-`--verbose` 还会显示已是最新版和只能手动检查的项目。
-
-当前内置预设可通过 Homebrew、apt 和 winget 检查更新。直接安装器和用户自行维护的 Git
-配置会标记为需要手动检查，不会根据不可靠的信息猜测版本。`--proxy` 使用与
-`sys bootstrap --proxy` 使用相同的代理配置；Windows 上会显式传递 winget 的 `--proxy` 参数。
-
-在 Ubuntu 上，Shine 不会记录已检测到的软件原本通过何种来源安装。因此手动检查结果不会
-猜测更新方式，只在安全时提供按来源区分的建议。例如，通过独立 `mise.run` 安装的 `mise`
-使用 `mise self-update`，通过包管理器安装则使用原包管理器更新。重新运行
-`shine sys bootstrap` 只会确认现有软件已存在，不会升级它。
+`shine sys bootstrap` 只负责确保软件存在，并不是软件更新管理器。Shine 不会检查或升级引导软件；
+请使用拥有该软件的包管理器或上游工具，例如 Homebrew、apt、winget、mise 或 rustup。重新运行
+`shine sys bootstrap` 只会确认所选软件存在，不会升级它。
 
 内置 mise 步骤遵循同一边界：它可以安装 mise，并把激活内容加入 Shine 管理的 Shell profile，
 但不会创建或更新 mise 配置，也不会管理 runtime 版本。`mise.toml`、工具安装与版本升级仍由 mise
@@ -100,7 +82,7 @@ shine sys profile enable mise
 检测，缺失时提示先 bootstrap。`shine upgrade` 会重新渲染当前已启用的集成，但不会升级其软件。
 
 `shine update` 和 `shine upgrade` 仍只处理 Shine 管理的配置和受管系统资源，不会升级这些
-第三方软件。是否执行 `shine sys update` 输出的升级命令始终由用户决定。
+第三方软件。
 
 顶层 `shine list` 会列出当前操作系统已登记在 sys manifest 中的受管系统配置；它用于快速总览，详细状态仍以 `shine sys status` 和 `shine sys info <ITEM>` 为准。`update --verbose` 与 `upgrade --verbose` 会同时展示跳过、已是最新以及需要注意的受管资源。
 

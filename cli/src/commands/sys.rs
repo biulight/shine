@@ -34,18 +34,6 @@ pub enum SysCommands {
     },
     /// Show system bootstrap items previously initialized by shine
     Status,
-    /// Check recorded bootstrap software for updates without upgrading it
-    Update {
-        /// Recorded bootstrap item to check
-        #[arg(value_name = "ITEM")]
-        item: Option<String>,
-        /// Also show current and manual-check-only items
-        #[arg(long)]
-        verbose: bool,
-        /// Route package-manager update checks through shine's preset proxy
-        #[arg(long)]
-        proxy: bool,
-    },
     /// Bootstrap software and shell integration for the current OS
     Bootstrap {
         /// Bootstrap only these system items, in the given order

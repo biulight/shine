@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub(super) struct SysManifest {
+    /// Sys preset execution contract. Only v2 is executable.
+    pub(super) version: Option<u32>,
     #[serde(default)]
     pub(super) description: String,
     pub(super) default_profile: Option<String>,
@@ -15,10 +17,6 @@ pub(super) struct SysManifest {
     pub(super) items: Vec<SysItem>,
     #[serde(default)]
     pub(super) profiles: BTreeMap<String, SysProfile>,
-    /// Opts this OS preset into Rust-composed base + item shell integrations.
-    /// Absent/false preserves the legacy platform-wide profile templates.
-    #[serde(default)]
-    pub(super) profile_composition: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -171,13 +169,8 @@ pub(super) struct SysProfile {
 #[derive(Clone, Debug)]
 pub(super) struct LoadedSysPreset {
     pub(super) manifest: SysManifest,
-    pub(super) script_path: PathBuf,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct SysInitCommand {
-    pub(super) program: &'static str,
-    pub(super) fixed_args: Vec<&'static str>,
+    /// Canonical directory containing `shine.toml` and its item resources.
+    pub(super) root: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,27 +206,6 @@ pub(super) struct SysItemOutcome {
     pub(super) label: String,
     pub(super) status: SysItemStatus,
     pub(super) detail: String,
-    pub(super) logs: Vec<String>,
-}
-
-/// Ephemeral result of a bootstrap-software update check. Unlike
-/// `SysItemStatus`, this is deliberately never persisted in sys-manifest.toml.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SysUpdateState {
-    Available,
-    Current,
-    Manual,
-    Unsupported,
-    Failed,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct SysUpdateCheck {
-    pub(super) item_id: String,
-    pub(super) label: String,
-    pub(super) state: SysUpdateState,
-    pub(super) detail: String,
-    pub(super) upgrade_command: String,
     pub(super) logs: Vec<String>,
 }
 

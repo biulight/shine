@@ -226,7 +226,7 @@ shine/
 │       │   ├── profile_blocks.rs # Shell-profile sentinel blocks: per-phase sentinel
 │       │   │                 # insert/remove, BOM preservation, legacy-sentinel migration
 │       │   ├── selection.rs  # Item-selection resolution (profile vs interactive)
-│       │   ├── execution.rs  # Running sys items, parsing script output, run reports
+│       │   ├── execution.rs  # Bootstrap reporting, proxy environment, and outcome formatting
 │       │   ├── resources.rs  # SystemDriver trait, receipts, BuiltinDriver glue (dispatches
 │       │   │                 # to sys/drivers/*)
 │       │   └── drivers/
@@ -327,9 +327,9 @@ shine/
     │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
-        ├── macos/   init.sh, shine.toml
-        ├── ubuntu/  init.sh, shine.toml
-        └── windows/ init.ps1, shine.toml
+        ├── macos/   shine.toml, install/, profile/
+        ├── ubuntu/  shine.toml, install/, profile/
+        └── windows/ shine.toml, profile/
 ```
 
 ### Command routing
@@ -527,25 +527,26 @@ side only — see step 8) rides on top of the macOS/Linux implementation.
 
 1. `sys::detect_os_id()` — reads `std::env::consts::OS`; on Linux reads `ID=` from `/etc/os-release`.
 2. `presets::extract_prefix("sys/<os_id>", presets_dir)` materializes the detected OS preset.
-3. `sys::load_sys_preset` parses items, named selection profiles, detection/install metadata, and
-   item-owned shell integrations. A standard-only preset does not require `init.sh`/`init.ps1`.
+3. `sys::load_sys_preset` validates the v2 manifest, named selection profiles, detection/install
+   metadata, and item-owned shell integrations.
 4. `sys::selection` resolves ordered positional items, a named profile, or interactive/default
    selection. Positional items and `--preset` are mutually exclusive; managed items are rejected.
 5. `sys::bootstrap` performs standard read-only detection and fixed Homebrew/APT/Winget install argv
-   (or one per-item script). Items without `[items.install]` alone use the legacy platform dispatcher.
+   (or one per-item script). Every init item declares both `detect` and `install`; there is no
+   platform dispatcher fallback.
 6. Successful items enable their integration state. `sys::profile_compose` renders base + enabled
    item integrations once, and `sys::profile` reconciles them through the existing pre/post sentinels.
 
 `--dry-run` prints provider/script actions and persistent integration details without executing.
 `--proxy` injects the standard HTTP proxy env set and passes `--proxy` explicitly to Winget. External
 or overlay install scripts and executable profile code require `allow_sys_code = true`. Static
-detection, provider declarations, PATH, env, and aliases do not. See ADR 0027.
+detection, provider declarations, PATH, env, and aliases do not. See ADR 0028.
 
 Ubuntu ships three profiles (`presets/sys/ubuntu/shine.toml`): `recommended` (default,
 full interactive dev setup), `all` (recommended + zerotier/pnpm/mise/homebrew), and
 `minimal` — a lean headless CLI core (`neovim`, `fzf`, `bat`, `eza`, `zoxide`) intended for
 production-server bootstrapping via `shine sys bootstrap --preset minimal`. The `minimal` profile
-reuses existing items only, so adding it needed no `init.sh` change.
+reuses existing items only, so adding it needed no installer change.
 
 ### Personal tasks (`shine task` / `shine run`)
 
@@ -711,11 +712,11 @@ App categories may also declare `[artifact]\nscript = "build.sh"` (optionally `t
 
 ### Sys preset (OS init)
 
-1. Create `presets/sys/<os_id>/shine.toml` and opt into `profile_composition = true`:
+1. Create `presets/sys/<os_id>/shine.toml` with `version = 2`:
    ```toml
    description = "One-line description of this OS init preset."
    default_profile = "recommended"
-   profile_composition = true
+   version = 2
 
    [[items]]
    id = "neovim"
@@ -737,11 +738,11 @@ App categories may also declare `[artifact]\nscript = "build.sh"` (optionally `t
    ```
 2. Detection is `command`, `path`, or `any`. Package providers are fixed ensure-present actions and
    never upgrade. Complex installs use `[items.install] kind = "script"` with one item-local script,
-   normal exit status, and no `SHINE_SYS_STATUS` protocol.
+   normal exit status.
 3. Put OS-wide shell setup in `profile/base.pre.*` / `base.post.*`. Declare item integrations with
    exactly one of `path`, `env`, `eval`, `source`, `aliases`, or `fragment`; complex integration lives
    in `profile/<item>.*`. Named `[profiles.*]` tables select items only.
-4. Legacy `init.sh`/`init.ps1` dispatch and status events remain compatibility-only for builtin items
-   without `[items.install]`; do not use them for a new standard item.
+4. Every init item must declare both `detect` and `install`. v1 manifests and unknown versions fail
+   before execution; do not add a platform dispatcher or status/update protocol.
 5. `cargo build` re-embeds. Verify with `shine sys list`, `shine sys info <ITEM>`, and
    `shine sys bootstrap <ITEM> --dry-run`.

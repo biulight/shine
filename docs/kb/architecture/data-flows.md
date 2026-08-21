@@ -183,31 +183,21 @@ Selection resolves explicit ordered items, a named selection profile, or the exi
 interactive/default path through `sys/selection.rs`. Explicit items accept only `mode = "init"`,
 deduplicate by first occurrence, and never widen to sibling items.
 
-Items with `[items.detect]` plus `[items.install]` run through `sys/bootstrap.rs`. Rust performs the
-read-only detection, invokes a fixed Homebrew/APT/Winget provider argv or one per-item script, limits
-runtime/output, detects again, and produces the canonical `sys/<item>` outcome. Items without
-`[items.install]` use the legacy platform dispatcher during builtin migration; the paths are
-mutually exclusive per item.
+Every executable sys manifest declares `version = 2`. Each init item has both `[items.detect]` and
+`[items.install]`; Rust performs the read-only detection, invokes a fixed Homebrew/APT/Winget
+provider argv or one per-item script, limits runtime/output, detects again, and produces the
+canonical `sys/<item>` outcome. A v1 or unknown manifest version fails before detection, elevation,
+installer execution, or profile writes.
 
-For a manifest with `profile_composition = true`, successful bootstrap items set
-`profile_enabled` in `sys-manifest.toml`. `sys/profile_compose.rs` combines base pre/post content
+Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`. `sys/profile_compose.rs` combines base pre/post content
 with all enabled item integrations in stable manifest order. `sys/profile.rs` reconciles the two
 generated files before `sys/profile_blocks.rs` updates the existing pre/post sentinels. Composition
 happens once after item execution, and render failure leaves the last installed profile intact.
 `sys profile enable/disable` changes only this activation state and generated profile content.
 
-`shine sys update [ITEM] [--verbose]` is a separate, read-only bootstrap-software flow. It reads
-only `mode = "init"` entries already recorded in `sys-manifest.toml`, then invokes the current
-platform preset as `<item> check-update`. Platform scripts emit `SHINE_SYS_UPDATE` events with a
-verified availability state and an upstream command; the Rust core displays but never executes
-that command. This flow does not write the run manifest, invoke elevation, or update managed
-profiles. Global `shine update` / `shine upgrade` remain limited to Shine configuration and
-managed sys resources.
-
-Legacy items still use `sys/execution.rs`, which runs `init.sh <item_id>` and parses
-`SHINE_SYS_STATUS\t<state>\t<detail>` lines. New standard items and per-item scripts do not use that
-wire protocol. The platform script remains the update-check compatibility source until its items
-are fully migrated.
+Shine does not run update checks for bootstrap software. Homebrew, APT, Winget, mise, rustup, or
+the applicable upstream tool owns package versions and upgrades. Global `shine update` / `shine
+upgrade` remain limited to Shine configuration and managed sys resources.
 
 Top-level `shine list` reads current-OS entries with `managed = true` directly from
 `sys-manifest.toml` for its installed-only `System Configs` section. It does not call the live

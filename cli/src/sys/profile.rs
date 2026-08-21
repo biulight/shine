@@ -11,24 +11,6 @@ use super::profile_blocks::update_sys_shell_profiles;
 use super::profile_compose::ComposedSysProfiles;
 use super::{SYS_PROFILE_PHASES, SysItemOutcome, SysItemStatus, SysProfilePhase};
 
-pub(super) async fn install_sys_profile_loader(
-    config: &Config,
-    os_id: &str,
-    script_dir: &Path,
-    sys_shell: &str,
-    force_profile: bool,
-) -> Result<SysItemOutcome> {
-    install_sys_profile_loader_with_templates(
-        config,
-        os_id,
-        script_dir,
-        sys_shell,
-        force_profile,
-        None,
-    )
-    .await
-}
-
 pub(super) async fn install_sys_profile_loader_with_templates(
     config: &Config,
     os_id: &str,
@@ -82,16 +64,6 @@ pub(super) struct SysShellProfileUpdate {
     pub(super) updated: bool,
     pub(super) unsupported_shell: bool,
     pub(super) detail: String,
-}
-
-#[cfg(test)]
-pub(super) async fn install_sys_profile_files(
-    config: &Config,
-    os_id: &str,
-    script_dir: &Path,
-    force_profile: bool,
-) -> Result<SysProfileFileUpdate> {
-    install_sys_profile_files_with_templates(config, os_id, script_dir, force_profile, None).await
 }
 
 async fn install_sys_profile_files_with_templates(
