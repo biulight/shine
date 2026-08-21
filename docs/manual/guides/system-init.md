@@ -26,6 +26,9 @@ shine sys bootstrap --dry-run
 shell integration without changing the system. Some items require administrator access or additional environment variables;
 `shine sys info <ITEM>` lists those requirements.
 
+When a missing item is about to run, Shine prints its `sys/<ITEM>` identifier and label first, so
+any authorization or password prompt that follows is attributable to the active software.
+
 ## Select interactively or apply a profile
 
 ```bash

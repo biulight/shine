@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use crate::colors;
 
 use super::{
-    ResolvedSelection, SysItemOutcome, SysItemStatus, SysManifest, selection::format_item_ids,
+    ResolvedSelection, SysItem, SysItemOutcome, SysItemStatus, SysManifest,
+    selection::format_item_ids,
 };
 
 pub(super) fn manifest_item_labels(manifest: &SysManifest) -> BTreeMap<&str, String> {
@@ -60,6 +61,23 @@ pub(super) fn proxy_env_vars(config: &crate::config::Config) -> Vec<(&'static st
         ("NO_PROXY", no_proxy.to_string()),
         ("SHINE_SYS_PROXY", url),
     ]
+}
+
+pub(super) fn item_install_start_text(item: &SysItem, requires_admin: bool) -> String {
+    let admin_note = if requires_admin {
+        " (administrator access required)"
+    } else {
+        ""
+    };
+    format!("sys/{} ({}) installing{admin_note}", item.id, item.label)
+}
+
+pub(super) fn print_item_install_start(item: &SysItem, requires_admin: bool) {
+    println!(
+        "  {} {}",
+        colors::symbol("•"),
+        colors::dim(&item_install_start_text(item, requires_admin))
+    );
 }
 
 pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
@@ -125,4 +143,35 @@ pub(super) fn print_sys_summary(outcomes: &[SysItemOutcome]) {
     })
     .collect::<Vec<_>>();
     println!("{}", colors::dim(&format!("Summary: {}", parts.join(", "))));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sys::manifest::parse_and_validate_manifest;
+
+    #[test]
+    fn item_install_start_names_item_and_admin_requirement() {
+        let manifest = parse_and_validate_manifest(
+            r#"
+version = 2
+
+[[items]]
+id = "zerotier"
+label = "ZeroTier"
+detect = { kind = "command", command = "zerotier-cli" }
+install = { kind = "script", path = "install/zerotier.sh" }
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            item_install_start_text(&manifest.items[0], true),
+            "sys/zerotier (ZeroTier) installing (administrator access required)"
+        );
+        assert_eq!(
+            item_install_start_text(&manifest.items[0], false),
+            "sys/zerotier (ZeroTier) installing"
+        );
+    }
 }

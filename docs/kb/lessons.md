@@ -3,6 +3,16 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-22 — Bootstrap sudo prompts lost their owning item
+
+- **Symptom**: `shine sys bootstrap` could show a sudo password prompt without identifying which
+  selected software caused it.
+- **Root cause**: installer output is buffered until completion, including output from install
+  scripts that invoke `sudo` themselves.
+- **Fix**: announce each missing item from the bootstrap runner before starting its installer.
+- **Rule**: a bootstrap action must identify its owning item before any authorization interaction;
+  do not rely on installer output that the runner buffers until completion.
+
 ## 2026-08-21 — External-code errors hid the active trust boundary
 
 - **Symptom**: `shine sys bootstrap` reported external profile or legacy bootstrap code without

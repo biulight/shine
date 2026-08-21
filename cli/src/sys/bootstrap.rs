@@ -55,13 +55,18 @@ pub(super) async fn run_standard_bootstrap_item(
         ));
     }
 
+    if let SysInstall::Script { path, .. } = install {
+        let script_path = resolve_preset_file(loaded, path)?;
+        require_external_code_permission(config, &script_path, "install script")?;
+    }
+    super::execution::print_item_install_start(item, install_requires_admin(os_id, install, item)?);
+
     let execution = match install {
         SysInstall::Package {
             provider, package, ..
         } => run_package_provider(os_id, *provider, package, proxy_env).await?,
         SysInstall::Script { path, .. } => {
             let script_path = resolve_preset_file(loaded, path)?;
-            require_external_code_permission(config, &script_path, "install script")?;
             run_item_script(
                 config,
                 os_id,
@@ -103,6 +108,18 @@ pub(super) async fn run_standard_bootstrap_item(
     }
 
     Ok(outcome(item, status, detail, execution.logs))
+}
+
+fn install_requires_admin(os_id: &str, install: &SysInstall, item: &SysItem) -> Result<bool> {
+    match install {
+        SysInstall::Package {
+            provider, package, ..
+        } => {
+            let (_, _, requires_admin) = package_command(os_id, *provider, package, &[])?;
+            Ok(requires_admin)
+        }
+        SysInstall::Script { .. } => Ok(item.requires_admin && os_id != "windows"),
+    }
 }
 
 pub(super) fn standard_install_preview(
@@ -676,6 +693,54 @@ mod tests {
             ]
         );
         assert!(!admin);
+    }
+
+    #[test]
+    fn install_admin_requirement_includes_packages_and_script_metadata() {
+        let manifest = parse_and_validate_manifest(
+            r#"
+version = 2
+
+[[items]]
+id = "apt-tool"
+label = "APT tool"
+detect = { kind = "command", command = "apt-tool" }
+install = { kind = "package", provider = "apt", package = "apt-tool" }
+
+[[items]]
+id = "script-tool"
+label = "Script tool"
+requires_admin = true
+detect = { kind = "command", command = "script-tool" }
+install = { kind = "script", path = "install/script-tool.sh" }
+"#,
+        )
+        .unwrap();
+
+        assert!(
+            install_requires_admin(
+                "ubuntu",
+                manifest.items[0].install.as_ref().unwrap(),
+                &manifest.items[0]
+            )
+            .unwrap()
+        );
+        assert!(
+            install_requires_admin(
+                "ubuntu",
+                manifest.items[1].install.as_ref().unwrap(),
+                &manifest.items[1]
+            )
+            .unwrap()
+        );
+        assert!(
+            !install_requires_admin(
+                "windows",
+                manifest.items[1].install.as_ref().unwrap(),
+                &manifest.items[1]
+            )
+            .unwrap()
+        );
     }
 
     #[test]
