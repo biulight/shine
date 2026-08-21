@@ -165,6 +165,11 @@ bugs. Check this list before changing the modules named in each entry.
   [ADR 0008](decisions/0008-age-secret-backend-tagged-ciphertext.md)).
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
   prefix, breaks every secret encrypted before the change.
+- **Workspace export decrypts only on explicit request.** `shine env workspace export` omits
+  secret-winning keys unless `--include-secrets` is present, never mixes in the caller's process
+  environment, and never prints exported values in its status or dry-run output. On Unix, an
+  export containing secrets must be created privately (`0600`) before plaintext bytes are written;
+  chmod after a wider temporary-file write is not sufficient.
 
 ## SSH transfer
 

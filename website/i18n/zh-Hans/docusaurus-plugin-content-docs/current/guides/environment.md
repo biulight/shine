@@ -251,6 +251,33 @@ shine env secret seal
 
 为避免改变 dotenv 语义，包含插值（例如 `${BASE_URL}`）或带转义的双引号值的文件会被拒绝；先将它们解析为最终值后再导入。即使没有选择 `--secret`，生成文件仍会保留带说明的空 `[secret]` 表。
 
+## 将 workspace 导出为 dotenv
+
+当其他工具需要普通 dotenv 文件，或者准备停止使用 Shine env 时，可导出某个 mode 合并后的最终结果：
+
+```bash
+shine env workspace export \
+  --format dotenv \
+  --mode production \
+  --output .env.production.local
+```
+
+`--format` 为必填项，以便明确导出格式。命令按 workspace 声明的顺序合并环境源，但不会混入当前进程变量或 `--with` 值。默认只导出最终生效的 `[plain]` 项，不会解密 payload；若后层 secret 覆盖了前层 plain，同名旧明文也不会被导出。
+
+只有目标确实需要完整可运行环境时，才显式包含已经封存的 secret：
+
+```bash
+shine env workspace export \
+  --format dotenv \
+  --mode production \
+  --output .env.production.local \
+  --include-secrets
+```
+
+这会把 secret 以明文写入文件。在 Unix 上，含 secret 的新输出文件权限为仅所有者可读写的 `0600`；无论使用什么平台，都应将它排除在版本控制之外。目标已存在时命令默认拒绝覆盖，确认后才添加 `--force`；`--dry-run` 只报告 mode、目标路径和变量数量，不显示值，也不写文件。
+
+导出文件不含 Shine 元数据，也不依赖 Shine 运行。若要停用 Shine env，请逐个导出并验证所需 mode，将含 secret 的输出加入 `.gitignore`，移除 `shine env run` 包装，最后再自行归档或删除 `shine.workspace.toml` 与对应的 `*.shine.toml` 环境源。导出命令不会删除这些源文件。
+
 ## 使用分层项目环境
 
 在项目根目录创建 `shine.workspace.toml`，声明可用 mode、按顺序合并的文件和项目共享的

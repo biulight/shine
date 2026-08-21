@@ -29,6 +29,48 @@ pub async fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     finalize_temp(&temp, path).await
 }
 
+/// Durably writes a private file with owner-only permissions on Unix.
+///
+/// The temporary file receives the restrictive mode before any content is
+/// written, so plaintext never has a wider visibility window before rename.
+pub async fn atomic_write_private(path: &Path, contents: &[u8]) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    tokio::fs::create_dir_all(parent)
+        .await
+        .with_context(|| format!("creating {}", parent.display()))?;
+    let temp = parent.join(format!(".shine-write-{}", uuid::Uuid::new_v4()));
+
+    if let Err(error) = write_private_temp(&temp, contents).await {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(error);
+    }
+
+    finalize_temp(&temp, path).await
+}
+
+#[cfg(unix)]
+async fn write_private_temp(temp: &Path, contents: &[u8]) -> Result<()> {
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(temp)
+        .await
+        .with_context(|| format!("creating {}", temp.display()))?;
+    file.write_all(contents)
+        .await
+        .with_context(|| format!("writing {}", temp.display()))?;
+    file.sync_all()
+        .await
+        .with_context(|| format!("syncing {}", temp.display()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn write_private_temp(temp: &Path, contents: &[u8]) -> Result<()> {
+    write_temp(temp, contents).await
+}
+
 async fn write_temp(temp: &Path, contents: &[u8]) -> Result<()> {
     let mut file = tokio::fs::File::create(temp)
         .await
@@ -129,6 +171,32 @@ mod tests {
             names.push(entry.file_name());
         }
         assert_eq!(names, vec![std::ffi::OsString::from("file.txt")]);
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn atomic_write_private_uses_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = crate::test_support::make_temp_dir("shine-persist-private").await;
+        let path = dir.join("secret.env");
+        tokio::fs::write(&path, b"old\n").await.unwrap();
+        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .await
+            .unwrap();
+
+        atomic_write_private(&path, b"TOKEN=secret\n")
+            .await
+            .unwrap();
+
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"TOKEN=secret\n");
+        let mode = tokio::fs::metadata(&path)
+            .await
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 

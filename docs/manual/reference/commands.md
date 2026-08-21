@@ -168,6 +168,7 @@ shine env get <KEY>
 shine env delete <KEY> [--force]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
+shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
 shine env broker describe [--workspace <FILE>] --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
 shine env broker policy <add|update> --name <NAME> --ssh-target <TARGET> [--project <PROJECT>] --workspace <FILE> [--remote-workspace <REMOTE_FILE>] --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
 shine env broker policy diff <NAME> --workspace <FILE> --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
@@ -189,9 +190,11 @@ shine env secret identity list
 
 `--with` is repeatable and accepts `KEY=ALIAS`. `--no-workspace` uses explicit values and the process
 environment only and conflicts with `--workspace` and `--mode`. Workspace initialization currently
-requires `--from-dotenv` and supports `--dry-run`. Broker policy creation chooses one or more explicit
-`--release` keys or freezes every currently declared key with `--release-all-declared`; the forms are
-mutually exclusive. Touch ID identities are macOS-only and require `age-plugin-se`.
+requires `--from-dotenv` and supports `--dry-run`. Workspace export requires an explicit format,
+mode, and output path. It exports only resolved plain values unless `--include-secrets` is present;
+it never includes inherited process values. Broker policy creation chooses one or more explicit
+`--release` keys or freezes every currently declared key with `--release-all-declared`; the forms
+are mutually exclusive. Touch ID identities are macOS-only and require `age-plugin-se`.
 
 For broker policies, `--project` stores a human-readable project label. `--remote-workspace`
 requires remote requests to report that exact absolute workspace path in addition to matching the

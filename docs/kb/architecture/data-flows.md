@@ -177,6 +177,15 @@ active source and upgrade refreshes it. Explicit `live` mode points raw commands
 source. A transformed live launcher calls the manifest-constrained internal renderer on each
 invocation, then executes or sources the atomically refreshed file under `rendered/`.
 
+## Workspace environment export
+
+`shine env workspace export --format dotenv` resolves one explicit mode through the same ordered
+source paths as `env run`, but deliberately excludes inherited process variables and `--with`
+injection. The default path parses only `[plain]` values and does not decrypt payloads; a later
+secret declaration removes any earlier plain value with the same key. `--include-secrets` switches
+to the normal sealed-source compiler, then writes the standalone plaintext result through an atomic
+owner-only file on Unix. Export never edits or removes the workspace definition or source files.
+
 ## Sys bootstrap (`shine sys bootstrap`)
 
 Selection resolves explicit ordered items, a named selection profile, or the existing

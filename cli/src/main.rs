@@ -312,6 +312,19 @@ async fn run(cli: Cli) -> Result<()> {
                     )
                     .await
                 }
+                EnvWorkspaceSubcommand::Export(cmd) => {
+                    env::workspace::handle_export(
+                        &config,
+                        cmd.format,
+                        cmd.workspace.as_deref(),
+                        &cmd.mode,
+                        &cmd.output,
+                        cmd.include_secrets,
+                        cmd.force,
+                        cmd.dry_run,
+                    )
+                    .await
+                }
             },
             EnvCommands::Broker(cmd) => match cmd.command {
                 EnvBrokerSubcommand::Describe {
@@ -1429,6 +1442,53 @@ mod tests {
                 && cmd.secret == ["DATABASE_URL"]
                 && cmd.dry_run
         ));
+    }
+
+    #[test]
+    fn cli_accepts_workspace_dotenv_export() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "workspace",
+            "export",
+            "--format",
+            "dotenv",
+            "--mode",
+            "production",
+            "--output",
+            ".env.production.local",
+            "--include-secrets",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Workspace(commands::EnvWorkspaceCommand {
+                    command: EnvWorkspaceSubcommand::Export(cmd)
+                })
+            } if cmd.format == commands::EnvWorkspaceExportFormat::Dotenv
+                && cmd.mode == "production"
+                && cmd.output == std::path::Path::new(".env.production.local")
+                && cmd.include_secrets
+                && cmd.dry_run
+        ));
+    }
+
+    #[test]
+    fn cli_requires_workspace_export_format() {
+        let error = Cli::try_parse_from([
+            "shine",
+            "env",
+            "workspace",
+            "export",
+            "--mode",
+            "production",
+            "--output",
+            ".env.production.local",
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("--format <FORMAT>"));
     }
 
     #[test]

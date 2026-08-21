@@ -1,5 +1,6 @@
 use super::broker::{SourceSnapshot, WorkspaceSnapshot};
-use crate::persist::atomic_write;
+use crate::commands::EnvWorkspaceExportFormat;
+use crate::persist::{atomic_write, atomic_write_private};
 use crate::secret::{BackendKind, EncryptRecipients};
 use crate::{config::Config, secret};
 use anyhow::{Context, Result, bail};
@@ -37,6 +38,101 @@ pub async fn handle_init_from_dotenv(
 
     let root = std::env::current_dir().context("resolving current directory")?;
     init_from_dotenv_at(&root, requested_modes, secrets, force, dry_run).await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_export(
+    config: &Config,
+    format: EnvWorkspaceExportFormat,
+    workspace_arg: Option<&Path>,
+    mode: &str,
+    output: &Path,
+    include_secrets: bool,
+    force: bool,
+    dry_run: bool,
+) -> Result<()> {
+    validate_mode(mode)?;
+    let workspace_path = find_workspace_optional(workspace_arg)
+        .await?
+        .context("shine.workspace.toml was not found; pass --workspace")?;
+    let workspace = load_workspace(&workspace_path).await?;
+    let sources = resolve_sources(&workspace_path, &workspace.env.files, mode)?;
+    let output = absolute_from_current(output)?;
+    if output.exists() && !force {
+        bail!(
+            "{} already exists; rerun with --force to replace it",
+            output.display()
+        );
+    }
+
+    let mut values = compile_export_sources(&sources, config, include_secrets).await?;
+    let mut contents = match format {
+        EnvWorkspaceExportFormat::Dotenv => render_dotenv(&values)?,
+    };
+    if dry_run {
+        println!(
+            "Would export {} variables for mode {mode} to {}{}",
+            values.len(),
+            output.display(),
+            if include_secrets {
+                " (including secrets)"
+            } else {
+                ""
+            }
+        );
+        for value in values.values_mut() {
+            value.zeroize();
+        }
+        contents.zeroize();
+    } else {
+        let write_result = if include_secrets {
+            atomic_write_private(&output, contents.as_bytes()).await
+        } else {
+            atomic_write(&output, contents.as_bytes()).await
+        };
+        for value in values.values_mut() {
+            value.zeroize();
+        }
+        contents.zeroize();
+        write_result?;
+        println!(
+            "Exported {} variables for mode {mode} to {}{}",
+            values.len(),
+            output.display(),
+            if include_secrets {
+                " (including secrets)"
+            } else {
+                ""
+            }
+        );
+        if include_secrets {
+            eprintln!("Warning: the exported file contains plaintext secrets; do not commit it.");
+        }
+    }
+    Ok(())
+}
+
+fn render_dotenv(values: &BTreeMap<String, String>) -> Result<String> {
+    let mut rendered = String::new();
+    for (key, value) in values {
+        if value.contains('\0') {
+            bail!("{key} contains a NUL byte and cannot be represented in dotenv format");
+        }
+        rendered.push_str(key);
+        rendered.push('=');
+        rendered.push('"');
+        for ch in value.chars() {
+            match ch {
+                '\\' => rendered.push_str("\\\\"),
+                '"' => rendered.push_str("\\\""),
+                '\n' => rendered.push_str("\\n"),
+                '\r' => rendered.push_str("\\r"),
+                _ => rendered.push(ch),
+            }
+        }
+        rendered.push_str("\"\n");
+    }
+    Ok(rendered)
 }
 
 async fn init_from_dotenv_at(
@@ -993,6 +1089,39 @@ async fn compile_sources(sources: &[PathBuf], config: &Config) -> Result<BTreeMa
     Ok(merged)
 }
 
+async fn compile_export_sources(
+    sources: &[PathBuf],
+    config: &Config,
+    include_secrets: bool,
+) -> Result<BTreeMap<String, String>> {
+    if include_secrets {
+        return compile_sources(sources, config).await;
+    }
+
+    let mut merged = BTreeMap::new();
+    let mut loaded = 0usize;
+    for path in sources {
+        if !path.is_file() {
+            continue;
+        }
+        let contents = tokio::fs::read_to_string(path)
+            .await
+            .with_context(|| format!("reading {}", path.display()))?;
+        let source = parse_source(path, &contents)?;
+        for key in source.secret.keys() {
+            // A later secret declaration shadows an earlier plain value even
+            // when secrets are intentionally omitted from the export.
+            merged.remove(key);
+        }
+        merged.extend(source.plain);
+        loaded += 1;
+    }
+    if loaded == 0 {
+        bail!("none of the configured environment source files exist");
+    }
+    Ok(merged)
+}
+
 async fn calculate_input_hash(
     workspace_path: &Path,
     mode: &str,
@@ -1205,6 +1334,33 @@ mod tests {
     fn dotenv_import_rejects_interpolation() {
         let error = parse_dotenv(Path::new(".env"), "VITE_URL=${BASE_URL}/api\n").unwrap_err();
         assert!(error.to_string().contains("dotenv interpolation"));
+    }
+
+    #[test]
+    fn dotenv_export_is_stable_and_escapes_multiline_values() {
+        let rendered = render_dotenv(&BTreeMap::from([
+            ("ALPHA".to_owned(), "plain".to_owned()),
+            (
+                "COMPLEX".to_owned(),
+                "quote\" slash\\ first\nsecond".to_owned(),
+            ),
+        ]))
+        .unwrap();
+
+        assert_eq!(
+            rendered,
+            "ALPHA=\"plain\"\nCOMPLEX=\"quote\\\" slash\\\\ first\\nsecond\"\n"
+        );
+    }
+
+    #[test]
+    fn dotenv_export_rejects_nul_values() {
+        let error = render_dotenv(&BTreeMap::from([(
+            "BROKEN".to_owned(),
+            "before\0after".to_owned(),
+        )]))
+        .unwrap_err();
+        assert!(error.to_string().contains("NUL byte"));
     }
 
     #[test]
@@ -1455,6 +1611,109 @@ mod tests {
         let values = compile_sources(&[base, local], &config).await.unwrap();
         assert_eq!(values.get("A").map(String::as_str), Some("base"));
         assert_eq!(values.get("B").map(String::as_str), Some("local"));
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workspace_export_plain_is_standalone_and_respects_secret_shadowing() {
+        let directory =
+            std::env::temp_dir().join(format!("shine-workspace-export-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        let workspace_path = directory.join(WORKSPACE_FILE);
+        tokio::fs::write(
+            &workspace_path,
+            "version = 2\n[env]\nmodes = [\"production\"]\nfiles = [\"base.toml\", \"production.toml\"]\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            directory.join("base.toml"),
+            "version = 1\n[plain]\nPUBLIC = \"base\"\nSHADOWED = \"old\"\n[secret]\nTOKEN = \"pending\"\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            directory.join("production.toml"),
+            "version = 1\n[plain]\nPUBLIC = \"production\"\n[secret]\nSHADOWED = true\n",
+        )
+        .await
+        .unwrap();
+        let output = directory.join(".env.production.local");
+        let config = Config::new_for_test(&directory);
+
+        handle_export(
+            &config,
+            EnvWorkspaceExportFormat::Dotenv,
+            Some(&workspace_path),
+            "production",
+            &output,
+            false,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(!output.exists());
+
+        handle_export(
+            &config,
+            EnvWorkspaceExportFormat::Dotenv,
+            Some(&workspace_path),
+            "production",
+            &output,
+            false,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            tokio::fs::read_to_string(&output).await.unwrap(),
+            "PUBLIC=\"production\"\n"
+        );
+        assert!(
+            handle_export(
+                &config,
+                EnvWorkspaceExportFormat::Dotenv,
+                Some(&workspace_path),
+                "production",
+                &output,
+                false,
+                false,
+                false,
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("--force")
+        );
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workspace_export_requires_explicit_secret_inclusion() {
+        let directory =
+            std::env::temp_dir().join(format!("shine-workspace-export-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        let source = directory.join("source.toml");
+        tokio::fs::write(
+            &source,
+            "version = 1\n[plain]\nPUBLIC = \"safe\"\n[secret]\nTOKEN = \"pending\"\n",
+        )
+        .await
+        .unwrap();
+        let config = Config::new_for_test(&directory);
+
+        let plain = compile_export_sources(std::slice::from_ref(&source), &config, false)
+            .await
+            .unwrap();
+        assert_eq!(plain, BTreeMap::from([("PUBLIC".into(), "safe".into())]));
+
+        let error = compile_export_sources(&[source], &config, true)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("is not sealed"));
         tokio::fs::remove_dir_all(directory).await.unwrap();
     }
 
