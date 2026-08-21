@@ -683,12 +683,6 @@ mod tests {
             "[tasks.ship]\ncommand = [\"cargo\", \"publish\"]\n",
         )
         .unwrap();
-        std::fs::write(
-            dir.join("sys-manifest.toml"),
-            "[[entries]]\nitem_id = \"brew\"\n\n[[entries]]\nitem_id = \"split-dns\"\nmanaged = true\n",
-        )
-        .unwrap();
-
         unsafe {
             std::env::set_var("SHINE_CONFIG_DIR", &dir);
             std::env::remove_var("SHINE_PRESETS");
@@ -704,9 +698,9 @@ mod tests {
         assert!(shell_info.contains("custom-tool"));
         assert!(shell_info.contains("custom-shell/custom-tool"));
         assert!(complete_values(&["shine", "run", ""], 2).contains("ship"));
-        let sys_updates = complete_values(&["shine", "sys", "update", ""], 3);
-        assert!(sys_updates.contains("brew"));
-        assert!(!sys_updates.contains("split-dns"));
+        let sys_apply = complete_values(&["shine", "sys", "apply", ""], 3);
+        assert!(sys_apply.contains("custom-sys"));
+        assert!(!sys_apply.contains("split-dns"));
         assert!(
             !dir.join("config.toml").exists(),
             "completion must not initialize config files"
