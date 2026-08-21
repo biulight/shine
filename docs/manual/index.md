@@ -11,7 +11,7 @@ Shine keeps a development environment portable, usable, and safe across machines
 sessions. It gives shell commands, application configuration, bootstrap steps, environment values,
 tasks, and SSH workflows explicit ownership and reviewable lifecycle operations.
 
-This manual applies to **Shine 1.4.0**.
+This manual applies to **Shine 1.5.0**.
 
 ## Four connected workflows
 

@@ -7,12 +7,32 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-08-22
+
 ### Breaking changes
 
 - System presets now require `version = 2`, with explicit `detect` and `install` metadata for
   every bootstrap item. The monolithic `init.sh` / `init.ps1` dispatcher and `shine sys update`
   have been removed; use the owning package manager or upstream tool to upgrade bootstrap software.
   Existing sys run records remain readable. See the system preset v2 migration guide.
+
+### Features
+
+- Added command-scoped shell installation and removal, allowing individual commands in a shell
+  category to be activated, inspected, upgraded, or removed without disturbing installed siblings.
+- Reworked system bootstrap around version 2 declarative presets, standard package providers, and
+  composable profile integrations that can be enabled or disabled per system item.
+
+### Bug Fixes
+
+- Preserved command-scoped shell lifecycle receipts and completed shell-command candidates for
+  dynamic completion.
+- Improved system-preset permission diagnostics and made targeted updates accept verbose output.
+
+### Docs
+
+- Documented command-scoped shell presets, the system-preset v2 migration, standard bootstrap
+  providers, and profile composition in the English and Simplified Chinese manuals.
 
 ## [1.4.0] — 2026-08-20
 
