@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use crate::config::Config;
+use crate::{colors, config::Config};
 
 use super::{
     LoadedSysPreset, SysDetection, SysDetectionProbe, SysInitCommand, SysInstall, SysItem,
@@ -184,13 +184,13 @@ pub(super) fn external_code_permission_error(
     let (reason, remediation) = match (config.is_external_presets, overlay.is_some()) {
         (true, true) => (
             "an external preset source and preset overlay are active",
-            "disable both the external preset source and preset overlay",
+            "Disable both the external preset source and preset overlay",
         ),
         (true, false) => (
             "an external preset source is active",
-            "disable the external preset source",
+            "Disable the external preset source",
         ),
-        (false, true) => ("a preset overlay is active", "disable the preset overlay"),
+        (false, true) => ("a preset overlay is active", "Disable the preset overlay"),
         (false, false) => {
             unreachable!("external code permission error created without an external source")
         }
@@ -208,13 +208,18 @@ pub(super) fn external_code_permission_error(
     if let Some(path) = code_path {
         source_details.push_str(&format!("Code path:      {}\n", path.display()));
     }
+    let allow_setting = colors::bold_yellow_stderr("allow_sys_code = true");
+    let global_config = colors::cyan_stderr(&config.global_config_path().display().to_string());
+    let keep_blocked = colors::yellow_stderr(remediation);
 
     anyhow::anyhow!(
         "{capability} is blocked because {reason}.\n\n\
 {source_details}\
-Global config:  {}\n\n\
-After reviewing the active preset sources, set `allow_sys_code = true` in the global config, or {remediation}.",
-        config.global_config_path().display()
+After reviewing the active preset sources, choose one:\n\n\
+  Allow external sys code:\n\
+    Set {allow_setting} in {global_config}\n\n\
+  Keep external sys code blocked:\n\
+    {keep_blocked}."
     )
 }
 
@@ -706,11 +711,13 @@ mod tests {
         )));
         assert!(message.contains(&format!("Preset overlay: {}", overlay.display())));
         assert!(message.contains(&format!("Code path:      {}", code_path.display())));
+        assert!(message.contains("After reviewing the active preset sources, choose one:"));
         assert!(message.contains(&format!(
-            "Global config:  {}",
+            "Set allow_sys_code = true in {}",
             config.global_config_path().display()
         )));
-        assert!(message.contains("or disable both the external preset source and preset overlay"));
+        assert!(message.contains("Keep external sys code blocked:"));
+        assert!(message.contains("Disable both the external preset source and preset overlay."));
     }
 
     #[cfg(unix)]

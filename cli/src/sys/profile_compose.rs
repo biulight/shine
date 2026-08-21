@@ -425,9 +425,9 @@ mod tests {
         ));
         assert!(message.contains(&format!("Preset overlay: {}", overlay.display())));
         assert!(message.contains(&format!(
-            "Global config:  {}",
+            "Set allow_sys_code = true in {}",
             dir.join("config.toml").display()
         )));
-        assert!(message.contains("set `allow_sys_code = true` in the global config"));
+        assert!(message.contains("Keep external sys code blocked:"));
     }
 }

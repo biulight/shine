@@ -11,7 +11,8 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Root cause**: the permission check correctly treated the overlay as an external trust boundary,
   but its one-line diagnostic described only the blocked item and flag.
 - **Fix**: identify the executable integration kind, every active external preset layer, and the
-  resolved global config path; also state that bootstrap preflight made no system changes.
+  resolved global config path; present permission and keep-blocked remediation as separate actions,
+  and state that bootstrap preflight made no system changes.
 - **Rule**: permission errors must name both the blocked capability and the active trust boundary,
   then point to the configuration layer that can actually grant access. Alternative remediation
   must remove every active trust boundary, not imply that removing only one of several layers is

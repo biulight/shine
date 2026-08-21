@@ -691,7 +691,8 @@ async fn handle_init_for_os(
 }
 
 fn bootstrap_preflight_error(error: anyhow::Error) -> anyhow::Error {
-    anyhow::anyhow!("{error}\n\nNo system changes were made.")
+    let no_changes = colors::dim_stderr("No system changes were made.");
+    anyhow::anyhow!("{error}\n\n{no_changes}")
 }
 
 async fn record_sys_item_outcomes(
