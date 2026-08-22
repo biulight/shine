@@ -615,6 +615,7 @@ fn enter_local_tty(pid: Option<u32>, original: libc::termios) -> Result<TtyResto
     Ok(restore)
 }
 
+#[cfg(any(unix, test))]
 fn confirmation_approved(answer: &str) -> bool {
     const PASTE_START: &str = "\u{1b}[200~";
     const PASTE_END: &str = "\u{1b}[201~";
