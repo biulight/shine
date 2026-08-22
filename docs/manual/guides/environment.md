@@ -27,6 +27,10 @@ shine env delete HTTP_PROXY_PORT
 `localhost,127.0.0.1,::1`. After changing it or another proxy variable, `shine update` marks the
 installed `proxy` shell preset as updatable; run `shine upgrade` to apply the value.
 
+The built-in image commands use `IMAGE_QUALITY=80`, `IMAGE_MAX_WIDTH=1920`, and
+`IMAGE_MAX_HEIGHT=1080` by default. Override them for one run with `--quality`, `--width`, or
+`--height`, or keep different machine-local defaults with `shine env set`.
+
 `shine env list` hides sensitive values by default. Use `--reveal` only in a trusted terminal. Output
 is grouped by the effective source—`config.toml`, global override, overlay, or project override—so
 you can identify which value wins. Values normally live in the active configuration's `[env]` table.

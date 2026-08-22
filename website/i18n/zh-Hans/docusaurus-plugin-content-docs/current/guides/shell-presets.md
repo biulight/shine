@@ -62,6 +62,7 @@ shine shell uninstall proxy --purge
 
 | 类别 | 命令 | 用途 |
 | --- | --- | --- |
+| `image-tools` | `img-compress`、`img-resize`、`img-convert` | 使用 Bun 1.3.14 或更高版本批量处理 JPEG、PNG、WebP |
 | `proxy` | `setproxy`、`usetproxy` | 设置或清除当前终端会话的代理变量 |
 | `utils` | `copyfile` | 通过 OSC52 将文件内容复制到本地剪贴板 |
 | `utils` | `shine-env-export` | 将 Shine env 值载入当前 shell |

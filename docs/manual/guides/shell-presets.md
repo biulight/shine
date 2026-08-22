@@ -69,6 +69,7 @@ never removes `~/.shine/config.toml`.
 
 | Category | Commands | Purpose |
 | --- | --- | --- |
+| `image-tools` | `img-compress`, `img-resize`, `img-convert` | Batch-process JPEG, PNG, and WebP files with Bun 1.3.14 or newer |
 | `proxy` | `setproxy`, `usetproxy` | Set or clear proxy variables in the current terminal session |
 | `utils` | `copyfile` | Copy file content to the local clipboard through OSC 52 |
 | `utils` | `shine-env-export` | Load a Shine environment value into the current shell |

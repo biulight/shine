@@ -30,6 +30,9 @@ HTTP_PROXY_PORT = "6152"
 SOCKS5_PROXY_PORT = "6153"
 PROXY_HOST = "127.0.0.1"
 PROXY_NO_PROXY = "localhost,127.0.0.1,::1"
+IMAGE_QUALITY = "80"
+IMAGE_MAX_WIDTH = "1920"
+IMAGE_MAX_HEIGHT = "1080"
 MY_API_TOKEN = { value = "<令牌>", description = "内部 API 的访问令牌" }
 
 [[env_proxy]]

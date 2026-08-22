@@ -7,6 +7,17 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Features
+
+- Added the cross-platform `image-tools` shell preset with safe batch compression, bounded resizing,
+  and JPEG/PNG/WebP conversion powered by Bun.
+
+### Docs
+
+- Replaced the manual homepage proxy example with the built-in image workflow and documented its
+  commands, local defaults, batch output rules, and Bun prerequisite in English and Simplified
+  Chinese.
+
 ## [1.6.0] — 2026-08-22
 
 ### Features

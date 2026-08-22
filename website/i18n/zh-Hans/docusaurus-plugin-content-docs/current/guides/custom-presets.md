@@ -21,7 +21,7 @@ Shine 会输出 `Preset Source`、可选的 `Presets Overlay`，以及外部 She
 文件夹同步；它把选定源文件变成已安装能力：创建受管命令入口、解析本地值、默认保留已安装快照、
 报告待处理变化，并且只移除自己拥有的内容。
 
-例如，一个自定义 `shell/image-tools/` 类别可以提供三个个人图片命令：
+内置 `shell/image-tools/` 类别就是一个完整示例，它通过以下元数据提供三个图片命令：
 
 ```toml
 description = "Personal image workflow commands."
@@ -38,35 +38,47 @@ source = "resize.ts"
 target = "img-resize"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+env = ["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
 
 [[files]]
 source = "convert.ts"
 target = "img-convert"
 runtime = "bun"
 platforms = ["unix", "windows"]
+env = ["IMAGE_QUALITY"]
 ```
 
-这段元数据只是机制示例，并非内置预设；类别中还需要包含三个对应源文件。这些文件可以使用
-[`Bun.Image`](https://bun.com/docs/runtime/image) 压缩、缩放和转换 JPEG、PNG、WebP 图片，无需
-ImageMagick、Sharp 或其它图片库。运行命令的每台机器都必须在 `PATH` 中自行安装 Bun 1.3.14
-或更高版本。Shine 不内置 Bun，Shine 仓库固定的 Bun 版本只是开发与测试基线。预设作者还应在
-启动时检测 `Bun.Image`，旧版 Bun 不具备该能力时给出明确的升级提示。
+这个类别包含三个入口文件和一个共享实现，使用
+[`Bun.Image`](https://bun.com/docs/runtime/image) 压缩、缩放和转换 JPEG、PNG、WebP，无需
+ImageMagick、Sharp 或其它图片库。运行命令的每台机器都必须在 `PATH` 中安装 Bun 1.3.14 或更高
+版本；Shine 不内置 Bun。命令会检测缺失的 `Bun.Image` API，并给出升级提示。
 
-源文件准备好后，Shine 会在它外面补上生命周期：
+可以安装整个类别或其中一个命令，再沿用普通 Shell 预设的生命周期：
 
 ```bash
 shine info shell/image-tools
 shine install shell/image-tools/img-compress
+img-compress photo.jpg screenshots/
+img-resize --width 1280 --output-dir ./resized photos/
+img-convert --format webp --quality 75 --output-dir ./webp hero.png gallery/
 shine info shell/image-tools --diff
 shine upgrade shell/image-tools
 shine shell uninstall image-tools/img-compress --dry-run
 ```
 
-默认 snapshot 模式下，修改或同步来源文件夹不会悄悄改变已安装命令。`shine info --diff` 展示
-待处理的来源变化，`shine upgrade` 再显式应用。图片质量、最大尺寸等值保留在各台机器本地，只因
-对应命令明确声明需要它们才会注入。这就是“同步一个脚本文件”和“把脚本作为可复用个人能力运行”
-之间的边界。
+每个命令都接受多个文件或目录输入。目录只扫描第一层的 JPEG、PNG、WebP，不会递归。未指定
+`--output-dir` 时，结果保存在来源旁边，名称形如 `photo.compressed.jpg`、
+`photo.resized.jpg` 或所选转换格式的扩展名。指定输出目录后，所有结果平铺到该目录；重复目标名会
+明确失败。已有目标也会失败，只有 `--force` 才允许替换；来源图片永远不会被原地修改。
+
+批处理遇到单项失败后会继续，并在存在任意失败时返回非零状态。前 20 条失败会显示在终端；超过
+20 条时，完整列表还会写入 `--output-dir` 下唯一命名的 `image-tools-errors-*.log`，未指定输出目录
+时则写入当前目录。
+
+`IMAGE_QUALITY`、`IMAGE_MAX_WIDTH`、`IMAGE_MAX_HEIGHT` 默认分别为 `80`、`1920`、`1080`。
+命令参数只覆盖当次运行，本地 Shine 配置则会保留这台机器的长期偏好。默认 snapshot 模式下，修改
+复制或外部来源后仍需执行 `shine upgrade`，已安装命令才会变化。这就是“同步一个脚本文件”和“把
+脚本作为可复用个人能力运行”之间的边界。
 
 ## 使用 Overlay 覆盖少量文件
 

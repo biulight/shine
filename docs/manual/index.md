@@ -38,12 +38,13 @@ This manual applies to **Shine 1.6.0**.
 
 ## Try a built-in preset
 
-Install the proxy helpers and inspect what Shine added:
+Install the image helpers, resize a photo, and inspect what Shine added:
 
 ```bash
 shine list --available
-shine install shell/proxy
-shine info shell/proxy
+shine install shell/image-tools
+img-resize photo.jpg
+shine info shell/image-tools
 ```
 
 You can also browse ready-made configuration for tools such as Starship, Git, Vim, and Ghostty.
@@ -54,10 +55,11 @@ Surge and Clash Verge Rev have their own guided setup in [application presets](.
 A preset folder can arrive through any folder-sync tool, archive, network transfer, version-control
 checkout, or manual copy. Shine does not prescribe how you share it.
 
-Your own presets might package collision-aware batch renaming, image compression and resizing,
-spreadsheet cleanup, or document printing as reusable commands. These are ideas you can build, not
-bundled tools; each command still needs its application or runtime on the machine. See [custom
-presets](./guides/custom-presets.md) for the mechanism and a minimal image-workflow example.
+The built-in `image-tools` preset shows this pattern with reusable compression, resizing, and format
+conversion commands. Your own presets might package collision-aware batch renaming, spreadsheet
+cleanup, or document printing in the same way. Each command still needs its application or runtime
+on the machine. See [custom presets](./guides/custom-presets.md) for the mechanism and the complete
+image workflow.
 
 ## Use the same toolkit for more than files
 

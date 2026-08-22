@@ -1,0 +1,25 @@
+description = "Batch image compression, resizing, and format conversion with Bun."
+
+[[files]]
+source = "compress.ts"
+target = "img-compress"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_QUALITY"]
+description = "Compress JPEG, PNG, and WebP images without modifying the originals."
+
+[[files]]
+source = "resize.ts"
+target = "img-resize"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+description = "Resize JPEG, PNG, and WebP images to fit configured bounds."
+
+[[files]]
+source = "convert.ts"
+target = "img-convert"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_QUALITY"]
+description = "Convert images to JPEG, PNG, or WebP."

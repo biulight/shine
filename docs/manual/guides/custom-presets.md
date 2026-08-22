@@ -25,7 +25,8 @@ Shine does not require Git or provide general-purpose folder synchronization. It
 source files into installed capabilities: it creates managed command entries, resolves local values,
 keeps an installed snapshot by default, reports pending changes, and removes only what it owns.
 
-For example, a custom `shell/image-tools/` category could expose three personal image commands:
+The built-in `shell/image-tools/` category is a complete example. It exposes three image commands
+through this metadata:
 
 ```toml
 description = "Personal image workflow commands."
@@ -42,38 +43,51 @@ source = "resize.ts"
 target = "img-resize"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+env = ["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
 
 [[files]]
 source = "convert.ts"
 target = "img-convert"
 runtime = "bun"
 platforms = ["unix", "windows"]
+env = ["IMAGE_QUALITY"]
 ```
 
-This metadata is an illustration, not a built-in preset: the category must also contain the three
-source files. Those files can use [`Bun.Image`](https://bun.com/docs/runtime/image) to compress,
-resize, and convert JPEG, PNG, and WebP images without ImageMagick, Sharp, or another image library.
-Every machine that runs them needs an external Bun 1.3.14 or newer in `PATH`. Shine does not bundle
-Bun, and the Bun version pinned by the Shine repository is only its development and test baseline.
-Preset authors should detect `Bun.Image` at startup and print a clear upgrade hint when an older Bun
-is found.
+The category includes three entry files plus a shared implementation using
+[`Bun.Image`](https://bun.com/docs/runtime/image). It compresses, resizes, and converts JPEG, PNG,
+and WebP without ImageMagick, Sharp, or another image library. Every machine that runs the commands
+needs Bun 1.3.14 or newer in `PATH`; Shine does not bundle Bun. The commands detect a missing
+`Bun.Image` API and print an upgrade hint.
 
-Once the source exists, Shine adds the lifecycle around it:
+Install the category or one command, then use the same lifecycle as any other shell preset:
 
 ```bash
 shine info shell/image-tools
 shine install shell/image-tools/img-compress
+img-compress photo.jpg screenshots/
+img-resize --width 1280 --output-dir ./resized photos/
+img-convert --format webp --quality 75 --output-dir ./webp hero.png gallery/
 shine info shell/image-tools --diff
 shine upgrade shell/image-tools
 shine shell uninstall image-tools/img-compress --dry-run
 ```
 
-In the default snapshot mode, changing or synchronizing the source folder does not silently change
-the installed command. `shine info --diff` exposes the pending source change, and `shine upgrade`
-applies it explicitly. Values such as image quality or maximum dimensions remain local to each
-machine and are injected only because the corresponding command declares them. This is the boundary
-between synchronizing a script file and operating it as a reusable personal capability.
+Each command accepts multiple file or directory inputs. A directory scan processes direct JPEG,
+PNG, and WebP children only; it never recurses. Without `--output-dir`, output stays beside its
+source as `photo.compressed.jpg`, `photo.resized.jpg`, or the selected conversion extension. An
+output directory flattens the selected inputs, so duplicate target names fail explicitly. Existing
+files also fail unless `--force` is present, and source images are never modified in place.
+
+Batch processing continues after an individual failure and returns a nonzero status if any item
+failed. The first 20 failures appear in the terminal. If there are more, the complete list is also
+written to a uniquely named `image-tools-errors-*.log` under `--output-dir`, or the current directory
+when no output directory was supplied.
+
+`IMAGE_QUALITY`, `IMAGE_MAX_WIDTH`, and `IMAGE_MAX_HEIGHT` default to `80`, `1920`, and `1080`.
+Command options override them for one invocation; changing the Shine values keeps the preference on
+that machine. In the default snapshot mode, changing a copied or external source still requires
+`shine upgrade` before the installed command changes. This is the boundary between synchronizing a
+script file and operating it as a reusable personal capability.
 
 ## Override selected files with an overlay
 

@@ -404,10 +404,25 @@ mod tests {
             config.env.get("SOCKS5_PROXY_PORT").map(String::as_str),
             Some("6153")
         );
+        assert_eq!(
+            config.env.get("IMAGE_QUALITY").map(String::as_str),
+            Some("80")
+        );
+        assert_eq!(
+            config.env.get("IMAGE_MAX_WIDTH").map(String::as_str),
+            Some("1920")
+        );
+        assert_eq!(
+            config.env.get("IMAGE_MAX_HEIGHT").map(String::as_str),
+            Some("1080")
+        );
         let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
         assert!(content.contains("CUSTOM = \"kept\""));
         assert!(content.contains("HTTP_PROXY_PORT = \"6152\""));
         assert!(content.contains("SOCKS5_PROXY_PORT = \"6153\""));
+        assert!(content.contains("IMAGE_QUALITY = \"80\""));
+        assert!(content.contains("IMAGE_MAX_WIDTH = \"1920\""));
+        assert!(content.contains("IMAGE_MAX_HEIGHT = \"1080\""));
 
         // SAFETY: env_lock() is held for the duration of this block, preventing
         //          concurrent env mutation from other threads in this test binary.
