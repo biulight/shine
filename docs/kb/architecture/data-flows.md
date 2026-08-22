@@ -4,6 +4,21 @@ End-to-end flows that span multiple modules and are not visible in any single fi
 module map and per-command routing table, see [`AGENTS.md`](../../../AGENTS.md) — this file only
 records the cross-module sequences and their gotchas.
 
+## Shell install and uninstall
+
+Shell lifecycle targets are either a category (`utils`) or one command in a category
+(`utils/shine-env-export`). Embedded sources and external snapshots remain category-scoped shared
+deployment material so a command can consume sibling resources, while launchers and
+`shell-manifest.toml` receipts are command-scoped.
+
+Command install filters metadata before transforms and launcher creation, then upserts only the
+selected manifest target. Category install retains the existing replace-category reconciliation.
+Status treats a manifest receipt or a compatible legacy launcher as installed; extracted source
+files alone are only cache state. Command uninstall removes only the selected managed launcher,
+rendered output, and receipt, rebuilds source-command profile wrappers from the remaining launchers,
+and removes shared category material only after the last installed command is gone. Foreign command
+entries are never removed.
+
 ## App install (`shine app install <category>`)
 
 `cli/src/apps/mod.rs` orchestrates:
@@ -58,12 +73,15 @@ the receipt comparison includes the normalized domain, DNS servers, and platform
 Update and sys-info output render those receipt differences field by field (`old -> new`) so the
 user can inspect the pending system change before granting administrator access to upgrade.
 
-`shine update --diff` appends content diffs to stale shell/app rows, while `shine update <TARGET>`
-resolves one installed shell/app through the same aliases as `shine info` and prints only its stale
-files. Both paths reuse `info`'s effective-content renderer, so embedded versus external preset
-selection, transforms, and manual-generator behavior stay identical to `shine info --diff` and the
-upgrade operation. Target mode returns after the config check and does not perform the binary
-release check; managed sys resources keep their structured receipt differences instead.
+`shine update --diff` expands stale shell/app rows, while `shine update <TARGET>` resolves one
+installed shell/app through the same aliases as `shine info` and prints only its stale files. Each
+row carries structured pending changes: content, source/destination relocation, a new file,
+deployment metadata, or command-entry refresh. Only content changes invoke `info`'s effective-
+content renderer; structural changes are rendered field by field. Inline diffs require valid UTF-8
+without NUL bytes and are capped at 256 KiB per side. Embedded versus external preset selection,
+transforms, and manual-generator behavior stay identical to `shine info --diff` and the upgrade
+operation. Target mode returns after the config check and does not perform the binary release check;
+managed sys resources keep their structured receipt differences instead.
 
 ## Generated app files
 
@@ -159,20 +177,36 @@ active source and upgrade refreshes it. Explicit `live` mode points raw commands
 source. A transformed live launcher calls the manifest-constrained internal renderer on each
 invocation, then executes or sources the atomically refreshed file under `rendered/`.
 
+## Workspace environment export
+
+`shine env workspace export --format dotenv` resolves one explicit mode through the same ordered
+source paths as `env run`, but deliberately excludes inherited process variables and `--with`
+injection. The default path parses only `[plain]` values and does not decrypt payloads; a later
+secret declaration removes any earlier plain value with the same key. `--include-secrets` switches
+to the normal sealed-source compiler, then writes the standalone plaintext result through an atomic
+owner-only file on Unix. Export never edits or removes the workspace definition or source files.
+
 ## Sys bootstrap (`shine sys bootstrap`)
 
-`shine sys update [ITEM] [--verbose]` is a separate, read-only bootstrap-software flow. It reads
-only `mode = "init"` entries already recorded in `sys-manifest.toml`, then invokes the current
-platform preset as `<item> check-update`. Platform scripts emit `SHINE_SYS_UPDATE` events with a
-verified availability state and an upstream command; the Rust core displays but never executes
-that command. This flow does not write the run manifest, invoke elevation, or update managed
-profiles. Global `shine update` / `shine upgrade` remain limited to Shine configuration and
-managed sys resources.
+Selection resolves explicit ordered items, a named selection profile, or the existing
+interactive/default path through `sys/selection.rs`. Explicit items accept only `mode = "init"`,
+deduplicate by first occurrence, and never widen to sibling items.
 
-Documented in `AGENTS.md` § "Sys preset flow". Key cross-module point: `sys/execution.rs` runs
-`init.sh <item_id>` once per selected item and parses `SHINE_SYS_STATUS\t<state>\t<detail>` lines
-from script stdout into the run report; anything else is rendered as indented logs. A final
-`init.sh __shine_finalize` call performs shared profile integration exactly once.
+Every executable sys manifest declares `version = 2`. Each init item has both `[items.detect]` and
+`[items.install]`; Rust performs the read-only detection, invokes a fixed Homebrew/APT/Winget
+provider argv or one per-item script, limits runtime/output, detects again, and produces the
+canonical `sys/<item>` outcome. A v1 or unknown manifest version fails before detection, elevation,
+installer execution, or profile writes.
+
+Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`. `sys/profile_compose.rs` combines base pre/post content
+with all enabled item integrations in stable manifest order. `sys/profile.rs` reconciles the two
+generated files before `sys/profile_blocks.rs` updates the existing pre/post sentinels. Composition
+happens once after item execution, and render failure leaves the last installed profile intact.
+`sys profile enable/disable` changes only this activation state and generated profile content.
+
+Shine does not run update checks for bootstrap software. Homebrew, APT, Winget, mise, rustup, or
+the applicable upstream tool owns package versions and upgrades. Global `shine update` / `shine
+upgrade` remain limited to Shine configuration and managed sys resources.
 
 Top-level `shine list` reads current-OS entries with `managed = true` directly from
 `sys-manifest.toml` for its installed-only `System Configs` section. It does not call the live

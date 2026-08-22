@@ -1,3 +1,4 @@
+version = 2
 description = "Initialize Windows with selectable Rust, terminal tools, network, and JavaScript runtime setup steps."
 default_profile = "recommended"
 
@@ -6,45 +7,114 @@ id = "rust"
 label = "Rust"
 description = "Install Rustup and the Rust toolchain."
 
+detect = { kind = "command", command = "rustup", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "Rustlang.Rustup" }
+
 [[items]]
 id = "yazi"
 label = "Yazi"
 description = "Install the Yazi terminal file manager."
+
+detect = { kind = "command", command = "yazi", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "sxyazi.yazi" }
+
+[[items.shell]]
+shells = ["powershell"]
+phase = "post"
+when_command = "yazi"
+fragment = "profile/yazi.ps1"
 
 [[items]]
 id = "starship"
 label = "Starship"
 description = "Install the Starship shell prompt."
 
+detect = { kind = "command", command = "starship", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "Starship.Starship" }
+
+[[items.shell]]
+shells = ["powershell"]
+phase = "post"
+when_command = "starship"
+eval = ["starship", "init", "{shell}"]
+
 [[items]]
 id = "zoxide"
 label = "zoxide"
 description = "Install smarter directory jumping."
+
+detect = { kind = "command", command = "zoxide", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "ajeetdsouza.zoxide" }
+
+[[items.shell]]
+shells = ["powershell"]
+phase = "post"
+when_command = "zoxide"
+eval = ["zoxide", "init", "{shell}"]
 
 [[items]]
 id = "atuin"
 label = "Atuin"
 description = "Install the Atuin shell history sync client."
 
+detect = { kind = "command", command = "atuin", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "Atuinsh.Atuin" }
+
+[[items.shell]]
+shells = ["powershell"]
+phase = "post"
+when_command = "atuin"
+eval = ["atuin", "init", "{shell}"]
+
 [[items]]
 id = "fzf"
 label = "fzf"
 description = "Install the fzf command-line fuzzy finder."
+
+detect = { kind = "command", command = "fzf", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "junegunn.fzf" }
 
 [[items]]
 id = "bat"
 label = "bat"
 description = "Install the bat command-line file viewer."
 
+detect = { kind = "command", command = "bat", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "sharkdp.bat" }
+
+[[items.shell]]
+shells = ["powershell"]
+phase = "post"
+when_command = "bat"
+fragment = "profile/bat.ps1"
+
 [[items]]
 id = "eza"
 label = "eza"
 description = "Install the eza modern ls replacement."
 
+detect = { kind = "command", command = "eza", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "eza-community.eza" }
+
+[[items.shell]]
+shells = ["powershell"]
+phase = "post"
+when_command = "eza"
+fragment = "profile/eza.ps1"
+
 [[items]]
 id = "zerotier"
 label = "ZeroTier"
 description = "Install the ZeroTier One Windows client."
+
+detect = { kind = "command", command = "zerotier-cli" }
+
+[items.install]
+kind = "package"
+provider = "winget"
+package = "ZeroTier.ZeroTierOne"
+success_status = "needs-action"
+success_hint = "open ZeroTier and join a network"
 
 [[items]]
 id = "split-dns"
@@ -64,15 +134,30 @@ id = "bun"
 label = "Bun"
 description = "Install the Bun JavaScript runtime."
 
+detect = { kind = "command", command = "bun", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "Oven-sh.Bun" }
+
 [[items]]
 id = "pnpm"
 label = "pnpm"
 description = "Install the pnpm package manager."
 
+detect = { kind = "command", command = "pnpm", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "pnpm.pnpm" }
+
 [[items]]
 id = "mise"
 label = "mise"
 description = "Install the mise development environment manager."
+
+detect = { kind = "command", command = "mise", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "jdx.mise" }
+
+[[items.shell]]
+shells = ["powershell"]
+phase = "post"
+when_command = "mise"
+eval = ["mise", "activate", "{shell}"]
 
 [profiles.required]
 items = ["rust", "yazi", "starship"]

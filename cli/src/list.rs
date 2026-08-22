@@ -37,7 +37,7 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
     crate::config::print_presets_note(config);
 
     if !diff {
-        let shell_names = sorted_names(update_shell.iter().map(|row| row.label.clone()).collect());
+        let shell_names = shell_categories(&update_shell);
         let app_names = update_app
             .keys()
             .map(|category| (*category).to_string())
@@ -163,6 +163,7 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
     crate::config::print_presets_note(config);
     let shell_rows = build_shell_rows(config).await?;
     let installed_shell: Vec<&ShellRow> = shell_rows.iter().filter(|r| r.is_installed).collect();
+    let all_shell: Vec<&ShellRow> = shell_rows.iter().collect();
 
     let cats_result = load_active_categories(config, None).await;
     let app_rows = match cats_result {
@@ -173,6 +174,7 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
         .iter()
         .filter(|r| r.file_status != FileStatus::NotInstalled)
         .collect();
+    let all_app: Vec<&AppRow> = app_rows.iter().collect();
     let update_sys = sys::managed_updates(config).await.unwrap_or_default();
 
     let any = !installed_shell.is_empty() || !installed_app.is_empty() || !update_sys.is_empty();
@@ -190,19 +192,53 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
     } else {
         None
     };
+    let shell_statuses = if diff {
+        installed_shell
+            .iter()
+            .map(|row| ShellLifecycleStatus {
+                category: row.category.clone(),
+                detail_label: row.label.clone(),
+                status_sym: row.status_sym,
+                status_text: row.status_text,
+            })
+            .collect()
+    } else {
+        shell_category_statuses(&all_shell)
+    };
+    let app_statuses = if diff {
+        installed_app
+            .iter()
+            .map(|row| AppLifecycleStatus {
+                category: row.category.clone(),
+                detail_label: row.label.clone(),
+                sym: row.sym,
+                status_text: row.status_text,
+                file_status: row.file_status,
+                dest: row.dest.clone(),
+            })
+            .collect()
+    } else {
+        app_category_statuses(&all_app)
+    };
 
     // ── Shell Presets ────────────────────────────────────────────────────────
     if !installed_shell.is_empty() {
         println!("{}", colors::bold("Shell Presets"));
 
-        let label_width = installed_shell
-            .iter()
-            .map(|r| r.label.len())
-            .max()
-            .unwrap_or(0);
+        let label_width = if diff {
+            installed_shell.iter().map(|row| row.label.len()).max()
+        } else {
+            shell_statuses.iter().map(|row| row.category.len()).max()
+        }
+        .unwrap_or(0);
 
-        for row in &installed_shell {
-            let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
+        for row in &shell_statuses {
+            let label = if diff {
+                &row.detail_label
+            } else {
+                &row.category
+            };
+            let pad = " ".repeat(label_width.saturating_sub(label.len()));
             let run_hint = if row.status_sym == "↑" {
                 format!("  {}", colors::dim("run `shine upgrade`"))
             } else {
@@ -210,16 +246,17 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
             };
             println!(
                 "  {}  {}{}  {}{}",
-                row.symbol,
-                row.label,
+                colors::symbol(row.status_sym),
+                label,
                 pad,
                 colors::status_label(row.status_text, row.status_sym),
                 run_hint,
             );
-            if row.status_sym == "↑"
+            if diff
+                && row.status_sym == "↑"
                 && let Some(diffs) = &update_diffs
             {
-                diffs.print_shell_for_row(config, &row.label).await?;
+                diffs.print_shell_for_row(config, &row.detail_label).await?;
             }
         }
     }
@@ -231,24 +268,33 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
         }
         println!("{}", colors::bold("App Configs"));
 
-        let label_width = installed_app
-            .iter()
-            .map(|r| r.label.len())
-            .max()
-            .unwrap_or(0);
+        let label_width = if diff {
+            installed_app.iter().map(|row| row.label.len()).max()
+        } else {
+            app_statuses.iter().map(|row| row.category.len()).max()
+        }
+        .unwrap_or(0);
 
         let mut up_to_date = 0usize;
         let mut update_available = 0usize;
         let mut user_modified = 0usize;
         let mut missing = 0usize;
 
-        for row in &installed_app {
-            let pad = " ".repeat(label_width.saturating_sub(row.label.len()));
-            let dest_part = row
-                .dest
-                .as_deref()
-                .map(|d| format!("  {}  {}", colors::dim("→"), colors::dim(d)))
-                .unwrap_or_default();
+        for row in &app_statuses {
+            let label = if diff {
+                &row.detail_label
+            } else {
+                &row.category
+            };
+            let pad = " ".repeat(label_width.saturating_sub(label.len()));
+            let dest_part = if diff {
+                row.dest
+                    .as_deref()
+                    .map(|d| format!("  {}  {}", colors::dim("→"), colors::dim(d)))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
 
             let run_hint = if row.sym == "↑" {
                 format!("  {}", colors::dim("run `shine upgrade`"))
@@ -259,17 +305,18 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
             println!(
                 "  {}  {}{}{}  {}{}",
                 colors::symbol(row.sym),
-                row.label,
+                label,
                 pad,
                 dest_part,
                 colors::status_label(row.status_text, row.sym),
                 run_hint,
             );
 
-            if row.file_status == FileStatus::UpdateAvail
+            if diff
+                && row.file_status == FileStatus::UpdateAvail
                 && let Some(diffs) = &update_diffs
             {
-                diffs.print_app_for_row(config, &row.label).await?;
+                diffs.print_app_for_row(config, &row.detail_label).await?;
             }
 
             match row.file_status {
@@ -316,7 +363,9 @@ pub async fn handle_list(config: &Config) -> Result<()> {
     let installed_shell: Vec<String> = shell_rows
         .iter()
         .filter(|r| should_show_shell_in_simple_list(r))
-        .map(|r| r.label.clone())
+        .map(|r| r.category.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect();
 
     let cats_result = load_active_categories(config, None).await;
@@ -376,6 +425,140 @@ fn installed_app_categories(rows: &[AppRow]) -> Vec<String> {
         .collect()
 }
 
+fn shell_categories(rows: &[&ShellRow]) -> Vec<String> {
+    rows.iter()
+        .map(|row| row.category.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+struct ShellLifecycleStatus {
+    category: String,
+    detail_label: String,
+    status_sym: &'static str,
+    status_text: &'static str,
+}
+
+fn shell_category_statuses(rows: &[&ShellRow]) -> Vec<ShellLifecycleStatus> {
+    let mut grouped: BTreeMap<&str, Vec<&ShellRow>> = BTreeMap::new();
+    for row in rows {
+        grouped.entry(&row.category).or_default().push(row);
+    }
+    grouped
+        .into_iter()
+        .filter_map(|(category, rows)| {
+            if !rows.iter().any(|row| row.is_installed) {
+                return None;
+            }
+            if rows.len() == 1 {
+                let row = rows[0];
+                return Some(ShellLifecycleStatus {
+                    category: category.to_string(),
+                    detail_label: row.label.clone(),
+                    status_sym: row.status_sym,
+                    status_text: row.status_text,
+                });
+            }
+            let selected = rows
+                .iter()
+                .filter(|row| row.is_installed)
+                .max_by_key(|row| shell_status_priority(row.status_sym))
+                .expect("grouped shell category is non-empty");
+            let partially_installed = rows.iter().any(|row| !row.is_installed);
+            let (status_sym, status_text) = if partially_installed && selected.status_sym == "✓" {
+                ("~", "partial install")
+            } else {
+                (selected.status_sym, selected.status_text)
+            };
+            Some(ShellLifecycleStatus {
+                category: category.to_string(),
+                detail_label: category.to_string(),
+                status_sym,
+                status_text,
+            })
+        })
+        .collect()
+}
+
+fn shell_status_priority(sym: &str) -> usize {
+    match sym {
+        "!" => 4,
+        "~" => 3,
+        "↑" => 2,
+        "✓" => 1,
+        _ => 0,
+    }
+}
+
+struct AppLifecycleStatus {
+    category: String,
+    detail_label: String,
+    sym: &'static str,
+    status_text: &'static str,
+    file_status: FileStatus,
+    dest: Option<String>,
+}
+
+fn app_category_statuses(rows: &[&AppRow]) -> Vec<AppLifecycleStatus> {
+    let mut grouped: BTreeMap<&str, Vec<&AppRow>> = BTreeMap::new();
+    for row in rows {
+        grouped.entry(&row.category).or_default().push(row);
+    }
+    grouped
+        .into_iter()
+        .filter_map(|(category, rows)| {
+            let has_installed = rows
+                .iter()
+                .any(|row| row.file_status != FileStatus::NotInstalled);
+            if !has_installed {
+                return None;
+            }
+            if rows.len() == 1 {
+                let row = rows[0];
+                return Some(AppLifecycleStatus {
+                    category: category.to_string(),
+                    detail_label: row.label.clone(),
+                    sym: row.sym,
+                    status_text: row.status_text,
+                    file_status: row.file_status,
+                    dest: row.dest.clone(),
+                });
+            }
+            let has_not_installed = rows
+                .iter()
+                .any(|row| row.file_status == FileStatus::NotInstalled);
+            let installed_max = rows
+                .iter()
+                .map(|row| row.file_status)
+                .filter(|status| *status != FileStatus::NotInstalled)
+                .max()
+                .expect("installed app category has an installed row");
+            let status = if has_not_installed && installed_max == FileStatus::UpToDate {
+                FileStatus::Partial
+            } else {
+                installed_max
+            };
+            let (sym, status_text) = match status {
+                FileStatus::Missing => ("!", "destination missing"),
+                FileStatus::UserModified => ("~", "user modified"),
+                FileStatus::Partial => ("~", "partial install"),
+                FileStatus::UpdateAvail => ("↑", "update available"),
+                FileStatus::UpToDate => ("✓", "up-to-date"),
+                FileStatus::NotInstalled => unreachable!(),
+            };
+            Some(AppLifecycleStatus {
+                category: category.to_string(),
+                detail_label: category.to_string(),
+                sym,
+                status_text,
+                file_status: status,
+                dest: None,
+            })
+        })
+        .collect()
+}
+
 fn sorted_names(mut names: Vec<String>) -> Vec<String> {
     names.sort_by(|left, right| {
         left.to_lowercase()
@@ -414,11 +597,13 @@ mod tests {
 
     fn shell_row(status_text: &'static str, is_installed: bool) -> ShellRow {
         ShellRow {
+            category: "proxy".to_string(),
             symbol: String::new(),
             label: "proxy/setproxy".to_string(),
             status_sym: "~",
             status_text,
             is_installed,
+            changes: Vec::new(),
         }
     }
 
@@ -445,6 +630,42 @@ mod tests {
         assert_eq!(grouped.len(), 2);
         assert_eq!(grouped["clash-verge"].len(), 2);
         assert_eq!(grouped["surge"].len(), 1);
+    }
+
+    #[test]
+    fn update_rows_collapse_shell_commands_to_their_category() {
+        let first = shell_row("update available", true);
+        let mut second = shell_row("update available", true);
+        second.label = "proxy/usetproxy".to_string();
+
+        assert_eq!(shell_categories(&[&first, &second]), vec!["proxy"]);
+    }
+
+    #[test]
+    fn default_shell_status_collapses_commands_and_reports_partial_install() {
+        let mut installed = shell_row("up-to-date", true);
+        installed.status_sym = "✓";
+        let mut missing = shell_row("not installed", false);
+        missing.label = "proxy/usetproxy".to_string();
+        missing.status_sym = "✗";
+
+        let statuses = shell_category_statuses(&[&installed, &missing]);
+
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].category, "proxy");
+        assert_eq!(statuses[0].status_text, "partial install");
+    }
+
+    #[test]
+    fn default_app_status_collapses_files_and_reports_partial_install() {
+        let installed = app_row("surge", FileStatus::UpToDate);
+        let missing = app_row("surge", FileStatus::NotInstalled);
+
+        let statuses = app_category_statuses(&[&installed, &missing]);
+
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].category, "surge");
+        assert_eq!(statuses[0].file_status, FileStatus::Partial);
     }
 
     #[test]

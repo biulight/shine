@@ -195,9 +195,10 @@ shine/
 │       │   │                 # mod declarations + re-exports (handle_*, ShellUpgradeReport)
 │       │   ├── deployment.rs # External snapshot/live deployment, shell-manifest.toml,
 │       │   │                 # category materialization, constrained lazy live transforms
-│       │   ├── install.rs    # handle_install/handle_upgrade_installed/handle_completion_install/
+│       │   ├── install.rs    # category or category/command handle_install,
+│       │                     # handle_upgrade_installed/handle_completion_install/
 │       │   │                 # handle_init_template, script/link-spec building
-│       │   ├── uninstall.rs  # handle_uninstall
+│       │   ├── uninstall.rs  # category or category/command handle_uninstall
 │       │   ├── links.rs      # Bin-symlink spec building, link-conflict detail/printing
 │       │   ├── report.rs     # handle_list, ShellUpgradeReport, install/uninstall summary formatting
 │       │   ├── profile.rs    # Managed profile file/PATH/sentinel-block install+removal
@@ -207,6 +208,8 @@ shine/
 │       │   ├── mod.rs        # Module root: mod declarations + re-exports (handle_*, detect_os_id)
 │       │   ├── commands.rs   # handle_list/handle_info/handle_status/handle_init orchestration,
 │       │   │                 # preset-manifest loading
+│       │   ├── bootstrap.rs  # standard read-only detection + fixed Homebrew/APT/Winget
+│       │   │                 # ensure-present providers and per-item script executor
 │       │   ├── managed.rs    # Managed-item command family: SysAction, handle_apply/
 │       │   │                 # handle_uninstall/handle_upgrade_managed, managed_updates,
 │       │   │                 # run_managed (converge/remove a managed sys resource)
@@ -218,10 +221,12 @@ shine/
 │       │   ├── manifest.rs   # Preset loading, parsing, and validation
 │       │   ├── profile.rs    # Sys-profile install: loader install, three-way merge
 │       │   │                 # (fallback + git merge-file), conflict markers
+│       │   ├── profile_compose.rs # Deterministic base + enabled item integration composer
+│       │   ├── profile_commands.rs # `sys profile enable/disable` activation handlers
 │       │   ├── profile_blocks.rs # Shell-profile sentinel blocks: per-phase sentinel
 │       │   │                 # insert/remove, BOM preservation, legacy-sentinel migration
 │       │   ├── selection.rs  # Item-selection resolution (profile vs interactive)
-│       │   ├── execution.rs  # Running sys items, parsing script output, run reports
+│       │   ├── execution.rs  # Bootstrap reporting, proxy environment, and outcome formatting
 │       │   ├── resources.rs  # SystemDriver trait, receipts, BuiltinDriver glue (dispatches
 │       │   │                 # to sys/drivers/*)
 │       │   └── drivers/
@@ -322,9 +327,9 @@ shine/
     │   ├── starship/   starship.toml  (shine-dest: ~/.config/starship.toml; no shine.toml, uses annotation instead)
     │   └── vim/        shine.toml, vimrc, _machine_specific.vim
     └── sys/
-        ├── macos/   init.sh, shine.toml
-        ├── ubuntu/  init.sh, shine.toml
-        └── windows/ init.ps1, shine.toml
+        ├── macos/   shine.toml, install/, profile/
+        ├── ubuntu/  shine.toml, install/, profile/
+        └── windows/ shine.toml, profile/
 ```
 
 ### Command routing
@@ -358,16 +363,19 @@ shine/
 
 ### Key data flow
 
-**Install** (`shine shell install [CATEGORY]`):
+**Install** (`shine shell install [CATEGORY[/COMMAND]]`):
 1. Embedded mode uses `presets::extract_prefix`; external snapshot mode materializes the
    effective category under `<shine_dir>/installed/shell/`; explicit live mode retains the
-   external source path.
-2. `bin_links::link_executables(bin_dir, sources)` — creates flat symlinks in `~/.shine/bin/`
+   external source path. Category sources are shared deployment material even for a command target.
+2. `bin_links::link_executables(bin_dir, sources)` creates flat entries in `~/.shine/bin/` only for
+   the selected commands; `shell-manifest.toml` records the same command-scoped activation.
 3. `shells::append_path_to_shell_config` — appends a sentinel-guarded `export PATH` block to `~/.zshrc` (or equivalent)
 
 **Uninstall**:
-1. `bin_links::unlink_managed` — removes only symlinks pointing into the managed presets dir
-2. `presets::remove_prefix` — removes only embedded-asset files (user files are never touched)
+1. `bin_links::unlink_managed` removes a category, while command targets remove only their selected
+   managed entry and manifest receipt; foreign entries are never touched.
+2. `presets::remove_prefix` removes only embedded-asset files after the last installed command no
+   longer needs the shared category material (user files are never touched).
 3. `shells::remove_path_from_shell_config` — removes the sentinel block; skipped on `--dry-run`
 
 ### Env variable substitution
@@ -518,18 +526,27 @@ side only — see step 8) rides on top of the macOS/Linux implementation.
 ### Sys preset flow (`shine sys bootstrap`)
 
 1. `sys::detect_os_id()` — reads `std::env::consts::OS`; on Linux reads `ID=` from `/etc/os-release`.
-2. `presets::extract_prefix("sys/<os_id>", presets_dir)` — unpacks `init.sh` + `shine.toml` for the detected OS.
-3. `sys::load_sys_preset` — parses `shine.toml` for `description`, `[[items]]`, `[profiles.*]`, and `default_profile`.
-4. In interactive mode: `dialoguer::MultiSelect` lets the user pick init items. Non-interactive mode requires `default_profile`.
-5. Calls `bash <presets_dir>/sys/<os>/init.sh <item_id>` once per selected item, then calls `bash <presets_dir>/sys/<os>/init.sh __shine_finalize` so shared shell/profile integration runs once.
+2. `presets::extract_prefix("sys/<os_id>", presets_dir)` materializes the detected OS preset.
+3. `sys::load_sys_preset` validates the v2 manifest, named selection profiles, detection/install
+   metadata, and item-owned shell integrations.
+4. `sys::selection` resolves ordered positional items, a named profile, or interactive/default
+   selection. Positional items and `--preset` are mutually exclusive; managed items are rejected.
+5. `sys::bootstrap` performs standard read-only detection and fixed Homebrew/APT/Winget install argv
+   (or one per-item script). Every init item declares both `detect` and `install`; there is no
+   platform dispatcher fallback.
+6. Successful items enable their integration state. `sys::profile_compose` renders base + enabled
+   item integrations once, and `sys::profile` reconciles them through the existing pre/post sentinels.
 
-`shine sys bootstrap --preset <PROFILE>` bypasses interactive selection. `--dry-run` prints the command and script content without executing. `--proxy` injects HTTP proxy env vars (`http_proxy`/`https_proxy`/`all_proxy` + uppercase = `http://$PROXY_HOST:$HTTP_PROXY_PORT`, `no_proxy` = `PROXY_NO_PROXY`, plus a shine-owned `SHINE_SYS_PROXY` = the same URL) into every init-script subprocess, built from the `[env]` preset proxy keys via `sys::execution::proxy_env_vars` — reusing the same values as the `proxy` shell preset so downloads route through the local proxy on locked-down networks. macOS/Ubuntu `curl`/`apt`/`brew`/`rustup` read the standard env vars directly. **winget ignores `http_proxy`/`https_proxy` env vars entirely**, so `presets/sys/windows/init.ps1` instead reads `SHINE_SYS_PROXY` and passes `winget install --proxy <url>`; that winget CLI option is disabled by default, so the script best-effort runs `winget settings --enable ProxyCommandLineOptions` (works only when elevated) and, on a nonzero winget exit, prints the one-time admin remediation. SOCKS5 is intentionally not injected (winget can't use it).
+`--dry-run` prints provider/script actions and persistent integration details without executing.
+`--proxy` injects the standard HTTP proxy env set and passes `--proxy` explicitly to Winget. External
+or overlay install scripts and executable profile code require `allow_sys_code = true`. Static
+detection, provider declarations, PATH, env, and aliases do not. See ADR 0028.
 
 Ubuntu ships three profiles (`presets/sys/ubuntu/shine.toml`): `recommended` (default,
 full interactive dev setup), `all` (recommended + zerotier/pnpm/mise/homebrew), and
 `minimal` — a lean headless CLI core (`neovim`, `fzf`, `bat`, `eza`, `zoxide`) intended for
 production-server bootstrapping via `shine sys bootstrap --preset minimal`. The `minimal` profile
-reuses existing items only, so adding it needed no `init.sh` change.
+reuses existing items only, so adding it needed no installer change.
 
 ### Personal tasks (`shine task` / `shine run`)
 
@@ -695,19 +712,37 @@ App categories may also declare `[artifact]\nscript = "build.sh"` (optionally `t
 
 ### Sys preset (OS init)
 
-1. Create `presets/sys/<os_id>/init.sh` — a bash script that accepts one item ID as `$1`; support `__shine_finalize` if the preset needs shared profile or shell integration.
-2. Create `presets/sys/<os_id>/shine.toml`:
+1. Create `presets/sys/<os_id>/shine.toml` with `version = 2`:
    ```toml
    description = "One-line description of this OS init preset."
    default_profile = "recommended"
+   version = 2
 
    [[items]]
    id = "neovim"
    label = "Neovim"
    description = "Install Neovim"
 
+   [items.detect]
+   kind = "command"
+   command = "nvim"
+   version_args = ["--version"]
+
+   [items.install]
+   kind = "package"
+   provider = "homebrew" # homebrew-cask, apt, or winget
+   package = "neovim"
+
    [profiles.recommended]
    items = ["neovim"]
    ```
-3. Emit compact status events from scripts with `printf 'SHINE_SYS_STATUS\t%s\t%s\n' "already-installed" "detail"`. Supported states are `installed`, `already-installed`, `skipped`, `updated`, `needs-action`, `completed`, and `failed`; other output is rendered as indented logs.
-4. `cargo build` re-embeds. Verify with `shine sys list` and `shine sys bootstrap --dry-run`.
+2. Detection is `command`, `path`, or `any`. Package providers are fixed ensure-present actions and
+   never upgrade. Complex installs use `[items.install] kind = "script"` with one item-local script,
+   normal exit status.
+3. Put OS-wide shell setup in `profile/base.pre.*` / `base.post.*`. Declare item integrations with
+   exactly one of `path`, `env`, `eval`, `source`, `aliases`, or `fragment`; complex integration lives
+   in `profile/<item>.*`. Named `[profiles.*]` tables select items only.
+4. Every init item must declare both `detect` and `install`. v1 manifests and unknown versions fail
+   before execution; do not add a platform dispatcher or status/update protocol.
+5. `cargo build` re-embeds. Verify with `shine sys list`, `shine sys info <ITEM>`, and
+   `shine sys bootstrap <ITEM> --dry-run`.

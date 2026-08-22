@@ -4,7 +4,7 @@ default-members = ["."]
 resolver = "2"
 
 [workspace.package]
-version = "1.4.0"
+version = "1.6.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Felix Jiang <biulight007@gmail.com>"]
@@ -16,7 +16,7 @@ anyhow = "1.0.102"
 directories = "6.0.0"
 toml = "1.1.2"
 toml_edit = "0.25.11"
-utils = { package = "shine-core", path = "utils", version = "1.4.0" }
+utils = { package = "shine-core", path = "utils", version = "1.6.0" }
 
 [package]
 name = "shine-cli"
@@ -24,11 +24,11 @@ version.workspace = true
 edition.workspace = true
 rust-version = "1.88"
 license.workspace = true
-description = "Cross-platform CLI for managed shell commands, app configs, and machine setup"
+description = "Give personal automation a reviewable lifecycle"
 readme = "README.md"
 repository = "https://github.com/biulight/shine"
 homepage = "https://github.com/biulight/shine"
-keywords = ["cli", "dotfiles", "configuration", "bootstrap", "shell"]
+keywords = ["cli", "environment", "configuration", "bootstrap", "shell"]
 categories = ["command-line-utilities", "config"]
 include = [
     "Cargo.toml",

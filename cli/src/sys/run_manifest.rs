@@ -28,8 +28,17 @@ pub(super) struct SysRunEntry {
     pub(super) updated_at: String,
     #[serde(default)]
     pub(super) managed: bool,
+    /// Whether this init item contributes its item-owned integrations to the
+    /// Rust-composed sys shell profile. Defaults true for legacy entries so a
+    /// preset migration does not silently deactivate previously bootstrapped tools.
+    #[serde(default = "default_profile_enabled")]
+    pub(super) profile_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) receipt: Option<SystemReceipt>,
+}
+
+fn default_profile_enabled() -> bool {
+    true
 }
 
 impl SysRunManifest {

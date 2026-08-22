@@ -11,9 +11,35 @@ use super::{
 
 pub(super) fn resolve_selection(
     manifest: &SysManifest,
+    requested: &[String],
     preset: Option<&str>,
     interactive: bool,
 ) -> Result<ResolvedSelection> {
+    if !requested.is_empty() {
+        if preset.is_some() {
+            bail!("explicit sys bootstrap items cannot be combined with `--preset`");
+        }
+        let mut seen = BTreeSet::new();
+        let mut item_ids = Vec::new();
+        for item_id in requested {
+            let item = manifest
+                .items
+                .iter()
+                .find(|item| item.id == *item_id)
+                .with_context(|| format!("unknown sys bootstrap item `{item_id}`"))?;
+            if item.mode == SysItemMode::Managed {
+                bail!("`{item_id}` is a managed system resource; use `shine sys apply {item_id}`");
+            }
+            if seen.insert(item_id.as_str()) {
+                item_ids.push(item_id.clone());
+            }
+        }
+        return Ok(ResolvedSelection {
+            item_ids,
+            source: SelectionSource::Items,
+        });
+    }
+
     if let Some(profile_name) = preset {
         return Ok(ResolvedSelection {
             item_ids: profile_items(manifest, profile_name)?.to_vec(),

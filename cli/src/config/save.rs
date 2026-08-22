@@ -51,6 +51,9 @@ impl Config {
             };
             sparse.remove("schema_version");
             sparse.remove("last_cleared_schema_version");
+            // Executable sys-code permission is intentionally global-only. Never preserve or
+            // materialize it in a project configuration that could authorize its own presets.
+            sparse.remove("allow_sys_code");
             return Ok(sparse);
         }
 
@@ -346,6 +349,21 @@ mod tests {
         let content = fs::read_to_string(&config.config_path).await.unwrap();
         let loaded: Config = toml::from_str(&content).unwrap();
         assert!(loaded.allow_app_hooks);
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn allow_sys_code_round_trips_through_save() {
+        let dir = make_temp_dir().await;
+        let mut config = config_in(&dir);
+        config.allow_sys_code = true;
+
+        config.save().await.unwrap();
+
+        let content = fs::read_to_string(&config.config_path).await.unwrap();
+        let loaded: Config = toml::from_str(&content).unwrap();
+        assert!(loaded.allow_sys_code);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

@@ -71,5 +71,6 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 ## Preset authoring
 
 Follow `AGENTS.md` § "Adding a new preset category". Key rules: prefer `shine.toml` metadata over
-legacy `shine-dest:` annotations; declare `transforms` in order; sys scripts report progress via
-`SHINE_SYS_STATUS` tab-separated events.
+legacy `shine-dest:` annotations and declare transforms in order. Sys manifests declare `version =
+2`; every init item uses standard detection/provider metadata or one item-local script with a
+normal exit code. Do not add platform-wide dispatch or status/update wire protocols.

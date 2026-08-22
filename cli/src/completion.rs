@@ -23,14 +23,13 @@ pub fn generate_registration(shell: CompletionShell) {
 
 pub fn command() -> clap::Command {
     let preset_targets = ArgValueCandidates::new(preset_target_candidates);
-    let shell_categories = ArgValueCandidates::new(shell_category_candidates);
+    let shell_lifecycle_targets = ArgValueCandidates::new(shell_lifecycle_candidates);
     let shell_targets = ArgValueCandidates::new(shell_info_candidates);
     let app_categories = ArgValueCandidates::new(app_category_candidates);
     let app_build_categories = ArgValueCandidates::new(app_build_candidates);
     let app_unbuild_categories = ArgValueCandidates::new(app_unbuild_candidates);
     let app_refresh_categories = ArgValueCandidates::new(app_refresh_candidates);
     let sys_items = ArgValueCandidates::new(sys_item_candidates);
-    let sys_updates = ArgValueCandidates::new(sys_update_candidates);
     let resource_targets = ArgValueCandidates::new(resource_target_candidates);
     let upgrade_targets = ArgValueCandidates::new(upgrade_target_candidates);
     let installed_targets = ArgValueCandidates::new(installed_target_candidates);
@@ -58,10 +57,10 @@ pub fn command() -> clap::Command {
                 cmd.mut_arg("target", |arg| arg.add(shell_targets.clone()))
             })
             .mut_subcommand("install", |cmd| {
-                cmd.mut_arg("category", |arg| arg.add(shell_categories.clone()))
+                cmd.mut_arg("target", |arg| arg.add(shell_lifecycle_targets.clone()))
             })
             .mut_subcommand("uninstall", |cmd| {
-                cmd.mut_arg("category", |arg| arg.add(shell_categories.clone()))
+                cmd.mut_arg("target", |arg| arg.add(shell_lifecycle_targets.clone()))
             })
         })
         .mut_subcommand("app", |cmd| {
@@ -93,11 +92,19 @@ pub fn command() -> clap::Command {
             cmd.mut_subcommand("info", |cmd| {
                 cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
             })
+            .mut_subcommand("bootstrap", |cmd| {
+                cmd.mut_arg("items", |arg| arg.add(sys_items.clone()))
+            })
+            .mut_subcommand("profile", |cmd| {
+                cmd.mut_subcommand("enable", |cmd| {
+                    cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
+                })
+                .mut_subcommand("disable", |cmd| {
+                    cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
+                })
+            })
             .mut_subcommand("apply", |cmd| {
                 cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
-            })
-            .mut_subcommand("update", |cmd| {
-                cmd.mut_arg("item", |arg| arg.add(sys_updates.clone()))
             })
             .mut_subcommand("uninstall", |cmd| {
                 cmd.mut_arg("item", |arg| arg.add(sys_items.clone()))
@@ -149,11 +156,24 @@ fn preset_target_candidates() -> Vec<CompletionCandidate> {
         targets.insert(category.clone());
         targets.insert(format!("shell/{category}"));
     }
+    for (category, commands) in shell_command_names() {
+        for command in commands {
+            targets.insert(format!("shell/{category}/{command}"));
+        }
+    }
     completion_candidates(targets)
 }
 
-fn shell_category_candidates() -> Vec<CompletionCandidate> {
-    completion_candidates(category_names("shell"))
+fn shell_lifecycle_candidates() -> Vec<CompletionCandidate> {
+    let mut names = shell_category_names();
+    for (category, commands) in shell_command_names() {
+        names.extend(
+            commands
+                .into_iter()
+                .map(|command| format!("{category}/{command}")),
+        );
+    }
+    completion_candidates(names)
 }
 
 fn shell_info_candidates() -> Vec<CompletionCandidate> {
@@ -469,34 +489,6 @@ fn sys_item_names() -> BTreeSet<String> {
     names
 }
 
-fn sys_update_candidates() -> Vec<CompletionCandidate> {
-    #[derive(serde::Deserialize)]
-    struct Manifest {
-        #[serde(default)]
-        entries: Vec<Entry>,
-    }
-    #[derive(serde::Deserialize)]
-    struct Entry {
-        item_id: String,
-        #[serde(default)]
-        managed: bool,
-    }
-
-    let names = runtime_paths()
-        .and_then(|paths| std::fs::read_to_string(paths.shine_dir.join("sys-manifest.toml")).ok())
-        .and_then(|content| toml::from_str::<Manifest>(&content).ok())
-        .map(|manifest| {
-            manifest
-                .entries
-                .into_iter()
-                .filter(|entry| !entry.managed)
-                .map(|entry| entry.item_id)
-                .collect()
-        })
-        .unwrap_or_default();
-    completion_candidates(names)
-}
-
 fn task_name_candidates() -> Vec<CompletionCandidate> {
     #[derive(serde::Deserialize)]
     struct Manifest {
@@ -650,6 +642,13 @@ mod tests {
         assert!(complete_values(&["shine", "info", ""], 2).contains("sys/split-dns"));
         assert!(complete_values(&["shine", "info", ""], 2).contains("app/starship"));
         assert!(complete_values(&["shine", "install", ""], 2).contains("shell/proxy"));
+        assert!(
+            complete_values(&["shine", "install", ""], 2).contains("shell/utils/shine-env-export")
+        );
+        assert!(
+            complete_values(&["shine", "shell", "install", ""], 3)
+                .contains("utils/shine-env-export")
+        );
         let preset_copy = complete_values(&["shine", "preset", "copy", ""], 3);
         assert!(preset_copy.contains("app/surge"));
         assert!(preset_copy.contains("shell/proxy"));
@@ -684,12 +683,6 @@ mod tests {
             "[tasks.ship]\ncommand = [\"cargo\", \"publish\"]\n",
         )
         .unwrap();
-        std::fs::write(
-            dir.join("sys-manifest.toml"),
-            "[[entries]]\nitem_id = \"brew\"\n\n[[entries]]\nitem_id = \"split-dns\"\nmanaged = true\n",
-        )
-        .unwrap();
-
         unsafe {
             std::env::set_var("SHINE_CONFIG_DIR", &dir);
             std::env::remove_var("SHINE_PRESETS");
@@ -705,9 +698,9 @@ mod tests {
         assert!(shell_info.contains("custom-tool"));
         assert!(shell_info.contains("custom-shell/custom-tool"));
         assert!(complete_values(&["shine", "run", ""], 2).contains("ship"));
-        let sys_updates = complete_values(&["shine", "sys", "update", ""], 3);
-        assert!(sys_updates.contains("brew"));
-        assert!(!sys_updates.contains("split-dns"));
+        let sys_apply = complete_values(&["shine", "sys", "apply", ""], 3);
+        assert!(sys_apply.contains("custom-sys"));
+        assert!(!sys_apply.contains("split-dns"));
         assert!(
             !dir.join("config.toml").exists(),
             "completion must not initialize config files"

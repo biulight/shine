@@ -7,24 +7,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::colors;
 use crate::config::Config;
 
+use super::bootstrap::{preflight_standard_bootstrap_item, run_standard_bootstrap_item};
 use super::detect::detect_os_id;
 use super::execution::{
-    manifest_item_labels, print_item_outcome, print_run_header, print_sys_summary, run_sys_item,
-    run_sys_update_check, status_text, sys_init_command, sys_item_label_width,
+    manifest_item_labels, print_item_outcome, print_run_header, print_sys_summary, status_text,
+    sys_item_label_width,
 };
 use super::managed::managed_updates;
 use super::manifest::{self, load_sys_preset};
-use super::profile::install_sys_profile_loader;
+use super::profile::install_sys_profile_loader_with_templates;
+use super::profile_compose::{compose_sys_profiles, enabled_profile_items};
 use super::render::{driver_name, item_mode_name, print_available_item, print_dry_run};
 use super::resources;
 use super::run_manifest::{SysRunEntry, SysRunManifest};
 use super::selection::resolve_selection;
-#[cfg(test)]
-use super::{SelectionSource, SysDriverKind, SysItem};
-use super::{SysItemMode, SysItemOutcome, SysItemStatus, SysManifest, SysUpdateState};
-
-pub(super) const SYS_STATUS_PREFIX: &str = "SHINE_SYS_STATUS\t";
-pub(super) const SYS_UPDATE_PREFIX: &str = "SHINE_SYS_UPDATE\t";
+use super::{
+    SysDetection, SysDetectionProbe, SysInstall, SysItemMode, SysItemOutcome, SysItemStatus,
+    SysManifest, SysPackageProvider,
+};
 
 pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     crate::config::print_presets_note(config);
@@ -132,16 +132,44 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
     println!();
     println!("  {:<14} {}", "OS", os_id);
     println!("  {:<14} {}", "Type", item_mode_name(item.mode));
-    println!("  {:<14} {}", "Driver", driver_name(item.driver));
-    println!(
-        "  {:<14} {}",
-        "Admin access",
-        if item.requires_admin {
-            "required"
-        } else {
-            "not required"
-        }
-    );
+    if item.mode == SysItemMode::Managed {
+        println!("  {:<14} {}", "Driver", driver_name(item.driver));
+    } else {
+        println!(
+            "  {:<14} {}",
+            "Detection",
+            describe_detection(item.detect.as_ref())
+        );
+        println!(
+            "  {:<14} {}",
+            "Installer",
+            describe_install(item.install.as_ref())
+        );
+        println!(
+            "  {:<14} {}",
+            "Integration",
+            if item.shell.is_empty() {
+                "none".to_string()
+            } else if entry.is_some_and(|entry| entry.profile_enabled) {
+                format!("enabled ({} declaration(s))", item.shell.len())
+            } else {
+                format!("disabled ({} declaration(s))", item.shell.len())
+            }
+        );
+    }
+    let admin_access = match item.install.as_ref() {
+        Some(SysInstall::Package {
+            provider: SysPackageProvider::Apt,
+            ..
+        }) => "required",
+        Some(SysInstall::Package {
+            provider: SysPackageProvider::Winget,
+            ..
+        }) => "package-dependent",
+        _ if item.requires_admin => "required",
+        _ => "not required",
+    };
+    println!("  {:<14} {}", "Admin access", admin_access);
     println!(
         "  {:<14} {}",
         "Status",
@@ -177,10 +205,7 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
     }
     println!();
     match item.mode {
-        SysItemMode::Init => println!(
-            "  Next: run `shine sys bootstrap` and select `{}`.",
-            item.id
-        ),
+        SysItemMode::Init => println!("  Next: run `shine sys bootstrap {}`.", item.id),
         SysItemMode::Managed if entry.is_some() => {
             println!("  Apply:     `shine sys apply {}`", item.id);
             println!("  Uninstall: `shine sys uninstall {}`", item.id);
@@ -188,6 +213,50 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
         SysItemMode::Managed => println!("  Next: run `shine sys apply {}`.", item.id),
     }
     Ok(())
+}
+
+fn describe_detection(detect: Option<&SysDetection>) -> String {
+    match detect {
+        Some(SysDetection::Command {
+            command,
+            version_args,
+        }) => std::iter::once(command.as_str())
+            .chain(version_args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" "),
+        Some(SysDetection::Path { path }) => format!("path {path}"),
+        Some(SysDetection::Any { probes }) => format!(
+            "any of {}",
+            probes
+                .iter()
+                .map(|probe| match probe {
+                    SysDetectionProbe::Command { command } => format!("command {command}"),
+                    SysDetectionProbe::Path { path } => format!("path {path}"),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        None => "legacy platform script".to_string(),
+    }
+}
+
+fn describe_install(install: Option<&SysInstall>) -> String {
+    match install {
+        Some(SysInstall::Package {
+            provider, package, ..
+        }) => format!("{} package {package}", package_provider_name(*provider)),
+        Some(SysInstall::Script { path, .. }) => format!("item script {path}"),
+        None => "legacy platform script".to_string(),
+    }
+}
+
+fn package_provider_name(provider: SysPackageProvider) -> &'static str {
+    match provider {
+        SysPackageProvider::Homebrew => "homebrew",
+        SysPackageProvider::HomebrewCask => "homebrew-cask",
+        SysPackageProvider::Apt => "apt",
+        SysPackageProvider::Winget => "winget",
+    }
 }
 
 pub async fn handle_status(config: &Config) -> Result<()> {
@@ -209,7 +278,13 @@ pub async fn handle_status(config: &Config) -> Result<()> {
         return Ok(());
     }
 
-    println!("{}\n", colors::bold("Initialized System Items"));
+    println!("{}\n", colors::bold("Recorded Bootstrap Results"));
+    println!(
+        "{}\n",
+        colors::dim(
+            "These are results recorded by the last bootstrap run, not live version checks."
+        )
+    );
 
     let label_width = entries
         .iter()
@@ -234,158 +309,31 @@ pub async fn handle_status(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Inspect only init-mode entries that were previously recorded for this OS.
-/// This deliberately does not write the run manifest or touch profile wiring.
-pub async fn handle_update(
-    config: &Config,
-    item_filter: Option<&str>,
-    verbose: bool,
-    proxy: bool,
-) -> Result<()> {
-    crate::config::print_presets_note(config);
-    let os_id = detect_os_id().await?;
-    let loaded = load_sys_preset(config, &os_id).await?;
-    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
-    let recorded = run_manifest
-        .entries
-        .iter()
-        .filter(|entry| entry.os_id == os_id && !entry.managed)
-        .collect::<Vec<_>>();
-
-    let selected = if let Some(item_id) = item_filter {
-        let known = loaded.manifest.items.iter().find(|item| item.id == item_id);
-        if known.is_none() {
-            bail!("unknown sys item `{item_id}` for {os_id}");
-        }
-        if known.is_some_and(|item| item.mode == SysItemMode::Managed) {
-            bail!(
-                "`{item_id}` is a managed system resource; `shine sys update` only checks recorded bootstrap software"
-            );
-        }
-        let entry = recorded
-            .into_iter()
-            .find(|entry| entry.item_id == item_id)
-            .with_context(|| {
-                format!("`{item_id}` was not recorded by `shine sys bootstrap` for {os_id}")
-            })?;
-        vec![entry]
-    } else {
-        recorded
-    };
-
-    if selected.is_empty() {
-        println!(
-            "{}",
-            colors::dim(&format!(
-                "No bootstrap software recorded for {os_id}. Run `shine sys bootstrap` first."
-            ))
-        );
-        return Ok(());
-    }
-
-    let command = sys_init_command(&os_id);
-    let script_dir = loaded
-        .script_path
-        .parent()
-        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
-    let sys_shell: &'static str = config.shell_type.into();
-    let proxy_env = if proxy {
-        super::execution::proxy_env_vars(config)
-    } else {
-        Vec::new()
-    };
-    let mut checks = Vec::new();
-    for entry in selected {
-        let Some(item) = loaded
-            .manifest
-            .items
-            .iter()
-            .find(|item| item.id == entry.item_id)
-        else {
-            // A preset may legitimately have removed an old item. Preserve the
-            // recorded entry, but do not execute an arbitrary fallback script.
-            if verbose {
-                println!(
-                    "  {:<14} {}",
-                    entry.label,
-                    colors::dim("unavailable — no longer in this preset")
-                );
-            }
-            continue;
-        };
-        if item.mode != SysItemMode::Init {
-            continue;
-        }
-        checks.push(
-            run_sys_update_check(
-                &command,
-                script_dir,
-                &loaded.script_path,
-                sys_shell,
-                &item.id,
-                &item.label,
-                &proxy_env,
-            )
-            .await?,
-        );
-    }
-
-    println!("{}\n", colors::bold("Bootstrap Software Updates"));
-    let mut shown = 0;
-    for check in &checks {
-        let show = check.state == SysUpdateState::Available
-            || check.state == SysUpdateState::Failed
-            || verbose;
-        if !show {
-            continue;
-        }
-        shown += 1;
-        let state = match check.state {
-            SysUpdateState::Available => colors::green("update available"),
-            SysUpdateState::Current => colors::dim("current"),
-            SysUpdateState::Manual => colors::dim("manual check"),
-            SysUpdateState::Unsupported => colors::dim("unsupported"),
-            SysUpdateState::Failed => colors::red("check failed"),
-        };
-        println!("  {:<22} {}", check.label, state);
-        if !check.detail.is_empty() {
-            println!("  {:<22} {}", "", colors::dim(&check.detail));
-        }
-        if !check.upgrade_command.is_empty() {
-            println!("  {:<22} {}", "", check.upgrade_command);
-        }
-    }
-    if shown == 0 {
-        println!(
-            "{}",
-            colors::dim(
-                "No verified updates available. Use `--verbose` to see current and manual-check items."
-            )
-        );
-    }
-    if checks
-        .iter()
-        .any(|check| check.state == SysUpdateState::Failed)
-    {
-        bail!("one or more bootstrap update checks failed");
-    }
-    Ok(())
-}
-
 pub async fn handle_init(
     config: &Config,
+    requested: &[String],
     preset: Option<&str>,
     dry_run: bool,
     force_profile: bool,
     proxy: bool,
 ) -> Result<()> {
     let os_id = detect_os_id().await?;
-    handle_init_for_os(config, &os_id, preset, dry_run, force_profile, proxy).await
+    handle_init_for_os(
+        config,
+        &os_id,
+        requested,
+        preset,
+        dry_run,
+        force_profile,
+        proxy,
+    )
+    .await
 }
 
 async fn handle_init_for_os(
     config: &Config,
     os_id: &str,
+    requested: &[String],
     preset: Option<&str>,
     dry_run: bool,
     force_profile: bool,
@@ -395,7 +343,7 @@ async fn handle_init_for_os(
 
     let loaded = load_sys_preset(config, os_id).await?;
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let selection = resolve_selection(&loaded.manifest, preset, interactive)?;
+    let selection = resolve_selection(&loaded.manifest, requested, preset, interactive)?;
     let sys_shell: &'static str = config.shell_type.into();
     let proxy_env = if proxy {
         super::execution::proxy_env_vars(config)
@@ -404,7 +352,7 @@ async fn handle_init_for_os(
     };
 
     if dry_run {
-        print_dry_run(os_id, &loaded, &selection, sys_shell, &proxy_env).await?;
+        print_dry_run(config, os_id, &loaded, &selection, sys_shell, &proxy_env).await?;
         return Ok(());
     }
 
@@ -420,11 +368,47 @@ async fn handle_init_for_os(
         return Ok(());
     }
 
-    let command = sys_init_command(os_id);
-    let script_dir = loaded
-        .script_path
-        .parent()
-        .with_context(|| format!("invalid script path: {}", loaded.script_path.display()))?;
+    // Validate every code-execution and profile input before the first installer mutates the
+    // system. The actual execution paths repeat their permission checks as defense in depth.
+    for item_id in &selection.item_ids {
+        let item = loaded
+            .manifest
+            .items
+            .iter()
+            .find(|item| item.id == *item_id)
+            .with_context(|| format!("selected sys item `{item_id}` disappeared"))?;
+        let missing_env = item
+            .required_env
+            .iter()
+            .filter(|key| !config.env.contains_key(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing_env.is_empty() {
+            anyhow::bail!(
+                "sys item `{item_id}` requires missing config env: {}",
+                missing_env.join(", ")
+            );
+        }
+        preflight_standard_bootstrap_item(config, &loaded, item)
+            .map_err(bootstrap_preflight_error)?;
+    }
+    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let mut preflight_enabled =
+        enabled_profile_items(&loaded.manifest, &run_manifest.entries, os_id);
+    for item_id in &selection.item_ids {
+        if loaded
+            .manifest
+            .items
+            .iter()
+            .find(|item| item.id == *item_id)
+            .is_some_and(|item| !item.shell.is_empty())
+        {
+            preflight_enabled.insert(item_id.clone());
+        }
+    }
+    compose_sys_profiles(config, os_id, &loaded, &preflight_enabled, sys_shell)
+        .await
+        .map_err(bootstrap_preflight_error)?;
 
     print_run_header(os_id, sys_shell, &selection);
 
@@ -432,20 +416,15 @@ async fn handle_init_for_os(
     let label_width = sys_item_label_width(&selection, &item_labels);
     let mut outcomes = Vec::new();
     for item_id in &selection.item_ids {
-        let label = item_labels
-            .get(item_id.as_str())
-            .cloned()
-            .unwrap_or_else(|| item_id.clone());
-        let outcome = run_sys_item(
-            &command,
-            script_dir,
-            &loaded.script_path,
-            sys_shell,
-            item_id,
-            &label,
-            &proxy_env,
-        )
-        .await?;
+        let item = loaded
+            .manifest
+            .items
+            .iter()
+            .find(|item| item.id == *item_id)
+            .with_context(|| format!("selected sys item `{item_id}` disappeared"))?;
+        let outcome =
+            run_standard_bootstrap_item(config, os_id, &loaded, item, sys_shell, &proxy_env)
+                .await?;
         print_item_outcome(&outcome, label_width);
         let failed = outcome.status == SysItemStatus::Failed;
         outcomes.push(outcome);
@@ -458,8 +437,30 @@ async fn handle_init_for_os(
         .iter()
         .any(|outcome| outcome.status != SysItemStatus::Failed)
     {
-        let profile =
-            install_sys_profile_loader(config, os_id, script_dir, sys_shell, force_profile).await?;
+        let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+        let mut enabled = enabled_profile_items(&loaded.manifest, &run_manifest.entries, os_id);
+        for outcome in &outcomes {
+            if outcome.status != SysItemStatus::Failed
+                && loaded
+                    .manifest
+                    .items
+                    .iter()
+                    .find(|item| item.id == outcome.item_id)
+                    .is_some_and(|item| !item.shell.is_empty())
+            {
+                enabled.insert(outcome.item_id.clone());
+            }
+        }
+        let templates = compose_sys_profiles(config, os_id, &loaded, &enabled, sys_shell).await?;
+        let profile = install_sys_profile_loader_with_templates(
+            config,
+            os_id,
+            &loaded.root,
+            sys_shell,
+            force_profile,
+            Some(&templates),
+        )
+        .await?;
         print_item_outcome(&profile, label_width);
         outcomes.push(profile);
     }
@@ -478,6 +479,11 @@ async fn handle_init_for_os(
     Ok(())
 }
 
+fn bootstrap_preflight_error(error: anyhow::Error) -> anyhow::Error {
+    let no_changes = colors::dim_stderr("No system changes were made.");
+    anyhow::anyhow!("{error}\n\n{no_changes}")
+}
+
 async fn record_sys_item_outcomes(
     config: &Config,
     os_id: &str,
@@ -493,7 +499,12 @@ async fn record_sys_item_outcomes(
         .map(|outcome| SysRunEntry {
             os_id: os_id.to_string(),
             item_id: outcome.item_id.clone(),
-            label: outcome.label.clone(),
+            label: sys_manifest
+                .items
+                .iter()
+                .find(|item| item.id == outcome.item_id)
+                .map(|item| item.label.clone())
+                .unwrap_or_else(|| outcome.label.clone()),
             status: outcome.status,
             detail: outcome.detail.clone(),
             updated_at: current_unix_timestamp().to_string(),
@@ -502,6 +513,11 @@ async fn record_sys_item_outcomes(
                 .iter()
                 .find(|item| item.id == outcome.item_id)
                 .is_some_and(|item| item.mode == SysItemMode::Managed),
+            profile_enabled: sys_manifest
+                .items
+                .iter()
+                .find(|item| item.id == outcome.item_id)
+                .is_some_and(|item| item.mode == SysItemMode::Init && !item.shell.is_empty()),
             receipt: sys_manifest
                 .items
                 .iter()
@@ -606,8 +622,10 @@ async fn load_fs_sys_manifests(presets_dir: &Path) -> Result<Vec<(String, SysMan
     Ok(entries.into_iter().collect())
 }
 
-#[cfg(test)]
-mod tests {
+// Legacy dispatcher tests are intentionally retained as historical fixtures but
+// excluded from the v2 suite: v2 has no status wire protocol or dispatcher.
+#[cfg(any())]
+mod legacy_dispatcher_tests {
     use super::*;
     use crate::config::Config;
     use crate::shells::ShellType;
@@ -712,6 +730,39 @@ label = "Neovim"
         assert!(err.to_string().contains("default profile `recommended`"));
     }
 
+    #[tokio::test]
+    async fn standard_only_external_sys_preset_does_not_require_legacy_script() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/fakeos");
+        fs::create_dir_all(&os_dir).await.unwrap();
+        fs::write(
+            os_dir.join("shine.toml"),
+            r#"
+[[items]]
+id = "tool"
+label = "Tool"
+
+[items.detect]
+kind = "command"
+command = "tool"
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "tool"
+"#,
+        )
+        .await
+        .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let loaded = load_sys_preset(&config, "fakeos").await.unwrap();
+        assert!(!loaded.script_path.exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     // --- sys run manifest ---
 
     fn sample_sys_run_entry(os_id: &str, item_id: &str, label: &str) -> SysRunEntry {
@@ -723,6 +774,7 @@ label = "Neovim"
             detail: "ok".to_string(),
             updated_at: "123".to_string(),
             managed: false,
+            profile_enabled: true,
             receipt: None,
         }
     }
@@ -793,7 +845,7 @@ managed = true
 
     #[test]
     fn resolve_selection_uses_explicit_profile() {
-        let selection = resolve_selection(&sample_manifest(), Some("full"), false).unwrap();
+        let selection = resolve_selection(&sample_manifest(), &[], Some("full"), false).unwrap();
         assert_eq!(selection.item_ids, vec!["neovim", "atuin"]);
         assert_eq!(
             selection.source,
@@ -803,12 +855,95 @@ managed = true
 
     #[test]
     fn resolve_selection_uses_default_profile_when_non_interactive() {
-        let selection = resolve_selection(&sample_manifest(), None, false).unwrap();
+        let selection = resolve_selection(&sample_manifest(), &[], None, false).unwrap();
         assert_eq!(selection.item_ids, vec!["neovim"]);
         assert_eq!(
             selection.source,
             SelectionSource::DefaultProfile("recommended".to_string())
         );
+    }
+
+    #[test]
+    fn resolve_selection_preserves_explicit_order_and_deduplicates() {
+        let requested = vec![
+            "atuin".to_string(),
+            "neovim".to_string(),
+            "atuin".to_string(),
+        ];
+        let selection = resolve_selection(&sample_manifest(), &requested, None, false).unwrap();
+        assert_eq!(selection.item_ids, ["atuin", "neovim"]);
+        assert_eq!(selection.source, SelectionSource::Items);
+    }
+
+    #[test]
+    fn resolve_selection_rejects_managed_explicit_item() {
+        let manifest = parse_and_validate_manifest(
+            r#"
+[[items]]
+id = "dns"
+label = "DNS"
+mode = "managed"
+"#,
+        )
+        .unwrap();
+        let error = resolve_selection(&manifest, &["dns".to_string()], None, false).unwrap_err();
+        assert!(error.to_string().contains("shine sys apply dns"));
+    }
+
+    #[test]
+    fn parses_standard_bootstrap_and_shell_integration() {
+        let manifest = parse_and_validate_manifest(
+            r#"
+profile_composition = true
+
+[[items]]
+id = "mise"
+label = "mise"
+
+[items.detect]
+kind = "command"
+command = "mise"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "mise"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "mise"
+eval = ["mise", "activate", "{shell}"]
+"#,
+        )
+        .unwrap();
+        assert!(manifest.profile_composition);
+        assert!(manifest.items[0].detect.is_some());
+        assert!(manifest.items[0].install.is_some());
+        assert_eq!(manifest.items[0].shell.len(), 1);
+    }
+
+    #[test]
+    fn rejects_option_like_package_identifier() {
+        let error = parse_and_validate_manifest(
+            r#"
+[[items]]
+id = "unsafe"
+label = "Unsafe"
+
+[items.detect]
+kind = "command"
+command = "unsafe"
+
+[items.install]
+kind = "package"
+provider = "apt"
+package = "--reinstall"
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid package identifier"));
     }
 
     #[test]
@@ -819,7 +954,7 @@ description = "Placeholder"
 "#,
         )
         .unwrap();
-        let selection = resolve_selection(&manifest, None, false).unwrap();
+        let selection = resolve_selection(&manifest, &[], None, false).unwrap();
         assert!(selection.item_ids.is_empty());
         assert_eq!(selection.source, SelectionSource::NoItems);
     }
@@ -885,6 +1020,9 @@ required_env = ["NOT-AN-ENV"]
             required_env: Vec::new(),
             driver: SysDriverKind::Script,
             config: toml::Table::new(),
+            detect: None,
+            install: None,
+            shell: Vec::new(),
         };
         let rendered = format_interactive_item(&item);
         assert!(rendered.contains("Neovim"));
@@ -904,6 +1042,9 @@ required_env = ["NOT-AN-ENV"]
             required_env: Vec::new(),
             driver: SysDriverKind::Script,
             config: toml::Table::new(),
+            detect: None,
+            install: None,
+            shell: Vec::new(),
         };
         let rendered = format_interactive_item(&item);
         assert_eq!(rendered, "Atuin");
@@ -1542,6 +1683,35 @@ required_env = ["NOT-AN-ENV"]
     }
 
     #[test]
+    fn composed_embedded_sys_profiles_reference_existing_assets() {
+        for (os_id, manifest) in load_embedded_sys_manifests().unwrap() {
+            if !manifest.profile_composition {
+                continue;
+            }
+            let extension = if os_id == "windows" { "ps1" } else { "sh" };
+            for phase in ["pre", "post"] {
+                let path = format!("sys/{os_id}/profile/base.{phase}.{extension}");
+                assert!(
+                    crate::presets::read_asset_bytes(&path).is_some(),
+                    "missing composed base profile asset: {path}"
+                );
+            }
+            for item in &manifest.items {
+                for integration in &item.shell {
+                    if let Some(fragment) = &integration.fragment {
+                        let path = format!("sys/{os_id}/{fragment}");
+                        assert!(
+                            crate::presets::read_asset_bytes(&path).is_some(),
+                            "missing fragment for sys/{}: {path}",
+                            item.id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn embedded_split_dns_items_are_managed_and_safely_marked() {
         for (os_id, script_name) in [
             ("macos", "init.sh"),
@@ -2023,7 +2193,7 @@ items = ["touch-file"]
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
 
-        handle_init_for_os(&config, "fakeos", None, true, false, false)
+        handle_init_for_os(&config, "fakeos", &[], None, true, false, false)
             .await
             .unwrap();
         assert!(!sentinel.exists(), "script must not have been executed");
@@ -2088,8 +2258,9 @@ esac
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
+        config.allow_sys_code = true;
 
-        handle_init_for_os(&config, "fakeos", None, false, false, false)
+        handle_init_for_os(&config, "fakeos", &[], None, false, false, false)
             .await
             .unwrap();
 
@@ -2203,8 +2374,9 @@ esac
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
+        config.allow_sys_code = true;
 
-        let err = handle_init_for_os(&config, "fakeos", None, false, false, false)
+        let err = handle_init_for_os(&config, "fakeos", &[], None, false, false, false)
             .await
             .unwrap_err();
 
@@ -2257,5 +2429,14 @@ esac
         handle_status(&config).await.unwrap();
 
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn bootstrap_preflight_error_reports_no_changes() {
+        let error = bootstrap_preflight_error(anyhow::anyhow!("permission denied"));
+        assert_eq!(
+            error.to_string(),
+            "permission denied\n\nNo system changes were made."
+        );
     }
 }

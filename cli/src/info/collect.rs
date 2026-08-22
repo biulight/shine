@@ -4,7 +4,7 @@ use crate::env::EnvConfig;
 use crate::install_core::AppManifest;
 use crate::shells::metadata::ShellCategory;
 use crate::shells::metadata::load_active_categories as load_active_shells;
-use crate::status::{FileStatus, app_file_row_status, build_shell_rows};
+use crate::status::{FileStatus, UpdateChange, assess_app_file, build_shell_rows};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,6 +16,7 @@ pub(super) struct AppInfoFile {
     pub(super) destination: PathBuf,
     pub(super) status: FileStatus,
     pub(super) manifest_entry: Option<crate::install_core::AppEntry>,
+    pub(super) changes: Vec<UpdateChange>,
 }
 
 #[derive(Clone)]
@@ -28,6 +29,7 @@ pub(super) struct ShellInfoFile {
     pub(super) link_path: PathBuf,
     pub(super) link_target: Option<PathBuf>,
     pub(super) status: &'static str,
+    pub(super) changes: Vec<UpdateChange>,
 }
 
 pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile>> {
@@ -51,11 +53,11 @@ pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile
                 }
                 continue;
             }
-            let (Some(destination), status) =
-                app_file_row_status(config, &category, file, &manifest, env_map).await
-            else {
+            let assessment = assess_app_file(config, &category, file, &manifest, env_map).await;
+            let Some(destination) = assessment.destination else {
                 continue;
             };
+            let status = assessment.status;
             if status == FileStatus::NotInstalled {
                 continue;
             }
@@ -69,6 +71,7 @@ pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile
                 destination,
                 status,
                 manifest_entry,
+                changes: assessment.changes,
             });
         }
     }
@@ -83,6 +86,13 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
     let mut files = Vec::new();
     for category in categories {
         for file in &category.files {
+            let label = format!("{}/{}", category.name, file.command_name);
+            let Some(row) = shell_rows.iter().find(|row| row.label == label) else {
+                continue;
+            };
+            if !row.is_installed {
+                continue;
+            }
             let source_path = config.preset_path(
                 Path::new("shell")
                     .join(&category.name)
@@ -103,25 +113,7 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
                 std::ffi::OsStr::new(&file.command_name),
             );
 
-            let source_exists = installed_source_path.exists();
-            let rendered_exists = rendered_path.exists();
-            let (link_exists, link_target) = read_link_target(&link_path).await?;
-            if !source_exists && !rendered_exists && !link_exists {
-                continue;
-            }
-
-            let fallback_status = match (source_exists || rendered_exists, link_exists) {
-                (true, true) => "up-to-date",
-                (true, false) => "preset present, bin symlink missing",
-                (false, true) => "bin symlink present, script missing",
-                (false, false) => "not installed",
-            };
-            let label = format!("{}/{}", category.name, file.command_name);
-            let status = shell_rows
-                .iter()
-                .find(|row| row.label == label)
-                .map(|row| row.status_text)
-                .unwrap_or(fallback_status);
+            let link_target = read_link_target(&link_path).await?;
 
             files.push(ShellInfoFile {
                 category: category.clone(),
@@ -131,31 +123,33 @@ pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfo
                 rendered_path,
                 link_path,
                 link_target,
-                status,
+                status: row.status_text,
+                changes: row.changes.clone(),
             });
         }
     }
     Ok(files)
 }
 
-async fn read_link_target(path: &Path) -> Result<(bool, Option<PathBuf>)> {
+async fn read_link_target(path: &Path) -> Result<Option<PathBuf>> {
     let is_link = tokio::fs::symlink_metadata(path)
         .await
         .map(|meta| meta.file_type().is_symlink())
         .unwrap_or(false);
     if !is_link {
-        return Ok((path.exists(), None));
+        return Ok(None);
     }
     let target = tokio::fs::read_link(path)
         .await
         .with_context(|| format!("reading symlink: {}", path.display()))?;
-    Ok((true, Some(target)))
+    Ok(Some(target))
 }
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
     use super::*;
+    use crate::shells::handle_install;
+    use tokio::fs;
 
     #[cfg(windows)]
     #[tokio::test]
@@ -170,5 +164,37 @@ mod tests {
         assert!(files.iter().all(|file| file.category.name != "docker"));
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shell_info_excludes_uninstalled_snapshot_siblings() {
+        let dir = crate::test_support::make_temp_dir("shine-info-shell").await;
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("one.sh"), b"#!/bin/sh\necho one\n")
+            .await
+            .unwrap();
+        fs::write(category.join("two.sh"), b"#!/bin/sh\necho two\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        handle_install(&config, Some("custom/one"), false)
+            .await
+            .unwrap();
+
+        let files = collect_shell_files(&config).await.unwrap();
+        assert!(files.iter().any(|file| file.file.command_name == "one"));
+        assert!(files.iter().all(|file| file.file.command_name != "two"));
+
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 }

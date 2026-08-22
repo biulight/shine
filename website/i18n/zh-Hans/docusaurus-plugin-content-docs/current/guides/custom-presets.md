@@ -7,6 +7,67 @@ sidebar_position: 4
 
 少量个性化优先使用 overlay；需要完全维护一套预设时，再使用外部 `presets_dir`。
 
+两种模式的 fallback 规则不同：
+
+- 使用内置基础来源时，overlay 覆盖同路径内容，其余路径继续来自二进制内嵌预设；
+- 完整外部 `presets_dir` 是 App 与 Shell 类别的权威来源，缺少的内容不会悄悄从二进制补齐。
+
+Shine 会输出 `Preset Source`、可选的 `Presets Overlay`，以及外部 Shell 的部署模式，便于在解释
+`list`、`update` 或安装结果前确认当前模型。
+
+## 从来源文件夹到已安装能力
+
+任何能把预设文件夹放到机器上的工具或流程，都可以充当同步层。Shine 不依赖 Git，也不承担通用
+文件夹同步；它把选定源文件变成已安装能力：创建受管命令入口、解析本地值、默认保留已安装快照、
+报告待处理变化，并且只移除自己拥有的内容。
+
+例如，一个自定义 `shell/image-tools/` 类别可以提供三个个人图片命令：
+
+```toml
+description = "Personal image workflow commands."
+
+[[files]]
+source = "compress.ts"
+target = "img-compress"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_QUALITY"]
+
+[[files]]
+source = "resize.ts"
+target = "img-resize"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+
+[[files]]
+source = "convert.ts"
+target = "img-convert"
+runtime = "bun"
+platforms = ["unix", "windows"]
+```
+
+这段元数据只是机制示例，并非内置预设；类别中还需要包含三个对应源文件。这些文件可以使用
+[`Bun.Image`](https://bun.com/docs/runtime/image) 压缩、缩放和转换 JPEG、PNG、WebP 图片，无需
+ImageMagick、Sharp 或其它图片库。运行命令的每台机器都必须在 `PATH` 中自行安装 Bun 1.3.14
+或更高版本。Shine 不内置 Bun，Shine 仓库固定的 Bun 版本只是开发与测试基线。预设作者还应在
+启动时检测 `Bun.Image`，旧版 Bun 不具备该能力时给出明确的升级提示。
+
+源文件准备好后，Shine 会在它外面补上生命周期：
+
+```bash
+shine info shell/image-tools
+shine install shell/image-tools/img-compress
+shine info shell/image-tools --diff
+shine upgrade shell/image-tools
+shine shell uninstall image-tools/img-compress --dry-run
+```
+
+默认 snapshot 模式下，修改或同步来源文件夹不会悄悄改变已安装命令。`shine info --diff` 展示
+待处理的来源变化，`shine upgrade` 再显式应用。图片质量、最大尺寸等值保留在各台机器本地，只因
+对应命令明确声明需要它们才会注入。这就是“同步一个脚本文件”和“把脚本作为可复用个人能力运行”
+之间的边界。
+
 ## 使用 Overlay 覆盖少量文件
 
 Overlay 按相同相对路径覆盖基础预设，也可以增加新类别：
@@ -66,6 +127,10 @@ live 模式下，普通 Shell/Bun 源文件内容在下一次调用时直接生�
 调用前原子渲染；渲染失败时该次调用会中止，不会继续运行旧输出。变更 `target`、`runtime`、
 `transforms` 或 `env` 等入口元数据时，仍必须执行 `shine upgrade` 重建受管入口。要恢复默认行为，
 重新执行不带 `--live` 的 `shine preset link <PATH>`，或执行 `shine preset unlink`。
+
+如果移动了已关联的 overlay 或 live preset 目录，请关联新路径后运行 `shine update`。只要有效的
+相对文件集合与字节没有变化，snapshot 部署仍保持最新；live 部署则会显示旧、新来源路径，因为
+`shine upgrade` 必须重新指向受管命令入口。该来源迁移会与内容变化分开显示。
 
 也可以直接设置环境变量：
 
@@ -154,6 +219,57 @@ env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
 可选的 `env` 只适用于 Bun 入口。每项写成 `KEY` 或 `SOURCE=TARGET`；入口启动时会通过 `shine env run --no-workspace --with ...` 注入值，因此优先解密 `SOURCE_SECRET`，不存在时读取明文 `SOURCE`。声明 `env` 后，运行机器的 `PATH` 中还必须有 `shine`。不要在元数据中填写值或密文，只声明键名。
 
 后续支持的运行时会在本节逐项记录其支持值、文件类型、前提条件和限制。Python、Node 与 Deno 目前均不可配置为 `runtime`。
+
+## 编写系统 Bootstrap Item
+
+一个 sys 类别对应一个操作系统目录，例如 `sys/ubuntu/`。每个可执行 sys 预设都要声明
+`version = 2`，再用 detection 和固定 provider 描述普通的 ensure-present 软件：
+
+```toml
+version = 2
+
+[[items]]
+id = "mise"
+label = "mise"
+description = "Install mise without managing its versions."
+
+[items.detect]
+kind = "command"
+command = "mise"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew" # 也支持 homebrew-cask、apt 或 winget
+package = "mise"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "mise"
+eval = ["mise", "activate", "{shell}"]
+
+[profiles.recommended]
+items = ["mise"]
+```
+
+Detection 支持 `command`、`path`，以及由 command/path probes 组成的 `any`。包安装是固定的
+ensure-present 操作：Shine 负责 argv、提权、代理、超时、输出限制和安装后检测，但不会升级包。
+复杂 item 可使用 `[items.install] kind = "script", path = "install/<item>.sh"`；脚本只处理该
+item，并以普通 exit code 返回结果。每个 init item 都必须同时声明 `detect` 与 `install`，不会再回退到平台级 dispatcher。version 1 manifest 会在 detection 或 profile 写入前被拒绝；请参阅 [v2 迁移指南](sys-preset-v2-migration.md)。
+
+Shell integration 必须且只能声明 `path`、`env`、`eval`、`source`、`aliases` 或 `fragment` 之一。
+`profile/base.pre.sh` 与 `profile/base.post.sh` 只放操作系统公共内容；复杂的 item 逻辑放入
+`profile/<item>.sh`。phase、可选 priority、manifest 顺序和声明顺序共同决定稳定的组合顺序。
+命名 `[profiles.*]` 表只选择 bootstrap items，不定义 shell 内容，也不会禁用选择之外的集成。
+
+外部 sys 安装脚本和可执行 profile 内容（`eval`、`source`、fragment 与 base 文件）要求用户先审查
+来源并在全局配置中设置 `allow_sys_code = true`；项目配置不能授权自身。如果可执行 sys 代码在
+bootstrap 预检阶段被拦截，错误会指出可用的代码类型和路径、当前每一层外部 preset 来源以及全局
+配置路径，并分别给出“授予权限”和“继续阻止外部代码”两种操作；此时尚未运行任何安装器。静态
+detection、package metadata、PATH、env 和 aliases 无需该授权。使用
+`shine sys list`、`shine sys info <ITEM>` 和
+`shine sys bootstrap <ITEM> --dry-run` 完成验证。
 
 ## App 构建脚本运行时
 

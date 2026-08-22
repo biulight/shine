@@ -25,8 +25,9 @@ shine list
 shine info proxy
 ```
 
-If the source script exists but its command entry is missing, `shine list` does not report it as
-available. Rebuild managed files and entries with
+If a source script exists but its command entry is missing, `shine list` does not list that command
+as a separate lifecycle resource; a multi-command category may still appear as partial. Use
+`shine info shell/<CATEGORY>` for command-level details, then rebuild managed files and entries with
 `shine shell install <CATEGORY> --replace-managed`.
 
 ## Application configuration is reported as user-modified
@@ -44,7 +45,7 @@ preview the same command with `--dry-run` first.
 ## Shine is using an unexpected preset source
 
 External directories, project configuration, and environment variables can change the active
-source. Check the active source in command output and compare the precedence rules in the
+source. Check `Preset Source` and `Presets Overlay` in command output and compare the precedence rules in the
 [configuration reference](./reference/configuration.md).
 
 To isolate the check from existing configuration, use a separate directory:

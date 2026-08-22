@@ -5,14 +5,17 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 1.4.0. Use `--help` on any subcommand for the exact interface of the
+This page reflects Shine 1.6.0. Use `--help` on any subcommand for the exact interface of the
 installed version.
 
 ## 1.0 target rules
 
-Canonical targets are `app/<category>`, `shell/<category>`, and `sys/<item>`. Installation and
-uninstall also accept a bare category when it is unique across app and shell presets. Prefer complete
-targets in scripts and documentation to avoid future ambiguity.
+Canonical targets are `app/<category>`, `shell/<category>`,
+`shell/<category>/<command>`, and `sys/<item>`. Shell command targets are supported by install and
+uninstall; upgrade reconciles the commands already installed in their owning category. Installation
+and uninstall also accept a bare category when it is unique across app and shell presets. Bare shell
+command names are inspection-only. Prefer complete targets in scripts and documentation to avoid
+future ambiguity.
 
 ```bash
 shine list --available
@@ -58,8 +61,8 @@ directory temporarily.
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [CATEGORY] [--replace-managed]
-shine shell uninstall [CATEGORY] [--purge] [--dry-run]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--replace-managed]
+shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run]
 
 shine app list
 shine app info <CATEGORY>
@@ -93,17 +96,31 @@ shine completions <bash|zsh|powershell>
 - `update --refresh-release` bypasses the 24-hour cache. By default, `update` groups targets under
   the same Homebrew-style sections as `shine list`: interactive terminals use horizontal columns,
   while redirected output stays one target per line. It then prints the `shine upgrade` action once.
-  App files collapse to their category. `update --diff` switches to detailed vertical rows, expands
-  affected files, and shows available content changes.
-- A targeted update cannot combine with `--verbose` or `--refresh-release`.
+  App files and Shell commands collapse to their category. `update --diff` switches to detailed
+  vertical rows and expands affected files and commands. Structural changes such as source or
+  destination relocation, new files, deployment metadata, and command-entry refreshes are shown
+  field by field; a unified diff is
+  printed only when content changed. Targeted `update <TARGET>` uses the same details.
+  For structural-only updates, Shine identifies a missing or mismatched command entry and a missing
+  Shell manifest record separately, then prints `content: unchanged` instead of an empty diff.
+  A targeted `update <TARGET>` is already detailed, so adding `--diff` changes only an untargeted
+  update from category summaries to expanded rows.
+- Inline diffs require valid UTF-8 text without NUL bytes and are limited to 256 KiB per side.
+  Binary, invalid UTF-8, and larger content is summarized with byte counts instead of being dumped
+  to the terminal. `info --diff` uses the same protection.
+- A targeted update can accept `--verbose` for command-line compatibility, but targeted output is
+  already detailed, so the flag does not add more rows. It cannot combine with `--refresh-release`
+  because targeted checks do not perform a Shine release check.
 - `update/upgrade --pull` synchronizes Git-managed sources and reloads configuration first.
 - `upgrade --prune-stale` removes old managed app files no longer present in the source.
-- By default, `upgrade` prints each app category, Shell target, or managed-system item it actually
+- By default, `upgrade` prints each app category, Shell category, or managed-system item it actually
   updates and counts each user-facing target once. App rows include the number of changed files.
   `--verbose` expands app files and successful hook output, and also shows current/skipped items and
   Shell deployment details such as snapshots, templates, and Bin Links. Failures, conflicts,
   user-modified warnings, and blocked hooks remain visible without `--verbose`.
 - `shell info` and top-level `info` inspect uninstalled presets; `list --available` filters by kind.
+- Default list, update, and upgrade summaries use category-level lifecycle identities.
+  `info`, `--diff`, and verbose deployment sections retain file, command, link, and receipt details.
 
 ## System presets
 
@@ -111,14 +128,18 @@ shine completions <bash|zsh|powershell>
 shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
-shine sys update [ITEM] [--verbose] [--proxy]
-shine sys bootstrap [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
+shine sys bootstrap [ITEM]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
+shine sys profile enable <ITEM> [--dry-run]
+shine sys profile disable <ITEM> [--dry-run]
 shine sys apply [ITEM] [--dry-run]
 shine sys uninstall <ITEM> [--dry-run]
 ```
 
-`sys bootstrap` installs software and shell integration. `sys update` only checks recorded bootstrap
-software and never upgrades it. `shine upgrade sys/<ITEM>` converges an independent managed item.
+Positional items and `--preset` are mutually exclusive. `sys bootstrap` ensures only the selected
+software is present and enables its declared shell integration; rerunning it never upgrades the
+software. `sys profile enable/disable` changes only Shine-owned integration content. Use the
+software's own package manager or upstream tool for upgrades; `shine upgrade sys/<ITEM>` converges
+an independent managed item.
 
 ## Preset sources and customization
 
@@ -147,6 +168,7 @@ shine env get <KEY>
 shine env delete <KEY> [--force]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
+shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
 shine env broker describe [--workspace <FILE>] --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
 shine env broker policy <add|update> --name <NAME> --ssh-target <TARGET> [--project <PROJECT>] --workspace <FILE> [--remote-workspace <REMOTE_FILE>] --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
 shine env broker policy diff <NAME> --workspace <FILE> --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
@@ -168,9 +190,11 @@ shine env secret identity list
 
 `--with` is repeatable and accepts `KEY=ALIAS`. `--no-workspace` uses explicit values and the process
 environment only and conflicts with `--workspace` and `--mode`. Workspace initialization currently
-requires `--from-dotenv` and supports `--dry-run`. Broker policy creation chooses one or more explicit
-`--release` keys or freezes every currently declared key with `--release-all-declared`; the forms are
-mutually exclusive. Touch ID identities are macOS-only and require `age-plugin-se`.
+requires `--from-dotenv` and supports `--dry-run`. Workspace export requires an explicit format,
+mode, and output path. It exports only resolved plain values unless `--include-secrets` is present;
+it never includes inherited process values. Broker policy creation chooses one or more explicit
+`--release` keys or freezes every currently declared key with `--release-all-declared`; the forms
+are mutually exclusive. Touch ID identities are macOS-only and require `age-plugin-se`.
 
 For broker policies, `--project` stores a human-readable project label. `--remote-workspace`
 requires remote requests to report that exact absolute workspace path in addition to matching the
@@ -227,5 +251,5 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-Stable `shine --version` output is `shine 1.4.0 (<commit> <date>)`; preview builds use a label such as
-`1.4.0-preview`.
+Stable `shine --version` output is `shine 1.6.0 (<commit> <date>)`; preview builds use a label such as
+`1.6.0-preview`.

@@ -293,6 +293,7 @@ mod tests {
             destination: PathBuf::from(dest),
             status: FileStatus::UpToDate,
             manifest_entry: None,
+            changes: Vec::new(),
         }
     }
 
@@ -319,6 +320,7 @@ mod tests {
             link_path: PathBuf::from(format!("/tmp/bin/{command}")),
             link_target: None,
             status: "up-to-date",
+            changes: Vec::new(),
         }
     }
 

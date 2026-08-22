@@ -3,6 +3,73 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-22 — Bootstrap sudo prompts lost their owning item
+
+- **Symptom**: `shine sys bootstrap` could show a sudo password prompt without identifying which
+  selected software caused it.
+- **Root cause**: installer output is buffered until completion, including output from install
+  scripts that invoke `sudo` themselves.
+- **Fix**: announce each missing item from the bootstrap runner before starting its installer.
+- **Rule**: a bootstrap action must identify its owning item before any authorization interaction;
+  do not rely on installer output that the runner buffers until completion.
+
+## 2026-08-21 — External-code errors hid the active trust boundary
+
+- **Symptom**: `shine sys bootstrap` reported external profile or legacy bootstrap code without
+  explaining which external preset layers created the trust boundary, which file would execute, or
+  where the global-only permission had to be configured.
+- **Root cause**: the permission check correctly treated the overlay as an external trust boundary,
+  but its one-line diagnostic described only the blocked item and flag.
+- **Fix**: identify the executable integration kind, every active external preset layer, and the
+  resolved global config path; present permission and keep-blocked remediation as separate actions,
+  and state that bootstrap preflight made no system changes.
+- **Rule**: permission errors must name both the blocked capability and the active trust boundary,
+  then point to the configuration layer that can actually grant access. Alternative remediation
+  must remove every active trust boundary, not imply that removing only one of several layers is
+  sufficient.
+
+## 2026-08-20 — Redundant detail flags should remain composable
+
+- **Symptom**: `shine update <TARGET> --verbose` failed during argument parsing even though the
+  target form was already detailed and accepting the flag would not make the request ambiguous.
+- **Root cause**: the targeted update implementation intentionally bypassed the global verbose
+  listing, and that internal no-op was exposed as a Clap argument conflict.
+- **Fix**: accept `--verbose` with a target as a compatibility no-op while retaining the meaningful
+  conflict between targeted checks and `--refresh-release`.
+- **Rule**: when a shared CLI option is redundant in a more specific mode, accept it if its meaning
+  is already satisfied; reserve argument conflicts for combinations with incompatible semantics.
+
+## 2026-08-20 — Shell source presence was mistaken for command installation
+
+- **Symptom**: `shine shell install utils/shine-env-export` was parsed as a nonexistent category,
+  completed successfully with `0 linked`, and could not express the user's intent to activate only
+  one independent command from `utils`.
+- **Root cause**: lifecycle parsing stopped at categories, while status treated extracted source
+  files and full external snapshots as installation evidence even though the manifest and launchers
+  were already command-granular.
+- **Fix**: accept explicit `category/command` install and uninstall targets, update manifest entries
+  incrementally at that scope, treat category source material as a shared cache rather than an
+  activation receipt, filter info through command installation status, and retain shared rendered
+  files until the final referencing command is uninstalled.
+- **Rule**: when deployment material is broader than the user-selected lifecycle unit, installed
+  state must come from the unit's receipt or managed entry—not incidental source presence.
+
+## 2026-08-20 — Structural preset updates were rendered as content replacements
+
+- **Symptom**: renaming a live overlay root, for example `shineOverlay` to `shineOverlayTest`,
+  correctly required command entries to be repointed but `shine update <TARGET>` presented the
+  change as a whole-file diff. New files and destination moves had the same misleading path.
+- **Root cause**: status collapsed content, manifest, path, and launcher differences into one
+  `UpdateAvail` value; targeted and `--diff` output then unconditionally invoked the text renderer.
+- **Fix**: retain structured update causes through status collection and render relocations and
+  deployment fields directly. Generate a unified diff only for an actual content change, and omit
+  inline output for binary, invalid UTF-8, NUL-containing, or over-256-KiB inputs. Keep command-entry
+  absence, command-entry mismatch, and missing manifest state distinct; for a structural-only update,
+  say explicitly that content is unchanged.
+- **Rule**: update availability and content difference are not synonyms. Preserve the reason for a
+  pending reconciliation step at the most actionable safe granularity, and never feed arbitrary
+  bytes or unbounded files to a terminal diff.
+
 ## 2026-08-20 — Refreshed Clash rules left browser connections on their old route
 
 - **Symptom**: after `shine app artifact apply clash-verge` refreshed every rule-provider, browser
@@ -27,7 +94,8 @@ Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was no
 - **Fix**: classify installable new files and destination moves as available updates, render default
   targets through the shared horizontal column presentation with one action hint, and reserve file
   destinations and successful hook details for `--diff` or `--verbose`. Keep failures, conflicts,
-  user-modified warnings, and permission blocks visible.
+  user-modified warnings, and permission blocks visible. Exclude manual-generator destination moves
+  because implicit upgrade intentionally preserves those manifest snapshots.
 - **Rule**: update discovery and upgrade execution must agree on the full pending change set and use
   the same user-selected target as their default reporting and counting unit.
 

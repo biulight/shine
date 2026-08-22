@@ -11,7 +11,7 @@ use commands::{
     EnvBrokerPolicySubcommand, EnvBrokerSubcommand, EnvCommands, EnvIdentitySubcommand,
     EnvProxySubcommand, EnvSecretSubcommand, EnvWorkspaceSubcommand, LocalCommands,
     OverlayCommands, PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands,
-    ShellCommands, StateCommands, SysCommands, TaskCommands, ThemeCommands,
+    ShellCommands, StateCommands, SysCommands, SysProfileCommands, TaskCommands, ThemeCommands,
 };
 #[cfg(test)]
 use commands::{
@@ -255,24 +255,24 @@ async fn run(cli: Cli) -> Result<()> {
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
             ShellCommands::Info { target } => Box::pin(shells::handle_info(&config, &target)).await,
             ShellCommands::Install {
-                category,
+                target,
                 replace_managed,
             } => {
                 Box::pin(shells::handle_install(
                     &config,
-                    category.as_deref(),
+                    target.as_deref(),
                     replace_managed,
                 ))
                 .await
             }
             ShellCommands::Uninstall {
-                category,
+                target,
                 purge,
                 dry_run,
             } => {
                 Box::pin(shells::handle_uninstall(
                     &config,
-                    category.as_deref(),
+                    target.as_deref(),
                     purge,
                     dry_run,
                 ))
@@ -307,6 +307,19 @@ async fn run(cli: Cli) -> Result<()> {
                         cmd.from_dotenv,
                         &cmd.mode,
                         &cmd.secret,
+                        cmd.force,
+                        cmd.dry_run,
+                    )
+                    .await
+                }
+                EnvWorkspaceSubcommand::Export(cmd) => {
+                    env::workspace::handle_export(
+                        &config,
+                        cmd.format,
+                        cmd.workspace.as_deref(),
+                        &cmd.mode,
+                        &cmd.output,
+                        cmd.include_secrets,
                         cmd.force,
                         cmd.dry_run,
                     )
@@ -467,12 +480,8 @@ async fn run(cli: Cli) -> Result<()> {
             SysCommands::List { all } => Box::pin(sys::handle_list(&config, all)).await,
             SysCommands::Info { item } => Box::pin(sys::handle_info(&config, &item)).await,
             SysCommands::Status => Box::pin(sys::handle_status(&config)).await,
-            SysCommands::Update {
-                item,
-                verbose,
-                proxy,
-            } => Box::pin(sys::handle_update(&config, item.as_deref(), verbose, proxy)).await,
             SysCommands::Bootstrap {
+                items,
                 preset,
                 dry_run,
                 force_profile,
@@ -480,6 +489,7 @@ async fn run(cli: Cli) -> Result<()> {
             } => {
                 Box::pin(sys::handle_init(
                     &config,
+                    &items,
                     preset.as_deref(),
                     dry_run,
                     force_profile,
@@ -487,6 +497,14 @@ async fn run(cli: Cli) -> Result<()> {
                 ))
                 .await
             }
+            SysCommands::Profile { command } => match command {
+                SysProfileCommands::Enable { item, dry_run } => {
+                    Box::pin(sys::handle_profile_enable(&config, &item, dry_run)).await
+                }
+                SysProfileCommands::Disable { item, dry_run } => {
+                    Box::pin(sys::handle_profile_disable(&config, &item, dry_run)).await
+                }
+            },
             SysCommands::Apply { item, dry_run } => {
                 Box::pin(sys::handle_apply(&config, item.as_deref(), dry_run)).await
             }
@@ -993,7 +1011,18 @@ mod tests {
             }) if target == "proxy/setproxy"
         ));
 
-        assert!(Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--verbose"]).is_err());
+        let cli = Cli::try_parse_from(["shine", "update", "utils/shine-theme-sync", "--verbose"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                target: Some(ref target),
+                pull: false,
+                diff: false,
+                verbose: true,
+                refresh_release: false
+            }) if target == "utils/shine-theme-sync"
+        ));
         assert!(
             Cli::try_parse_from(["shine", "update", "proxy/setproxy", "--refresh-release"])
                 .is_err()
@@ -1413,6 +1442,53 @@ mod tests {
                 && cmd.secret == ["DATABASE_URL"]
                 && cmd.dry_run
         ));
+    }
+
+    #[test]
+    fn cli_accepts_workspace_dotenv_export() {
+        let cli = Cli::try_parse_from([
+            "shine",
+            "env",
+            "workspace",
+            "export",
+            "--format",
+            "dotenv",
+            "--mode",
+            "production",
+            "--output",
+            ".env.production.local",
+            "--include-secrets",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Env {
+                command: EnvCommands::Workspace(commands::EnvWorkspaceCommand {
+                    command: EnvWorkspaceSubcommand::Export(cmd)
+                })
+            } if cmd.format == commands::EnvWorkspaceExportFormat::Dotenv
+                && cmd.mode == "production"
+                && cmd.output == std::path::Path::new(".env.production.local")
+                && cmd.include_secrets
+                && cmd.dry_run
+        ));
+    }
+
+    #[test]
+    fn cli_requires_workspace_export_format() {
+        let error = Cli::try_parse_from([
+            "shine",
+            "env",
+            "workspace",
+            "export",
+            "--mode",
+            "production",
+            "--output",
+            ".env.production.local",
+        ])
+        .unwrap_err();
+        assert!(error.to_string().contains("--format <FORMAT>"));
     }
 
     #[test]
@@ -1865,12 +1941,13 @@ mod tests {
             cli.command,
             Commands::Sys {
                 command: SysCommands::Bootstrap {
+                    items,
                     preset: None,
                     dry_run: false,
                     force_profile: false,
                     proxy: false
                 }
-            }
+            } if items.is_empty()
         ));
 
         let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "--dry-run"]).unwrap();
@@ -1878,12 +1955,13 @@ mod tests {
             cli.command,
             Commands::Sys {
                 command: SysCommands::Bootstrap {
+                    items,
                     preset: None,
                     dry_run: true,
                     force_profile: false,
                     proxy: false
                 }
-            }
+            } if items.is_empty()
         ));
 
         let cli =
@@ -1892,12 +1970,13 @@ mod tests {
             cli.command,
             Commands::Sys {
                 command: SysCommands::Bootstrap {
+                    items,
                     preset: Some(ref preset),
                     dry_run: false,
                     force_profile: false,
                     proxy: false
                 }
-            } if preset == "recommended"
+            } if items.is_empty() && preset == "recommended"
         ));
 
         let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "--force-profile"]).unwrap();
@@ -1905,12 +1984,13 @@ mod tests {
             cli.command,
             Commands::Sys {
                 command: SysCommands::Bootstrap {
+                    items,
                     preset: None,
                     dry_run: false,
                     force_profile: true,
                     proxy: false
                 }
-            }
+            } if items.is_empty()
         ));
 
         let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "--proxy"]).unwrap();
@@ -1918,12 +1998,13 @@ mod tests {
             cli.command,
             Commands::Sys {
                 command: SysCommands::Bootstrap {
+                    items,
                     preset: None,
                     dry_run: false,
                     force_profile: false,
                     proxy: true
                 }
-            }
+            } if items.is_empty()
         ));
 
         let cli = Cli::try_parse_from([
@@ -1939,12 +2020,54 @@ mod tests {
             cli.command,
             Commands::Sys {
                 command: SysCommands::Bootstrap {
+                    items,
                     preset: Some(ref preset),
                     dry_run: true,
                     force_profile: false,
                     proxy: false
                 }
-            } if preset == "recommended"
+            } if items.is_empty() && preset == "recommended"
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "sys", "bootstrap", "rust", "mise"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Bootstrap {
+                    items,
+                    preset: None,
+                    ..
+                }
+            } if items == ["rust", "mise"]
+        ));
+
+        assert!(
+            Cli::try_parse_from([
+                "shine",
+                "sys",
+                "bootstrap",
+                "mise",
+                "--preset",
+                "recommended",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cli_accepts_sys_profile_state_commands() {
+        let cli = Cli::try_parse_from(["shine", "sys", "profile", "disable", "mise", "--dry-run"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Profile {
+                    command: SysProfileCommands::Disable {
+                        ref item,
+                        dry_run: true
+                    }
+                }
+            } if item == "mise"
         ));
     }
 
@@ -1960,23 +2083,8 @@ mod tests {
     }
 
     #[test]
-    fn cli_accepts_sys_update_options() {
-        let cli = Cli::try_parse_from(["shine", "sys", "update"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Sys {
-                command: SysCommands::Update {
-                    item: None,
-                    verbose: false,
-                    proxy: false
-                }
-            }
-        ));
-        let cli = Cli::try_parse_from(["shine", "sys", "update", "neovim", "--verbose", "--proxy"])
-            .unwrap();
-        assert!(
-            matches!(cli.command, Commands::Sys { command: SysCommands::Update { item: Some(ref item), verbose: true, proxy: true } } if item == "neovim")
-        );
+    fn cli_rejects_removed_sys_update_command() {
+        assert!(Cli::try_parse_from(["shine", "sys", "update"]).is_err());
     }
 
     #[test]

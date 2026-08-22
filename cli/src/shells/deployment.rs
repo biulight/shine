@@ -70,6 +70,18 @@ impl ShellManifest {
     pub(crate) fn remove_category(&mut self, category: &str) {
         self.entries.retain(|entry| entry.category != category);
     }
+
+    pub(crate) fn remove_target(&mut self, category: &str, command: &str) {
+        self.entries
+            .retain(|entry| entry.category != category || entry.command != command);
+    }
+
+    fn replace_targets(&mut self, targets: &BTreeSet<String>, entries: Vec<ShellManifestEntry>) {
+        self.entries
+            .retain(|entry| !targets.contains(&canonical_target(entry)));
+        self.entries.extend(entries);
+        self.entries.sort_by_key(canonical_target);
+    }
 }
 
 fn canonical_target(entry: &ShellManifestEntry) -> String {
@@ -337,9 +349,28 @@ async fn collect_files(root: &Path, current: &Path, files: &mut BTreeSet<PathBuf
     Ok(())
 }
 
-pub(crate) async fn update_manifest(config: &Config, categories: &[ShellCategory]) -> Result<()> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ManifestUpdateScope {
+    Categories,
+    Commands,
+}
+
+pub(crate) async fn update_manifest(
+    config: &Config,
+    categories: &[ShellCategory],
+    scope: ManifestUpdateScope,
+) -> Result<()> {
     let mut manifest = ShellManifest::load(config).await?;
     let selected: BTreeSet<String> = categories.iter().map(|cat| cat.name.clone()).collect();
+    let selected_targets = categories
+        .iter()
+        .flat_map(|category| {
+            category
+                .files
+                .iter()
+                .map(|file| format!("shell/{}/{}", category.name, file.command_name))
+        })
+        .collect::<BTreeSet<_>>();
     let mut entries = Vec::new();
     for category in categories {
         for file in &category.files {
@@ -400,7 +431,10 @@ pub(crate) async fn update_manifest(config: &Config, categories: &[ShellCategory
             });
         }
     }
-    manifest.replace_categories(&selected, entries);
+    match scope {
+        ManifestUpdateScope::Categories => manifest.replace_categories(&selected, entries),
+        ManifestUpdateScope::Commands => manifest.replace_targets(&selected_targets, entries),
+    }
     manifest.save(config).await
 }
 

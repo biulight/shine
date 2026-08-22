@@ -8,6 +8,73 @@ sidebar_position: 4
 Use an overlay for a small number of customizations. Use an external `presets_dir` when you need to
 maintain a complete preset collection.
 
+These modes have different fallback rules:
+
+- with the built-in base, an overlay replaces matching paths and every unmatched path still comes
+  from the embedded preset;
+- a full external `presets_dir` is authoritative for app and shell categories. Missing content is
+  not silently borrowed from the binary.
+
+Shine prints `Preset Source`, optional `Presets Overlay`, and external shell deployment mode so you
+can tell which model is active before interpreting `list`, `update`, or install output.
+
+## From source folders to installed capabilities
+
+Any tool or process that places a preset folder on a machine can be the synchronization layer.
+Shine does not require Git or provide general-purpose folder synchronization. It turns selected
+source files into installed capabilities: it creates managed command entries, resolves local values,
+keeps an installed snapshot by default, reports pending changes, and removes only what it owns.
+
+For example, a custom `shell/image-tools/` category could expose three personal image commands:
+
+```toml
+description = "Personal image workflow commands."
+
+[[files]]
+source = "compress.ts"
+target = "img-compress"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_QUALITY"]
+
+[[files]]
+source = "resize.ts"
+target = "img-resize"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+
+[[files]]
+source = "convert.ts"
+target = "img-convert"
+runtime = "bun"
+platforms = ["unix", "windows"]
+```
+
+This metadata is an illustration, not a built-in preset: the category must also contain the three
+source files. Those files can use [`Bun.Image`](https://bun.com/docs/runtime/image) to compress,
+resize, and convert JPEG, PNG, and WebP images without ImageMagick, Sharp, or another image library.
+Every machine that runs them needs an external Bun 1.3.14 or newer in `PATH`. Shine does not bundle
+Bun, and the Bun version pinned by the Shine repository is only its development and test baseline.
+Preset authors should detect `Bun.Image` at startup and print a clear upgrade hint when an older Bun
+is found.
+
+Once the source exists, Shine adds the lifecycle around it:
+
+```bash
+shine info shell/image-tools
+shine install shell/image-tools/img-compress
+shine info shell/image-tools --diff
+shine upgrade shell/image-tools
+shine shell uninstall image-tools/img-compress --dry-run
+```
+
+In the default snapshot mode, changing or synchronizing the source folder does not silently change
+the installed command. `shine info --diff` exposes the pending source change, and `shine upgrade`
+applies it explicitly. Values such as image quality or maximum dimensions remain local to each
+machine and are injected only because the corresponding command declares them. This is the boundary
+between synchronizing a script file and operating it as a reusable personal capability.
+
 ## Override selected files with an overlay
 
 An overlay replaces base-preset files at the same relative path and can add new categories:
@@ -79,6 +146,11 @@ In live mode, ordinary shell and Bun source changes take effect on the next invo
 than executing stale output. Changes to entry metadata such as `target`, `runtime`, `transforms`, or
 `env` still require `shine upgrade` to rebuild the managed entry. Restore snapshot mode by running
 `shine preset link <PATH>` without `--live`, or use `shine preset unlink`.
+
+If a linked overlay or live preset directory is moved, link the new path and run `shine update`.
+Snapshot deployments stay current when their effective relative files and bytes are unchanged.
+Live deployments report the old and new source paths because `shine upgrade` must repoint their
+managed command entries; this relocation is shown separately from content changes.
 
 You can also select the source through an environment variable:
 
@@ -192,6 +264,62 @@ names in metadata—never values or ciphertext.
 
 Future runtimes will be documented here with their values, file types, prerequisites, and limits.
 Python, Node, and Deno are not currently valid `runtime` values.
+
+## Author a system bootstrap item
+
+A sys category is one OS directory such as `sys/ubuntu/`. Every executable sys preset declares
+`version = 2`, then describes ordinary ensure-present software with detection and a fixed provider:
+
+```toml
+version = 2
+
+[[items]]
+id = "mise"
+label = "mise"
+description = "Install mise without managing its versions."
+
+[items.detect]
+kind = "command"
+command = "mise"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew" # homebrew-cask, apt, or winget are also supported
+package = "mise"
+
+[[items.shell]]
+shells = ["bash", "zsh"]
+phase = "post"
+when_command = "mise"
+eval = ["mise", "activate", "{shell}"]
+
+[profiles.recommended]
+items = ["mise"]
+```
+
+Detection supports `command`, `path`, and `any` command/path probes. Package installs are fixed
+ensure-present actions: Shine owns argv, elevation, proxy handling, timeout, output limits, and the
+post-install detection, but never upgrades the package. A complex item may use
+`[items.install] kind = "script", path = "install/<item>.sh"`; the script handles only that item,
+returns a normal exit code. Every init item must declare both `detect` and `install`; there is no
+platform-wide dispatcher fallback. Version 1 manifests are rejected before detection or profile
+writes; see [the v2 migration guide](sys-preset-v2-migration.md).
+
+Shell integrations accept exactly one of `path`, `env`, `eval`, `source`, `aliases`, or `fragment`.
+Use `profile/base.pre.sh` and `profile/base.post.sh` only for OS-wide content; put complex item logic
+in `profile/<item>.sh`. Phase, optional `priority`, manifest order, and declaration order determine
+stable composition. Named `[profiles.*]` tables select bootstrap items; they do not define shell
+content or disable integrations outside the selection.
+
+External sys install scripts and executable profile content (`eval`, `source`, fragments, and base
+files) require the user to review the source and set `allow_sys_code = true` in the global config;
+the project config cannot authorize itself. If executable sys code is blocked during bootstrap
+preflight, the error identifies the code kind and path when available, each active external preset
+layer, and the global config path. It presents separate actions to grant permission or keep external
+code blocked; no installer has run yet. Static detection, package metadata, PATH, env, and aliases
+remain available without that opt-in. Validate with
+`shine sys list`, `shine sys info <ITEM>`, and `shine sys bootstrap <ITEM> --dry-run`.
 
 ## Application artifact runtimes
 

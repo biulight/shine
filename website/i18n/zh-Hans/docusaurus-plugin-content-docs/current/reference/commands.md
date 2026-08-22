@@ -5,11 +5,15 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 1.4.0。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
+本页适用于 Shine 1.6.0。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
 
 ## 1.0 target 规则
 
-日常命令使用 `app/<category>`、`shell/<category>` 和 `sys/<item>` 作为规范 target。名称在 app 与 shell 间唯一时，安装和卸载也接受裸类别名；脚本和文档中建议始终写完整 target，避免以后新增同名类别后产生歧义。
+日常命令使用 `app/<category>`、`shell/<category>`、`shell/<category>/<command>` 和
+`sys/<item>` 作为规范 target。install 与 uninstall 支持 Shell 命令 target；upgrade 则在所属
+类别内协调已经安装的命令。名称在 app 与 shell 间唯一时，安装和卸载也接受裸类别名；裸
+Shell 命令名只用于查看。脚本和文档中建议始终写完整 target，避免以后新增同名类别后产生
+歧义。
 
 ```bash
 shine list --available
@@ -52,8 +56,8 @@ shine upgrade app/starship
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [CATEGORY] [--replace-managed]
-shine shell uninstall [CATEGORY] [--purge] [--dry-run]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--replace-managed]
+shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run]
 
 shine app list
 shine app info <CATEGORY>
@@ -82,16 +86,29 @@ shine completions <bash|zsh|powershell>
 
 - `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
   Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示
-  一次 `shine upgrade`。App 文件按类别折叠。`update --diff` 会改用纵向详细行，展开受
-  影响的文件并显示可用内容差异。
-- 为 `update` 指定 target 后不能同时使用 `--verbose` 或 `--refresh-release`。
+  一次 `shine upgrade`。App 文件与 Shell 命令都按类别折叠。`update --diff` 会改用纵向
+  详细行并展开受影响的文件与命令；来源或目标迁移、新文件、部署元数据和命令入口刷新等
+  结构性变更会逐字段显示，只有内容确实变化时才输出 unified diff。定向的
+  `update <TARGET>` 使用相同明细。
+  只有结构变化时，Shine 会分别指出缺失或不匹配的命令入口与缺失的 Shell manifest 记录，
+  并显示 `content: unchanged`，而不是输出空 diff。
+  定向的 `update <TARGET>` 本身已经显示详情，因此 `--diff` 只会把不带 target 的 update 从
+  类别摘要切换为展开行。
+- 内联 diff 要求两侧都是不含 NUL 字节的有效 UTF-8 文本，并且每侧不超过 256 KiB。
+  二进制、无效 UTF-8 或更大的内容只显示字节数摘要，不会整段写入终端；`info --diff`
+  使用相同保护。
+- 为 `update` 指定 target 后仍可同时传入 `--verbose` 以兼容通用命令行调用，但定向输出本身
+  已包含详细信息，因此不会增加更多条目。定向检查不会检查 Shine 版本，仍不能与
+  `--refresh-release` 组合使用。
 - `update/upgrade --pull` 会先同步 Git 管理的来源并重新加载配置。
 - `upgrade --prune-stale` 移除预设来源中已不存在的旧受管 app 文件。
-- `upgrade` 默认逐项显示实际更新的 app 类别、Shell target 或受管系统项，并按用户可见
+- `upgrade` 默认逐项显示实际更新的 App 类别、Shell 类别或受管系统项，并按用户可见
   target 各计数一次；app 行会附带变更文件数。`--verbose` 会展开 app 文件和成功 hook 的
   输出，还会显示已是最新或跳过的项目，以及 snapshot、template、Bin Link 等 Shell
   部署细节。失败、冲突、用户修改警告和被拦截的 hook 无需 `--verbose` 也会显示。
 - `shell info` 和顶层 `info` 可以检查尚未安装的预设；`list --available` 可按资源类型过滤。
+- 默认的 list、update 与 upgrade 摘要使用类别级生命周期身份；`info`、`--diff` 与
+  verbose 部署区段仍保留文件、命令、入口和 receipt 明细。
 
 ## 系统预设
 
@@ -99,13 +116,14 @@ shine completions <bash|zsh|powershell>
 shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
-shine sys update [ITEM] [--verbose] [--proxy]
-shine sys bootstrap [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
+shine sys bootstrap [ITEM]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
+shine sys profile enable <ITEM> [--dry-run]
+shine sys profile disable <ITEM> [--dry-run]
 shine sys apply [ITEM] [--dry-run]
 shine sys uninstall <ITEM> [--dry-run]
 ```
 
-`sys bootstrap` 安装软件和 shell 集成；`sys update` 只检查已记录的引导软件，不执行升级。独立受管系统项可通过 `shine upgrade sys/<ITEM>` 收敛到当前预设状态。
+位置参数 item 与 `--preset` 互斥。`sys bootstrap` 只确保选中的软件存在，并启用其声明的 shell 集成；重复运行不会升级软件。`sys profile enable/disable` 只修改 Shine 自己管理的集成内容。第三方软件升级请使用其包管理器或上游工具；独立受管系统项可通过 `shine upgrade sys/<ITEM>` 收敛到当前预设状态。
 
 ## 预设来源与定制
 
@@ -132,6 +150,7 @@ shine env get <KEY>
 shine env delete <KEY> [--force]
 shine env run [--workspace <FILE>] [--mode <MODE>] [--no-workspace] [--with <KEY[=ALIAS]>]... [--secret-broker [--secret <KEY[=ALIAS]>]...] -- <COMMAND>...
 shine env workspace init --from-dotenv [--mode <MODE>]... [--secret <KEY>]... [--force] [--dry-run]
+shine env workspace export --format dotenv [--workspace <FILE>] --mode <MODE> --output <FILE> [--include-secrets] [--force] [--dry-run]
 shine env broker describe [--workspace <FILE>] --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
 shine env broker policy <add|update> --name <NAME> --ssh-target <TARGET> [--project <PROJECT>] --workspace <FILE> [--remote-workspace <REMOTE_FILE>] --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
 shine env broker policy diff <NAME> --workspace <FILE> --mode <MODE> (--release <KEY>... | --release-all-declared) -- <COMMAND>...
@@ -151,7 +170,7 @@ shine env secret identity init [--touch-id] [--access-control <POLICY>] [-o <PAT
 shine env secret identity list
 ```
 
-`--with` 可重复使用，写成 `KEY=ALIAS` 可改变子进程看到的变量名。`--no-workspace` 只使用显式值和已有进程环境，不能与 `--workspace` 或 `--mode` 同时使用。`workspace init` 只接受 `--from-dotenv`，可先用 `--dry-run` 预览生成文件。broker 策略必须用一个或多个 `--release` 选择密钥，或用 `--release-all-declared` 固化当前环境源声明的全部密钥；二者不能组合。Touch ID identity 只适用于 macOS，并依赖 `age-plugin-se`。
+`--with` 可重复使用，写成 `KEY=ALIAS` 可改变子进程看到的变量名。`--no-workspace` 只使用显式值和已有进程环境，不能与 `--workspace` 或 `--mode` 同时使用。`workspace init` 只接受 `--from-dotenv`，可先用 `--dry-run` 预览生成文件。`workspace export` 必须显式指定格式、mode 和输出路径；默认只导出合并后生效的普通值，添加 `--include-secrets` 才会解密并包含 secret，且不会混入当前进程变量。broker 策略必须用一个或多个 `--release` 选择密钥，或用 `--release-all-declared` 固化当前环境源声明的全部密钥；二者不能组合。Touch ID identity 只适用于 macOS，并依赖 `age-plugin-se`。
 
 创建 broker 策略时，`--project` 用于保存便于识别的项目标签；`--remote-workspace` 要求远端
 请求除了匹配 workspace 内容和其它策略字段外，还必须报告这个完全一致的绝对 workspace 路径。
@@ -199,4 +218,4 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-`shine --version` 在稳定版显示 `shine 1.4.0 (<commit> <date>)`；preview 构建使用 `1.4.0-preview` 形式的版本标签。
+`shine --version` 在稳定版显示 `shine 1.6.0 (<commit> <date>)`；preview 构建使用 `1.6.0-preview` 形式的版本标签。

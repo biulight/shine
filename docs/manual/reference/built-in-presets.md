@@ -5,9 +5,12 @@ sidebar_position: 3
 
 # Built-in presets
 
-Shine compiles these presets into the CLI. They install or manage **configuration and development
-environment items**; they do not automatically install the corresponding desktop application.
-Inspect and preview before applying to confirm destinations, backups, and permissions:
+Shine compiles these presets into the CLI. They are usable defaults and copyable starting points,
+not an exhaustive catalog of every tool Shine can support. Shell and app presets manage declared
+commands and configuration; system presets initialize selected development tools or manage a small
+set of reversible system resources. App presets do not automatically install the corresponding
+desktop application. Inspect and preview before applying to confirm destinations, backups, and
+permissions:
 
 ```bash
 shine shell list
@@ -18,7 +21,7 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-This page reflects the built-in `presets/` directory in Shine 1.4.0. For another version, use
+This page reflects the built-in `presets/` directory in Shine 1.6.0. For another version, use
 `shine list --available` and `--help` as the authority.
 
 ## Shell presets
@@ -48,6 +51,11 @@ See [Manage shell presets](../guides/shell-presets.md) and
 
 ## Application presets
 
+Most categories install configuration files. Surge and Clash Verge Rev intentionally go further:
+their provider-specific artifact scripts assemble the application-specific include/editor files
+that users would otherwise have to wire by hand. The generic app lifecycle still owns the declared
+files; the artifact remains an explicit, category-specific capability.
+
 <div className="built-in-presets-app-table" aria-hidden="true" />
 
 | Category | Platform and destination | Managed content and notes |
@@ -70,9 +78,22 @@ Surge, Starship, or another application.
 
 ## System presets
 
-`shine sys bootstrap` installs development-environment items. Interactive mode selects individual
-items; non-interactive mode uses the platform default profile. Run `--dry-run` first because package
-managers, downloads, and profile merging may require privileges or change the machine.
+`shine sys bootstrap` runs standardized package providers or isolated compatibility scripts for
+selected development-environment items. Interactive mode selects items, positional IDs run only
+those items, and non-interactive mode uses the platform default profile.
+The recorded result means that the bootstrap step ran; it is not a live assertion that a package is
+still installed or current. Rerunning bootstrap checks presence but does not upgrade third-party
+software. Run `--dry-run` first because package managers, downloads, and profile merging may require
+privileges or change the machine.
+
+Shell integration is item-owned: a successful targeted bootstrap enables that item's generated
+content without pulling in integrations for unselected software. Earlier enabled integrations stay
+active until explicitly disabled with `shine sys profile disable <ITEM>`.
+
+The `mise` item installs mise and activates it through Shine-managed shell profile content. Shine
+does not write mise configuration or manage runtime versions; use mise itself for those operations.
+Shine does not check or upgrade third-party bootstrap software; use Homebrew, apt, winget, mise,
+rustup, or the upstream tool that owns the software.
 
 <div className="built-in-presets-system-table" aria-hidden="true" />
 

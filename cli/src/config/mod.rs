@@ -157,6 +157,11 @@ pub struct Config {
     /// Embedded presets may run hooks without this opt-in.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_app_hooks: bool,
+    /// Global-only opt-in allowing external sys presets and overlays to execute install scripts or
+    /// install persistent shell-profile code. Declarative package providers,
+    /// detection, PATH, env, and aliases do not require this opt-in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_sys_code: bool,
     /// Whether the managed sys `pre` profile auto-syncs the terminal theme
     /// (`shine theme sync --auto`) on interactive shell startup. Defaults to
     /// `true`. The `SHINE_SYNC_TERMINAL_THEME` env var overrides this at
@@ -276,6 +281,11 @@ impl Config {
         &self.config_path
     }
 
+    /// Global configuration path, even when a project configuration is active.
+    pub fn global_config_path(&self) -> PathBuf {
+        self.shine_dir.join(GLOBAL_CONFIG_FILE)
+    }
+
     /// Whether configuration was discovered from a project `shine.config.toml`.
     pub fn is_project_config(&self) -> bool {
         self.is_project_config
@@ -323,6 +333,7 @@ impl Config {
             app_default_dest_root_override: None,
             is_external_presets: false,
             allow_app_hooks: false,
+            allow_sys_code: false,
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_recipients: Vec::new(),
@@ -456,8 +467,9 @@ impl Config {
     }
 }
 
-/// Print a note showing the active external presets directory.
-/// No-op when the embedded presets are in use.
+/// Print the effective base preset source, optional overlay, and external
+/// shell deployment mode. This makes built-in, external, and overlay-backed
+/// runs report provenance with the same vocabulary.
 pub fn print_presets_note(config: &Config) {
     if config.is_external_presets {
         println!(
@@ -476,8 +488,11 @@ pub fn print_presets_note(config: &Config) {
             crate::colors::dim(&crate::colors::shell_deployment_note(deployment))
         );
         println!();
-    } else if let Some(dir) = config.active_presets_overlay_dir() {
-        println!("{}", crate::colors::presets_overlay_note(dir));
+    } else {
+        println!("{}", crate::colors::presets_source_note("built-in"));
+        if let Some(dir) = config.active_presets_overlay_dir() {
+            println!("{}", crate::colors::presets_overlay_note(dir));
+        }
         println!();
     }
 }
@@ -507,6 +522,7 @@ impl Default for Config {
             app_default_dest_root_override: None,
             is_external_presets: false,
             allow_app_hooks: false,
+            allow_sys_code: false,
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_recipients: Vec::new(),

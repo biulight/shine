@@ -277,6 +277,43 @@ To preserve dotenv semantics, files containing interpolation such as `${BASE_URL
 double-quoted values are rejected. Resolve them to final values before importing. The generated file
 includes a documented empty `[secret]` table even when no `--secret` is selected.
 
+## Export a workspace to dotenv
+
+Export one fully resolved mode when another tool needs a conventional dotenv file, or when you want
+to stop using Shine env:
+
+```bash
+shine env workspace export \
+  --format dotenv \
+  --mode production \
+  --output .env.production.local
+```
+
+`--format` is required so the export contract remains explicit. The command merges the workspace
+sources in their declared order, but does not include inherited process variables or `--with`
+values. By default it exports only winning `[plain]` entries and does not decrypt payloads. If a
+later secret declaration shadows an earlier plain value, that old plain value is omitted.
+
+Include sealed secrets only when the destination really needs a complete runnable environment:
+
+```bash
+shine env workspace export \
+  --format dotenv \
+  --mode production \
+  --output .env.production.local \
+  --include-secrets
+```
+
+This writes plaintext secrets. On Unix, a secret-bearing output is created with owner-only `0600`
+permissions; keep it out of version control on every platform. Existing outputs are rejected unless
+you add `--force`, and `--dry-run` reports the mode, destination, and variable count without printing
+values or writing the file.
+
+The exported file has no Shine metadata or runtime dependency. To leave Shine env, export and test
+each required mode, add secret-bearing outputs to `.gitignore`, remove `shine env run` wrappers, and
+only then archive or delete `shine.workspace.toml` and its `*.shine.toml` sources yourself. Export
+never deletes those source files.
+
 ## Use layered project environments
 
 At the project root, declare modes, ordered sources, and shared recipients in

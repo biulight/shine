@@ -43,6 +43,23 @@ pub fn yellow_stderr(s: &str) -> String {
         .to_string()
 }
 
+/// Bold warning emphasis for sensitive actions rendered on stderr.
+pub fn bold_yellow_stderr(s: &str) -> String {
+    use owo_colors::Style;
+    s.if_supports_color(Stream::Stderr, |t| t.style(Style::new().bold().yellow()))
+        .to_string()
+}
+
+pub fn cyan_stderr(s: &str) -> String {
+    s.if_supports_color(Stream::Stderr, |t| t.cyan())
+        .to_string()
+}
+
+pub fn dim_stderr(s: &str) -> String {
+    s.if_supports_color(Stream::Stderr, |t| t.dimmed())
+        .to_string()
+}
+
 pub fn red(s: &str) -> String {
     s.if_supports_color(Stream::Stdout, |t| t.red()).to_string()
 }
@@ -79,7 +96,7 @@ pub fn status_label(s: &str, sym: &str) -> String {
 }
 
 /// Shared column width for the presets-note labels below, so their values line up.
-const PRESETS_NOTE_LABEL_WIDTH: usize = 18; // "◈ External Presets".chars().count()
+const PRESETS_NOTE_LABEL_WIDTH: usize = 18; // "◈ Shell Deployment".chars().count()
 
 fn presets_note_value(plain_label: &str, styled_label: &str, value: &str) -> String {
     let pad = " ".repeat(PRESETS_NOTE_LABEL_WIDTH.saturating_sub(plain_label.chars().count()) + 2);
@@ -90,14 +107,19 @@ fn presets_note(plain_label: &str, styled_label: &str, dir: &std::path::Path) ->
     presets_note_value(plain_label, styled_label, &path_display::format(dir))
 }
 
-/// Returns a formatted note indicating the active external presets directory.
-pub fn external_presets_note(dir: &std::path::Path) -> String {
+/// Returns a formatted note naming the effective base preset source.
+pub fn presets_source_note(value: &str) -> String {
     use owo_colors::Style;
-    let label = "◈ External Presets";
+    let label = "◈ Preset Source";
     let styled = label
         .if_supports_color(Stream::Stdout, |t| t.style(Style::new().bold().cyan()))
         .to_string();
-    presets_note(label, &styled, dir)
+    presets_note_value(label, &styled, value)
+}
+
+/// Returns a formatted note indicating the active external presets directory.
+pub fn external_presets_note(dir: &std::path::Path) -> String {
+    presets_source_note(&format!("external · {}", path_display::format(dir)))
 }
 
 /// Returns a formatted note indicating the active presets overlay directory.
@@ -132,22 +154,24 @@ mod tests {
     }
 
     #[test]
-    fn external_presets_note_contains_presets_label() {
+    fn external_presets_note_uses_shared_source_label() {
         let path = Path::new("/some/dir");
         let note = external_presets_note(path);
         assert!(
-            note.contains("External Presets"),
-            "note should include the 'External Presets' label: {note:?}"
+            note.contains("Preset Source") && note.contains("external"),
+            "note should use the shared preset-source vocabulary: {note:?}"
         );
     }
 
     #[test]
     fn presets_note_values_use_the_same_column() {
+        let source = presets_source_note("built-in");
         let external = external_presets_note(Path::new("/external"));
         let overlay = presets_overlay_note(Path::new("/overlay"));
         let deployment = shell_deployment_note("snapshot");
 
-        assert_eq!(external.find("/external"), overlay.find("/overlay"));
-        assert_eq!(external.find("/external"), deployment.find("snapshot"));
+        assert_eq!(source.find("built-in"), external.find("external"));
+        assert_eq!(source.find("built-in"), overlay.find("/overlay"));
+        assert_eq!(source.find("built-in"), deployment.find("snapshot"));
     }
 }

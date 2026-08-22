@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use console::{Style, style};
 use dialoguer::theme::ColorfulTheme;
 
 use crate::colors;
-use crate::sys::execution::{format_command_preview, status_symbol, status_text, sys_init_command};
+use crate::sys::execution::{status_symbol, status_text};
 use crate::sys::run_manifest::SysRunEntry;
 use crate::sys::{LoadedSysPreset, ResolvedSelection, SysDriverKind, SysItem, SysItemMode};
 
@@ -72,6 +72,7 @@ pub(in crate::sys) fn driver_name(driver: SysDriverKind) -> &'static str {
 }
 
 pub(in crate::sys) async fn print_dry_run(
+    config: &crate::config::Config,
     os_id: &str,
     loaded: &LoadedSysPreset,
     selection: &ResolvedSelection,
@@ -96,23 +97,65 @@ pub(in crate::sys) async fn print_dry_run(
             selection.item_ids.join(", ")
         }
     );
-    println!("  Script: {}", loaded.script_path.display());
-    let command = sys_init_command(os_id);
     println!("  Commands:");
     for item_id in &selection.item_ids {
-        println!(
-            "    {}",
-            format_command_preview(&command, &loaded.script_path, std::slice::from_ref(item_id))
-        );
+        let item = loaded
+            .manifest
+            .items
+            .iter()
+            .find(|item| item.id == *item_id);
+        let preview = crate::sys::bootstrap::standard_install_preview(
+            config,
+            os_id,
+            loaded,
+            item.expect("selection was validated against the manifest"),
+        )?;
+        println!("    {preview}");
+    }
+    let integrations = selection
+        .item_ids
+        .iter()
+        .filter_map(|item_id| {
+            loaded
+                .manifest
+                .items
+                .iter()
+                .find(|item| item.id == *item_id)
+        })
+        .flat_map(|item| {
+            item.shell
+                .iter()
+                .map(move |integration| (item, integration))
+        })
+        .collect::<Vec<_>>();
+    if !integrations.is_empty() {
+        println!("  Shell integrations:");
+        for (item, integration) in integrations {
+            let action = if let Some(fragment) = &integration.fragment {
+                format!("fragment {fragment}")
+            } else if integration.path.is_some() {
+                "PATH".to_string()
+            } else if !integration.env.is_empty() {
+                "environment".to_string()
+            } else if !integration.eval_argv.is_empty() {
+                "guarded eval".to_string()
+            } else if integration.source.is_some() {
+                "guarded source".to_string()
+            } else {
+                "aliases".to_string()
+            };
+            println!(
+                "    sys/{}: {} · {:?} · {}",
+                item.id,
+                integration.phase.as_str(),
+                integration.shells,
+                action
+            );
+        }
     }
     if !selection.item_ids.is_empty() {
         println!("    shine internal sys profile pre/post update");
     }
     println!();
-    let content = tokio::fs::read_to_string(&loaded.script_path)
-        .await
-        .with_context(|| format!("reading {}", loaded.script_path.display()))?;
-    println!("{}", colors::dim("--- script content ---"));
-    print!("{content}");
     Ok(())
 }

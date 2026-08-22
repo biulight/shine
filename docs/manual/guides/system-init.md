@@ -6,8 +6,9 @@ sidebar_position: 3
 # Initialize and manage a system
 
 System presets provide selectable development-environment initialization steps for macOS, Ubuntu,
-and Windows. Use `shine sys list` from the installed version as the authoritative list of available
-items.
+and Windows, plus a small set of reversible managed system resources. They are not a general machine
+configuration or package-version manager. Use `shine sys list` from the installed version as the
+authoritative list of available items.
 
 See [built-in presets](../reference/built-in-presets.md#system-presets) for each platform's profiles
 and for `split-dns` environment variables and safe preview steps.
@@ -21,21 +22,29 @@ shine sys info split-dns
 shine sys bootstrap --dry-run
 ```
 
-`--dry-run` shows selection results, script invocations, and managed profile updates without changing
-the system. Some items require administrator access or additional environment variables;
+`--dry-run` shows selection results, provider/script invocations, and each persistent item-owned
+shell integration without changing the system. Some items require administrator access or additional environment variables;
 `shine sys info <ITEM>` lists those requirements.
+
+When a missing item is about to run, Shine prints its `sys/<ITEM>` identifier and label first, so
+any authorization or password prompt that follows is attributable to the active software.
 
 ## Select interactively or apply a profile
 
 ```bash
 shine sys bootstrap
+shine sys bootstrap mise
+shine sys bootstrap rust mise
 shine sys bootstrap --preset recommended
 shine sys bootstrap --preset minimal
 shine sys bootstrap --proxy --dry-run
 ```
 
 - In an interactive terminal, `shine sys bootstrap` opens a multi-select interface.
+- Positional item IDs bootstrap only those items, preserving their order and ignoring duplicates.
 - `--preset` applies the named profile directly.
+- Positional items and `--preset` cannot be combined. Managed resources use `sys apply`, not
+  `sys bootstrap`.
 - In a non-interactive environment without an explicit profile, Shine uses the configured default.
 
 Ubuntu includes a `minimal` profile for production servers. It installs only Neovim, fzf, bat, eza,
@@ -59,35 +68,40 @@ After initialization, inspect the recorded state:
 shine sys status
 ```
 
-## Check bootstrap software updates
+This view is a run record: `installed`, `already installed`, or `completed` describes what the last
+bootstrap invocation observed. It does not probe whether third-party software is still present or
+current.
 
-Read-only update checks are available for software recorded during initialization:
+## Upgrade bootstrap software with its owner
+
+`shine sys bootstrap` is an ensure-present initializer, not a software update manager. Shine does
+not check or upgrade bootstrap software. Use the package manager or upstream tool that owns each
+item—such as Homebrew, apt, winget, mise, or rustup—to check for and install updates. Rerunning
+`shine sys bootstrap` only verifies that the selected software is present and does not upgrade it.
+
+The built-in mise step follows the same boundary: it can install mise and add activation to managed
+shell profile content, but it does not create or update mise configuration and does not manage
+runtime versions. Use mise for `mise.toml`, tool installation, and version upgrades.
+
+## Manage shell integration state
+
+A successful bootstrap enables only the selected items' declared shell integrations. It does not
+disable integrations enabled by an earlier run, and a named selection profile is not a desired-state
+replacement for software or shell configuration.
 
 ```bash
-shine sys update
-shine sys update neovim --verbose
-shine sys update --proxy
+shine sys profile disable mise --dry-run
+shine sys profile disable mise
+shine sys profile enable mise
 ```
 
-This command checks only software recorded by `shine sys bootstrap`. It does not install or upgrade
-software and does not modify the system manifest or shell profile. By default it shows only packages
-that a package manager confirms have updates, together with copyable upstream upgrade commands.
-`--verbose` also shows current packages and items that require a manual check.
-
-Built-in presets currently check through Homebrew, apt, and winget. Direct installers and
-user-maintained Git configuration are marked for manual review rather than assigned a guessed
-version. `--proxy` uses the same configuration as `sys bootstrap --proxy`; on Windows, it explicitly
-passes winget's `--proxy` option.
-
-On Ubuntu, Shine does not record the installation source of software it finds already present.
-Manual-check results therefore avoid guessing an updater and give source-specific guidance only
-when it is safe to do so: for example, standalone `mise.run` installs use `mise self-update`, while
-package-managed installs use their original package manager. Rerunning `shine sys bootstrap` only
-verifies that existing software is present and does not upgrade it.
+These commands modify only Shine-owned generated profile content. Disabling does not uninstall the
+software. Enabling first verifies the item's declared detection and asks you to bootstrap it when it
+is missing. `shine upgrade` re-renders the currently enabled integrations but does not upgrade their
+software.
 
 `shine update` and `shine upgrade` still manage only Shine configuration and managed system
-resources. They never upgrade this third-party software. You decide whether to execute commands
-printed by `shine sys update`.
+resources. They never upgrade this third-party software.
 
 Top-level `shine list` includes managed system configuration recorded for the current operating
 system. Use `shine sys status` and `shine sys info <ITEM>` for details. `update --verbose` and

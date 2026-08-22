@@ -18,6 +18,7 @@ limits, commands available in the current session, and required environment vari
 ```bash
 shine shell list
 shine shell install proxy
+shine shell install utils/shine-env-export # Install only this command
 shine shell install            # Install every category available on this platform
 ```
 
@@ -25,7 +26,12 @@ You can also let Shine identify whether a category is a shell or application pre
 
 ```bash
 shine install proxy
+shine install shell/utils/shine-env-export
 ```
+
+A category target activates every command available for the current platform. Use an explicit
+`category/command` target when you need only one command. Mutation does not accept a bare command
+name because the same name may appear in more than one category.
 
 Open a new terminal or reload the shell profile after installation. To install completions, run:
 
@@ -50,11 +56,14 @@ shine install shell/proxy --replace-managed
 ```bash
 shine shell uninstall proxy --dry-run
 shine shell uninstall proxy
+shine shell uninstall utils/shine-env-export
 shine shell uninstall proxy --purge
 ```
 
-`--purge` also removes the category's preset directory. Without a category it processes the whole
-shell preset tree. It never removes `~/.shine/config.toml`.
+Command-scoped uninstall preserves other installed commands in the category. Shared preset or
+snapshot files may remain while a sibling command still needs them. `--purge` also removes empty
+managed preset directories; without a target, uninstall processes the whole shell preset tree. It
+never removes `~/.shine/config.toml`.
 
 ## Common built-in commands
 

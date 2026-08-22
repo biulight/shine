@@ -1,4 +1,4 @@
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use std::{ffi::OsString, path::PathBuf};
 
 #[derive(Subcommand, Debug)]
@@ -56,6 +56,39 @@ pub struct EnvWorkspaceCommand {
 pub enum EnvWorkspaceSubcommand {
     /// Create a workspace from conventional dotenv files
     Init(EnvWorkspaceInitCommand),
+    /// Export one resolved workspace mode without retaining a Shine dependency
+    Export(EnvWorkspaceExportCommand),
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum EnvWorkspaceExportFormat {
+    /// Conventional KEY=VALUE dotenv output
+    Dotenv,
+}
+
+#[derive(Args, Debug)]
+pub struct EnvWorkspaceExportCommand {
+    /// Export format
+    #[arg(long, value_enum, value_name = "FORMAT")]
+    pub format: EnvWorkspaceExportFormat,
+    /// Workspace definition (defaults to the nearest shine.workspace.toml)
+    #[arg(long, value_name = "FILE")]
+    pub workspace: Option<PathBuf>,
+    /// Environment mode to resolve
+    #[arg(long, value_name = "MODE")]
+    pub mode: String,
+    /// Destination dotenv file
+    #[arg(long, value_name = "FILE")]
+    pub output: PathBuf,
+    /// Decrypt and include sealed workspace secrets
+    #[arg(long)]
+    pub include_secrets: bool,
+    /// Replace an existing output file
+    #[arg(long)]
+    pub force: bool,
+    /// Validate and describe the export without writing it
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Args, Debug)]

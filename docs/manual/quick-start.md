@@ -48,9 +48,9 @@ shine list
 shine info shell/proxy
 ```
 
-`shine list` shows installed content that is currently usable. `shine info` can also inspect presets
-that are not installed. Use a full target such as `shell/proxy` in scripts. A bare name is accepted
-only when it is unique across application and shell categories.
+`shine list` reports the installed lifecycle unit, `proxy`; `shine info shell/proxy` expands it into
+the managed commands, links, and source details. Use the full target `shell/proxy` in scripts. A bare
+name is accepted only when it is unique across application and shell categories.
 
 Disable the proxy in the current terminal session:
 
@@ -67,5 +67,13 @@ shine shell uninstall proxy --dry-run
 After reviewing the output, remove `--dry-run` to apply the uninstall. Shine removes only the
 scripts, command entries, and profile fragments it manages.
 
-Next, install [application configuration](./guides/app-presets.md) or use
-[system initialization presets](./guides/system-init.md).
+Next, choose the workflow that matters to you:
+
+- turn a personal script or application configuration into a [custom
+  preset](./guides/custom-presets.md);
+- install [application configuration](./guides/app-presets.md), including the opinionated Surge and
+  Clash Verge Rev artifact workflows;
+- initialize a machine with the deliberately scoped [system bootstrap](./guides/system-init.md);
+- save [repeatable tasks](./guides/tasks-and-serve.md); or
+- continue work through [SSH environment forwarding, file transfer, and the local secret
+  broker](./guides/ssh-transfer.md).

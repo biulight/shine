@@ -8,12 +8,12 @@ use super::{
     ShellCommands, StateCommands, SysCommands, TaskCommands, TaskRunCommand, ThemeCommands,
 };
 
-/// Manage shell presets, app configs, system setup, and personal tools
+/// Give personal automation a reviewable lifecycle
 #[derive(Parser, Debug)]
 #[command(name = "shine")]
 #[command(version = version::display(), about, long_about = None)]
 #[command(
-    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>, or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, state, self, serve, completions, theme, and local are advanced tools."
+    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>[/<command>], or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, state, self, serve, completions, theme, and local are advanced tools."
 )]
 pub struct Cli {
     #[arg(long, global = true)]
@@ -44,7 +44,7 @@ pub enum Commands {
     },
     /// Install or repair one shell or app preset
     Install {
-        /// Preset target: app/<category>, shell/<category>, or a unique category name
+        /// Preset target: app/<category>, shell/<category>[/<command>], or a unique category name
         #[arg(value_name = "TARGET")]
         target: String,
         /// Replace user-modified files that are already managed by shine
@@ -53,7 +53,7 @@ pub enum Commands {
     },
     /// Uninstall one shell or app preset
     Uninstall {
-        /// Preset target: app/<category>, shell/<category>, or a unique category name
+        /// Preset target: app/<category>, shell/<category>[/<command>], or a unique category name
         #[arg(value_name = "TARGET")]
         target: String,
         /// Remove managed files even when they were modified after installation (app only)
@@ -287,17 +287,17 @@ impl CompletionShell {
 
 #[derive(Parser, Debug)]
 pub struct UpdateCommand {
-    /// Installed shell or app target to inspect (shows pending content differences)
+    /// Installed shell or app target to inspect (shows reconciliation details)
     #[arg(value_name = "TARGET")]
     pub target: Option<String>,
     /// Pull Git-managed preset sources before checking status
     #[arg(long)]
     pub pull: bool,
-    /// Show content differences for available shell and app updates
+    /// Show content differences for all updates (targeted checks are already detailed)
     #[arg(long)]
     pub diff: bool,
-    /// Show installed entries that are already current or need attention
-    #[arg(long, conflicts_with = "target")]
+    /// Show installed entries that are already current or need attention (targeted checks are already detailed)
+    #[arg(long)]
     pub verbose: bool,
     /// Bypass the 24-hour version cache and check GitHub now
     #[arg(long, conflicts_with = "target")]

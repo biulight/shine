@@ -71,6 +71,11 @@ bugs. Check this list before changing the modules named in each entry.
 - **PowerShell profiles: preserve a leading BOM** when rewriting the file
   (`cli/src/sys/profile_blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
   `Documents/WindowsPowerShell/` profile files so pwsh and Windows PowerShell stay in sync.
+- **Sys profile composition is activation-additive, not selection-replacing.** A targeted item or
+  named selection profile enables successful item integrations but never disables previously
+  enabled ones. Only `shine sys profile disable <ITEM>` removes that item's generated content.
+  Composition order is phase, explicit priority, manifest order, then integration order; failures
+  must leave the last installed profile intact.
 
 ## Config files
 
@@ -84,6 +89,12 @@ bugs. Check this list before changing the modules named in each entry.
   run implicitly, but external preset or overlay code must be gated by
   `allow_app_hooks = true`; otherwise a user-controlled presets checkout would
   gain command execution during ordinary read-oriented update checks.
+- **External sys executable code is separately opt-in.** Static detection/provider metadata and
+  declarative PATH/env/aliases are safe to inspect, but external or overlay bootstrap/managed scripts,
+  guarded eval/source, fragments, and base profile code require `allow_sys_code = true`. Read-only
+  status paths must never execute sys code, and update-check scripts require the same permission.
+  This permission is global-only: a project
+  config must never be able to authorize its own executable preset content.
 - **Manual generators never run from implicit status or upgrade paths.**
   `generator.auto = false` leaves `list`/`info`/`update` local-only and
   causes upgrade to preserve the manifest snapshot. Only install (including `--replace-managed`) or
@@ -119,11 +130,21 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
-- **Embedded templates are the fallback** when an external/overlay presets dir lacks a file
-  (commit `5606438`). External presets mode must degrade to embedded content, not error.
+- **Fallback depends on the selected preset mode.** In built-in mode, an overlay replaces matching
+  paths and unmatched paths continue to read embedded assets. A full external preset source is
+  authoritative for app and shell category discovery: a missing category or file is not silently
+  borrowed from the binary. Sys profile installation has a narrower compatibility fallback to its
+  embedded template when a selected external sys preset omits a previously-known profile file
+  (commit `5606438`). Do not generalize that compatibility path into cross-source category fallback.
 
 ## External shell deployment
 
+- **Shell command activation is command-scoped even though deployment is category-scoped.**
+  Embedded extraction and external snapshots may materialize every source file in a category so
+  commands can use sibling resources, but source-file presence alone never means that a command is
+  installed. `shell-manifest.toml` entries and compatible legacy launchers are the activation
+  receipts. Command-scoped install must upsert only its selected receipt; command-scoped uninstall
+  must remove only its selected managed launcher/receipt and preserve installed siblings.
 - **External source selection and installed state are separate.** Snapshot mode materializes
   effective shell categories below `<shine_dir>/installed/shell/`; launchers must never point at
   the user-owned external tree unless `external_shell_mode = "live"` is explicit.
@@ -144,6 +165,11 @@ bugs. Check this list before changing the modules named in each entry.
   [ADR 0008](decisions/0008-age-secret-backend-tagged-ciphertext.md)).
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
   prefix, breaks every secret encrypted before the change.
+- **Workspace export decrypts only on explicit request.** `shine env workspace export` omits
+  secret-winning keys unless `--include-secrets` is present, never mixes in the caller's process
+  environment, and never prints exported values in its status or dry-run output. On Unix, an
+  export containing secrets must be created privately (`0600`) before plaintext bytes are written;
+  chmod after a wider temporary-file write is not sufficient.
 
 ## SSH transfer
 
