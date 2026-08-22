@@ -69,6 +69,8 @@ scripts, command entries, and profile fragments it manages.
 
 Next, choose the workflow that matters to you:
 
+- turn a personal script or application configuration into a [custom
+  preset](./guides/custom-presets.md);
 - install [application configuration](./guides/app-presets.md), including the opinionated Surge and
   Clash Verge Rev artifact workflows;
 - initialize a machine with the deliberately scoped [system bootstrap](./guides/system-init.md);

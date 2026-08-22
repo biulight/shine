@@ -8,7 +8,7 @@ use super::{
     ShellCommands, StateCommands, SysCommands, TaskCommands, TaskRunCommand, ThemeCommands,
 };
 
-/// Keep development environments portable across machines and remote sessions
+/// Give personal automation a reviewable lifecycle
 #[derive(Parser, Debug)]
 #[command(name = "shine")]
 #[command(version = version::display(), about, long_about = None)]

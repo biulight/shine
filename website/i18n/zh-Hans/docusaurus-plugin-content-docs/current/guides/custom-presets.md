@@ -15,6 +15,59 @@ sidebar_position: 4
 Shine 会输出 `Preset Source`、可选的 `Presets Overlay`，以及外部 Shell 的部署模式，便于在解释
 `list`、`update` 或安装结果前确认当前模型。
 
+## 从来源文件夹到已安装能力
+
+任何能把预设文件夹放到机器上的工具或流程，都可以充当同步层。Shine 不依赖 Git，也不承担通用
+文件夹同步；它把选定源文件变成已安装能力：创建受管命令入口、解析本地值、默认保留已安装快照、
+报告待处理变化，并且只移除自己拥有的内容。
+
+例如，一个自定义 `shell/image-tools/` 类别可以提供三个个人图片命令：
+
+```toml
+description = "Personal image workflow commands."
+
+[[files]]
+source = "compress.ts"
+target = "img-compress"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_QUALITY"]
+
+[[files]]
+source = "resize.ts"
+target = "img-resize"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+
+[[files]]
+source = "convert.ts"
+target = "img-convert"
+runtime = "bun"
+platforms = ["unix", "windows"]
+```
+
+这段元数据只是机制示例，并非内置预设；类别中还需要包含三个对应源文件。这些文件可以使用
+[`Bun.Image`](https://bun.com/docs/runtime/image) 压缩、缩放和转换 JPEG、PNG、WebP 图片，无需
+ImageMagick、Sharp 或其它图片库。运行命令的每台机器都必须在 `PATH` 中自行安装 Bun 1.3.14
+或更高版本。Shine 不内置 Bun，Shine 仓库固定的 Bun 版本只是开发与测试基线。预设作者还应在
+启动时检测 `Bun.Image`，旧版 Bun 不具备该能力时给出明确的升级提示。
+
+源文件准备好后，Shine 会在它外面补上生命周期：
+
+```bash
+shine info shell/image-tools
+shine install shell/image-tools/img-compress
+shine info shell/image-tools --diff
+shine upgrade shell/image-tools
+shine shell uninstall image-tools/img-compress --dry-run
+```
+
+默认 snapshot 模式下，修改或同步来源文件夹不会悄悄改变已安装命令。`shine info --diff` 展示
+待处理的来源变化，`shine upgrade` 再显式应用。图片质量、最大尺寸等值保留在各台机器本地，只因
+对应命令明确声明需要它们才会注入。这就是“同步一个脚本文件”和“把脚本作为可复用个人能力运行”
+之间的边界。
+
 ## 使用 Overlay 覆盖少量文件
 
 Overlay 按相同相对路径覆盖基础预设，也可以增加新类别：

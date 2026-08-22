@@ -18,6 +18,63 @@ These modes have different fallback rules:
 Shine prints `Preset Source`, optional `Presets Overlay`, and external shell deployment mode so you
 can tell which model is active before interpreting `list`, `update`, or install output.
 
+## From source folders to installed capabilities
+
+Any tool or process that places a preset folder on a machine can be the synchronization layer.
+Shine does not require Git or provide general-purpose folder synchronization. It turns selected
+source files into installed capabilities: it creates managed command entries, resolves local values,
+keeps an installed snapshot by default, reports pending changes, and removes only what it owns.
+
+For example, a custom `shell/image-tools/` category could expose three personal image commands:
+
+```toml
+description = "Personal image workflow commands."
+
+[[files]]
+source = "compress.ts"
+target = "img-compress"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_QUALITY"]
+
+[[files]]
+source = "resize.ts"
+target = "img-resize"
+runtime = "bun"
+platforms = ["unix", "windows"]
+env = ["IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+
+[[files]]
+source = "convert.ts"
+target = "img-convert"
+runtime = "bun"
+platforms = ["unix", "windows"]
+```
+
+This metadata is an illustration, not a built-in preset: the category must also contain the three
+source files. Those files can use [`Bun.Image`](https://bun.com/docs/runtime/image) to compress,
+resize, and convert JPEG, PNG, and WebP images without ImageMagick, Sharp, or another image library.
+Every machine that runs them needs an external Bun 1.3.14 or newer in `PATH`. Shine does not bundle
+Bun, and the Bun version pinned by the Shine repository is only its development and test baseline.
+Preset authors should detect `Bun.Image` at startup and print a clear upgrade hint when an older Bun
+is found.
+
+Once the source exists, Shine adds the lifecycle around it:
+
+```bash
+shine info shell/image-tools
+shine install shell/image-tools/img-compress
+shine info shell/image-tools --diff
+shine upgrade shell/image-tools
+shine shell uninstall image-tools/img-compress --dry-run
+```
+
+In the default snapshot mode, changing or synchronizing the source folder does not silently change
+the installed command. `shine info --diff` exposes the pending source change, and `shine upgrade`
+applies it explicitly. Values such as image quality or maximum dimensions remain local to each
+machine and are injected only because the corresponding command declares them. This is the boundary
+between synchronizing a script file and operating it as a reusable personal capability.
+
 ## Override selected files with an overlay
 
 An overlay replaces base-preset files at the same relative path and can add new categories:

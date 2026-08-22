@@ -63,6 +63,7 @@ shine shell uninstall proxy --dry-run
 
 接下来可按实际目标继续：
 
+- 把个人脚本或应用配置变成[自定义预设](./guides/custom-presets.md)；
 - 安装[应用配置](./guides/app-presets.md)，包括 Surge 与 Clash Verge Rev 的专用 artifact 工作流；
 - 使用边界明确的[系统引导](./guides/system-init.md)初始化机器；
 - 保存[可重复任务](./guides/tasks-and-serve.md)；或
