@@ -18,7 +18,7 @@ with a [`lessons.md`](../lessons.md) entry.
 |---|---|
 | Edited a preset but the binary still shows old content | Re-embed didn't trigger. Confirm `cli/build.rs` still has `cargo:rerun-if-changed=presets`; touch a file under `presets/` and rebuild. |
 | `app list` / `app info` shows unexpected presets | An external presets mode is active. Check `SHINE_CONFIG_DIR`, `SHINE_PRESETS`, and `presets_dir`/`presets_overlay_dir` in `config.toml` (priority chain: ADR 0005). |
-| Commands create state in `~/.shine` during ad-hoc verification | Most commands call `Config::load_or_init()`. Isolate with `SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine` (see `AGENTS.md` § Verification Notes). |
+| Commands create state in `~/.shine` during ad-hoc verification | Most commands call `Config::load_or_init()`. Isolate with `SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine` (see `AGENTS.md` § Verification boundaries). |
 | Sandbox build permission failures | Use `cargo ... --target-dir target` to keep artifacts repo-local. |
 
 ## Update / self-upgrade

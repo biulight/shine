@@ -542,7 +542,7 @@ Sys v2 行为随 v1.5.0 落地时，已在同一 release change 中：
 
 1. 新增 ADR，明确 supersede ADR 0027 中的 gradual legacy fallback 与 bootstrap update-check 部分；
 2. 更新 sys architecture data flow 与 invariants；
-3. 同步 AGENTS.md module map/command routing；
+3. 同步 `docs/kb/architecture/module-map.md` 的模块图与命令路由；
 4. 更新 English 与 Simplified Chinese custom presets、system init、commands、built-in presets、
    configuration 和 troubleshooting；
 5. 发布 v1 → v2 preset migration guide；

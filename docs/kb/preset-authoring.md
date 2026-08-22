@@ -1,0 +1,258 @@
+# Preset Authoring
+
+Internal authoring guide for embedded and external Shine presets. Public command usage belongs in
+the bilingual manual; design rationale belongs in ADRs; behavioral safety rules belong in
+[`architecture/invariants.md`](architecture/invariants.md).
+
+## Shared workflow
+
+1. Prefer `shine.toml` metadata over legacy source annotations for new presets.
+2. Keep commands, identifiers, and platform constraints explicit in metadata.
+3. Treat external preset and overlay code as untrusted unless the corresponding config permission
+   (`allow_app_hooks` or `allow_sys_code`) is explicitly enabled.
+4. Keep generated output deterministic. Never print credentials, source URLs containing secrets, or
+   raw subscription records in diagnostics.
+5. `cli/build.rs` must retain `cargo:rerun-if-changed=presets`; a normal Cargo rebuild then
+   re-embeds changed assets.
+6. For a user-visible preset change, update the matching English and Simplified Chinese manual
+   pages in the same change.
+
+## Shell preset category
+
+Create `presets/shell/<category>/shine.toml` and the source files it declares. A minimal native
+entry is:
+
+```toml
+description = "What this category does."
+
+[[files]]
+source = "your_script.sh"
+target = "mycommand"
+needs_source = false
+```
+
+- Native Unix scripts normally use a `#!/bin/bash` shebang. When no explicit metadata description
+  is present, Shine can parse the leading `# ` comment block immediately after the shebang.
+- `needs_source = true` exposes a shell function instead of a direct launcher; use it only when the
+  command must mutate the parent shell.
+- `platforms = ["unix"]` or `platforms = ["windows"]` can select platform-specific files for the
+  same command name.
+- Only `[[files]]` entries become commands. Sibling helper modules are deployment material, not
+  activation receipts.
+
+### Bun shell entries
+
+A cross-platform TypeScript/JavaScript command may use:
+
+```toml
+[[files]]
+source = "command.ts"
+target = "command"
+runtime = "bun"
+```
+
+Rules:
+
+- Bun is an external prerequisite. Shine checks for it but never installs it.
+- `runtime = "bun"` accepts `.ts`, `.js`, `.mts`, and `.mjs`; it cannot combine with
+  `needs_source = true` because a subprocess cannot modify its parent shell.
+- The installed command is a Shine-managed regular launcher, not a symlink. Ownership and removal
+  depend on its marker and target contract; see the Bun launcher invariant.
+- Use a leading `//` block or the metadata `description` field. Explicit metadata wins.
+- Static substitution remains opt-in through `transforms = ["template"]`; JS/TS does not support
+  the shell-only `# shine-template: true` annotation.
+
+A Bun entry may request runtime env injection:
+
+```toml
+env = ["KEY", "SOURCE=TARGET"]
+```
+
+The ordered mapping uses the `shine env run --with` grammar. Names are validated and duplicate
+targets are rejected at metadata load. At launch the managed wrapper runs through
+`shine env run --no-workspace --with ... -- bun <script>`; `KEY_SECRET` is decrypted per invocation.
+This requires both `shine` and `bun` on `PATH`. Runtime `env` and static `template` transforms are
+independent and may be combined. See
+[`../bun-shell-preset-env-injection-prd.md`](../bun-shell-preset-env-injection-prd.md).
+
+### Shell verification
+
+`shell install` has real side effects. For an isolated lifecycle check, copy the category into the
+temporary external preset tree first:
+
+```bash
+cargo build --target-dir target
+cargo run --target-dir target -- shell list
+cargo run --target-dir target -- shell info <category>
+mkdir -p .tmp-home/.shine/presets/shell
+cp -R presets/shell/<category> .tmp-home/.shine/presets/shell/
+env SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine cargo run --target-dir target -- shell install <category>
+env SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine cargo run --target-dir target -- shell uninstall <category> --dry-run
+```
+
+Add targeted metadata, launcher, and install/uninstall round-trip tests for new behavior.
+
+## App preset category
+
+Create `presets/app/<category>/shine.toml`. Prefer metadata over the legacy `shine-dest:` source
+annotation:
+
+```toml
+description = "Managed application configuration."
+dest = "~/.config/example"
+
+[[files]]
+source = "config.jsonc"
+transforms = ["jsonc-to-json", "template"]
+```
+
+- A per-file `dest` overrides the category destination. Structured platform data destinations and
+  privileged destinations must use the supported metadata model; do not reproduce destination
+  resolution in an artifact script.
+- `jsonc-to-json` strips comments; `template` replaces `@@VAR_NAME@@` from the active `[env]` table.
+  Transforms compose in declaration order.
+- `@@VAR@@` is the delimiter for every file type. Quote YAML placeholders when they begin a scalar;
+  native-typed YAML env rendering is not supported. See
+  [ADR 0013](decisions/0013-template-delimiter-policy.md).
+
+### Lifecycle hooks
+
+Categories may declare `post_install` and `post_upgrade` as a command table or array of command
+tables. Both run direct argv commands only when the category actually changed:
+
+- `post_install` runs after an install that writes at least one file, including
+  `--replace-managed`.
+- `post_upgrade` runs after an upgrade that writes or installs at least one file.
+- External preset/overlay hooks require `allow_app_hooks = true`.
+- Hooks inherit only the parent environment. They do not receive `[env]` values or `SHINE_APP_*`.
+- `show_output = true` prints successful stdout; otherwise success is quiet.
+
+Use a hook for a lifecycle action such as reload/setup. Use an artifact when the action needs the
+artifact environment contract or explicit user invocation.
+
+### Generated files
+
+An app file may declare:
+
+```toml
+generator = {
+  script = "generate.ts",
+  runtime = "bun",
+  env = ["SOURCE_URL"],
+  when_env = "SOURCE_URL",
+  auto = false,
+}
+```
+
+- A static `source` remains mandatory as fallback and stable manifest identity.
+- When enabled, UTF-8 stdout becomes the effective source before normal transforms and install
+  strategies.
+- `auto` defaults to true. Automatic generators may run during status/update and upgrade.
+- `auto = false` keeps implicit status local-only and preserves the installed snapshot during
+  upgrade. Install still generates; `shine app refresh <category> [source] [--force]` is the
+  explicit refresh path.
+- Only declared `generator.env` values are injected; `_SECRET` values are not decrypted.
+- External preset/overlay generators require `allow_app_hooks = true` and are deadline/output
+  limited.
+- Failure preserves an existing managed destination as last-known-good. A first-time enabled
+  generator failure is fatal.
+
+See [ADR 0016](decisions/0016-generated-app-files-and-surge-subscriptions.md) and
+[ADR 0018](decisions/0018-manual-app-generator-refresh.md).
+
+### Artifacts
+
+An app category can expose explicit artifact commands:
+
+```toml
+[artifact]
+script = "build.ts"
+teardown = "unbuild.ts"
+runtime = "bun"
+```
+
+- `runtime` is `native` by default. Native executes the file directly and relies on its shebang;
+  Bun accepts `.ts`, `.js`, `.mts`, or `.mjs` and requires Bun on `PATH`.
+- `script` runs only through `shine app artifact apply <app-id>` unless a preset explicitly invokes
+  that command from a lifecycle hook.
+- `teardown` runs through `shine app artifact remove <app-id>` and best-effort before app uninstall.
+- Explicit artifact commands are ungated and propagate nonzero exit. Implicit uninstall teardown
+  for external presets is permission-gated and non-fatal.
+- Scripts receive the fixed `SHINE_APP_*` contract plus the active `[env]` table as stored. Secret
+  ciphertext is not decrypted.
+- An overlay script wins only when that exact artifact path exists; otherwise the active base
+  preset script remains available.
+
+See [ADR 0009](decisions/0009-app-artifact-build-explicit-command.md),
+[ADR 0012](decisions/0012-app-lifecycle-post-install-and-teardown.md), and the
+[app artifact data flow](architecture/data-flows.md#app-artifact-build-shine-app-artifact-apply-app-id).
+
+### App verification
+
+Be deliberate about preset mode. With `SHINE_CONFIG_DIR` set, copy the category under test to
+`$SHINE_CONFIG_DIR/presets/app/<category>/`; unset external preset settings when verifying embedded
+assets.
+
+```bash
+cargo run --target-dir target -- app list
+cargo run --target-dir target -- app info <category>
+cargo run --target-dir target -- app install <category> --dry-run
+```
+
+Add targeted tests for destination resolution, metadata parsing, transforms, generators, hooks, or
+artifact behavior as applicable. TypeScript presets must pass `bun run check:ts`.
+
+## Sys preset
+
+Create `presets/sys/<os_id>/shine.toml` with `version = 2`:
+
+```toml
+description = "One-line OS preset description."
+default_profile = "recommended"
+version = 2
+
+[[items]]
+id = "neovim"
+label = "Neovim"
+description = "Install Neovim"
+
+[items.detect]
+kind = "command"
+command = "nvim"
+version_args = ["--version"]
+
+[items.install]
+kind = "package"
+provider = "homebrew"
+package = "neovim"
+
+[profiles.recommended]
+items = ["neovim"]
+```
+
+- Every init item declares both `detect` and `install`. Unknown versions and v1 manifests fail
+  before execution.
+- Detection kinds are `command`, `path`, or `any`.
+- Package providers are fixed ensure-present Homebrew, Homebrew Cask, APT, or Winget actions; they
+  do not implement package upgrades. Complex installation uses one item-local script with normal
+  exit status.
+- Put OS-wide shell setup in `profile/base.pre.*` and `profile/base.post.*`.
+- Each item integration declares exactly one of `path`, `env`, `eval`, `source`, `aliases`, or
+  `fragment`; complex fragments live in `profile/<item>.*`.
+- Named `[profiles.*]` tables select items only. Successful items are activation-additive; explicit
+  `sys profile disable` is the removal path.
+- Do not add a platform-wide dispatcher or a parallel status/update protocol.
+- External or overlay install scripts and executable profile code require `allow_sys_code = true`;
+  static detection/provider metadata and declarative PATH/env/aliases remain inspectable.
+
+Verify with:
+
+```bash
+cargo build --target-dir target
+cargo run --target-dir target -- sys list
+cargo run --target-dir target -- sys info <item>
+cargo run --target-dir target -- sys bootstrap <item> --dry-run
+```
+
+The sys commands may initialize config state. Use an isolated `SHINE_CONFIG_DIR` and copy the OS
+preset into its `presets/sys/<os_id>/` tree when the check must not touch the real Shine directory.

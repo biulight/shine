@@ -82,7 +82,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **All `config.toml` writes go through `utils::sync_table`**, which preserves user comments.
   Never serialize the whole file from a struct — that destroys comments.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
-  key > `~/.shine/` default. Code and docs (AGENTS.md § Config) must agree.
+  key > `~/.shine/` default. Code and
+  [`data-flows.md`](data-flows.md#config-discovery) must agree.
 - **External app preset hooks and generators are opt-in only.** `post_upgrade`
   runs commands after upgrades, while an automatic file generator may run
   during install/update/upgrade and supply effective source bytes. Embedded code may
@@ -162,7 +163,7 @@ bugs. Check this list before changing the modules named in each entry.
   must never consult `Config::secret_backend` or any other config to pick a backend — only the
   `age:` prefix (or its absence) decides. This lets `secret_backend`/`age_recipients` change
   freely without breaking previously-encrypted secrets (see
-  [ADR 0008](decisions/0008-age-secret-backend-tagged-ciphertext.md)).
+  [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md)).
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
   prefix, breaks every secret encrypted before the change.
 - **Workspace export decrypts only on explicit request.** `shine env workspace export` omits

@@ -1,7 +1,7 @@
 # 0005 — Config/presets locations resolve through a fixed priority chain
 
 - **Status**: accepted
-- **Evidence**: `cli/src/config/discovery.rs`, `AGENTS.md` § Config
+- **Evidence**: `cli/src/config/discovery.rs`, `architecture/data-flows.md` § Config discovery
 
 ## Context
 
@@ -23,7 +23,7 @@ Project-local configs inherit unset keys from the global config (commit `a5aed62
 ## Consequences
 
 - Tests and agent sessions isolate state with
-  `SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine` (see `AGENTS.md` § Verification Notes).
+  `SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine` (see `AGENTS.md` § Verification boundaries).
 - Any new directory-dependent feature must resolve through this chain, not hardcode `~/.shine/`.
 - Behavior differences between "embedded" and "external presets" modes follow from which level
   of the chain is active — check the active mode before debugging preset lookups.

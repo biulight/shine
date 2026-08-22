@@ -1,7 +1,7 @@
 # Data Flows
 
-End-to-end flows that span multiple modules and are not visible in any single file. For the
-module map and per-command routing table, see [`AGENTS.md`](../../../AGENTS.md) — this file only
+End-to-end flows that span multiple modules and are not visible in any single file. For module
+ownership and the per-command routing table, see [`module-map.md`](module-map.md) — this file only
 records the cross-module sequences and their gotchas.
 
 ## Shell install and uninstall
@@ -166,10 +166,9 @@ the richer `SHINE_APP_*` + `[env]` artifact contract used by `build`/`teardown`.
 
 ## Shell install / uninstall
 
-Documented in `AGENTS.md` § "Key data flow". Summary: extract embedded assets →
-symlink executables into `~/.shine/bin/` (`bin_links.rs`) → append a sentinel-guarded PATH block
-to the shell config (`shells/profile.rs`). Uninstall removes only shine-managed symlinks/files
-and deletes the sentinel block precisely.
+Embedded install extracts assets, links executables into `~/.shine/bin/` (`bin_links.rs`), and
+appends a sentinel-guarded PATH block to the shell config (`shells/profile.rs`). Uninstall removes
+only Shine-managed symlinks/files and deletes the sentinel block precisely.
 
 For external presets, `external_shell_mode = "snapshot"` first materializes the effective
 base/overlay category under `<shine_dir>/installed/shell/`; update compares that snapshot with the

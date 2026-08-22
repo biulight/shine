@@ -1,7 +1,7 @@
 # 0002 — CHANGELOG.md is hand-written; git-cliff only generates GitHub Release notes
 
 - **Status**: accepted
-- **Evidence**: `AGENTS.md` § Releases, `cliff.toml`, `release.yml` git-cliff step
+- **Evidence**: `AGENTS.md` § Hard repository rules, `cliff.toml`, `release.yml` git-cliff step
 
 ## Context
 

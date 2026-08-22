@@ -257,7 +257,8 @@ shine theme sync [--quiet]
 
 命令职责：
 
-- **只读**加载 shine 配置——不得创建配置状态。`Config::load_or_init()` 会写盘（见 AGENTS.md），
+- **只读**加载 shine 配置——不得创建配置状态。`Config::load_or_init()` 会写盘（见
+  [`AGENTS.md`](../AGENTS.md#verification-boundaries)），
   而本命令在**每次交互式 shell 启动时**都会跑，必须走只读加载路径；
 - 按 §6 的优先级解析主题：已有 `SHINE_TERMINAL_THEME` → `COLORFGBG` → OSC 11 查询；
 - 判断 `light` / `dark`；

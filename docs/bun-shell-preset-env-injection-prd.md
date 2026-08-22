@@ -170,7 +170,9 @@ ownership rules remain the sole authority for overwrite and uninstall decisions.
 - Injected values live in the Bun child's environment (and its descendants), so they
   are readable by same-user processes via `/proc/<pid>/environ` or `ps eww`. This is
   the standard exposure of environment-variable passing — the same trade-off already
-  accepted for the SSH session token (see `AGENTS.md`) — not a regression to hide.
+  accepted for the SSH session token (see
+  [`architecture/invariants.md`](kb/architecture/invariants.md#ssh-transfer)) — not a regression
+  to hide.
 - Keep the existing rule that unmarked, unreadable, altered, or foreign launchers
   are user files: never overwrite or delete them without the current explicit
   force behavior.
