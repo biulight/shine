@@ -447,4 +447,27 @@ install = { kind = "package", provider = "apt", package = "tool" }
             parse_and_validate_manifest(manifest).unwrap();
         }
     }
+
+    #[test]
+    fn built_in_ubuntu_all_profile_includes_bun() {
+        let manifest =
+            parse_and_validate_manifest(include_str!("../../../presets/sys/ubuntu/shine.toml"))
+                .unwrap();
+
+        assert!(manifest.items.iter().any(|item| item.id == "bun"));
+        assert!(
+            manifest.profiles["all"]
+                .items
+                .iter()
+                .any(|item| item == "bun")
+        );
+        assert!(
+            !manifest.profiles["recommended"]
+                .items
+                .iter()
+                .any(|item| item == "bun")
+        );
+        assert!(!include_str!("../../../presets/sys/ubuntu/install/bun.sh").is_empty());
+        assert!(!include_str!("../../../presets/sys/ubuntu/profile/bun.sh").is_empty());
+    }
 }
