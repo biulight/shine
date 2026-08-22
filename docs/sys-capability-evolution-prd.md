@@ -1,537 +1,591 @@
-# Shine sys 精确 Bootstrap 与 Preset 标准化规划
+# Shine Sys Preset v2 与新设备初始化 PRD
 
-> **状态：已接受并实现，builtin preset 仍按 item 渐进迁移。** CLI、manifest、profile composition
-> 和 permission contract 已由 [ADR 0027](kb/decisions/0027-sys-bootstrap-providers-and-profile-composition.md)
-> 固化。已发布用户行为仍以 English / Simplified Chinese public manual 和命令 `--help` 为准。
+> **状态：Sys Preset v2 已完成，Environment Setup 集成待后续实现。** 本文以 `v1.4.0` 为兼容
+> 基线，取代此前“保留 monolithic platform dispatcher、渐进迁移 builtin item”的方案。Sys v2
+> 核心已由 [ADR 0028](kb/decisions/0028-sys-preset-v2-single-execution-contract.md) 接受并在
+> `v1.5.0` 实现发布，代码、English / Simplified Chinese public manual 和 changelog 已同步；第 9.2
+> 节的 Environment Setup 集成仍是后续范围。
 
-## 1. 背景
+## 1. 摘要
 
-`shine sys` 当前为 macOS、Ubuntu 和 Windows 提供 selectable bootstrap items，以及少量具有
-desired state、receipt 和安全 remove 语义的 managed system resources。
+`shine sys` 的核心职责是初始化新设备。自定义 sys preset 与 environment setup 是核心产品方向；
+macOS、Ubuntu、Windows 可以拥有不同 item、不同安装方式和不同 shell integration，Shine 不追求把
+平台能力抹平成 universal manifest。
 
-当前 bootstrap preset 由两部分组成：
+Shine 统一的是每个 bootstrap item 的生命周期：
 
-1. `shine.toml` 声明 items、named profiles 和少量 metadata；
-2. 每个平台使用一个共享 `init.sh` / `init.ps1`，自行完成 item dispatch、软件检测、安装、更新
-   检查，并通过 `SHINE_SYS_STATUS` / `SHINE_SYS_UPDATE` 私有事件协议把结果返回 Rust。
+```text
+选择 item
+  → 只读检测
+  → ensure-present 安装
+  → 再次检测
+  → 记录本次结果
+  → 启用该 item 的 Shine-owned shell integration
+```
 
-Shell integration 也主要集中在平台级 `profile.pre.*` / `profile.post.*` 中。即使用户只选择一个
-item，Shine 仍会安装包含多个工具检测与 activation 逻辑的整份平台 profile。
+从 v1.4 向 v1.5 开发期间，过渡实现曾同时保留 monolithic `init.sh` / `init.ps1` dispatcher，又
+增加 Rust provider、manifest detection/install metadata 和 profile composer，形成双轨。v1.5.0
+最终收敛到单一 v2 contract：所有 bootstrap item 显式声明 detection 与 provider/per-item script，
+builtin preset 已一次性迁移，legacy bootstrap dispatcher 与私有 status wire protocol 已删除。
 
-这个结构能快速添加 builtin 行为，但扩展一个普通 software item 时，作者必须同时理解：
+这是 public preset contract 的破坏性更新，最终随 Shine 1.5.0 发布。已安装用户的
+`sys-manifest.toml` 运行状态继续兼容读取；破坏的是 preset authoring contract，不是用户已有状态。
 
-- manifest item 与 named profile；
-- 平台脚本的 dispatch 约定；
-- status/update 私有事件协议；
-- package manager、proxy、privilege 和 exit-code 差异；
-- 平台级 shell profile 的顺序与条件逻辑；
-- Rust 何时写 `sys-manifest.toml`、安装 profile 和停止后续 item。
+## 2. 背景与问题
 
-对“检测一个命令，不存在时通过 Homebrew/APT/Winget 安装，再启用 shell integration”这类常见
-需求，这个心智负担过高，也导致三个平台重复实现相似的生命周期代码。
+### 2.1 v1.4 模型
 
-## 2. 产品定位
+线上 v1.4 的一个 OS preset 由以下部分组成：
 
-`shine sys` 的目标是：
+1. `shine.toml` 声明 item identity、selection profiles 与少量 managed metadata；
+2. 一个共享 `init.sh` / `init.ps1` 负责 item dispatch、检测、安装和只读 update check；
+3. 平台级 `profile.pre.*` / `profile.post.*` 包含多个软件的 activation；
+4. 脚本通过 `SHINE_SYS_STATUS` / `SHINE_SYS_UPDATE` 私有文本协议把结果返回 Rust。
 
-> 提供可靠、可审查的跨平台 bootstrap execution，并把常见 software item 的检测、安装和 shell
-> integration 标准化；只对少量具有完整安全生命周期的系统资源提供持续管理。
+该模型能快速添加 builtin 行为，但自定义 preset 作者必须理解平台 dispatch、状态协议、proxy、
+privilege、结果格式和整个平台 profile。普通 ensure-present item 与复杂产品安装没有清晰边界。
 
-责任边界为：
+### 2.2 过渡实现的问题
+
+v1.5.0 收敛前的过渡实现已经具备精确 positional selection、Rust package provider、item-owned
+profile composition 和 external-code permission，但 builtin 迁移尚不完整：
+
+- macOS 与 Windows 的多数普通 package 已声明 provider，但旧安装函数仍在平台脚本中；
+- Ubuntu 仍主要依赖 monolithic script；
+- 旧脚本继续承载 bootstrap fallback 与 update checks；
+- manifest、Rust 和脚本同时描述部分相同 lifecycle；
+- 新架构的代码量已经产生，但旧架构的维护成本尚未消失。
+
+长期保留双轨会让每个 bug 都需要判断它属于 provider、per-item script 还是 legacy fallback，也会
+让 custom preset contract 存在两种有效写法。v1.5.0 因此完成了 v2 单一执行模型的收敛。
+
+## 3. 产品定位
+
+`shine sys` 定位为：
+
+> 面向新设备初始化的、平台感知且可审查的 item execution framework；它为 environment setup 和
+> custom presets 提供稳定编排接口，但不接管第三方软件的长期版本管理。
+
+责任边界：
 
 ```text
 Shine
-  ├── 精确选择并执行 bootstrap items
-  ├── 确保选中的 software 在本次 bootstrap 后可用
-  ├── 组合和管理 Shine-owned shell integration
-  ├── 记录 bootstrap outcome
-  ├── 提供只读 update guidance
-  └── 管理少量可安全撤销的系统资源
+  ├── 发现当前 OS preset
+  ├── 精确选择并排序 bootstrap items
+  ├── 执行 detection 与 ensure-present install
+  ├── 统一 privilege、proxy、dry-run、timeout 和 outcome
+  ├── 组合 Shine-owned shell integration
+  ├── 保存 bootstrap run record 与 integration-enabled state
+  └── 管理少量具有安全 remove 语义的 managed resources
 
-Homebrew / APT / Winget / mise / rustup / upstream installer
-  └── 管理第三方软件版本、升级、依赖和软件仓库
+平台 preset
+  ├── 决定该平台有哪些 items
+  ├── 选择固定 package provider 或平台专属 per-item script
+  ├── 描述平台专属 detection
+  └── 描述平台专属 shell integration
+
+Homebrew / APT / Winget / rustup / mise / upstream installer
+  └── 管理软件版本、仓库、依赖、升级与卸载策略
 ```
 
-Shine 标准化的是 bootstrap execution，不是 software management。
+## 4. Goals
 
-## 3. 非目标
+1. 为 environment setup 提供稳定的 `sys/<item>` target 与精确 bootstrap API。
+2. 让 custom preset 作者无需实现 platform-wide dispatcher 或私有 status protocol。
+3. 让普通 package item 只需 declarative metadata。
+4. 让平台特有或复杂安装保留小型 per-item script escape hatch。
+5. 让被选择且成功检测/安装的 item 才启用自己的 shell integration。
+6. 删除 builtin 与 runtime 中的 legacy bootstrap fallback，消除双轨。
+7. 保持 managed resources 与 bootstrap software 的命令、状态和安全语义分离。
+8. 保持 v1.4 runtime state 可读取，避免升级后静默丢失已启用 profile。
 
-- 不记录或持续验证 installation provenance。
-- 不为 bootstrap software 增加 `shine sys upgrade <ITEM>`。
-- 不执行第三方软件升级；`shine sys update [ITEM]` 保持只读。
-- 不实现 package solver、dependency resolution、version constraint、version pinning 或 rollback。
-- 不替代 Homebrew、APT、Winget、mise、rustup 等工具。
-- 不猜测预先存在软件的安装来源。
-- 不通过任意 shell-string install/update 字段开放未经约束的命令 DSL。
-- 不把 common install steps 扩展成包含 download/extract/retry/fallback/rollback 的通用 workflow DSL。
-- 不让 `sys/mise` 管理 `mise.toml`、plugins、backend selection 或 runtime versions。
-- 不强制所有复杂安装迁移到 Rust；产品特定流程继续使用受约束的 per-item script escape hatch。
-- 不让 named selection profile 同时承担 shell profile 内容或软件卸载语义。
-- 不为了扩大 sys feature 数量而增加无法可靠 inspect/remove 的 managed driver。
+## 5. Non-goals
 
-## 4. 核心概念
+- 不设计 universal cross-platform item manifest。
+- 不要求不同 OS 拥有相同 item ID、provider、版本或安装步骤。
+- 不实现 platform condition DSL；每个 OS 继续拥有独立 preset。
+- 不实现 package solver、dependency resolution、version constraints、pinning 或 rollback。
+- 不记录或推断 installation provenance。
+- 不增加 bootstrap software upgrade/uninstall ownership。
+- 不通过任意 shell-string metadata 创建 workflow DSL。
+- 不把 download/extract/retry/fallback 等产品流程通用化到 Rust；这类逻辑留在 per-item script。
+- 不让 selection profile 表示 software desired state 或隐式卸载。
+- 不在本轮增加 `item_files` / include；先完成执行模型收敛，再用真实规模评估 manifest 分片。
+- 不为了扩大 `sys` 功能而新增无法可靠 inspect/remove 的 managed driver。
 
-### 4.1 Bootstrap item
+## 6. 核心模型
 
-`mode = "init"` 的 item 表示一次 ensure-present bootstrap：
+### 6.1 Bootstrap item
 
-1. 只读检测 software 是否已经可用；
-2. 已可用时记录 `already-installed`，不升级；
-3. 不可用时执行受约束的 package provider 或 per-item script；
-4. 安装后重新检测；
-5. 验证成功后记录 outcome，并启用该 item 声明的 shell integration。
+`mode = "init"`（默认值）表示一次 ensure-present 初始化：
 
-Bootstrap outcome 是执行记录，不是实时版本状态，也不构成对第三方软件文件的 ownership。
+1. detection 已满足时记录 `already-installed`，不执行 install；
+2. detection 未满足时执行 provider 或 per-item script；
+3. install 成功后必须再次执行同一 detection；
+4. 再检测仍失败时，item 失败且不得启用 integration；
+5. 成功只形成 run record，不代表 Shine 拥有该软件。
 
-### 4.2 Managed item
+v2 中每个 bootstrap item 必须同时声明 `detect` 与 `install`。不存在“缺少 install 时调用平台
+`init.sh <item>`”的 fallback。
 
-`mode = "managed"` 的 item 持续比较 desired/current state，并通过 receipt 支持幂等 apply 和安全
-remove。它继续使用 `shine sys apply`、`shine sys uninstall` 和顶层
-`shine upgrade sys/<ITEM>`，不进入 software bootstrap provider 模型。
+### 6.2 Managed item
 
-当前 builtin managed item 是 `split-dns`；Rust core 还提供 `managed-file` driver，供自定义或未来
-builtin preset 使用。managed driver 是严格评审后的例外，不是 software item 的默认实现方式。
-
-### 4.3 两种 profile
-
-本文严格区分：
-
-- **Selection profile**：`recommended`、`minimal`、`all` 等 named item composition，决定一次
-  bootstrap 选择哪些 items。
-- **Shell integration profile**：登录 shell 中的 PATH、environment、activation、alias、function
-  等配置，由 base profile 和 item-owned integrations 组合生成。
-
-文档和代码命名应避免用无修饰的 `profile` 同时指代两者。
-
-## 5. 精确 Bootstrap CLI
-
-item 作为 positional arguments：
+`mode = "managed"` 表示 Shine 持续拥有 desired/current comparison 与安全 remove 语义的系统资源。
+它继续使用：
 
 ```text
-shine sys bootstrap [ITEM]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
+shine sys apply <ITEM>
+shine sys uninstall <ITEM>
+shine upgrade sys/<ITEM>
 ```
 
-示例：
+Managed item 不声明 bootstrap `detect`、`install` 或 shell integration。当前 `split-dns` 和已有
+managed-file driver 保持该模型；新增 driver 仍需独立设计评审。
 
-```bash
-shine sys bootstrap mise
-shine sys bootstrap rust mise
-shine sys bootstrap --preset recommended
-shine sys bootstrap
-```
+### 6.3 Selection profile 与 shell integration
 
-规则：
+- **Selection profile**：命名 item 列表，例如 `recommended`、`minimal`、`all`，只决定本次选择。
+- **Shell integration**：item 对 Shine-owned shell profile 的贡献，拥有独立 activation state。
 
-- positional items 与 `--preset` 互斥；
-- 指定 items 时只接受当前 OS manifest 中 `mode = "init"` 的 item；
-- managed item 返回明确错误，并提示 `shine sys apply <ITEM>`；
-- 保留用户输入顺序；重复 item 在执行前去重，并保留首次出现的位置；
-- 无 items 和 `--preset` 时保持现有 interactive/default behavior；
-- 每个 item 独立检测与执行，首个失败仍停止后续 item；
-- shell integration composition 每次 invocation 最多 finalize 一次；
-- user-facing target/reporting 使用 canonical `sys/<item>`；
-- 内部 manifest/receipt 继续使用 `(os_id, item_id)`，不把展示格式写入持久化 identity；
-- CLI、未来 environment setup 和测试调用同一个 lower-level selection/execution API。
+Selection profile 不是 replacement desired state。执行 `recommended` 不得禁用过去单独启用的 item。
 
-该能力只提高 bootstrap 粒度，不改变 software version ownership。
+## 7. Sys Preset v2 Contract
 
-## 6. 标准 Software Item 模型
+### 7.1 根 manifest
 
-### 6.1 Manifest 结构
-
-普通 package provider item 的模型：
+每个 `presets/sys/<os-id>/shine.toml` 必须显式声明：
 
 ```toml
+version = 2
+description = "Initialize this platform for development."
+default_profile = "recommended"
+
 [[items]]
 id = "mise"
 label = "mise"
 description = "Install the mise development environment manager."
-mode = "init"
+detect = { kind = "command", command = "mise", version_args = ["--version"] }
+install = { kind = "package", provider = "homebrew", package = "mise" }
 
-[items.detect]
-kind = "command"
-command = "mise"
-version_args = ["--version"]
-
-[items.install]
-kind = "package"
-provider = "homebrew"
-package = "mise"
-```
-
-Windows 可以只替换 provider metadata：
-
-```toml
-[items.install]
-kind = "package"
-provider = "winget"
-package = "jdx.mise"
-```
-
-这不是跨平台 universal manifest；每个平台仍拥有自己的 `presets/sys/<os>/shine.toml`，因此不需要
-在单个 item 中引入复杂的 platform condition DSL。
-
-### 6.2 Detection
-
-初始版本只支持少量可静态校验的 detection kinds：
-
-- `command`：命令是否可解析；可选结构化 `version_args` 仅用于显示；
-- `path`：文件或目录是否存在；
-- `any`：一组 command/path probes 中任一满足。
-
-Detection 必须只读、无 shell 拼接、无隐式网络访问。安装前后的 detection 使用同一实现。无法用这些
-原语准确检测的 item 使用 per-item script，而不是继续扩展 detection DSL。
-
-### 6.3 Package provider
-
-初始 provider 限定为 builtin preset 已有的重复路径：
-
-- Homebrew formula；
-- Homebrew cask；
-- APT package；
-- Winget package。
-
-Rust 负责：
-
-- 使用结构化 argv 构造固定 install action；
-- package identifier validation；
-- proxy 参数与环境变量；
-- Unix privilege elevation 和 Windows elevation guidance；
-- native process exit-code 检查；
-- dry-run、安全输出和失败格式；
-- 安装后 detection；
-- 统一生成 `installed`、`already-installed`、`needs-action` 或 `failed` outcome。
-
-Provider 只允许 ensure-present/install，不暴露 upgrade action，不解析或解决 dependencies。
-
-### 6.4 Per-item script escape hatch
-
-复杂 bootstrap 使用独立脚本：
-
-```toml
-[items.install]
-kind = "script"
-path = "install/yazi.sh"
-```
-
-目录约定：
-
-```text
-presets/sys/ubuntu/
-  ├── shine.toml
-  ├── install/
-  │   ├── neovim.sh
-  │   ├── yazi.sh
-  │   └── astronvim.sh
-  └── profile/
-      ├── yazi.sh
-      ├── fzf.sh
-      └── zsh-vi-mode.zsh
-```
-
-新 per-item install script：
-
-- 只实现该 item 的产品特定安装流程；
-- 不负责 item dispatch；
-- 不写 manifest 或 shell profile；
-- 不实现 software upgrade；
-- 不要求输出 `SHINE_SYS_STATUS` / `SHINE_SYS_UPDATE`；
-- 通过正常 stdout/stderr 和 exit code 返回结果；
-- 由 Rust 在执行前后检测并决定最终 outcome。
-
-如果安装成功后还需要人工动作，可以通过受校验的 manifest metadata 提供 `success_status` 和
-`success_hint`，而不是让脚本发明新的 wire status。
-
-## 7. Shell Integration 模型
-
-### 7.1 Base profile
-
-平台级 profile 只保留与单个 software 无关的公共逻辑，例如：
-
-- `shine theme sync`；
-- 通用 user-local PATH；
-- Shine profile loader；
-- 必要的平台 shell bootstrap。
-
-建议文件名明确表达其职责：
-
-```text
-profile/base.pre.sh
-profile/base.post.sh
-profile/base.pre.ps1
-profile/base.post.ps1
-```
-
-Homebrew、mise、Starship、Yazi、fzf 等 software-specific 内容应逐步移入 item-owned integration。
-
-### 7.2 声明式 integration
-
-常见 integration 使用有限的声明式原语。例如：
-
-```toml
 [[items.shell]]
 shells = ["bash", "zsh"]
 phase = "post"
 when_command = "mise"
 eval = ["mise", "activate", "{shell}"]
+
+[profiles.recommended]
+items = ["mise"]
 ```
+
+`version = 2` 本身启用 item-owned profile composition，不再需要
+`profile_composition = true` feature flag。
+
+### 7.2 Version validation
+
+- 缺少 `version` 的 manifest 按 v1 识别并拒绝执行；
+- `version = 1` 返回同一 migration error；
+- 未知更高版本返回“当前 Shine 不支持该版本”，不得尝试降级解析；
+- version error 必须在 detection、脚本执行、提权或 profile write 之前发生；
+- `list` / `info` 可以展示 manifest incompatibility，但不得吞掉错误并借用 embedded category。
+
+v1 错误应明确指出：删除 monolithic dispatcher、为每个 init item 增加 `detect` / `install`、迁移
+software-specific profile，并链接对应版本的 migration guide。
+
+### 7.3 Detection
+
+v2 初始只支持经过 builtin 需求验证的只读 detection：
 
 ```toml
-[[items.shell]]
-shells = ["bash", "zsh"]
-phase = "pre"
-path = "$HOME/.local/bin"
+detect = { kind = "command", command = "mise", version_args = ["--version"] }
+detect = { kind = "path", path = "$HOME/.config/nvim" }
 ```
+
+复杂的任一匹配继续使用 `any`：
 
 ```toml
-[[items.shell]]
-shells = ["bash", "zsh"]
-phase = "post"
-when_command = "eza"
-aliases = { ls = "eza --icons", ll = "eza -la --icons" }
+[items.detect]
+kind = "any"
+probes = [
+  { kind = "command", command = "zerotier-cli" },
+  { kind = "path", path = "/Applications/ZeroTier One.app" },
+]
 ```
 
-初始原语限制为实际 builtin 需求已经证明必要的集合：
+约束：
 
-- `path`；
-- `env`；
-- guarded `eval`；
-- guarded `source`；
-- aliases。
+- detection 只读且不得隐式联网；
+- command 使用结构化 argv，不经过 shell；
+- path 允许 `$HOME` 形式，但必须经过现有安全展开与 validation；
+- install 前后使用同一 detection；
+- 无法可靠表达时，优先改善平台专属 detection primitive，而不是把检测藏进 install script；
+- 不增加 arbitrary `command = "shell string"`。
 
-值、argv、shell placeholder 和路径必须经过验证与 shell-specific escaping。不要增加任意
-`command = "..."` shell string。
+### 7.4 Package provider
 
-### 7.3 Item-owned fragment
+普通 ensure-present package 使用有限 provider：
 
-Yazi 的 shell function、fzf 的平台 fallback、zsh-vi-mode 的多路径探测等复杂逻辑使用 fragment：
+- `homebrew`
+- `homebrew-cask`
+- `apt`
+- `winget`
+
+示例：
 
 ```toml
-[[items.shell]]
-shells = ["bash", "zsh"]
-phase = "post"
-fragment = "profile/yazi.sh"
+install = { kind = "package", provider = "winget", package = "jdx.mise" }
 ```
 
-Fragment 必须只包含该 item 的 shell integration，不应重新引入整个平台的 dispatch 或安装逻辑。
+Rust 负责固定 argv、package identifier validation、proxy、privilege、timeout、bounded output、
+exit code、dry-run、安装后 detection 与 outcome。Provider 只提供 install/ensure-present，不提供
+upgrade、remove、version pin 或 dependency solver。
 
-### 7.4 Composition 与顺序
+Provider 是否可用由当前 OS preset 决定，不要求同一 item 在其他 OS 使用相同 provider。Homebrew
+本身、Rustup 或平台缺少适用 package 的 item 使用 per-item script。
 
-Rust profile composer 使用稳定顺序生成 Shine-owned profile：
+### 7.5 Per-item install script
+
+复杂安装使用平台专属文件：
+
+```toml
+[items.install]
+kind = "script"
+path = "install/neovim.sh"
+```
+
+推荐目录：
 
 ```text
-base.pre
-  → enabled item pre integrations
-  → user profile content
-  → enabled item post integrations
-  → base.post
+presets/sys/ubuntu/
+├── shine.toml
+├── install/
+│   ├── astronvim.sh
+│   ├── homebrew.sh
+│   ├── neovim.sh
+│   └── yazi.sh
+└── profile/
+    ├── base.pre.sh
+    ├── base.post.sh
+    ├── fzf.sh
+    ├── yazi.sh
+    └── zsh-vi-mode.sh
+```
+
+Per-item script contract：
+
+- 只安装一个 manifest item；
+- 不做 item dispatch；
+- 不写 `sys-manifest.toml` 或 shell profile；
+- 不实现 update/upgrade；
+- 不输出 `SHINE_SYS_STATUS` / `SHINE_SYS_UPDATE`；
+- 通过正常 stdout/stderr 与 exit code 返回；
+- 从 `SHINE_SYS_PRESET_ROOT` 与 `SHINE_TARGET_HOME` 获取受支持路径；
+- proxy/required env 由 Rust 按声明注入；
+- 成功后仍由 Rust detection 决定最终 outcome。
+
+Script path 必须是 preset root 下的安全相对路径：拒绝绝对路径、`..`、symlink escape 和不匹配当前
+平台的扩展名。External/overlay script 受 `allow_sys_code` 控制。
+
+### 7.6 Success guidance
+
+安装成功但仍需人工操作时，可以声明：
+
+```toml
+[items.install]
+kind = "package"
+provider = "homebrew-cask"
+package = "zerotier-one"
+success_status = "needs-action"
+success_hint = "open ZeroTier and join a network"
+```
+
+Hint 是受长度与控制字符校验的人类说明，不是 command string。
+
+## 8. Shell Integration v2
+
+### 8.1 Base 与 item ownership
+
+`profile/base.pre.*` 和 `profile/base.post.*` 只允许平台公共内容，例如：
+
+- Shine profile loader 所需环境；
+- user-local PATH；
+- terminal theme sync；
+- 与单个 software 无关的平台初始化。
+
+Homebrew、mise、Starship、Yazi、fzf、nvm 等内容必须归属对应 item。不得为了方便重新引入
+platform-wide software block。
+
+### 8.2 Declarative primitives
+
+常见 integration 使用有限、可校验的结构：
+
+- `path`
+- `env`
+- guarded structured `eval`
+- guarded `source`
+- `aliases`
+- item-owned `fragment`
+
+每个 `[[items.shell]]` 必须只选择其中一种内容形式。`eval` 是 argv，不是 shell string；`{shell}`
+只能替换为当前受支持 shell。路径、变量名、alias 和 argv 均需严格 validation 与 shell-specific
+escaping。
+
+复杂 function 或平台探测放入 `profile/<item>.*` fragment。Fragment 只负责该 item 的 activation，
+不得执行软件安装、修改 manifest 或分派其他 item。
+
+### 8.3 Activation semantics
+
+- bootstrap item 得到 `installed` 或 `already-installed` 后启用自己的 integrations；
+- item 失败时 activation state 不变；
+- targeted bootstrap 和 selection profile 都只增加成功 item，不禁用历史 item；
+- `shine sys profile enable <ITEM>` 先运行 detection，成功后才启用；
+- `shine sys profile disable <ITEM>` 只移除 Shine-owned generated content，不卸载软件；
+- `shine upgrade` 可以依据当前 v2 preset 重渲染已启用 integration，但不得升级 bootstrap software。
+
+### 8.4 Composition safety
+
+排序固定为 phase、显式 priority、manifest item 顺序、同 item integration 顺序。输出必须 byte
+deterministic；render/validation/fragment read 任一步失败时保留 last-known-good profile。
+
+继续遵守现有 profile invariants：
+
+- 只写 Shine sentinel block；
+- `$HOME` 路径保持可移植表达；
+- line-ending-only 差异不得触发改写；
+- PowerShell 同步 pwsh 与 Windows PowerShell profile；
+- 保留 PowerShell BOM；
+- 不触碰 sentinel 外用户内容。
+
+## 9. CLI 与 Environment Setup Contract
+
+### 9.1 Bootstrap CLI
+
+```text
+shine sys bootstrap [ITEM]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
 ```
 
 规则：
 
-- `pre` / `post` 继续映射到现有 sys sentinel blocks，不能改写 sentinel ownership 边界；
-- item 默认按 manifest 声明顺序排列，不按安装历史排列；
-- 同 item 内按声明顺序排列；
-- 只有确有顺序要求的少量内容允许可选 `priority`，相同 priority 仍按 manifest 顺序；
-- `zsh-syntax-highlighting` 等必须靠后的内容通过明确 priority 表达；
-- 生成内容必须保持 byte-deterministic 和 line-ending-aware reconciliation；
-- PowerShell 继续同时维护 pwsh 与 Windows PowerShell profile，并保留 BOM；
-- `$HOME` 下路径继续以 `$HOME/...` 形式写入。
+- positional items 与 `--preset` 互斥；
+- 保留输入顺序，重复 item 按首次出现去重；
+- 只接受当前 OS 的 init items；
+- managed item 提示使用 `shine sys apply`；
+- 无显式选择时保持 interactive/default-profile 行为；
+- 首个 item 失败后停止后续执行；
+- 一个 invocation 最多保存一次 manifest、compose 一次 profile；
+- reporting identity 使用 `sys/<item>`，持久化 identity 保持 `(os_id, item_id)`。
 
-### 7.5 Integration activation state
+### 9.2 Environment setup integration
 
-Shell integration 与软件卸载分开：
+Environment setup 必须调用与 CLI 相同的 lower-level selection/execution API，而不是拼接 shell command
+或重新实现 provider 逻辑。输入是有序 canonical targets，输出是逐 item structured outcome 与最终
+summary。
 
-- bootstrap item 得到 `installed` 或 `already-installed` 后，启用其 integrations；
-- bootstrap 失败时不启用；
-- targeted bootstrap 只增加本次成功 item，不隐式禁用以前启用的 integrations；
-- named selection profile 也不表示“删除 profile 外的 software/integration”；
-- 顶层 `shine upgrade` 只根据当前 preset 重新渲染已启用 integrations，不升级 software；
-- `sys-manifest.toml` 可以增加最小的 integration-enabled state，但不增加 provider/version
-  provenance。
+Environment definition 可以在不同 OS 选择不同 sys items，不要求名称或实现一致。缺失 item 是明确
+validation error，不允许从其他 OS 借用 preset 或自动猜测替代项。
 
-为避免“只能启用、不能退出”，提供命令：
+Targeted environment setup 不得改变未选择 item 的 software 或 activation state。
 
-```text
-shine sys profile enable <ITEM>
-shine sys profile disable <ITEM>
-```
+### 9.3 Status
 
-它们只管理 Shine-owned shell integration，不安装、升级或卸载 software。`enable` 必须先通过 item
-detection；`disable` 只能移除 Shine 自己生成的 fragment/receipt，不触碰用户 profile 内容。
+`shine sys status` 继续展示 bootstrap run record。它不得把 `installed` / `already-installed` 描述成
+实时 package 状态或版本 current，也不得为了显示状态执行 external code 或网络检查。
 
-### 7.6 External preset 安全边界
+## 10. 移除 Bootstrap Software Update
 
-Shell profile fragment 会在每次 shell 启动时执行，比一次性 install script 具有更长期的代码执行
-能力。因此：
+`sys` 的核心是新设备初始化，不是长期 package manager。v2 删除 bootstrap software 的 live/read-only
+update-check lifecycle：
 
-- `path`、静态 `env` 和 aliases 走严格声明式校验；
-- `eval`、`source` 和 `fragment` 视为 persistent executable profile code；
-- embedded builtin code 可以按内置信任边界使用；
-- external preset/overlay 的 bootstrap/managed/update-check scripts 与 executable profile code
-  必须通过全局 `allow_sys_code` 显式 opt in；项目配置不能授权自身；
-- dry-run 必须列出将持久加载的 item、phase、shell 和 fragment path；
-- update/status 的只读路径不得首次执行 external profile code；
-- 配置开关为独立的 `allow_sys_code`；它同时覆盖 external/overlay 的 install-time sys script
-  和 persistent executable profile code，不复用 app 专属的 `allow_app_hooks`。
+- 删除 `shine sys update [ITEM]`；
+- 删除 `SHINE_SYS_UPDATE` bootstrap protocol；
+- 删除 platform script 中的 `check-update` dispatch；
+- 顶层 `shine update` / `shine upgrade` 不检查或升级第三方 bootstrap software；
+- `shine update` 仍可报告 managed system resources 的 desired-state change；
+- `shine sys info` 可以展示 provider 与静态维护建议，但不得联网判断 package update。
 
-## 8. Rust 与 Preset 的责任边界
+用户通过 Homebrew、APT、Winget、mise、rustup 或上游工具管理第三方软件版本。English / Simplified
+Chinese migration notes 必须列出该命令删除与替代方式。
 
-### Rust core
+## 11. External Preset Security
 
-- CLI parsing、selection 和 canonical target reporting；
-- manifest schema validation；
-- detection；
-- package provider install argv；
-- privilege、proxy、timeout、output limit 和 exit code；
-- dry-run；
-- outcome、manifest 与 enabled integration state；
-- profile composition、排序、escaping、atomic write 和 reconciliation；
-- managed resource desired state、receipt、apply/remove。
+External preset 与 overlay 中以下内容视为 executable sys code：
 
-### Preset metadata
+- per-item install script；
+- managed script；
+- base profile；
+- `eval`、`source`、fragment；
 
-- item identity、label、description；
-- detection metadata；
-- package provider/package id 或 per-item script path；
-- named selection profiles；
-- shell integration declarations/fragments；
-- required env、human guidance 和有限的 success hint。
+它们必须由 global-only `allow_sys_code = true` 授权；project config 不能授权自身。静态 detection、
+provider metadata、PATH、env 和 aliases 不需要执行权限。
 
-### Per-item script
+Preflight 必须在任何 detection side effect、installer、提权或 profile write 前完成，并一次性列出：
 
-- 只处理无法用标准 provider 表达的产品特定 bootstrap；
-- 不复制 Rust lifecycle；
-- 不实现长期 software management。
+- 被阻止的 code kind 与路径；
+- base preset 与 active overlay 来源；
+- 实际生效的 global config 路径；
+- 授权或保持阻止的明确操作。
 
-## 9. 执行数据流
+Read-only `list`、`info`、`status` 与 completion 不得执行 external code。
 
-精确 bootstrap 的目标数据流：
+## 12. Migration
 
-1. 解析 positional items、named selection profile 或 interactive/default selection。
-2. 校验所有 selected items 均为当前 OS 的 init items，并保持选择顺序。
-3. 对每个 item 执行只读 detection。
-4. 已存在则记录 `already-installed`；否则执行 package provider 或 per-item script。
-5. 安装后重新 detection；未达到 declared present state 则失败。
-6. 记录成功 outcomes，并更新 integration-enabled state。
-7. Rust composer 一次性生成 base + enabled item integrations。
-8. 通过现有 pre/post sentinel 和 profile reconciliation 安装 profile。
-9. 输出 canonical `sys/<item>` 结果和一次 summary。
+### 12.1 Builtin migration
 
-失败时必须保留 last-known-good generated profile；不得用部分生成内容替换现有 profile。
+该迁移在开发分支中分 commit 完成，并在 v1.5.0 发布前满足以下门槛：
 
-## 10. 分阶段迁移
+1. 三个平台所有 init item 都有 v2 detection 与 install；
+2. 普通 Homebrew/APT/Winget item 使用 provider；
+3. 复杂 item 移入 `install/<item>.*`；
+4. software-specific profile 移入 metadata 或 `profile/<item>.*`；
+5. 删除 `presets/sys/*/init.sh` 与 `init.ps1` monolithic bootstrap assets；
+6. 删除 bootstrap legacy runner、fallback 与 status/update parser；
+7. embedded preset tests 证明不存在未迁移 init item；
+8. public manuals、migration guide、ADR、KB 与 changelog 同步。
 
-### Phase 0：确认现有边界
+### 12.2 External v1 presets
 
-当前已基本完成：
+不提供隐式 runtime adapter。原因是 v1 monolithic script 无法安全、确定地推导出 per-item detection、
+install ownership 或 shell integration。
 
-- public manual 已明确 sys 是 bootstrap + limited managed resources；
-- `sys update` 是只读检查；
-- `sys status` 展示 recorded outcome，不声称软件版本 current；
-- managed resources 与 bootstrap software 已在命令和文档中区分。
+Shine 2.0 对 v1 preset：
 
-剩余收尾是让 user-facing lifecycle reporting 一致展示 canonical `sys/<item>`，同时保持内部
-`(os_id, item_id)` identity 不变。
+- 在 preflight 阶段拒绝；
+- 不执行旧 script；
+- 不安装或重写旧 profile；
+- 输出 migration guide；
+- `shine preset copy sys/<os>` 导出完整 v2 builtin 作为参考。
 
-### Phase 1：精确 Bootstrap Item（已完成）
+Migration guide 至少覆盖：version、detection、provider、per-item scripts、profile ownership、移除 update
+check 和 external code permission。
 
-- 实现 `shine sys bootstrap [ITEM]...`；
-- 与 `--preset` 互斥；
-- 复用现有 selection/execution API；
-- 保持 legacy monolithic platform scripts；
-- 为 canonical reporting 和 finalize-once 增加测试。
+### 12.3 Runtime state compatibility
 
-Phase 1 可以独立交付，直接解除 environment setup/composition 的主要粒度阻塞。
+`<shine_dir>/sys-manifest.toml` 是用户运行状态，不随 preset v1 一起废弃：
 
-### Phase 2：标准 Detection 与 Package Provider（已完成）
+- 继续读取 v1.4 entries；
+- 缺少 `profile_enabled` 的既有 init entry 默认视为 enabled；
+- 只对当前 v2 manifest 中仍存在且声明 shell integration 的 item 参与 composition；
+- 未知/已删除 item 不执行代码、不阻塞 bootstrap，也不立即破坏性删除 receipt；
+- 正常的下一次成功 bootstrap/profile operation 再以当前 schema 原子保存；
+- 不要求用户重新运行所有 installer 才能恢复 shell profile。
 
-- 接受最小 `detect` / `install` schema；
-- 实现 Homebrew formula/cask、APT、Winget provider；
-- Rust 统一 privilege、proxy、dry-run、exit-code 和 outcome；
-- 新 script item 使用 per-item script contract，不再输出私有 status event；
-- legacy `init.sh` / `init.ps1` 继续兼容。
+若最终实现需要不可隐式完成的状态清理，必须通过 `shine state migrate` 提供可预览、版本化迁移，
+不能藏在普通 read command 中。
 
-### Phase 3：可组合 Shell Integration（已完成）
+## 13. Failure Semantics
 
-- 分离 base profile 与 item-owned integrations；
-- 实现有限声明式原语和 fragment escape hatch；
-- 引入 integration-enabled state；
-- 实现稳定 composition、last-known-good 和 external-code permission；
-- 评估并固化 `sys profile enable/disable` 命令。
+- Manifest/version/permission validation 失败：任何 item 都不得执行。
+- Detection 失败：当前 item 失败，不执行 installer。
+- Installer 非零退出或 timeout：当前 item 失败，不进行成功写入。
+- Installer 返回零但 post-detection 失败：当前 item 失败并保留诊断。
+- Item 失败：后续 item 停止，之前成功 outcome 可以记录，但 profile 只在完整 compose 成功后替换。
+- Profile compose/write 失败：保留 last-known-good generated profile 与用户 sentinel 内容。
+- Dry-run：不得执行 detection 之外的 installer、提权、state write 或 profile write；输出 provider/script、
+  required env 与持久 integration 计划。
+- Diagnostics 不得打印 secret value、proxy credential 或脚本接收的敏感环境变量。
 
-### Phase 4：迁移 Builtin Presets（进行中）
+## 14. Verification Plan
 
-建议顺序：
+### 14.1 Manifest and custom preset
 
-1. Windows Winget items；
-2. macOS Homebrew formula/cask items；
-3. Ubuntu APT items；
-4. Ubuntu/macOS/Windows 的简单 activation；
-5. Yazi、fzf、zsh-vi-mode、AstroNvim 等 per-item scripts/fragments。
+- v2 package、script、managed item 正常解析；
+- 缺少/未知 version 有精确错误；
+- init item 缺少 detection/install 被拒绝；
+- managed item 混入 bootstrap fields 被拒绝；
+- duplicate ID、非法 profile reference、非法 env key/path/package/argv 被拒绝；
+- external full source 不借用 embedded category/file；
+- overlay 继续按既有 per-file precedence；
+- copy/export 包含 install/profile resources。
 
-每个平台迁移完成并有 golden tests 后，再弃用对应 monolithic dispatch/status protocol。兼容期内新旧
-模型不能对同一 item 同时执行。
+### 14.2 Execution
 
-当前实现进度：Windows Winget items 已迁移；macOS 常见 Homebrew formula/cask items 已迁移；
-Ubuntu 的直接 APT item 已开始迁移。三个平台的 shell profile 均已拆为 base + item-owned
-integration。仍需产品特定 fallback 的 item 保留 legacy dispatcher/update-check 兼容路径；manifest
-存在 `[items.install]` 时 Rust 一定选择标准执行器，因此不会对同一 item 双重执行。
+- Homebrew formula/cask、APT、Winget argv、proxy 与 privilege 均有纯 Rust 测试；
+- already-present item 不执行 install；
+- provider/script 完成后统一 post-detect；
+- per-item script 只依赖 exit code，不解析 legacy status event；
+- timeout/output limit 与错误 redaction 有覆盖；
+- targeted selection 保序、去重且首错停止；
+- environment setup 与 CLI 使用同一 execution entry point。
 
-## 11. 进入下一阶段的门槛
+### 14.3 Profile
 
-### Phase 1 → Phase 2
+- 只启用成功 item；
+- targeted/profile selection activation-additive；
+- enable 先检测、disable 不卸载；
+- priority/manifest/declaration order deterministic；
+- fragment/base failure 保留 last-known-good；
+- CRLF/LF、PowerShell BOM、双 profile 路径和 sentinel ownership 保持现有 golden behavior；
+- v1.4 runtime entries 在 v2 下正确重组。
 
-- 精确 item CLI 与 canonical reporting 已稳定；
-- named/interactive/targeted selection 共用同一 API；
-- targeted action 不改变未选择 item；
-- profile finalize-once 已有测试。
+### 14.4 Removal gates
 
-### Phase 2 → Phase 3
+- embedded assets 中不存在 monolithic `init.sh` / `init.ps1`；
+- production bootstrap path 中不存在缺失 install 的 legacy fallback；
+- bootstrap 不再解析 `SHINE_SYS_STATUS` / `SHINE_SYS_UPDATE`；
+- CLI 不再暴露 `shine sys update`；
+- 所有 builtin init item 通过 v2 validation；
+- `rg`/characterization test 确认旧 dispatch functions 已删除而非仅不可达。
 
-- package provider argv、proxy、privilege 和 exit-code 在三平台有测试；
-- standard item 与 legacy script 的互斥和 fallback 边界明确；
-- failed detection/install 不写错误的成功 outcome；
-- external install code permission 已有明确策略。
+### 14.5 Repository checks
 
-### Phase 3 → Phase 4
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features --tests --benches -- -D warnings`
+- `cargo nextest run --all-features`
+- `cargo deny check bans licenses sources`
+- `typos`
+- website locale parity、typecheck 与 production build
+- 代表性 macOS/Linux dry-run；Windows argv/profile 通过 CI 与 PowerShell tests
+- `git diff --check`
 
-- generated profile 顺序与 bytes deterministic；
-- pre/post sentinel、BOM、CRLF/LF 和 three-way merge invariants 有 golden coverage；
-- item integration enable/disable 不触碰用户内容；
-- external persistent profile code 必须显式授权；
-- last-known-good profile 在 render/fragment failure 时保持不变。
+## 15. Documentation and Decision Records
 
-## 12. 验收原则
+Sys v2 行为随 v1.5.0 落地时，已在同一 release change 中：
 
-1. 精确 bootstrap 只执行用户选择的 init items。
-2. 重跑 bootstrap 只验证已存在 software，不把它包装成 upgrade。
-3. `sys update` 始终只读；Shine 不新增 bootstrap software upgrade command。
-4. package provider 只执行固定、结构化的 ensure-present argv。
-5. 标准 item 作者无需理解 `SHINE_SYS_STATUS` / `SHINE_SYS_UPDATE` wire protocol。
-6. 复杂安装和 profile 行为按 item 隔离，不回到平台级 giant dispatcher。
-7. selection profile 只负责选择，不隐式卸载 software 或禁用其他 integrations。
-8. profile integration enable/disable 只修改 Shine-owned content。
-9. managed resource 与 bootstrap software 在 schema、命令、状态和文档中保持可区分。
-10. targeted sys action 不改变未选择 item。
-11. profile 生成失败保留 last-known-good，不能写入部分结果。
-12. external persistent profile code 必须显式 opt in。
-13. 所有新增 user-visible behavior 同步更新 English 和 Simplified Chinese manual。
-14. 接受 CLI、manifest schema、profile composition 或 permission contract 后，用 ADR 记录最终设计；
-    本文规划不替代实现事实源。
+1. 新增 ADR，明确 supersede ADR 0027 中的 gradual legacy fallback 与 bootstrap update-check 部分；
+2. 更新 sys architecture data flow 与 invariants；
+3. 同步 AGENTS.md module map/command routing；
+4. 更新 English 与 Simplified Chinese custom presets、system init、commands、built-in presets、
+   configuration 和 troubleshooting；
+5. 发布 v1 → v2 preset migration guide；
+6. 在 changelog 明确列出 `shine sys update` 删除、manifest v2 和 runtime state compatibility；
+7. 不把本 PRD、KB、ADR 或 release runbook 发布到 public manual。
 
-## 13. 推荐优先级
+本 PRD 是私有产品记录，不发布到 public manual；公开手册继续以已发布行为为准。
 
-| 阶段 | 内容 | 优先级 |
-| --- | --- | --- |
-| Phase 0 | canonical reporting 收尾 | 已完成 |
-| Phase 1 | `sys bootstrap [ITEM]...` | 已完成 |
-| Phase 2 | 标准 detection/package provider/per-item script | 已完成 |
-| Phase 3 | item-owned shell integration 与 profile composer | 已完成 |
-| Phase 4 | builtin preset 渐进迁移 | 进行中 |
-| 持续边界 | 新 reversible managed driver | 仅按真实需求评审 |
-| 不进入路线 | provenance、software upgrade、package/runtime version management | 不做 |
+## 16. Release and Acceptance Criteria
 
-这条路线只把重复、易错的 bootstrap lifecycle 和 profile composition 收进 Rust，不接管第三方软件
-版本。普通扩展以 metadata 为主，复杂差异保留在小型 per-item script/fragment 中，从而同时降低 preset
-作者心智负担并保持 Shine 的产品边界。
+Sys v2 的首个 stable release 是 Shine 1.5.0。以下条件中，1–3 和 5–12 是该版本的发布验收边界；
+第 4 项 Environment Setup 集成仍是后续工作。整份 PRD 只有在全部条件满足后才视为完成：
+
+1. Custom sys preset 只有一个 v2 bootstrap execution contract。
+2. 三个平台 builtin preset 无 legacy bootstrap fallback。
+3. 平台差异通过独立 OS manifest 与 per-item script 表达，不引入 universal platform DSL。
+4. Environment setup 可稳定调用 ordered `sys/<item>` targets。
+5. 普通 provider 与复杂 script 都遵循同一 pre/post detection 和 outcome 规则。
+6. 选择未涉及的 item 不被安装、禁用或修改。
+7. Profile failure 不破坏 last-known-good 与用户内容。
+8. External executable sys code 必须 global opt-in，read-only commands 不执行代码。
+9. v1 external preset 在执行前获得可操作 migration error。
+10. v1.4 runtime state 可读取，升级不要求重装软件。
+11. `shine sys update` 与旧 bootstrap protocols 已删除，文档给出 package-manager 替代路径。
+12. English / Simplified Chinese manual、ADR、KB、changelog 与 implementation 一致。
+
+## 17. Risks and Mitigations
+
+| Risk | Mitigation |
+| --- | --- |
+| 外部 v1 preset 被破坏 | Major release、preview、明确 version error、migration guide、完整 v2 copy 示例 |
+| 平台脚本拆分遗漏隐式共享状态 | 每个 item 声明 required env；公共逻辑仅进入 Rust 或 base；逐 item characterization tests |
+| Windows/macOS/Linux 行为难以在单机验证 | 固定 argv 单测、平台 CI、preview smoke test，不以“跨平台相同”作为验收 |
+| Profile 顺序变化 | 迁移前后 golden output 对比，显式 priority，保持 manifest order |
+| Runtime state 与新 manifest 不一致 | ID-based tolerant load、未知 entry 不执行、必要清理走 versioned state migrate |
+| Rust core 继续膨胀成通用 workflow engine | provider 保持有限；复杂流程必须回到 per-item script；新增 primitive 需 builtin 证据 |
+| 为解决 manifest 长度过早增加 include | v2 首版维持单 `shine.toml`；完成执行迁移后再独立评估 authoring ergonomics |
+
+## 18. Final Product Boundary
+
+Sys v2 不承诺不同平台做相同的事。它承诺：无论某个平台选择 metadata provider 还是专属脚本，Shine
+都能以同一套可审查生命周期精确初始化所选 item、记录结果并安全管理自身写入的 shell integration。
+
+这使 custom presets 可以表达平台真实差异，为后续 environment setup 定义稳定 target contract，
+也让 Shine 从 v1.4 的 platform-wide private script protocol 收敛为一个没有 legacy fallback 的新设备
+初始化核心。
