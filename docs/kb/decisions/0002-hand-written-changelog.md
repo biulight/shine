@@ -21,3 +21,6 @@ same release in different words — neither overwrites the other.
 - Commit messages still matter: git-cliff builds release notes from them, and the
   `fix(lint|clippy|fmt|typo|build|ci|internal)` scopes are auto-skipped (see
   `conventions.md`).
+- Documentation-only `docs`, scoped `docs(...)`, and `fix(docs)` commits are also skipped from
+  GitHub Release notes; user-facing feature and fix commits remain eligible even when they include
+  documentation changes.

@@ -20,6 +20,9 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   | `fix(build): ...` | build/compile error in new code |
   | `fix(ci): ...` | CI pipeline fix |
   | `fix(internal): ...` | any other non-user-facing cleanup |
+- GitHub Release notes also skip documentation-only commits written as `docs:`, `docs(scope):`,
+  or `fix(docs):`. Feature and bug-fix commits remain included even when they update public docs
+  in the same change.
 - Pre-commit runs `cargo fmt --check`, `clippy -D warnings`, `cargo deny check`, `typos`, and
   `cargo nextest run`; it validates `mise.toml`, and changes to Bun tooling or TypeScript sources
   additionally run `mise exec -- bun run check:ts` (strict type-check + Bun tests). All must pass
