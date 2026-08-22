@@ -23,7 +23,7 @@ deleting unrelated files.
 
 **Give personal automation a reviewable lifecycle.**
 
-This manual applies to **Shine 1.5.0**.
+This manual applies to **Shine 1.6.0**.
 
 ## What Shine helps you do
 

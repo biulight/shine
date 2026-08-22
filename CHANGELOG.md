@@ -7,6 +7,25 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-08-22
+
+### Features
+
+- Added `shine env workspace export --format dotenv` to resolve one workspace mode into a
+  standalone dotenv file, with explicit secret inclusion, safe overwrite controls, and dry-run
+  preview.
+
+### Bug Fixes
+
+- Identified the active system bootstrap item before administrator authorization or password
+  prompts appear.
+
+### Docs
+
+- Documented workspace dotenv export and system bootstrap prompt attribution in the English and
+  Simplified Chinese manuals, and clarified Shine's user-facing positioning and custom-preset
+  examples.
+
 ## [1.5.0] — 2026-08-22
 
 ### Breaking changes
