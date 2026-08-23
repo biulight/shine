@@ -53,6 +53,20 @@ Shine 不限定你怎样分享它。
 方式把批量重命名、表格整理或文档打印封装成自己的命令。每个命令需要的应用或运行时仍要安装在
 对应机器上。[自定义预设](./guides/custom-presets.md)介绍了实现机制和完整图片工作流。
 
+## 减少 AI agent 工作区里的明文密钥
+
+Claude Code、Codex 等 AI coding agent 可以读取工作区文件、运行命令并查看输出。Shine 可以把
+选定的工作区密钥封装为可提交的 GPG 或 age 密文，只在目标子进程需要时解密并注入：
+
+```bash
+shine env secret seal
+shine env run --mode development -- bun run build
+```
+
+这样可以降低明文密钥进入项目文件、日志、补丁或 agent 上下文的机会。它并不是沙箱：能够检查
+自身环境的命令仍然可以读取注入值。完整流程和安全边界见
+[在 AI agent 参与开发时保护环境密钥](./guides/agent-secret-safety.md)。
+
 ## 不只处理脚本和配置
 
 你还可以把重复命令保存为[任务](./guides/tasks-and-serve.md)，把选定的值带入

@@ -61,6 +61,22 @@ cleanup, or document printing in the same way. Each command still needs its appl
 on the machine. See [custom presets](./guides/custom-presets.md) for the mechanism and the complete
 image workflow.
 
+## Keep plaintext secrets out of AI agent workspaces
+
+AI coding agents such as Claude Code and Codex can read workspace files, run commands, and inspect
+their output. Shine can seal selected workspace secrets as commit-ready GPG or age ciphertext, then
+decrypt and inject them only into the child process that needs them:
+
+```bash
+shine env secret seal
+shine env run --mode development -- bun run build
+```
+
+This reduces the chance that plaintext secrets reach project files, logs, patches, or agent context.
+It is not a sandbox: a command that can inspect its environment can still read the injected values.
+See [protect environment secrets when using AI agents](./guides/agent-secret-safety.md) for the
+workflow and its security boundaries.
+
 ## Use the same toolkit for more than files
 
 Save commands you repeat as [tasks](./guides/tasks-and-serve.md), carry selected values into an
