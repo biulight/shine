@@ -11,6 +11,14 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Added the cross-platform `image-tools` shell preset with safe batch compression, bounded resizing,
   and JPEG/PNG/WebP conversion powered by Bun.
+- Added locked third-party dependencies for external and overlay Bun presets through a category-local
+  `package.json` and `bun.lock`, shared by Shell commands, app artifacts, and generators.
+
+### Breaking changes
+
+- Bun preset launchers now disable implicit package installation unless the effective external
+  script has a committed lock pair. Existing unlocked bare-package imports no longer download
+  automatically and must add `package.json` plus `bun.lock`, or bundle/vendor their dependencies.
 
 ### Docs
 

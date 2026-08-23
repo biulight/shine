@@ -18,10 +18,9 @@ bugs. Check this list before changing the modules named in each entry.
   conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
   format change re-detects installed launchers as stale on upgrade; changing it is a format bump.
   The content embeds the entry's ordered `env` spec (the `--with` tokens of the
-  `shine env run --no-workspace … -- bun <script>` wrapper), so adding/removing/reordering an `env`
-  declaration changes the bytes and refreshes the launcher; an entry with no `env` produces the v1
-  bytes and stays current. Ownership/removal still key only on the marker + target, independent of
-  `env`.
+  `shine env run --no-workspace … -- bun … <script>` wrapper) and its Bun dependency policy, so
+  either declaration changing refreshes the launcher. Ownership/removal still key only on the
+  marker + target, independent of `env` and dependency mode.
 - **Backups use the `<name>.shine.bak` suffix** (`install_core/file_ops.rs::backup_path`).
   Uninstall restores from that exact name; changing the suffix orphans existing backups.
 - **An app source has exactly one manifest destination.** A per-file `dest` overrides the category
@@ -90,6 +89,13 @@ bugs. Check this list before changing the modules named in each entry.
   run implicitly, but external preset or overlay code must be gated by
   `allow_app_hooks = true`; otherwise a user-controlled presets checkout would
   gain command execution during ordinary read-oriented update checks.
+- **Bun package installation is source-scoped and explicit.** Embedded scripts and external scripts
+  without a locked declaration run with `--no-install`. Only an effective external/overlay script
+  whose own physical category contains both `package.json` and `bun.lock` may run with
+  `--install=fallback`; one file without the other and any `trustedDependencies` field are errors.
+  Overlay package metadata never changes an inherited embedded script. Shine never runs
+  `bun install`, owns `node_modules`, or cleans Bun's global cache/virtual store, and dependency
+  download never bypasses `allow_app_hooks`. See ADR 0031.
 - **External sys executable code is separately opt-in.** Static detection/provider metadata and
   declarative PATH/env/aliases are safe to inspect, but external or overlay bootstrap/managed scripts,
   guarded eval/source, fragments, and base profile code require `allow_sys_code = true`. Read-only
@@ -156,6 +162,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
   files, manifest entries, and managed launchers, including legacy launchers pointing into the
   external tree. The external presets and overlay directories remain untouched.
+- **Preset materialization excludes `node_modules/` at every depth.** External Shell snapshots and
+  overlay copies retain `package.json` and `bun.lock`, but never copy a local installation tree into
+  Shine-owned state or embedded extraction.
 
 ## Secrets
 

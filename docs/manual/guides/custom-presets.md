@@ -166,6 +166,44 @@ Snapshot deployments stay current when their effective relative files and bytes 
 Live deployments report the old and new source paths because `shine upgrade` must repoint their
 managed command entries; this relocation is shown separately from content changes.
 
+### Use locked packages in external Bun presets
+
+Built-in Bun presets remain self-contained. External presets and overlays may use ordinary registry
+packages by committing both `package.json` and `bun.lock` in the same physical category directory as
+the effective script:
+
+```text
+shell/my-tools/
+├── shine.toml
+├── package.json
+├── bun.lock
+├── command.ts
+└── shared.ts
+```
+
+This convention also applies to Bun app artifact, teardown, and generator scripts under
+`app/<category>/`. Both files are required. Shine rejects a lone manifest or lock and, in this first
+version, any `trustedDependencies` declaration. An overlay declaration applies only when
+the overlay supplies the effective script; adding package files beside an inherited built-in script
+does not enable dependencies for it.
+
+Shine runs built-in and unlocked external scripts with `bun --no-install`. A locked external script
+runs with `bun --install=fallback`, so its first actual execution may download missing packages.
+`list` and `info` never fetch dependencies. Shine does not run `bun install`, copy `node_modules`, or
+own Bun's global cache and virtual store; uninstalling Shine or a preset does not clear those shared
+caches.
+
+For snapshot Shell presets, package or lock changes appear in `shine update` and take effect after
+`shine upgrade`. In live mode they are read on the next command invocation, while status still
+reports that the installed receipt should be refreshed. Fully offline machines need the relevant
+Bun cache already populated, or a bundled/vendored script. Native extensions, workspaces, `file:`,
+`link:`, and dependencies requiring lifecycle scripts are not guaranteed in this version.
+
+To migrate an external script that currently relies on Bun's implicit installation, create its
+category-local `package.json`, generate `bun.lock` with the repository's Bun version, commit both,
+and test from an empty Bun cache. Without the pair, bare package imports now fail instead of being
+downloaded automatically.
+
 You can also select the source through an environment variable:
 
 ```bash
@@ -267,9 +305,9 @@ Supported extensions are `.ts`, `.js`, `.mts`, and `.mjs`. Shine creates a manag
 extension, which users invoke as `my-tool`. Existing native `.sh` and `.ps1` entries remain
 compatible.
 
-Every device that runs the command needs Bun in `PATH`. Shine does not install Bun, download
-dependencies, or resolve `node_modules`. `runtime = "bun"` cannot be combined with
-`needs_source = true`.
+Every device that runs the command needs Bun in `PATH`. Shine does not install Bun or manage
+`node_modules`; external categories may opt into Bun-managed locked packages as described above.
+`runtime = "bun"` cannot be combined with `needs_source = true`.
 
 The optional `env` list applies only to Bun entries. Each item is `KEY` or `SOURCE=TARGET`. The entry
 injects values through `shine env run --no-workspace --with ...`, preferring `SOURCE_SECRET` and then

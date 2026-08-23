@@ -55,8 +55,9 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 - Rust and Bun versions have a single source of truth in root `mise.toml`; local development and CI
   must use those mise-managed tools. Root-level Bun development dependencies are locked by
   `bun.lock`; CI installs them with `bun install --frozen-lockfile` before running
-  `bun run check:ts`. Runtime preset scripts remain self-contained and must not import packages
-  from `node_modules`.
+  `bun run check:ts`. Built-in runtime preset scripts remain self-contained and may import only
+  relative modules plus Bun/Node built-ins. External or overlay Bun scripts may use dependencies
+  only through a category-local committed `package.json` + `bun.lock` pair; see ADR 0031.
 
 ## File size
 

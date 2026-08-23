@@ -160,6 +160,8 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 .iter()
                 .map(crate::env::EnvVarSpec::to_with_arg)
                 .collect::<Vec<_>>();
+            let bun_runtime =
+                crate::shells::deployment::bun_runtime_spec(config, &cat.name, script)?;
             let link_current = if link_exists {
                 let render_target = (config.is_external_presets
                     && config.external_shell_mode == crate::config::ExternalShellMode::Live
@@ -169,6 +171,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                     &link_path,
                     effective_source,
                     script.runtime,
+                    bun_runtime.dependency_mode,
                     &runtime_env,
                     render_target.as_deref(),
                 )
@@ -195,11 +198,17 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
             // A command is active when it has a manifest receipt or a launcher
             // (the latter preserves compatibility with pre-manifest installs).
             let is_installed = manifest_entry.is_some() || link_exists;
-            let manifest_current = !config.is_external_presets
+            let manifest_current = (!config.is_external_presets && manifest_entry.is_none())
                 || manifest_entry.is_some_and(|entry| {
                     entry.mode == config.external_shell_mode
                         && entry.source_path == script_path
                         && entry.runtime == expected_runtime
+                        && entry.bun_dependencies
+                            == bun_runtime
+                                .dependency_mode
+                                .as_manifest_value()
+                                .map(str::to_string)
+                        && entry.dependency_hash == bun_runtime.dependency_hash
                         && entry.transforms == effective_transforms
                         && entry.env == runtime_env
                         && entry.needs_source == script.needs_source
@@ -243,6 +252,31 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                     "runtime",
                     entry.runtime.clone(),
                     expected_runtime.to_string(),
+                );
+                push_deployment_change(
+                    &mut changes,
+                    "bun dependencies",
+                    entry
+                        .bun_dependencies
+                        .clone()
+                        .unwrap_or_else(|| "disabled".to_string()),
+                    bun_runtime
+                        .dependency_mode
+                        .as_manifest_value()
+                        .unwrap_or("disabled")
+                        .to_string(),
+                );
+                push_deployment_change(
+                    &mut changes,
+                    "dependency lock",
+                    entry
+                        .dependency_hash
+                        .map(|hash| format!("{hash:016x}"))
+                        .unwrap_or_else(|| "none".to_string()),
+                    bun_runtime
+                        .dependency_hash
+                        .map(|hash| format!("{hash:016x}"))
+                        .unwrap_or_else(|| "none".to_string()),
                 );
                 push_deployment_change(
                     &mut changes,
@@ -1409,6 +1443,8 @@ mod tests {
                 source_path: source.clone(),
                 rendered_path: config.rendered_dir().join("shell/custom/tool.sh"),
                 runtime: "bun".to_string(),
+                bun_dependencies: None,
+                dependency_hash: None,
                 transforms: vec!["template".to_string()],
                 env: vec!["OLD_KEY".to_string()],
                 needs_source: true,
@@ -1455,6 +1491,60 @@ mod tests {
                 },
             ]
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_bun_lock_change_reports_update_available() {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("tool.ts"), b"import 'zod'\n")
+            .await
+            .unwrap();
+        fs::write(
+            category.join("package.json"),
+            b"{\"dependencies\":{\"zod\":\"4.0.0\"}}",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("bun.lock"), b"lockfileVersion = 1\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        crate::shells::handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        fs::write(
+            category.join("bun.lock"),
+            b"lockfileVersion = 1\n# dependency changed\n",
+        )
+        .await
+        .unwrap();
+        let rows = build_shell_rows(&config).await.unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.label == "custom/mytool")
+            .unwrap();
+        assert_eq!(row.status_text, "update available");
+        assert!(row.changes.iter().any(|change| matches!(
+            change,
+            UpdateChange::DeploymentChanged {
+                field: "dependency lock",
+                ..
+            }
+        )));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

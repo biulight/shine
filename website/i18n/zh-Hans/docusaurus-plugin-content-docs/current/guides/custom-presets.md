@@ -144,6 +144,38 @@ live 模式下，普通 Shell/Bun 源文件内容在下一次调用时直接生�
 相对文件集合与字节没有变化，snapshot 部署仍保持最新；live 部署则会显示旧、新来源路径，因为
 `shine upgrade` 必须重新指向受管命令入口。该来源迁移会与内容变化分开显示。
 
+### 在外部 Bun 预设中使用锁定依赖
+
+内置 Bun 预设继续保持自包含。外部预设与 overlay 若要使用普通 registry 包，必须把
+`package.json` 和 `bun.lock` 一起提交到有效脚本所在的同一物理类别目录：
+
+```text
+shell/my-tools/
+├── shine.toml
+├── package.json
+├── bun.lock
+├── command.ts
+└── shared.ts
+```
+
+同一约定也适用于 `app/<category>/` 下采用 Bun 的 artifact、teardown 与 generator 脚本。两个
+文件缺一不可；首版还会拒绝任何 `trustedDependencies` 声明。Overlay 只有在自身提供有效脚本时才能
+使用自己的依赖声明；仅在 overlay 中加入 package 文件，不会为继承的内置脚本启用依赖。
+
+内置脚本和没有锁文件对的外部脚本都以 `bun --no-install` 运行。具备锁文件对的外部脚本以
+`bun --install=fallback` 运行，因此第一次真正执行时可能联网下载缺失包；`list` 与 `info` 不会
+下载依赖。Shine 不运行 `bun install`，不复制 `node_modules`，也不拥有 Bun 的全局缓存与 virtual
+store；卸载 Shine 或某个预设都不会清理这些共享缓存。
+
+Snapshot Shell 预设的 package 或 lock 变化会显示在 `shine update` 中，并在 `shine upgrade` 后
+生效。Live 模式会在下一次命令调用时读取当前文件，同时状态仍会提示刷新安装 receipt。完全离线的
+机器需要提前填充相应 Bun 缓存，或由作者 bundle/vendor 脚本。首版不保证原生扩展、workspace、
+`file:`、`link:` 以及需要生命周期脚本的依赖可用。
+
+若现有外部脚本依赖 Bun 的隐式安装，请在脚本类别根创建 `package.json`，使用仓库规定的 Bun
+版本生成 `bun.lock`，提交两者，并在空 Bun 缓存下测试。没有这对文件时，裸包导入现在会直接失败，
+不会再自动下载。
+
 也可以直接设置环境变量：
 
 ```bash
@@ -226,7 +258,9 @@ env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
 
 支持 `.ts`、`.js`、`.mts` 和 `.mjs`。安装后，Shine 会创建无扩展名的受管入口，用户仍以 `my-tool` 调用它；现有 `.sh` 和 `.ps1` 原生入口保持兼容。
 
-运行这类命令的每台设备都必须已在 `PATH` 中安装 Bun。Shine 不会安装 Bun、下载依赖或解析 `node_modules`；`runtime = "bun"` 也不能与 `needs_source = true` 组合使用。
+运行这类命令的每台设备都必须已在 `PATH` 中安装 Bun。Shine 不会安装 Bun 或管理
+`node_modules`；外部类别可以按上文约定启用由 Bun 管理的锁定依赖。`runtime = "bun"` 也不能与
+`needs_source = true` 组合使用。
 
 可选的 `env` 只适用于 Bun 入口。每项写成 `KEY` 或 `SOURCE=TARGET`；入口启动时会通过 `shine env run --no-workspace --with ...` 注入值，因此优先解密 `SOURCE_SECRET`，不存在时读取明文 `SOURCE`。声明 `env` 后，运行机器的 `PATH` 中还必须有 `shine`。不要在元数据中填写值或密文，只声明键名。
 

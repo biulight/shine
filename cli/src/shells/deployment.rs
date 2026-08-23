@@ -17,6 +17,10 @@ pub(crate) struct ShellManifestEntry {
     pub source_path: PathBuf,
     pub rendered_path: PathBuf,
     pub runtime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bun_dependencies: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency_hash: Option<u64>,
     #[serde(default)]
     pub transforms: Vec<String>,
     #[serde(default)]
@@ -110,6 +114,29 @@ pub(crate) fn rendered_path(config: &Config, category: &str, source_rel: &Path) 
         .join("shell")
         .join(category)
         .join(source_rel)
+}
+
+pub(crate) fn bun_runtime_spec(
+    config: &Config,
+    category: &str,
+    file: &ShellFile,
+) -> Result<crate::bun_runtime::BunRuntimeSpec> {
+    if file.runtime != crate::bin_links::LinkRuntime::Bun {
+        return Ok(crate::bun_runtime::BunRuntimeSpec::default());
+    }
+    let relative_root = Path::new("shell").join(category);
+    let overlay_root = config
+        .active_presets_overlay_dir()
+        .map(|root| root.join(&relative_root));
+    if let Some(root) = overlay_root
+        && root.join(&file.source_rel).is_file()
+    {
+        return crate::bun_runtime::resolve(&root, true);
+    }
+    if config.is_external_presets {
+        return crate::bun_runtime::resolve(&config.presets_dir().join(relative_root), true);
+    }
+    Ok(crate::bun_runtime::BunRuntimeSpec::default())
 }
 
 pub(crate) async fn effective_transforms(
@@ -320,6 +347,9 @@ async fn collect_files(root: &Path, current: &Path, files: &mut BTreeSet<PathBuf
             let path = entry.path();
             let kind = entry.file_type().await?;
             if kind.is_dir() {
+                if entry.file_name() == "node_modules" {
+                    continue;
+                }
                 pending.push(path);
             } else if kind.is_file() {
                 files.insert(
@@ -390,6 +420,7 @@ pub(crate) async fn update_manifest(
                 .iter()
                 .map(|spec| spec.to_with_arg())
                 .collect::<Vec<_>>();
+            let bun_runtime = bun_runtime_spec(config, &category.name, file)?;
             let render_target = (config.is_external_presets
                 && config.external_shell_mode == ExternalShellMode::Live
                 && !transforms.is_empty())
@@ -402,6 +433,7 @@ pub(crate) async fn update_manifest(
                 &link_path,
                 effective_source,
                 file.runtime,
+                bun_runtime.dependency_mode,
                 &env,
                 render_target.as_deref(),
             )
@@ -424,6 +456,11 @@ pub(crate) async fn update_manifest(
                     crate::bin_links::LinkRuntime::Bun => "bun",
                 }
                 .to_string(),
+                bun_dependencies: bun_runtime
+                    .dependency_mode
+                    .as_manifest_value()
+                    .map(str::to_string),
+                dependency_hash: bun_runtime.dependency_hash,
                 transforms,
                 env,
                 needs_source: file.needs_source,
@@ -529,5 +566,100 @@ impl RenderLock {
 impl Drop for RenderLock {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_manifest_without_bun_dependency_fields_deserializes() {
+        let manifest: ShellManifest = toml::from_str(
+            r#"
+[[entries]]
+category = "tools"
+command = "tool"
+mode = "snapshot"
+source_path = "/tmp/tool.ts"
+rendered_path = "/tmp/rendered/tool.ts"
+runtime = "bun"
+transforms = []
+env = []
+needs_source = false
+content_hash = 42
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.entries.len(), 1);
+        assert_eq!(manifest.entries[0].bun_dependencies, None);
+        assert_eq!(manifest.entries[0].dependency_hash, None);
+    }
+
+    #[tokio::test]
+    async fn overlay_package_without_overlay_script_does_not_enable_builtin_dependencies() {
+        let root = crate::test_support::make_temp_dir("shine-shell-overlay-package-only").await;
+        let overlay = root.join("overlay");
+        let category = overlay.join("shell/tools");
+        tokio::fs::create_dir_all(&category).await.unwrap();
+        tokio::fs::write(category.join("package.json"), b"{\"dependencies\":{}}")
+            .await
+            .unwrap();
+        tokio::fs::write(category.join("bun.lock"), b"lockfileVersion = 1\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&root);
+        config.presets_overlay_dir_override = Some(overlay);
+        let file = ShellFile {
+            source_rel: PathBuf::from("tool.ts"),
+            command_name: "tool".to_string(),
+            description: Vec::new(),
+            needs_source: false,
+            runtime: crate::bin_links::LinkRuntime::Bun,
+            transforms: Vec::new(),
+            env: Vec::new(),
+        };
+
+        let spec = bun_runtime_spec(&config, "tools", &file).unwrap();
+        assert_eq!(spec, crate::bun_runtime::BunRuntimeSpec::default());
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn collect_files_keeps_dependency_manifests_but_skips_node_modules() {
+        let root = crate::test_support::make_temp_dir("shine-shell-dependency-files").await;
+        tokio::fs::write(root.join("package.json"), b"{}")
+            .await
+            .unwrap();
+        tokio::fs::write(root.join("bun.lock"), b"lockfileVersion = 1\n")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(root.join("node_modules/zod"))
+            .await
+            .unwrap();
+        tokio::fs::write(root.join("node_modules/zod/index.js"), b"export {}")
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(root.join("nested/node_modules/pkg"))
+            .await
+            .unwrap();
+        tokio::fs::write(root.join("nested/node_modules/pkg/index.js"), b"export {}")
+            .await
+            .unwrap();
+
+        let mut files = BTreeSet::new();
+        collect_files(&root, &root, &mut files).await.unwrap();
+        assert!(files.contains(Path::new("package.json")));
+        assert!(files.contains(Path::new("bun.lock")));
+        assert!(files.iter().all(|path| !path.starts_with("node_modules")));
+        assert!(
+            files
+                .iter()
+                .all(|path| !path.starts_with("nested/node_modules"))
+        );
+
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 }

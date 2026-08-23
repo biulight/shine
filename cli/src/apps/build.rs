@@ -135,16 +135,16 @@ async fn artifact_command(
         .map(|dir| dir.join("app").join(app_id))
         .filter(|dir| dir.exists());
 
-    let (resolved_app_dir, script_path) = if let Some(overlay_dir) = &overlay_dir
+    let (resolved_app_dir, script_path, external_script) = if let Some(overlay_dir) = &overlay_dir
         && overlay_dir.join(script_name).exists()
     {
-        (overlay_dir.clone(), overlay_dir.join(script_name))
+        (overlay_dir.clone(), overlay_dir.join(script_name), true)
     } else {
         let candidate = source_dir.join(script_name);
         if !candidate.exists() {
             bail!("app '{app_id}' artifact script not found: {script_name}");
         }
-        (source_dir.clone(), candidate)
+        (source_dir.clone(), candidate, config.is_external_presets)
     };
 
     let http_dir = config.shine_dir().join("http").join("app").join(app_id);
@@ -177,9 +177,8 @@ async fn artifact_command(
             crate::proc::ensure_command("bun").with_context(|| {
                 format!("app '{app_id}' artifact requires Bun (https://bun.sh)")
             })?;
-            let mut command = Command::new("bun");
-            command.arg(&script_path);
-            command
+            let spec = crate::bun_runtime::resolve(&resolved_app_dir, external_script)?;
+            crate::bun_runtime::command(&script_path, spec)
         }
         metadata::ArtifactRuntime::Native => Command::new(&script_path),
     };
@@ -245,6 +244,76 @@ mod tests {
             perms.set_mode(perms.mode() | 0o111);
             fs::set_permissions(&script_path, perms).await.unwrap();
         }
+    }
+
+    async fn write_bun_category(root: &Path) {
+        fs::create_dir_all(root).await.unwrap();
+        fs::write(root.join("build.ts"), b"console.log('ok')\n")
+            .await
+            .unwrap();
+    }
+
+    fn command_args(command: &Command) -> Vec<String> {
+        command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn external_bun_artifact_uses_locked_fallback() {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/app/sample");
+        write_bun_category(&category).await;
+        fs::write(category.join("package.json"), b"{\"dependencies\":{}}")
+            .await
+            .unwrap();
+        fs::write(category.join("bun.lock"), b"lockfileVersion = 1\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let command = artifact_command(
+            &config,
+            "sample",
+            "build.ts",
+            metadata::ArtifactRuntime::Bun,
+        )
+        .await
+        .unwrap();
+        assert_eq!(command_args(&command)[0], "--install=fallback");
+        fs::remove_dir_all(dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn overlay_package_without_overlay_script_does_not_enable_builtin_artifact_dependencies()
+    {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/app/sample");
+        write_bun_category(&category).await;
+        let overlay = dir.join("overlay/app/sample");
+        fs::create_dir_all(&overlay).await.unwrap();
+        fs::write(overlay.join("package.json"), b"{\"dependencies\":{}}")
+            .await
+            .unwrap();
+        fs::write(overlay.join("bun.lock"), b"lockfileVersion = 1\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.presets_overlay_dir_override = Some(dir.join("overlay"));
+
+        let command = artifact_command(
+            &config,
+            "sample",
+            "build.ts",
+            metadata::ArtifactRuntime::Bun,
+        )
+        .await
+        .unwrap();
+        assert_eq!(command_args(&command)[0], "--no-install");
+        fs::remove_dir_all(dir).await.unwrap();
     }
 
     #[cfg(unix)]

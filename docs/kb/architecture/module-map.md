@@ -107,6 +107,7 @@ logic.
 | `cli/src/shells/template.rs` | Installed shell template rendering |
 | `cli/src/shells/metadata.rs` | Shell category/file metadata parsing |
 | `cli/src/bin_links.rs` | Native symlinks/shims and managed Bun launchers in `~/.shine/bin/` |
+| `cli/src/bun_runtime.rs` | Shared source-scoped Bun dependency policy and command construction |
 | `cli/src/sentinel.rs` | Shared sentinel-block primitives used by shell and sys profiles |
 
 ## System configuration

@@ -122,6 +122,9 @@ fn collect_overlay_paths(root: &Path, prefix: &str, out: &mut BTreeSet<String>) 
                 continue;
             };
             if file_type.is_dir() {
+                if entry.file_name() == "node_modules" {
+                    continue;
+                }
                 stack.push(path);
                 continue;
             }
@@ -623,6 +626,40 @@ mod tests {
         drop(guard);
 
         assert!(paths.contains(&"shell/personal/hello.sh".to_string()));
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn overlay_asset_paths_skip_node_modules() {
+        let dir = make_temp_dir().await;
+        fs::create_dir_all(dir.join("shell/personal/node_modules/zod"))
+            .await
+            .unwrap();
+        fs::write(dir.join("shell/personal/package.json"), b"{}")
+            .await
+            .unwrap();
+        fs::write(
+            dir.join("shell/personal/bun.lock"),
+            b"lockfileVersion = 1\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            dir.join("shell/personal/node_modules/zod/index.js"),
+            b"export {}",
+        )
+        .await
+        .unwrap();
+
+        let guard = overlay_lock().await;
+        set_overlay_dir(Some(&dir));
+        let paths = asset_paths("shell/personal");
+        set_overlay_dir(None);
+        drop(guard);
+
+        assert!(paths.contains(&"shell/personal/package.json".to_string()));
+        assert!(paths.contains(&"shell/personal/bun.lock".to_string()));
+        assert!(paths.iter().all(|path| !path.contains("node_modules")));
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

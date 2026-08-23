@@ -3,13 +3,14 @@ use crate::colors;
 use crate::config::Config;
 use crate::output;
 use crate::path_display;
+use anyhow::Result;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 pub(super) fn build_link_specs(
     config: &Config,
     categories: &[metadata::ShellCategory],
-) -> Vec<crate::bin_links::LinkSpec> {
+) -> Result<Vec<crate::bin_links::LinkSpec>> {
     categories
         .iter()
         .flat_map(|cat| {
@@ -23,16 +24,18 @@ pub(super) fn build_link_specs(
                         .ok()
                         .is_some_and(|bytes| crate::presets::parse_template_annotation(&bytes));
                 let effective = if has_transforms { rendered } else { source };
-                crate::bin_links::LinkSpec {
+                let bun_runtime = super::deployment::bun_runtime_spec(config, &cat.name, file)?;
+                Ok(crate::bin_links::LinkSpec {
                     source: effective,
                     link_name: OsString::from(&file.command_name),
                     runtime: file.runtime,
+                    bun_dependencies: bun_runtime.dependency_mode,
                     env: file.env.iter().map(|spec| spec.to_with_arg()).collect(),
                     render_target: (config.is_external_presets
                         && config.external_shell_mode == crate::config::ExternalShellMode::Live
                         && has_transforms)
                         .then(|| format!("shell/{}/{}", cat.name, file.command_name)),
-                }
+                })
             })
         })
         .collect()

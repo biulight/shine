@@ -61,6 +61,13 @@ Rules:
 - Use a leading `//` block or the metadata `description` field. Explicit metadata wins.
 - Static substitution remains opt-in through `transforms = ["template"]`; JS/TS does not support
   the shell-only `# shine-template: true` annotation.
+- Embedded Bun scripts must remain self-contained: only relative modules, `node:*`, `bun`, and
+  `bun:*` imports are allowed. `bun run check:ts` scans production preset imports for this rule.
+- External/overlay scripts may use registry dependencies when their physical category root contains
+  a committed `package.json` and `bun.lock`. The pair is required, any `trustedDependencies`
+  declaration is rejected, and local `node_modules/` trees are never copied.
+- Shine uses `--no-install` without that pair and `--install=fallback` with it. It does not run
+  `bun install` or own Bun's cache; the author must generate and verify the lock in preset CI.
 
 A Bun entry may request runtime env injection:
 
@@ -158,7 +165,9 @@ generator = {
   generator failure is fatal.
 
 See [ADR 0016](decisions/0016-generated-app-files-and-surge-subscriptions.md) and
-[ADR 0018](decisions/0018-manual-app-generator-refresh.md).
+[ADR 0018](decisions/0018-manual-app-generator-refresh.md). Bun generators follow the same locked
+external dependency convention as Shell entries; the physical category supplying the generator
+script owns the declaration.
 
 ### Artifacts
 
@@ -182,6 +191,8 @@ runtime = "bun"
   ciphertext is not decrypted.
 - An overlay script wins only when that exact artifact path exists; otherwise the active base
   preset script remains available.
+- Bun artifacts and teardown use the same locked external dependency convention. Package metadata
+  in an overlay does not affect an artifact inherited from the embedded category.
 
 See [ADR 0009](decisions/0009-app-artifact-build-explicit-command.md),
 [ADR 0012](decisions/0012-app-lifecycle-post-install-and-teardown.md), and the

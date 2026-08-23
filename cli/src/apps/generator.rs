@@ -34,7 +34,13 @@ pub(super) async fn generate(
         return Ok(None);
     }
 
-    let resolved = resolve_script(config, &category.name, &generator.script).await?;
+    let resolved = resolve_script(
+        config,
+        &category.name,
+        &generator.script,
+        generator.runtime == ArtifactRuntime::Bun,
+    )
+    .await?;
     let mut command = match generator.runtime {
         ArtifactRuntime::Bun => {
             crate::proc::ensure_command("bun").with_context(|| {
@@ -43,9 +49,7 @@ pub(super) async fn generate(
                     category.name
                 )
             })?;
-            let mut command = Command::new("bun");
-            command.arg(&resolved.path);
-            command
+            crate::bun_runtime::command(&resolved.path, resolved.bun_runtime)
         }
         ArtifactRuntime::Native => Command::new(&resolved.path),
     };
@@ -274,6 +278,7 @@ async fn run_generator_command(
 
 struct ResolvedScript {
     path: PathBuf,
+    bun_runtime: crate::bun_runtime::BunRuntimeSpec,
     temp_dir: Option<PathBuf>,
 }
 
@@ -293,7 +298,12 @@ impl Drop for ResolvedScript {
     }
 }
 
-async fn resolve_script(config: &Config, app_id: &str, script: &Path) -> Result<ResolvedScript> {
+async fn resolve_script(
+    config: &Config,
+    app_id: &str,
+    script: &Path,
+    resolve_bun_dependencies: bool,
+) -> Result<ResolvedScript> {
     let category_rel = Path::new("app").join(app_id);
     let overlay_script = config
         .active_presets_overlay_dir()
@@ -306,7 +316,17 @@ async fn resolve_script(config: &Config, app_id: &str, script: &Path) -> Result<
                 "app '{app_id}' generator skipped: set allow_app_hooks = true to allow external app generators"
             );
         }
-        let path = overlay_script.unwrap_or_else(|| config.preset_path(category_rel.join(script)));
+        let (path, category_root) = if let Some(path) = overlay_script {
+            let root = path
+                .ancestors()
+                .nth(script.components().count())
+                .context("overlay generator script escaped category root")?
+                .to_path_buf();
+            (path, root)
+        } else {
+            let root = config.preset_path(&category_rel);
+            (root.join(script), root)
+        };
         if !path.exists() {
             bail!(
                 "app '{app_id}' generator script not found: {}",
@@ -315,6 +335,11 @@ async fn resolve_script(config: &Config, app_id: &str, script: &Path) -> Result<
         }
         return Ok(ResolvedScript {
             path,
+            bun_runtime: if resolve_bun_dependencies {
+                crate::bun_runtime::resolve(&category_root, true)?
+            } else {
+                crate::bun_runtime::BunRuntimeSpec::default()
+            },
             temp_dir: None,
         });
     }
@@ -343,6 +368,7 @@ async fn resolve_script(config: &Config, app_id: &str, script: &Path) -> Result<
     }
     Ok(ResolvedScript {
         path,
+        bun_runtime: crate::bun_runtime::BunRuntimeSpec::default(),
         temp_dir: Some(temp_dir),
     })
 }
@@ -354,6 +380,54 @@ mod tests {
     use crate::env::EnvVarSpec;
     use crate::install_core::AppInstallStrategy;
     use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn external_bun_generator_resolves_locked_dependencies() {
+        let root = crate::test_support::make_temp_dir("shine-generator-bun-locked").await;
+        let mut config = Config::new_for_test(&root);
+        config.is_external_presets = true;
+        config.allow_app_hooks = true;
+        let category = config.presets_dir().join("app/sample");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(category.join("generate.ts"), b"console.log('ok')\n")
+            .await
+            .unwrap();
+        fs::write(category.join("package.json"), b"{\"dependencies\":{}}")
+            .await
+            .unwrap();
+        fs::write(category.join("bun.lock"), b"lockfileVersion = 1\n")
+            .await
+            .unwrap();
+
+        let resolved = resolve_script(&config, "sample", Path::new("generate.ts"), true)
+            .await
+            .unwrap();
+        assert_eq!(
+            resolved.bun_runtime.dependency_mode,
+            crate::bun_runtime::BunDependencyMode::Locked
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn embedded_bun_generator_disables_auto_install() {
+        let root = crate::test_support::make_temp_dir("shine-generator-bun-embedded").await;
+        let config = Config::new_for_test(&root);
+        let resolved = resolve_script(
+            &config,
+            "surge",
+            Path::new("generate-subscription.ts"),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            resolved.bun_runtime.dependency_mode,
+            crate::bun_runtime::BunDependencyMode::Disabled
+        );
+        resolved.cleanup().await;
+        fs::remove_dir_all(root).await.unwrap();
+    }
 
     async fn fixture() -> (
         PathBuf,
