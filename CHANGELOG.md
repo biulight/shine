@@ -7,12 +7,15 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-08-24
+
 ### Features
 
 - Added the cross-platform `image-tools` shell preset with safe batch compression, bounded resizing,
   and JPEG/PNG/WebP conversion powered by Bun.
 - Added locked third-party dependencies for external and overlay Bun presets through a category-local
   `package.json` and `bun.lock`, shared by Shell commands, app artifacts, and generators.
+- Added Bun installation and shell integration to the Ubuntu `all` system bootstrap profile.
 
 ### Breaking changes
 
@@ -25,6 +28,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Replaced the manual homepage proxy example with the built-in image workflow and documented its
   commands, local defaults, batch output rules, and Bun prerequisite in English and Simplified
   Chinese.
+- Highlighted the sealed workspace-secret workflow and its security boundaries for AI-assisted
+  development in both manual locales.
 
 ## [1.6.0] — 2026-08-22
 
