@@ -20,7 +20,7 @@ Shine 用 **Preset（预设）** 把脚本、个性化配置和安装方式集�
 
 **让个人自动化拥有可审阅的生命周期。**
 
-当前手册适用于 **Shine 1.6.0**。
+当前手册适用于 **Shine 1.7.0**。
 
 ## Shine 能替你做什么
 
@@ -32,12 +32,13 @@ Shine 用 **Preset（预设）** 把脚本、个性化配置和安装方式集�
 
 ## 先试一个内置预设
 
-安装代理辅助命令，再看看 Shine 加入了哪些内容：
+安装图片处理命令、缩放一张图片，再看看 Shine 加入了哪些内容：
 
 ```bash
 shine list --available
-shine install shell/proxy
-shine info shell/proxy
+shine install shell/image-tools
+img-resize photo.jpg
+shine info shell/image-tools
 ```
 
 你还可以查看 Starship、Git、Vim、Ghostty 等工具已有的配置预设。Surge 与 Clash Verge Rev
@@ -48,9 +49,23 @@ shine info shell/proxy
 预设文件夹可以通过任意文件夹同步工具、压缩包、网络传输、版本管理工作区或手工复制到达机器，
 Shine 不限定你怎样分享它。
 
-你可以把批量重命名、图片压缩与缩放、表格整理或文档打印封装成自己的可复用命令。这些是可以
-自行构建的方向，并非已内置工具；每个命令需要的应用或运行时仍要安装在对应机器上。
-[自定义预设](./guides/custom-presets.md)介绍了实现机制和一个最小图片工作流示例。
+内置 `image-tools` 预设已经用可复用的压缩、缩放和格式转换命令展示了这种模式。你也可以用同样
+方式把批量重命名、表格整理或文档打印封装成自己的命令。每个命令需要的应用或运行时仍要安装在
+对应机器上。[自定义预设](./guides/custom-presets.md)介绍了实现机制和完整图片工作流。
+
+## 减少 AI agent 工作区里的明文密钥
+
+Claude Code、Codex 等 AI coding agent 可以读取工作区文件、运行命令并查看输出。Shine 可以把
+选定的工作区密钥封装为可提交的 GPG 或 age 密文，只在目标子进程需要时解密并注入：
+
+```bash
+shine env secret seal
+shine env run --mode development -- bun run build
+```
+
+这样可以降低明文密钥进入项目文件、日志、补丁或 agent 上下文的机会。它并不是沙箱：能够检查
+自身环境的命令仍然可以读取注入值。完整流程和安全边界见
+[在 AI agent 参与开发时保护环境密钥](./guides/agent-secret-safety.md)。
 
 ## 不只处理脚本和配置
 

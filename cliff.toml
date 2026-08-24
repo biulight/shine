@@ -64,6 +64,7 @@ commit_preprocessors = [
 commit_parsers = [
     { message = "\\[skip", skip = true },
     { message = "\\p{Han}", skip = true },
+    { message = "^(docs(\\([^)]*\\))?|fix\\(docs\\))!?:", skip = true },
     { message = "^fix\\((lint|clippy|fmt|typo|build|ci)\\)", skip = true },
     { message = "^(fix|chore|refactor)\\(internal\\)", skip = true },
     { message = "^feat", group = "Features" },

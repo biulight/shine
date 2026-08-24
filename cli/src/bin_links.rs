@@ -1,3 +1,4 @@
+use crate::bun_runtime::BunDependencyMode;
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
@@ -22,7 +23,7 @@ const SHIM_TARGET_PREFIX: &str = "# shine-target: ";
 /// `Native` is the historical behavior: a Unix symlink or a Windows bash/PowerShell
 /// shim pointing directly at the script. `Bun` wraps the script in a generated
 /// launcher that runs `bun <script> "$@"` — a real regular file on Unix (not a
-/// symlink) carrying the managed marker, and a bun-invoking shim on Windows.
+/// symlink) carrying the managed marker, and a Bun shim on Windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LinkRuntime {
     #[default]
@@ -71,10 +72,11 @@ pub struct LinkSpec {
     pub source: PathBuf,
     pub link_name: OsString,
     pub runtime: LinkRuntime,
+    /// Whether Bun may resolve locked third-party dependencies for this entry.
+    pub bun_dependencies: BunDependencyMode,
     /// For `LinkRuntime::Bun`: ordered `--with` argument tokens (`KEY` or
-    /// `SOURCE=TARGET`) injected at launch through `shine env run`. Empty keeps
-    /// the v1 behavior — a plain `bun <script>` launcher with no `shine`
-    /// dependency — and produces byte-identical launcher content.
+    /// `SOURCE=TARGET`) injected at launch through `shine env run`. When empty,
+    /// the launcher invokes Bun directly without a `shine env run` dependency.
     pub env: Vec<String>,
     /// Canonical installed target to lazily render before execution in external live mode.
     pub render_target: Option<String>,
@@ -214,6 +216,7 @@ pub async fn link_executables(
             source: source.clone(),
             link_name: link_stem(source),
             runtime: LinkRuntime::Native,
+            bun_dependencies: BunDependencyMode::Disabled,
             env: Vec::new(),
             render_target: None,
         })
@@ -273,6 +276,7 @@ pub async fn link_executables_with_names(
                                 &spec.source,
                                 &link_path,
                                 spec.runtime,
+                                spec.bun_dependencies,
                                 &spec.env,
                                 spec.render_target.as_deref(),
                             )
@@ -293,6 +297,7 @@ pub async fn link_executables_with_names(
                     &link_path,
                     &spec.source,
                     spec.runtime,
+                    spec.bun_dependencies,
                     &spec.env,
                     spec.render_target.as_deref(),
                 )
@@ -308,6 +313,7 @@ pub async fn link_executables_with_names(
                             &spec.source,
                             &link_path,
                             spec.runtime,
+                            spec.bun_dependencies,
                             &spec.env,
                             spec.render_target.as_deref(),
                         )
@@ -324,6 +330,7 @@ pub async fn link_executables_with_names(
                         &spec.source,
                         &link_path,
                         spec.runtime,
+                        spec.bun_dependencies,
                         &spec.env,
                         spec.render_target.as_deref(),
                     )
@@ -342,6 +349,7 @@ pub async fn link_executables_with_names(
                     &spec.source,
                     &link_path,
                     spec.runtime,
+                    spec.bun_dependencies,
                     &spec.env,
                     spec.render_target.as_deref(),
                 )
@@ -366,6 +374,7 @@ pub(crate) async fn link_is_current(
     link_path: &Path,
     source: &Path,
     runtime: LinkRuntime,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
     render_target: Option<&str>,
 ) -> Result<bool> {
@@ -379,7 +388,15 @@ pub(crate) async fn link_is_current(
                 .is_ok_and(|target| target == source))
         }
         Ok(_) => Ok(matches!(
-            launcher_status(link_path, source, runtime, env, render_target).await?,
+            launcher_status(
+                link_path,
+                source,
+                runtime,
+                bun_dependencies,
+                env,
+                render_target,
+            )
+            .await?,
             LauncherStatus::Current
         )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -488,24 +505,43 @@ async fn create_link(
     source: &Path,
     link_path: &Path,
     runtime: LinkRuntime,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
     render_target: Option<&str>,
 ) -> Result<()> {
     #[cfg(unix)]
     {
         if let Some(target) = render_target {
-            return write_unix_live_launcher(source, link_path, runtime, env, target).await;
+            return write_unix_live_launcher(
+                source,
+                link_path,
+                runtime,
+                bun_dependencies,
+                env,
+                target,
+            )
+            .await;
         }
         match runtime {
             LinkRuntime::Native => tokio::fs::symlink(source, link_path)
                 .await
                 .with_context(|| format!("creating symlink {link_path:?} -> {source:?}")),
-            LinkRuntime::Bun => write_unix_bun_launcher(source, link_path, env).await,
+            LinkRuntime::Bun => {
+                write_unix_bun_launcher(source, link_path, bun_dependencies, env).await
+            }
         }
     }
     #[cfg(not(unix))]
     {
-        create_windows_shims(source, link_path, runtime, env, render_target).await
+        create_windows_shims(
+            source,
+            link_path,
+            runtime,
+            bun_dependencies,
+            env,
+            render_target,
+        )
+        .await
     }
 }
 
@@ -530,22 +566,41 @@ async fn launcher_status(
     link_path: &Path,
     source: &Path,
     runtime: LinkRuntime,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
     render_target: Option<&str>,
 ) -> Result<LauncherStatus> {
     #[cfg(unix)]
     {
         if let Some(target) = render_target {
-            return unix_live_launcher_status(link_path, source, runtime, env, target).await;
+            return unix_live_launcher_status(
+                link_path,
+                source,
+                runtime,
+                bun_dependencies,
+                env,
+                target,
+            )
+            .await;
         }
         match runtime {
-            LinkRuntime::Bun => unix_launcher_status(link_path, source, env).await,
+            LinkRuntime::Bun => {
+                unix_launcher_status(link_path, source, bun_dependencies, env).await
+            }
             LinkRuntime::Native => Ok(LauncherStatus::NotManaged),
         }
     }
     #[cfg(not(unix))]
     {
-        windows_shim_status(link_path, source, runtime, env, render_target).await
+        windows_shim_status(
+            link_path,
+            source,
+            runtime,
+            bun_dependencies,
+            env,
+            render_target,
+        )
+        .await
     }
 }
 
@@ -558,15 +613,24 @@ fn shell_single_quote(value: &str) -> String {
 /// `unix_launcher_status` to detect staleness, so any change here is a format
 /// change that will refresh installed launchers on upgrade.
 #[cfg(unix)]
-fn unix_bun_launcher_content(source: &Path, name: &str, env: &[String]) -> String {
+fn unix_bun_launcher_content(
+    source: &Path,
+    name: &str,
+    bun_dependencies: BunDependencyMode,
+    env: &[String],
+) -> String {
     let target = source.display().to_string();
     let quoted_target = shell_single_quote(&target);
     let quoted_name = shell_single_quote(name);
+    let install_arg = bun_dependencies.install_arg();
     // Empty `env` reproduces the v1 launcher byte-for-byte (no `shine` dependency);
     // a declared `env` adds a `shine` presence check and runs the child through
     // `shine env run --no-workspace` so values reach Bun via `Bun.env`.
     let (shine_check, runner) = if env.is_empty() {
-        (String::new(), format!("exec bun {quoted_target} \"$@\"\n"))
+        (
+            String::new(),
+            format!("exec bun {install_arg} {quoted_target} \"$@\"\n"),
+        )
     } else {
         let with_args = env
             .iter()
@@ -580,7 +644,7 @@ fn unix_bun_launcher_content(source: &Path, name: &str, env: &[String]) -> Strin
                  exit 127\nfi\n"
             ),
             format!(
-                "exec shine env run --no-workspace {with_args} -- bun {quoted_target} \"$@\"\n"
+                "exec shine env run --no-workspace {with_args} -- bun {install_arg} {quoted_target} \"$@\"\n"
             ),
         )
     };
@@ -601,6 +665,7 @@ fn unix_live_launcher_content(
     source: &Path,
     name: &str,
     runtime: LinkRuntime,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
     render_target: &str,
 ) -> String {
@@ -632,13 +697,14 @@ fn unix_live_launcher_content(
              exec {quoted_source} \"$@\"\n"
         ),
         LinkRuntime::Bun => {
+            let install_arg = bun_dependencies.install_arg();
             let bun_check = format!(
                 "if ! command -v bun >/dev/null 2>&1; then\n  \
                  printf 'shine: %s requires Bun, which was not found on PATH.\\n' {quoted_name} >&2\n  \
                  exit 127\nfi\n"
             );
             if env.is_empty() {
-                format!("{bun_check}exec bun {quoted_source} \"$@\"\n")
+                format!("{bun_check}exec bun {install_arg} {quoted_source} \"$@\"\n")
             } else {
                 let with_args = env
                     .iter()
@@ -646,7 +712,7 @@ fn unix_live_launcher_content(
                     .collect::<Vec<_>>()
                     .join(" ");
                 format!(
-                    "{bun_check}exec shine env run --no-workspace {with_args} -- bun {quoted_source} \"$@\"\n"
+                    "{bun_check}exec shine env run --no-workspace {with_args} -- bun {install_arg} {quoted_source} \"$@\"\n"
                 )
             }
         }
@@ -675,6 +741,7 @@ async fn write_unix_live_launcher(
     source: &Path,
     link_path: &Path,
     runtime: LinkRuntime,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
     render_target: &str,
 ) -> Result<()> {
@@ -683,7 +750,8 @@ async fn write_unix_live_launcher(
         tokio::fs::create_dir_all(parent).await?;
     }
     let name = launcher_command_name(link_path);
-    let content = unix_live_launcher_content(source, &name, runtime, env, render_target);
+    let content =
+        unix_live_launcher_content(source, &name, runtime, bun_dependencies, env, render_target);
     crate::persist::atomic_write(link_path, content.as_bytes()).await?;
     tokio::fs::set_permissions(link_path, std::fs::Permissions::from_mode(0o755)).await?;
     Ok(())
@@ -694,6 +762,7 @@ async fn unix_live_launcher_status(
     link_path: &Path,
     source: &Path,
     runtime: LinkRuntime,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
     render_target: &str,
 ) -> Result<LauncherStatus> {
@@ -711,7 +780,9 @@ async fn unix_live_launcher_status(
         return Ok(LauncherStatus::NotManaged);
     }
     let name = launcher_command_name(link_path);
-    if content == unix_live_launcher_content(source, &name, runtime, env, render_target) {
+    if content
+        == unix_live_launcher_content(source, &name, runtime, bun_dependencies, env, render_target)
+    {
         Ok(LauncherStatus::Current)
     } else {
         Ok(LauncherStatus::Stale)
@@ -719,7 +790,12 @@ async fn unix_live_launcher_status(
 }
 
 #[cfg(unix)]
-async fn write_unix_bun_launcher(source: &Path, link_path: &Path, env: &[String]) -> Result<()> {
+async fn write_unix_bun_launcher(
+    source: &Path,
+    link_path: &Path,
+    bun_dependencies: BunDependencyMode,
+    env: &[String],
+) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     if let Some(parent) = link_path.parent() {
         tokio::fs::create_dir_all(parent)
@@ -727,9 +803,12 @@ async fn write_unix_bun_launcher(source: &Path, link_path: &Path, env: &[String]
             .with_context(|| format!("creating bin dir: {parent:?}"))?;
     }
     let name = launcher_command_name(link_path);
-    tokio::fs::write(link_path, unix_bun_launcher_content(source, &name, env))
-        .await
-        .with_context(|| format!("writing bun launcher: {link_path:?}"))?;
+    tokio::fs::write(
+        link_path,
+        unix_bun_launcher_content(source, &name, bun_dependencies, env),
+    )
+    .await
+    .with_context(|| format!("writing bun launcher: {link_path:?}"))?;
     tokio::fs::set_permissions(link_path, std::fs::Permissions::from_mode(0o755))
         .await
         .with_context(|| format!("setting bun launcher permissions: {link_path:?}"))?;
@@ -740,6 +819,7 @@ async fn write_unix_bun_launcher(source: &Path, link_path: &Path, env: &[String]
 async fn unix_launcher_status(
     link_path: &Path,
     source: &Path,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
 ) -> Result<LauncherStatus> {
     let content = match tokio::fs::read_to_string(link_path).await {
@@ -759,7 +839,7 @@ async fn unix_launcher_status(
     let name = launcher_command_name(link_path);
     // Byte comparison against the regenerated content — which embeds the ordered
     // `env` spec — so an added/removed/reordered declaration is detected as stale.
-    if content == unix_bun_launcher_content(source, &name, env) {
+    if content == unix_bun_launcher_content(source, &name, bun_dependencies, env) {
         Ok(LauncherStatus::Current)
     } else {
         Ok(LauncherStatus::Stale)
@@ -771,6 +851,7 @@ async fn create_windows_shims(
     source: &Path,
     ps1_path: &Path,
     runtime: LinkRuntime,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
     render_target: Option<&str>,
 ) -> Result<()> {
@@ -783,13 +864,13 @@ async fn create_windows_shims(
     let name = launcher_command_name(ps1_path);
     tokio::fs::write(
         ps1_path,
-        powershell_shim_content(source, runtime, &name, env, render_target),
+        powershell_shim_content(source, runtime, &name, bun_dependencies, env, render_target),
     )
     .await
     .with_context(|| format!("writing PowerShell shim: {ps1_path:?}"))?;
     tokio::fs::write(
         &cmd_path,
-        cmd_shim_content(source, runtime, &name, env, render_target),
+        cmd_shim_content(source, runtime, &name, bun_dependencies, env, render_target),
     )
     .await
     .with_context(|| format!("writing cmd shim: {cmd_path:?}"))?;
@@ -801,6 +882,7 @@ fn powershell_shim_content(
     source: &Path,
     runtime: LinkRuntime,
     name: &str,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
     render_target: Option<&str>,
 ) -> String {
@@ -820,13 +902,14 @@ fn powershell_shim_content(
     });
     match runtime {
         LinkRuntime::Bun => {
+            let install_arg = bun_dependencies.install_arg();
             let name_escaped = name.replace('\'', "''");
             let bun_check = format!(
                 "if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {{\n  [Console]::Error.WriteLine('shine: {name_escaped} requires Bun, which was not found on PATH. Install from https://bun.sh')\n  exit 127\n}}\n"
             );
             if env.is_empty() {
                 format!(
-                    "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\n{render}{bun_check}& bun '{escaped}' @args\nexit $LASTEXITCODE\n"
+                    "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\n{render}{bun_check}& bun {install_arg} '{escaped}' @args\nexit $LASTEXITCODE\n"
                 )
             } else {
                 let with_args = env
@@ -835,7 +918,7 @@ fn powershell_shim_content(
                     .collect::<Vec<_>>()
                     .join(" ");
                 format!(
-                    "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\n{render}{bun_check}if (-not (Get-Command shine -ErrorAction SilentlyContinue)) {{\n  [Console]::Error.WriteLine('shine: {name_escaped} requires the shine command, which was not found on PATH.')\n  exit 127\n}}\n& shine env run --no-workspace {with_args} -- bun '{escaped}' @args\nexit $LASTEXITCODE\n"
+                    "{SHIM_MANAGED_MARKER}\n{SHIM_TARGET_PREFIX}{target}\n{render}{bun_check}if (-not (Get-Command shine -ErrorAction SilentlyContinue)) {{\n  [Console]::Error.WriteLine('shine: {name_escaped} requires the shine command, which was not found on PATH.')\n  exit 127\n}}\n& shine env run --no-workspace {with_args} -- bun {install_arg} '{escaped}' @args\nexit $LASTEXITCODE\n"
                 )
             }
         }
@@ -859,6 +942,7 @@ fn cmd_shim_content(
     source: &Path,
     runtime: LinkRuntime,
     name: &str,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
     render_target: Option<&str>,
 ) -> String {
@@ -876,12 +960,13 @@ fn cmd_shim_content(
     });
     match runtime {
         LinkRuntime::Bun => {
+            let install_arg = bun_dependencies.install_arg();
             let bun_check = format!(
                 "where bun >nul 2>nul\r\nif errorlevel 1 (\r\n  echo shine: {name} requires Bun, which was not found on PATH. Install from https://bun.sh 1>&2\r\n  exit /b 127\r\n)\r\n"
             );
             if env.is_empty() {
                 format!(
-                    "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\n{render}{bun_check}bun \"{target}\" %*\r\n"
+                    "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\n{render}{bun_check}bun {install_arg} \"{target}\" %*\r\n"
                 )
             } else {
                 let with_args = env
@@ -890,7 +975,7 @@ fn cmd_shim_content(
                     .collect::<Vec<_>>()
                     .join(" ");
                 format!(
-                    "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\n{render}{bun_check}where shine >nul 2>nul\r\nif errorlevel 1 (\r\n  echo shine: {name} requires the shine command, which was not found on PATH. 1>&2\r\n  exit /b 127\r\n)\r\nshine env run --no-workspace {with_args} -- bun \"{target}\" %*\r\n"
+                    "@echo off\r\nREM shine-managed\r\nREM shine-target: {target}\r\n{render}{bun_check}where shine >nul 2>nul\r\nif errorlevel 1 (\r\n  echo shine: {name} requires the shine command, which was not found on PATH. 1>&2\r\n  exit /b 127\r\n)\r\nshine env run --no-workspace {with_args} -- bun {install_arg} \"{target}\" %*\r\n"
                 )
             }
         }
@@ -924,6 +1009,7 @@ async fn windows_shim_status(
     link_path: &Path,
     source: &Path,
     runtime: LinkRuntime,
+    bun_dependencies: BunDependencyMode,
     env: &[String],
     render_target: Option<&str>,
 ) -> Result<LauncherStatus> {
@@ -944,8 +1030,10 @@ async fn windows_shim_status(
     }
 
     let name = launcher_command_name(link_path);
-    let expected_ps1 = powershell_shim_content(source, runtime, &name, env, render_target);
-    let expected_cmd = cmd_shim_content(source, runtime, &name, env, render_target);
+    let expected_ps1 =
+        powershell_shim_content(source, runtime, &name, bun_dependencies, env, render_target);
+    let expected_cmd =
+        cmd_shim_content(source, runtime, &name, bun_dependencies, env, render_target);
     let cmd_path = link_path.with_extension("cmd");
     let cmd_content = tokio::fs::read_to_string(&cmd_path).await.ok();
     if content == expected_ps1 && cmd_content.as_deref() == Some(expected_cmd.as_str()) {
@@ -1163,6 +1251,7 @@ mod tests {
             source: exe.clone(),
             link_name: OsString::from("setproxy"),
             runtime: LinkRuntime::Native,
+            bun_dependencies: BunDependencyMode::Disabled,
             env: Vec::new(),
             render_target: None,
         }];
@@ -1190,6 +1279,7 @@ mod tests {
             source: script.clone(),
             link_name: OsString::from("setproxy"),
             runtime: LinkRuntime::Native,
+            bun_dependencies: BunDependencyMode::Disabled,
             env: Vec::new(),
             render_target: None,
         }];
@@ -1215,6 +1305,7 @@ mod tests {
             source: plain,
             link_name: OsString::from("setproxy"),
             runtime: LinkRuntime::Native,
+            bun_dependencies: BunDependencyMode::Disabled,
             env: Vec::new(),
             render_target: None,
         }];
@@ -1339,11 +1430,24 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn locked_bun_spec(source: &Path, name: &str) -> LinkSpec {
+        LinkSpec {
+            source: source.to_path_buf(),
+            link_name: OsString::from(name),
+            runtime: LinkRuntime::Bun,
+            bun_dependencies: BunDependencyMode::Locked,
+            env: Vec::new(),
+            render_target: None,
+        }
+    }
+
+    #[cfg(unix)]
     fn bun_spec_with_env(source: &Path, name: &str, env: Vec<String>) -> LinkSpec {
         LinkSpec {
             source: source.to_path_buf(),
             link_name: OsString::from(name),
             runtime: LinkRuntime::Bun,
+            bun_dependencies: BunDependencyMode::Disabled,
             env,
             render_target: None,
         }
@@ -1373,7 +1477,10 @@ mod tests {
         assert!(content.contains(&format!("# shine-target: {}", script.display())));
         assert!(content.contains("command -v bun"));
         assert!(content.contains("exit 127"));
-        assert!(content.contains(&format!("exec bun '{}' \"$@\"", script.display())));
+        assert!(content.contains(&format!(
+            "exec bun --no-install '{}' \"$@\"",
+            script.display()
+        )));
         let mode = fs::metadata(&launcher).await.unwrap().permissions().mode();
         assert!(mode & 0o111 != 0, "launcher must be executable");
 
@@ -1505,7 +1612,10 @@ mod tests {
 
         let content = fs::read_to_string(bin.join("tool")).await.unwrap();
         assert!(
-            content.contains(&format!("exec bun '{}' \"$@\"", script.display())),
+            content.contains(&format!(
+                "exec bun --no-install '{}' \"$@\"",
+                script.display()
+            )),
             "no-env launcher must run bun directly: {content}"
         );
         assert!(
@@ -1536,9 +1646,31 @@ mod tests {
         assert_eq!(content.matches("exit 127").count(), 2);
         // The child runs through shine env run with the declared, ordered specs.
         assert!(content.contains(&format!(
-            "exec shine env run --no-workspace --with 'API_URL' --with 'SERVICE_TOKEN=API_TOKEN' -- bun '{}' \"$@\"",
+            "exec shine env run --no-workspace --with 'API_URL' --with 'SERVICE_TOKEN=API_TOKEN' -- bun --no-install '{}' \"$@\"",
             script.display()
         )));
+
+        fs::remove_dir_all(&src).await.unwrap();
+        fs::remove_dir_all(&bin).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn locked_bun_launcher_uses_fallback_and_refreshes_disabled_launcher() {
+        let (src, bin) = make_dirs().await;
+        let script = src.join("tool.ts");
+        fs::write(&script, b"import 'zod'\n").await.unwrap();
+
+        link_executables_with_names(&bin, &[bun_spec(&script, "tool")], false)
+            .await
+            .unwrap();
+        let refreshed =
+            link_executables_with_names(&bin, &[locked_bun_spec(&script, "tool")], false)
+                .await
+                .unwrap();
+        assert_eq!(refreshed.overwritten.len(), 1);
+        let content = fs::read_to_string(bin.join("tool")).await.unwrap();
+        assert!(content.contains("exec bun --install=fallback"));
 
         fs::remove_dir_all(&src).await.unwrap();
         fs::remove_dir_all(&bin).await.unwrap();

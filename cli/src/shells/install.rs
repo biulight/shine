@@ -103,7 +103,7 @@ pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) 
 
     // Symlinks point to the rendered file when one was produced, otherwise to the
     // raw source in presets_dir (non-template scripts).
-    let link_specs = build_link_specs(config, &categories);
+    let link_specs = build_link_specs(config, &categories)?;
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, force).await?;
     let manifest_scope = if selection.is_some_and(|target| target.command.is_some()) {
@@ -228,7 +228,7 @@ pub async fn handle_upgrade_installed_target(
     let script_pairs = build_script_pairs(config, &categories);
     let template_report = apply_template_to_scripts(config, &script_pairs).await?;
 
-    let link_specs = build_link_specs(config, &categories);
+    let link_specs = build_link_specs(config, &categories)?;
     let link_report =
         crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
     super::deployment::update_manifest(
@@ -1440,7 +1440,7 @@ mod tests {
         assert!(launcher.exists(), "bun launcher should be installed");
         assert!(!launcher.is_symlink(), "bun launcher is a regular file");
         let content = fs::read_to_string(&launcher).await.unwrap();
-        assert!(content.contains("exec bun"));
+        assert!(content.contains("exec bun --no-install"));
         assert!(
             content.contains(
                 &config
@@ -1499,8 +1499,66 @@ mod tests {
             .unwrap();
         assert!(launcher.contains("command -v shine"));
         assert!(launcher.contains(
-            "exec shine env run --no-workspace --with 'API_URL' --with 'SERVICE_TOKEN=API_TOKEN' -- bun "
+            "exec shine env run --no-workspace --with 'API_URL' --with 'SERVICE_TOKEN=API_TOKEN' -- bun --no-install "
         ));
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn external_bun_preset_with_locked_package_uses_fallback_and_records_hash() {
+        let dir = make_temp_dir().await;
+        let cat_dir = dir.join("presets/shell/custom");
+        fs::create_dir_all(&cat_dir).await.unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join("tool.ts"), b"import 'zod'\n")
+            .await
+            .unwrap();
+        fs::write(
+            cat_dir.join("package.json"),
+            b"{\"dependencies\":{\"zod\":\"4.0.0\"}}",
+        )
+        .await
+        .unwrap();
+        fs::write(cat_dir.join("bun.lock"), b"lockfileVersion = 1\n")
+            .await
+            .unwrap();
+        fs::create_dir_all(cat_dir.join("node_modules/zod"))
+            .await
+            .unwrap();
+        fs::write(cat_dir.join("node_modules/zod/index.js"), b"export {}")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+        handle_install(&config, Some("custom"), false)
+            .await
+            .unwrap();
+
+        let launcher = fs::read_to_string(config.bin_dir().join("mytool"))
+            .await
+            .unwrap();
+        assert!(launcher.contains("exec bun --install=fallback"));
+        assert!(
+            !config
+                .installed_shell_dir()
+                .join("custom/node_modules")
+                .exists()
+        );
+        let manifest = crate::shells::deployment::ShellManifest::load(&config)
+            .await
+            .unwrap();
+        let entry = manifest.find("shell/custom/mytool").unwrap();
+        assert_eq!(entry.bun_dependencies.as_deref(), Some("locked"));
+        assert!(entry.dependency_hash.is_some());
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

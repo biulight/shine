@@ -28,6 +28,9 @@ pub const DEFAULT_ENV_VARS: &[(&str, &str)] = &[
     ("SOCKS5_PROXY_PORT", "6153"),
     ("PROXY_HOST", "127.0.0.1"),
     ("PROXY_NO_PROXY", "localhost,127.0.0.1,::1"),
+    ("IMAGE_QUALITY", "80"),
+    ("IMAGE_MAX_WIDTH", "1920"),
+    ("IMAGE_MAX_HEIGHT", "1080"),
     ("GHOSTTY_BG_LIGHT", ""),
     ("GHOSTTY_BG_DARK", ""),
 ];

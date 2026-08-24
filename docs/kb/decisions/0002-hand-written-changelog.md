@@ -1,7 +1,7 @@
 # 0002 — CHANGELOG.md is hand-written; git-cliff only generates GitHub Release notes
 
 - **Status**: accepted
-- **Evidence**: `AGENTS.md` § Releases, `cliff.toml`, `release.yml` git-cliff step
+- **Evidence**: `AGENTS.md` § Hard repository rules, `cliff.toml`, `release.yml` git-cliff step
 
 ## Context
 
@@ -21,3 +21,6 @@ same release in different words — neither overwrites the other.
 - Commit messages still matter: git-cliff builds release notes from them, and the
   `fix(lint|clippy|fmt|typo|build|ci|internal)` scopes are auto-skipped (see
   `conventions.md`).
+- Documentation-only `docs`, scoped `docs(...)`, and `fix(docs)` commits are also skipped from
+  GitHub Release notes; user-facing feature and fix commits remain eligible even when they include
+  documentation changes.

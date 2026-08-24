@@ -21,7 +21,7 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-This page reflects the built-in `presets/` directory in Shine 1.6.0. For another version, use
+This page reflects the built-in `presets/` directory in Shine 1.7.0. For another version, use
 `shine list --available` and `--help` as the authority.
 
 ## Shell presets
@@ -35,6 +35,9 @@ wrapper; do not bypass it and execute the script directly.
 | Category | Command | Purpose and prerequisites |
 | --- | --- | --- |
 | `agent` | `ccenv` | Use Bun on macOS, Linux, or Windows to select Codex (default), DeepSeek, or Qwen and launch Claude Code. Provider values enter only that child. Requires `bun`, `shine`, and Claude Code. |
+| `image-tools` | `img-compress` | Batch-compress direct JPEG, PNG, and WebP file or directory inputs into derived output files. Uses `IMAGE_QUALITY`; requires Bun 1.3.14 or newer. |
+| `image-tools` | `img-resize` | Batch-resize images to fit `IMAGE_MAX_WIDTH` × `IMAGE_MAX_HEIGHT` without enlargement. Requires Bun 1.3.14 or newer. |
+| `image-tools` | `img-convert` | Batch-convert images to JPEG, PNG, or WebP with an explicit `--format`. Requires Bun 1.3.14 or newer. |
 | `proxy` | `setproxy` | Set HTTP/HTTPS/SOCKS5, npm, and pnpm proxies for the current session from `HTTP_PROXY_PORT`, `SOCKS5_PROXY_PORT`, `PROXY_HOST`, and `PROXY_NO_PROXY`; `auto` prefers SOCKS5. Also changes persistent Yarn proxy settings when Yarn exists. |
 | `proxy` | `usetproxy` | Clear session proxy variables and Yarn settings written by `setproxy`. |
 | `utils` | `copyfile` | Copy a file to the local clipboard through OSC 52. Unix only; the terminal or multiplexer must allow OSC 52. |
@@ -45,6 +48,10 @@ The Codex provider in `ccenv` uses local CLIProxyAPI with `CLIPROXYAPI_AUTH_TOKE
 use their matching `*_API_KEY`. Resolution order is `_SECRET`, legacy `_GPG_SECRET`, then plaintext.
 Failure to decrypt a selected ciphertext stops without falling back. Bind CLIProxyAPI to loopback and
 configure the same token on both sides.
+
+Image commands accept multiple files or one-level directory scans, derive new files instead of
+editing inputs, and accept `--output-dir` plus explicit command-specific overrides. See the
+[complete image workflow](../guides/custom-presets.md#from-source-folders-to-installed-capabilities).
 
 See [Manage shell presets](../guides/shell-presets.md) and
 [Manage environment variables](../guides/environment.md).
@@ -103,7 +110,7 @@ rustup, or the upstream tool that owns the software.
 | macOS | `recommended` (default) | `required` plus Rust, Neovim, AstroNvim, ZeroTier, Zsh plugins, zoxide, Atuin, fzf, bat, eza. |
 | macOS | `all` | `recommended` plus nvm, Bun, pnpm, mise, Fastfetch. |
 | Ubuntu | `recommended` (default) | Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza. |
-| Ubuntu | `all` | `recommended` plus ZeroTier, pnpm, mise, Homebrew. |
+| Ubuntu | `all` | `recommended` plus ZeroTier, Bun, pnpm, mise, Homebrew. |
 | Ubuntu | `minimal` | Neovim, fzf, bat, eza, zoxide; for servers without history sync, prompt, or JavaScript tooling. |
 | Windows | `required` | Rust, Yazi, Starship. |
 | Windows | `recommended` (default) | `required` plus zoxide, Atuin, fzf, bat, eza, ZeroTier. |

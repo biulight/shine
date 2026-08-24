@@ -19,7 +19,7 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-本文依据 Shine 1.6.0 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
+本文依据 Shine 1.7.0 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
 
 ## Shell 预设
 
@@ -30,6 +30,9 @@ shine sys info split-dns
 | 类别 | 命令 | 用途与前提 |
 | --- | --- | --- |
 | `agent` | `ccenv` | 通过 Bun 在 macOS、Linux 或 Windows 选择 Codex（默认）、DeepSeek 或 Qwen，并启动 Claude Code。provider 变量只进入该子进程；需要已安装 `bun`、`shine` 和 Claude Code。 |
+| `image-tools` | `img-compress` | 批量压缩直接传入的 JPEG、PNG、WebP 文件或目录第一层图片，生成派生文件。使用 `IMAGE_QUALITY`；需要 Bun 1.3.14 或更高版本。 |
+| `image-tools` | `img-resize` | 批量缩放图片，使其不放大并限制在 `IMAGE_MAX_WIDTH` × `IMAGE_MAX_HEIGHT` 内。需要 Bun 1.3.14 或更高版本。 |
+| `image-tools` | `img-convert` | 使用明确的 `--format` 把图片批量转换为 JPEG、PNG 或 WebP。需要 Bun 1.3.14 或更高版本。 |
 | `proxy` | `setproxy` | 为当前会话设置 HTTP/HTTPS/SOCKS5、npm 和 pnpm 代理。使用 `HTTP_PROXY_PORT`、`SOCKS5_PROXY_PORT`、`PROXY_HOST`、`PROXY_NO_PROXY`；`auto` 优先 SOCKS5。若安装了 Yarn，它会修改 Yarn 的持久代理配置。 |
 | `proxy` | `usetproxy` | 清除当前会话的代理变量，并清除 `setproxy` 写入的 Yarn 代理配置。 |
 | `utils` | `copyfile` | 通过 OSC52 把一个文件内容复制到本地剪贴板；仅 Unix，终端或终端复用器必须允许 OSC52。 |
@@ -37,6 +40,9 @@ shine sys info split-dns
 | `utils` | `shine-theme-sync` | 输出并导入终端明暗主题对应的 `SHINE_TERMINAL_THEME` 与 `BAT_THEME`。 |
 
 `ccenv` 的 Codex provider 通过本机 CLIProxyAPI 使用 `CLIPROXYAPI_AUTH_TOKEN`；DeepSeek 和 Qwen 分别使用对应的 `*_API_KEY`。凭据按 `_SECRET`、旧版 `_GPG_SECRET`、明文值的顺序解析；一旦选中的密文解密失败就会停止，不会回退。CLIProxyAPI 应只绑定回环地址，并配置与客户端相同的 token。
+
+图片命令接受多个文件或目录第一层扫描，默认生成新文件而不修改输入，并支持 `--output-dir` 与各命令
+自己的临时覆盖参数。完整说明见[图片工作流](../guides/custom-presets.md#从来源文件夹到已安装能力)。
 
 更多安装、重装与卸载说明见[管理 Shell 预设](../guides/shell-presets.md)，环境变量格式见[管理环境变量](../guides/environment.md)。
 
@@ -86,7 +92,7 @@ Shell integration 归各 item 所有：成功的 targeted bootstrap 只启用该
 | macOS | `recommended`（默认） | `required` 加 Rust、Neovim、AstroNvim、ZeroTier、Zsh 插件、zoxide、Atuin、fzf、bat、eza。 |
 | macOS | `all` | `recommended` 加 nvm、Bun、pnpm、mise、Fastfetch。 |
 | Ubuntu | `recommended`（默认） | Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza。 |
-| Ubuntu | `all` | `recommended` 加 ZeroTier、pnpm、mise、Homebrew。 |
+| Ubuntu | `all` | `recommended` 加 ZeroTier、Bun、pnpm、mise、Homebrew。 |
 | Ubuntu | `minimal` | Neovim、fzf、bat、eza、zoxide；适合不需要 shell 历史、prompt 与 JavaScript 工具链的服务器。 |
 | Windows | `required` | Rust、Yazi、Starship。 |
 | Windows | `recommended`（默认） | `required` 加 zoxide、Atuin、fzf、bat、eza、ZeroTier。 |

@@ -663,6 +663,50 @@ mod tests {
     }
 
     #[test]
+    fn embedded_image_tools_category_exposes_cross_platform_bun_commands() {
+        let categories = load_embedded_categories(Some("image-tools")).unwrap();
+        let category = categories
+            .iter()
+            .find(|category| category.name == "image-tools")
+            .unwrap();
+        let commands: Vec<_> = category
+            .files
+            .iter()
+            .map(|file| {
+                (
+                    file.command_name.as_str(),
+                    file.runtime,
+                    file.env
+                        .iter()
+                        .map(|spec| spec.source.as_str())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            commands,
+            vec![
+                (
+                    "img-compress",
+                    crate::bin_links::LinkRuntime::Bun,
+                    vec!["IMAGE_QUALITY"]
+                ),
+                (
+                    "img-resize",
+                    crate::bin_links::LinkRuntime::Bun,
+                    vec!["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"],
+                ),
+                (
+                    "img-convert",
+                    crate::bin_links::LinkRuntime::Bun,
+                    vec!["IMAGE_QUALITY"]
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn embedded_utils_category_exposes_copyfile_command() {
         let categories = load_embedded_categories(Some("utils")).unwrap();
         let utils = categories.iter().find(|cat| cat.name == "utils").unwrap();

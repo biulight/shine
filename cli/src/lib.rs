@@ -1,5 +1,6 @@
 pub mod apps;
 pub mod bin_links;
+pub mod bun_runtime;
 pub mod colors;
 pub mod commands;
 pub mod completion;

@@ -1,7 +1,7 @@
 # Data Flows
 
-End-to-end flows that span multiple modules and are not visible in any single file. For the
-module map and per-command routing table, see [`AGENTS.md`](../../../AGENTS.md) — this file only
+End-to-end flows that span multiple modules and are not visible in any single file. For module
+ownership and the per-command routing table, see [`module-map.md`](module-map.md) — this file only
 records the cross-module sequences and their gotchas.
 
 ## Shell install and uninstall
@@ -104,6 +104,9 @@ strategies:
 5. Only `generator.env` values are injected. External preset or overlay
    generator code requires `allow_app_hooks = true`. Execution is deadline- and
    output-size-limited.
+6. A Bun generator is resolved against the physical category that supplied its effective script.
+   Embedded temporary scripts use `--no-install`; an external/overlay script uses
+   `--install=fallback` only with a valid `package.json` + `bun.lock` pair in that category.
 
 The Surge generator downloads the Base64 URI list in
 `SURGE_SUBSCRIPTION_URL`, converts supported SS/VMess nodes, and writes bare
@@ -138,6 +141,9 @@ app preset's `[artifact].script`:
 5. Runs the script with `current_dir` set to the resolved app directory and inherited stdio (not
    captured like `post_upgrade` hooks), so build output streams live; a nonzero exit becomes a
    real `Result::Err` instead of being swallowed.
+6. For Bun artifacts and teardown, the final script source selects the dependency policy: embedded
+   or unlocked external code uses `--no-install`; a locked external/overlay category uses
+   `--install=fallback`. Resolution does not alter the cwd, environment contract or permission gate.
 
 For Surge specifically, `shine app install surge` copies the local files and
 the generated-subscription fallback into the Surge Profiles dir. The built-in
@@ -166,15 +172,22 @@ the richer `SHINE_APP_*` + `[env]` artifact contract used by `build`/`teardown`.
 
 ## Shell install / uninstall
 
-Documented in `AGENTS.md` § "Key data flow". Summary: extract embedded assets →
-symlink executables into `~/.shine/bin/` (`bin_links.rs`) → append a sentinel-guarded PATH block
-to the shell config (`shells/profile.rs`). Uninstall removes only shine-managed symlinks/files
-and deletes the sentinel block precisely.
+Embedded install extracts assets, links executables into `~/.shine/bin/` (`bin_links.rs`), and
+appends a sentinel-guarded PATH block to the shell config (`shells/profile.rs`). Uninstall removes
+only Shine-managed symlinks/files and deletes the sentinel block precisely.
 
 For external presets, `external_shell_mode = "snapshot"` first materializes the effective
 base/overlay category under `<shine_dir>/installed/shell/`; update compares that snapshot with the
 active source and upgrade refreshes it. Explicit `live` mode points raw commands at the external
-source. A transformed live launcher calls the manifest-constrained internal renderer on each
+category. Materialization skips every `node_modules/` directory but preserves `package.json` and
+`bun.lock`.
+
+Every Bun launcher includes an explicit package policy. Embedded commands and unlocked external
+commands use `--no-install`. When the physical category owning an effective external/overlay script
+contains both lock files, the launcher uses `--install=fallback`; the Shell manifest records this
+mode and a combined content hash. Snapshot changes are applied by upgrade. Live execution reads the
+current package files immediately, while status reports that its receipt and launcher need refresh.
+A transformed live launcher calls the manifest-constrained internal renderer on each
 invocation, then executes or sources the atomically refreshed file under `rendered/`.
 
 ## Workspace environment export

@@ -20,11 +20,14 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
   | `fix(build): ...` | build/compile error in new code |
   | `fix(ci): ...` | CI pipeline fix |
   | `fix(internal): ...` | any other non-user-facing cleanup |
+- GitHub Release notes also skip documentation-only commits written as `docs:`, `docs(scope):`,
+  or `fix(docs):`. Feature and bug-fix commits remain included even when they update public docs
+  in the same change.
 - Pre-commit runs `cargo fmt --check`, `clippy -D warnings`, `cargo deny check`, `typos`, and
   `cargo nextest run`; it validates `mise.toml`, and changes to Bun tooling or TypeScript sources
   additionally run `mise exec -- bun run check:ts` (strict type-check + Bun tests). All must pass
   locally before a commit lands.
-- **Never `git push` without explicit user approval** (`AGENTS.md` § Git Push Policy).
+- **Never `git push` without explicit user approval** (`AGENTS.md` § Hard repository rules).
 
 ## Versioning
 
@@ -46,14 +49,15 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 - Any test that performs privileged (sudo) file operations on real paths must hold the
   cross-process admin lock for its full body (`install_core/file_ops.rs`, commit `fbd9c55`).
 - Verify CLI behavior against an isolated config dir:
-  `SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine` (details in `AGENTS.md` § Verification Notes).
+  `SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine` (details in `AGENTS.md` § Verification boundaries).
 - CI additionally runs `cargo audit`; a new dependency with a RUSTSEC advisory fails the build
   (see lessons entry on quinn-proto).
 - Rust and Bun versions have a single source of truth in root `mise.toml`; local development and CI
   must use those mise-managed tools. Root-level Bun development dependencies are locked by
   `bun.lock`; CI installs them with `bun install --frozen-lockfile` before running
-  `bun run check:ts`. Runtime preset scripts remain self-contained and must not import packages
-  from `node_modules`.
+  `bun run check:ts`. Built-in runtime preset scripts remain self-contained and may import only
+  relative modules plus Bun/Node built-ins. External or overlay Bun scripts may use dependencies
+  only through a category-local committed `package.json` + `bun.lock` pair; see ADR 0031.
 
 ## File size
 
@@ -70,7 +74,7 @@ Repository-specific conventions. Build/test/lint commands live in [`AGENTS.md`](
 
 ## Preset authoring
 
-Follow `AGENTS.md` § "Adding a new preset category". Key rules: prefer `shine.toml` metadata over
+Follow [`preset-authoring.md`](preset-authoring.md). Key rules: prefer `shine.toml` metadata over
 legacy `shine-dest:` annotations and declare transforms in order. Sys manifests declare `version =
 2`; every init item uses standard detection/provider metadata or one item-local script with a
 normal exit code. Do not add platform-wide dispatch or status/update wire protocols.

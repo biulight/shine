@@ -18,10 +18,9 @@ bugs. Check this list before changing the modules named in each entry.
   conflict, never overwritten or removed. `unix_bun_launcher_content` is byte-deterministic so a
   format change re-detects installed launchers as stale on upgrade; changing it is a format bump.
   The content embeds the entry's ordered `env` spec (the `--with` tokens of the
-  `shine env run --no-workspace … -- bun <script>` wrapper), so adding/removing/reordering an `env`
-  declaration changes the bytes and refreshes the launcher; an entry with no `env` produces the v1
-  bytes and stays current. Ownership/removal still key only on the marker + target, independent of
-  `env`.
+  `shine env run --no-workspace … -- bun … <script>` wrapper) and its Bun dependency policy, so
+  either declaration changing refreshes the launcher. Ownership/removal still key only on the
+  marker + target, independent of `env` and dependency mode.
 - **Backups use the `<name>.shine.bak` suffix** (`install_core/file_ops.rs::backup_path`).
   Uninstall restores from that exact name; changing the suffix orphans existing backups.
 - **An app source has exactly one manifest destination.** A per-file `dest` overrides the category
@@ -82,13 +81,21 @@ bugs. Check this list before changing the modules named in each entry.
 - **All `config.toml` writes go through `utils::sync_table`**, which preserves user comments.
   Never serialize the whole file from a struct — that destroys comments.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
-  key > `~/.shine/` default. Code and docs (AGENTS.md § Config) must agree.
+  key > `~/.shine/` default. Code and
+  [`data-flows.md`](data-flows.md#config-discovery) must agree.
 - **External app preset hooks and generators are opt-in only.** `post_upgrade`
   runs commands after upgrades, while an automatic file generator may run
   during install/update/upgrade and supply effective source bytes. Embedded code may
   run implicitly, but external preset or overlay code must be gated by
   `allow_app_hooks = true`; otherwise a user-controlled presets checkout would
   gain command execution during ordinary read-oriented update checks.
+- **Bun package installation is source-scoped and explicit.** Embedded scripts and external scripts
+  without a locked declaration run with `--no-install`. Only an effective external/overlay script
+  whose own physical category contains both `package.json` and `bun.lock` may run with
+  `--install=fallback`; one file without the other and any `trustedDependencies` field are errors.
+  Overlay package metadata never changes an inherited embedded script. Shine never runs
+  `bun install`, owns `node_modules`, or cleans Bun's global cache/virtual store, and dependency
+  download never bypasses `allow_app_hooks`. See ADR 0031.
 - **External sys executable code is separately opt-in.** Static detection/provider metadata and
   declarative PATH/env/aliases are safe to inspect, but external or overlay bootstrap/managed scripts,
   guarded eval/source, fragments, and base profile code require `allow_sys_code = true`. Read-only
@@ -155,6 +162,9 @@ bugs. Check this list before changing the modules named in each entry.
 - **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
   files, manifest entries, and managed launchers, including legacy launchers pointing into the
   external tree. The external presets and overlay directories remain untouched.
+- **Preset materialization excludes `node_modules/` at every depth.** External Shell snapshots and
+  overlay copies retain `package.json` and `bun.lock`, but never copy a local installation tree into
+  Shine-owned state or embedded extraction.
 
 ## Secrets
 
@@ -162,7 +172,7 @@ bugs. Check this list before changing the modules named in each entry.
   must never consult `Config::secret_backend` or any other config to pick a backend — only the
   `age:` prefix (or its absence) decides. This lets `secret_backend`/`age_recipients` change
   freely without breaking previously-encrypted secrets (see
-  [ADR 0008](decisions/0008-age-secret-backend-tagged-ciphertext.md)).
+  [ADR 0008](../decisions/0008-age-secret-backend-tagged-ciphertext.md)).
 - **GPG ciphertext stays untagged.** Adding a tag to existing GPG secrets, or changing the `age:`
   prefix, breaks every secret encrypted before the change.
 - **Workspace export decrypts only on explicit request.** `shine env workspace export` omits

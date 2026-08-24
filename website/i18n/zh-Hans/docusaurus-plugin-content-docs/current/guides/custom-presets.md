@@ -21,7 +21,7 @@ Shine 会输出 `Preset Source`、可选的 `Presets Overlay`，以及外部 She
 文件夹同步；它把选定源文件变成已安装能力：创建受管命令入口、解析本地值、默认保留已安装快照、
 报告待处理变化，并且只移除自己拥有的内容。
 
-例如，一个自定义 `shell/image-tools/` 类别可以提供三个个人图片命令：
+内置 `shell/image-tools/` 类别就是一个完整示例，它通过以下元数据提供三个图片命令：
 
 ```toml
 description = "Personal image workflow commands."
@@ -38,35 +38,47 @@ source = "resize.ts"
 target = "img-resize"
 runtime = "bun"
 platforms = ["unix", "windows"]
-env = ["IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
+env = ["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
 
 [[files]]
 source = "convert.ts"
 target = "img-convert"
 runtime = "bun"
 platforms = ["unix", "windows"]
+env = ["IMAGE_QUALITY"]
 ```
 
-这段元数据只是机制示例，并非内置预设；类别中还需要包含三个对应源文件。这些文件可以使用
-[`Bun.Image`](https://bun.com/docs/runtime/image) 压缩、缩放和转换 JPEG、PNG、WebP 图片，无需
-ImageMagick、Sharp 或其它图片库。运行命令的每台机器都必须在 `PATH` 中自行安装 Bun 1.3.14
-或更高版本。Shine 不内置 Bun，Shine 仓库固定的 Bun 版本只是开发与测试基线。预设作者还应在
-启动时检测 `Bun.Image`，旧版 Bun 不具备该能力时给出明确的升级提示。
+这个类别包含三个入口文件和一个共享实现，使用
+[`Bun.Image`](https://bun.com/docs/runtime/image) 压缩、缩放和转换 JPEG、PNG、WebP，无需
+ImageMagick、Sharp 或其它图片库。运行命令的每台机器都必须在 `PATH` 中安装 Bun 1.3.14 或更高
+版本；Shine 不内置 Bun。命令会检测缺失的 `Bun.Image` API，并给出升级提示。
 
-源文件准备好后，Shine 会在它外面补上生命周期：
+可以安装整个类别或其中一个命令，再沿用普通 Shell 预设的生命周期：
 
 ```bash
 shine info shell/image-tools
 shine install shell/image-tools/img-compress
+img-compress photo.jpg screenshots/
+img-resize --width 1280 --output-dir ./resized photos/
+img-convert --format webp --quality 75 --output-dir ./webp hero.png gallery/
 shine info shell/image-tools --diff
 shine upgrade shell/image-tools
 shine shell uninstall image-tools/img-compress --dry-run
 ```
 
-默认 snapshot 模式下，修改或同步来源文件夹不会悄悄改变已安装命令。`shine info --diff` 展示
-待处理的来源变化，`shine upgrade` 再显式应用。图片质量、最大尺寸等值保留在各台机器本地，只因
-对应命令明确声明需要它们才会注入。这就是“同步一个脚本文件”和“把脚本作为可复用个人能力运行”
-之间的边界。
+每个命令都接受多个文件或目录输入。目录只扫描第一层的 JPEG、PNG、WebP，不会递归。未指定
+`--output-dir` 时，结果保存在来源旁边，名称形如 `photo.compressed.jpg`、
+`photo.resized.jpg` 或所选转换格式的扩展名。指定输出目录后，所有结果平铺到该目录；重复目标名会
+明确失败。已有目标也会失败，只有 `--force` 才允许替换；来源图片永远不会被原地修改。
+
+批处理遇到单项失败后会继续，并在存在任意失败时返回非零状态。前 20 条失败会显示在终端；超过
+20 条时，完整列表还会写入 `--output-dir` 下唯一命名的 `image-tools-errors-*.log`，未指定输出目录
+时则写入当前目录。
+
+`IMAGE_QUALITY`、`IMAGE_MAX_WIDTH`、`IMAGE_MAX_HEIGHT` 默认分别为 `80`、`1920`、`1080`。
+命令参数只覆盖当次运行，本地 Shine 配置则会保留这台机器的长期偏好。默认 snapshot 模式下，修改
+复制或外部来源后仍需执行 `shine upgrade`，已安装命令才会变化。这就是“同步一个脚本文件”和“把
+脚本作为可复用个人能力运行”之间的边界。
 
 ## 使用 Overlay 覆盖少量文件
 
@@ -131,6 +143,38 @@ live 模式下，普通 Shell/Bun 源文件内容在下一次调用时直接生�
 如果移动了已关联的 overlay 或 live preset 目录，请关联新路径后运行 `shine update`。只要有效的
 相对文件集合与字节没有变化，snapshot 部署仍保持最新；live 部署则会显示旧、新来源路径，因为
 `shine upgrade` 必须重新指向受管命令入口。该来源迁移会与内容变化分开显示。
+
+### 在外部 Bun 预设中使用锁定依赖
+
+内置 Bun 预设继续保持自包含。外部预设与 overlay 若要使用普通 registry 包，必须把
+`package.json` 和 `bun.lock` 一起提交到有效脚本所在的同一物理类别目录：
+
+```text
+shell/my-tools/
+├── shine.toml
+├── package.json
+├── bun.lock
+├── command.ts
+└── shared.ts
+```
+
+同一约定也适用于 `app/<category>/` 下采用 Bun 的 artifact、teardown 与 generator 脚本。两个
+文件缺一不可；首版还会拒绝任何 `trustedDependencies` 声明。Overlay 只有在自身提供有效脚本时才能
+使用自己的依赖声明；仅在 overlay 中加入 package 文件，不会为继承的内置脚本启用依赖。
+
+内置脚本和没有锁文件对的外部脚本都以 `bun --no-install` 运行。具备锁文件对的外部脚本以
+`bun --install=fallback` 运行，因此第一次真正执行时可能联网下载缺失包；`list` 与 `info` 不会
+下载依赖。Shine 不运行 `bun install`，不复制 `node_modules`，也不拥有 Bun 的全局缓存与 virtual
+store；卸载 Shine 或某个预设都不会清理这些共享缓存。
+
+Snapshot Shell 预设的 package 或 lock 变化会显示在 `shine update` 中，并在 `shine upgrade` 后
+生效。Live 模式会在下一次命令调用时读取当前文件，同时状态仍会提示刷新安装 receipt。完全离线的
+机器需要提前填充相应 Bun 缓存，或由作者 bundle/vendor 脚本。首版不保证原生扩展、workspace、
+`file:`、`link:` 以及需要生命周期脚本的依赖可用。
+
+若现有外部脚本依赖 Bun 的隐式安装，请在脚本类别根创建 `package.json`，使用仓库规定的 Bun
+版本生成 `bun.lock`，提交两者，并在空 Bun 缓存下测试。没有这对文件时，裸包导入现在会直接失败，
+不会再自动下载。
 
 也可以直接设置环境变量：
 
@@ -214,7 +258,9 @@ env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]
 
 支持 `.ts`、`.js`、`.mts` 和 `.mjs`。安装后，Shine 会创建无扩展名的受管入口，用户仍以 `my-tool` 调用它；现有 `.sh` 和 `.ps1` 原生入口保持兼容。
 
-运行这类命令的每台设备都必须已在 `PATH` 中安装 Bun。Shine 不会安装 Bun、下载依赖或解析 `node_modules`；`runtime = "bun"` 也不能与 `needs_source = true` 组合使用。
+运行这类命令的每台设备都必须已在 `PATH` 中安装 Bun。Shine 不会安装 Bun 或管理
+`node_modules`；外部类别可以按上文约定启用由 Bun 管理的锁定依赖。`runtime = "bun"` 也不能与
+`needs_source = true` 组合使用。
 
 可选的 `env` 只适用于 Bun 入口。每项写成 `KEY` 或 `SOURCE=TARGET`；入口启动时会通过 `shine env run --no-workspace --with ...` 注入值，因此优先解密 `SOURCE_SECRET`，不存在时读取明文 `SOURCE`。声明 `env` 后，运行机器的 `PATH` 中还必须有 `shine`。不要在元数据中填写值或密文，只声明键名。
 

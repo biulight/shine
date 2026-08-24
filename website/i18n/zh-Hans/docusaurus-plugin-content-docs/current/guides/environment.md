@@ -26,6 +26,10 @@ shine env delete HTTP_PROXY_PORT
 `localhost,127.0.0.1,::1`。修改它或其他代理变量后，`shine update` 会把已安装的
 `proxy` shell 预设标记为可更新；运行 `shine upgrade` 应用新值。
 
+内置图片命令默认使用 `IMAGE_QUALITY=80`、`IMAGE_MAX_WIDTH=1920`、
+`IMAGE_MAX_HEIGHT=1080`。可用 `--quality`、`--width`、`--height` 只覆盖当次运行，也可用
+`shine env set` 为当前机器保留不同默认值。
+
 `shine env list` 默认隐藏敏感值；`--reveal` 会显示完整值，应只在安全终端中使用。输出会按实际来源分为 `config.toml`、全局覆盖文件、overlay 和项目覆盖文件，便于确认哪个值正在生效。变量通常保存到当前配置的 `[env]` 表。
 
 全局 `~/.shine/config.toml` 和项目 `shine.config.toml` 的 `[env]` 支持简写字符串，也支持

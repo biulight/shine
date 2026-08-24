@@ -8,7 +8,7 @@ It complements — and never duplicates — the existing docs:
 
 | Document | What it covers |
 |---|---|
-| [`AGENTS.md`](../../AGENTS.md) | Build/test/lint commands, module map, command routing, preset authoring, hard rules (push policy, release rules) — the authoritative agent entry point (`CLAUDE.md` imports it) |
+| [`AGENTS.md`](../../AGENTS.md) | Mandatory workflow, high-frequency commands, verification boundaries, and hard repository rules — the authoritative agent entry point (`CLAUDE.md` imports it) |
 | [`README.md`](../../README.md) | User-facing documentation (features, installation, command usage) |
 | [`CHANGELOG.md`](../../CHANGELOG.md) | Hand-written, user-facing release history |
 | **`docs/kb/`** (this directory) | Decisions, invariants, data flows, runbooks, lessons — the non-derivable knowledge |
@@ -17,6 +17,8 @@ It complements — and never duplicates — the existing docs:
 
 - [`architecture/data-flows.md`](architecture/data-flows.md) — end-to-end flows that span multiple modules
 - [`architecture/invariants.md`](architecture/invariants.md) — non-obvious invariants that must hold
+- [`architecture/module-map.md`](architecture/module-map.md) — module ownership and command routing
+- [`preset-authoring.md`](preset-authoring.md) — shell, app, and sys preset authoring rules
 - [`decisions/`](decisions/) — ADR-lite records (one decision per file, numbered)
 - [`conventions.md`](conventions.md) — commit, versioning, and testing conventions
 - [`operations/release-runbook.md`](operations/release-runbook.md) — how to cut a release
@@ -39,7 +41,7 @@ Update the KB in the same PR as the change it documents:
 - Fixed a bug caused by non-obvious behavior → add an entry to `lessons.md`.
 - Made a design/architecture choice → add a numbered ADR in `decisions/`.
 - Changed a data flow or invariant → update the matching file in `architecture/`.
-- Structural refactor (modules moved/renamed) → sync `AGENTS.md` (existing convention).
+- Structural refactor (modules moved/renamed) → sync `architecture/module-map.md`.
 
 Keep entries short and factual. Cite commits by hash where relevant. Delete entries that become
 wrong rather than letting them rot.
