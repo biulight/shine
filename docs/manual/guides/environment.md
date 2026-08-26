@@ -177,6 +177,85 @@ process and explicit `--with` values. It cannot be combined with `--workspace` o
 Bun entries use this mode when they need fixed Shine configuration independent of the working
 directory.
 
+## Choose one-time injection or a transparent wrapper
+
+Use one-time injection for an occasional sensitive operation. For example, Cargo accepts
+`CARGO_REGISTRY_TOKEN` for crates.io when its `cargo:token` credential provider is active, so a yank
+can receive the token without leaving it in the shell or keeping a command wrapper enabled:
+
+```bash
+shine env run --no-workspace \
+  --with CARGO_REGISTRY_TOKEN \
+  -- cargo yank my-crate@1.2.3
+```
+
+`--with CARGO_REGISTRY_TOKEN` prefers encrypted `CARGO_REGISTRY_TOKEN_SECRET` and injects the
+plaintext only into Cargo for this run. Cargo and any descendants it launches can still read the
+value. For ordinary persistent Cargo authentication, Cargo recommends an operating-system
+credential provider; use Shine injection when you intentionally keep the token encrypted in Shine.
+See [Cargo registry authentication](https://doc.rust-lang.org/stable/cargo/reference/registry-authentication.html)
+and [`cargo yank`](https://doc.rust-lang.org/stable/cargo/commands/cargo-yank.html).
+
+### Install a transparent wrapper for fixed credential variables
+
+Use a transparent wrapper when a CLI repeatedly needs the same fixed credential variable. Some
+CLIs, such as GitHub CLI, read a variable like `GH_TOKEN` instead of accepting it as an argument:
+
+```bash
+shine env proxy install gh --with GH_TOKEN
+gh pr list
+```
+
+Shine creates a same-name shim in `~/.shine/bin/` and records the real command found in `PATH`. The
+shim resolves `GH_TOKEN_SECRET` only for its child and falls back to plaintext `GH_TOKEN`. It never
+exports the value back to the parent. `--with` is repeatable and accepts `KEY=ALIAS`.
+
+An installed proxy is command-wide, not subcommand-specific. If you deliberately proxy Cargo,
+disable injection until it is needed:
+
+```bash
+shine env proxy install cargo --with CARGO_REGISTRY_TOKEN
+shine env proxy disable cargo
+
+# Later, for the credentialed operation:
+shine env proxy enable cargo
+cargo yank my-crate@1.2.3
+shine env proxy disable cargo
+```
+
+While enabled, every Cargo subcommand and any descendant process may inherit the token. Disabling
+the rule retains the shim and forwards directly to the real Cargo without decrypting or injecting
+values. For an occasional yank, prefer the one-time `env run` form above.
+
+Proxy only an explicitly approved bare command name containing ASCII letters, numbers, `-`, `_`, or
+`.`. Make sure `~/.shine/bin/` is early in `PATH` and the target is not another Shine wrapper. Shine
+refuses to overwrite a same-name entry it does not own.
+
+Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
+`--project` to scope the rule; a project rule for the same command overrides the global one:
+
+```bash
+shine env proxy install gh --with GH_TOKEN --project
+shine env proxy list
+```
+
+Disable injection temporarily while retaining the shim; the disabled wrapper directly forwards to
+the real program:
+
+```bash
+shine env proxy disable gh
+shine env proxy enable gh
+shine env proxy disable gh --project
+```
+
+Remove the managed shim and user-level rule when no longer needed:
+
+```bash
+shine env proxy uninstall gh
+```
+
+If the real executable moves or is replaced, rerun the install command to record its new path.
+
 ## Provide variables and secrets to remote commands
 
 Choose according to how widely plaintext may be visible remotely:
@@ -208,49 +287,6 @@ The broker never transfers the decryption key or puts plaintext in the remote lo
 child, remote administrator, or malicious same-account process can still read plaintext. Fixed
 projects should use a local policy bound to the workspace digest, mode, full command, and releasable
 keys. See [SSH sessions, secret brokering, and file transfer](./ssh-transfer.md#provide-secrets-to-remote-commands-on-demand).
-
-## Install a transparent wrapper for fixed credential variables
-
-Some CLIs, such as GitHub CLI, read a fixed environment variable like `GH_TOKEN` instead of accepting
-it as an argument. Install a transparent wrapper without exporting the value into the shell:
-
-```bash
-shine env proxy install gh --with GH_TOKEN
-gh pr list
-```
-
-Shine creates a same-name shim in `~/.shine/bin/` and records the real command found in `PATH`. The
-shim resolves `GH_TOKEN_SECRET` only for its child and falls back to plaintext `GH_TOKEN`. It never
-exports the value back to the parent. `--with` is repeatable and accepts `KEY=ALIAS`.
-
-Proxy only an explicitly approved bare command name containing ASCII letters, numbers, `-`, `_`, or
-`.`. Make sure `~/.shine/bin/` is early in `PATH` and the target is not another Shine wrapper. Shine
-refuses to overwrite a same-name entry it does not own.
-
-Rules default to global `~/.shine/config.toml`. Inside a project with `shine.config.toml`, add
-`--project` to scope the rule; a project rule for the same command overrides the global one:
-
-```bash
-shine env proxy install gh --with GH_TOKEN --project
-shine env proxy list
-```
-
-Disable injection temporarily while retaining the shim; the disabled wrapper directly forwards to
-the real program:
-
-```bash
-shine env proxy disable gh
-shine env proxy enable gh
-shine env proxy disable gh --project
-```
-
-Remove the managed shim and user-level rule when no longer needed:
-
-```bash
-shine env proxy uninstall gh
-```
-
-If the real executable moves or is replaced, rerun the install command to record its new path.
 
 ## Initialize a workspace from dotenv
 

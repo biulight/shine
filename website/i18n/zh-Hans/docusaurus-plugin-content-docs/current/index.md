@@ -53,19 +53,23 @@ Shine 不限定你怎样分享它。
 方式把批量重命名、表格整理或文档打印封装成自己的命令。每个命令需要的应用或运行时仍要安装在
 对应机器上。[自定义预设](./guides/custom-presets.md)介绍了实现机制和完整图片工作流。
 
-## 减少 AI agent 工作区里的明文密钥
+## 只把凭据交给需要它的命令
 
-Claude Code、Codex 等 AI coding agent 可以读取工作区文件、运行命令并查看输出。Shine 可以把
-选定的工作区密钥封装为可提交的 GPG 或 age 密文，只在目标子进程需要时解密并注入：
+凭据不必长期留在工作区文件里，也不必导出到整个 Shell 会话。对于每次调用都要读取固定变量
+的 CLI，Shine 可以安装透明命令代理，只在这个命令运行时解析加密值：
 
 ```bash
-shine env secret seal
-shine env run --mode development -- bun run build
+shine env proxy install gh --with GH_TOKEN
+gh pr list
 ```
 
-这样可以降低明文密钥进入项目文件、日志、补丁或 agent 上下文的机会。它并不是沙箱：能够检查
-自身环境的命令仍然可以读取注入值。完整流程和安全边界见
-[在 AI agent 参与开发时保护环境密钥](./guides/agent-secret-safety.md)。
+代理会优先解密 `GH_TOKEN_SECRET`，只把结果注入目标子进程，不会导出回父 Shell。偶尔执行一次
+敏感操作时，应改用一次性的 `shine env run --with ... -- <command>`，不必长期启用代理。如何
+选择见[管理环境变量与密钥](./guides/environment.md)。
+
+这种方式也能降低明文密钥进入文件、日志、补丁或 AI Agent 上下文的机会，但它并不是沙箱：
+目标命令及其后代进程仍然可以读取注入值。完整流程和安全边界见
+[在 AI Agent 参与开发时保护环境密钥](./guides/agent-secret-safety.md)。
 
 ## 不只处理脚本和配置
 
@@ -79,6 +83,6 @@ shine env run --mode development -- bun run build
 1. [安装 Shine](./installation.md)
 2. [完成第一次预设安装](./quick-start.md)
 3. 查看[内置预设](./reference/built-in-presets.md)，看看现在有哪些内容可以直接使用
-4. 根据目标阅读 [Shell 预设](./guides/shell-presets.md)、[应用预设](./guides/app-presets.md)、[系统初始化](./guides/system-init.md)、[终端主题同步](./guides/terminal-theme-sync.md)、[任务与本地服务](./guides/tasks-and-serve.md) 或 [SSH 会话：密钥代理与文件传输](./guides/ssh-transfer.md)
+4. 根据目标阅读 [Shell 预设](./guides/shell-presets.md)、[应用预设](./guides/app-presets.md)、[环境变量与密钥](./guides/environment.md)、[系统初始化](./guides/system-init.md)、[终端主题同步](./guides/terminal-theme-sync.md)、[任务与本地服务](./guides/tasks-and-serve.md) 或 [SSH 会话：密钥代理与文件传输](./guides/ssh-transfer.md)
 
 如果已经遇到问题，直接前往[故障排查](./troubleshooting.md)；需要查看全部选项时再打开[命令参考](./reference/commands.md)。

@@ -31,6 +31,18 @@ shine env run --mode development -- bun run build
 
 但只要某个 Agent 被允许运行会读取环境变量的命令，它仍可能看到目标命令可见的 secret。`env run` 的安全边界是“按需注入”，不是“让不可信命令无法读取变量”。
 
+偶尔执行一次需要凭据的操作时，建议由用户在可信终端通过单次 `env run --with` 注入。若某个
+CLI 每次调用都需要同一个固定凭据变量，则可以安装透明命令代理，继续使用原来的调用方式：
+
+```bash
+shine env proxy install gh --with GH_TOKEN
+gh pr list
+```
+
+如果 Agent 获准运行 `gh`，它仍然可以使用注入的 token，也能查看命令暴露的信息。透明代理
+减少的是持久明文和整个 Shell 会话范围的导出，并不会让目标命令变成可信程序。设置方式、
+启停语义和 Cargo 示例见[选择单次注入还是透明代理](./environment.md#选择单次注入还是透明代理)。
+
 ## age identity 是解密能力
 
 使用 `age` 后端时，`age_recipients = ["age1..."]` 表示密文要加密给谁。recipient 类似公钥地址：个人默认值可写入 `~/.shine/config.toml`，项目团队共享的名单应写入 `shine.workspace.toml` 的 `[env.encryption]`，后者可以提交到仓库。
