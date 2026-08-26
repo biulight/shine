@@ -19,6 +19,8 @@ deleting unrelated files.
 **Documentation:** [English](https://biulight.github.io/shine/) ·
 [简体中文](https://biulight.github.io/shine/zh-Hans/)
 
+[![The three core values of Shine: repeatable deployment, one entry point for personal developer resources, and a reviewable lifecycle for Shine-managed content.](website/static/img/shine-core-values-en.webp)](website/static/img/shine-core-values-en.webp)
+
 ## What Shine helps you do
 
 - **Use a script like any other command.** Install it once and call it by name from `PATH`.

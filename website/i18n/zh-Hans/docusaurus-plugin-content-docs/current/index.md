@@ -22,6 +22,8 @@ Shine 用 **Preset（预设）** 把脚本、个性化配置和安装方式集�
 
 当前手册适用于 **Shine 1.7.0**。
 
+[![Shine 的三大核心价值：个人脚本与配置可重复部署、个人开发资源的统一入口，以及 Shine 管理内容的可审查生命周期。](/img/shine-core-values-zh-Hans.webp)](/img/shine-core-values-zh-Hans.webp)
+
 ## Shine 能替你做什么
 
 - **让脚本像普通命令一样使用：** 安装一次，就能从 `PATH` 中按名字调用。

@@ -25,6 +25,8 @@ deleting unrelated files.
 
 This manual applies to **Shine 1.7.0**.
 
+[![The three core values of Shine: repeatable deployment, one entry point for personal developer resources, and a reviewable lifecycle for Shine-managed content.](/img/shine-core-values-en.webp)](/img/shine-core-values-en.webp)
+
 ## What Shine helps you do
 
 - **Use a script like any other command.** Install it once and call it by name from `PATH`.
