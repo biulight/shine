@@ -32,6 +32,8 @@ This manual applies to **Shine 1.6.0**.
   transforms, or merges each file where its application expects it.
 - **Keep each machine's values on that machine.** A preset declares the keys it needs; you provide
   the values locally.
+- **Give encrypted credentials only to commands that need them.** Seal tokens and other sensitive
+  project values as GPG or age ciphertext, then decrypt them on demand for selected child processes.
 - **Look before you update.** By default, inspect what changed first; Shine applies it only when you
   choose to upgrade.
 - **Remove only what Shine installed.** Your source folder and unrelated files stay in place.
