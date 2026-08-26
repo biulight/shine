@@ -40,6 +40,20 @@ This primarily reduces three risks:
 An agent permitted to run a command that reads environment variables can still see secrets visible
 to that command. The boundary is on-demand injection, not protection from an untrusted child.
 
+For an occasional credentialed operation, run the command yourself with one-time `env run --with`
+injection. If a CLI repeatedly needs the same fixed credential variable, a transparent command
+proxy can keep the normal invocation:
+
+```bash
+shine env proxy install gh --with GH_TOKEN
+gh pr list
+```
+
+An agent allowed to run `gh` can still use the injected token and inspect anything the command
+reveals. The proxy reduces persistent plaintext and shell-wide exports; it does not make the target
+command trusted. See [choose one-time injection or a transparent wrapper](./environment.md#choose-one-time-injection-or-a-transparent-wrapper)
+for setup, enable/disable behavior, and the Cargo example.
+
 ## An age identity is decryption authority
 
 With the `age` backend, `age_recipients = ["age1..."]` identifies who can decrypt. A personal default
