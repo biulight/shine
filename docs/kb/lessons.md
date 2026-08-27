@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-28 — Native-shell integration tests must assert native syntax
+
+- **Symptom**: the Windows Rust test job rejected the profile written by `shell completion install`
+  even though it contained the correct PowerShell completion registration.
+- **Root cause**: the test let `ShellType::default()` select the native shell but always searched for
+  Bash/Zsh's `COMPLETE=<shell> shine` assignment; PowerShell intentionally uses
+  `$env:COMPLETE = 'powershell'`.
+- **Fix**: select the expected completion marker from the native shell type before inspecting the
+  installed managed profile.
+- **Rule**: a test that deliberately exercises a platform-selected implementation must assert that
+  implementation's syntax, not interpolate its name into one platform's syntax.
+
 ## 2026-08-27 — Generated documentation checks must ignore checkout line endings
 
 - **Symptom**: the Windows Rust test job reported both generated preset-capability blocks as stale

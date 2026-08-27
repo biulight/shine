@@ -889,9 +889,16 @@ mod tests {
         let profile = fs::read_to_string(managed_shell_profile_path(&config))
             .await
             .unwrap();
-        let shell_name: &'static str = config.shell_type.into();
+        let completion_marker = match config.shell_type {
+            ShellType::Bash => "COMPLETE=bash shine",
+            ShellType::Zsh => "COMPLETE=zsh shine",
+            ShellType::PowerShell => "$env:COMPLETE = 'powershell'",
+            ShellType::Fish | ShellType::Elvish => {
+                panic!("native default shell should support completion registration")
+            }
+        };
         assert!(
-            profile.contains(&format!("COMPLETE={shell_name} shine")),
+            profile.contains(completion_marker),
             "profile should register shine completion: {profile}"
         );
         assert!(
