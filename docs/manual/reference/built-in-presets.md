@@ -24,6 +24,35 @@ shine sys info split-dns
 This page reflects the built-in `presets/` directory in Shine 1.7.0. For another version, use
 `shine list --available` and `--help` as the authority.
 
+The platform column below is generated from the same built-in App destination and Shell file
+selectors used at runtime. A conformance test keeps this block synchronized with preset metadata in
+both manual locales.
+
+<!-- BEGIN GENERATED PRESET PLATFORM CAPABILITIES -->
+| Preset capability | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| `app/JetBrains` | ✓ | ✓ | ✓ |
+| `app/archey4` | ✓ | ✓ | — |
+| `app/clash-verge` | ✓ | ✓ | ✓ |
+| `app/docker-desktop` | — | — | ✓ |
+| `app/docker-engine` | ✓ | ✓ | ✓ |
+| `app/fastfetch` | ✓ | ✓ | ✓ |
+| `app/ghostty` | ✓ | ✓ | — |
+| `app/git` | ✓ | ✓ | ✓ |
+| `app/starship` | ✓ | ✓ | ✓ |
+| `app/surge` | ✓ | — | — |
+| `app/vim` | ✓ | ✓ | ✓ |
+| `shell/agent/ccenv` | ✓ | ✓ | ✓ |
+| `shell/image-tools/img-compress` | ✓ | ✓ | ✓ |
+| `shell/image-tools/img-convert` | ✓ | ✓ | ✓ |
+| `shell/image-tools/img-resize` | ✓ | ✓ | ✓ |
+| `shell/proxy/setproxy` | ✓ | ✓ | ✓ |
+| `shell/proxy/usetproxy` | ✓ | ✓ | ✓ |
+| `shell/utils/copyfile` | ✓ | ✓ | — |
+| `shell/utils/shine-env-export` | ✓ | ✓ | ✓ |
+| `shell/utils/shine-theme-sync` | ✓ | ✓ | ✓ |
+<!-- END GENERATED PRESET PLATFORM CAPABILITIES -->
+
 ## Shell presets
 
 Installing a shell category creates entries under `~/.shine/bin/` and wrappers in supported Bash,

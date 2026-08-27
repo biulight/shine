@@ -137,6 +137,13 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
+- **The generated built-in platform capability blocks must use runtime selector semantics.**
+  `preset_meta::tests::built_in_preset_platform_capability_docs_are_current` derives App category
+  and Shell command visibility from the pristine embedded metadata for macOS, Linux, and Windows,
+  then checks the delimited blocks in both public manual locales. Do not maintain a parallel
+  platform map or weaken the test to trust prose labels; a preset metadata change and both generated
+  blocks must land together. Regenerate them with
+  `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`.
 - **Fallback depends on the selected preset mode.** In built-in mode, an overlay replaces matching
   paths and unmatched paths continue to read embedded assets. A full external preset source is
   authoritative for app and shell category discovery: a missing category or file is not silently

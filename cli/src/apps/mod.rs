@@ -16,6 +16,8 @@ pub use build::{handle_build, handle_unbuild};
 pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};
 pub use install::handle_install;
+#[cfg(test)]
+pub(crate) use metadata::built_in_platform_availability;
 pub(crate) use metadata::validate_preset_category;
 pub use metadata::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,

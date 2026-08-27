@@ -5,6 +5,8 @@ use crate::platform::{OperatingSystem, current_platform};
 use crate::presets;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use tokio::fs;
@@ -974,6 +976,52 @@ fn file_matches_platform(
         current,
         &format!("app/{category}/shine.toml"),
     )
+}
+
+#[cfg(test)]
+pub(crate) fn built_in_platform_availability() -> Result<BTreeMap<String, BTreeSet<OperatingSystem>>>
+{
+    let mut capabilities = BTreeMap::new();
+    for name in crate::preset_meta::collect_pristine_embedded_category_names("app") {
+        let metadata_path = format!("app/{name}/shine.toml");
+        let Some(bytes) = presets::read_embedded_asset_bytes(&metadata_path) else {
+            capabilities.insert(
+                format!("app/{name}"),
+                OperatingSystem::ALL.into_iter().collect(),
+            );
+            continue;
+        };
+        let parsed = parse_category_toml(&name, &bytes)?;
+        let mut platforms = BTreeSet::new();
+        for platform in OperatingSystem::ALL {
+            if parsed.dest.select_for_platform(&name, platform)?.is_none() {
+                continue;
+            }
+            let has_file = if let Some(files) = &parsed.files {
+                let mut has_file = false;
+                for file in files {
+                    if !file_matches_platform(&name, file, platform)? {
+                        continue;
+                    }
+                    if let Some(dest) = &file.dest
+                        && dest.select_file_for_platform(&name, platform)?.is_none()
+                    {
+                        continue;
+                    }
+                    has_file = true;
+                    break;
+                }
+                has_file
+            } else {
+                true
+            };
+            if has_file {
+                platforms.insert(platform);
+            }
+        }
+        capabilities.insert(format!("app/{name}"), platforms);
+    }
+    Ok(capabilities)
 }
 
 fn normalize_relative(path: &str) -> Result<PathBuf> {

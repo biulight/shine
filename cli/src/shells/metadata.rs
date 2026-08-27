@@ -3,6 +3,8 @@ use crate::platform::{OperatingSystem, current_platform};
 use crate::presets;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use tokio::fs;
@@ -332,6 +334,49 @@ fn file_matches_platform(
         current,
         &format!("shell/{category}/shine.toml"),
     )
+}
+
+#[cfg(test)]
+pub(crate) fn built_in_platform_availability() -> Result<BTreeMap<String, BTreeSet<OperatingSystem>>>
+{
+    let mut capabilities: BTreeMap<String, BTreeSet<OperatingSystem>> = BTreeMap::new();
+    for name in crate::preset_meta::collect_pristine_embedded_category_names("shell") {
+        let metadata_path = format!("shell/{name}/shine.toml");
+        if let Some(bytes) = presets::read_embedded_asset_bytes(&metadata_path) {
+            let parsed = parse_category_toml(&name, &bytes)?;
+            if let Some(files) = parsed.files {
+                for file in files {
+                    let command = resolve_metadata_file(&file, &metadata_path)?.command_name;
+                    let platforms = capabilities
+                        .entry(format!("shell/{name}/{command}"))
+                        .or_default();
+                    for platform in OperatingSystem::ALL {
+                        if file_matches_platform(&name, &file, platform)? {
+                            platforms.insert(platform);
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+
+        let prefix = format!("shell/{name}/");
+        for asset_path in presets::embedded_asset_paths(&format!("shell/{name}")) {
+            let Some(relative) = asset_path.strip_prefix(&prefix) else {
+                continue;
+            };
+            let source = PathBuf::from(relative);
+            if relative == "shine.toml" || !is_shell_script(&source) {
+                continue;
+            }
+            let command = default_command_name(&source)?;
+            capabilities.insert(
+                format!("shell/{name}/{command}"),
+                OperatingSystem::ALL.into_iter().collect(),
+            );
+        }
+    }
+    Ok(capabilities)
 }
 
 fn collect_embedded_category_names(filter: Option<&str>) -> Vec<String> {

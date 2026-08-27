@@ -18,6 +18,9 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
    pages in the same change.
 7. Run `shine preset validate <path> --format json` before runtime-specific checks. It validates
    repository roots, category directories, and manifests without loading config or executing code.
+8. After changing a built-in App destination or App/Shell file selector, run
+   `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`
+   and commit both regenerated public-manual blocks.
 
 ## AI authoring boundary
 

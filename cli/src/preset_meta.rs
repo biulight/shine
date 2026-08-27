@@ -19,6 +19,22 @@ use crate::config::Config;
 use crate::platform::OperatingSystem;
 use crate::presets;
 
+#[cfg(test)]
+pub(crate) fn collect_pristine_embedded_category_names(root: &str) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    let prefix = format!("{root}/");
+    for asset_path in presets::embedded_asset_paths(root) {
+        let Some(rest) = asset_path.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Some((category, _)) = rest.split_once('/') else {
+            continue;
+        };
+        names.insert(category.to_string());
+    }
+    names.into_iter().collect()
+}
+
 /// Names of categories under `root` (e.g. `"shell"` or `"app"`) among the
 /// embedded assets, optionally filtered to a single name.
 pub(crate) fn collect_embedded_category_names(root: &str, filter: Option<&str>) -> Vec<String> {
@@ -221,6 +237,69 @@ mod tests {
     fn collect_embedded_category_names_filters_to_requested_name() {
         let names = collect_embedded_category_names("shell", Some("proxy"));
         assert_eq!(names, vec!["proxy".to_string()]);
+    }
+
+    #[test]
+    fn built_in_preset_platform_capability_docs_are_current() {
+        const START: &str = "<!-- BEGIN GENERATED PRESET PLATFORM CAPABILITIES -->";
+        const END: &str = "<!-- END GENERATED PRESET PLATFORM CAPABILITIES -->";
+
+        let mut capabilities = crate::apps::built_in_platform_availability().unwrap();
+        capabilities.extend(crate::shells::metadata::built_in_platform_availability().unwrap());
+
+        let mut expected = String::from(START);
+        expected.push_str("\n| Preset capability | macOS | Linux | Windows |\n");
+        expected.push_str("| --- | --- | --- | --- |\n");
+        for (target, platforms) in capabilities {
+            let supported = |platform| {
+                if platforms.contains(&platform) {
+                    "✓"
+                } else {
+                    "—"
+                }
+            };
+            expected.push_str(&format!(
+                "| `{target}` | {} | {} | {} |\n",
+                supported(OperatingSystem::Macos),
+                supported(OperatingSystem::Linux),
+                supported(OperatingSystem::Windows),
+            ));
+        }
+        expected.push_str(END);
+
+        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        if !repository_root.join("docs/manual").is_dir() {
+            // Published crates intentionally exclude the documentation repositories.
+            return;
+        }
+        let update = std::env::var_os("SHINE_UPDATE_PRESET_CAPABILITIES").as_deref()
+            == Some(std::ffi::OsStr::new("1"));
+        for relative in [
+            "docs/manual/reference/built-in-presets.md",
+            "website/i18n/zh-Hans/docusaurus-plugin-content-docs/current/reference/built-in-presets.md",
+        ] {
+            let path = repository_root.join(relative);
+            let document = std::fs::read_to_string(&path).unwrap();
+            let start = document
+                .find(START)
+                .unwrap_or_else(|| panic!("{} is missing {START}", path.display()));
+            let end = document[start..]
+                .find(END)
+                .map(|offset| start + offset + END.len())
+                .unwrap_or_else(|| panic!("{} is missing {END}", path.display()));
+            if update {
+                let mut updated = document;
+                updated.replace_range(start..end, &expected);
+                std::fs::write(&path, updated).unwrap();
+                continue;
+            }
+            assert_eq!(
+                &document[start..end],
+                expected,
+                "{} has a stale built-in preset platform capability list; replace its generated block with the right-hand value",
+                path.display()
+            );
+        }
     }
 
     #[tokio::test]

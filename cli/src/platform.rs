@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum OperatingSystem {
     Macos,
     Linux,

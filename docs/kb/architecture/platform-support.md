@@ -42,7 +42,7 @@ the repository at the assessment date, not every possible external preset.
 | Shell preset lifecycle | Full | Full | Full | Unix uses symlinks or managed launchers; Windows uses marked `.ps1` and `.cmd` shims |
 | Built-in shell commands | Full | Full | Partial | All shared commands are available except Unix-only `copyfile`; platform-specific proxy scripts exist |
 | App lifecycle engine | Full | Full | Full | Copy, transforms, JSON merge, generators, hooks, artifacts, backup, upgrade, and uninstall are shared |
-| Built-in app availability filtering | Full | Full | Full | Exact `macos`/`linux`/`windows` selectors are supported; `unix` remains a compatibility group |
+| Built-in App/Shell availability filtering | Full | Full | Full | Exact `macos`/`linux`/`windows` selectors are supported; `unix` remains a compatibility group, and a generated bilingual manual block is conformance-tested against runtime metadata |
 | Dynamic completions | Bash/Zsh | Bash/Zsh | PowerShell | Fish and Elvish profiles exist in generic shell code but dynamic completion registration is not provided |
 | Sys bootstrap | 21 items | 17 items | 14 items | Counts include the independent managed `split-dns` item |
 | Package provider | Homebrew/Cask | APT, Homebrew, scripts | WinGet | Ubuntu uses the largest number of item-owned compatibility scripts |
@@ -196,7 +196,9 @@ For a change that claims support on one or more of these platforms:
    unit test cannot reproduce the OS contract.
 7. Update both public manual locales in the same change for any user-visible compatibility or
    command/schema change.
-8. Update this assessment when a listed gap is closed or its intended scope changes.
+8. Regenerate the built-in preset platform capability block when App destinations or App/Shell
+   file selectors change; the Rust conformance test checks both manual locales.
+9. Update this assessment when a listed gap is closed or its intended scope changes.
 
 ## Evidence map
 
