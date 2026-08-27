@@ -7,6 +7,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-08-28
+
 ### Features
 
 - Added Rust to Ubuntu and Neovim to Windows system bootstrap presets so all three default
@@ -29,6 +31,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 - Documented AI skill registration, static validation, and isolated authoring dry-runs in English
   and Simplified Chinese.
+- Refreshed the homepage visuals and expanded both manual locales with guidance for on-demand
+  encrypted credential injection and Windows Hello through external age plugins.
 
 ## [1.7.0] — 2026-08-24
 

@@ -20,7 +20,7 @@ Shine 用 **Preset（预设）** 把脚本、个性化配置和安装方式集�
 
 **让个人自动化拥有可审阅的生命周期。**
 
-当前手册适用于 **Shine 1.7.0**。
+当前手册适用于 **Shine 1.8.0**。
 
 [![Shine 的三大核心价值：个人脚本与配置可重复部署、个人开发资源的统一入口，以及 Shine 管理内容的可审查生命周期。](/img/shine-core-values-zh-Hans.webp)](/img/shine-core-values-zh-Hans.webp)
 
