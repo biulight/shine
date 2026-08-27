@@ -223,6 +223,7 @@ mod tests {
         crate::test_support::make_temp_dir("shine-apps-build").await
     }
 
+    #[cfg(unix)]
     async fn write_sample_category(dir: &Path, script_body: &str) {
         let cat_dir = dir.join("presets/app/sample");
         fs::create_dir_all(&cat_dir).await.unwrap();

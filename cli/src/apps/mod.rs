@@ -314,6 +314,7 @@ mod tests {
     #![allow(clippy::await_holding_lock)]
     use super::*;
     use crate::config::Config;
+    #[cfg(unix)]
     use crate::install_core::manifest::AppManifest;
     #[cfg(unix)]
     use crate::test_support::env_lock;
@@ -524,10 +525,7 @@ mod tests {
 
         let destination = resolve_install_destination(docker, file, &config).unwrap();
 
-        assert_eq!(
-            destination,
-            PathBuf::from(crate::config::full_expand("~/.docker").unwrap()).join("daemon.json")
-        );
+        assert_eq!(destination, dir.join(".docker").join("daemon.json"));
     }
 
     #[cfg(unix)]

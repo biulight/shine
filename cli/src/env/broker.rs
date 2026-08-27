@@ -886,7 +886,10 @@ mod tests {
 
     fn snapshot() -> WorkspaceSnapshot {
         WorkspaceSnapshot {
-            workspace_path: "/srv/api/shine.workspace.toml".into(),
+            workspace_path: std::env::temp_dir()
+                .join("srv/api/shine.workspace.toml")
+                .to_string_lossy()
+                .into_owned(),
             workspace_contents: "version = 1\n[env]\nfiles = [\"env/development.toml\"]\n".into(),
             mode: "development".into(),
             override_process_env: false,
@@ -967,7 +970,7 @@ mod tests {
         assert_eq!(plan.candidate.project, "friendly-api-name");
         assert_eq!(
             plan.candidate.remote_workspace.as_deref(),
-            Some("/srv/api/shine.workspace.toml")
+            Some(original.workspace_path.as_str())
         );
         assert_eq!(
             plan.candidate.allow[0].release,

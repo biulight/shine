@@ -473,6 +473,10 @@ mod tests {
         std::env::temp_dir().join(format!("shine-git-pull-{name}-{}", uuid::Uuid::new_v4()))
     }
 
+    fn read_text(path: impl AsRef<Path>) -> String {
+        std::fs::read_to_string(path).unwrap().replace("\r\n", "\n")
+    }
+
     fn git(dir: &Path, args: &[&str]) {
         let output = StdCommand::new("git")
             .args(args)
@@ -584,10 +588,7 @@ mod tests {
 
         handle_pull(&config, false).await.unwrap();
 
-        assert_eq!(
-            std::fs::read_to_string(presets.join("preset.txt")).unwrap(),
-            "two\n"
-        );
+        assert_eq!(read_text(presets.join("preset.txt")), "two\n");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -643,10 +644,7 @@ mod tests {
 
         // First sync clones --depth 1: content present, history is a single commit.
         sync_managed_overlay(&url, None, &dir, false).await.unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dir.join("overlay.txt")).unwrap(),
-            "one\n"
-        );
+        assert_eq!(read_text(dir.join("overlay.txt")), "one\n");
         assert_eq!(commit_count(&dir), "1");
 
         // Fast-forward update on the remote is mirrored.
@@ -655,10 +653,7 @@ mod tests {
         git(&seed, &["commit", "-m", "update"]);
         git(&seed, &["push"]);
         sync_managed_overlay(&url, None, &dir, false).await.unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dir.join("overlay.txt")).unwrap(),
-            "two\n"
-        );
+        assert_eq!(read_text(dir.join("overlay.txt")), "two\n");
 
         // Rewritten history (amend + force-push) still mirrors where a
         // fast-forward pull would fail.
@@ -667,10 +662,7 @@ mod tests {
         git(&seed, &["commit", "--amend", "-m", "rewritten"]);
         git(&seed, &["push", "--force"]);
         sync_managed_overlay(&url, None, &dir, false).await.unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dir.join("overlay.txt")).unwrap(),
-            "three\n"
-        );
+        assert_eq!(read_text(dir.join("overlay.txt")), "three\n");
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -689,10 +681,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("fetch"));
-        assert_eq!(
-            std::fs::read_to_string(dir.join("overlay.txt")).unwrap(),
-            "one\n"
-        );
+        assert_eq!(read_text(dir.join("overlay.txt")), "one\n");
 
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -804,13 +804,38 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
 }
 
 fn validate_dest(name: &str, dest: &str) -> Result<()> {
+    validate_dest_for_platform(name, dest, None)
+}
+
+fn validate_dest_for_platform(
+    name: &str,
+    dest: &str,
+    platform: Option<OperatingSystem>,
+) -> Result<()> {
     let expanded = crate::config::full_expand(dest)
         .with_context(|| format!("failed to expand dest in app/{name}/shine.toml"))?;
-    if !Path::new(&expanded).is_absolute() {
+    let home_relative = dest == "~" || dest.starts_with("~/") || dest.starts_with("~\\");
+    let unix_absolute = expanded.starts_with('/');
+    let bytes = expanded.as_bytes();
+    let windows_drive_absolute = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    let windows_unc_absolute = expanded.starts_with("\\\\") || expanded.starts_with("//");
+    let windows_absolute = windows_drive_absolute || windows_unc_absolute;
+    let is_absolute = home_relative
+        || match platform {
+            Some(OperatingSystem::Macos | OperatingSystem::Linux) => unix_absolute,
+            Some(OperatingSystem::Windows) => windows_absolute,
+            None => Path::new(&expanded).is_absolute() || unix_absolute || windows_absolute,
+        };
+    if !is_absolute {
         bail!("app/{name}/shine.toml dest must be absolute after expansion");
     }
-    let path = PathBuf::from(&expanded);
-    if path.components().any(|c| c == Component::ParentDir) {
+    if expanded
+        .split(['/', '\\'])
+        .any(|component| component == "..")
+    {
         bail!("app/{name}/shine.toml dest must not contain '..'");
     }
     Ok(())
@@ -909,8 +934,15 @@ impl PlatformDestToml {
         if destinations.iter().all(|dest| dest.is_none()) {
             bail!("app/{category}/shine.toml platform destination map must not be empty");
         }
-        for dest in destinations.into_iter().flatten() {
-            validate_dest(category, dest)?;
+        for (dest, platform) in [
+            (&self.macos, OperatingSystem::Macos),
+            (&self.linux, OperatingSystem::Linux),
+            (&self.windows, OperatingSystem::Windows),
+            (&self.unix, OperatingSystem::Linux),
+        ] {
+            if let Some(dest) = dest {
+                validate_dest_for_platform(category, dest, Some(platform))?;
+            }
         }
         Ok(())
     }
@@ -1059,7 +1091,7 @@ pub(crate) fn validate_preset_category(
         else {
             continue;
         };
-        validate_dest(name, &category_dest)
+        validate_dest_for_platform(name, &category_dest, Some(platform))
             .map_err(|error| invalid_metadata(error, &manifest_path))?;
         let mut targets = BTreeSet::new();
         for file in files {
@@ -1081,7 +1113,7 @@ pub(crate) fn validate_preset_category(
                 None => AppDestinationRoot::Path(category_dest.clone()),
             };
             if let AppDestinationRoot::Path(path) = &destination {
-                validate_dest(name, path)
+                validate_dest_for_platform(name, path, Some(platform))
                     .map_err(|error| invalid_metadata(error, &manifest_path))?;
             }
             let destination_key = match &destination {
@@ -1945,6 +1977,23 @@ dest = { base = "data-dir", path = "../escape" }
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn platform_dest_validates_paths_for_declared_os() {
+        parse_category_toml(
+            "editor",
+            br#"dest = { macos = "/Library/Editor", linux = "/etc/editor", windows = "C:\\Users\\Public\\Editor", unix = "/opt/editor" }"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn platform_dest_rejects_path_for_a_different_os() {
+        let error =
+            parse_category_toml("editor", br#"dest = { windows = "/etc/editor" }"#).unwrap_err();
+
+        assert!(error.to_string().contains("must be absolute"));
     }
 
     #[test]

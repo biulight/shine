@@ -802,6 +802,7 @@ mod tests {
         assert!(split_ssh_args(&["-p".to_string()]).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn wrapped_command_round_trips_through_a_real_shell() {
         // Exercises the full nested-quoting composition end to end: run the
@@ -995,6 +996,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn wrapped_command_theme_injection_round_trips_through_a_real_shell() {
         // Same rationale as wrapped_command_round_trips_through_a_real_shell:
@@ -1017,6 +1019,7 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), "dark");
     }
 
+    #[cfg(unix)]
     #[test]
     fn wrapped_command_forwarded_env_round_trips_special_characters() {
         let forwarded = BTreeMap::from([(

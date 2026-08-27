@@ -232,6 +232,7 @@ fn append_manifest_entries_for_category_destinations(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::await_holding_lock)]
+    #[cfg(unix)]
     use super::super::install::handle_install;
     use super::*;
     use crate::apps::metadata::{AppCategory, AppDestinationRoot, AppFile, AppListMode};

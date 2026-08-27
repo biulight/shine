@@ -1069,8 +1069,10 @@ async fn remove_windows_shims(ps1_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use tokio::fs;
 
+    #[cfg(unix)]
     async fn make_dirs() -> (PathBuf, PathBuf) {
         let id = uuid::Uuid::new_v4();
         let src_dir = std::env::temp_dir().join(format!("shine-bl-src-{id}"));
@@ -1092,6 +1094,7 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
     async fn make_plain(dir: &Path, name: &str) -> PathBuf {
         let path = dir.join(name);
         fs::write(&path, b"data").await.unwrap();
@@ -1728,8 +1731,22 @@ mod tests {
     fn shell_shims_pass_bash_compatible_paths_on_windows() {
         let source = PathBuf::from(r"C:\Users\me\.shine\rendered\shell\utils\copyfile.sh");
 
-        let ps1 = powershell_shim_content(&source, LinkRuntime::Native, "copyfile", &[], None);
-        let cmd = cmd_shim_content(&source, LinkRuntime::Native, "copyfile", &[], None);
+        let ps1 = powershell_shim_content(
+            &source,
+            LinkRuntime::Native,
+            "copyfile",
+            BunDependencyMode::Disabled,
+            &[],
+            None,
+        );
+        let cmd = cmd_shim_content(
+            &source,
+            LinkRuntime::Native,
+            "copyfile",
+            BunDependencyMode::Disabled,
+            &[],
+            None,
+        );
 
         assert!(ps1.contains("C:/Users/me/.shine/rendered/shell/utils/copyfile.sh"));
         assert!(cmd.contains("C:/Users/me/.shine/rendered/shell/utils/copyfile.sh"));

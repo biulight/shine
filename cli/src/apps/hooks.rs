@@ -158,8 +158,12 @@ fn shell_quote_for_display(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::apps::metadata::{self, AppListMode};
+    use crate::apps::metadata;
+    #[cfg(unix)]
+    use crate::apps::metadata::AppListMode;
+    #[cfg(unix)]
     use crate::config::Config;
+    #[cfg(unix)]
     use std::collections::{BTreeMap, BTreeSet};
 
     #[cfg(unix)]

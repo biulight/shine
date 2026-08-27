@@ -662,6 +662,7 @@ fn outcome(
 mod tests {
     use super::*;
     use crate::sys::manifest::parse_and_validate_manifest;
+    #[cfg(unix)]
     use tokio::fs;
 
     #[test]

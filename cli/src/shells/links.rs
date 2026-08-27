@@ -130,7 +130,7 @@ fn shell_category_after_root(path: &Path) -> Option<String> {
     components.next()?.as_os_str().to_str().map(str::to_string)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::path::PathBuf;

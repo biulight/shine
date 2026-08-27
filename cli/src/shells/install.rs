@@ -534,6 +534,7 @@ async fn installed_source_commands_for_categories(
 #[cfg(test)]
 mod tests {
     use super::super::ShellType;
+    #[cfg(unix)]
     use super::super::uninstall::handle_uninstall;
     use super::*;
     use crate::config::Config;
@@ -744,8 +745,17 @@ mod tests {
 
         assert!(config.installed_shell_dir().join("custom/one.sh").exists());
         assert!(config.installed_shell_dir().join("custom/two.sh").exists());
-        assert!(config.bin_dir().join("one").exists());
-        assert!(!config.bin_dir().join("two").exists());
+        assert!(
+            crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("one"),)
+                .exists()
+        );
+        assert!(
+            !crate::bin_links::command_path_for_name(
+                config.bin_dir(),
+                std::ffi::OsStr::new("two"),
+            )
+            .exists()
+        );
         let rows = crate::status::build_shell_rows(&config).await.unwrap();
         let sibling = rows.iter().find(|row| row.label == "custom/two").unwrap();
         assert!(!sibling.is_installed);
@@ -771,6 +781,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn managed_profile_source_marker(shell: &ShellType) -> &'static str {
         match shell {
             ShellType::PowerShell => ". (Join-Path $HOME 'shell/profile.ps1')",
@@ -781,6 +792,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn managed_profile_path_marker(shell: &ShellType) -> &'static str {
         match shell {
             ShellType::PowerShell => "$shinePathEntries",
@@ -949,6 +961,7 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn append_writes_source_entry_and_managed_profile() {
         let dir = make_temp_dir().await;
@@ -1026,6 +1039,7 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn append_refreshes_stale_sentinel_with_managed_profile_source() {
         let dir = make_temp_dir().await;
@@ -1357,7 +1371,14 @@ mod tests {
         );
         let launcher_content = fs::read_to_string(&launcher).await.unwrap();
         assert!(launcher_content.contains("shine-managed"));
-        assert!(launcher_content.contains(&source.display().to_string()));
+        let recorded_target = launcher_content
+            .lines()
+            .find_map(|line| line.strip_prefix("# shine-target: "))
+            .expect("launcher should record its source target");
+        assert_eq!(
+            fs::canonicalize(recorded_target).await.unwrap(),
+            fs::canonicalize(&source).await.unwrap()
+        );
         assert!(launcher_content.contains("bun"));
 
         let source_commands = installed_source_commands(&config).await.unwrap();

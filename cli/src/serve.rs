@@ -536,6 +536,7 @@ mod tests {
         assert!(plist.contains("<string>6188</string>"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn launchd_plist_logs_are_scoped_under_the_user_shine_dir_not_shared_tmp() {
         let log_dir = Path::new("/Users/tester/.shine/run/http");

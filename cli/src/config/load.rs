@@ -611,8 +611,8 @@ mod tests {
         fs::write(
             shine_dir.join("config.toml"),
             format!(
-                "schema_version = 1\npresets_dir = \"{}\"\n",
-                external_presets.display()
+                "schema_version = 1\npresets_dir = {}\n",
+                toml::Value::String(external_presets.to_string_lossy().into_owned())
             ),
         )
         .await
