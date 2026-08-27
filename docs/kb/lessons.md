@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-27 — Serialized path assertions must compare decoded values
+
+- **Symptom**: the Windows Rust test job failed after `shine preset link` correctly persisted an
+  external preset directory in `config.toml`.
+- **Root cause**: the test searched the raw TOML text for the native Windows path, but TOML string
+  syntax escapes each backslash, so the serialized text intentionally differs from `Path::to_str()`.
+- **Fix**: parse the saved TOML and compare the decoded `presets_dir` as a `PathBuf` against the
+  canonical linked directory.
+- **Rule**: cross-platform persistence tests must compare decoded semantic values; inspect raw text
+  only when the serialization format itself is the behavior under test.
+
 ## 2026-08-27 — Background services must pin the resolved Shine directory
 
 - **Symptom**: a service installed while using `--config-dir` or `SHINE_CONFIG_DIR` could later

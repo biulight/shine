@@ -529,9 +529,15 @@ mod tests {
             .unwrap();
 
         let content = fs::read_to_string(dir.join("config.toml")).await.unwrap();
-        assert!(
-            content.contains(presets.to_str().unwrap()),
-            "config.toml should contain the linked path"
+        let parsed: toml::Table = toml::from_str(&content).unwrap();
+        let saved = parsed
+            .get("presets_dir")
+            .and_then(toml::Value::as_str)
+            .map(PathBuf::from);
+        assert_eq!(
+            saved.as_deref(),
+            Some(fs::canonicalize(&presets).await.unwrap().as_path()),
+            "config.toml should contain the canonical linked path"
         );
 
         fs::remove_dir_all(&dir).await.unwrap();
