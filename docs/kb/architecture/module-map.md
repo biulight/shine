@@ -15,6 +15,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/build.rs` | `rust-embed` rebuild trigger for `presets/` |
 | `utils/` | Reusable `shine-core` package with no CLI/Tauri dependency |
 | `presets/` | Embedded shell, app, and OS bootstrap assets |
+| `skills/shine-preset-author/` | Portable AI workflow and kind-specific preset author references |
 | `docs/manual/` | Default English public manual |
 | `website/i18n/zh-Hans/` | Simplified Chinese public manual and UI locale |
 | `docs/kb/` | Internal agent knowledge: invariants, flows, decisions, operations, lessons |
@@ -57,6 +58,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `theme sync` | `cli/src/theme/` |
 | `env ...` | `cli/src/env/` plus `cli/src/secret/` |
 | `preset export/copy/link/unlink/overlay` | `cli/src/preset_commands.rs` |
+| `preset new/validate` | Kind template handlers and `cli/src/preset_validation.rs` |
 | `preset pull`, `update --pull`, `upgrade --pull` | `cli/src/git_pull.rs` plus top-level routing |
 | `init` | `cli/src/init.rs` |
 | `self install/upgrade` | `cli/src/self_install.rs`, `cli/src/update_check/` |
@@ -143,6 +145,7 @@ logic.
 | `cli/src/presets.rs` | Embedded extraction, active asset reads, category enumeration |
 | `cli/src/preset_commands.rs` | Preset copy/export/link/unlink/overlay commands |
 | `cli/src/preset_meta.rs` | Shared preset kind and canonical target metadata |
+| `cli/src/preset_validation.rs` | Config-independent preset discovery, static validation report, and text/JSON rendering |
 | `cli/src/git_pull.rs` | FF-only external source pulls and managed overlay mirroring |
 | `cli/src/state.rs` | Versioned runtime-state cleanup |
 | `cli/src/status.rs` | Shared installed-status row builders |

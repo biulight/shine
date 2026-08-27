@@ -6,6 +6,13 @@ use clap::{Args, Subcommand, ValueEnum};
 pub enum PresetTemplateKind {
     App,
     Shell,
+    Sys,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum PresetValidationFormat {
+    Text,
+    Json,
 }
 
 #[derive(Args, Debug)]
@@ -92,13 +99,22 @@ pub enum OverlayCommands {
 
 #[derive(Subcommand, Debug)]
 pub enum PresetCommands {
-    /// Create a shine.toml template for a new app or shell preset
+    /// Create a shine.toml template for a new app, shell, or sys preset
     New {
         #[arg(value_enum)]
         kind: PresetTemplateKind,
         /// Overwrite shine.toml if it already exists
         #[arg(long, short = 'f')]
         force: bool,
+    },
+    /// Statically validate preset metadata and referenced files
+    Validate {
+        /// Preset repository, category directory, or shine.toml (defaults to current directory)
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+        /// Output format
+        #[arg(long, value_enum, default_value_t = PresetValidationFormat::Text)]
+        format: PresetValidationFormat,
     },
     /// Copy built-in presets to a directory for local customization
     Export(ExportCommand),

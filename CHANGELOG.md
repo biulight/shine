@@ -7,6 +7,18 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Features
+
+- Added the portable `shine-preset-author` Agent Skill, `preset new sys`, and config-independent
+  `preset validate` text/JSON reports for safe AI-assisted app, shell, and sys preset authoring.
+- Added `shell install --dry-run` to resolve shell deployment plans without materializing files,
+  links, manifests, snapshots, rendered content, or profile changes.
+
+### Docs
+
+- Documented AI skill registration, static validation, and isolated authoring dry-runs in English
+  and Simplified Chinese.
+
 ## [1.7.0] — 2026-08-24
 
 ### Features

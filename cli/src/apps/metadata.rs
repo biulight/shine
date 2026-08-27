@@ -9,6 +9,8 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
+use crate::preset_validation::PresetValidationFailure;
+
 #[derive(Debug, Clone)]
 pub struct AppCategory {
     pub name: String,
@@ -829,11 +831,19 @@ impl DestToml {
         &self,
         category: &str,
     ) -> Result<Option<AppDestinationRoot>> {
+        self.select_file_for_platform(category, current_platform())
+    }
+
+    fn select_file_for_platform(
+        &self,
+        category: &str,
+        platform: &str,
+    ) -> Result<Option<AppDestinationRoot>> {
         match self {
             Self::Single(dest) => Ok(Some(AppDestinationRoot::Path(dest.clone()))),
             Self::Rooted(dest) => Ok(Some(dest.resolve(category)?)),
             Self::Platforms(dest) => Ok(dest
-                .select_for_platform(category, current_platform())?
+                .select_for_platform(category, platform)?
                 .map(AppDestinationRoot::Path)),
         }
     }
@@ -901,6 +911,232 @@ fn normalize_relative(path: &str) -> Result<PathBuf> {
         bail!("path must not contain '..'");
     }
     Ok(path.to_path_buf())
+}
+
+/// Validate one on-disk app category without loading configuration or running
+/// generators, hooks, artifacts, transforms, or installers. Returns whether
+/// the category uses explicit `shine.toml` metadata.
+pub(crate) fn validate_preset_category(
+    name: &str,
+    root: &Path,
+) -> std::result::Result<bool, PresetValidationFailure> {
+    let manifest_path = root.join("shine.toml");
+    if !manifest_path.is_file() {
+        ensure_category_has_files(root, "app")?;
+        return Ok(false);
+    }
+
+    let bytes = std::fs::read(&manifest_path).map_err(|error| {
+        PresetValidationFailure::at(
+            "read_failed",
+            format!("cannot read app metadata: {error}"),
+            &manifest_path,
+        )
+    })?;
+    let parsed: CategoryToml = toml::from_slice(&bytes).map_err(|error| {
+        PresetValidationFailure::at(
+            "invalid_metadata",
+            format!("failed to parse app/{name}/shine.toml: {error}"),
+            &manifest_path,
+        )
+    })?;
+    let context = format!("app/{name}/shine.toml");
+
+    resolve_hooks(parsed.post_upgrade.clone(), "post_upgrade", &context)
+        .and_then(|_| resolve_hooks(parsed.post_install.clone(), "post_install", &context))
+        .map_err(|error| invalid_metadata(error, &manifest_path))?;
+    let artifact = resolve_artifact(parsed.artifact.clone(), &context)
+        .map_err(|error| invalid_metadata(error, &manifest_path))?;
+
+    let files: &[FileToml] = match &parsed.files {
+        Some(files) if files.is_empty() => {
+            return Err(PresetValidationFailure::at(
+                "invalid_metadata",
+                format!("{context} files must not be empty"),
+                &manifest_path,
+            ));
+        }
+        Some(files) => files,
+        None => {
+            ensure_category_has_files(root, "app")?;
+            &[]
+        }
+    };
+
+    let mut uses_bun = artifact
+        .as_ref()
+        .is_some_and(|artifact| artifact.runtime == ArtifactRuntime::Bun);
+    if let Some(artifact) = &artifact {
+        validate_reference(root, &artifact.script, "artifact script")?;
+        if let Some(teardown) = &artifact.teardown {
+            validate_reference(root, teardown, "artifact teardown script")?;
+        }
+    }
+
+    for file in files {
+        let source = normalize_relative(&file.source)
+            .with_context(|| format!("invalid source for {context}"))
+            .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        normalize_relative(file.target.as_deref().unwrap_or(&file.source))
+            .with_context(|| format!("invalid target for {context}"))
+            .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        resolve_transforms(file, &context)
+            .and_then(|_| resolve_install_strategy(file, &context).map(|_| ()))
+            .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        let generator = resolve_generator(file.generator.clone(), &context)
+            .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        if let Some(generator) = &generator {
+            uses_bun |= generator.runtime == ArtifactRuntime::Bun;
+            validate_reference_path(root, &generator.script, "generator script")?;
+        }
+        validate_reference_path(root, &source, "source file")?;
+        // Calling both branches validates platform declarations even when this
+        // host would filter the entry out.
+        for platform in ["unix", "windows"] {
+            file_matches_platform(name, file, platform)
+                .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        }
+    }
+
+    for platform in ["unix", "windows"] {
+        let Some(category_dest) = parsed
+            .dest
+            .select_for_platform(name, platform)
+            .map_err(|error| invalid_metadata(error, &manifest_path))?
+        else {
+            continue;
+        };
+        validate_dest(name, &category_dest)
+            .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        let mut targets = BTreeSet::new();
+        for file in files {
+            if !file_matches_platform(name, file, platform)
+                .map_err(|error| invalid_metadata(error, &manifest_path))?
+            {
+                continue;
+            }
+            let target = normalize_relative(file.target.as_deref().unwrap_or(&file.source))
+                .map_err(|error| invalid_metadata(error, &manifest_path))?;
+            let destination = match &file.dest {
+                Some(dest) => match dest
+                    .select_file_for_platform(name, platform)
+                    .map_err(|error| invalid_metadata(error, &manifest_path))?
+                {
+                    Some(destination) => destination,
+                    None => continue,
+                },
+                None => AppDestinationRoot::Path(category_dest.clone()),
+            };
+            if let AppDestinationRoot::Path(path) = &destination {
+                validate_dest(name, path)
+                    .map_err(|error| invalid_metadata(error, &manifest_path))?;
+            }
+            let destination_key = match &destination {
+                AppDestinationRoot::Path(path) => crate::config::full_expand(path)
+                    .map(|path| format!("path:{path}"))
+                    .map_err(|error| invalid_metadata(anyhow::Error::new(error), &manifest_path))?,
+                AppDestinationRoot::DataDir(path) => {
+                    format!("data-dir:{}", path.display())
+                }
+            };
+            let target_key = format!("{destination_key}/{}", target.display());
+            if !targets.insert(target_key) {
+                return Err(PresetValidationFailure::at(
+                    "duplicate_target",
+                    format!(
+                        "app/{name} declares the same effective destination more than once for {platform}: {}",
+                        target.display()
+                    ),
+                    &manifest_path,
+                ));
+            }
+        }
+    }
+
+    if uses_bun {
+        crate::bun_runtime::resolve(root, true).map_err(|error| {
+            PresetValidationFailure::at("bun_dependency_policy", error.to_string(), root)
+        })?;
+    }
+    Ok(true)
+}
+
+fn invalid_metadata(error: anyhow::Error, path: &Path) -> PresetValidationFailure {
+    PresetValidationFailure::at("invalid_metadata", error.to_string(), path)
+}
+
+fn validate_reference(
+    root: &Path,
+    relative: &str,
+    label: &str,
+) -> std::result::Result<(), PresetValidationFailure> {
+    let relative = normalize_relative(relative).map_err(|error| {
+        PresetValidationFailure::at(
+            "invalid_metadata",
+            format!("invalid {label}: {error}"),
+            root.join(relative),
+        )
+    })?;
+    validate_reference_path(root, &relative, label)
+}
+
+fn validate_reference_path(
+    root: &Path,
+    relative: &Path,
+    label: &str,
+) -> std::result::Result<(), PresetValidationFailure> {
+    let path = root.join(relative);
+    let canonical = std::fs::canonicalize(&path).map_err(|error| {
+        PresetValidationFailure::at(
+            "missing_reference",
+            format!("{label} is missing or unreadable: {error}"),
+            &path,
+        )
+    })?;
+    if !canonical.starts_with(root) || !canonical.is_file() {
+        return Err(PresetValidationFailure::at(
+            "invalid_reference",
+            format!("{label} must be a file inside the preset category"),
+            path,
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_category_has_files(
+    root: &Path,
+    kind: &str,
+) -> std::result::Result<(), PresetValidationFailure> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory).map_err(|error| {
+            PresetValidationFailure::at(
+                "read_failed",
+                format!("cannot read {kind} category: {error}"),
+                &directory,
+            )
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                PresetValidationFailure::at("read_failed", error.to_string(), &directory)
+            })?;
+            let file_type = entry.file_type().map_err(|error| {
+                PresetValidationFailure::at("read_failed", error.to_string(), entry.path())
+            })?;
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            } else if file_type.is_file()
+                && entry.file_name().to_string_lossy().as_ref() != "shine.toml"
+            {
+                return Ok(());
+            }
+        }
+    }
+    Err(PresetValidationFailure::at(
+        "no_files",
+        format!("{kind} preset category contains no files"),
+        root,
+    ))
 }
 
 fn parse_legacy_description(content: &[u8]) -> Option<String> {

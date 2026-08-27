@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::config::Config;
+use crate::preset_validation::PresetValidationFailure;
 
 use super::{
     LoadedSysPreset, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall, SysItem,
@@ -37,6 +38,124 @@ pub(super) fn parse_and_validate_manifest(content: &str) -> Result<SysManifest> 
     let manifest: SysManifest = toml::from_str(content)?;
     validate_manifest(&manifest)?;
     Ok(manifest)
+}
+
+/// Parse and validate a sys v2 category plus every preset-owned file it
+/// references. This is static and intentionally does not construct `Config`.
+pub(super) fn validate_preset_category(
+    name: &str,
+    root: &Path,
+) -> std::result::Result<(), PresetValidationFailure> {
+    let manifest_path = root.join("shine.toml");
+    let content = std::fs::read_to_string(&manifest_path).map_err(|error| {
+        PresetValidationFailure::at(
+            "missing_metadata",
+            format!("sys/{name} requires a readable shine.toml: {error}"),
+            &manifest_path,
+        )
+    })?;
+    let manifest = parse_and_validate_manifest(&content).map_err(|error| {
+        PresetValidationFailure::at(
+            "invalid_metadata",
+            format!("failed to validate sys/{name}/shine.toml: {error:#}"),
+            &manifest_path,
+        )
+    })?;
+
+    for item in &manifest.items {
+        if let Some(SysInstall::Script { path, .. }) = &item.install {
+            validate_reference(root, path, "install script")?;
+        }
+        for integration in &item.shell {
+            if let Some(fragment) = &integration.fragment {
+                let path = validate_reference(root, fragment, "profile fragment")?;
+                std::fs::read_to_string(&path).map_err(|error| {
+                    PresetValidationFailure::at(
+                        "invalid_reference",
+                        format!("profile fragment must be valid UTF-8: {error}"),
+                        path,
+                    )
+                })?;
+            }
+        }
+        if item.driver == SysDriverKind::ManagedFile {
+            let source = item
+                .config
+                .get("source")
+                .and_then(toml::Value::as_str)
+                .expect("managed-file source is guaranteed by validate_manifest");
+            validate_reference(root, source, "managed-file source")?;
+            if let Some(transforms) = item
+                .config
+                .get("transforms")
+                .and_then(toml::Value::as_array)
+            {
+                let specs = transforms
+                    .iter()
+                    .map(|value| value.as_str().unwrap_or_default().to_string())
+                    .collect::<Vec<_>>();
+                crate::install_core::transforms::validate(&specs).map_err(|error| {
+                    PresetValidationFailure::at(
+                        "invalid_metadata",
+                        format!(
+                            "sys item `{}` has invalid managed-file transforms: {error}",
+                            item.id
+                        ),
+                        &manifest_path,
+                    )
+                })?;
+            }
+            let target = item
+                .config
+                .get("target")
+                .and_then(toml::Value::as_str)
+                .expect("managed-file target is guaranteed by validate_manifest");
+            let expanded = crate::config::full_expand(target).map_err(|error| {
+                PresetValidationFailure::at(
+                    "invalid_metadata",
+                    format!(
+                        "sys item `{}` has invalid managed-file target: {error}",
+                        item.id
+                    ),
+                    &manifest_path,
+                )
+            })?;
+            if !Path::new(&expanded).is_absolute() {
+                return Err(PresetValidationFailure::at(
+                    "invalid_metadata",
+                    format!(
+                        "sys item `{}` managed-file target must resolve to an absolute path",
+                        item.id
+                    ),
+                    &manifest_path,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_reference(
+    root: &Path,
+    relative: &str,
+    label: &str,
+) -> std::result::Result<std::path::PathBuf, PresetValidationFailure> {
+    let path = root.join(relative);
+    let canonical = std::fs::canonicalize(&path).map_err(|error| {
+        PresetValidationFailure::at(
+            "missing_reference",
+            format!("{label} is missing or unreadable: {error}"),
+            &path,
+        )
+    })?;
+    if !canonical.starts_with(root) || !canonical.is_file() {
+        return Err(PresetValidationFailure::at(
+            "invalid_reference",
+            format!("{label} must be a file inside the preset category"),
+            path,
+        ));
+    }
+    Ok(canonical)
 }
 
 fn validate_manifest(manifest: &SysManifest) -> Result<()> {

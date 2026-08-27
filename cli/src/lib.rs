@@ -18,6 +18,7 @@ pub mod persist;
 pub mod platform;
 pub mod preset_commands;
 pub mod preset_meta;
+pub mod preset_validation;
 pub mod presets;
 pub mod privilege;
 pub mod proc;

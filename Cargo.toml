@@ -38,6 +38,7 @@ include = [
     "cli/build.rs",
     "cli/src/**",
     "presets/**",
+    "skills/**",
 ]
 build = "cli/build.rs"
 

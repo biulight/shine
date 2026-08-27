@@ -16,6 +16,7 @@ pub use build::{handle_build, handle_unbuild};
 pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};
 pub use install::handle_install;
+pub(crate) use metadata::validate_preset_category;
 pub use metadata::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
     load_active_categories, load_embedded_categories, load_installed_categories,
@@ -71,9 +72,21 @@ pub async fn materialize_file_content(
     file: &metadata::AppFile,
     env: &BTreeMap<String, String>,
 ) -> Result<Vec<u8>> {
-    let raw = if let Some(generated) = generator::generate(config, cat, file, env).await? {
-        generated
-    } else if config.is_external_presets {
+    if let Some(generated) = generator::generate(config, cat, file, env).await? {
+        return apply_file_transforms(file, generated, env);
+    }
+    materialize_static_file_content(config, cat, file, env).await
+}
+
+/// Read and transform only the declared static source. Used by installation
+/// dry-runs so inspecting a plan can never execute a generator.
+async fn materialize_static_file_content(
+    config: &Config,
+    cat: &metadata::AppCategory,
+    file: &metadata::AppFile,
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    let raw = if config.is_external_presets {
         let path = config.preset_path(Path::new("app").join(&cat.name).join(&file.source_rel));
         tokio::fs::read(&path)
             .await
@@ -84,6 +97,14 @@ pub async fn materialize_file_content(
             .with_context(|| format!("embedded source not found: {key}"))?
     };
 
+    apply_file_transforms(file, raw, env)
+}
+
+fn apply_file_transforms(
+    file: &metadata::AppFile,
+    raw: Vec<u8>,
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
     if file.transforms.is_empty() {
         Ok(raw)
     } else {

@@ -18,6 +18,44 @@ These modes have different fallback rules:
 Shine prints `Preset Source`, optional `Presets Overlay`, and external shell deployment mode so you
 can tell which model is active before interpreting `list`, `update`, or install output.
 
+## Create a preset with AI
+
+Shine ships the portable Agent Skill at `skills/shine-preset-author/` in its source and crate
+package. Register that directory with your AI client's native skill installer or skills-directory
+mechanism, then ask in ordinary language for an app configuration, shell command, system bootstrap,
+or customization of a built-in category. Shine does not detect or edit Codex, Claude, Cursor, or
+other client configuration.
+
+The skill checks that the installed Shine supports static validation, selects the matching author
+reference, scaffolds from the current binary, validates the result as JSON, and performs only an
+isolated dry-run. It never links or activates the category and never runs hooks, artifacts,
+generators, installation scripts, or a real bootstrap. The skill instructions are English for
+cross-client portability, but questions and the final report follow the user's language.
+
+You can use the same flow without an AI client:
+
+```bash
+mkdir -p my-presets/app/my-editor
+cd my-presets/app/my-editor
+shine preset new app
+# Add config files and edit shine.toml.
+shine preset validate . --format json
+```
+
+Use `shell` or `sys` in `preset new` for the other kinds. To customize an embedded category, enter
+the repository or overlay root and run `shine preset copy <kind>/<name>`; the command creates the
+kind/category path.
+
+`preset validate` also accepts a repository root, one category directory, or its `shine.toml`. Root
+validation scans only direct category directories below `app/`, `shell/`, and `sys/`; an empty root
+is invalid. It evaluates both Unix and Windows declarations on any host, verifies referenced files
+and locked Bun dependency policy, and reports compatible metadata-free app/shell categories with a
+`legacy_metadata` warning. It does not load active source/overlay settings, initialize config, check
+for updates, write files, access the network, or execute preset code.
+
+The default output is text. `--format json` emits the stable `schema_version: 1` report used by the
+skill; validation errors exit with status 1, while warnings do not.
+
 ## From source folders to installed capabilities
 
 Any tool or process that places a preset folder on a machine can be the synchronization layer.
@@ -248,15 +286,18 @@ managed with `--git`, which is intentionally disposable. Git must be available i
 
 ## Create category metadata
 
-Generate a `shine.toml` template in an application or shell category directory:
+Generate a `shine.toml` template in an application, shell, or sys category directory:
 
 ```bash
 shine preset new app
 shine preset new shell
+shine preset new sys
 ```
 
 Existing files require `--force`. Category metadata is a preset-author interface; after editing it,
-validate with the relevant `list`, `info`, and installation `--dry-run` commands.
+first run `shine preset validate . --format json`, then use the relevant isolated installation
+`--dry-run` command. Shell install dry-run resolves intended command links without creating files,
+links, manifests, snapshots, rendered files, or profile edits.
 
 ### Give an application file its own destination
 

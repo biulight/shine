@@ -149,6 +149,38 @@ pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) 
     Ok(())
 }
 
+/// Resolve and validate a shell installation plan without extracting presets,
+/// rendering templates, creating links, updating manifests, or editing shell
+/// profiles.
+pub async fn handle_install_dry_run(config: &Config, target: Option<&str>) -> Result<()> {
+    crate::config::print_presets_note(config);
+    let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
+    let categories = match selection {
+        Some(target) => metadata::load_active_target(config, target).await?,
+        None => metadata::load_active_categories(config, None).await?,
+    };
+    if categories.is_empty() {
+        anyhow::bail!("no shell preset categories found");
+    }
+    super::deployment::validate_snapshot_categories(config, &categories).await?;
+    let specs = build_link_specs(config, &categories)?;
+    let mut command_names = BTreeSet::new();
+    for spec in &specs {
+        let command = spec.link_name.to_string_lossy().to_string();
+        if !command_names.insert(command.clone()) {
+            anyhow::bail!("duplicate requested shell command: {command}");
+        }
+        let target = crate::bin_links::command_path_for_name(config.bin_dir(), &spec.link_name);
+        println!(
+            "Would link shell command {command}: {} -> {}",
+            target.display(),
+            spec.source.display()
+        );
+    }
+    println!("Dry run: no shell files, links, manifests, or profiles were changed.");
+    Ok(())
+}
+
 pub async fn handle_upgrade_installed(
     config: &Config,
     verbose: bool,
@@ -537,6 +569,34 @@ mod tests {
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-shell").await
+    }
+
+    #[tokio::test]
+    async fn install_dry_run_does_not_materialize_shell_state() {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"tool\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("tool.sh"), b"#!/bin/sh\necho tool\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        handle_install_dry_run(&config, Some("custom"))
+            .await
+            .unwrap();
+
+        assert!(!config.bin_dir().exists());
+        assert!(!config.shine_dir().join("installed/shell").exists());
+        assert!(!config.shine_dir().join("shell-manifest.toml").exists());
+        assert!(!config.home_dir.join(".zshrc").exists());
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
