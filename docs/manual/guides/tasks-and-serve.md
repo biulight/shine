@@ -81,7 +81,7 @@ Start the service when another local application needs files under `~/.shine/htt
 shine serve start
 ```
 
-It listens on `127.0.0.1:6174` by default. On macOS, you can install a user service:
+It listens on `127.0.0.1:6174` by default. Install the native per-user background service or task:
 
 ```bash
 shine serve install
@@ -89,8 +89,9 @@ shine serve status
 shine serve uninstall
 ```
 
-`serve install` currently supports macOS only and installs a launchd user service. Both foreground
-and user-service modes bind only to `127.0.0.1`.
+Shine uses launchd on macOS, a systemd user unit on Linux, and a limited current-user scheduled task
+on Windows. Windows starts it at login; Linux and macOS enable their user service. All modes bind
+only to `127.0.0.1` and preserve the active `--config-dir`.
 
 Print a URL for a generated resource:
 

@@ -15,6 +15,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   links, manifests, snapshots, rendered content, or profile changes.
 - Added exact `macos`, `linux`, and `windows` App/Shell preset selectors while retaining `unix` as
   the compatible macOS/Linux group.
+- Added persistent `serve install/status/uninstall` support through a systemd user service on
+  Linux and a limited current-user scheduled task on Windows.
 
 ### Bug Fixes
 

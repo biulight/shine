@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-27 — Background services must pin the resolved Shine directory
+
+- **Symptom**: a service installed while using `--config-dir` or `SHINE_CONFIG_DIR` could later
+  serve the default `~/.shine/http/` tree instead of the selected tree.
+- **Root cause**: the service manager starts Shine outside the installing shell and does not retain
+  its working directory or ad-hoc environment.
+- **Fix**: every launchd, systemd, and Windows scheduled-task command records the resolved
+  `shine_dir` as an explicit global `--config-dir` argument.
+- **Rule**: persistent registrations must serialize all state-location inputs needed to reproduce
+  the installed behavior; never rely on the installer process environment surviving a login or
+  reboot.
+
 ## 2026-08-27 — Unix grouping exposed macOS-only app presets on Linux
 
 - **Symptom**: the built-in Surge preset appeared in App listings on Linux and Windows and could

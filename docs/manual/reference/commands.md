@@ -238,8 +238,8 @@ shine theme sync [--auto] [--quiet]
 ```
 
 Tasks store and execute argument arrays without a shell. `--cwd` fixes the working directory; without
-it the caller's directory is used. `serve install` currently supports a macOS user service only;
-`start` runs the local service in the foreground.
+it the caller's directory is used. `serve install` uses launchd on macOS, a systemd user unit on
+Linux, and a current-user scheduled task on Windows; `start` runs the local service in the foreground.
 
 ## SSH, secret brokering, and transfer
 

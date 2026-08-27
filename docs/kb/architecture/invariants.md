@@ -240,6 +240,10 @@ bugs. Check this list before changing the modules named in each entry.
   `serve::http_root()` (`~/.shine/http/`), bypassing the filesystem permissions that would
   otherwise keep them out of this user's home directory. Preset authors must never route secrets
   or other sensitive content through a `dest` that resolves under `~/.shine/http`.
+- **Persistent serve registrations are per-user and preserve the selected Shine directory.**
+  launchd, systemd, and Windows Task Scheduler entries must run without administrator privileges
+  and pass the resolved `shine_dir` back through `--config-dir`; background startup cannot depend on
+  the installing shell retaining `SHINE_CONFIG_DIR` or its current directory.
 - **launchd log paths must stay under the user's own `shine_dir`, never a shared path like
   `/tmp`.** `serve::launchd_log_dir` writes to `shine_dir/run/http/serve.{out,err}.log`, kept out
   of `http_root()` itself so log contents are never servable over HTTP. Two OS user accounts each

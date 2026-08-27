@@ -20,8 +20,8 @@ The overall maturity remains uneven:
 | Platform | Current maturity | Main strengths | Main gaps |
 | --- | --- | --- | --- |
 | macOS | Highest | Broadest built-in sys preset, Homebrew/Cask integration, zsh profile, launchd service install, Secure Enclave/Touch ID, native split DNS | Managed system profile targets zsh; some tty behavior requires real-terminal verification |
-| Ubuntu | High | Rich server/developer bootstrap, bash and zsh profiles, minimal server profile, systemd-resolved safety checks | More installer logic lives in per-item scripts; no persistent HTTP user service; no built-in Rust bootstrap |
-| Windows | Medium-high core, lower advanced coverage | PowerShell shims and profiles, WinGet, Windows path and line-ending handling, NRPT split DNS, Windows OpenSSH environment wrapper | No Windows-remote transfer or secret broker, no terminal OSC theme detection, no persistent HTTP service, thinner editor bootstrap, and no native Windows test job in normal CI |
+| Ubuntu | High | Rich server/developer bootstrap, bash and zsh profiles, minimal server profile, systemd user service, systemd-resolved safety checks | More installer logic lives in per-item scripts; no built-in Rust bootstrap |
+| Windows | Medium-high core, lower advanced coverage | PowerShell shims and profiles, WinGet, Windows path and line-ending handling, NRPT split DNS, Windows OpenSSH environment wrapper, persistent HTTP task | No Windows-remote transfer or secret broker, no terminal OSC theme detection, thinner editor bootstrap, and no native Windows test job in normal CI |
 
 The highest-priority remaining engineering gap is:
 
@@ -52,7 +52,7 @@ the repository at the assessment date, not every possible external preset.
 | SSH to a Windows remote | Partial | Partial | Partial | Safely injects selected environment values through PowerShell |
 | SSH transfer and on-demand secret broker | Full for POSIX remote | Full for POSIX remote | No Windows-remote mode | Windows remote mode has no compatible transfer/control channel |
 | `serve start` foreground server | Full | Full | Full | Shared Tokio loopback server |
-| `serve install/status/uninstall` | Full | Missing | Missing | Only launchd user-service management exists |
+| `serve install/status/uninstall` | Full | Full | Full | Uses launchd, a systemd user unit, and a current-user scheduled task respectively |
 | Secure Enclave/Touch ID age identity | Full | Not applicable | Missing by design | Windows Hello integration was deferred to an external age plugin in ADR 0032 |
 
 ## System preset differences
@@ -122,18 +122,12 @@ Acceptance criteria:
   profile paths.
 - Real-terminal-only macOS behavior remains documented when it cannot be made deterministic in CI.
 
-### P2: Persistent HTTP service integration is macOS-only
+### Persistent HTTP service integration
 
-The foreground loopback server is portable, but service install, status, and uninstall are guarded
-to macOS and implemented only with launchd.
-
-Potential follow-up work:
-
-- Add a systemd user unit for Ubuntu without requiring root.
-- Choose and document a Windows user-level persistence mechanism before implementation.
-- Preserve the current loopback-only binding and per-user log isolation invariants.
-- Add install/status/uninstall round-trip tests that do not mutate the developer's real service
-  registry.
+`serve install/status/uninstall` uses launchd on macOS, `systemctl --user` on Linux, and a
+least-privilege, current-user Task Scheduler entry on Windows. Every registration starts the shared
+foreground server with an explicit `--config-dir`, so custom Shine state remains attached after the
+installing shell exits. See ADR 0035.
 
 ### P2: Windows remote SSH is intentionally feature-reduced
 

@@ -208,7 +208,7 @@ shine serve url <PATH> [--port <PORT>]
 shine theme sync [--auto] [--quiet]
 ```
 
-任务按参数数组保存并直接执行，不经过 shell。`--cwd` 将任务固定到指定工作目录；未设置时继续使用调用者的当前目录。`serve install` 当前只支持 macOS 用户服务，`start` 可在前台启动本地服务。
+任务按参数数组保存并直接执行，不经过 shell。`--cwd` 将任务固定到指定工作目录；未设置时继续使用调用者的当前目录。`serve install` 在 macOS 使用 launchd、在 Linux 使用 systemd user unit、在 Windows 使用当前用户的计划任务；`start` 可在前台启动本地服务。
 
 ## SSH 会话、密钥代理与文件传输
 

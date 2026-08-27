@@ -140,9 +140,10 @@ shine serve status
 shine serve url app/surge/custom-rules.sgmodule
 ```
 
-`shine serve install` currently supports a macOS user service only. On other platforms, run
-`shine serve start` in the foreground. The service publishes only files under `~/.shine/http/`. If a
-resource is missing, first run the relevant `shine app artifact apply <APP_ID>`.
+`shine serve install` uses launchd on macOS, a systemd user unit on Linux, and a current-user
+scheduled task on Windows. The service publishes only files under `~/.shine/http/` (or the active
+`--config-dir`). If a resource is missing, first run the relevant
+`shine app artifact apply <APP_ID>`.
 
 Do not put sensitive files under `~/.shine/http/`. The service binds to `127.0.0.1` but has no
 additional authentication.
