@@ -193,6 +193,18 @@ pub(crate) async fn merge_fs_tree(
 mod tests {
     use super::*;
 
+    fn normalize_generated_block(block: &str) -> String {
+        String::from_utf8(crate::install_core::normalize_eol(block.as_bytes())).unwrap()
+    }
+
+    fn generated_block_replacement(current: &str, expected: &str) -> String {
+        if current.contains("\r\n") {
+            expected.replace('\n', "\r\n")
+        } else {
+            expected.to_string()
+        }
+    }
+
     #[test]
     fn platform_matches_defaults_to_true_when_unset() {
         assert!(platform_matches(None, OperatingSystem::Windows, "ctx").unwrap());
@@ -288,18 +300,32 @@ mod tests {
                 .map(|offset| start + offset + END.len())
                 .unwrap_or_else(|| panic!("{} is missing {END}", path.display()));
             if update {
+                let replacement = generated_block_replacement(&document[start..end], &expected);
                 let mut updated = document;
-                updated.replace_range(start..end, &expected);
+                updated.replace_range(start..end, &replacement);
                 std::fs::write(&path, updated).unwrap();
                 continue;
             }
             assert_eq!(
-                &document[start..end],
+                normalize_generated_block(&document[start..end]),
                 expected,
                 "{} has a stale built-in preset platform capability list; replace its generated block with the right-hand value",
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn generated_capability_blocks_accept_and_preserve_crlf() {
+        let expected = "<!-- start -->\n| row |\n<!-- end -->";
+        let checked_out = "<!-- start -->\r\n| row |\r\n<!-- end -->";
+
+        assert_eq!(normalize_generated_block(checked_out), expected);
+        assert_eq!(
+            generated_block_replacement(checked_out, expected),
+            checked_out
+        );
+        assert_eq!(generated_block_replacement(expected, expected), expected);
     }
 
     #[tokio::test]

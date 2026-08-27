@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-27 — Generated documentation checks must ignore checkout line endings
+
+- **Symptom**: the Windows Rust test job reported both generated preset-capability blocks as stale
+  even though every row matched the runtime-derived output.
+- **Root cause**: Git's Windows checkout presented the Markdown blocks with CRLF endings while the
+  in-memory generator used LF, and the conformance test compared the strings byte-for-byte.
+- **Fix**: normalize the checked block before comparison and preserve its existing CRLF or LF style
+  when the opt-in update mode replaces it.
+- **Rule**: generated documentation conformance checks must treat checkout-only line-ending changes
+  as equivalent, and generators that edit a block must not introduce mixed endings into its file.
+
 ## 2026-08-27 — Serialized path assertions must compare decoded values
 
 - **Symptom**: the Windows Rust test job failed after `shine preset link` correctly persisted an
