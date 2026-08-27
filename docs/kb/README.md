@@ -18,6 +18,7 @@ It complements — and never duplicates — the existing docs:
 - [`architecture/data-flows.md`](architecture/data-flows.md) — end-to-end flows that span multiple modules
 - [`architecture/invariants.md`](architecture/invariants.md) — non-obvious invariants that must hold
 - [`architecture/module-map.md`](architecture/module-map.md) — module ownership and command routing
+- [`architecture/platform-support.md`](architecture/platform-support.md) — macOS, Ubuntu, and Windows capability matrix, gaps, and implementation priorities
 - [`preset-authoring.md`](preset-authoring.md) — shell, app, and sys preset authoring rules
 - [`decisions/`](decisions/) — ADR-lite records (one decision per file, numbered)
 - [`conventions.md`](conventions.md) — commit, versioning, and testing conventions

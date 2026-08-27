@@ -37,6 +37,7 @@ Full KB maintenance protocol: [`docs/kb/README.md`](docs/kb/README.md).
 | Module ownership and command routing | [`docs/kb/architecture/module-map.md`](docs/kb/architecture/module-map.md) |
 | Cross-module data flows | [`docs/kb/architecture/data-flows.md`](docs/kb/architecture/data-flows.md) |
 | Safety and behavioral invariants | [`docs/kb/architecture/invariants.md`](docs/kb/architecture/invariants.md) |
+| Platform coverage, gaps, and implementation priorities | [`docs/kb/architecture/platform-support.md`](docs/kb/architecture/platform-support.md) |
 | Shell, app, and sys preset authoring | [`docs/kb/preset-authoring.md`](docs/kb/preset-authoring.md) |
 | Design rationale | [`docs/kb/decisions/`](docs/kb/decisions/) |
 | Commit, versioning, and testing conventions | [`docs/kb/conventions.md`](docs/kb/conventions.md) |
