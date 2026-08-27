@@ -520,7 +520,8 @@ fn validate_item_id(item_id: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_and_validate_manifest;
+    use super::{SysInstall, parse_and_validate_manifest};
+    use crate::sys::SysPackageProvider;
 
     const ITEM: &str = r#"
 [[items]]
@@ -588,5 +589,64 @@ install = { kind = "package", provider = "apt", package = "tool" }
         );
         assert!(!include_str!("../../../presets/sys/ubuntu/install/bun.sh").is_empty());
         assert!(!include_str!("../../../presets/sys/ubuntu/profile/bun.sh").is_empty());
+    }
+
+    #[test]
+    fn built_in_ubuntu_profiles_include_rust_except_minimal() {
+        let manifest =
+            parse_and_validate_manifest(include_str!("../../../presets/sys/ubuntu/shine.toml"))
+                .unwrap();
+
+        assert!(manifest.items.iter().any(|item| item.id == "rust"));
+        for profile in ["recommended", "all"] {
+            assert!(
+                manifest.profiles[profile]
+                    .items
+                    .iter()
+                    .any(|item| item == "rust")
+            );
+        }
+        assert!(
+            !manifest.profiles["minimal"]
+                .items
+                .iter()
+                .any(|item| item == "rust")
+        );
+        assert!(!include_str!("../../../presets/sys/ubuntu/install/rust.sh").is_empty());
+    }
+
+    #[test]
+    fn built_in_windows_profiles_include_neovim_except_required() {
+        let manifest =
+            parse_and_validate_manifest(include_str!("../../../presets/sys/windows/shine.toml"))
+                .unwrap();
+        let neovim = manifest
+            .items
+            .iter()
+            .find(|item| item.id == "neovim")
+            .unwrap();
+
+        assert!(matches!(
+            neovim.install.as_ref(),
+            Some(SysInstall::Package {
+                provider: SysPackageProvider::Winget,
+                package,
+                ..
+            }) if package == "Neovim.Neovim"
+        ));
+        for profile in ["recommended", "all"] {
+            assert!(
+                manifest.profiles[profile]
+                    .items
+                    .iter()
+                    .any(|item| item == "neovim")
+            );
+        }
+        assert!(
+            !manifest.profiles["required"]
+                .items
+                .iter()
+                .any(|item| item == "neovim")
+        );
     }
 }

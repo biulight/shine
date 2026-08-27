@@ -109,11 +109,11 @@ rustup, or the upstream tool that owns the software.
 | macOS | `required` | Homebrew, Yazi, Starship. |
 | macOS | `recommended` (default) | `required` plus Rust, Neovim, AstroNvim, ZeroTier, Zsh plugins, zoxide, Atuin, fzf, bat, eza. |
 | macOS | `all` | `recommended` plus nvm, Bun, pnpm, mise, Fastfetch. |
-| Ubuntu | `recommended` (default) | Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza. |
+| Ubuntu | `recommended` (default) | Rust, Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza. |
 | Ubuntu | `all` | `recommended` plus ZeroTier, Bun, pnpm, mise, Homebrew. |
 | Ubuntu | `minimal` | Neovim, fzf, bat, eza, zoxide; for servers without history sync, prompt, or JavaScript tooling. |
 | Windows | `required` | Rust, Yazi, Starship. |
-| Windows | `recommended` (default) | `required` plus zoxide, Atuin, fzf, bat, eza, ZeroTier. |
+| Windows | `recommended` (default) | `required` plus Neovim, zoxide, Atuin, fzf, bat, eza, ZeroTier. |
 | Windows | `all` | `recommended` plus Bun, pnpm, mise. |
 
 ### Private split DNS

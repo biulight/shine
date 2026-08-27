@@ -91,11 +91,11 @@ Shell integration 归各 item 所有：成功的 targeted bootstrap 只启用该
 | macOS | `required` | Homebrew、Yazi、Starship。 |
 | macOS | `recommended`（默认） | `required` 加 Rust、Neovim、AstroNvim、ZeroTier、Zsh 插件、zoxide、Atuin、fzf、bat、eza。 |
 | macOS | `all` | `recommended` 加 nvm、Bun、pnpm、mise、Fastfetch。 |
-| Ubuntu | `recommended`（默认） | Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza。 |
+| Ubuntu | `recommended`（默认） | Rust、Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza。 |
 | Ubuntu | `all` | `recommended` 加 ZeroTier、Bun、pnpm、mise、Homebrew。 |
 | Ubuntu | `minimal` | Neovim、fzf、bat、eza、zoxide；适合不需要 shell 历史、prompt 与 JavaScript 工具链的服务器。 |
 | Windows | `required` | Rust、Yazi、Starship。 |
-| Windows | `recommended`（默认） | `required` 加 zoxide、Atuin、fzf、bat、eza、ZeroTier。 |
+| Windows | `recommended`（默认） | `required` 加 Neovim、zoxide、Atuin、fzf、bat、eza、ZeroTier。 |
 | Windows | `all` | `recommended` 加 Bun、pnpm、mise。 |
 
 ### Private split DNS

@@ -9,6 +9,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
+- Added Rust to Ubuntu and Neovim to Windows system bootstrap presets so all three default
+  `recommended` profiles include a Rust toolchain and editor baseline.
 - Added the portable `shine-preset-author` Agent Skill, `preset new sys`, and config-independent
   `preset validate` text/JSON reports for safe AI-assisted app, shell, and sys preset authoring.
 - Added `shell install --dry-run` to resolve shell deployment plans without materializing files,

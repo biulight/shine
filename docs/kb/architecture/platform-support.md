@@ -44,7 +44,7 @@ the repository at the assessment date, not every possible external preset.
 | App lifecycle engine | Full | Full | Full | Copy, transforms, JSON merge, generators, hooks, artifacts, backup, upgrade, and uninstall are shared |
 | Built-in app availability filtering | Full | Full | Full | Exact `macos`/`linux`/`windows` selectors are supported; `unix` remains a compatibility group |
 | Dynamic completions | Bash/Zsh | Bash/Zsh | PowerShell | Fish and Elvish profiles exist in generic shell code but dynamic completion registration is not provided |
-| Sys bootstrap | 21 items | 16 items | 13 items | Counts include the independent managed `split-dns` item |
+| Sys bootstrap | 21 items | 17 items | 14 items | Counts include the independent managed `split-dns` item |
 | Package provider | Homebrew/Cask | APT, Homebrew, scripts | WinGet | Ubuntu uses the largest number of item-owned compatibility scripts |
 | Managed split DNS | Full | Full | Full | Uses `/etc/resolver`, systemd-resolved drop-in, and NRPT respectively |
 | Terminal theme auto-detection | Full | Full | Partial | OSC query is Unix-only; Windows can consume an existing or explicitly supplied theme value |
@@ -59,34 +59,36 @@ the repository at the assessment date, not every possible external preset.
 
 ### Common coverage
 
-All three built-in sys presets provide Yazi, Starship, zoxide, Atuin, fzf, bat, eza, ZeroTier,
-split DNS, Bun, pnpm, and mise. Package installation is presence-oriented: Shine bootstraps missing
-software but does not own third-party version upgrades.
+All three built-in sys presets provide Rust, Neovim, Yazi, Starship, zoxide, Atuin, fzf, bat, eza,
+ZeroTier, split DNS, Bun, pnpm, and mise. Package installation is presence-oriented: Shine
+bootstraps missing software but does not own third-party version upgrades.
 
 ### macOS
 
-The macOS preset contains 21 items. In addition to the common set it includes Homebrew, Rust,
-Neovim, AstroNvim, nvm, Fastfetch, and several zsh plugins. Most installation is declarative through
-Homebrew or Homebrew Cask, with scripts reserved for Homebrew, Rust, and AstroNvim compatibility
-flows. The generated managed system profile targets zsh.
+The macOS preset contains 21 items. In addition to the common set it includes Homebrew, AstroNvim,
+nvm, Fastfetch, and several zsh plugins. Most installation is declarative through Homebrew or
+Homebrew Cask, with scripts reserved for Homebrew, Rust, and AstroNvim compatibility flows. The
+generated managed system profile targets zsh.
 
 ### Ubuntu
 
-The Ubuntu preset contains 16 items and provides `recommended`, `all`, and `minimal` profiles. The
+The Ubuntu preset contains 17 items and provides `recommended`, `all`, and `minimal` profiles. The
 minimal profile is useful for servers and deliberately omits prompt, history-sync, JavaScript, and
-Homebrew tooling. Ubuntu supports both bash and zsh managed profiles.
+Homebrew tooling. The default profile includes Rust through the official rustup installer. Ubuntu
+supports both bash and zsh managed profiles.
 
 Ubuntu has the richest script-based bootstrap surface. AstroNvim, Atuin, Yazi, Starship, zoxide,
 zsh-vi-mode, bat, eza, Bun, pnpm, mise, Homebrew, and ZeroTier use item-owned scripts, while Neovim
-and fzf use APT. This gives better control over upstream versions and compatibility, but also creates
-the highest ongoing maintenance and external-download test burden. Rust is not currently included.
+and fzf use APT. Rust uses the same official rustup bootstrap model as macOS. This gives better
+control over upstream versions and compatibility, but also creates the highest ongoing maintenance
+and external-download test burden.
 
 ### Windows
 
-The Windows preset contains 13 items and provides `required`, `recommended`, and `all` profiles.
-It uses declarative WinGet packages and PowerShell profile fragments. Rust is included, while
-Neovim and AstroNvim are not. WinGet proxy support passes an explicit `--proxy` argument because
-WinGet does not honor the standard proxy environment variables by itself.
+The Windows preset contains 14 items and provides `required`, `recommended`, and `all` profiles.
+It uses declarative WinGet packages and PowerShell profile fragments. Rust and Neovim are included,
+while AstroNvim is not. WinGet proxy support passes an explicit `--proxy` argument because WinGet
+does not honor the standard proxy environment variables by itself.
 
 Windows profile integration intentionally updates both PowerShell 7 and Windows PowerShell 5.1
 profile files and preserves an existing leading BOM. Shell launchers use managed `.ps1` and `.cmd`
@@ -154,10 +156,10 @@ real-terminal verification comparable to the macOS `/dev/tty` investigation reco
 ### P2: Built-in bootstrap profiles are not feature-equivalent
 
 Raw item counts are not themselves a compatibility goal because each OS has different package and
-shell needs. The useful parity gaps are:
+shell needs. All three default `recommended` profiles now share a Rust toolchain, Neovim editor, and
+the common terminal-tool baseline. The remaining useful parity gaps are:
 
-- Ubuntu has no built-in Rust bootstrap.
-- Windows has no Neovim or AstroNvim bootstrap.
+- Windows has no AstroNvim bootstrap.
 - Windows lacks a server-oriented minimal profile.
 - Ubuntu's large script surface needs more integration coverage than declarative providers.
 
@@ -173,8 +175,8 @@ the counts match.
    supported workflow on those platforms.
 3. Decide the target scope for Windows remote SSH, then either document the intentional boundary or
    design a secure Windows transfer/broker transport.
-4. Fill high-value sys preset gaps, starting with Ubuntu Rust and Windows editor tooling, with
-   platform smoke tests.
+4. Fill remaining high-value sys preset gaps, starting with a decision on Windows AstroNvim and a
+   server-oriented Windows profile, with platform smoke tests.
 5. Reassess Windows terminal theme detection after the higher-impact correctness and CI gaps are
    closed.
 
