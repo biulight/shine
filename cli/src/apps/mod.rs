@@ -36,10 +36,13 @@ use std::path::{Path, PathBuf};
 const APP_TEMPLATE: &str = r#"# App preset metadata for shine.
 description = "My app configuration."
 dest = "~/.config/my-app"
+# Optional category platform destination. Exact OS keys override the Unix fallback:
+# dest = { macos = "~/Library/Application Support/My App", linux = "~/.config/my-app", windows = "~/AppData/Roaming/My App", unix = "~/.config/my-app" }
 
 [[files]]
 source = "config.toml"
 target = "config.toml"
+# Optional: platforms = ["macos"] # exact: macos/linux/windows; unix groups macOS + Linux
 # Optional per-file override:
 # dest = { base = "data-dir", path = "com.example.my-app" }
 description = "Main application config"
@@ -320,6 +323,39 @@ mod tests {
         crate::test_support::make_temp_dir("shine-apps").await
     }
 
+    #[cfg(not(target_os = "macos"))]
+    #[tokio::test]
+    async fn surge_runtime_actions_are_unavailable_outside_macos() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+
+        for error in [
+            info::handle_info(&config, "surge").await.unwrap_err(),
+            build::handle_build(&config, "surge").await.unwrap_err(),
+            refresh::handle_refresh(&config, "surge", None, false)
+                .await
+                .unwrap_err(),
+            install::handle_install(&config, Some("surge"), false, false)
+                .await
+                .unwrap_err(),
+        ] {
+            assert!(
+                error
+                    .to_string()
+                    .contains("app preset category not found: surge"),
+                "unexpected error: {error:#}"
+            );
+        }
+
+        assert!(
+            !dir.join("Library/Application Support/Surge/Profiles")
+                .exists()
+        );
+        assert!(!dir.join("presets/app/surge").exists());
+        assert!(!dir.join("env.toml").exists());
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
     #[cfg(unix)]
     async fn write_external_sample_app(dir: &std::path::Path, body: &[u8]) {
         write_external_sample_app_with_extra(dir, body, None).await;
@@ -348,6 +384,41 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn uninstall_remains_manifest_driven_after_category_becomes_macos_only() {
+        let dir = make_temp_dir().await;
+        write_external_sample_app(&dir, b"{\"enabled\":true}\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        install::handle_install(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+        let destination = dir.join(".config/sample/daemon.json");
+        assert!(destination.exists());
+
+        fs::write(
+            dir.join("presets/app/sample/shine.toml"),
+            b"dest = { macos = \"~/Library/Sample\" }\n[[files]]\nsource = \"daemon.jsonc\"\n",
+        )
+        .await
+        .unwrap();
+        uninstall::handle_uninstall(&config, Some("sample"), false, false, false)
+            .await
+            .unwrap();
+
+        assert!(!destination.exists());
+        assert!(
+            AppManifest::load(config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[cfg(unix)]

@@ -48,10 +48,10 @@ kind/category path.
 
 `preset validate` also accepts a repository root, one category directory, or its `shine.toml`. Root
 validation scans only direct category directories below `app/`, `shell/`, and `sys/`; an empty root
-is invalid. It evaluates both Unix and Windows declarations on any host, verifies referenced files
-and locked Bun dependency policy, and reports compatible metadata-free app/shell categories with a
-`legacy_metadata` warning. It does not load active source/overlay settings, initialize config, check
-for updates, write files, access the network, or execute preset code.
+is invalid. It evaluates the macOS, Linux, and Windows declarations on any host, verifies referenced
+files and locked Bun dependency policy, and reports compatible metadata-free app/shell categories
+with a `legacy_metadata` warning. It does not load active source/overlay settings, initialize config,
+check for updates, write files, access the network, or execute preset code.
 
 The default output is text. `--format json` emits the stable `schema_version: 1` report used by the
 skill; validation errors exit with status 1, while warnings do not.
@@ -317,8 +317,12 @@ target = "rules/provider.list"
 dest = { base = "data-dir", path = "com.example.my-app" }
 ```
 
-The override accepts the same absolute string or `{ windows = "...", unix = "..." }` mapping as
-category destinations. The structured `data-dir` form is file-only and resolves the platform's user
+The override accepts the same absolute string or platform mapping as category destinations.
+Mappings accept exact `macos`, `linux`, and `windows` keys plus `unix` as a macOS/Linux fallback;
+an exact key wins when both are present. A missing branch omits that category or file on the
+corresponding OS. `platforms` arrays on explicit App and Shell files use the same four selectors,
+combine them with OR semantics, and must not be empty. The structured `data-dir` form is file-only
+and resolves the platform's user
 application-data root: `%APPDATA%` on Windows, Application Support on macOS, and `XDG_DATA_HOME`
 (or `~/.local/share`) on Linux. `path` and `target` must be relative and cannot contain `..`.
 

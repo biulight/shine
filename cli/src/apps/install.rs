@@ -33,6 +33,16 @@ pub async fn handle_install(
         None => "app".to_string(),
     };
 
+    // Resolve platform availability before config initialization or embedded
+    // extraction so a targeted request for an unavailable category has no
+    // lifecycle side effects.
+    let categories = metadata::load_active_categories(config, category).await?;
+    if let Some(category) = category
+        && categories.is_empty()
+    {
+        anyhow::bail!("app preset category not found: {category}");
+    }
+
     // Load env config once — used by the `template` transform.
     let env = EnvConfig::load_or_init(config).await?;
     let env_map = env.as_map();
@@ -44,12 +54,6 @@ pub async fn handle_install(
         // and transformed source updates from the current binary take effect.
         let _extract_report =
             crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
-    }
-    let categories = metadata::load_active_categories(config, category).await?;
-    if let Some(category) = category
-        && categories.is_empty()
-    {
-        anyhow::bail!("app preset category not found: {category}");
     }
     validate_unique_install_destinations(&categories, config)?;
     let total_available: usize = categories.iter().map(|c| c.files.len()).sum();

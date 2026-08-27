@@ -24,7 +24,7 @@ source = "my_tool.sh"
 target = "mytool"
 needs_source = false
 # Optional: limit a file to specific platforms.
-# platforms = ["unix"]      # or ["windows"]
+# platforms = ["macos"]    # exact: macos/linux/windows; unix groups macOS + Linux
 
 # PowerShell scripts are also supported:
 # source = "my_tool.ps1"

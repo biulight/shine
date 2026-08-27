@@ -32,8 +32,9 @@ upgrade, bootstrap, hook, generator, or artifact actions.
 `apps/metadata.rs`, `shells/metadata.rs`, and `sys/manifest.rs` so runtime and static validation do
 not become independent schemas. The validator is routed before `Config::load_or_init()` and must
 remain free of config initialization, update checks, process execution, network access, and writes.
-Validate both `unix` and `windows` branches on every host. New diagnostic codes are API surface;
-keep them stable within schema version 1.
+Validate the effective `macos`, `linux`, and `windows` branches on every host, including any
+declared `unix` compatibility fallback. New diagnostic codes are API surface; keep them stable
+within schema version 1.
 
 The skill directory is distributed in the crate but is not embedded as runtime presets. Validate
 its Agent Skills frontmatter and directory-name parity after edits. See
@@ -57,8 +58,8 @@ needs_source = false
   is present, Shine can parse the leading `# ` comment block immediately after the shebang.
 - `needs_source = true` exposes a shell function instead of a direct launcher; use it only when the
   command must mutate the parent shell.
-- `platforms = ["unix"]` or `platforms = ["windows"]` can select platform-specific files for the
-  same command name.
+- `platforms` accepts exact `macos`, `linux`, and `windows` selectors; `unix` is the compatibility
+  group for macOS and Linux. Exact and group selectors are ORed, and an empty array is invalid.
 - Only `[[files]]` entries become commands. Sibling helper modules are deployment material, not
   activation receipts.
 

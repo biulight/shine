@@ -8,8 +8,9 @@ directory. Start from `shine preset new shell`; its template is authoritative.
 - `description` explains the command group.
 - Each `[[files]]` entry declares a safe relative `source` and optional plain
   filename `target` used as the command name.
-- Native sources end in `.sh` or `.ps1`. Use `platforms` to make parallel Unix
-  and Windows implementations of the same command mutually exclusive.
+- Native sources end in `.sh` or `.ps1`. `platforms` accepts exact `macos`, `linux`, and `windows`
+  selectors; `unix` groups macOS and Linux. The array must not be empty, and overlapping exact/group
+  entries for the same command are rejected on the affected OS.
 - `needs_source = true` is for native scripts that must run in the caller's
   shell. It cannot be combined with `runtime = "bun"`.
 

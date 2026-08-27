@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-27 — Unix grouping exposed macOS-only app presets on Linux
+
+- **Symptom**: the built-in Surge preset appeared in App listings on Linux and Windows and could
+  install files beneath a meaningless Surge-style destination before its macOS-only reload hook
+  failed.
+- **Root cause**: runtime selection collapsed every non-Windows host into `unix`, so metadata could
+  not distinguish macOS from Linux and relied on destination paths or external commands to fail.
+- **Fix**: add exact `macos`, `linux`, and `windows` selectors, retain `unix` as a compatibility
+  group, validate all exact OS branches, and declare Surge's destination only for macOS.
+- **Rule**: encode OS availability in metadata and filter before application lifecycle effects; never use a
+  platform-specific path or hook failure as the availability boundary.
+
 ## 2026-08-22 — Bootstrap sudo prompts lost their owning item
 
 - **Symptom**: `shine sys bootstrap` could show a sudo password prompt without identifying which

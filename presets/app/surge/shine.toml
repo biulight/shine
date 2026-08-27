@@ -1,5 +1,5 @@
 description = "Surge local proxy/rule files, installed beside the active profile."
-dest = "~/Library/Application Support/Surge/Profiles"
+dest = { macos = "~/Library/Application Support/Surge/Profiles" }
 list_mode = "files"
 post_upgrade = [
   { command = "/Applications/Surge.app/Contents/Applications/surge-cli", args = ["reload"] },

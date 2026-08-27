@@ -13,6 +13,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   `preset validate` text/JSON reports for safe AI-assisted app, shell, and sys preset authoring.
 - Added `shell install --dry-run` to resolve shell deployment plans without materializing files,
   links, manifests, snapshots, rendered content, or profile changes.
+- Added exact `macos`, `linux`, and `windows` App/Shell preset selectors while retaining `unix` as
+  the compatible macOS/Linux group.
+
+### Bug Fixes
+
+- Hidden the macOS-only Surge preset from App runtime actions on Linux and Windows while preserving
+  manifest-driven cleanup of any existing installation.
 
 ### Docs
 

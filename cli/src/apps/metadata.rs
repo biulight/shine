@@ -1,7 +1,7 @@
 use super::manifest::AppInstallStrategy;
 use crate::config::Config;
 use crate::env::EnvVarSpec;
-use crate::platform::current_platform;
+use crate::platform::{OperatingSystem, current_platform};
 use crate::presets;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -171,7 +171,10 @@ enum DestBaseToml {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PlatformDestToml {
+    macos: Option<String>,
+    linux: Option<String>,
     windows: Option<String>,
     unix: Option<String>,
 }
@@ -770,12 +773,13 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
     let parsed: CategoryToml = toml::from_slice(bytes)
         .with_context(|| format!("failed to parse app/{name}/shine.toml"))?;
 
-    if let Some(dest) = parsed.dest.select_for_current_platform(name)? {
-        validate_dest(name, &dest)?;
-    }
+    parsed.dest.validate_category(name)?;
     if let Some(files) = &parsed.files {
         for file in files {
             file_matches_current_platform(name, file)?;
+            if let Some(dest) = &file.dest {
+                dest.validate_file(name)?;
+            }
             if let Some(AppDestinationRoot::Path(dest)) = selected_file_destination(name, file)? {
                 validate_dest(name, &dest)?;
             }
@@ -813,11 +817,33 @@ fn validate_dest(name: &str, dest: &str) -> Result<()> {
 }
 
 impl DestToml {
+    fn validate_category(&self, category: &str) -> Result<()> {
+        match self {
+            Self::Single(dest) => validate_dest(category, dest),
+            Self::Rooted(_) => bail!(
+                "app/{category}/shine.toml rooted destinations are supported only in [[files]]"
+            ),
+            Self::Platforms(dest) => dest.validate(category),
+        }
+    }
+
+    fn validate_file(&self, category: &str) -> Result<()> {
+        match self {
+            Self::Single(dest) => validate_dest(category, dest),
+            Self::Rooted(dest) => dest.resolve(category).map(|_| ()),
+            Self::Platforms(dest) => dest.validate(category),
+        }
+    }
+
     fn select_for_current_platform(&self, category: &str) -> Result<Option<String>> {
         self.select_for_platform(category, current_platform())
     }
 
-    fn select_for_platform(&self, category: &str, current: &str) -> Result<Option<String>> {
+    fn select_for_platform(
+        &self,
+        category: &str,
+        current: OperatingSystem,
+    ) -> Result<Option<String>> {
         match self {
             Self::Single(dest) => Ok(Some(dest.clone())),
             Self::Rooted(_) => bail!(
@@ -837,7 +863,7 @@ impl DestToml {
     fn select_file_for_platform(
         &self,
         category: &str,
-        platform: &str,
+        platform: OperatingSystem,
     ) -> Result<Option<AppDestinationRoot>> {
         match self {
             Self::Single(dest) => Ok(Some(AppDestinationRoot::Path(dest.clone()))),
@@ -878,12 +904,27 @@ fn file_destination_matches_current_platform(category: &str, file: &FileToml) ->
 }
 
 impl PlatformDestToml {
-    fn select_for_platform(&self, category: &str, current: &str) -> Result<Option<String>> {
-        match current {
-            "windows" => Ok(self.windows.clone()),
-            "unix" => Ok(self.unix.clone()),
-            _ => bail!("app/{category}/shine.toml has unsupported current platform `{current}`"),
+    fn validate(&self, category: &str) -> Result<()> {
+        let destinations = [&self.macos, &self.linux, &self.windows, &self.unix];
+        if destinations.iter().all(|dest| dest.is_none()) {
+            bail!("app/{category}/shine.toml platform destination map must not be empty");
         }
+        for dest in destinations.into_iter().flatten() {
+            validate_dest(category, dest)?;
+        }
+        Ok(())
+    }
+
+    fn select_for_platform(
+        &self,
+        _category: &str,
+        current: OperatingSystem,
+    ) -> Result<Option<String>> {
+        Ok(match current {
+            OperatingSystem::Macos => self.macos.clone().or_else(|| self.unix.clone()),
+            OperatingSystem::Linux => self.linux.clone().or_else(|| self.unix.clone()),
+            OperatingSystem::Windows => self.windows.clone(),
+        })
     }
 }
 
@@ -891,7 +932,11 @@ fn file_matches_current_platform(category: &str, file: &FileToml) -> Result<bool
     file_matches_platform(category, file, current_platform())
 }
 
-fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Result<bool> {
+fn file_matches_platform(
+    category: &str,
+    file: &FileToml,
+    current: OperatingSystem,
+) -> Result<bool> {
     crate::preset_meta::platform_matches(
         file.platforms.as_deref(),
         current,
@@ -942,6 +987,11 @@ pub(crate) fn validate_preset_category(
     })?;
     let context = format!("app/{name}/shine.toml");
 
+    parsed
+        .dest
+        .validate_category(name)
+        .map_err(|error| invalid_metadata(error, &manifest_path))?;
+
     resolve_hooks(parsed.post_upgrade.clone(), "post_upgrade", &context)
         .and_then(|_| resolve_hooks(parsed.post_install.clone(), "post_install", &context))
         .map_err(|error| invalid_metadata(error, &manifest_path))?;
@@ -990,15 +1040,18 @@ pub(crate) fn validate_preset_category(
             validate_reference_path(root, &generator.script, "generator script")?;
         }
         validate_reference_path(root, &source, "source file")?;
-        // Calling both branches validates platform declarations even when this
-        // host would filter the entry out.
-        for platform in ["unix", "windows"] {
+        if let Some(dest) = &file.dest {
+            dest.validate_file(name)
+                .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        }
+        // Check every exact OS even when this host would filter the entry out.
+        for platform in OperatingSystem::ALL {
             file_matches_platform(name, file, platform)
                 .map_err(|error| invalid_metadata(error, &manifest_path))?;
         }
     }
 
-    for platform in ["unix", "windows"] {
+    for platform in OperatingSystem::ALL {
         let Some(category_dest) = parsed
             .dest
             .select_for_platform(name, platform)
@@ -1044,7 +1097,8 @@ pub(crate) fn validate_preset_category(
                 return Err(PresetValidationFailure::at(
                     "duplicate_target",
                     format!(
-                        "app/{name} declares the same effective destination more than once for {platform}: {}",
+                        "app/{name} declares the same effective destination more than once for {}: {}",
+                        platform.as_str(),
                         target.display()
                     ),
                     &manifest_path,
@@ -1203,6 +1257,7 @@ mod tests {
         assert!(!vim.files.is_empty());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn embedded_surge_installs_local_profile_resources() {
         let categories = load_embedded_categories(Some("surge")).unwrap();
@@ -1285,6 +1340,18 @@ mod tests {
                 teardown: Some("unbuild.ts".to_string()),
                 runtime: ArtifactRuntime::Bun,
             })
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn embedded_surge_is_unavailable_outside_macos() {
+        assert!(load_embedded_categories(Some("surge")).unwrap().is_empty());
+        assert!(
+            load_embedded_categories(None)
+                .unwrap()
+                .iter()
+                .all(|category| category.name != "surge")
         );
     }
 
@@ -1567,10 +1634,10 @@ source = "config.toml"
 
     #[test]
     fn embedded_surge_declares_artifact_script() {
-        let categories = load_embedded_categories(Some("surge")).unwrap();
-        let surge = categories.iter().find(|c| c.name == "surge").unwrap();
+        let bytes = presets::read_asset_bytes("app/surge/shine.toml").unwrap();
+        let parsed = parse_category_toml("surge", &bytes).unwrap();
         assert_eq!(
-            surge.artifact,
+            resolve_artifact(parsed.artifact, "app/surge/shine.toml").unwrap(),
             Some(AppArtifact {
                 script: "build.ts".to_string(),
                 teardown: Some("unbuild.ts".to_string()),
@@ -1848,6 +1915,47 @@ dest = { base = "data-dir", path = "../escape" }
     }
 
     #[test]
+    fn exact_platform_destination_precedes_unix_fallback() {
+        let parsed = parse_category_toml(
+            "editor",
+            br#"dest = { macos = "~/Library/Editor", linux = "~/.config/editor", unix = "~/.editor" }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed
+                .dest
+                .select_for_platform("editor", OperatingSystem::Macos)
+                .unwrap()
+                .as_deref(),
+            Some("~/Library/Editor")
+        );
+        assert_eq!(
+            parsed
+                .dest
+                .select_for_platform("editor", OperatingSystem::Linux)
+                .unwrap()
+                .as_deref(),
+            Some("~/.config/editor")
+        );
+        assert_eq!(
+            parsed
+                .dest
+                .select_for_platform("editor", OperatingSystem::Windows)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn empty_platform_destination_map_is_rejected() {
+        let err = parse_category_toml("editor", b"dest = {}\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must not be empty"));
+    }
+
+    #[test]
     fn unsupported_file_platform_is_rejected() {
         let err = parse_category_toml(
             "docker-engine",
@@ -1881,10 +1989,22 @@ platforms = ["unix"]
         )
         .unwrap();
 
-        assert!(file_matches_platform("docker-engine", &windows_only, "windows").unwrap());
-        assert!(!file_matches_platform("docker-engine", &windows_only, "unix").unwrap());
-        assert!(file_matches_platform("docker-engine", &unix_only, "unix").unwrap());
-        assert!(!file_matches_platform("docker-engine", &unix_only, "windows").unwrap());
+        assert!(
+            file_matches_platform("docker-engine", &windows_only, OperatingSystem::Windows)
+                .unwrap()
+        );
+        assert!(
+            !file_matches_platform("docker-engine", &windows_only, OperatingSystem::Linux).unwrap()
+        );
+        assert!(
+            file_matches_platform("docker-engine", &unix_only, OperatingSystem::Macos).unwrap()
+        );
+        assert!(
+            file_matches_platform("docker-engine", &unix_only, OperatingSystem::Linux).unwrap()
+        );
+        assert!(
+            !file_matches_platform("docker-engine", &unix_only, OperatingSystem::Windows).unwrap()
+        );
     }
 
     #[test]

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 
 use crate::config::Config;
+use crate::platform::OperatingSystem;
 use crate::presets;
 
 /// Names of categories under `root` (e.g. `"shell"` or `"app"`) among the
@@ -70,25 +71,31 @@ pub(crate) async fn collect_fs_category_names(
 }
 
 /// Shared platform-filter logic for a `shine.toml` file entry's optional
-/// `platforms` list. `current` is `"windows"` or `"unix"`
-/// (`platform::current_platform()`). `context` labels the offending entry in
+/// `platforms` list. Exact selectors are `macos`, `linux`, and `windows`;
+/// `unix` is the compatibility group for macOS and Linux. `context` labels the offending entry in
 /// the error message (e.g. `"shell/proxy/shine.toml"`).
 pub(crate) fn platform_matches(
     platforms: Option<&[String]>,
-    current: &str,
+    current: OperatingSystem,
     context: &str,
 ) -> Result<bool> {
     let Some(platforms) = platforms else {
         return Ok(true);
     };
+    if platforms.is_empty() {
+        anyhow::bail!(
+            "{context} platforms must not be empty; expected `macos`, `linux`, `windows`, or `unix`"
+        );
+    }
 
     let mut matches = false;
     for platform in platforms {
         let normalized = platform.trim().to_ascii_lowercase();
         match normalized.as_str() {
-            "windows" | "unix" => matches |= normalized == current,
+            "macos" | "linux" | "windows" => matches |= normalized == current.as_str(),
+            "unix" => matches |= current.is_unix(),
             _ => anyhow::bail!(
-                "{context} has unsupported platform `{platform}`; expected `windows` or `unix`"
+                "{context} has unsupported platform `{platform}`; expected `macos`, `linux`, `windows`, or `unix`"
             ),
         }
     }
@@ -172,22 +179,40 @@ mod tests {
 
     #[test]
     fn platform_matches_defaults_to_true_when_unset() {
-        assert!(platform_matches(None, "windows", "ctx").unwrap());
+        assert!(platform_matches(None, OperatingSystem::Windows, "ctx").unwrap());
     }
 
     #[test]
-    fn platform_matches_checks_current_platform() {
-        let platforms = vec!["windows".to_string()];
-        assert!(platform_matches(Some(&platforms), "windows", "ctx").unwrap());
-        assert!(!platform_matches(Some(&platforms), "unix", "ctx").unwrap());
+    fn platform_matches_exact_os_and_unix_group() {
+        let macos = vec!["macos".to_string()];
+        assert!(platform_matches(Some(&macos), OperatingSystem::Macos, "ctx").unwrap());
+        assert!(!platform_matches(Some(&macos), OperatingSystem::Linux, "ctx").unwrap());
+
+        let unix = vec!["unix".to_string()];
+        assert!(platform_matches(Some(&unix), OperatingSystem::Macos, "ctx").unwrap());
+        assert!(platform_matches(Some(&unix), OperatingSystem::Linux, "ctx").unwrap());
+        assert!(!platform_matches(Some(&unix), OperatingSystem::Windows, "ctx").unwrap());
+    }
+
+    #[test]
+    fn platform_matches_rejects_empty_platforms() {
+        let platforms = Vec::new();
+        let err = platform_matches(Some(&platforms), OperatingSystem::Linux, "ctx")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must not be empty"));
     }
 
     #[test]
     fn platform_matches_rejects_unknown_platform_with_context() {
         let platforms = vec!["plan9".to_string()];
-        let err = platform_matches(Some(&platforms), "unix", "app/foo/shine.toml")
-            .unwrap_err()
-            .to_string();
+        let err = platform_matches(
+            Some(&platforms),
+            OperatingSystem::Linux,
+            "app/foo/shine.toml",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("app/foo/shine.toml"));
         assert!(err.contains("unsupported platform"));
     }

@@ -23,11 +23,9 @@ The overall maturity remains uneven:
 | Ubuntu | High | Rich server/developer bootstrap, bash and zsh profiles, minimal server profile, systemd-resolved safety checks | More installer logic lives in per-item scripts; no persistent HTTP user service; no built-in Rust bootstrap |
 | Windows | Medium-high core, lower advanced coverage | PowerShell shims and profiles, WinGet, Windows path and line-ending handling, NRPT split DNS, Windows OpenSSH environment wrapper | No Windows-remote transfer or secret broker, no terminal OSC theme detection, no persistent HTTP service, thinner editor bootstrap, and no native Windows test job in normal CI |
 
-The two highest-priority engineering gaps are:
+The highest-priority remaining engineering gap is:
 
-1. App preset platform selection can distinguish only `unix` and `windows`, so it cannot encode a
-   macOS-only category correctly.
-2. Normal CI runs the Rust test suite only on Ubuntu. macOS and Windows release jobs prove that the
+1. Normal CI runs the Rust test suite only on Ubuntu. macOS and Windows release jobs prove that the
    binaries compile, but do not execute platform-specific tests.
 
 ## Capability matrix
@@ -44,7 +42,7 @@ the repository at the assessment date, not every possible external preset.
 | Shell preset lifecycle | Full | Full | Full | Unix uses symlinks or managed launchers; Windows uses marked `.ps1` and `.cmd` shims |
 | Built-in shell commands | Full | Full | Partial | All shared commands are available except Unix-only `copyfile`; platform-specific proxy scripts exist |
 | App lifecycle engine | Full | Full | Full | Copy, transforms, JSON merge, generators, hooks, artifacts, backup, upgrade, and uninstall are shared |
-| Built-in app availability filtering | Partial | Partial | Partial | The selector models only `unix` versus `windows`; it cannot express macOS-only categories |
+| Built-in app availability filtering | Full | Full | Full | Exact `macos`/`linux`/`windows` selectors are supported; `unix` remains a compatibility group |
 | Dynamic completions | Bash/Zsh | Bash/Zsh | PowerShell | Fish and Elvish profiles exist in generic shell code but dynamic completion registration is not provided |
 | Sys bootstrap | 21 items | 16 items | 13 items | Counts include the independent managed `split-dns` item |
 | Package provider | Homebrew/Cask | APT, Homebrew, scripts | WinGet | Ubuntu uses the largest number of item-owned compatibility scripts |
@@ -96,30 +94,13 @@ files instead of depending on Windows symlink privileges.
 
 ## Confirmed gaps and risks
 
-### P1: App presets cannot express an exact operating system
+### Closed 2026-08-27: App presets can express an exact operating system
 
-`platform::current_platform` returns only `unix` or `windows`. App category destinations and
-per-file `platforms` use the same two-value model. This is sufficient for most path and shell
-differences but cannot distinguish macOS from Ubuntu.
-
-The built-in Surge preset is documented as macOS-only, but its category destination is an
-unconditional string. The loader therefore exposes it on Ubuntu and Windows and can attempt to
-install files into a meaningless `Library/Application Support/Surge/Profiles` path. Its macOS-only
-reload hook then fails non-fatally on those systems, leaving the files installed.
-
-Before implementation, write an ADR for the exact selector vocabulary and compatibility behavior.
-A likely direction is to support exact OS selectors (`macos`, `ubuntu`/`linux`, `windows`) while
-retaining `unix` as a compatibility group. Validation must continue to check every declared
-platform branch from any host.
-
-Acceptance criteria:
-
-- Category-level and per-file metadata can express macOS-only behavior.
-- Existing `unix` and `windows` presets remain compatible.
-- Surge is absent from app list/info/install candidates outside macOS.
-- Preset validation detects invalid or empty platform branches without requiring that OS.
-- Public English and Simplified Chinese preset-authoring documentation is updated together when
-  the schema changes.
+ADR 0034 added exact `macos`, `linux`, and `windows` selectors while retaining `unix` as the
+macOS/Linux compatibility group. App destination maps prefer an exact branch over `unix`, App and
+Shell file filters share the same vocabulary, and host-independent validation checks all three
+effective OS branches plus every explicitly declared destination. The built-in Surge category now
+has only a macOS destination and is absent from runtime App candidates on Linux and Windows.
 
 ### P1: CI does not execute native macOS or Windows tests
 
@@ -192,17 +173,15 @@ the counts match.
 
 ## Implementation sequence
 
-1. Define exact platform selectors in an ADR, implement them, fix Surge visibility, and add
-   cross-host validation tests.
-2. Add native macOS and Windows test jobs to pull-request CI before expanding more platform-specific
+1. Add native macOS and Windows test jobs to pull-request CI before expanding more platform-specific
    behavior.
-3. Add Ubuntu and Windows persistent service integrations if stable local HTTP resources are a
+2. Add Ubuntu and Windows persistent service integrations if stable local HTTP resources are a
    supported workflow on those platforms.
-4. Decide the target scope for Windows remote SSH, then either document the intentional boundary or
+3. Decide the target scope for Windows remote SSH, then either document the intentional boundary or
    design a secure Windows transfer/broker transport.
-5. Fill high-value sys preset gaps, starting with Ubuntu Rust and Windows editor tooling, with
+4. Fill high-value sys preset gaps, starting with Ubuntu Rust and Windows editor tooling, with
    platform smoke tests.
-6. Reassess Windows terminal theme detection after the higher-impact correctness and CI gaps are
+5. Reassess Windows terminal theme detection after the higher-impact correctness and CI gaps are
    closed.
 
 ## Cross-platform definition of done

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::platform::current_platform;
+use crate::platform::{OperatingSystem, current_platform};
 use crate::presets;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -322,7 +322,11 @@ fn file_matches_current_platform(category: &str, file: &FileToml) -> Result<bool
     file_matches_platform(category, file, current_platform())
 }
 
-fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Result<bool> {
+fn file_matches_platform(
+    category: &str,
+    file: &FileToml,
+    current: OperatingSystem,
+) -> Result<bool> {
     crate::preset_meta::platform_matches(
         file.platforms.as_deref(),
         current,
@@ -597,7 +601,7 @@ pub(crate) fn validate_preset_category(
                     .with_context(|| format!("invalid transforms in {context}"))
                     .map_err(|error| invalid_metadata(error, &manifest_path))?;
                 validate_reference(root, &entry.source_rel, "shell source")?;
-                for platform in ["unix", "windows"] {
+                for platform in OperatingSystem::ALL {
                     file_matches_platform(name, file, platform)
                         .map_err(|error| invalid_metadata(error, &manifest_path))?;
                 }
@@ -618,7 +622,7 @@ pub(crate) fn validate_preset_category(
     let uses_bun = resolved
         .iter()
         .any(|(_, entry)| entry.runtime == crate::bin_links::LinkRuntime::Bun);
-    for platform in ["unix", "windows"] {
+    for platform in OperatingSystem::ALL {
         let mut commands = BTreeSet::new();
         for (platforms, entry) in &resolved {
             if !crate::preset_meta::platform_matches(platforms.as_deref(), platform, &context)
@@ -630,8 +634,9 @@ pub(crate) fn validate_preset_category(
                 return Err(PresetValidationFailure::at(
                     "duplicate_command",
                     format!(
-                        "shell/{name} declares command `{}` more than once for {platform}",
-                        entry.command_name
+                        "shell/{name} declares command `{}` more than once for {}",
+                        entry.command_name,
+                        platform.as_str()
                     ),
                     &manifest_path,
                 ));
@@ -800,8 +805,8 @@ mod tests {
             env: None,
         };
 
-        assert!(file_matches_platform("proxy", &file, "windows").unwrap());
-        assert!(!file_matches_platform("proxy", &file, "unix").unwrap());
+        assert!(file_matches_platform("proxy", &file, OperatingSystem::Windows).unwrap());
+        assert!(!file_matches_platform("proxy", &file, OperatingSystem::Linux).unwrap());
     }
 
     #[test]
@@ -817,8 +822,9 @@ mod tests {
             env: None,
         };
 
-        assert!(file_matches_platform("proxy", &file, "windows").unwrap());
-        assert!(file_matches_platform("proxy", &file, "unix").unwrap());
+        assert!(file_matches_platform("proxy", &file, OperatingSystem::Windows).unwrap());
+        assert!(file_matches_platform("proxy", &file, OperatingSystem::Macos).unwrap());
+        assert!(file_matches_platform("proxy", &file, OperatingSystem::Linux).unwrap());
     }
 
     #[test]
@@ -834,7 +840,7 @@ mod tests {
             env: None,
         };
 
-        let err = file_matches_platform("proxy", &file, "unix")
+        let err = file_matches_platform("proxy", &file, OperatingSystem::Linux)
             .unwrap_err()
             .to_string();
         assert!(err.contains("unsupported platform `plan9`"));

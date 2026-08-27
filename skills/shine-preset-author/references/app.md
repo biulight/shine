@@ -7,12 +7,13 @@ installed Shine release.
 ## Essential shape
 
 - `description` explains the category.
-- `dest` is an absolute path after `~`/environment expansion, or a platform map
-  with `unix` and `windows` values.
+- `dest` is an absolute path after `~`/environment expansion, or a platform map with exact
+  `macos`, `linux`, and `windows` values plus the optional `unix` macOS/Linux fallback. An exact
+  destination wins over `unix`.
 - Each `[[files]]` entry declares a safe relative `source`; `target` defaults to
   the source path. A per-file `dest` may override the category destination.
-- `platforms = ["unix"]`, `["windows"]`, or both limits a file. Validate both
-  branches even when authoring on one host.
+- `platforms` accepts `macos`, `linux`, `windows`, and the macOS/Linux compatibility group `unix`.
+  The array must not be empty. Validate all three exact OS branches on every host.
 
 Prefer explicit file lists. Keep sources and generator/artifact scripts inside
 the category. Never use absolute source paths or `..`.
@@ -32,6 +33,6 @@ the category. Never use absolute source paths or `..`.
   place both `package.json` and `bun.lock` at the category root; never declare
   `trustedDependencies`.
 
-Avoid duplicate effective destinations on either platform. Keep destination
+Avoid duplicate effective destinations on any operating system. Keep destination
 ownership narrow and explain required secrets or environment keys without
 placing their values in the preset.

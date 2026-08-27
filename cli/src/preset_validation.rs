@@ -669,6 +669,22 @@ source = "one.toml"
             "invalid_metadata"
         );
 
+        // Every declared branch is validated even when exact OS destinations
+        // shadow the Unix compatibility fallback on both Unix operating systems.
+        write(
+            category.join("shine.toml"),
+            r#"dest = { macos = "~/Library/Editor", linux = "~/.config/editor", unix = "relative/shadowed" }
+[[files]]
+source = "one.toml"
+"#,
+        );
+        let invalid_shadowed_unix = validate_path(&category).await;
+        assert!(!invalid_shadowed_unix.valid);
+        assert_eq!(
+            invalid_shadowed_unix.categories[0].diagnostics[0].code,
+            "invalid_metadata"
+        );
+
         write(
             category.join("shine.toml"),
             r#"dest = "~/.config/editor"
@@ -686,6 +702,82 @@ target = "same.toml"
             duplicate.categories[0].diagnostics[0].code,
             "duplicate_target"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn validates_exact_platforms_and_rejects_empty_platform_lists() {
+        let root = fixture_root("preset-validation-exact-platforms").await;
+        let category = root.join("shell/tools");
+        write(
+            category.join("shine.toml"),
+            r#"[[files]]
+source = "mac.sh"
+target = "tool"
+platforms = ["macos"]
+[[files]]
+source = "linux.sh"
+target = "tool"
+platforms = ["linux"]
+[[files]]
+source = "windows.ps1"
+target = "tool"
+platforms = ["windows"]
+"#,
+        );
+        write(category.join("mac.sh"), "#!/bin/sh\n");
+        write(category.join("linux.sh"), "#!/bin/sh\n");
+        write(category.join("windows.ps1"), "exit 0\n");
+
+        let valid = validate_path(&category).await;
+        assert!(valid.valid, "{valid:#?}");
+
+        write(
+            category.join("shine.toml"),
+            r#"[[files]]
+source = "mac.sh"
+target = "tool"
+platforms = []
+"#,
+        );
+        let empty = validate_path(&category).await;
+        assert!(!empty.valid);
+        assert_eq!(empty.categories[0].diagnostics[0].code, "invalid_metadata");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unix_and_exact_shell_selectors_conflict_on_the_exact_os() {
+        let root = fixture_root("preset-validation-overlapping-platforms").await;
+        let category = root.join("shell/tools");
+        write(
+            category.join("shine.toml"),
+            r#"[[files]]
+source = "unix.sh"
+target = "tool"
+platforms = ["unix"]
+[[files]]
+source = "mac.sh"
+target = "tool"
+platforms = ["macos"]
+"#,
+        );
+        write(category.join("unix.sh"), "#!/bin/sh\n");
+        write(category.join("mac.sh"), "#!/bin/sh\n");
+
+        let report = validate_path(&category).await;
+        assert!(!report.valid);
+        assert_eq!(
+            report.categories[0].diagnostics[0].code,
+            "duplicate_command"
+        );
+        assert!(
+            report.categories[0].diagnostics[0]
+                .message
+                .contains("macos")
+        );
+
         std::fs::remove_dir_all(root).unwrap();
     }
 }

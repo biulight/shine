@@ -34,7 +34,7 @@ activates a source or overlay and never executes preset code.
 
 `shine preset validate [PATH] [--format text|json]` is the authority for static validation. Top-level
 routing handles it before config loading and update checks. It reads the requested repository,
-category, or manifest directly; checks both Unix and Windows branches; reuses app, shell, sys,
+category, or manifest directly; checks every supported operating-system branch; reuses app, shell, sys,
 transform, environment, and Bun policy parsing; verifies referenced files; and never starts a
 generator, hook, artifact, bootstrap script, process, or network request. Compatible app/shell
 categories without metadata remain valid with a `legacy_metadata` warning.

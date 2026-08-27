@@ -42,7 +42,7 @@ shine preset validate . --format json
 
 `preset validate` 也接受仓库根目录、单个类别目录或其中的 `shine.toml`。根目录模式只扫描
 `app/`、`shell/`、`sys/` 下的直接类别目录；空仓库会失败。无论当前宿主是什么系统，它都会
-检查 Unix 与 Windows 声明、引用文件和锁定的 Bun 依赖策略；兼容的无 metadata App/Shell
+检查 macOS、Linux 与 Windows 声明、引用文件和锁定的 Bun 依赖策略；兼容的无 metadata App/Shell
 类别会得到 `legacy_metadata` warning。该命令不会加载当前来源或 overlay 设置、初始化配置、
 检查更新、写文件、联网或执行预设代码。
 
@@ -276,7 +276,7 @@ target = "rules/provider.list"
 dest = { base = "data-dir", path = "com.example.my-app" }
 ```
 
-文件级覆盖既支持类别已有的绝对路径字符串，也支持 `{ windows = "...", unix = "..." }` 平台映射。仅文件级可使用结构化 `data-dir`：它在 Windows 解析为 `%APPDATA%`，在 macOS 解析为 Application Support，在 Linux 解析为 `XDG_DATA_HOME`（未设置时为 `~/.local/share`）。`path` 和 `target` 必须是相对路径，且不能包含 `..`。
+文件级覆盖既支持类别已有的绝对路径字符串，也支持平台映射。映射可使用精确的 `macos`、`linux`、`windows` 键，并可用 `unix` 作为 macOS/Linux 回退；同时存在时精确键优先。某个平台缺少分支时，该类别或文件不会在对应系统出现。App 与 Shell 显式文件的 `platforms` 数组使用同样四个选择器，按 OR 语义组合且不能为空。仅文件级可使用结构化 `data-dir`：它在 Windows 解析为 `%APPDATA%`，在 macOS 解析为 Application Support，在 Linux 解析为 `XDG_DATA_HOME`（未设置时为 `~/.local/share`）。`path` 和 `target` 必须是相对路径，且不能包含 `..`。
 
 如果两个条目最终指向同一路径，Shine 会在写入前拒绝整个操作。后续 metadata 若移动已受管 source，`shine upgrade` 只会在旧文件未被修改且新目标不存在时迁移；否则保留两端现状并提示用户处理。
 
