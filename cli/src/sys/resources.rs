@@ -2,115 +2,12 @@ use super::{SysDriverKind, SysItem};
 use crate::config::Config;
 use crate::sys::drivers::{managed_file, split_dns};
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fmt;
-use std::path::{Path, PathBuf};
-use utils::lifecycle::LifecycleEffect;
-
-pub(super) const RECEIPT_VERSION: u32 = 1;
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "driver", rename_all = "kebab-case")]
-pub(super) enum SystemReceipt {
-    Script { version: u32 },
-    SplitDns(SplitDnsReceipt),
-    ManagedFile(ManagedFileReceipt),
-}
-
-impl SystemReceipt {
-    pub(super) fn script() -> Self {
-        Self::Script {
-            version: RECEIPT_VERSION,
-        }
-    }
-
-    pub(super) fn driver(&self) -> SysDriverKind {
-        match self {
-            Self::Script { .. } => SysDriverKind::Script,
-            Self::SplitDns(_) => SysDriverKind::SplitDns,
-            Self::ManagedFile(_) => SysDriverKind::ManagedFile,
-        }
-    }
-
-    pub(super) fn requires_admin(&self) -> bool {
-        match self {
-            Self::Script { .. } => false,
-            Self::SplitDns(_) => true,
-            Self::ManagedFile(receipt) => receipt.privileged,
-        }
-    }
-
-    fn ensure_supported(&self) -> Result<()> {
-        let version = match self {
-            Self::Script { version } => *version,
-            Self::SplitDns(receipt) => receipt.version,
-            Self::ManagedFile(receipt) => receipt.version,
-        };
-        if version != RECEIPT_VERSION {
-            bail!("unsupported system resource receipt version {version}");
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct SplitDnsReceipt {
-    pub(super) version: u32,
-    pub(super) os_id: String,
-    pub(super) item_id: String,
-    pub(super) domain: String,
-    pub(super) servers: Vec<String>,
-    pub(super) resource: String,
-    pub(super) content_hash: Option<u64>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct ManagedFileReceipt {
-    pub(super) version: u32,
-    pub(super) destination: PathBuf,
-    pub(super) backup: Option<PathBuf>,
-    pub(super) content_hash: u64,
-    pub(super) privileged: bool,
-    pub(super) restart_hint: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ResourcePlan {
-    pub description: String,
-    pub requires_admin: bool,
-    pub restart_hint: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct ResourceOutcome {
-    pub changed: bool,
-    pub effects: Vec<LifecycleEffect>,
-    pub detail: String,
-    pub receipt: Option<SystemReceipt>,
-    pub restart_hint: Option<String>,
-}
-
-#[derive(Debug)]
-pub(super) struct ResourceConflict {
-    message: String,
-}
-
-impl ResourceConflict {
-    pub(super) fn user_modified(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for ResourceConflict {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for ResourceConflict {}
+use std::path::Path;
+pub(super) use utils::runtime::{
+    ManagedFileReceipt, RECEIPT_VERSION, ResourceConflict, ResourceOutcome, ResourcePlan,
+    SplitDnsReceipt, SystemReceipt,
+};
 
 pub(super) struct DriverContext<'a> {
     pub config: &'a Config,
@@ -321,6 +218,8 @@ pub(super) fn config_env(context: &DriverContext<'_>, config_key: &str) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::{Deserialize, Serialize};
+    use std::path::PathBuf;
 
     #[test]
     fn receipt_roundtrips_with_version_and_driver() {

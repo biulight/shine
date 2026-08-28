@@ -46,17 +46,15 @@ fn default_sync_terminal_theme() -> bool {
     true
 }
 
+fn default_shell_type() -> ShellType {
+    crate::shells::get_shell().unwrap_or_default()
+}
+
 fn is_true(value: &bool) -> bool {
     *value
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ExternalShellMode {
-    #[default]
-    Snapshot,
-    Live,
-}
+pub use utils::runtime::ExternalShellMode;
 
 /// A command whose protected environment values are injected by a shine proxy.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -105,7 +103,7 @@ pub struct Config {
     pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_cleared_schema_version: Option<u32>,
-    #[serde(skip)]
+    #[serde(skip, default = "default_shell_type")]
     pub shell_type: ShellType,
     /// Optional persistent presets_dir override stored in the active config.
     /// Takes effect when neither SHINE_CONFIG_DIR nor SHINE_PRESETS is set.
@@ -326,7 +324,7 @@ impl Config {
             home_dir: dir.to_path_buf(),
             schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
             last_cleared_schema_version: None,
-            shell_type: ShellType::default(),
+            shell_type: default_shell_type(),
             presets_dir_override: None,
             external_shell_mode: ExternalShellMode::Snapshot,
             presets_overlay_dir_override: None,
@@ -470,6 +468,12 @@ impl Config {
     }
 }
 
+impl AsRef<Path> for Config {
+    fn as_ref(&self) -> &Path {
+        self.shine_dir()
+    }
+}
+
 /// Print the effective base preset source, optional overlay, and external
 /// shell deployment mode. This makes built-in, external, and overlay-backed
 /// runs report provenance with the same vocabulary.
@@ -519,7 +523,7 @@ impl Default for Config {
             home_dir,
             schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
             last_cleared_schema_version: None,
-            shell_type: ShellType::default(),
+            shell_type: default_shell_type(),
             presets_dir_override: None,
             external_shell_mode: ExternalShellMode::Snapshot,
             presets_overlay_dir_override: None,

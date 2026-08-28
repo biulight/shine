@@ -6,10 +6,8 @@
 //! for these primitives — both depend on `install_core` instead.
 
 pub mod file_ops;
-pub mod line_endings;
 pub mod manifest;
-pub mod transforms;
 
-pub use line_endings::{eol_eq, normalize_eol};
 pub use manifest::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
-pub use transforms::apply as apply_transforms;
+pub use utils::install::transforms;
+pub use utils::install::{apply_transforms, eol_eq, normalize_eol};

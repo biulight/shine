@@ -24,9 +24,8 @@ pub use report::{ShellUpgradeReport, handle_info, handle_list};
 pub use uninstall::handle_uninstall;
 
 use anyhow::{Result, bail};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
+pub use utils::runtime::ShellType;
 
 pub const SENTINEL_START: &str = "# >>> shine >>>";
 const SENTINEL_END: &str = "# <<< shine <<<";
@@ -41,15 +40,6 @@ enum PathUpdateStatus {
 struct ShellConfigUpdate {
     profile_updated: bool,
     config_status: PathUpdateStatus,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum ShellType {
-    Bash,
-    Fish,
-    Zsh,
-    PowerShell,
-    Elvish,
 }
 
 pub fn get_shell() -> Result<ShellType> {
@@ -85,49 +75,6 @@ fn get_shell_config_paths(shell_type: &ShellType, home_path: &Path) -> Result<Ve
             }
         }
         ShellType::Elvish => Ok(vec![home_path.join(".config/elvish/rc.elv")]),
-    }
-}
-
-impl FromStr for ShellType {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let shell_name = s
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(s)
-            .to_ascii_lowercase();
-        let normalized = shell_name.trim_end_matches(".exe");
-        if normalized == "bash" {
-            Ok(ShellType::Bash)
-        } else if normalized == "fish" {
-            Ok(ShellType::Fish)
-        } else if normalized == "zsh" {
-            Ok(ShellType::Zsh)
-        } else if normalized == "powershell" || normalized == "pwsh" {
-            Ok(ShellType::PowerShell)
-        } else if normalized == "elvish" {
-            Ok(ShellType::Elvish)
-        } else {
-            bail!("Unknown shell item type: {}", s)
-        }
-    }
-}
-
-impl From<ShellType> for &'static str {
-    fn from(value: ShellType) -> Self {
-        match value {
-            ShellType::Bash => "bash",
-            ShellType::Fish => "fish",
-            ShellType::Zsh => "zsh",
-            ShellType::PowerShell => "powershell",
-            ShellType::Elvish => "elvish",
-        }
-    }
-}
-
-impl Default for ShellType {
-    fn default() -> Self {
-        get_shell().unwrap_or(ShellType::Zsh)
     }
 }
 

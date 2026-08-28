@@ -34,6 +34,12 @@ quiet/verbose sections, conflicts, profile hints, and stdout/stderr routing.
 
 ## App install (`shine app install <category>`)
 
+Phase 2 Core extraction owns App manifest/schema types, transforms, hashes, persistence, and normal
+managed-file effects in `shine-core`. `CoreRuntime` also provides a host-neutral prepared App
+executor used by the Core-only harness; it loads the manifest before mutation, maps Contract v1,
+and preserves target isolation. CLI compatibility adapters continue to render the established
+events while remaining orchestration is migrated behind that executor.
+
 `cli/src/apps/mod.rs` orchestrates:
 
 1. **Metadata** — `apps/metadata.rs` parses `presets/app/<category>/shine.toml` (category `dest`,
@@ -222,6 +228,10 @@ the richer `SHINE_APP_*` + `[env]` artifact contract used by `build`/`teardown`.
 
 ## Shell install / uninstall
 
+The Shell source/deployment model, canonical target parser, external mode, and versioned manifest
+are Core-owned. The CLI deployment module consumes those types while retaining the current
+distribution adapter for embedded `rust-embed` assets and terminal presentation.
+
 Embedded install extracts assets, links executables into `~/.shine/bin/` (`bin_links.rs`), and
 appends a sentinel-guarded PATH block to the shell config (`shells/profile.rs`). Uninstall removes
 only Shine-managed symlinks/files and deletes the sentinel block precisely.
@@ -250,6 +260,11 @@ to the normal sealed-source compiler, then writes the standalone plaintext resul
 owner-only file on Unix. Export never edits or removes the workspace definition or source files.
 
 ## Sys bootstrap (`shine sys bootstrap`)
+
+Sys driver/status types, receipts, resource outcomes, and `sys-manifest.toml` are Core-owned.
+`CoreRuntime` has an in-memory managed-file apply/remove executor that shares App file ownership
+primitives; platform-specific split-DNS/bootstrap/profile orchestration remains on the active Phase
+2 migration path and does not expand Lifecycle Contract v1.
 
 Selection resolves explicit ordered items, a named selection profile, or the existing
 interactive/default path through `sys/selection.rs`. Explicit items accept only `mode = "init"`,

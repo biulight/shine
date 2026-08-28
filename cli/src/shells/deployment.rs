@@ -2,125 +2,12 @@ use super::metadata::{ShellCategory, ShellFile};
 use crate::config::{Config, ExternalShellMode};
 use crate::env::EnvConfig;
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
-
-const MANIFEST_FILE: &str = "shell-manifest.toml";
-pub(crate) const SHELL_MANIFEST_SCHEMA_VERSION: u32 = 1;
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct ShellManifestEntry {
-    pub category: String,
-    pub command: String,
-    pub mode: ExternalShellMode,
-    pub source_path: PathBuf,
-    pub rendered_path: PathBuf,
-    pub runtime: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bun_dependencies: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dependency_hash: Option<u64>,
-    #[serde(default)]
-    pub transforms: Vec<String>,
-    #[serde(default)]
-    pub env: Vec<String>,
-    #[serde(default)]
-    pub needs_source: bool,
-    pub content_hash: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct ShellManifest {
-    #[serde(default = "legacy_manifest_schema_version")]
-    pub(crate) schema_version: u32,
-    #[serde(default)]
-    pub entries: Vec<ShellManifestEntry>,
-}
-
-fn legacy_manifest_schema_version() -> u32 {
-    0
-}
-
-impl Default for ShellManifest {
-    fn default() -> Self {
-        Self {
-            schema_version: SHELL_MANIFEST_SCHEMA_VERSION,
-            entries: Vec::new(),
-        }
-    }
-}
-
-impl ShellManifest {
-    pub(crate) async fn load(config: &Config) -> Result<Self> {
-        let mut manifest: Self = crate::persist::load_toml_or_default(
-            &config.shine_dir().join(MANIFEST_FILE),
-            "shell manifest",
-        )
-        .await?;
-        match manifest.schema_version {
-            0 => manifest.schema_version = SHELL_MANIFEST_SCHEMA_VERSION,
-            SHELL_MANIFEST_SCHEMA_VERSION => {}
-            version => bail!(
-                "shell manifest schema version {version} is newer than this Shine supports ({SHELL_MANIFEST_SCHEMA_VERSION})"
-            ),
-        }
-        Ok(manifest)
-    }
-
-    pub(crate) async fn save(&self, config: &Config) -> Result<()> {
-        if self.schema_version != SHELL_MANIFEST_SCHEMA_VERSION {
-            bail!(
-                "cannot write shell manifest schema version {}; expected {SHELL_MANIFEST_SCHEMA_VERSION}",
-                self.schema_version
-            );
-        }
-        crate::persist::save_toml_atomic(
-            self,
-            &config.shine_dir().join(MANIFEST_FILE),
-            "shell manifest",
-        )
-        .await
-    }
-
-    pub(crate) fn find(&self, target: &str) -> Option<&ShellManifestEntry> {
-        self.entries
-            .iter()
-            .find(|entry| canonical_target(entry) == target)
-    }
-
-    pub(crate) fn replace_categories(
-        &mut self,
-        categories: &BTreeSet<String>,
-        entries: Vec<ShellManifestEntry>,
-    ) {
-        self.entries
-            .retain(|entry| !categories.contains(&entry.category));
-        self.entries.extend(entries);
-        self.entries.sort_by_key(canonical_target);
-    }
-
-    pub(crate) fn remove_category(&mut self, category: &str) {
-        self.entries.retain(|entry| entry.category != category);
-    }
-
-    pub(crate) fn remove_target(&mut self, category: &str, command: &str) {
-        self.entries
-            .retain(|entry| entry.category != category || entry.command != command);
-    }
-
-    fn replace_targets(&mut self, targets: &BTreeSet<String>, entries: Vec<ShellManifestEntry>) {
-        self.entries
-            .retain(|entry| !targets.contains(&canonical_target(entry)));
-        self.entries.extend(entries);
-        self.entries.sort_by_key(canonical_target);
-    }
-}
-
-fn canonical_target(entry: &ShellManifestEntry) -> String {
-    format!("shell/{}/{}", entry.category, entry.command)
-}
+#[cfg(test)]
+use utils::runtime::{SHELL_MANIFEST_FILE as MANIFEST_FILE, SHELL_MANIFEST_SCHEMA_VERSION};
+pub(crate) use utils::runtime::{ShellManifest, ShellManifestEntry};
 
 pub(crate) fn deployment_source_path(
     config: &Config,

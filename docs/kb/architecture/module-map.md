@@ -15,6 +15,9 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/build.rs` | `rust-embed` rebuild trigger for `presets/` |
 | `utils/` | Reusable `shine-core` package with no CLI/Tauri dependency |
 | `utils/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
+| `utils/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
+| `utils/src/install/` | Core-owned transforms, EOL handling, App manifest, and host-neutral managed-file operations |
+| `utils/src/persist.rs` | Core-owned atomic persistence and versioned TOML helpers |
 | `presets/` | Embedded shell, app, and OS bootstrap assets |
 | `skills/shine-preset-author/` | Portable AI workflow and kind-specific preset author references |
 | `docs/manual/` | Default English public manual |
@@ -41,7 +44,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/platform.rs` | Platform classification shared across command domains |
 | `cli/src/privilege.rs` | Cross-platform administrator/elevation orchestration |
 | `cli/src/proc.rs` | Small domain-neutral subprocess helpers |
-| `cli/src/persist.rs` | Shared safe persistence helpers |
+| `cli/src/persist.rs` | Compatibility re-export of Core persistence helpers |
 | `cli/src/shell_quote.rs` | Copy-paste-safe shell argument rendering |
 | `cli/src/version.rs` | Version string formatting |
 
@@ -90,9 +93,8 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/apps/build.rs` | Explicit artifact apply/remove and uninstall teardown |
 | `cli/src/apps/json_merge.rs` | Managed-key JSON merge strategy |
 | `cli/src/install_core/file_ops.rs` | Copy, backup, restore, privileged filesystem operations |
-| `cli/src/install_core/manifest.rs` | `app-manifest.toml` model and persistence |
-| `cli/src/install_core/transforms/` | `jsonc-to-json`, `template`, EOL helpers |
-| `cli/src/install_core/line_endings.rs` | Shared EOL detection, normalization, and comparison |
+| `cli/src/install_core/manifest.rs` | Compatibility re-export of Core-owned `app-manifest.toml` types |
+| `utils/src/install/` | App manifest, file ownership primitives, `jsonc-to-json`/`template`, and EOL helpers |
 
 `install_core` contains app/sys-shared primitives only; `sys` depends on it, not on app-specific
 logic.
@@ -102,7 +104,7 @@ logic.
 | Path | Responsibility |
 |---|---|
 | `cli/src/shells/mod.rs` | Shell types, shared accessors, handler re-exports |
-| `cli/src/shells/deployment.rs` | Embedded/external snapshot/live deployment and versioned `shell-manifest.toml` |
+| `cli/src/shells/deployment.rs` | Embedded/external snapshot/live orchestration using Core-owned Shell models and manifest |
 | `cli/src/shells/install.rs` | Category/command install, read-only pending assessment, and installed-shell upgrade results |
 | `cli/src/shells/uninstall.rs` | Category/command uninstall results with sibling/cache and foreign-launcher protection |
 | `cli/src/shells/links.rs` | Launcher/link specifications and conflict reporting |
@@ -124,7 +126,7 @@ logic.
 | `cli/src/sys/managed.rs` | Managed-resource apply/update/remove/upgrade and structured result adapters |
 | `cli/src/sys/model.rs` | Sys manifest and runtime outcome models |
 | `cli/src/sys/manifest.rs` | Preset parsing and validation |
-| `cli/src/sys/run_manifest.rs` | Versioned `sys-manifest.toml` container for bootstrap/profile state and managed receipts |
+| `cli/src/sys/run_manifest.rs` | Compatibility re-export of Core-owned Sys manifest and receipt state |
 | `cli/src/sys/selection.rs` | Positional/profile/interactive item selection |
 | `cli/src/sys/execution.rs` | Bootstrap reporting and proxy environment |
 | `cli/src/sys/render.rs` | System command presentation helpers |

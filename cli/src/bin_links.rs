@@ -24,12 +24,7 @@ const SHIM_TARGET_PREFIX: &str = "# shine-target: ";
 /// shim pointing directly at the script. `Bun` wraps the script in a generated
 /// launcher that runs `bun <script> "$@"` — a real regular file on Unix (not a
 /// symlink) carrying the managed marker, and a Bun shim on Windows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LinkRuntime {
-    #[default]
-    Native,
-    Bun,
-}
+pub use utils::runtime::LinkRuntime;
 
 /// Whether an existing on-disk launcher/shim is a current, stale, or foreign file.
 ///

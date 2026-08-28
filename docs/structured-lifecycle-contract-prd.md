@@ -238,8 +238,9 @@ The Roadmap Phase 1 acceptance gate is complete when:
 7. **Complete:** repository-wide built-in Preset validation and App, external snapshot Shell, and
    fake-OS managed Sys install → update → upgrade → uninstall acceptance chains close the broader
    Roadmap Phase 1 gate, including targeted ownership isolation and safe result serialization.
-8. **Pending / Phase 2:** move reusable executors and host abstractions behind `shine-core` without
-   changing Contract v1.
+8. **In progress / Phase 2:** reusable executors and host abstractions are moving behind
+   `shine-core` without changing Contract v1; the implementation contract is
+   [shine-core-runtime-prd.md](shine-core-runtime-prd.md).
 
 ## 11. Documentation impact
 

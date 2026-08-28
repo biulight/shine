@@ -11,58 +11,12 @@ use tokio::fs;
 
 use crate::preset_validation::PresetValidationFailure;
 
-#[derive(Debug, Clone)]
-pub struct ShellCategory {
-    pub name: String,
-    pub description: Option<String>,
-    pub files: Vec<ShellFile>,
-    // Tracks whether the category came from an explicit metadata file vs. auto-collection;
-    // reserved for future upgrade/list logic, mirroring AppCategory::uses_metadata.
-    #[allow(dead_code)]
-    pub uses_metadata: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ShellFile {
-    pub source_rel: PathBuf,
-    pub command_name: String,
-    pub description: Vec<String>,
-    pub needs_source: bool,
-    /// How the command is invoked: native (symlink/shim) or via the `bun` runtime.
-    pub runtime: crate::bin_links::LinkRuntime,
-    /// Declared install-time transforms (e.g. `["template"]`) applied to the source
-    /// before linking. Empty means "no metadata-declared transform" — native scripts
-    /// may still opt into templating via the `# shine-template: true` annotation.
-    pub transforms: Vec<String>,
-    /// Runtime environment values injected into a Bun launcher via `Bun.env`,
-    /// using the `env run --with` grammar (ordered). Empty for native entries;
-    /// only `runtime = "bun"` entries may declare it (enforced at metadata load).
-    pub env: Vec<crate::env::EnvVarSpec>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ShellTarget<'a> {
-    pub category: &'a str,
-    pub command: Option<&'a str>,
-}
+pub use utils::runtime::{ShellCategory, ShellFile};
 
 /// Parse the scoped shell lifecycle grammar: `category` or `category/command`.
 /// Bare command aliases remain inspection-only so mutation targets stay unambiguous.
-pub fn parse_lifecycle_target(target: &str) -> Result<ShellTarget<'_>> {
-    let target = target.trim();
-    if target.is_empty() {
-        bail!("shell preset target must not be empty");
-    }
-    let mut parts = target.split('/');
-    let category = parts.next().unwrap_or_default();
-    let command = parts.next();
-    if category.is_empty() || command.is_some_and(str::is_empty) || parts.next().is_some() {
-        bail!(
-            "invalid shell preset target `{target}`; expected <category> or <category>/<command>"
-        );
-    }
-    Ok(ShellTarget { category, command })
-}
+pub use utils::runtime::ShellTarget;
+pub use utils::runtime::parse_shell_lifecycle_target as parse_lifecycle_target;
 
 /// Select and validate one shell lifecycle target from the active preset namespace.
 pub async fn load_active_target(

@@ -8,6 +8,9 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tokio::fs;
+pub use utils::install::file_ops::{
+    InstallOutcome, UninstallOutcome, backup_path, install_bytes, uninstall_entry,
+};
 
 /// Cross-process advisory lock serialising privileged (sudo) filesystem
 /// mutations. `nextest` runs each test in its own OS process, so an
@@ -47,38 +50,6 @@ pub async fn admin_lock() -> Result<AdminLockGuard> {
     }
 }
 
-#[derive(Debug)]
-pub enum InstallOutcome {
-    Installed { hash: u64 },
-    AlreadyManaged,
-    BackedUpAndInstalled { backup: PathBuf, hash: u64 },
-    DryRun,
-}
-
-#[derive(Debug)]
-pub enum UninstallOutcome {
-    Removed,
-    RestoredBackup { backup: PathBuf },
-    ForceRemoved,
-    ForceRestoredBackup { backup: PathBuf },
-    NotFound,
-    UserModified,
-    DryRun,
-}
-
-pub async fn install_bytes(
-    content: &[u8],
-    destination: &Path,
-    is_managed: bool,
-    dry_run: bool,
-    force: bool,
-) -> Result<InstallOutcome> {
-    if dry_run {
-        return Ok(InstallOutcome::DryRun);
-    }
-    install_bytes_impl(content, destination, is_managed, force).await
-}
-
 pub async fn install_bytes_admin(
     content: &[u8],
     destination: &Path,
@@ -90,7 +61,7 @@ pub async fn install_bytes_admin(
         return Ok(InstallOutcome::DryRun);
     }
     if !cfg!(unix) || std::env::var("USER").is_ok_and(|user| user == "root") {
-        return install_bytes_impl(content, destination, is_managed, force).await;
+        return install_bytes(content, destination, is_managed, false, force).await;
     }
     let _lock = admin_lock().await?;
     if !crate::privilege::ensure_admin(1).await? {
@@ -193,101 +164,6 @@ pub fn sudo_command() -> tokio::process::Command {
     command
 }
 
-async fn install_bytes_impl(
-    content: &[u8],
-    destination: &Path,
-    is_managed: bool,
-    force: bool,
-) -> Result<InstallOutcome> {
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("failed to create directory: {}", parent.display()))?;
-    }
-
-    let hash = hash_content(content);
-
-    if destination.exists() {
-        if is_managed {
-            let existing = fs::read(destination).await.unwrap_or_default();
-            if !force && hash_content(&existing) == hash {
-                return Ok(InstallOutcome::AlreadyManaged);
-            }
-            fs::write(destination, content)
-                .await
-                .with_context(|| format!("failed to overwrite: {}", destination.display()))?;
-            return Ok(InstallOutcome::Installed { hash });
-        }
-
-        let backup = backup_path(destination);
-        fs::rename(destination, &backup).await.with_context(|| {
-            format!(
-                "failed to back up {} to {}",
-                destination.display(),
-                backup.display()
-            )
-        })?;
-        fs::write(destination, content)
-            .await
-            .with_context(|| format!("failed to install to: {}", destination.display()))?;
-        return Ok(InstallOutcome::BackedUpAndInstalled { backup, hash });
-    }
-
-    fs::write(destination, content)
-        .await
-        .with_context(|| format!("failed to install to: {}", destination.display()))?;
-    Ok(InstallOutcome::Installed { hash })
-}
-
-pub async fn uninstall_entry(
-    entry: &AppEntry,
-    dry_run: bool,
-    force: bool,
-) -> Result<UninstallOutcome> {
-    if dry_run {
-        return Ok(UninstallOutcome::DryRun);
-    }
-
-    if !entry.destination.exists() {
-        return Ok(UninstallOutcome::NotFound);
-    }
-
-    let current = fs::read(&entry.destination)
-        .await
-        .with_context(|| format!("reading: {}", entry.destination.display()))?;
-    let user_modified = hash_content(&current) != entry.content_hash;
-    if user_modified && !force {
-        return Ok(UninstallOutcome::UserModified);
-    }
-
-    fs::remove_file(&entry.destination)
-        .await
-        .with_context(|| format!("removing: {}", entry.destination.display()))?;
-
-    if let Some(backup) = &entry.backup
-        && backup.exists()
-    {
-        fs::rename(backup, &entry.destination)
-            .await
-            .with_context(|| format!("restoring backup: {}", backup.display()))?;
-        return Ok(if user_modified {
-            UninstallOutcome::ForceRestoredBackup {
-                backup: backup.clone(),
-            }
-        } else {
-            UninstallOutcome::RestoredBackup {
-                backup: backup.clone(),
-            }
-        });
-    }
-
-    Ok(if user_modified {
-        UninstallOutcome::ForceRemoved
-    } else {
-        UninstallOutcome::Removed
-    })
-}
-
 pub async fn uninstall_entry_admin(
     entry: &AppEntry,
     dry_run: bool,
@@ -350,11 +226,6 @@ pub async fn uninstall_entry_admin(
     } else {
         UninstallOutcome::Removed
     })
-}
-
-fn backup_path(dest: &Path) -> PathBuf {
-    let name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-    dest.with_file_name(format!("{name}.shine.bak"))
 }
 
 #[cfg(test)]

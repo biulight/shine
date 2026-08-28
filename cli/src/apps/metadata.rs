@@ -1,5 +1,6 @@
 use super::manifest::AppInstallStrategy;
 use crate::config::Config;
+#[cfg(test)]
 use crate::env::EnvVarSpec;
 use crate::platform::{OperatingSystem, current_platform};
 use crate::presets;
@@ -12,102 +13,10 @@ use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
 use crate::preset_validation::PresetValidationFailure;
-
-#[derive(Debug, Clone)]
-pub struct AppCategory {
-    pub name: String,
-    pub description: Option<String>,
-    pub destination_root: Option<String>,
-    pub files: Vec<AppFile>,
-    pub list_mode: AppListMode,
-    pub post_upgrade: Vec<AppHook>,
-    /// Hooks run after `shine app install` (including `--replace-managed`) when at least one file in
-    /// this category actually changed — the install-time counterpart to
-    /// `post_upgrade` (which only fires on `shine upgrade`).
-    pub post_install: Vec<AppHook>,
-    // Tracks whether the category came from an explicit metadata file vs. auto-collection;
-    // reserved for future upgrade/list logic.
-    #[allow(dead_code)]
-    pub uses_metadata: bool,
-    /// `true` when shine.toml has an explicit `[[files]]` section;
-    /// `false` for auto-collected files and legacy categories.
-    pub has_explicit_files: bool,
-    pub artifact: Option<AppArtifact>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AppListMode {
-    Category,
-    Files,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AppHook {
-    pub command: String,
-    pub args: Vec<String>,
-    /// Print this hook's stdout to the user when it succeeds. Defaults to
-    /// `false` (silent) — most hooks (e.g. `surge-cli reload`) have nothing
-    /// worth surfacing; opt in for hooks whose stdout is a deliberate note.
-    pub show_output: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ArtifactRuntime {
-    /// The script is executed directly (`Command::new(script)`), relying on its
-    /// shebang. Unix-only in practice — fine for macOS-only presets (e.g. surge).
-    #[default]
-    Native,
-    /// The script is run via `bun <script>`, so it works on macOS/Windows/Linux
-    /// (like shine's bun shell presets). `bun` is an external prerequisite.
-    Bun,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AppArtifact {
-    pub script: String,
-    /// Optional companion script that reverses `script`'s side-effects. Run
-    /// explicitly via `shine app artifact remove <id>` and implicitly (best-effort)
-    /// during `shine app uninstall`. Shares `build`'s full env contract.
-    pub teardown: Option<String>,
-    /// How `script`/`teardown` are launched. `Bun` makes the artifact
-    /// cross-platform; `Native` execs the file directly (Unix-only).
-    pub runtime: ArtifactRuntime,
-}
-
-#[derive(Debug, Clone)]
-pub struct AppFile {
-    pub source_rel: PathBuf,
-    pub target_rel: PathBuf,
-    /// Optional per-file destination root. When present, this overrides the
-    /// category-level `dest` while retaining the same path validation rules.
-    pub destination_root: Option<AppDestinationRoot>,
-    pub description: Option<String>,
-    pub display_name: Option<String>,
-    pub legacy_dest_annotation: Option<String>,
-    pub transforms: Vec<String>,
-    pub install_strategy: AppInstallStrategy,
-    pub requires_admin: bool,
-    pub restart_hint: Option<String>,
-    pub generator: Option<AppGenerator>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppDestinationRoot {
-    Path(String),
-    DataDir(PathBuf),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AppGenerator {
-    pub script: PathBuf,
-    pub runtime: ArtifactRuntime,
-    pub env: Vec<EnvVarSpec>,
-    pub when_env: String,
-    /// Whether read-oriented status checks and `shine upgrade` may run this
-    /// generator implicitly. Install (including `--replace-managed`) and `app refresh` ignore
-    /// this switch. Defaults to true for compatibility with existing presets.
-    pub auto: bool,
-}
+pub use utils::runtime::{
+    AppArtifact, AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
+    ArtifactRuntime,
+};
 
 #[derive(Debug, Deserialize)]
 struct CategoryToml {

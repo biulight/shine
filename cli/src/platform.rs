@@ -1,28 +1,6 @@
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum OperatingSystem {
-    Macos,
-    Linux,
-    Windows,
-}
-
-impl OperatingSystem {
-    pub(crate) const ALL: [Self; 3] = [Self::Macos, Self::Linux, Self::Windows];
-
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Macos => "macos",
-            Self::Linux => "linux",
-            Self::Windows => "windows",
-        }
-    }
-
-    pub(crate) const fn is_unix(self) -> bool {
-        matches!(self, Self::Macos | Self::Linux)
-    }
-}
+pub(crate) use utils::runtime::RuntimePlatform as OperatingSystem;
 
 pub fn executable_name_for_os(os: &str) -> &'static str {
     if os == "windows" {
@@ -37,12 +15,7 @@ pub fn current_executable_name() -> &'static str {
 }
 
 pub(crate) fn current_platform() -> OperatingSystem {
-    match std::env::consts::OS {
-        "macos" => OperatingSystem::Macos,
-        "linux" => OperatingSystem::Linux,
-        "windows" => OperatingSystem::Windows,
-        other => panic!("unsupported operating system: {other}"),
-    }
+    OperatingSystem::current()
 }
 
 pub fn release_target(os: &str, arch: &str) -> Result<String> {

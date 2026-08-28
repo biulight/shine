@@ -1547,9 +1547,14 @@ version = "1.8.0"
 dependencies = [
  "anyhow",
  "directories",
+ "jsonc-parser",
  "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
  "toml",
  "toml_edit",
+ "uuid",
 ]
 
 [[package]]

@@ -5,6 +5,15 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **Core runtime domain logic receives captured inputs, never ambient user state.** Runtime
+  contexts carry home, Shine roots, platform, environment, and an immutable preset snapshot.
+  In-memory lifecycle tests must not fall back to the real HOME, process, network, or administrator
+  state. Distribution-only embedded assets enter through the frontend snapshot adapter.
+- **A host abstraction does not weaken ownership checks.** Real and in-memory managed-file paths
+  share the same content hash, backup suffix, receipt, user-modification preservation, and
+  manifest-version gates. Adding a new host operation must retain those checks rather than treating
+  a successful write primitive as ownership evidence.
+
 - **Reusable lifecycle results contain identities and codes, never payloads.** Structured outcomes
   may record canonical targets, logical resource names, status, effects, and stable diagnostic
   codes. They must not copy raw errors/logs, source or destination content, environment or secret

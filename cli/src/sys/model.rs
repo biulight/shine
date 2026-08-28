@@ -2,7 +2,7 @@
 //! under `presets/sys/<os>/`), selection results, and run-outcome types shared
 //! across `sys::execution`, `sys::selection`, `sys::profile`, and `sys::manifest`.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -143,14 +143,7 @@ pub(super) enum SysShellKind {
     Powershell,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub(super) enum SysDriverKind {
-    #[default]
-    Script,
-    SplitDns,
-    ManagedFile,
-}
+pub(super) use utils::runtime::SysDriverKind;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -188,17 +181,7 @@ pub(super) struct ResolvedSelection {
     pub(super) source: SelectionSource,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub(super) enum SysItemStatus {
-    Installed,
-    AlreadyInstalled,
-    Skipped,
-    Updated,
-    NeedsAction,
-    Completed,
-    Failed,
-}
+pub(super) use utils::runtime::SysItemStatus;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SysItemOutcome {
