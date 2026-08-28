@@ -116,7 +116,7 @@ shine serve status
 shine serve url app/surge/custom-rules.sgmodule
 ```
 
-`shine serve install` 当前只支持 macOS 用户服务；其它环境可用 `shine serve start` 在前台运行。服务只发布 `~/.shine/http/` 下的文件，资源不存在时应先运行对应的 `shine app artifact apply <APP_ID>`。
+`shine serve install` 在 macOS 使用 launchd、在 Linux 使用 systemd user unit、在 Windows 使用当前用户的计划任务。服务只发布 `~/.shine/http/`（或当前 `--config-dir`）下的文件，资源不存在时应先运行对应的 `shine app artifact apply <APP_ID>`。
 
 请不要把敏感文件放入 `~/.shine/http/`。服务绑定在 `127.0.0.1`，但没有额外认证。
 

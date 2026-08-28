@@ -23,7 +23,9 @@ deleting unrelated files.
 
 **Give personal automation a reviewable lifecycle.**
 
-This manual applies to **Shine 1.7.0**.
+This manual applies to **Shine 1.8.0**.
+
+[![The three core values of Shine: repeatable deployment, one entry point for personal developer resources, and a reviewable lifecycle for Shine-managed content.](/img/shine-core-values-en.webp)](/img/shine-core-values-en.webp)
 
 ## What Shine helps you do
 
@@ -32,6 +34,8 @@ This manual applies to **Shine 1.7.0**.
   transforms, or merges each file where its application expects it.
 - **Keep each machine's values on that machine.** A preset declares the keys it needs; you provide
   the values locally.
+- **Give encrypted credentials only to commands that need them.** Seal tokens and other sensitive
+  project values as GPG or age ciphertext, then decrypt them on demand for selected child processes.
 - **Look before you update.** By default, inspect what changed first; Shine applies it only when you
   choose to upgrade.
 - **Remove only what Shine installed.** Your source folder and unrelated files stay in place.
@@ -61,21 +65,26 @@ cleanup, or document printing in the same way. Each command still needs its appl
 on the machine. See [custom presets](./guides/custom-presets.md) for the mechanism and the complete
 image workflow.
 
-## Keep plaintext secrets out of AI agent workspaces
+## Give credentials only to commands that need them
 
-AI coding agents such as Claude Code and Codex can read workspace files, run commands, and inspect
-their output. Shine can seal selected workspace secrets as commit-ready GPG or age ciphertext, then
-decrypt and inject them only into the child process that needs them:
+Credentials do not have to remain in workspace files or be exported across an entire shell session.
+For a CLI that repeatedly reads a fixed variable, Shine can install a transparent command wrapper
+that resolves an encrypted value only when that command runs:
 
 ```bash
-shine env secret seal
-shine env run --mode development -- bun run build
+shine env proxy install gh --with GH_TOKEN
+gh pr list
 ```
 
-This reduces the chance that plaintext secrets reach project files, logs, patches, or agent context.
-It is not a sandbox: a command that can inspect its environment can still read the injected values.
-See [protect environment secrets when using AI agents](./guides/agent-secret-safety.md) for the
-workflow and its security boundaries.
+The wrapper prefers encrypted `GH_TOKEN_SECRET`, injects the result only into its child, and does not
+export it back to the parent shell. For an occasional sensitive operation, use one-time
+`shine env run --with ... -- <command>` injection instead of keeping a wrapper enabled. See
+[manage environment variables and secrets](./guides/environment.md) to choose between the two.
+
+This also reduces the chance that plaintext secrets reach files, logs, patches, or AI agent context,
+but it is not a sandbox: the target command and its descendants can still read injected values. See
+[protect environment secrets when using AI agents](./guides/agent-secret-safety.md) for the complete
+workflow and security boundaries.
 
 ## Use the same toolkit for more than files
 
@@ -91,6 +100,7 @@ third-party tool versions; see [system initialization](./guides/system-init.md) 
 3. Browse the [built-in presets](./reference/built-in-presets.md) to see what you can use now.
 4. Continue with [shell presets](./guides/shell-presets.md),
    [application presets](./guides/app-presets.md),
+   [environment variables and secrets](./guides/environment.md),
    [system initialization](./guides/system-init.md),
    [terminal theme synchronization](./guides/terminal-theme-sync.md),
    [tasks and the local service](./guides/tasks-and-serve.md), or

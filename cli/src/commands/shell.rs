@@ -17,6 +17,9 @@ pub enum ShellCommands {
         /// Run 'shine shell list' to see available categories.
         #[arg(value_name = "TARGET")]
         target: Option<String>,
+        /// Print what would be linked without making any changes
+        #[arg(long)]
+        dry_run: bool,
         /// Replace user-modified managed files, links, and profile integration
         #[arg(long)]
         replace_managed: bool,

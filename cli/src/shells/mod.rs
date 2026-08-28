@@ -10,9 +10,10 @@ mod uninstall;
 #[doc(hidden)]
 pub use deployment::handle_render_live;
 pub use install::{
-    handle_completion_install, handle_init_template, handle_install, handle_upgrade_installed,
-    handle_upgrade_installed_target,
+    handle_completion_install, handle_init_template, handle_install, handle_install_dry_run,
+    handle_upgrade_installed, handle_upgrade_installed_target,
 };
+pub(crate) use metadata::validate_preset_category;
 #[doc(hidden)]
 pub use report::handle_list_with_presets_note;
 pub use report::{ShellUpgradeReport, handle_info, handle_list};

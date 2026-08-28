@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Command reference
 
-This page reflects Shine 1.7.0. Use `--help` on any subcommand for the exact interface of the
+This page reflects Shine 1.8.0. Use `--help` on any subcommand for the exact interface of the
 installed version.
 
 ## 1.0 target rules
@@ -61,7 +61,7 @@ directory temporarily.
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--replace-managed]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed]
 shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run]
 
 shine app list
@@ -76,6 +76,10 @@ shine app artifact remove <APP_ID>
 `--replace-managed` overwrites managed content modified after installation; inspect
 `shine info <TARGET> --diff` first. `app uninstall --force` deletes user-modified managed files, so
 preview with `--dry-run`.
+
+`shell install --dry-run` resolves metadata, deployment sources, Bun policy, and intended command
+links, but does not extract or snapshot presets, render templates, create links, write a manifest,
+or edit shell profiles.
 
 `app refresh` handles only generated files tracked by the manifest and preserves the last successful
 content on failure. Artifact apply/remove explicitly runs an external integration declared by the
@@ -144,7 +148,8 @@ an independent managed item.
 ## Preset sources and customization
 
 ```text
-shine preset new <app|shell> [--force]
+shine preset new <app|shell|sys> [--force]
+shine preset validate [PATH] [--format <text|json>]
 shine preset export [DIR] [--force]
 shine preset copy <app|shell|sys>/<NAME> [--force]
 shine preset link <PATH> [--create] [--live]
@@ -157,7 +162,15 @@ shine preset pull
 
 `preset copy` copies one complete built-in category for a partial overlay; `preset export` exports the
 full collection. External shell presets use snapshots by default and require `shine upgrade` after
-source changes. `--live` is for preset development. See [Customize presets](../guides/custom-presets.md).
+source changes. `--live` is for preset development.
+
+`preset validate` accepts a preset repository root, an `app|shell|sys/<name>` category, or its
+`shine.toml`; the path defaults to the current directory. It statically checks every declared
+platform branch and referenced file without loading the active preset source, initializing Shine
+configuration, checking for updates, accessing the network, or running preset code. Invalid input
+or categories exit with status 1; warnings do not. JSON output uses `schema_version: 1` and contains
+no colors or explanatory text outside the JSON document. See
+[Customize presets](../guides/custom-presets.md).
 
 ## Environment values and secrets
 
@@ -225,8 +238,8 @@ shine theme sync [--auto] [--quiet]
 ```
 
 Tasks store and execute argument arrays without a shell. `--cwd` fixes the working directory; without
-it the caller's directory is used. `serve install` currently supports a macOS user service only;
-`start` runs the local service in the foreground.
+it the caller's directory is used. `serve install` uses launchd on macOS, a systemd user unit on
+Linux, and a current-user scheduled task on Windows; `start` runs the local service in the foreground.
 
 ## SSH, secret brokering, and transfer
 
@@ -251,5 +264,5 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-Stable `shine --version` output is `shine 1.7.0 (<commit> <date>)`; preview builds use a label such as
-`1.7.0-preview`.
+Stable `shine --version` output is `shine 1.8.0 (<commit> <date>)`; preview builds use a label such as
+`1.8.0-preview`.

@@ -16,6 +16,32 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
    re-embeds changed assets.
 6. For a user-visible preset change, update the matching English and Simplified Chinese manual
    pages in the same change.
+7. Run `shine preset validate <path> --format json` before runtime-specific checks. It validates
+   repository roots, category directories, and manifests without loading config or executing code.
+8. After changing a built-in App destination or App/Shell file selector, run
+   `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`
+   and commit both regenerated public-manual blocks.
+
+## AI authoring boundary
+
+`skills/shine-preset-author/` is the portable author workflow. Keep `SKILL.md` concise and route to
+only one of `references/app.md`, `references/shell.md`, or `references/sys.md`. The skill must treat
+the installed CLI as authoritative: check `preset validate --help`, scaffold with `preset new` or
+`preset copy`, require JSON validation, and run only isolated dry-runs under a temporary
+`SHINE_CONFIG_DIR`. It must never link a source/overlay, activate a preset, or run real install,
+upgrade, bootstrap, hook, generator, or artifact actions.
+
+`cli/src/preset_validation.rs` owns path discovery and the schema-v1 report. Domain rules stay with
+`apps/metadata.rs`, `shells/metadata.rs`, and `sys/manifest.rs` so runtime and static validation do
+not become independent schemas. The validator is routed before `Config::load_or_init()` and must
+remain free of config initialization, update checks, process execution, network access, and writes.
+Validate the effective `macos`, `linux`, and `windows` branches on every host, including any
+declared `unix` compatibility fallback. New diagnostic codes are API surface; keep them stable
+within schema version 1.
+
+The skill directory is distributed in the crate but is not embedded as runtime presets. Validate
+its Agent Skills frontmatter and directory-name parity after edits. See
+[ADR 0033](decisions/0033-skill-first-ai-preset-authoring.md).
 
 ## Shell preset category
 
@@ -35,8 +61,8 @@ needs_source = false
   is present, Shine can parse the leading `# ` comment block immediately after the shebang.
 - `needs_source = true` exposes a shell function instead of a direct launcher; use it only when the
   command must mutate the parent shell.
-- `platforms = ["unix"]` or `platforms = ["windows"]` can select platform-specific files for the
-  same command name.
+- `platforms` accepts exact `macos`, `linux`, and `windows` selectors; `unix` is the compatibility
+  group for macOS and Linux. Exact and group selectors are ORed, and an empty array is invalid.
 - Only `[[files]]` entries become commands. Sibling helper modules are deployment material, not
   activation receipts.
 
@@ -84,8 +110,8 @@ independent and may be combined. See
 
 ### Shell verification
 
-`shell install` has real side effects. For an isolated lifecycle check, copy the category into the
-temporary external preset tree first:
+For an isolated plan check, copy the category into a temporary external preset tree and use the
+side-effect-free install dry-run:
 
 ```bash
 cargo build --target-dir target
@@ -93,11 +119,12 @@ cargo run --target-dir target -- shell list
 cargo run --target-dir target -- shell info <category>
 mkdir -p .tmp-home/.shine/presets/shell
 cp -R presets/shell/<category> .tmp-home/.shine/presets/shell/
-env SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine cargo run --target-dir target -- shell install <category>
-env SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine cargo run --target-dir target -- shell uninstall <category> --dry-run
+env SHINE_CONFIG_DIR=$PWD/.tmp-home/.shine cargo run --target-dir target -- shell install <category> --dry-run
 ```
 
-Add targeted metadata, launcher, and install/uninstall round-trip tests for new behavior.
+The dry-run validates deployment inputs and prints intended links without extracting, snapshotting,
+rendering, linking, recording a manifest, or editing profiles. Add targeted metadata, launcher, and
+install/uninstall round-trip tests for new behavior.
 
 ## App preset category
 

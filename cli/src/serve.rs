@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 use tokio::fs;
@@ -11,6 +12,8 @@ use crate::config::Config;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
 const LAUNCHD_LABEL: &str = "top.biulight.shine.http";
+const SYSTEMD_UNIT: &str = "shine-http.service";
+const WINDOWS_TASK: &str = "Shine HTTP Server";
 const MAX_HEADER_BYTES: usize = 8192;
 /// Bounds how long a single connection may take end-to-end (read request + write
 /// response), so a slow-loris style local client can't hold a task open forever.
@@ -27,13 +30,24 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 // See docs/kb/architecture/invariants.md § Local HTTP server.
 
 pub async fn handle_install(config: &Config, port: u16) -> Result<()> {
-    ensure_macos_service_support()?;
-
     let root = http_root(config);
     fs::create_dir_all(&root)
         .await
         .with_context(|| format!("creating {}", root.display()))?;
 
+    match std::env::consts::OS {
+        "macos" => install_launchd(config, port).await?,
+        "linux" => install_systemd(config, port).await?,
+        "windows" => install_windows_task(config, port).await?,
+        os => bail!("shine serve install is not supported on {os}"),
+    }
+
+    println!("Serving {}", root.display());
+    println!("URL base: http://{DEFAULT_HOST}:{port}/");
+    Ok(())
+}
+
+async fn install_launchd(config: &Config, port: u16) -> Result<()> {
     let plist_path = launchd_plist_path(config);
     let parent = plist_path
         .parent()
@@ -48,7 +62,7 @@ pub async fn handle_install(config: &Config, port: u16) -> Result<()> {
         .with_context(|| format!("creating {}", log_dir.display()))?;
 
     let executable = service_executable(config)?;
-    let plist = launchd_plist(&executable, port, &log_dir);
+    let plist = launchd_plist(&executable, config.shine_dir(), port, &log_dir);
     fs::write(&plist_path, plist)
         .await
         .with_context(|| format!("writing {}", plist_path.display()))?;
@@ -58,8 +72,67 @@ pub async fn handle_install(config: &Config, port: u16) -> Result<()> {
     launchctl(&["load", "-w", &plist_arg]).await?;
 
     println!("Installed {LAUNCHD_LABEL}");
-    println!("Serving {}", root.display());
-    println!("URL base: http://{DEFAULT_HOST}:{port}/");
+    Ok(())
+}
+
+async fn install_systemd(config: &Config, port: u16) -> Result<()> {
+    let unit_path = systemd_unit_path(config);
+    let parent = unit_path
+        .parent()
+        .context("systemd unit path must have a parent directory")?;
+    fs::create_dir_all(parent)
+        .await
+        .with_context(|| format!("creating {}", parent.display()))?;
+
+    let executable = service_executable(config)?;
+    let unit = systemd_unit(&executable, config.shine_dir(), port)?;
+    fs::write(&unit_path, unit)
+        .await
+        .with_context(|| format!("writing {}", unit_path.display()))?;
+
+    systemctl(&["daemon-reload"]).await?;
+    systemctl(&["enable", SYSTEMD_UNIT]).await?;
+    systemctl(&["restart", SYSTEMD_UNIT]).await?;
+    println!("Installed {SYSTEMD_UNIT}");
+    Ok(())
+}
+
+async fn install_windows_task(config: &Config, port: u16) -> Result<()> {
+    let executable = service_executable(config)?;
+    let task_run = windows_task_command(&executable, config.shine_dir(), port)?;
+    if task_run.encode_utf16().count() > 261 {
+        bail!("Windows scheduled task command exceeds the 261-character schtasks limit");
+    }
+    let run_as = windows_current_user()?;
+    let _ = schtasks(&[
+        OsStr::new("/End"),
+        OsStr::new("/TN"),
+        OsStr::new(WINDOWS_TASK),
+    ])
+    .await;
+    schtasks(&[
+        OsStr::new("/Create"),
+        OsStr::new("/SC"),
+        OsStr::new("ONLOGON"),
+        OsStr::new("/TN"),
+        OsStr::new(WINDOWS_TASK),
+        OsStr::new("/TR"),
+        OsStr::new(&task_run),
+        OsStr::new("/RL"),
+        OsStr::new("LIMITED"),
+        OsStr::new("/RU"),
+        &run_as,
+        OsStr::new("/NP"),
+        OsStr::new("/F"),
+    ])
+    .await?;
+    schtasks(&[
+        OsStr::new("/Run"),
+        OsStr::new("/TN"),
+        OsStr::new(WINDOWS_TASK),
+    ])
+    .await?;
+    println!("Installed {WINDOWS_TASK}");
     Ok(())
 }
 
@@ -91,25 +164,66 @@ pub async fn handle_start(config: &Config, port: u16) -> Result<()> {
 }
 
 pub async fn handle_status(config: &Config) -> Result<()> {
-    ensure_macos_service_support()?;
+    match std::env::consts::OS {
+        "macos" => status_launchd(config).await,
+        "linux" => status_systemd(config).await,
+        "windows" => status_windows_task().await,
+        os => bail!("shine serve status is not supported on {os}"),
+    }
+}
 
+pub async fn handle_uninstall(config: &Config) -> Result<()> {
+    match std::env::consts::OS {
+        "macos" => uninstall_launchd(config).await,
+        "linux" => uninstall_systemd(config).await,
+        "windows" => uninstall_windows_task().await,
+        os => bail!("shine serve uninstall is not supported on {os}"),
+    }
+}
+
+async fn status_launchd(config: &Config) -> Result<()> {
     let plist_path = launchd_plist_path(config);
     if !plist_path.exists() {
         println!("Not installed");
         return Ok(());
     }
-
     match launchctl(&["list", LAUNCHD_LABEL]).await {
-        Ok(()) => println!("Installed and loaded"),
-        Err(_) => println!("Installed but not loaded"),
+        Ok(()) => println!("Installed and running"),
+        Err(_) => println!("Installed but not running"),
     }
     println!("Plist: {}", plist_path.display());
     Ok(())
 }
 
-pub async fn handle_uninstall(config: &Config) -> Result<()> {
-    ensure_macos_service_support()?;
+async fn status_systemd(config: &Config) -> Result<()> {
+    let unit_path = systemd_unit_path(config);
+    if !unit_path.exists() {
+        println!("Not installed");
+        return Ok(());
+    }
+    match systemctl(&["is-active", "--quiet", SYSTEMD_UNIT]).await {
+        Ok(()) => println!("Installed and running"),
+        Err(_) => println!("Installed but not running"),
+    }
+    println!("Unit: {}", unit_path.display());
+    Ok(())
+}
 
+async fn status_windows_task() -> Result<()> {
+    match schtasks(&[
+        OsStr::new("/Query"),
+        OsStr::new("/TN"),
+        OsStr::new(WINDOWS_TASK),
+    ])
+    .await
+    {
+        Ok(()) => println!("Installed"),
+        Err(_) => println!("Not installed"),
+    }
+    Ok(())
+}
+
+async fn uninstall_launchd(config: &Config) -> Result<()> {
     let plist_path = launchd_plist_path(config);
     if plist_path.exists() {
         let plist_arg = plist_path.to_string_lossy().to_string();
@@ -121,6 +235,49 @@ pub async fn handle_uninstall(config: &Config) -> Result<()> {
     } else {
         println!("Not installed");
     }
+    Ok(())
+}
+
+async fn uninstall_systemd(config: &Config) -> Result<()> {
+    let unit_path = systemd_unit_path(config);
+    if !unit_path.exists() {
+        println!("Not installed");
+        return Ok(());
+    }
+    systemctl(&["disable", "--now", SYSTEMD_UNIT]).await?;
+    fs::remove_file(&unit_path)
+        .await
+        .with_context(|| format!("removing {}", unit_path.display()))?;
+    systemctl(&["daemon-reload"]).await?;
+    println!("Uninstalled {SYSTEMD_UNIT}");
+    Ok(())
+}
+
+async fn uninstall_windows_task() -> Result<()> {
+    let query = schtasks(&[
+        OsStr::new("/Query"),
+        OsStr::new("/TN"),
+        OsStr::new(WINDOWS_TASK),
+    ])
+    .await;
+    if query.is_err() {
+        println!("Not installed");
+        return Ok(());
+    }
+    let _ = schtasks(&[
+        OsStr::new("/End"),
+        OsStr::new("/TN"),
+        OsStr::new(WINDOWS_TASK),
+    ])
+    .await;
+    schtasks(&[
+        OsStr::new("/Delete"),
+        OsStr::new("/TN"),
+        OsStr::new(WINDOWS_TASK),
+        OsStr::new("/F"),
+    ])
+    .await?;
+    println!("Uninstalled {WINDOWS_TASK}");
     Ok(())
 }
 
@@ -149,13 +306,6 @@ fn launchd_log_dir(config: &Config) -> PathBuf {
     config.shine_dir().join("run").join("http")
 }
 
-fn ensure_macos_service_support() -> Result<()> {
-    if !cfg!(target_os = "macos") {
-        bail!("shine serve install is currently supported on macOS only");
-    }
-    Ok(())
-}
-
 fn service_executable(config: &Config) -> Result<PathBuf> {
     if let Some(dest) = &config.self_install_dest {
         return Ok(dest.clone());
@@ -171,8 +321,9 @@ fn launchd_plist_path(config: &Config) -> PathBuf {
         .join(format!("{LAUNCHD_LABEL}.plist"))
 }
 
-fn launchd_plist(executable: &Path, port: u16, log_dir: &Path) -> String {
+fn launchd_plist(executable: &Path, shine_dir: &Path, port: u16, log_dir: &Path) -> String {
     let executable = xml_escape(&executable.display().to_string());
+    let shine_dir = xml_escape(&shine_dir.display().to_string());
     let out_log = xml_escape(&log_dir.join("serve.out.log").display().to_string());
     let err_log = xml_escape(&log_dir.join("serve.err.log").display().to_string());
     format!(
@@ -185,6 +336,8 @@ fn launchd_plist(executable: &Path, port: u16, log_dir: &Path) -> String {
   <key>ProgramArguments</key>
   <array>
     <string>{executable}</string>
+    <string>--config-dir</string>
+    <string>{shine_dir}</string>
     <string>serve</string>
     <string>start</string>
     <string>--port</string>
@@ -204,6 +357,100 @@ fn launchd_plist(executable: &Path, port: u16, log_dir: &Path) -> String {
     )
 }
 
+fn systemd_unit_path(config: &Config) -> PathBuf {
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| config.home_dir.join(".config"));
+    config_home.join("systemd").join("user").join(SYSTEMD_UNIT)
+}
+
+fn systemd_unit(executable: &Path, shine_dir: &Path, port: u16) -> Result<String> {
+    let executable = executable
+        .to_str()
+        .context("shine executable path is not valid UTF-8")?;
+    let shine_dir = shine_dir
+        .to_str()
+        .context("shine config directory is not valid UTF-8")?;
+    Ok(format!(
+        "[Unit]\nDescription=Shine local HTTP server\n\n[Service]\nType=simple\nExecStart={} --config-dir {} serve start --port {port}\nRestart=on-failure\nRestartSec=2s\n\n[Install]\nWantedBy=default.target\n",
+        systemd_quote(executable),
+        systemd_quote(shine_dir),
+    ))
+}
+
+fn systemd_quote(value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+        .replace('%', "%%")
+        .replace('$', "$$");
+    format!("\"{escaped}\"")
+}
+
+fn windows_task_command(executable: &Path, shine_dir: &Path, port: u16) -> Result<String> {
+    let executable = executable
+        .to_str()
+        .context("shine executable path is not valid Unicode")?;
+    let shine_dir = shine_dir
+        .to_str()
+        .context("shine config directory is not valid Unicode")?;
+    Ok([
+        executable.to_string(),
+        "--config-dir".to_string(),
+        shine_dir.to_string(),
+        "serve".to_string(),
+        "start".to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ]
+    .iter()
+    .map(|arg| windows_quote_arg(arg))
+    .collect::<Vec<_>>()
+    .join(" "))
+}
+
+fn windows_current_user() -> Result<OsString> {
+    let username = std::env::var_os("USERNAME")
+        .filter(|value| !value.is_empty())
+        .context("USERNAME is not set; cannot register the current-user scheduled task")?;
+    if let Some(domain) = std::env::var_os("USERDOMAIN").filter(|value| !value.is_empty()) {
+        let mut qualified = domain;
+        qualified.push("\\");
+        qualified.push(username);
+        Ok(qualified)
+    } else {
+        Ok(username)
+    }
+}
+
+// Quote one argv element according to the CommandLineToArgvW rules used by Rust's
+// Windows process startup. Backslashes need doubling only when they precede a quote
+// or the closing quote.
+fn windows_quote_arg(value: &str) -> String {
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0;
+    for ch in value.chars() {
+        if ch == '\\' {
+            backslashes += 1;
+        } else if ch == '"' {
+            quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+            quoted.push('"');
+            backslashes = 0;
+        } else {
+            quoted.push_str(&"\\".repeat(backslashes));
+            backslashes = 0;
+            quoted.push(ch);
+        }
+    }
+    quoted.push_str(&"\\".repeat(backslashes * 2));
+    quoted.push('"');
+    quoted
+}
+
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -214,11 +461,25 @@ fn xml_escape(value: &str) -> String {
 }
 
 async fn launchctl(args: &[&str]) -> Result<()> {
-    let output = Command::new("launchctl")
-        .args(args)
+    run_command("launchctl", args.iter().map(OsStr::new)).await
+}
+
+async fn systemctl(args: &[&str]) -> Result<()> {
+    let args = std::iter::once(OsStr::new("--user")).chain(args.iter().map(OsStr::new));
+    run_command("systemctl", args).await
+}
+
+async fn schtasks(args: &[&OsStr]) -> Result<()> {
+    run_command("schtasks.exe", args.iter().copied()).await
+}
+
+async fn run_command<'a>(program: &str, args: impl IntoIterator<Item = &'a OsStr>) -> Result<()> {
+    let args: Vec<OsString> = args.into_iter().map(OsStr::to_os_string).collect();
+    let output = Command::new(program)
+        .args(&args)
         .output()
         .await
-        .with_context(|| format!("running launchctl {}", args.join(" ")))?;
+        .with_context(|| format!("running {program}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -229,13 +490,9 @@ async fn launchctl(args: &[&str]) -> Result<()> {
             detail
         };
         if detail.is_empty() {
-            bail!("launchctl {} failed with {}", args.join(" "), output.status);
+            bail!("{program} failed with {}", output.status);
         }
-        bail!(
-            "launchctl {} failed with {}: {detail}",
-            args.join(" "),
-            output.status
-        );
+        bail!("{program} failed with {}: {detail}", output.status);
     }
     Ok(())
 }
@@ -488,7 +745,8 @@ fn content_type(path: &Path) -> &'static str {
 mod tests {
     use super::{
         cache_headers, entity_tag, etag_matches, launchd_log_dir, launchd_plist,
-        launchd_plist_path, normalize_resource_path, public_url,
+        launchd_plist_path, normalize_resource_path, public_url, systemd_unit, systemd_unit_path,
+        windows_quote_arg, windows_task_command,
     };
     use crate::config::Config;
     use std::path::{Path, PathBuf};
@@ -527,19 +785,32 @@ mod tests {
     #[test]
     fn launchd_plist_runs_the_single_foreground_server() {
         let log_dir = Path::new("/Users/tester/.shine/run/http");
-        let plist = launchd_plist(Path::new("/opt/shine & tools/shine"), 6188, log_dir);
+        let plist = launchd_plist(
+            Path::new("/opt/shine & tools/shine"),
+            Path::new("/Users/tester/.shine & tools"),
+            6188,
+            log_dir,
+        );
         assert!(plist.contains("<string>top.biulight.shine.http</string>"));
         assert!(plist.contains("<string>/opt/shine &amp; tools/shine</string>"));
+        assert!(plist.contains("<string>--config-dir</string>"));
+        assert!(plist.contains("<string>/Users/tester/.shine &amp; tools</string>"));
         assert!(plist.contains("<string>serve</string>"));
         assert!(plist.contains("<string>start</string>"));
         assert!(plist.contains("<string>--port</string>"));
         assert!(plist.contains("<string>6188</string>"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn launchd_plist_logs_are_scoped_under_the_user_shine_dir_not_shared_tmp() {
         let log_dir = Path::new("/Users/tester/.shine/run/http");
-        let plist = launchd_plist(Path::new("/opt/shine/shine"), 6188, log_dir);
+        let plist = launchd_plist(
+            Path::new("/opt/shine/shine"),
+            Path::new("/Users/tester/.shine"),
+            6188,
+            log_dir,
+        );
         assert!(plist.contains("<string>/Users/tester/.shine/run/http/serve.out.log</string>"));
         assert!(plist.contains("<string>/Users/tester/.shine/run/http/serve.err.log</string>"));
         assert!(!plist.contains("/tmp/"));
@@ -560,5 +831,46 @@ mod tests {
         let root = PathBuf::from("/tmp/shine-home");
         let config = Config::new_for_test(&root);
         assert_eq!(launchd_log_dir(&config), root.join("run").join("http"));
+    }
+
+    #[test]
+    fn systemd_unit_runs_and_restarts_the_user_server() {
+        let unit = systemd_unit(
+            Path::new("/opt/shine % tools/shine"),
+            Path::new("/home/tester/.shine $ state"),
+            6188,
+        )
+        .unwrap();
+        assert!(unit.contains("Type=simple"));
+        assert!(unit.contains(
+            "ExecStart=\"/opt/shine %% tools/shine\" --config-dir \"/home/tester/.shine $$ state\" serve start --port 6188"
+        ));
+        assert!(unit.contains("Restart=on-failure"));
+        assert!(unit.contains("WantedBy=default.target"));
+    }
+
+    #[test]
+    fn systemd_unit_path_uses_the_standard_user_unit_suffix() {
+        let root = PathBuf::from("/tmp/shine-home");
+        let config = Config::new_for_test(&root);
+        assert!(systemd_unit_path(&config).ends_with("systemd/user/shine-http.service"));
+    }
+
+    #[test]
+    fn windows_task_command_preserves_spaces_quotes_and_trailing_backslashes() {
+        let command = windows_task_command(
+            Path::new(r#"C:\Program Files\Shine\shine.exe"#),
+            Path::new(r#"C:\Users\Tester\shine state\"#),
+            6199,
+        )
+        .unwrap();
+        assert!(command.starts_with(r#""C:\Program Files\Shine\shine.exe" "--config-dir""#));
+        assert!(command.contains(r#""C:\Users\Tester\shine state\\""#));
+        assert!(command.ends_with(r#""serve" "start" "--port" "6199""#));
+        assert_eq!(
+            windows_quote_arg(r#"C:\path with space\"#),
+            r#""C:\path with space\\""#
+        );
+        assert_eq!(windows_quote_arg(r#"a"b"#), r#""a\"b""#);
     }
 }

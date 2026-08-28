@@ -137,6 +137,13 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
+- **The generated built-in platform capability blocks must use runtime selector semantics.**
+  `preset_meta::tests::built_in_preset_platform_capability_docs_are_current` derives App category
+  and Shell command visibility from the pristine embedded metadata for macOS, Linux, and Windows,
+  then checks the delimited blocks in both public manual locales. Do not maintain a parallel
+  platform map or weaken the test to trust prose labels; a preset metadata change and both generated
+  blocks must land together. Regenerate them with
+  `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`.
 - **Fallback depends on the selected preset mode.** In built-in mode, an overlay replaces matching
   paths and unmatched paths continue to read embedded assets. A full external preset source is
   authoritative for app and shell category discovery: a missing category or file is not silently
@@ -240,6 +247,10 @@ bugs. Check this list before changing the modules named in each entry.
   `serve::http_root()` (`~/.shine/http/`), bypassing the filesystem permissions that would
   otherwise keep them out of this user's home directory. Preset authors must never route secrets
   or other sensitive content through a `dest` that resolves under `~/.shine/http`.
+- **Persistent serve registrations are per-user and preserve the selected Shine directory.**
+  launchd, systemd, and Windows Task Scheduler entries must run without administrator privileges
+  and pass the resolved `shine_dir` back through `--config-dir`; background startup cannot depend on
+  the installing shell retaining `SHINE_CONFIG_DIR` or its current directory.
 - **launchd log paths must stay under the user's own `shine_dir`, never a shared path like
   `/tmp`.** `serve::launchd_log_dir` writes to `shine_dir/run/http/serve.{out,err}.log`, kept out
   of `http_root()` itself so log contents are never servable over HTTP. Two OS user accounts each

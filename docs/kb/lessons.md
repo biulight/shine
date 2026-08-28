@@ -3,6 +3,64 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-28 — Native-shell integration tests must assert native syntax
+
+- **Symptom**: the Windows Rust test job rejected the profile written by `shell completion install`
+  even though it contained the correct PowerShell completion registration.
+- **Root cause**: the test let `ShellType::default()` select the native shell but always searched for
+  Bash/Zsh's `COMPLETE=<shell> shine` assignment; PowerShell intentionally uses
+  `$env:COMPLETE = 'powershell'`.
+- **Fix**: select the expected completion marker from the native shell type before inspecting the
+  installed managed profile.
+- **Rule**: a test that deliberately exercises a platform-selected implementation must assert that
+  implementation's syntax, not interpolate its name into one platform's syntax.
+
+## 2026-08-27 — Generated documentation checks must ignore checkout line endings
+
+- **Symptom**: the Windows Rust test job reported both generated preset-capability blocks as stale
+  even though every row matched the runtime-derived output.
+- **Root cause**: Git's Windows checkout presented the Markdown blocks with CRLF endings while the
+  in-memory generator used LF, and the conformance test compared the strings byte-for-byte.
+- **Fix**: normalize the checked block before comparison and preserve its existing CRLF or LF style
+  when the opt-in update mode replaces it.
+- **Rule**: generated documentation conformance checks must treat checkout-only line-ending changes
+  as equivalent, and generators that edit a block must not introduce mixed endings into its file.
+
+## 2026-08-27 — Serialized path assertions must compare decoded values
+
+- **Symptom**: the Windows Rust test job failed after `shine preset link` correctly persisted an
+  external preset directory in `config.toml`.
+- **Root cause**: the test searched the raw TOML text for the native Windows path, but TOML string
+  syntax escapes each backslash, so the serialized text intentionally differs from `Path::to_str()`.
+- **Fix**: parse the saved TOML and compare the decoded `presets_dir` as a `PathBuf` against the
+  canonical linked directory.
+- **Rule**: cross-platform persistence tests must compare decoded semantic values; inspect raw text
+  only when the serialization format itself is the behavior under test.
+
+## 2026-08-27 — Background services must pin the resolved Shine directory
+
+- **Symptom**: a service installed while using `--config-dir` or `SHINE_CONFIG_DIR` could later
+  serve the default `~/.shine/http/` tree instead of the selected tree.
+- **Root cause**: the service manager starts Shine outside the installing shell and does not retain
+  its working directory or ad-hoc environment.
+- **Fix**: every launchd, systemd, and Windows scheduled-task command records the resolved
+  `shine_dir` as an explicit global `--config-dir` argument.
+- **Rule**: persistent registrations must serialize all state-location inputs needed to reproduce
+  the installed behavior; never rely on the installer process environment surviving a login or
+  reboot.
+
+## 2026-08-27 — Unix grouping exposed macOS-only app presets on Linux
+
+- **Symptom**: the built-in Surge preset appeared in App listings on Linux and Windows and could
+  install files beneath a meaningless Surge-style destination before its macOS-only reload hook
+  failed.
+- **Root cause**: runtime selection collapsed every non-Windows host into `unix`, so metadata could
+  not distinguish macOS from Linux and relied on destination paths or external commands to fail.
+- **Fix**: add exact `macos`, `linux`, and `windows` selectors, retain `unix` as a compatibility
+  group, validate all exact OS branches, and declare Surge's destination only for macOS.
+- **Rule**: encode OS availability in metadata and filter before application lifecycle effects; never use a
+  platform-specific path or hook failure as the availability boundary.
+
 ## 2026-08-22 — Bootstrap sudo prompts lost their owning item
 
 - **Symptom**: `shine sys bootstrap` could show a sudo password prompt without identifying which

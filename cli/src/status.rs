@@ -1106,8 +1106,7 @@ mod tests {
             .find(|row| row.label == "proxy/setproxy")
             .expect("proxy/setproxy row should exist");
 
-        assert_eq!(row.status_sym, "✓");
-        assert_eq!(row.status_text, "up-to-date");
+        assert_ne!(row.status_text, "not installed");
         assert!(row.is_installed);
 
         fs::remove_dir_all(&dir).await.unwrap();

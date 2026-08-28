@@ -1,11 +1,15 @@
 use crate::config::Config;
-use crate::platform::current_platform;
+use crate::platform::{OperatingSystem, current_platform};
 use crate::presets;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use tokio::fs;
+
+use crate::preset_validation::PresetValidationFailure;
 
 #[derive(Debug, Clone)]
 pub struct ShellCategory {
@@ -320,12 +324,59 @@ fn file_matches_current_platform(category: &str, file: &FileToml) -> Result<bool
     file_matches_platform(category, file, current_platform())
 }
 
-fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Result<bool> {
+fn file_matches_platform(
+    category: &str,
+    file: &FileToml,
+    current: OperatingSystem,
+) -> Result<bool> {
     crate::preset_meta::platform_matches(
         file.platforms.as_deref(),
         current,
         &format!("shell/{category}/shine.toml"),
     )
+}
+
+#[cfg(test)]
+pub(crate) fn built_in_platform_availability() -> Result<BTreeMap<String, BTreeSet<OperatingSystem>>>
+{
+    let mut capabilities: BTreeMap<String, BTreeSet<OperatingSystem>> = BTreeMap::new();
+    for name in crate::preset_meta::collect_pristine_embedded_category_names("shell") {
+        let metadata_path = format!("shell/{name}/shine.toml");
+        if let Some(bytes) = presets::read_embedded_asset_bytes(&metadata_path) {
+            let parsed = parse_category_toml(&name, &bytes)?;
+            if let Some(files) = parsed.files {
+                for file in files {
+                    let command = resolve_metadata_file(&file, &metadata_path)?.command_name;
+                    let platforms = capabilities
+                        .entry(format!("shell/{name}/{command}"))
+                        .or_default();
+                    for platform in OperatingSystem::ALL {
+                        if file_matches_platform(&name, &file, platform)? {
+                            platforms.insert(platform);
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+
+        let prefix = format!("shell/{name}/");
+        for asset_path in presets::embedded_asset_paths(&format!("shell/{name}")) {
+            let Some(relative) = asset_path.strip_prefix(&prefix) else {
+                continue;
+            };
+            let source = PathBuf::from(relative);
+            if relative == "shine.toml" || !is_shell_script(&source) {
+                continue;
+            }
+            let command = default_command_name(&source)?;
+            capabilities.insert(
+                format!("shell/{name}/{command}"),
+                OperatingSystem::ALL.into_iter().collect(),
+            );
+        }
+    }
+    Ok(capabilities)
 }
 
 fn collect_embedded_category_names(filter: Option<&str>) -> Vec<String> {
@@ -549,6 +600,197 @@ fn validate_command_name(target: &str) -> Result<String> {
     }
 }
 
+/// Validate one on-disk shell category without loading configuration or
+/// executing any command. Returns whether the category has explicit metadata.
+pub(crate) fn validate_preset_category(
+    name: &str,
+    root: &Path,
+) -> std::result::Result<bool, PresetValidationFailure> {
+    let manifest_path = root.join("shine.toml");
+    if !manifest_path.is_file() {
+        let sources = collect_local_scripts(root)?;
+        validate_legacy_commands(root, &sources)?;
+        return Ok(false);
+    }
+
+    let bytes = std::fs::read(&manifest_path).map_err(|error| {
+        PresetValidationFailure::at(
+            "read_failed",
+            format!("cannot read shell metadata: {error}"),
+            &manifest_path,
+        )
+    })?;
+    let parsed: CategoryToml = toml::from_slice(&bytes).map_err(|error| {
+        PresetValidationFailure::at(
+            "invalid_metadata",
+            format!("failed to parse shell/{name}/shine.toml: {error}"),
+            &manifest_path,
+        )
+    })?;
+    let context = format!("shell/{name}/shine.toml");
+
+    let mut resolved = Vec::new();
+    match &parsed.files {
+        Some(files) if files.is_empty() => {
+            return Err(PresetValidationFailure::at(
+                "invalid_metadata",
+                format!("{context} files must not be empty"),
+                &manifest_path,
+            ));
+        }
+        Some(files) => {
+            for file in files {
+                let entry = resolve_metadata_file(file, &context)
+                    .map_err(|error| invalid_metadata(error, &manifest_path))?;
+                crate::install_core::transforms::validate(&entry.transforms)
+                    .with_context(|| format!("invalid transforms in {context}"))
+                    .map_err(|error| invalid_metadata(error, &manifest_path))?;
+                validate_reference(root, &entry.source_rel, "shell source")?;
+                for platform in OperatingSystem::ALL {
+                    file_matches_platform(name, file, platform)
+                        .map_err(|error| invalid_metadata(error, &manifest_path))?;
+                }
+                resolved.push((file.platforms.clone(), entry));
+            }
+        }
+        None => {
+            for source in collect_local_scripts(root)? {
+                let command_name = default_command_name(&source)
+                    .map_err(|error| invalid_metadata(error, &manifest_path))?;
+                // Auto-collected entries apply to both platforms, matching the
+                // runtime loader's compatibility behavior.
+                resolved.push((None, ResolvedFile::native(source, command_name)));
+            }
+        }
+    }
+
+    let uses_bun = resolved
+        .iter()
+        .any(|(_, entry)| entry.runtime == crate::bin_links::LinkRuntime::Bun);
+    for platform in OperatingSystem::ALL {
+        let mut commands = BTreeSet::new();
+        for (platforms, entry) in &resolved {
+            if !crate::preset_meta::platform_matches(platforms.as_deref(), platform, &context)
+                .map_err(|error| invalid_metadata(error, &manifest_path))?
+            {
+                continue;
+            }
+            if !commands.insert(entry.command_name.clone()) {
+                return Err(PresetValidationFailure::at(
+                    "duplicate_command",
+                    format!(
+                        "shell/{name} declares command `{}` more than once for {}",
+                        entry.command_name,
+                        platform.as_str()
+                    ),
+                    &manifest_path,
+                ));
+            }
+        }
+    }
+
+    if uses_bun {
+        crate::bun_runtime::resolve(root, true).map_err(|error| {
+            PresetValidationFailure::at("bun_dependency_policy", error.to_string(), root)
+        })?;
+    }
+    Ok(true)
+}
+
+fn invalid_metadata(error: anyhow::Error, path: &Path) -> PresetValidationFailure {
+    PresetValidationFailure::at("invalid_metadata", error.to_string(), path)
+}
+
+fn collect_local_scripts(
+    root: &Path,
+) -> std::result::Result<Vec<PathBuf>, PresetValidationFailure> {
+    let mut scripts = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory).map_err(|error| {
+            PresetValidationFailure::at(
+                "read_failed",
+                format!("cannot read shell category: {error}"),
+                &directory,
+            )
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                PresetValidationFailure::at("read_failed", error.to_string(), &directory)
+            })?;
+            let file_type = entry.file_type().map_err(|error| {
+                PresetValidationFailure::at("read_failed", error.to_string(), entry.path())
+            })?;
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            } else if file_type.is_file() {
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)
+                    .map(Path::to_path_buf)
+                    .map_err(|error| {
+                        PresetValidationFailure::at("read_failed", error.to_string(), entry.path())
+                    })?;
+                if is_shell_script(&relative) {
+                    scripts.push(relative);
+                }
+            }
+        }
+    }
+    scripts.sort();
+    if scripts.is_empty() {
+        return Err(PresetValidationFailure::at(
+            "no_files",
+            "shell preset category contains no .sh or .ps1 files",
+            root,
+        ));
+    }
+    Ok(scripts)
+}
+
+fn validate_legacy_commands(
+    root: &Path,
+    sources: &[PathBuf],
+) -> std::result::Result<(), PresetValidationFailure> {
+    let mut commands = BTreeSet::new();
+    for source in sources {
+        let command = default_command_name(source).map_err(|error| {
+            PresetValidationFailure::at("invalid_metadata", error.to_string(), root.join(source))
+        })?;
+        if !commands.insert(command.clone()) {
+            return Err(PresetValidationFailure::at(
+                "duplicate_command",
+                format!("legacy shell category resolves more than one file to `{command}`"),
+                root,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_reference(
+    root: &Path,
+    relative: &Path,
+    label: &str,
+) -> std::result::Result<(), PresetValidationFailure> {
+    let path = root.join(relative);
+    let canonical = std::fs::canonicalize(&path).map_err(|error| {
+        PresetValidationFailure::at(
+            "missing_reference",
+            format!("{label} is missing or unreadable: {error}"),
+            &path,
+        )
+    })?;
+    if !canonical.starts_with(root) || !canonical.is_file() {
+        return Err(PresetValidationFailure::at(
+            "invalid_reference",
+            format!("{label} must be a file inside the preset category"),
+            path,
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,8 +850,8 @@ mod tests {
             env: None,
         };
 
-        assert!(file_matches_platform("proxy", &file, "windows").unwrap());
-        assert!(!file_matches_platform("proxy", &file, "unix").unwrap());
+        assert!(file_matches_platform("proxy", &file, OperatingSystem::Windows).unwrap());
+        assert!(!file_matches_platform("proxy", &file, OperatingSystem::Linux).unwrap());
     }
 
     #[test]
@@ -625,8 +867,9 @@ mod tests {
             env: None,
         };
 
-        assert!(file_matches_platform("proxy", &file, "windows").unwrap());
-        assert!(file_matches_platform("proxy", &file, "unix").unwrap());
+        assert!(file_matches_platform("proxy", &file, OperatingSystem::Windows).unwrap());
+        assert!(file_matches_platform("proxy", &file, OperatingSystem::Macos).unwrap());
+        assert!(file_matches_platform("proxy", &file, OperatingSystem::Linux).unwrap());
     }
 
     #[test]
@@ -642,7 +885,7 @@ mod tests {
             env: None,
         };
 
-        let err = file_matches_platform("proxy", &file, "unix")
+        let err = file_matches_platform("proxy", &file, OperatingSystem::Linux)
             .unwrap_err()
             .to_string();
         assert!(err.contains("unsupported platform `plan9`"));

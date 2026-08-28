@@ -3,8 +3,8 @@ use super::report::{
     print_install_success_with_backup,
 };
 use super::{
-    install_prepared_content, materialize_file_content, metadata, resolve_install_destination,
-    validate_unique_install_destinations,
+    install_prepared_content, materialize_file_content, materialize_static_file_content, metadata,
+    resolve_install_destination, validate_unique_install_destinations,
 };
 use crate::colors;
 use crate::config::Config;
@@ -33,6 +33,16 @@ pub async fn handle_install(
         None => "app".to_string(),
     };
 
+    // Resolve platform availability before config initialization or embedded
+    // extraction so a targeted request for an unavailable category has no
+    // lifecycle side effects.
+    let categories = metadata::load_active_categories(config, category).await?;
+    if let Some(category) = category
+        && categories.is_empty()
+    {
+        anyhow::bail!("app preset category not found: {category}");
+    }
+
     // Load env config once — used by the `template` transform.
     let env = EnvConfig::load_or_init(config).await?;
     let env_map = env.as_map();
@@ -44,12 +54,6 @@ pub async fn handle_install(
         // and transformed source updates from the current binary take effect.
         let _extract_report =
             crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
-    }
-    let categories = metadata::load_active_categories(config, category).await?;
-    if let Some(category) = category
-        && categories.is_empty()
-    {
-        anyhow::bail!("app preset category not found: {category}");
     }
     validate_unique_install_destinations(&categories, config)?;
     let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
@@ -67,6 +71,9 @@ pub async fn handle_install(
     // snapshot and is kept with a warning.
     for cat in &categories {
         for file in &cat.files {
+            if dry_run {
+                continue;
+            }
             let Some(generator) = &file.generator else {
                 continue;
             };
@@ -129,7 +136,12 @@ pub async fn handle_install(
             let content = if let Some(content) = generated_content.remove(&display_name) {
                 content
             } else {
-                match materialize_file_content(config, cat, file, env_map).await {
+                let materialized = if dry_run {
+                    materialize_static_file_content(config, cat, file, env_map).await
+                } else {
+                    materialize_file_content(config, cat, file, env_map).await
+                };
+                match materialized {
                     Ok(content) => content,
                     Err(error) => {
                         eprintln!("  {} {display_name}: {error:#}", colors::symbol_stderr("✗"));
@@ -394,6 +406,51 @@ source = \"file.conf\"\n",
             "post_install must run on replacement install"
         );
 
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn install_dry_run_uses_generator_fallback_without_executing_code() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = make_temp_dir().await;
+        let destination = dir.join("destination");
+        let marker = dir.join("generator-ran");
+        let category = dir.join("presets/app/generated");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            format!(
+                "dest = {:?}\n[[files]]\nsource = \"fallback.txt\"\ngenerator = {{ script = \"generate.sh\", env = [\"RUN\"], when_env = \"RUN\" }}\n",
+                destination.to_string_lossy()
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("fallback.txt"), b"fallback\n")
+            .await
+            .unwrap();
+        let generator = category.join("generate.sh");
+        fs::write(
+            &generator,
+            format!("#!/bin/sh\ntouch {:?}\necho generated\n", marker),
+        )
+        .await
+        .unwrap();
+        let mut permissions = fs::metadata(&generator).await.unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&generator, permissions).await.unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.env.insert("RUN".to_string(), "yes".to_string());
+        handle_install(&config, Some("generated"), true, false)
+            .await
+            .unwrap();
+
+        assert!(!marker.exists());
+        assert!(!destination.exists());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

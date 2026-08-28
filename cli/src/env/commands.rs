@@ -1070,7 +1070,8 @@ mod tests {
         let err = resolve_env_write_target(&config, "MY_TOKEN", false).unwrap_err();
 
         assert!(
-            err.to_string().contains(override_path.to_str().unwrap()),
+            err.to_string()
+                .contains(&crate::path_display::format(&override_path)),
             "error should name the winning override file: {err:#}"
         );
         assert!(
@@ -1123,7 +1124,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(err.to_string().contains(override_path.to_str().unwrap()));
+        assert!(
+            err.to_string()
+                .contains(&crate::path_display::format(&override_path))
+        );
         assert!(
             !fs::try_exists(&override_path).await.unwrap(),
             "refused write must not touch the override file"
@@ -1178,7 +1182,10 @@ mod tests {
 
         let err = handle_delete(&config, "MY_TOKEN", false).await.unwrap_err();
 
-        assert!(err.to_string().contains(override_path.to_str().unwrap()));
+        assert!(
+            err.to_string()
+                .contains(&crate::path_display::format(&override_path))
+        );
         let content = fs::read_to_string(&override_path).await.unwrap();
         assert!(
             content.contains("MY_TOKEN"),

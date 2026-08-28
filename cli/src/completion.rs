@@ -636,9 +636,12 @@ mod tests {
         assert!(shell_info.contains("setproxy"));
         assert!(shell_info.contains("proxy/setproxy"));
         let build = complete_values(&["shine", "app", "artifact", "apply", ""], 4);
-        assert!(build.contains("surge"));
+        assert_eq!(build.contains("surge"), cfg!(target_os = "macos"));
         assert!(!build.contains("starship"));
-        assert!(complete_values(&["shine", "app", "refresh", ""], 3).contains("surge"));
+        assert_eq!(
+            complete_values(&["shine", "app", "refresh", ""], 3).contains("surge"),
+            cfg!(target_os = "macos")
+        );
         assert!(complete_values(&["shine", "info", ""], 2).contains("sys/split-dns"));
         assert!(complete_values(&["shine", "info", ""], 2).contains("app/starship"));
         assert!(complete_values(&["shine", "install", ""], 2).contains("shell/proxy"));

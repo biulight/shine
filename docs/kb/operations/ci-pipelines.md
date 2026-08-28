@@ -4,7 +4,7 @@ All workflows live in `.github/workflows/`.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `test.yml` | `workflow_call` only (reused by the others) | fmt check → `cargo check --all` → clippy `-D warnings` → `cargo audit` → `cargo nextest run --all-features` |
+| `test.yml` | `workflow_call` only (reused by the others) | Ubuntu runs Bun checks, fmt, `cargo check --all`, clippy `-D warnings`, and `cargo audit`; a blocking Ubuntu x86_64 / macOS arm64 / Windows x86_64 matrix runs `cargo nextest run --all-features` natively |
 | `msrv.yml` | reusable by releases; push/PR to `release` or `main`, manual | `cargo check --locked --workspace` with Rust 1.88; release asset building and crate publishing wait for it |
 | `ci.yml` | push to `release`; PRs to `release`/`main` | calls `test.yml` |
 | `release.yml` | push of a `v*` tag | test + MSRV → `package-assets.yml` builds per-platform tarballs and crates.io publish → GitHub Release with git-cliff-generated notes + `install.sh`/`install.ps1` → `open-main-pr` job opens (or reuses) the `release` → `main` sync PR |
@@ -19,7 +19,9 @@ Notes:
   PRs, it logs a warning with a manual compare URL instead of failing the release.
 - The `Preview` release is overwritten daily and marked prerelease with `make_latest: legacy`,
   so it never becomes the "latest" release that `shine update` resolves.
-- `test.yml` installs `cargo-llvm-cov`/llvm-tools; coverage tooling is available in CI runs.
+- The Ubuntu quality job in `test.yml` installs `cargo-llvm-cov`/llvm-tools; coverage tooling is
+  available there. Rust tests run separately on all three supported OS families with `fail-fast`
+  disabled so one platform failure does not hide the others.
 
 ## Documentation server deployment
 

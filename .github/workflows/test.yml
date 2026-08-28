@@ -7,7 +7,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -24,8 +24,6 @@ jobs:
         run: bun run check:ts
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
       - name: Check code format
         run: cargo fmt -- --check
@@ -37,5 +35,33 @@ jobs:
         uses: taiki-e/install-action@cargo-audit
       - name: Security audit
         run: cargo audit
+
+  rust-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Install Rust with mise
+        uses: jdx/mise-action@v4
+        with:
+          version: 2026.7.7
+          install_args: rust
+      - name: Install Rust target
+        run: mise exec -- rustup target add ${{ matrix.target }}
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@v2
       - name: Execute rust tests
-        run: cargo nextest run --all-features
+        run: cargo nextest run --all-features --target ${{ matrix.target }}

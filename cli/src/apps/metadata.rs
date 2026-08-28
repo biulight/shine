@@ -1,13 +1,17 @@
 use super::manifest::AppInstallStrategy;
 use crate::config::Config;
 use crate::env::EnvVarSpec;
-use crate::platform::current_platform;
+use crate::platform::{OperatingSystem, current_platform};
 use crate::presets;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use tokio::fs;
+
+use crate::preset_validation::PresetValidationFailure;
 
 #[derive(Debug, Clone)]
 pub struct AppCategory {
@@ -169,7 +173,10 @@ enum DestBaseToml {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PlatformDestToml {
+    macos: Option<String>,
+    linux: Option<String>,
     windows: Option<String>,
     unix: Option<String>,
 }
@@ -768,12 +775,13 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
     let parsed: CategoryToml = toml::from_slice(bytes)
         .with_context(|| format!("failed to parse app/{name}/shine.toml"))?;
 
-    if let Some(dest) = parsed.dest.select_for_current_platform(name)? {
-        validate_dest(name, &dest)?;
-    }
+    parsed.dest.validate_category(name)?;
     if let Some(files) = &parsed.files {
         for file in files {
             file_matches_current_platform(name, file)?;
+            if let Some(dest) = &file.dest {
+                dest.validate_file(name)?;
+            }
             if let Some(AppDestinationRoot::Path(dest)) = selected_file_destination(name, file)? {
                 validate_dest(name, &dest)?;
             }
@@ -798,24 +806,71 @@ fn parse_category_toml(name: &str, bytes: &[u8]) -> Result<CategoryToml> {
 }
 
 fn validate_dest(name: &str, dest: &str) -> Result<()> {
+    validate_dest_for_platform(name, dest, None)
+}
+
+fn validate_dest_for_platform(
+    name: &str,
+    dest: &str,
+    platform: Option<OperatingSystem>,
+) -> Result<()> {
     let expanded = crate::config::full_expand(dest)
         .with_context(|| format!("failed to expand dest in app/{name}/shine.toml"))?;
-    if !Path::new(&expanded).is_absolute() {
+    let home_relative = dest == "~" || dest.starts_with("~/") || dest.starts_with("~\\");
+    let unix_absolute = expanded.starts_with('/');
+    let bytes = expanded.as_bytes();
+    let windows_drive_absolute = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    let windows_unc_absolute = expanded.starts_with("\\\\") || expanded.starts_with("//");
+    let windows_absolute = windows_drive_absolute || windows_unc_absolute;
+    let is_absolute = home_relative
+        || match platform {
+            Some(OperatingSystem::Macos | OperatingSystem::Linux) => unix_absolute,
+            Some(OperatingSystem::Windows) => windows_absolute,
+            None => Path::new(&expanded).is_absolute() || unix_absolute || windows_absolute,
+        };
+    if !is_absolute {
         bail!("app/{name}/shine.toml dest must be absolute after expansion");
     }
-    let path = PathBuf::from(&expanded);
-    if path.components().any(|c| c == Component::ParentDir) {
+    if expanded
+        .split(['/', '\\'])
+        .any(|component| component == "..")
+    {
         bail!("app/{name}/shine.toml dest must not contain '..'");
     }
     Ok(())
 }
 
 impl DestToml {
+    fn validate_category(&self, category: &str) -> Result<()> {
+        match self {
+            Self::Single(dest) => validate_dest(category, dest),
+            Self::Rooted(_) => bail!(
+                "app/{category}/shine.toml rooted destinations are supported only in [[files]]"
+            ),
+            Self::Platforms(dest) => dest.validate(category),
+        }
+    }
+
+    fn validate_file(&self, category: &str) -> Result<()> {
+        match self {
+            Self::Single(dest) => validate_dest(category, dest),
+            Self::Rooted(dest) => dest.resolve(category).map(|_| ()),
+            Self::Platforms(dest) => dest.validate(category),
+        }
+    }
+
     fn select_for_current_platform(&self, category: &str) -> Result<Option<String>> {
         self.select_for_platform(category, current_platform())
     }
 
-    fn select_for_platform(&self, category: &str, current: &str) -> Result<Option<String>> {
+    fn select_for_platform(
+        &self,
+        category: &str,
+        current: OperatingSystem,
+    ) -> Result<Option<String>> {
         match self {
             Self::Single(dest) => Ok(Some(dest.clone())),
             Self::Rooted(_) => bail!(
@@ -829,11 +884,19 @@ impl DestToml {
         &self,
         category: &str,
     ) -> Result<Option<AppDestinationRoot>> {
+        self.select_file_for_platform(category, current_platform())
+    }
+
+    fn select_file_for_platform(
+        &self,
+        category: &str,
+        platform: OperatingSystem,
+    ) -> Result<Option<AppDestinationRoot>> {
         match self {
             Self::Single(dest) => Ok(Some(AppDestinationRoot::Path(dest.clone()))),
             Self::Rooted(dest) => Ok(Some(dest.resolve(category)?)),
             Self::Platforms(dest) => Ok(dest
-                .select_for_platform(category, current_platform())?
+                .select_for_platform(category, platform)?
                 .map(AppDestinationRoot::Path)),
         }
     }
@@ -868,12 +931,34 @@ fn file_destination_matches_current_platform(category: &str, file: &FileToml) ->
 }
 
 impl PlatformDestToml {
-    fn select_for_platform(&self, category: &str, current: &str) -> Result<Option<String>> {
-        match current {
-            "windows" => Ok(self.windows.clone()),
-            "unix" => Ok(self.unix.clone()),
-            _ => bail!("app/{category}/shine.toml has unsupported current platform `{current}`"),
+    fn validate(&self, category: &str) -> Result<()> {
+        let destinations = [&self.macos, &self.linux, &self.windows, &self.unix];
+        if destinations.iter().all(|dest| dest.is_none()) {
+            bail!("app/{category}/shine.toml platform destination map must not be empty");
         }
+        for (dest, platform) in [
+            (&self.macos, OperatingSystem::Macos),
+            (&self.linux, OperatingSystem::Linux),
+            (&self.windows, OperatingSystem::Windows),
+            (&self.unix, OperatingSystem::Linux),
+        ] {
+            if let Some(dest) = dest {
+                validate_dest_for_platform(category, dest, Some(platform))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn select_for_platform(
+        &self,
+        _category: &str,
+        current: OperatingSystem,
+    ) -> Result<Option<String>> {
+        Ok(match current {
+            OperatingSystem::Macos => self.macos.clone().or_else(|| self.unix.clone()),
+            OperatingSystem::Linux => self.linux.clone().or_else(|| self.unix.clone()),
+            OperatingSystem::Windows => self.windows.clone(),
+        })
     }
 }
 
@@ -881,12 +966,62 @@ fn file_matches_current_platform(category: &str, file: &FileToml) -> Result<bool
     file_matches_platform(category, file, current_platform())
 }
 
-fn file_matches_platform(category: &str, file: &FileToml, current: &str) -> Result<bool> {
+fn file_matches_platform(
+    category: &str,
+    file: &FileToml,
+    current: OperatingSystem,
+) -> Result<bool> {
     crate::preset_meta::platform_matches(
         file.platforms.as_deref(),
         current,
         &format!("app/{category}/shine.toml"),
     )
+}
+
+#[cfg(test)]
+pub(crate) fn built_in_platform_availability() -> Result<BTreeMap<String, BTreeSet<OperatingSystem>>>
+{
+    let mut capabilities = BTreeMap::new();
+    for name in crate::preset_meta::collect_pristine_embedded_category_names("app") {
+        let metadata_path = format!("app/{name}/shine.toml");
+        let Some(bytes) = presets::read_embedded_asset_bytes(&metadata_path) else {
+            capabilities.insert(
+                format!("app/{name}"),
+                OperatingSystem::ALL.into_iter().collect(),
+            );
+            continue;
+        };
+        let parsed = parse_category_toml(&name, &bytes)?;
+        let mut platforms = BTreeSet::new();
+        for platform in OperatingSystem::ALL {
+            if parsed.dest.select_for_platform(&name, platform)?.is_none() {
+                continue;
+            }
+            let has_file = if let Some(files) = &parsed.files {
+                let mut has_file = false;
+                for file in files {
+                    if !file_matches_platform(&name, file, platform)? {
+                        continue;
+                    }
+                    if let Some(dest) = &file.dest
+                        && dest.select_file_for_platform(&name, platform)?.is_none()
+                    {
+                        continue;
+                    }
+                    has_file = true;
+                    break;
+                }
+                has_file
+            } else {
+                true
+            };
+            if has_file {
+                platforms.insert(platform);
+            }
+        }
+        capabilities.insert(format!("app/{name}"), platforms);
+    }
+    Ok(capabilities)
 }
 
 fn normalize_relative(path: &str) -> Result<PathBuf> {
@@ -901,6 +1036,241 @@ fn normalize_relative(path: &str) -> Result<PathBuf> {
         bail!("path must not contain '..'");
     }
     Ok(path.to_path_buf())
+}
+
+/// Validate one on-disk app category without loading configuration or running
+/// generators, hooks, artifacts, transforms, or installers. Returns whether
+/// the category uses explicit `shine.toml` metadata.
+pub(crate) fn validate_preset_category(
+    name: &str,
+    root: &Path,
+) -> std::result::Result<bool, PresetValidationFailure> {
+    let manifest_path = root.join("shine.toml");
+    if !manifest_path.is_file() {
+        ensure_category_has_files(root, "app")?;
+        return Ok(false);
+    }
+
+    let bytes = std::fs::read(&manifest_path).map_err(|error| {
+        PresetValidationFailure::at(
+            "read_failed",
+            format!("cannot read app metadata: {error}"),
+            &manifest_path,
+        )
+    })?;
+    let parsed: CategoryToml = toml::from_slice(&bytes).map_err(|error| {
+        PresetValidationFailure::at(
+            "invalid_metadata",
+            format!("failed to parse app/{name}/shine.toml: {error}"),
+            &manifest_path,
+        )
+    })?;
+    let context = format!("app/{name}/shine.toml");
+
+    parsed
+        .dest
+        .validate_category(name)
+        .map_err(|error| invalid_metadata(error, &manifest_path))?;
+
+    resolve_hooks(parsed.post_upgrade.clone(), "post_upgrade", &context)
+        .and_then(|_| resolve_hooks(parsed.post_install.clone(), "post_install", &context))
+        .map_err(|error| invalid_metadata(error, &manifest_path))?;
+    let artifact = resolve_artifact(parsed.artifact.clone(), &context)
+        .map_err(|error| invalid_metadata(error, &manifest_path))?;
+
+    let files: &[FileToml] = match &parsed.files {
+        Some(files) if files.is_empty() => {
+            return Err(PresetValidationFailure::at(
+                "invalid_metadata",
+                format!("{context} files must not be empty"),
+                &manifest_path,
+            ));
+        }
+        Some(files) => files,
+        None => {
+            ensure_category_has_files(root, "app")?;
+            &[]
+        }
+    };
+
+    let mut uses_bun = artifact
+        .as_ref()
+        .is_some_and(|artifact| artifact.runtime == ArtifactRuntime::Bun);
+    if let Some(artifact) = &artifact {
+        validate_reference(root, &artifact.script, "artifact script")?;
+        if let Some(teardown) = &artifact.teardown {
+            validate_reference(root, teardown, "artifact teardown script")?;
+        }
+    }
+
+    for file in files {
+        let source = normalize_relative(&file.source)
+            .with_context(|| format!("invalid source for {context}"))
+            .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        normalize_relative(file.target.as_deref().unwrap_or(&file.source))
+            .with_context(|| format!("invalid target for {context}"))
+            .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        resolve_transforms(file, &context)
+            .and_then(|_| resolve_install_strategy(file, &context).map(|_| ()))
+            .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        let generator = resolve_generator(file.generator.clone(), &context)
+            .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        if let Some(generator) = &generator {
+            uses_bun |= generator.runtime == ArtifactRuntime::Bun;
+            validate_reference_path(root, &generator.script, "generator script")?;
+        }
+        validate_reference_path(root, &source, "source file")?;
+        if let Some(dest) = &file.dest {
+            dest.validate_file(name)
+                .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        }
+        // Check every exact OS even when this host would filter the entry out.
+        for platform in OperatingSystem::ALL {
+            file_matches_platform(name, file, platform)
+                .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        }
+    }
+
+    for platform in OperatingSystem::ALL {
+        let Some(category_dest) = parsed
+            .dest
+            .select_for_platform(name, platform)
+            .map_err(|error| invalid_metadata(error, &manifest_path))?
+        else {
+            continue;
+        };
+        validate_dest_for_platform(name, &category_dest, Some(platform))
+            .map_err(|error| invalid_metadata(error, &manifest_path))?;
+        let mut targets = BTreeSet::new();
+        for file in files {
+            if !file_matches_platform(name, file, platform)
+                .map_err(|error| invalid_metadata(error, &manifest_path))?
+            {
+                continue;
+            }
+            let target = normalize_relative(file.target.as_deref().unwrap_or(&file.source))
+                .map_err(|error| invalid_metadata(error, &manifest_path))?;
+            let destination = match &file.dest {
+                Some(dest) => match dest
+                    .select_file_for_platform(name, platform)
+                    .map_err(|error| invalid_metadata(error, &manifest_path))?
+                {
+                    Some(destination) => destination,
+                    None => continue,
+                },
+                None => AppDestinationRoot::Path(category_dest.clone()),
+            };
+            if let AppDestinationRoot::Path(path) = &destination {
+                validate_dest_for_platform(name, path, Some(platform))
+                    .map_err(|error| invalid_metadata(error, &manifest_path))?;
+            }
+            let destination_key = match &destination {
+                AppDestinationRoot::Path(path) => crate::config::full_expand(path)
+                    .map(|path| format!("path:{path}"))
+                    .map_err(|error| invalid_metadata(anyhow::Error::new(error), &manifest_path))?,
+                AppDestinationRoot::DataDir(path) => {
+                    format!("data-dir:{}", path.display())
+                }
+            };
+            let target_key = format!("{destination_key}/{}", target.display());
+            if !targets.insert(target_key) {
+                return Err(PresetValidationFailure::at(
+                    "duplicate_target",
+                    format!(
+                        "app/{name} declares the same effective destination more than once for {}: {}",
+                        platform.as_str(),
+                        target.display()
+                    ),
+                    &manifest_path,
+                ));
+            }
+        }
+    }
+
+    if uses_bun {
+        crate::bun_runtime::resolve(root, true).map_err(|error| {
+            PresetValidationFailure::at("bun_dependency_policy", error.to_string(), root)
+        })?;
+    }
+    Ok(true)
+}
+
+fn invalid_metadata(error: anyhow::Error, path: &Path) -> PresetValidationFailure {
+    PresetValidationFailure::at("invalid_metadata", error.to_string(), path)
+}
+
+fn validate_reference(
+    root: &Path,
+    relative: &str,
+    label: &str,
+) -> std::result::Result<(), PresetValidationFailure> {
+    let relative = normalize_relative(relative).map_err(|error| {
+        PresetValidationFailure::at(
+            "invalid_metadata",
+            format!("invalid {label}: {error}"),
+            root.join(relative),
+        )
+    })?;
+    validate_reference_path(root, &relative, label)
+}
+
+fn validate_reference_path(
+    root: &Path,
+    relative: &Path,
+    label: &str,
+) -> std::result::Result<(), PresetValidationFailure> {
+    let path = root.join(relative);
+    let canonical = std::fs::canonicalize(&path).map_err(|error| {
+        PresetValidationFailure::at(
+            "missing_reference",
+            format!("{label} is missing or unreadable: {error}"),
+            &path,
+        )
+    })?;
+    if !canonical.starts_with(root) || !canonical.is_file() {
+        return Err(PresetValidationFailure::at(
+            "invalid_reference",
+            format!("{label} must be a file inside the preset category"),
+            path,
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_category_has_files(
+    root: &Path,
+    kind: &str,
+) -> std::result::Result<(), PresetValidationFailure> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = std::fs::read_dir(&directory).map_err(|error| {
+            PresetValidationFailure::at(
+                "read_failed",
+                format!("cannot read {kind} category: {error}"),
+                &directory,
+            )
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                PresetValidationFailure::at("read_failed", error.to_string(), &directory)
+            })?;
+            let file_type = entry.file_type().map_err(|error| {
+                PresetValidationFailure::at("read_failed", error.to_string(), entry.path())
+            })?;
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            } else if file_type.is_file()
+                && entry.file_name().to_string_lossy().as_ref() != "shine.toml"
+            {
+                return Ok(());
+            }
+        }
+    }
+    Err(PresetValidationFailure::at(
+        "no_files",
+        format!("{kind} preset category contains no files"),
+        root,
+    ))
 }
 
 fn parse_legacy_description(content: &[u8]) -> Option<String> {
@@ -967,6 +1337,7 @@ mod tests {
         assert!(!vim.files.is_empty());
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn embedded_surge_installs_local_profile_resources() {
         let categories = load_embedded_categories(Some("surge")).unwrap();
@@ -1049,6 +1420,18 @@ mod tests {
                 teardown: Some("unbuild.ts".to_string()),
                 runtime: ArtifactRuntime::Bun,
             })
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn embedded_surge_is_unavailable_outside_macos() {
+        assert!(load_embedded_categories(Some("surge")).unwrap().is_empty());
+        assert!(
+            load_embedded_categories(None)
+                .unwrap()
+                .iter()
+                .all(|category| category.name != "surge")
         );
     }
 
@@ -1331,10 +1714,10 @@ source = "config.toml"
 
     #[test]
     fn embedded_surge_declares_artifact_script() {
-        let categories = load_embedded_categories(Some("surge")).unwrap();
-        let surge = categories.iter().find(|c| c.name == "surge").unwrap();
+        let bytes = presets::read_asset_bytes("app/surge/shine.toml").unwrap();
+        let parsed = parse_category_toml("surge", &bytes).unwrap();
         assert_eq!(
-            surge.artifact,
+            resolve_artifact(parsed.artifact, "app/surge/shine.toml").unwrap(),
             Some(AppArtifact {
                 script: "build.ts".to_string(),
                 teardown: Some("unbuild.ts".to_string()),
@@ -1612,6 +1995,64 @@ dest = { base = "data-dir", path = "../escape" }
     }
 
     #[test]
+    fn exact_platform_destination_precedes_unix_fallback() {
+        let parsed = parse_category_toml(
+            "editor",
+            br#"dest = { macos = "~/Library/Editor", linux = "~/.config/editor", unix = "~/.editor" }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed
+                .dest
+                .select_for_platform("editor", OperatingSystem::Macos)
+                .unwrap()
+                .as_deref(),
+            Some("~/Library/Editor")
+        );
+        assert_eq!(
+            parsed
+                .dest
+                .select_for_platform("editor", OperatingSystem::Linux)
+                .unwrap()
+                .as_deref(),
+            Some("~/.config/editor")
+        );
+        assert_eq!(
+            parsed
+                .dest
+                .select_for_platform("editor", OperatingSystem::Windows)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn platform_dest_validates_paths_for_declared_os() {
+        parse_category_toml(
+            "editor",
+            br#"dest = { macos = "/Library/Editor", linux = "/etc/editor", windows = "C:\\Users\\Public\\Editor", unix = "/opt/editor" }"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn platform_dest_rejects_path_for_a_different_os() {
+        let error =
+            parse_category_toml("editor", br#"dest = { windows = "/etc/editor" }"#).unwrap_err();
+
+        assert!(error.to_string().contains("must be absolute"));
+    }
+
+    #[test]
+    fn empty_platform_destination_map_is_rejected() {
+        let err = parse_category_toml("editor", b"dest = {}\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must not be empty"));
+    }
+
+    #[test]
     fn unsupported_file_platform_is_rejected() {
         let err = parse_category_toml(
             "docker-engine",
@@ -1645,10 +2086,22 @@ platforms = ["unix"]
         )
         .unwrap();
 
-        assert!(file_matches_platform("docker-engine", &windows_only, "windows").unwrap());
-        assert!(!file_matches_platform("docker-engine", &windows_only, "unix").unwrap());
-        assert!(file_matches_platform("docker-engine", &unix_only, "unix").unwrap());
-        assert!(!file_matches_platform("docker-engine", &unix_only, "windows").unwrap());
+        assert!(
+            file_matches_platform("docker-engine", &windows_only, OperatingSystem::Windows)
+                .unwrap()
+        );
+        assert!(
+            !file_matches_platform("docker-engine", &windows_only, OperatingSystem::Linux).unwrap()
+        );
+        assert!(
+            file_matches_platform("docker-engine", &unix_only, OperatingSystem::Macos).unwrap()
+        );
+        assert!(
+            file_matches_platform("docker-engine", &unix_only, OperatingSystem::Linux).unwrap()
+        );
+        assert!(
+            !file_matches_platform("docker-engine", &unix_only, OperatingSystem::Windows).unwrap()
+        );
     }
 
     #[test]

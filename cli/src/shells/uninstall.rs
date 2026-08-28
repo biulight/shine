@@ -395,7 +395,10 @@ mod tests {
             rendered.exists(),
             "installed sibling still uses rendered file"
         );
-        assert!(config.bin_dir().join("two").exists());
+        assert!(
+            crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("two"))
+                .exists()
+        );
         let manifest = crate::shells::deployment::ShellManifest::load(&config)
             .await
             .unwrap();

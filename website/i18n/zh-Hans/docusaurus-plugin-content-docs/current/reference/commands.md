@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # 命令参考
 
-本页适用于 Shine 1.7.0。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
+本页适用于 Shine 1.8.0。任何子命令都可以使用 `--help` 查看当前安装版本的准确参数。
 
 ## 1.0 target 规则
 
@@ -56,7 +56,7 @@ shine upgrade app/starship
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--replace-managed]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed]
 shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run]
 
 shine app list
@@ -69,6 +69,9 @@ shine app artifact remove <APP_ID>
 ```
 
 `--replace-managed` 会覆盖安装后被用户修改的受管内容。先使用 `shine info <TARGET> --diff` 检查差异。`app uninstall --force` 会删除被用户修改过的受管文件，执行前应加 `--dry-run` 预览。
+
+`shell install --dry-run` 会解析 metadata、部署来源、Bun 策略和计划中的命令入口，但不会提取或
+快照预设、渲染模板、创建链接、写入 manifest 或修改 shell profile。
 
 `app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。`app artifact apply/remove` 显式运行预设声明的外部集成脚本，Shine 不会把 apply 隐式作为普通安装或升级的一部分。
 
@@ -128,7 +131,8 @@ shine sys uninstall <ITEM> [--dry-run]
 ## 预设来源与定制
 
 ```text
-shine preset new <app|shell> [--force]
+shine preset new <app|shell|sys> [--force]
+shine preset validate [PATH] [--format <text|json>]
 shine preset export [DIR] [--force]
 shine preset copy <app|shell|sys>/<NAME> [--force]
 shine preset link <PATH> [--create] [--live]
@@ -139,7 +143,15 @@ shine preset overlay unlink
 shine preset pull
 ```
 
-`preset copy` 只把一个完整的内置预设复制到当前目录，适合创建局部 overlay；`preset export` 导出整套内置预设。外部 Shell 预设默认以快照方式运行，来源内容变更需通过 `shine upgrade` 应用；`--live` 只适合预设开发，令源内容在下一次调用时生效。Git 管理来源的安全限制见[自定义预设](../guides/custom-presets.md)。
+`preset copy` 只把一个完整的内置预设复制到当前目录，适合创建局部 overlay；`preset export`
+导出整套内置预设。外部 Shell 预设默认以快照方式运行，来源内容变更需通过
+`shine upgrade` 应用；`--live` 只适合预设开发，令源内容在下一次调用时生效。
+
+`preset validate` 接受预设仓库根目录、`app|shell|sys/<name>` 类别目录或其中的
+`shine.toml`；默认检查当前目录。它会静态检查所有平台分支和引用文件，不读取当前激活的预设
+来源、不初始化 Shine 配置、不检查更新、不联网，也不运行任何预设代码。输入或类别无效时退出码
+为 1，warning 不会导致失败。JSON 输出固定使用 `schema_version: 1`，不含颜色，也不会在 JSON
+文档之外输出说明文字。Git 管理来源的安全限制及完整流程见[自定义预设](../guides/custom-presets.md)。
 
 ## 环境变量与密钥
 
@@ -196,7 +208,7 @@ shine serve url <PATH> [--port <PORT>]
 shine theme sync [--auto] [--quiet]
 ```
 
-任务按参数数组保存并直接执行，不经过 shell。`--cwd` 将任务固定到指定工作目录；未设置时继续使用调用者的当前目录。`serve install` 当前只支持 macOS 用户服务，`start` 可在前台启动本地服务。
+任务按参数数组保存并直接执行，不经过 shell。`--cwd` 将任务固定到指定工作目录；未设置时继续使用调用者的当前目录。`serve install` 在 macOS 使用 launchd、在 Linux 使用 systemd user unit、在 Windows 使用当前用户的计划任务；`start` 可在前台启动本地服务。
 
 ## SSH 会话、密钥代理与文件传输
 
@@ -218,4 +230,4 @@ shine self install [--dest <PATH>]
 shine self upgrade [--channel <stable|preview>]
 ```
 
-`shine --version` 在稳定版显示 `shine 1.7.0 (<commit> <date>)`；preview 构建使用 `1.7.0-preview` 形式的版本标签。
+`shine --version` 在稳定版显示 `shine 1.8.0 (<commit> <date>)`；preview 构建使用 `1.8.0-preview` 形式的版本标签。

@@ -1,6 +1,29 @@
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum OperatingSystem {
+    Macos,
+    Linux,
+    Windows,
+}
+
+impl OperatingSystem {
+    pub(crate) const ALL: [Self; 3] = [Self::Macos, Self::Linux, Self::Windows];
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Macos => "macos",
+            Self::Linux => "linux",
+            Self::Windows => "windows",
+        }
+    }
+
+    pub(crate) const fn is_unix(self) -> bool {
+        matches!(self, Self::Macos | Self::Linux)
+    }
+}
+
 pub fn executable_name_for_os(os: &str) -> &'static str {
     if os == "windows" {
         "shine.exe"
@@ -13,8 +36,13 @@ pub fn current_executable_name() -> &'static str {
     executable_name_for_os(std::env::consts::OS)
 }
 
-pub fn current_platform() -> &'static str {
-    if cfg!(windows) { "windows" } else { "unix" }
+pub(crate) fn current_platform() -> OperatingSystem {
+    match std::env::consts::OS {
+        "macos" => OperatingSystem::Macos,
+        "linux" => OperatingSystem::Linux,
+        "windows" => OperatingSystem::Windows,
+        other => panic!("unsupported operating system: {other}"),
+    }
 }
 
 pub fn release_target(os: &str, arch: &str) -> Result<String> {
@@ -135,6 +163,16 @@ mod tests {
             release_target("windows", "aarch64").unwrap(),
             "windows-aarch64"
         );
+    }
+
+    #[test]
+    fn operating_system_names_and_unix_group_are_stable() {
+        assert_eq!(OperatingSystem::Macos.as_str(), "macos");
+        assert_eq!(OperatingSystem::Linux.as_str(), "linux");
+        assert_eq!(OperatingSystem::Windows.as_str(), "windows");
+        assert!(OperatingSystem::Macos.is_unix());
+        assert!(OperatingSystem::Linux.is_unix());
+        assert!(!OperatingSystem::Windows.is_unix());
     }
 
     #[test]

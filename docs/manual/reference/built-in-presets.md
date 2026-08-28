@@ -21,8 +21,37 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-This page reflects the built-in `presets/` directory in Shine 1.7.0. For another version, use
+This page reflects the built-in `presets/` directory in Shine 1.8.0. For another version, use
 `shine list --available` and `--help` as the authority.
+
+The platform column below is generated from the same built-in App destination and Shell file
+selectors used at runtime. A conformance test keeps this block synchronized with preset metadata in
+both manual locales.
+
+<!-- BEGIN GENERATED PRESET PLATFORM CAPABILITIES -->
+| Preset capability | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| `app/JetBrains` | ✓ | ✓ | ✓ |
+| `app/archey4` | ✓ | ✓ | — |
+| `app/clash-verge` | ✓ | ✓ | ✓ |
+| `app/docker-desktop` | — | — | ✓ |
+| `app/docker-engine` | ✓ | ✓ | ✓ |
+| `app/fastfetch` | ✓ | ✓ | ✓ |
+| `app/ghostty` | ✓ | ✓ | — |
+| `app/git` | ✓ | ✓ | ✓ |
+| `app/starship` | ✓ | ✓ | ✓ |
+| `app/surge` | ✓ | — | — |
+| `app/vim` | ✓ | ✓ | ✓ |
+| `shell/agent/ccenv` | ✓ | ✓ | ✓ |
+| `shell/image-tools/img-compress` | ✓ | ✓ | ✓ |
+| `shell/image-tools/img-convert` | ✓ | ✓ | ✓ |
+| `shell/image-tools/img-resize` | ✓ | ✓ | ✓ |
+| `shell/proxy/setproxy` | ✓ | ✓ | ✓ |
+| `shell/proxy/usetproxy` | ✓ | ✓ | ✓ |
+| `shell/utils/copyfile` | ✓ | ✓ | — |
+| `shell/utils/shine-env-export` | ✓ | ✓ | ✓ |
+| `shell/utils/shine-theme-sync` | ✓ | ✓ | ✓ |
+<!-- END GENERATED PRESET PLATFORM CAPABILITIES -->
 
 ## Shell presets
 
@@ -109,11 +138,11 @@ rustup, or the upstream tool that owns the software.
 | macOS | `required` | Homebrew, Yazi, Starship. |
 | macOS | `recommended` (default) | `required` plus Rust, Neovim, AstroNvim, ZeroTier, Zsh plugins, zoxide, Atuin, fzf, bat, eza. |
 | macOS | `all` | `recommended` plus nvm, Bun, pnpm, mise, Fastfetch. |
-| Ubuntu | `recommended` (default) | Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza. |
+| Ubuntu | `recommended` (default) | Rust, Neovim, AstroNvim, Atuin, Yazi, Starship, zoxide, zsh-vi-mode, fzf, bat, eza. |
 | Ubuntu | `all` | `recommended` plus ZeroTier, Bun, pnpm, mise, Homebrew. |
 | Ubuntu | `minimal` | Neovim, fzf, bat, eza, zoxide; for servers without history sync, prompt, or JavaScript tooling. |
 | Windows | `required` | Rust, Yazi, Starship. |
-| Windows | `recommended` (default) | `required` plus zoxide, Atuin, fzf, bat, eza, ZeroTier. |
+| Windows | `recommended` (default) | `required` plus Neovim, zoxide, Atuin, fzf, bat, eza, ZeroTier. |
 | Windows | `all` | `recommended` plus Bun, pnpm, mise. |
 
 ### Private split DNS

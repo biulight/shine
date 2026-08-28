@@ -1,5 +1,5 @@
 version = 2
-description = "Initialize Windows with selectable Rust, terminal tools, network, and JavaScript runtime setup steps."
+description = "Initialize Windows with selectable Rust, Neovim, terminal tools, network, and JavaScript runtime setup steps."
 default_profile = "recommended"
 
 [[items]]
@@ -9,6 +9,14 @@ description = "Install Rustup and the Rust toolchain."
 
 detect = { kind = "command", command = "rustup", version_args = ["--version"] }
 install = { kind = "package", provider = "winget", package = "Rustlang.Rustup" }
+
+[[items]]
+id = "neovim"
+label = "Neovim"
+description = "Install Neovim with WinGet."
+
+detect = { kind = "command", command = "nvim", version_args = ["--version"] }
+install = { kind = "package", provider = "winget", package = "Neovim.Neovim" }
 
 [[items]]
 id = "yazi"
@@ -163,7 +171,7 @@ eval = ["mise", "activate", "{shell}"]
 items = ["rust", "yazi", "starship"]
 
 [profiles.recommended]
-items = ["rust", "yazi", "starship", "zoxide", "atuin", "fzf", "bat", "eza", "zerotier"]
+items = ["rust", "neovim", "yazi", "starship", "zoxide", "atuin", "fzf", "bat", "eza", "zerotier"]
 
 [profiles.all]
-items = ["rust", "yazi", "starship", "zoxide", "atuin", "fzf", "bat", "eza", "zerotier", "bun", "pnpm", "mise"]
+items = ["rust", "neovim", "yazi", "starship", "zoxide", "atuin", "fzf", "bat", "eza", "zerotier", "bun", "pnpm", "mise"]

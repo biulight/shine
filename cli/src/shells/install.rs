@@ -24,7 +24,7 @@ source = "my_tool.sh"
 target = "mytool"
 needs_source = false
 # Optional: limit a file to specific platforms.
-# platforms = ["unix"]      # or ["windows"]
+# platforms = ["macos"]    # exact: macos/linux/windows; unix groups macOS + Linux
 
 # PowerShell scripts are also supported:
 # source = "my_tool.ps1"
@@ -146,6 +146,38 @@ pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) 
         }
     }
     print_source_command_activation_hint(config, &shell_config_path, &installed_commands);
+    Ok(())
+}
+
+/// Resolve and validate a shell installation plan without extracting presets,
+/// rendering templates, creating links, updating manifests, or editing shell
+/// profiles.
+pub async fn handle_install_dry_run(config: &Config, target: Option<&str>) -> Result<()> {
+    crate::config::print_presets_note(config);
+    let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
+    let categories = match selection {
+        Some(target) => metadata::load_active_target(config, target).await?,
+        None => metadata::load_active_categories(config, None).await?,
+    };
+    if categories.is_empty() {
+        anyhow::bail!("no shell preset categories found");
+    }
+    super::deployment::validate_snapshot_categories(config, &categories).await?;
+    let specs = build_link_specs(config, &categories)?;
+    let mut command_names = BTreeSet::new();
+    for spec in &specs {
+        let command = spec.link_name.to_string_lossy().to_string();
+        if !command_names.insert(command.clone()) {
+            anyhow::bail!("duplicate requested shell command: {command}");
+        }
+        let target = crate::bin_links::command_path_for_name(config.bin_dir(), &spec.link_name);
+        println!(
+            "Would link shell command {command}: {} -> {}",
+            target.display(),
+            spec.source.display()
+        );
+    }
+    println!("Dry run: no shell files, links, manifests, or profiles were changed.");
     Ok(())
 }
 
@@ -502,6 +534,7 @@ async fn installed_source_commands_for_categories(
 #[cfg(test)]
 mod tests {
     use super::super::ShellType;
+    #[cfg(unix)]
     use super::super::uninstall::handle_uninstall;
     use super::*;
     use crate::config::Config;
@@ -537,6 +570,34 @@ mod tests {
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-shell").await
+    }
+
+    #[tokio::test]
+    async fn install_dry_run_does_not_materialize_shell_state() {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"tool\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("tool.sh"), b"#!/bin/sh\necho tool\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        handle_install_dry_run(&config, Some("custom"))
+            .await
+            .unwrap();
+
+        assert!(!config.bin_dir().exists());
+        assert!(!config.shine_dir().join("installed/shell").exists());
+        assert!(!config.shine_dir().join("shell-manifest.toml").exists());
+        assert!(!config.home_dir.join(".zshrc").exists());
+        fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[tokio::test]
@@ -684,8 +745,17 @@ mod tests {
 
         assert!(config.installed_shell_dir().join("custom/one.sh").exists());
         assert!(config.installed_shell_dir().join("custom/two.sh").exists());
-        assert!(config.bin_dir().join("one").exists());
-        assert!(!config.bin_dir().join("two").exists());
+        assert!(
+            crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("one"),)
+                .exists()
+        );
+        assert!(
+            !crate::bin_links::command_path_for_name(
+                config.bin_dir(),
+                std::ffi::OsStr::new("two"),
+            )
+            .exists()
+        );
         let rows = crate::status::build_shell_rows(&config).await.unwrap();
         let sibling = rows.iter().find(|row| row.label == "custom/two").unwrap();
         assert!(!sibling.is_installed);
@@ -711,6 +781,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn managed_profile_source_marker(shell: &ShellType) -> &'static str {
         match shell {
             ShellType::PowerShell => ". (Join-Path $HOME 'shell/profile.ps1')",
@@ -721,6 +792,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn managed_profile_path_marker(shell: &ShellType) -> &'static str {
         match shell {
             ShellType::PowerShell => "$shinePathEntries",
@@ -817,9 +889,16 @@ mod tests {
         let profile = fs::read_to_string(managed_shell_profile_path(&config))
             .await
             .unwrap();
-        let shell_name: &'static str = config.shell_type.into();
+        let completion_marker = match config.shell_type {
+            ShellType::Bash => "COMPLETE=bash shine",
+            ShellType::Zsh => "COMPLETE=zsh shine",
+            ShellType::PowerShell => "$env:COMPLETE = 'powershell'",
+            ShellType::Fish | ShellType::Elvish => {
+                panic!("native default shell should support completion registration")
+            }
+        };
         assert!(
-            profile.contains(&format!("COMPLETE={shell_name} shine")),
+            profile.contains(completion_marker),
             "profile should register shine completion: {profile}"
         );
         assert!(
@@ -889,6 +968,7 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn append_writes_source_entry_and_managed_profile() {
         let dir = make_temp_dir().await;
@@ -966,6 +1046,7 @@ mod tests {
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn append_refreshes_stale_sentinel_with_managed_profile_source() {
         let dir = make_temp_dir().await;
@@ -1297,7 +1378,14 @@ mod tests {
         );
         let launcher_content = fs::read_to_string(&launcher).await.unwrap();
         assert!(launcher_content.contains("shine-managed"));
-        assert!(launcher_content.contains(&source.display().to_string()));
+        let recorded_target = launcher_content
+            .lines()
+            .find_map(|line| line.strip_prefix("# shine-target: "))
+            .expect("launcher should record its source target");
+        assert_eq!(
+            fs::canonicalize(recorded_target).await.unwrap(),
+            fs::canonicalize(&source).await.unwrap()
+        );
         assert!(launcher_content.contains("bun"));
 
         let source_commands = installed_source_commands(&config).await.unwrap();

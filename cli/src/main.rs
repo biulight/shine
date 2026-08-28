@@ -86,6 +86,17 @@ async fn run(cli: Cli) -> Result<()> {
         return theme::handle_sync(*auto, *quiet).await;
     }
 
+    if let Commands::Preset {
+        command: PresetCommands::Validate { path, format },
+    } = &cli.command
+    {
+        let valid = cli::preset_validation::handle_validate(path, *format).await?;
+        if !valid {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let config = Box::pin(Config::load_or_init()).await?;
 
     if let Commands::ShellRender { target } = &cli.command {
@@ -206,7 +217,9 @@ async fn run(cli: Cli) -> Result<()> {
             PresetCommands::New { kind, force } => match kind {
                 PresetTemplateKind::App => apps::handle_init_template(force).await,
                 PresetTemplateKind::Shell => shells::handle_init_template(force).await,
+                PresetTemplateKind::Sys => sys::handle_init_template(force).await,
             },
+            PresetCommands::Validate { .. } => unreachable!(),
             PresetCommands::Export(cmd) => {
                 Box::pin(handle_preset_export(&config, cmd.dir, cmd.force)).await
             }
@@ -256,6 +269,12 @@ async fn run(cli: Cli) -> Result<()> {
             ShellCommands::Info { target } => Box::pin(shells::handle_info(&config, &target)).await,
             ShellCommands::Install {
                 target,
+                dry_run: true,
+                replace_managed: _,
+            } => Box::pin(shells::handle_install_dry_run(&config, target.as_deref())).await,
+            ShellCommands::Install {
+                target,
+                dry_run: false,
                 replace_managed,
             } => {
                 Box::pin(shells::handle_install(
@@ -1188,6 +1207,35 @@ mod tests {
             }
         ));
 
+        let cli = Cli::try_parse_from(["shine", "preset", "validate"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Validate {
+                    path,
+                    format: commands::PresetValidationFormat::Text,
+                }
+            } if path == std::path::Path::new(".")
+        ));
+        let cli = Cli::try_parse_from([
+            "shine",
+            "preset",
+            "validate",
+            "presets/app/git/shine.toml",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Validate {
+                    path,
+                    format: commands::PresetValidationFormat::Json,
+                }
+            } if path == std::path::Path::new("presets/app/git/shine.toml")
+        ));
+
         for legacy in ["export", "link", "unlink", "overlay", "pull"] {
             assert!(Cli::try_parse_from(["shine", legacy]).is_err());
         }
@@ -1840,6 +1888,17 @@ mod tests {
             Commands::Preset {
                 command: PresetCommands::New {
                     kind: PresetTemplateKind::App,
+                    force: false,
+                }
+            }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["shine", "preset", "new", "sys"])
+                .unwrap()
+                .command,
+            Commands::Preset {
+                command: PresetCommands::New {
+                    kind: PresetTemplateKind::Sys,
                     force: false,
                 }
             }

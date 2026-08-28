@@ -25,9 +25,11 @@ entries are never removed.
 
 1. **Metadata** — `apps/metadata.rs` parses `presets/app/<category>/shine.toml` (category `dest`,
    optional per-`[[files]]` `dest`, `transforms`, `requires_admin`, …). A file destination overrides
-   the category root; `{ base = "data-dir", path = "..." }` remains structured until a `Config`
-   resolves the current user's platform data directory. Duplicate effective destinations fail
-   before any writes. Legacy categories without `shine.toml` (git, starship) use
+   the category root. Exact `macos`/`linux`/`windows` selection (with `unix` as the macOS/Linux
+   fallback) filters a targeted category before env loading or embedded extraction; an exact
+   destination overrides the fallback. `{ base = "data-dir", path = "..." }` remains structured
+   until a `Config` resolves the current user's platform data directory. Duplicate effective
+   destinations fail before any writes. Legacy categories without `shine.toml` (git, starship) use
    `apps/annotation.rs` to read a `shine-dest:` comment from the file itself.
 2. **Transforms** — `install_core/transforms/` applies `jsonc-to-json` and/or `template`
    (`@@VAR@@` substitution from the `[env]` config table) in declaration order, in memory, before

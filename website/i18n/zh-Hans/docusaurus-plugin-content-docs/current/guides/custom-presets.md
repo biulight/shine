@@ -15,6 +15,40 @@ sidebar_position: 4
 Shine 会输出 `Preset Source`、可选的 `Presets Overlay`，以及外部 Shell 的部署模式，便于在解释
 `list`、`update` 或安装结果前确认当前模型。
 
+## 使用 AI 创建预设
+
+Shine 在源码和 crate 包中提供可移植的 Agent Skill：`skills/shine-preset-author/`。通过 AI
+客户端原生的 skill 安装器或 skills 目录机制注册该目录，然后直接用自然语言描述需要的 App
+配置、Shell 命令、系统引导流程，或要定制的内置类别。Shine 不会探测或修改 Codex、Claude、
+Cursor 等客户端的配置。
+
+该 skill 会先确认当前安装的 Shine 支持静态校验，再选择对应的作者参考，使用当前二进制生成
+模板，使用 JSON 校验结果，并且只执行隔离 dry-run。它不会 link 或激活类别，也不会运行 hook、
+artifact、generator、安装脚本或真实 bootstrap。为提高跨客户端兼容性，skill 指令使用英文，
+但提问和结果说明会跟随用户语言。
+
+不使用 AI 客户端时也可以执行同一流程：
+
+```bash
+mkdir -p my-presets/app/my-editor
+cd my-presets/app/my-editor
+shine preset new app
+# 添加配置文件并编辑 shine.toml。
+shine preset validate . --format json
+```
+
+其它类型把 `preset new` 的参数换成 `shell` 或 `sys`。定制内置类别时，进入仓库或 overlay 根目录
+并运行 `shine preset copy <kind>/<name>`；命令会创建类型与类别路径。
+
+`preset validate` 也接受仓库根目录、单个类别目录或其中的 `shine.toml`。根目录模式只扫描
+`app/`、`shell/`、`sys/` 下的直接类别目录；空仓库会失败。无论当前宿主是什么系统，它都会
+检查 macOS、Linux 与 Windows 声明、引用文件和锁定的 Bun 依赖策略；兼容的无 metadata App/Shell
+类别会得到 `legacy_metadata` warning。该命令不会加载当前来源或 overlay 设置、初始化配置、
+检查更新、写文件、联网或执行预设代码。
+
+默认输出文本；`--format json` 输出 skill 使用的稳定 `schema_version: 1` 报告。校验错误的
+退出码为 1，warning 不会导致失败。
+
 ## 从来源文件夹到已安装能力
 
 任何能把预设文件夹放到机器上的工具或流程，都可以充当同步层。Shine 不依赖 Git，也不承担通用
@@ -213,14 +247,17 @@ Shine 会定位基础预设和当前 overlay 所在的 Git 仓库；两个来源
 
 ## 新建类别元数据
 
-在 app 或 shell 类别目录中生成 `shine.toml` 模板：
+在 App、Shell 或 Sys 类别目录中生成 `shine.toml` 模板：
 
 ```bash
 shine preset new app
 shine preset new shell
+shine preset new sys
 ```
 
-已有文件时只有加上 `--force` 才会覆盖。类别格式属于预设作者接口，修改后应先使用对应的 `list`、`info` 和安装 `--dry-run` 验证。
+已有文件时只有加上 `--force` 才会覆盖。类别格式属于预设作者接口，修改后先运行
+`shine preset validate . --format json`，再执行对应的隔离安装 `--dry-run`。Shell 安装 dry-run
+只解析计划中的命令入口，不会创建文件、链接、manifest、snapshot、渲染文件或 profile 修改。
 
 ### 为单个 App 文件指定目标目录
 
@@ -239,7 +276,7 @@ target = "rules/provider.list"
 dest = { base = "data-dir", path = "com.example.my-app" }
 ```
 
-文件级覆盖既支持类别已有的绝对路径字符串，也支持 `{ windows = "...", unix = "..." }` 平台映射。仅文件级可使用结构化 `data-dir`：它在 Windows 解析为 `%APPDATA%`，在 macOS 解析为 Application Support，在 Linux 解析为 `XDG_DATA_HOME`（未设置时为 `~/.local/share`）。`path` 和 `target` 必须是相对路径，且不能包含 `..`。
+文件级覆盖既支持类别已有的绝对路径字符串，也支持平台映射。映射可使用精确的 `macos`、`linux`、`windows` 键，并可用 `unix` 作为 macOS/Linux 回退；同时存在时精确键优先。某个平台缺少分支时，该类别或文件不会在对应系统出现。App 与 Shell 显式文件的 `platforms` 数组使用同样四个选择器，按 OR 语义组合且不能为空。仅文件级可使用结构化 `data-dir`：它在 Windows 解析为 `%APPDATA%`，在 macOS 解析为 Application Support，在 Linux 解析为 `XDG_DATA_HOME`（未设置时为 `~/.local/share`）。`path` 和 `target` 必须是相对路径，且不能包含 `..`。
 
 如果两个条目最终指向同一路径，Shine 会在写入前拒绝整个操作。后续 metadata 若移动已受管 source，`shine upgrade` 只会在旧文件未被修改且新目标不存在时迁移；否则保留两端现状并提示用户处理。
 

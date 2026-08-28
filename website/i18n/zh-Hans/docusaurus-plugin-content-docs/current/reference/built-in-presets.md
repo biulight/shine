@@ -19,7 +19,35 @@ shine sys list --all
 shine sys info split-dns
 ```
 
-本文依据 Shine 1.7.0 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
+本文依据 Shine 1.8.0 源码中的内置 `presets/` 目录编写。使用其它版本时请以 `shine list --available` 和 `--help` 的输出为准。
+
+下方平台能力清单由运行时使用的内置 App 目标路径和 Shell 文件 selector 自动生成。
+Conformance 测试会确保两个手册语言版本中的清单始终与 preset 元数据同步。
+
+<!-- BEGIN GENERATED PRESET PLATFORM CAPABILITIES -->
+| Preset capability | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| `app/JetBrains` | ✓ | ✓ | ✓ |
+| `app/archey4` | ✓ | ✓ | — |
+| `app/clash-verge` | ✓ | ✓ | ✓ |
+| `app/docker-desktop` | — | — | ✓ |
+| `app/docker-engine` | ✓ | ✓ | ✓ |
+| `app/fastfetch` | ✓ | ✓ | ✓ |
+| `app/ghostty` | ✓ | ✓ | — |
+| `app/git` | ✓ | ✓ | ✓ |
+| `app/starship` | ✓ | ✓ | ✓ |
+| `app/surge` | ✓ | — | — |
+| `app/vim` | ✓ | ✓ | ✓ |
+| `shell/agent/ccenv` | ✓ | ✓ | ✓ |
+| `shell/image-tools/img-compress` | ✓ | ✓ | ✓ |
+| `shell/image-tools/img-convert` | ✓ | ✓ | ✓ |
+| `shell/image-tools/img-resize` | ✓ | ✓ | ✓ |
+| `shell/proxy/setproxy` | ✓ | ✓ | ✓ |
+| `shell/proxy/usetproxy` | ✓ | ✓ | ✓ |
+| `shell/utils/copyfile` | ✓ | ✓ | — |
+| `shell/utils/shine-env-export` | ✓ | ✓ | ✓ |
+| `shell/utils/shine-theme-sync` | ✓ | ✓ | ✓ |
+<!-- END GENERATED PRESET PLATFORM CAPABILITIES -->
 
 ## Shell 预设
 
@@ -91,11 +119,11 @@ Shell integration 归各 item 所有：成功的 targeted bootstrap 只启用该
 | macOS | `required` | Homebrew、Yazi、Starship。 |
 | macOS | `recommended`（默认） | `required` 加 Rust、Neovim、AstroNvim、ZeroTier、Zsh 插件、zoxide、Atuin、fzf、bat、eza。 |
 | macOS | `all` | `recommended` 加 nvm、Bun、pnpm、mise、Fastfetch。 |
-| Ubuntu | `recommended`（默认） | Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza。 |
+| Ubuntu | `recommended`（默认） | Rust、Neovim、AstroNvim、Atuin、Yazi、Starship、zoxide、zsh-vi-mode、fzf、bat、eza。 |
 | Ubuntu | `all` | `recommended` 加 ZeroTier、Bun、pnpm、mise、Homebrew。 |
 | Ubuntu | `minimal` | Neovim、fzf、bat、eza、zoxide；适合不需要 shell 历史、prompt 与 JavaScript 工具链的服务器。 |
 | Windows | `required` | Rust、Yazi、Starship。 |
-| Windows | `recommended`（默认） | `required` 加 zoxide、Atuin、fzf、bat、eza、ZeroTier。 |
+| Windows | `recommended`（默认） | `required` 加 Neovim、zoxide、Atuin、fzf、bat、eza、ZeroTier。 |
 | Windows | `all` | `recommended` 加 Bun、pnpm、mise。 |
 
 ### Private split DNS

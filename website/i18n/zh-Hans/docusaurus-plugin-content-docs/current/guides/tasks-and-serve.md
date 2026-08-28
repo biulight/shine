@@ -72,7 +72,7 @@ shine app artifact apply surge
 shine serve start
 ```
 
-默认监听 `127.0.0.1:6174`。如需 macOS 用户服务：
+默认监听 `127.0.0.1:6174`。安装当前平台的用户级后台服务或任务：
 
 ```bash
 shine serve install
@@ -80,7 +80,7 @@ shine serve status
 shine serve uninstall
 ```
 
-`serve install` 当前只支持 macOS，并使用 launchd 安装用户服务。前台运行或用户服务都只绑定 `127.0.0.1`。
+Shine 在 macOS 使用 launchd，在 Linux 使用 systemd user unit，在 Windows 使用当前用户、受限权限的计划任务；Windows 登录时启动，Linux 和 macOS 则启用对应用户服务。所有模式都只绑定 `127.0.0.1`，并保留当前的 `--config-dir`。
 
 为已生成的资源打印 URL：
 

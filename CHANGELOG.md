@@ -7,6 +7,33 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-08-28
+
+### Features
+
+- Added Rust to Ubuntu and Neovim to Windows system bootstrap presets so all three default
+  `recommended` profiles include a Rust toolchain and editor baseline.
+- Added the portable `shine-preset-author` Agent Skill, `preset new sys`, and config-independent
+  `preset validate` text/JSON reports for safe AI-assisted app, shell, and sys preset authoring.
+- Added `shell install --dry-run` to resolve shell deployment plans without materializing files,
+  links, manifests, snapshots, rendered content, or profile changes.
+- Added exact `macos`, `linux`, and `windows` App/Shell preset selectors while retaining `unix` as
+  the compatible macOS/Linux group.
+- Added persistent `serve install/status/uninstall` support through a systemd user service on
+  Linux and a limited current-user scheduled task on Windows.
+
+### Bug Fixes
+
+- Hidden the macOS-only Surge preset from App runtime actions on Linux and Windows while preserving
+  manifest-driven cleanup of any existing installation.
+
+### Docs
+
+- Documented AI skill registration, static validation, and isolated authoring dry-runs in English
+  and Simplified Chinese.
+- Refreshed the homepage visuals and expanded both manual locales with guidance for on-demand
+  encrypted credential injection and Windows Hello through external age plugins.
+
 ## [1.7.0] — 2026-08-24
 
 ### Features
