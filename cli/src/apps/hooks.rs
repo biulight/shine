@@ -11,10 +11,12 @@ use tokio::process::Command;
 
 use crate::colors;
 use crate::config::Config;
+use utils::lifecycle::{LifecycleEffect, LifecycleOutcomeV1, LifecycleStatus};
 
 use super::metadata::{AppCategory, AppHook};
 
 /// Which lifecycle moment a hook run belongs to.
+#[derive(Clone, Copy)]
 pub(crate) enum HookPhase {
     PostInstall,
     PostUpgrade,
@@ -34,6 +36,19 @@ impl HookPhase {
             HookPhase::PostUpgrade => "post-upgrade",
         }
     }
+
+    fn resource(self) -> &'static str {
+        match self {
+            HookPhase::PostInstall => "hook:post-install",
+            HookPhase::PostUpgrade => "hook:post-upgrade",
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct HookRunResult {
+    pub(crate) notes: Vec<String>,
+    pub(crate) outcomes: Vec<LifecycleOutcomeV1>,
 }
 
 /// Runs the phase's hooks for every changed category, in `changed` (sorted)
@@ -49,9 +64,10 @@ pub(crate) async fn run_app_hooks<'a>(
     changed: &BTreeSet<String>,
     phase: HookPhase,
     show_success: bool,
-) -> Vec<String> {
+) -> HookRunResult {
     let label = phase.label();
-    let mut all_notes: Vec<String> = Vec::new();
+    let resource = phase.resource();
+    let mut result = HookRunResult::default();
     for category in changed {
         let Some(cat) = get_category(category) else {
             continue;
@@ -65,6 +81,15 @@ pub(crate) async fn run_app_hooks<'a>(
                 "  {} {category}: {label} hook skipped (set allow_app_hooks = true to allow external app hooks; manual: {})",
                 colors::symbol("!"),
                 hook_sequence_display(hooks)
+            );
+            result.outcomes.push(
+                LifecycleOutcomeV1::new(
+                    format!("app/{category}"),
+                    Some(resource),
+                    LifecycleStatus::Skipped,
+                    [],
+                )
+                .with_diagnostic_code("app_hook_permission_required"),
             );
             continue;
         }
@@ -109,14 +134,30 @@ pub(crate) async fn run_app_hooks<'a>(
                 colors::symbol("✓")
             );
         }
+        result.outcomes.push(if completed {
+            LifecycleOutcomeV1::new(
+                format!("app/{category}"),
+                Some(resource),
+                LifecycleStatus::Changed,
+                [LifecycleEffect::CodeExecuted],
+            )
+        } else {
+            LifecycleOutcomeV1::new(
+                format!("app/{category}"),
+                Some(resource),
+                LifecycleStatus::Failed,
+                [],
+            )
+            .with_diagnostic_code("app_hook_failed")
+        });
         for note in &notes {
             for line in note.lines() {
                 println!("     {}", colors::dim(line));
             }
         }
-        all_notes.extend(notes);
+        result.notes.extend(notes);
     }
-    all_notes
+    result
 }
 
 fn command_output_detail(output: &std::process::Output) -> String {
@@ -186,7 +227,7 @@ mod tests {
         );
         let updated = BTreeSet::from(["sample".to_string()]);
 
-        run_app_hooks(
+        let blocked = run_app_hooks(
             &config,
             |name| categories.get(name),
             &updated,
@@ -194,10 +235,15 @@ mod tests {
             true,
         )
         .await;
+        assert_eq!(blocked.outcomes[0].status, LifecycleStatus::Skipped);
+        assert_eq!(
+            blocked.outcomes[0].diagnostic_codes,
+            ["app_hook_permission_required"]
+        );
         assert!(!marker.exists(), "external hook must be skipped by default");
 
         config.allow_app_hooks = true;
-        run_app_hooks(
+        let allowed = run_app_hooks(
             &config,
             |name| categories.get(name),
             &updated,
@@ -205,6 +251,7 @@ mod tests {
             true,
         )
         .await;
+        assert_eq!(allowed.outcomes[0].status, LifecycleStatus::Changed);
         assert_eq!(tokio::fs::read_to_string(&marker).await.unwrap(), "ran");
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
@@ -274,7 +321,7 @@ mod tests {
         );
         let updated = BTreeSet::from(["sample".to_string()]);
 
-        let notes = run_app_hooks(
+        let result = run_app_hooks(
             &config,
             |name| categories.get(name),
             &updated,
@@ -282,7 +329,8 @@ mod tests {
             true,
         )
         .await;
-        assert_eq!(notes, vec!["hello from hook".to_string()]);
+        assert_eq!(result.notes, vec!["hello from hook".to_string()]);
+        assert_eq!(result.outcomes[0].effects, [LifecycleEffect::CodeExecuted]);
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -303,7 +351,7 @@ mod tests {
         );
         let updated = BTreeSet::from(["sample".to_string()]);
 
-        let notes = run_app_hooks(
+        let result = run_app_hooks(
             &config,
             |name| categories.get(name),
             &updated,
@@ -312,8 +360,9 @@ mod tests {
         )
         .await;
         assert!(
-            notes.is_empty(),
-            "hook stdout must stay silent by default: {notes:?}"
+            result.notes.is_empty(),
+            "hook stdout must stay silent by default: {:?}",
+            result.notes
         );
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
@@ -333,7 +382,7 @@ mod tests {
             sample_hook_category("echo hidden detail", true, HookPhase::PostUpgrade),
         )]);
         let updated = BTreeSet::from(["sample".to_string()]);
-        let notes = run_app_hooks(
+        let result = run_app_hooks(
             &config,
             |name| categories.get(name),
             &updated,
@@ -342,7 +391,42 @@ mod tests {
         )
         .await;
 
-        assert!(notes.is_empty());
+        assert!(result.notes.is_empty());
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_hook_result_contains_only_safe_code_not_child_output() {
+        let dir = std::env::temp_dir().join(format!("shine-hook-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.allow_app_hooks = true;
+        let categories = BTreeMap::from([(
+            "sample".to_string(),
+            sample_hook_category(
+                "printf lifecycle-secret >&2; exit 7",
+                true,
+                HookPhase::PostUpgrade,
+            ),
+        )]);
+        let updated = BTreeSet::from(["sample".to_string()]);
+
+        let result = run_app_hooks(
+            &config,
+            |name| categories.get(name),
+            &updated,
+            HookPhase::PostUpgrade,
+            true,
+        )
+        .await;
+
+        assert_eq!(result.outcomes[0].status, LifecycleStatus::Failed);
+        assert_eq!(result.outcomes[0].diagnostic_codes, ["app_hook_failed"]);
+        let serialized = serde_json::to_string(&result.outcomes).unwrap();
+        assert!(!serialized.contains("lifecycle-secret"));
+        assert!(!serialized.contains(&dir.display().to_string()));
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 

@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::process::Stdio;
+use utils::lifecycle::LifecycleEffect;
 
 const DNS_MARKER_PREFIX: &str = "Managed by shine: split-dns:";
 
@@ -229,6 +230,7 @@ pub(in crate::sys) async fn apply_split_dns(
     if context.dry_run {
         return Ok(ResourceOutcome {
             changed: true,
+            effects: vec![LifecycleEffect::ResourceWritePreviewed],
             detail: format!("{} -> {}", desired.domain, desired.servers.join(", ")),
             receipt: Some(SystemReceipt::SplitDns(desired)),
             restart_hint: None,
@@ -248,6 +250,7 @@ pub(in crate::sys) async fn apply_split_dns(
         if windows_split_dns_up_to_date(&desired).await {
             return Ok(ResourceOutcome {
                 changed: false,
+                effects: Vec::new(),
                 detail: desired.domain.clone(),
                 receipt: Some(SystemReceipt::SplitDns(desired)),
                 restart_hint: None,
@@ -284,6 +287,7 @@ pub(in crate::sys) async fn apply_split_dns(
                 desired.content_hash = Some(hash_content(&content));
                 return Ok(ResourceOutcome {
                     changed: false,
+                    effects: Vec::new(),
                     detail: desired.domain.clone(),
                     receipt: Some(SystemReceipt::SplitDns(desired)),
                     restart_hint: None,
@@ -303,6 +307,11 @@ pub(in crate::sys) async fn apply_split_dns(
 
     Ok(ResourceOutcome {
         changed,
+        effects: if changed {
+            vec![LifecycleEffect::ResourceWritten]
+        } else {
+            Vec::new()
+        },
         detail: format!("{} -> {}", desired.domain, desired.servers.join(", ")),
         receipt: Some(SystemReceipt::SplitDns(desired)),
         restart_hint: None,
@@ -316,6 +325,7 @@ pub(in crate::sys) async fn remove_split_dns(
     if dry_run {
         return Ok(ResourceOutcome {
             changed: true,
+            effects: vec![LifecycleEffect::ResourceRemovePreviewed],
             detail: format!("remove split DNS for {}", receipt.domain),
             receipt: None,
             restart_hint: None,
@@ -359,6 +369,11 @@ pub(in crate::sys) async fn remove_split_dns(
     };
     Ok(ResourceOutcome {
         changed,
+        effects: if changed {
+            vec![LifecycleEffect::ResourceRemoved]
+        } else {
+            Vec::new()
+        },
         detail: format!("split DNS for {} removed", receipt.domain),
         receipt: None,
         restart_hint: None,

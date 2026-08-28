@@ -179,23 +179,29 @@ pub async fn handle_config_upgrade(
     };
 
     let env_report = Box::pin(env::upgrade::handle_upgrade(config, false, verbose)).await?;
-    let shell_report =
-        Box::pin(shells::handle_upgrade_installed(config, verbose, &mut sep)).await?;
-    let app_report = Box::pin(apps::handle_upgrade_installed_with_output(
-        config,
-        prune_stale,
-        verbose,
-        &mut sep,
+    let (shell_report, shell_lifecycle) = Box::pin(shells::handle_upgrade_installed_with_result(
+        config, verbose, &mut sep,
     ))
     .await?;
-    let sys_report = Box::pin(sys::handle_upgrade_managed(config, verbose, &mut sep)).await?;
+    let (app_report, app_lifecycle) =
+        Box::pin(apps::handle_upgrade_installed_with_output_with_result(
+            config,
+            prune_stale,
+            verbose,
+            &mut sep,
+        ))
+        .await?;
+    let (sys_report, _sys_lifecycle) = Box::pin(sys::handle_upgrade_managed_with_result(
+        config, verbose, &mut sep,
+    ))
+    .await?;
 
     let updated = env_report.updated
-        + shell_report.updated_categories.len()
+        + changed_shell_categories(&shell_lifecycle)
         + usize::from(shell_report.path_changed)
-        + app_report.updated_categories
+        + changed_app_categories(&app_lifecycle)
         + sys_report.updated;
-    let user_modified = env_report.user_modified + app_report.user_modified;
+    let user_modified = env_report.user_modified + preserved_app_resources(&app_lifecycle);
 
     let summary = config_upgrade_summary_parts(updated, user_modified, shell_report.link_conflicts);
     if verbose || sep.has_printed() {
@@ -207,10 +213,20 @@ pub async fn handle_config_upgrade(
         println!("  {} {}", colors::symbol("!"), colors::yellow(hint));
     }
 
-    if app_report.failed > 0 {
+    let fatal_app_failures = app_lifecycle
+        .outcomes
+        .iter()
+        .filter(|outcome| {
+            outcome
+                .diagnostic_codes
+                .iter()
+                .any(|code| code == "app_generator_unavailable")
+        })
+        .count();
+    if fatal_app_failures > 0 {
         bail!(
             "{} generated app configuration item(s) failed",
-            app_report.failed
+            fatal_app_failures
         );
     }
 
@@ -253,14 +269,20 @@ async fn handle_config_target_upgrade(
             if prune_stale {
                 bail!("`--prune-stale` applies only to app targets");
             }
-            let report = Box::pin(sys::handle_upgrade_managed_target(
+            let (report, lifecycle) = Box::pin(sys::handle_upgrade_managed_target_with_result(
                 config,
                 Some(item),
                 verbose,
                 &mut sep,
             ))
             .await?;
-            (report.updated, 0, 0, report.failed, Default::default())
+            (
+                lifecycle.summary().changed,
+                lifecycle.summary().preserved + lifecycle.summary().conflicts,
+                0,
+                report.failed,
+                Default::default(),
+            )
         } else {
             let normalized = if let Some(rest) = target.strip_prefix("app/") {
                 let category = rest.split('/').next().unwrap_or_default();
@@ -274,19 +296,29 @@ async fn handle_config_target_upgrade(
             let (kind, category) = resolve_preset_kind(config, &normalized).await?;
             match kind {
                 PresetKind::App => {
-                    let report = Box::pin(apps::handle_upgrade_installed_target(
-                        config,
-                        Some(&category),
-                        prune_stale,
-                        verbose,
-                        &mut sep,
-                    ))
-                    .await?;
+                    let (report, lifecycle) =
+                        Box::pin(apps::handle_upgrade_installed_target_with_result(
+                            config,
+                            Some(&category),
+                            prune_stale,
+                            verbose,
+                            &mut sep,
+                        ))
+                        .await?;
                     (
-                        report.updated_categories,
-                        report.user_modified,
+                        changed_app_categories(&lifecycle),
+                        preserved_app_resources(&lifecycle),
                         0,
-                        report.failed,
+                        lifecycle
+                            .outcomes
+                            .iter()
+                            .filter(|outcome| {
+                                outcome
+                                    .diagnostic_codes
+                                    .iter()
+                                    .any(|code| code == "app_generator_unavailable")
+                            })
+                            .count(),
                         report.restart_hints,
                     )
                 }
@@ -294,17 +326,18 @@ async fn handle_config_target_upgrade(
                     if prune_stale {
                         bail!("`--prune-stale` applies only to app targets");
                     }
-                    let report = Box::pin(shells::handle_upgrade_installed_target(
-                        config,
-                        Some(&category),
-                        verbose,
-                        &mut sep,
-                    ))
-                    .await?;
+                    let (report, lifecycle) =
+                        Box::pin(shells::handle_upgrade_installed_target_with_result(
+                            config,
+                            Some(&category),
+                            verbose,
+                            &mut sep,
+                        ))
+                        .await?;
                     (
-                        report.updated_categories.len() + usize::from(report.path_changed),
+                        changed_shell_categories(&lifecycle) + usize::from(report.path_changed),
                         0,
-                        report.link_conflicts,
+                        lifecycle.summary().conflicts,
                         0,
                         Default::default(),
                     )
@@ -342,6 +375,64 @@ fn config_upgrade_summary_parts(
     );
     output::push_count(&mut parts, link_conflicts, colors::yellow, "link conflicts");
     parts
+}
+
+fn changed_shell_categories(result: &utils::lifecycle::LifecycleResultV1) -> usize {
+    result
+        .outcomes
+        .iter()
+        .filter(|outcome| {
+            outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome.target.starts_with("shell/")
+                && outcome.effects.iter().any(|effect| {
+                    !matches!(effect, utils::lifecycle::LifecycleEffect::CacheWritten)
+                })
+        })
+        .filter_map(|outcome| outcome.target.split('/').nth(1))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+}
+
+fn is_app_auxiliary_resource(resource: Option<&str>) -> bool {
+    matches!(
+        resource,
+        Some(
+            "preset-cache"
+                | "purge"
+                | "hook:post-install"
+                | "hook:post-upgrade"
+                | "artifact:teardown"
+        )
+    )
+}
+
+fn changed_app_categories(result: &utils::lifecycle::LifecycleResultV1) -> usize {
+    result
+        .outcomes
+        .iter()
+        .filter(|outcome| {
+            outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome.target.starts_with("app/")
+                && !is_app_auxiliary_resource(outcome.resource.as_deref())
+        })
+        .map(|outcome| outcome.target.as_str())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+}
+
+fn preserved_app_resources(result: &utils::lifecycle::LifecycleResultV1) -> usize {
+    result
+        .outcomes
+        .iter()
+        .filter(|outcome| {
+            matches!(
+                outcome.status,
+                utils::lifecycle::LifecycleStatus::Preserved
+                    | utils::lifecycle::LifecycleStatus::Conflict
+            ) && outcome.target.starts_with("app/")
+                && !is_app_auxiliary_resource(outcome.resource.as_deref())
+        })
+        .count()
 }
 
 /// After a successful self-upgrade, try to sync the new binary to the self-install destination.

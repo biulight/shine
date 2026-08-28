@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use directories::BaseDirs;
 use tokio::fs;
 use tokio::process::Command;
+use utils::lifecycle::{LifecycleEffect, LifecycleOutcomeV1, LifecycleStatus};
 
 /// Runs the `[artifact].script` declared by an app preset (`shine app artifact apply <app-id>`).
 ///
@@ -56,14 +57,15 @@ pub async fn handle_unbuild(config: &Config, app_id: &str) -> Result<()> {
 /// is gated by `allow_app_hooks` for external presets and its failures are
 /// non-fatal (a broken teardown must not block file removal). `dry_run` prints
 /// the intended script without running it.
-pub(crate) async fn run_teardown_for_uninstall(config: &Config, cat: &AppCategory, dry_run: bool) {
-    let Some((teardown, runtime)) = cat
+pub(crate) async fn run_teardown_for_uninstall(
+    config: &Config,
+    cat: &AppCategory,
+    dry_run: bool,
+) -> Option<LifecycleOutcomeV1> {
+    let (teardown, runtime) = cat
         .artifact
         .as_ref()
-        .and_then(|a| a.teardown.as_deref().map(|t| (t, a.runtime)))
-    else {
-        return;
-    };
+        .and_then(|a| a.teardown.as_deref().map(|t| (t, a.runtime)))?;
     let app_id = &cat.name;
 
     if config.is_external_presets && !config.allow_app_hooks {
@@ -71,7 +73,10 @@ pub(crate) async fn run_teardown_for_uninstall(config: &Config, cat: &AppCategor
             "  {} {app_id}: artifact teardown skipped (set allow_app_hooks = true to allow external app hooks; manual: shine app artifact remove {app_id})",
             colors::symbol("!"),
         );
-        return;
+        return Some(
+            teardown_outcome(app_id, LifecycleStatus::Skipped, [])
+                .with_diagnostic_code("app_teardown_permission_required"),
+        );
     }
 
     if dry_run {
@@ -79,7 +84,11 @@ pub(crate) async fn run_teardown_for_uninstall(config: &Config, cat: &AppCategor
             "  {} {app_id}: [dry-run] would run artifact teardown ({teardown})",
             colors::symbol("!"),
         );
-        return;
+        return Some(teardown_outcome(
+            app_id,
+            LifecycleStatus::Previewed,
+            [LifecycleEffect::CodeExecutionPreviewed],
+        ));
     }
 
     let mut command = match artifact_command(config, app_id, teardown, runtime).await {
@@ -89,7 +98,10 @@ pub(crate) async fn run_teardown_for_uninstall(config: &Config, cat: &AppCategor
                 "  {} {app_id}: artifact teardown skipped: {e:#}",
                 colors::symbol("!"),
             );
-            return;
+            return Some(
+                teardown_outcome(app_id, LifecycleStatus::Failed, [])
+                    .with_diagnostic_code("app_teardown_setup_failed"),
+            );
         }
     };
     match command.status().await {
@@ -98,20 +110,46 @@ pub(crate) async fn run_teardown_for_uninstall(config: &Config, cat: &AppCategor
                 "  {} {app_id}: artifact teardown completed",
                 colors::symbol("✓")
             );
+            Some(teardown_outcome(
+                app_id,
+                LifecycleStatus::Changed,
+                [LifecycleEffect::CodeExecuted],
+            ))
         }
         Ok(status) => {
             eprintln!(
                 "  {} {app_id}: artifact teardown failed: exited with {status}",
                 colors::symbol("!"),
             );
+            Some(
+                teardown_outcome(app_id, LifecycleStatus::Failed, [])
+                    .with_diagnostic_code("app_teardown_failed"),
+            )
         }
         Err(e) => {
             eprintln!(
                 "  {} {app_id}: artifact teardown failed: {e}",
                 colors::symbol("!"),
             );
+            Some(
+                teardown_outcome(app_id, LifecycleStatus::Failed, [])
+                    .with_diagnostic_code("app_teardown_failed"),
+            )
         }
     }
+}
+
+fn teardown_outcome(
+    app_id: &str,
+    status: LifecycleStatus,
+    effects: impl IntoIterator<Item = LifecycleEffect>,
+) -> LifecycleOutcomeV1 {
+    LifecycleOutcomeV1::new(
+        format!("app/{app_id}"),
+        Some("artifact:teardown"),
+        status,
+        effects,
+    )
 }
 
 /// Resolves an artifact script (overlay copy wins over the source copy) and
@@ -622,12 +660,20 @@ mod tests {
         let cat = categories.iter().find(|c| c.name == "sample").unwrap();
 
         // External preset without the opt-in: teardown must be skipped.
-        run_teardown_for_uninstall(&config, cat, false).await;
+        let gated = run_teardown_for_uninstall(&config, cat, false)
+            .await
+            .unwrap();
+        assert_eq!(gated.status, LifecycleStatus::Skipped);
+        assert_eq!(gated.diagnostic_codes, ["app_teardown_permission_required"]);
         assert!(!marker.exists(), "external teardown must be gated");
 
         // Opt in: teardown runs.
         config.allow_app_hooks = true;
-        run_teardown_for_uninstall(&config, cat, false).await;
+        let executed = run_teardown_for_uninstall(&config, cat, false)
+            .await
+            .unwrap();
+        assert_eq!(executed.status, LifecycleStatus::Changed);
+        assert_eq!(executed.effects, [LifecycleEffect::CodeExecuted]);
         assert!(marker.exists(), "teardown should run once opted in");
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -654,9 +700,34 @@ mod tests {
             .unwrap();
         let cat = categories.iter().find(|c| c.name == "sample").unwrap();
 
-        run_teardown_for_uninstall(&config, cat, true).await;
+        let preview = run_teardown_for_uninstall(&config, cat, true)
+            .await
+            .unwrap();
+        assert_eq!(preview.status, LifecycleStatus::Previewed);
+        assert_eq!(preview.effects, [LifecycleEffect::CodeExecutionPreviewed]);
         assert!(!marker.exists(), "dry-run teardown must not execute");
 
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn teardown_for_uninstall_failure_is_structured_and_non_fatal() {
+        let dir = make_temp_dir().await;
+        write_teardown_category(&dir, "#!/bin/sh\nexit 5\n").await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        config.allow_app_hooks = true;
+        let categories = metadata::load_active_categories(&config, Some("sample"))
+            .await
+            .unwrap();
+
+        let outcome = run_teardown_for_uninstall(&config, &categories[0], false)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.status, LifecycleStatus::Failed);
+        assert_eq!(outcome.diagnostic_codes, ["app_teardown_failed"]);
         fs::remove_dir_all(&dir).await.unwrap();
     }
 }

@@ -15,6 +15,9 @@ use crate::output;
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
 use std::path::Path;
+use utils::lifecycle::{
+    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+};
 
 const SHELL_TEMPLATE: &str = r#"# Shell preset metadata for shine.
 description = "My shell helper commands."
@@ -53,7 +56,20 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
 }
 
 pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) -> Result<()> {
+    handle_install_with_result(config, target, force)
+        .await
+        .map(|_| ())
+}
+
+pub(crate) async fn handle_install_with_result(
+    config: &Config,
+    target: Option<&str>,
+    force: bool,
+) -> Result<LifecycleResultV1> {
+    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Install, false);
     crate::config::print_presets_note(config);
+    // Reject unsupported runtime state before extraction, snapshots, links, or profiles.
+    let manifest_before = super::deployment::ShellManifest::load(config).await?;
     let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
     let category_filter = selection.map(|target| target.category);
     let mut categories = match selection {
@@ -70,8 +86,10 @@ pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) 
     };
 
     // When using the default presets directory, extract the embedded assets first.
+    let mut cache_written = false;
     if !config.is_external_presets {
         let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
+        cache_written = !report.created.is_empty() || !report.overwritten.is_empty();
         output::summary_line("Shell Presets", &preset_extract_summary_parts(&report));
     }
 
@@ -99,7 +117,7 @@ pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) 
 
     // Apply env-variable substitution to scripts that opt in via `# shine-template: true`.
     // Output goes to rendered_dir; presets_dir templates are left untouched.
-    apply_template_to_scripts(config, &script_pairs).await?;
+    let template_report = apply_template_to_scripts(config, &script_pairs).await?;
 
     // Symlinks point to the rendered file when one was produced, otherwise to the
     // raw source in presets_dir (non-template scripts).
@@ -121,6 +139,8 @@ pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) 
 
     let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
     let shell_update = append_path_to_shell_config(config, force, &source_commands).await?;
+    let profile_updated = shell_update.profile_updated;
+    let config_updated = matches!(&shell_update.config_status, PathUpdateStatus::Updated(_));
     let profile_path = managed_shell_profile_path(config);
     if shell_update.profile_updated {
         output::detail_line(
@@ -146,14 +166,81 @@ pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) 
         }
     }
     print_source_command_activation_hint(config, &shell_config_path, &installed_commands);
-    Ok(())
+
+    for category in &categories {
+        for file in &category.files {
+            let target = format!("shell/{}/{}", category.name, file.command_name);
+            let link_path = crate::bin_links::command_path_for_name(
+                config.bin_dir(),
+                std::ffi::OsStr::new(&file.command_name),
+            );
+            let conflict = link_report
+                .conflicts
+                .iter()
+                .any(|conflict| conflict.link_path == link_path);
+            let link_changed = link_report
+                .created
+                .iter()
+                .chain(&link_report.overwritten)
+                .any(|path| path == &link_path);
+            let template_changed = template_report
+                .updated
+                .iter()
+                .any(|name| name == &format!("{}/{}", category.name, file.command_name));
+            let receipt_changed = manifest_before.find(&target).is_none();
+            let profile_changed = profile_updated || config_updated;
+            let changed = cache_written
+                || snapshots_updated > 0
+                || link_changed
+                || template_changed
+                || receipt_changed
+                || profile_changed;
+            let mut effects = Vec::new();
+            if cache_written {
+                effects.push(LifecycleEffect::CacheWritten);
+            }
+            if snapshots_updated > 0 || link_changed || template_changed || profile_changed {
+                effects.push(LifecycleEffect::ResourceWritten);
+            }
+            if receipt_changed || link_changed {
+                effects.push(LifecycleEffect::ReceiptWritten);
+            }
+            lifecycle_result.push(if conflict {
+                LifecycleOutcomeV1::new(target, None::<String>, LifecycleStatus::Conflict, [])
+                    .with_diagnostic_code("shell_command_conflict")
+            } else {
+                LifecycleOutcomeV1::new(
+                    target,
+                    None::<String>,
+                    if changed {
+                        LifecycleStatus::Changed
+                    } else {
+                        LifecycleStatus::Unchanged
+                    },
+                    effects,
+                )
+            });
+        }
+    }
+    Ok(lifecycle_result)
 }
 
 /// Resolve and validate a shell installation plan without extracting presets,
 /// rendering templates, creating links, updating manifests, or editing shell
 /// profiles.
 pub async fn handle_install_dry_run(config: &Config, target: Option<&str>) -> Result<()> {
+    handle_install_dry_run_with_result(config, target)
+        .await
+        .map(|_| ())
+}
+
+pub(crate) async fn handle_install_dry_run_with_result(
+    config: &Config,
+    target: Option<&str>,
+) -> Result<LifecycleResultV1> {
+    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Install, true);
     crate::config::print_presets_note(config);
+    let _manifest_gate = super::deployment::ShellManifest::load(config).await?;
     let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
     let categories = match selection {
         Some(target) => metadata::load_active_target(config, target).await?,
@@ -176,9 +263,34 @@ pub async fn handle_install_dry_run(config: &Config, target: Option<&str>) -> Re
             target.display(),
             spec.source.display()
         );
+        let canonical = categories
+            .iter()
+            .find_map(|category| {
+                category
+                    .files
+                    .iter()
+                    .find(|file| file.command_name == command)
+                    .map(|_| format!("shell/{}/{}", category.name, command))
+            })
+            .unwrap_or_else(|| format!("shell/unknown/{command}"));
+        let mut effects = vec![
+            LifecycleEffect::ResourceWritePreviewed,
+            LifecycleEffect::ReceiptWritePreviewed,
+        ];
+        if !config.is_external_presets
+            || config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
+        {
+            effects.push(LifecycleEffect::CacheWritePreviewed);
+        }
+        lifecycle_result.push(LifecycleOutcomeV1::new(
+            canonical,
+            None::<String>,
+            LifecycleStatus::Previewed,
+            effects,
+        ));
     }
     println!("Dry run: no shell files, links, manifests, or profiles were changed.");
-    Ok(())
+    Ok(lifecycle_result)
 }
 
 pub async fn handle_upgrade_installed(
@@ -186,7 +298,17 @@ pub async fn handle_upgrade_installed(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<ShellUpgradeReport> {
-    handle_upgrade_installed_target(config, None, verbose, sep).await
+    handle_upgrade_installed_with_result(config, verbose, sep)
+        .await
+        .map(|(report, _)| report)
+}
+
+pub(crate) async fn handle_upgrade_installed_with_result(
+    config: &Config,
+    verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    handle_upgrade_installed_target_with_result(config, None, verbose, sep).await
 }
 
 pub async fn handle_upgrade_installed_target(
@@ -195,6 +317,18 @@ pub async fn handle_upgrade_installed_target(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<ShellUpgradeReport> {
+    handle_upgrade_installed_target_with_result(config, category_filter, verbose, sep)
+        .await
+        .map(|(report, _)| report)
+}
+
+pub(crate) async fn handle_upgrade_installed_target_with_result(
+    config: &Config,
+    category_filter: Option<&str>,
+    verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Upgrade, false);
     let all_categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
     } else {
@@ -225,7 +359,7 @@ pub async fn handle_upgrade_installed_target(
         if verbose {
             println!("{}", colors::dim("No installed shell presets found."));
         }
-        return Ok(ShellUpgradeReport::default());
+        return Ok((ShellUpgradeReport::default(), lifecycle_result));
     }
 
     let installed_categories: std::collections::BTreeSet<String> = installed_commands
@@ -234,11 +368,17 @@ pub async fn handle_upgrade_installed_target(
         .collect();
 
     let pending_targets = pending_upgrade_targets(config, &installed_commands).await?;
+    let conflicting_targets = conflicting_upgrade_targets(config, &installed_commands).await?;
 
+    let mut cache_updated_categories = BTreeSet::new();
     if !config.is_external_presets {
         for category in &installed_categories {
             let prefix = format!("shell/{category}");
-            let _ = crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
+            let report =
+                crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
+            if !report.created.is_empty() || !report.overwritten.is_empty() {
+                cache_updated_categories.insert(category.clone());
+            }
         }
     }
 
@@ -261,12 +401,40 @@ pub async fn handle_upgrade_installed_target(
     let template_report = apply_template_to_scripts(config, &script_pairs).await?;
 
     let link_specs = build_link_specs(config, &categories)?;
-    let link_report =
-        crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
+    let conflicting_commands = conflicting_targets
+        .iter()
+        .filter_map(|target| target.split('/').next_back())
+        .collect::<BTreeSet<_>>();
+    let (conflicting_specs, applicable_specs): (Vec<_>, Vec<_>) = link_specs
+        .into_iter()
+        .partition(|spec| conflicting_commands.contains(spec.link_name.to_string_lossy().as_ref()));
+    let mut link_report =
+        crate::bin_links::link_executables_with_names(config.bin_dir(), &applicable_specs, true)
+            .await?;
+    link_report
+        .conflicts
+        .extend(
+            conflicting_specs
+                .into_iter()
+                .map(|spec| crate::bin_links::LinkConflict {
+                    link_path: crate::bin_links::command_path_for_name(
+                        config.bin_dir(),
+                        &spec.link_name,
+                    ),
+                    source: spec.source,
+                    kind: crate::bin_links::LinkConflictKind::ExistingEntry,
+                }),
+        );
+    let mut manifest_categories = categories.clone();
+    for category in &mut manifest_categories {
+        category.files.retain(|file| {
+            !conflicting_targets.contains(&format!("{}/{}", category.name, file.command_name))
+        });
+    }
     super::deployment::update_manifest(
         config,
-        &categories,
-        super::deployment::ManifestUpdateScope::Categories,
+        &manifest_categories,
+        super::deployment::ManifestUpdateScope::Commands,
     )
     .await?;
 
@@ -279,6 +447,7 @@ pub async fn handle_upgrade_installed_target(
         PathUpdateStatus::AlreadyConfigured => None,
         PathUpdateStatus::Updated(path) => Some(path),
     };
+    let profile_changed = shell_update.profile_updated || updated_shell_config.is_some();
 
     let remaining_targets = pending_upgrade_targets(config, &installed_commands).await?;
     let mut updated_targets = pending_targets
@@ -362,16 +531,68 @@ pub async fn handle_upgrade_installed_target(
         }
     }
 
-    Ok(ShellUpgradeReport {
-        updated_targets,
-        updated_categories,
-        snapshots_updated,
-        templates_updated: template_report.updated.len(),
-        links_created: link_report.created.len(),
-        links_updated: link_report.overwritten.len(),
-        link_conflicts: link_report.conflicts.len(),
-        path_changed: updated_shell_config.is_some(),
-    })
+    for (category, command) in &installed_commands {
+        let short_target = format!("{category}/{command}");
+        let canonical = format!("shell/{short_target}");
+        let link_path = crate::bin_links::command_path_for_name(
+            config.bin_dir(),
+            std::ffi::OsStr::new(command),
+        );
+        let conflict = link_report
+            .conflicts
+            .iter()
+            .any(|conflict| conflict.link_path == link_path);
+        let was_pending = pending_targets.contains(&short_target);
+        let still_pending = remaining_targets.contains(&short_target);
+        let mut effects = Vec::new();
+        if cache_updated_categories.contains(category) {
+            effects.push(LifecycleEffect::CacheWritten);
+        }
+        if was_pending && !still_pending {
+            effects.push(LifecycleEffect::ResourceWritten);
+            effects.push(LifecycleEffect::ReceiptWritten);
+        }
+        if profile_changed && !effects.contains(&LifecycleEffect::ResourceWritten) {
+            effects.push(LifecycleEffect::ResourceWritten);
+        }
+        lifecycle_result.push(if conflict {
+            LifecycleOutcomeV1::new(
+                canonical,
+                None::<String>,
+                LifecycleStatus::Conflict,
+                effects,
+            )
+            .with_diagnostic_code("shell_command_conflict")
+        } else if still_pending {
+            LifecycleOutcomeV1::new(canonical, None::<String>, LifecycleStatus::Failed, effects)
+                .with_diagnostic_code("shell_upgrade_not_converged")
+        } else {
+            LifecycleOutcomeV1::new(
+                canonical,
+                None::<String>,
+                if was_pending || cache_updated_categories.contains(category) || profile_changed {
+                    LifecycleStatus::Changed
+                } else {
+                    LifecycleStatus::Unchanged
+                },
+                effects,
+            )
+        });
+    }
+
+    Ok((
+        ShellUpgradeReport {
+            updated_targets,
+            updated_categories,
+            snapshots_updated,
+            templates_updated: template_report.updated.len(),
+            links_created: link_report.created.len(),
+            links_updated: link_report.overwritten.len(),
+            link_conflicts: link_report.conflicts.len(),
+            path_changed: updated_shell_config.is_some(),
+        },
+        lifecycle_result,
+    ))
 }
 
 fn should_print_upgrade_section(
@@ -411,9 +632,93 @@ async fn pending_upgrade_targets(
     Ok(crate::status::build_shell_rows(config)
         .await?
         .into_iter()
-        .filter(|row| row.status_sym == "↑" && installed_targets.contains(&row.label))
+        .filter(|row| {
+            row.status_sym == "↑" && !row.link_conflict && installed_targets.contains(&row.label)
+        })
         .map(|row| row.label)
         .collect())
+}
+
+async fn conflicting_upgrade_targets(
+    config: &Config,
+    installed_commands: &[(String, String)],
+) -> Result<BTreeSet<String>> {
+    let installed_targets = installed_commands
+        .iter()
+        .map(|(category, command)| format!("{category}/{command}"))
+        .collect::<BTreeSet<_>>();
+    Ok(crate::status::build_shell_rows(config)
+        .await?
+        .into_iter()
+        .filter(|row| row.link_conflict && installed_targets.contains(&row.label))
+        .map(|row| row.label)
+        .collect())
+}
+
+pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<LifecycleResultV1> {
+    let mut result = LifecycleResultV1::new(LifecycleOperation::Update, false);
+    for row in crate::status::build_shell_rows(config)
+        .await?
+        .into_iter()
+        .filter(|row| row.is_installed)
+    {
+        let mut effects = Vec::new();
+        if row.changes.iter().any(|change| {
+            matches!(
+                change,
+                crate::status::UpdateChange::ContentChanged
+                    | crate::status::UpdateChange::SourceRelocated { .. }
+                    | crate::status::UpdateChange::DeploymentChanged {
+                        field: "snapshot",
+                        ..
+                    }
+            )
+        }) {
+            effects.push(LifecycleEffect::CacheWritePreviewed);
+        }
+        if row.changes.iter().any(|change| {
+            matches!(
+                change,
+                crate::status::UpdateChange::ManifestEntryMissing { .. }
+            )
+        }) {
+            effects.push(LifecycleEffect::ReceiptWritePreviewed);
+        }
+        if row.changes.iter().any(|change| {
+            !matches!(
+                change,
+                crate::status::UpdateChange::ManifestEntryMissing { .. }
+            )
+        }) {
+            effects.push(LifecycleEffect::ResourceWritePreviewed);
+        }
+        let outcome = LifecycleOutcomeV1::new(
+            format!(
+                "shell/{}/{}",
+                row.category,
+                row.label.split('/').next_back().unwrap_or(&row.label)
+            ),
+            None::<String>,
+            if row.link_conflict {
+                LifecycleStatus::Conflict
+            } else if row.status_sym == "↑" {
+                LifecycleStatus::Pending
+            } else {
+                LifecycleStatus::Unchanged
+            },
+            if row.link_conflict {
+                vec![LifecycleEffect::UserResourcePreserved]
+            } else {
+                effects
+            },
+        );
+        result.push(if row.link_conflict {
+            outcome.with_diagnostic_code("shell_command_conflict")
+        } else {
+            outcome
+        });
+    }
+    Ok(result)
 }
 
 pub async fn handle_completion_install(config: &Config) -> Result<()> {
@@ -606,9 +911,13 @@ mod tests {
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("utils/shine-env-export"), false)
+        let lifecycle = handle_install_with_result(&config, Some("utils/shine-env-export"), false)
             .await
             .unwrap();
+
+        assert_eq!(lifecycle.outcomes.len(), 1);
+        assert_eq!(lifecycle.outcomes[0].target, "shell/utils/shine-env-export");
+        assert_eq!(lifecycle.outcomes[0].status, LifecycleStatus::Changed);
 
         let selected = crate::bin_links::command_path_for_name(
             config.bin_dir(),
@@ -683,6 +992,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn future_manifest_rejects_install_before_shell_mutation() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::write(
+            config.shine_dir().join("shell-manifest.toml"),
+            "schema_version = 2\nentries = []\n",
+        )
+        .await
+        .unwrap();
+
+        let error = handle_install(&config, Some("utils/shine-env-export"), false)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("newer than this Shine supports"));
+        assert!(!config.presets_dir().join("shell/utils").exists());
+        assert!(!config.bin_dir().exists());
+        assert!(!config.home_dir.join(".zshrc").exists());
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn category_upgrade_repairs_only_installed_commands() {
         let dir = make_temp_dir().await;
         let config = Config::new_for_test(&dir);
@@ -706,6 +1037,19 @@ mod tests {
         )
         .await
         .unwrap();
+
+        let pending = collect_update_lifecycle_result(&config).await.unwrap();
+        let selected_pending = pending
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target == "shell/utils/shine-env-export")
+            .unwrap();
+        assert_eq!(selected_pending.status, LifecycleStatus::Pending);
+        assert!(
+            selected_pending
+                .effects
+                .contains(&LifecycleEffect::ResourceWritePreviewed)
+        );
 
         let mut separator = crate::output::SectionSeparator::new();
         handle_upgrade_installed_target(&config, Some("utils"), false, &mut separator)

@@ -121,3 +121,27 @@ async fn handle_profile_state(
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn future_sys_manifest_rejects_composed_profile_mutation() {
+        let dir = crate::test_support::make_temp_dir("shine-sys-profile-manifest-gate").await;
+        let config = Config::new_for_test(&dir);
+        tokio::fs::write(
+            config.shine_dir().join("sys-manifest.toml"),
+            "schema_version = 2\nentries = []\n",
+        )
+        .await
+        .unwrap();
+
+        let error = sync_composed_profile(&config).await.unwrap_err();
+
+        assert!(error.to_string().contains("newer than this Shine supports"));
+        assert!(!config.home_dir.join(".shine/profile").exists());
+        assert!(!config.home_dir.join(".zshrc").exists());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+}

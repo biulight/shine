@@ -71,8 +71,11 @@ pub(crate) async fn handle_uninstall_with_result(
             .await
             .unwrap_or_default();
         for cat in &categories {
-            if involved_categories.contains(&cat.name) {
-                super::build::run_teardown_for_uninstall(config, cat, dry_run).await;
+            if involved_categories.contains(&cat.name)
+                && let Some(outcome) =
+                    super::build::run_teardown_for_uninstall(config, cat, dry_run).await
+            {
+                lifecycle_result.push(outcome);
             }
         }
     }
@@ -162,7 +165,10 @@ pub(crate) async fn handle_uninstall_with_result(
                 lifecycle_result.push(app_uninstall_outcome(
                     entry,
                     LifecycleStatus::Previewed,
-                    [LifecycleEffect::ResourceRemovePreviewed],
+                    [
+                        LifecycleEffect::ResourceRemovePreviewed,
+                        LifecycleEffect::ReceiptRemovePreviewed,
+                    ],
                 ));
             }
             Err(e) => {
@@ -186,13 +192,51 @@ pub(crate) async fn handle_uninstall_with_result(
             Some(cat) => format!("app/{cat}"),
             None => "app".to_string(),
         };
-        let _remove_report =
+        let remove_report =
             crate::presets::remove_prefix(&remove_prefix_key, config.presets_dir(), dry_run)
                 .await?;
+        let cache_target = category
+            .map(|cat| format!("app/{cat}"))
+            .unwrap_or_else(|| "app".to_string());
+        let cache_status = if dry_run && !remove_report.removed.is_empty() {
+            LifecycleStatus::Previewed
+        } else if !remove_report.removed.is_empty() {
+            LifecycleStatus::Changed
+        } else {
+            LifecycleStatus::Unchanged
+        };
+        let cache_effects = match cache_status {
+            LifecycleStatus::Previewed => vec![LifecycleEffect::CacheRemovePreviewed],
+            LifecycleStatus::Changed => vec![LifecycleEffect::CacheRemoved],
+            _ => Vec::new(),
+        };
+        lifecycle_result.push(LifecycleOutcomeV1::new(
+            cache_target,
+            Some("preset-cache"),
+            cache_status,
+            cache_effects,
+        ));
 
-        if purge && !dry_run {
+        if purge && dry_run {
+            lifecycle_result.push(LifecycleOutcomeV1::new(
+                category
+                    .map(|cat| format!("app/{cat}"))
+                    .unwrap_or_else(|| "app".to_string()),
+                Some("purge"),
+                LifecycleStatus::Previewed,
+                if category.is_some() {
+                    vec![LifecycleEffect::CacheRemovePreviewed]
+                } else {
+                    vec![
+                        LifecycleEffect::CacheRemovePreviewed,
+                        LifecycleEffect::ReceiptRemovePreviewed,
+                    ]
+                },
+            ));
+        } else if purge {
             if let Some(cat) = category {
                 let cat_dir = config.presets_dir().join("app").join(cat);
+                let mut purged = false;
                 if cat_dir.exists() {
                     tokio::fs::remove_dir_all(&cat_dir).await.with_context(|| {
                         format!(
@@ -200,32 +244,72 @@ pub(crate) async fn handle_uninstall_with_result(
                             cat_dir.display()
                         )
                     })?;
+                    purged = true;
                 }
                 println!(
                     "  {}  {}",
                     colors::symbol("✓"),
                     colors::dim(&format!("app/{cat} presets directory purged")),
                 );
+                lifecycle_result.push(LifecycleOutcomeV1::new(
+                    format!("app/{cat}"),
+                    Some("purge"),
+                    if purged {
+                        LifecycleStatus::Changed
+                    } else {
+                        LifecycleStatus::Unchanged
+                    },
+                    if purged {
+                        vec![LifecycleEffect::CachePurged]
+                    } else {
+                        Vec::new()
+                    },
+                ));
             } else {
                 let app_dir = config.presets_dir().join("app");
+                let mut purge_effects = Vec::new();
                 if app_dir.exists() {
                     tokio::fs::remove_dir_all(&app_dir).await.with_context(|| {
                         format!("removing app presets directory: {}", app_dir.display())
                     })?;
+                    purge_effects.push(LifecycleEffect::CachePurged);
                 }
                 let manifest_path = config.shine_dir().join("app-manifest.toml");
                 if manifest_path.exists() {
                     tokio::fs::remove_file(&manifest_path)
                         .await
                         .context("removing app manifest")?;
+                    purge_effects.push(LifecycleEffect::ReceiptRemoved);
                 }
                 println!(
                     "  {}  {}",
                     colors::symbol("✓"),
                     colors::dim("app presets directory and manifest purged"),
                 );
+                lifecycle_result.push(LifecycleOutcomeV1::new(
+                    "app",
+                    Some("purge"),
+                    if purge_effects.is_empty() {
+                        LifecycleStatus::Unchanged
+                    } else {
+                        LifecycleStatus::Changed
+                    },
+                    purge_effects,
+                ));
             }
         }
+    } else if purge {
+        lifecycle_result.push(
+            LifecycleOutcomeV1::new(
+                category
+                    .map(|cat| format!("app/{cat}"))
+                    .unwrap_or_else(|| "app".to_string()),
+                Some("purge"),
+                LifecycleStatus::Skipped,
+                [LifecycleEffect::UserResourcePreserved],
+            )
+            .with_diagnostic_code("app_external_preset_cache_preserved"),
+        );
     }
 
     let mut summary_parts: Vec<String> = Vec::new();
@@ -367,11 +451,35 @@ mod tests {
             .await
             .unwrap();
         assert!(result.dry_run);
-        assert_eq!(result.summary().previewed, count_before);
+        assert_eq!(
+            result
+                .outcomes
+                .iter()
+                .filter(|outcome| {
+                    outcome.effects
+                        == vec![
+                            LifecycleEffect::ResourceRemovePreviewed,
+                            LifecycleEffect::ReceiptRemovePreviewed,
+                        ]
+                })
+                .count(),
+            count_before
+        );
         assert!(
-            result.outcomes.iter().all(|outcome| {
-                outcome.effects == vec![LifecycleEffect::ResourceRemovePreviewed]
-            })
+            result
+                .outcomes
+                .iter()
+                .filter(|outcome| {
+                    outcome.resource.as_deref() != Some("artifact:teardown")
+                        && outcome.resource.as_deref() != Some("preset-cache")
+                })
+                .all(|outcome| {
+                    outcome.effects
+                        == vec![
+                            LifecycleEffect::ResourceRemovePreviewed,
+                            LifecycleEffect::ReceiptRemovePreviewed,
+                        ]
+                })
         );
 
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
@@ -649,6 +757,67 @@ mod tests {
                 .entries
                 .is_empty()
         );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn embedded_category_and_global_purge_record_cache_and_manifest_effects() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let category_cache = config.presets_dir().join("app/git");
+        fs::create_dir_all(&category_cache).await.unwrap();
+        fs::write(category_cache.join("orphan"), b"cache")
+            .await
+            .unwrap();
+        let manifest = AppManifest {
+            entries: vec![AppEntry {
+                source: "app/git/gitconfig".to_string(),
+                destination: dir.join("missing-gitconfig"),
+                backup: None,
+                content_hash: 1,
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+            ..AppManifest::default()
+        };
+        manifest.save(config.shine_dir()).await.unwrap();
+
+        let category = handle_uninstall_with_result(&config, Some("git"), false, true, false)
+            .await
+            .unwrap();
+        let category_purge = category
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.resource.as_deref() == Some("purge"))
+            .unwrap();
+        assert_eq!(category_purge.target, "app/git");
+        assert!(
+            category_purge
+                .effects
+                .contains(&LifecycleEffect::CachePurged)
+        );
+
+        let global_cache = config.presets_dir().join("app/other");
+        fs::create_dir_all(&global_cache).await.unwrap();
+        fs::write(global_cache.join("orphan"), b"cache")
+            .await
+            .unwrap();
+        let global = handle_uninstall_with_result(&config, None, false, true, false)
+            .await
+            .unwrap();
+        let global_purge = global
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target == "app" && outcome.resource.as_deref() == Some("purge"))
+            .unwrap();
+        assert!(global_purge.effects.contains(&LifecycleEffect::CachePurged));
+        assert!(
+            global_purge
+                .effects
+                .contains(&LifecycleEffect::ReceiptRemoved)
+        );
+        assert!(!config.shine_dir().join("app-manifest.toml").exists());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

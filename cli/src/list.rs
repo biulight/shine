@@ -12,9 +12,26 @@ const SHELL_PRESET_PRESENT_LINK_MISSING: &str = "preset present, bin symlink mis
 
 pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
     let shell_rows = build_shell_rows(config).await?;
+    let shell_lifecycle = crate::shells::collect_update_lifecycle_result(config).await?;
+    let pending_shell = shell_lifecycle
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.status == utils::lifecycle::LifecycleStatus::Pending)
+        .map(|outcome| outcome.target.as_str())
+        .collect::<BTreeSet<_>>();
     let update_shell: Vec<&ShellRow> = shell_rows
         .iter()
-        .filter(|r| r.is_installed && r.status_sym == "↑")
+        .filter(|r| {
+            r.is_installed
+                && pending_shell.contains(
+                    format!(
+                        "shell/{}/{}",
+                        r.category,
+                        r.label.split('/').next_back().unwrap_or(&r.label)
+                    )
+                    .as_str(),
+                )
+        })
         .collect();
 
     let cats_result = load_active_categories(config, None).await;
@@ -603,6 +620,7 @@ mod tests {
             status_sym: "~",
             status_text,
             is_installed,
+            link_conflict: false,
             changes: Vec::new(),
         }
     }

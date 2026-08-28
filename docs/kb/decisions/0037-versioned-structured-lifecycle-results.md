@@ -2,7 +2,8 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-28
-- **Evidence**: `utils/src/lifecycle.rs`, `cli/src/apps/{install,uninstall}.rs`,
+- **Evidence**: `utils/src/lifecycle.rs`, `cli/src/apps/{install,upgrade,uninstall,hooks,build}.rs`,
+  `cli/src/shells/{install,uninstall,deployment}.rs`, `cli/src/sys/{managed,resources,run_manifest}.rs`,
   `cli/src/install_core/manifest.rs`
 
 ## Context
@@ -32,17 +33,23 @@ error prose, raw logs, source/destination content, environment or secret values,
 destination paths. Human rendering remains a frontend responsibility even while the first migration
 slices temporarily generate results alongside existing inline output.
 
-Dry-run is represented as `previewed`; it is not called a Plan and carries no approval or snapshot
-guarantee. The reviewable Plan contract remains a separate Roadmap Phase 3 decision.
+Before any public JSON surface existed, Contract v1 added `pending`. Read-only `update` has
+`dry_run = false` and reports applicable work as `pending`; explicit dry-run has `dry_run = true`
+and reports `previewed`. `changed` is reserved for an execution that actually changed Shine-owned
+state. Dry-run is not called a Plan and carries no approval or snapshot guarantee. The reviewable
+Plan contract remains a separate Roadmap Phase 3 decision.
 
-Runtime manifests adopt a top-level `schema_version` independently. A missing version is legacy v0,
-supported legacy state normalizes in memory and upgrades on the next successful write, and an
-unsupported future version fails before mutation. An incompatible shape or semantic
-reinterpretation requires a version bump.
+The App, Shell, and Sys runtime manifests adopt a top-level `schema_version` independently. A
+missing version is legacy v0, supported legacy state normalizes in memory and upgrades on the next
+successful write, and an unsupported future version fails before mutation. An incompatible shape
+or semantic reinterpretation requires a version bump. Sys resource receipt versions remain
+independent of the container manifest schema.
 
-The first slice covers App file/receipt outcomes from install/uninstall and `app-manifest.toml`. It
-preserves public CLI output and exit behavior. App hooks/teardown/purge, Shell, managed Sys, renderer
-separation, and their manifest versions follow as separate characterization-backed slices.
+Execution slices 1–5 cover App files, upgrade, hooks, teardown, embedded cache and purge; Shell
+command-scoped lifecycle; managed Sys built-in resources; and all three manifest gates. Existing
+aggregate report types remain CLI compatibility adapters: reusable facts come from structured
+results, while restart hints, Shell presentation totals, and Sys field-difference prose remain
+frontend metadata. Renderer separation remains a characterization-backed follow-up.
 
 ## Consequences
 

@@ -4,7 +4,9 @@ use crate::sys::drivers::{managed_file, split_dns};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::{Path, PathBuf};
+use utils::lifecycle::LifecycleEffect;
 
 pub(super) const RECEIPT_VERSION: u32 = 1;
 
@@ -83,10 +85,32 @@ pub(super) struct ResourcePlan {
 #[derive(Clone, Debug)]
 pub(super) struct ResourceOutcome {
     pub changed: bool,
+    pub effects: Vec<LifecycleEffect>,
     pub detail: String,
     pub receipt: Option<SystemReceipt>,
     pub restart_hint: Option<String>,
 }
+
+#[derive(Debug)]
+pub(super) struct ResourceConflict {
+    message: String,
+}
+
+impl ResourceConflict {
+    pub(super) fn user_modified(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for ResourceConflict {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ResourceConflict {}
 
 pub(super) struct DriverContext<'a> {
     pub config: &'a Config,

@@ -76,9 +76,9 @@ Update this file when modules move, split, merge, or take on a different respons
 | Path | Responsibility |
 |---|---|
 | `cli/src/apps/mod.rs` | Shared app kernel and handler re-exports |
-| `cli/src/apps/install.rs` | App install orchestration |
-| `cli/src/apps/uninstall.rs` | Manifest-driven, category-scoped uninstall |
-| `cli/src/apps/upgrade.rs` | Installed app upgrades and stale-entry cleanup |
+| `cli/src/apps/install.rs` | App install orchestration and structured file/cache/hook outcomes |
+| `cli/src/apps/uninstall.rs` | Manifest-driven category uninstall and structured teardown/cache/purge outcomes |
+| `cli/src/apps/upgrade.rs` | Installed app upgrades, stale-entry cleanup, and structured outcomes |
 | `cli/src/apps/info.rs` | App list/info status |
 | `cli/src/apps/report.rs` | Install/uninstall outcome formatting |
 | `cli/src/apps/metadata.rs` | `shine.toml` app schema and parsing |
@@ -101,9 +101,9 @@ logic.
 | Path | Responsibility |
 |---|---|
 | `cli/src/shells/mod.rs` | Shell types, shared accessors, handler re-exports |
-| `cli/src/shells/deployment.rs` | Embedded/external snapshot/live deployment and shell manifest |
-| `cli/src/shells/install.rs` | Category/command install and installed-shell upgrade |
-| `cli/src/shells/uninstall.rs` | Category/command uninstall |
+| `cli/src/shells/deployment.rs` | Embedded/external snapshot/live deployment and versioned `shell-manifest.toml` |
+| `cli/src/shells/install.rs` | Category/command install, read-only pending assessment, and installed-shell upgrade results |
+| `cli/src/shells/uninstall.rs` | Category/command uninstall results with sibling/cache and foreign-launcher protection |
 | `cli/src/shells/links.rs` | Launcher/link specifications and conflict reporting |
 | `cli/src/shells/report.rs` | Shell list/install/uninstall/upgrade reporting |
 | `cli/src/shells/profile.rs` | PATH/source-command profile blocks |
@@ -120,14 +120,14 @@ logic.
 | `cli/src/sys/commands.rs` | List/info/status/bootstrap orchestration and manifest loading |
 | `cli/src/sys/bootstrap.rs` | Read-only detection plus Homebrew/APT/Winget/script install actions |
 | `cli/src/sys/detect.rs` | OS and Linux distribution detection |
-| `cli/src/sys/managed.rs` | Managed-resource apply/remove/upgrade family |
+| `cli/src/sys/managed.rs` | Managed-resource apply/update/remove/upgrade and structured result adapters |
 | `cli/src/sys/model.rs` | Sys manifest and runtime outcome models |
 | `cli/src/sys/manifest.rs` | Preset parsing and validation |
-| `cli/src/sys/run_manifest.rs` | `sys-manifest.toml` receipts |
+| `cli/src/sys/run_manifest.rs` | Versioned `sys-manifest.toml` container for bootstrap/profile state and managed receipts |
 | `cli/src/sys/selection.rs` | Positional/profile/interactive item selection |
 | `cli/src/sys/execution.rs` | Bootstrap reporting and proxy environment |
 | `cli/src/sys/render.rs` | System command presentation helpers |
-| `cli/src/sys/resources.rs` | `SystemDriver` abstraction and built-in dispatch |
+| `cli/src/sys/resources.rs` | Typed `SystemDriver` resource outcomes/conflicts and built-in dispatch |
 | `cli/src/sys/drivers/` | Built-in managed-resource drivers such as split DNS and managed file |
 | `cli/src/sys/profile.rs` | Generated profile install and three-way reconciliation |
 | `cli/src/sys/profile_compose.rs` | Deterministic base plus enabled-item composition |

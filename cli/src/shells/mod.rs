@@ -9,9 +9,13 @@ mod uninstall;
 
 #[doc(hidden)]
 pub use deployment::handle_render_live;
+pub(crate) use install::collect_update_lifecycle_result;
 pub use install::{
     handle_completion_install, handle_init_template, handle_install, handle_install_dry_run,
     handle_upgrade_installed, handle_upgrade_installed_target,
+};
+pub(crate) use install::{
+    handle_upgrade_installed_target_with_result, handle_upgrade_installed_with_result,
 };
 pub(crate) use metadata::validate_preset_category;
 #[doc(hidden)]

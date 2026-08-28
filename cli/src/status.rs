@@ -86,6 +86,9 @@ pub struct ShellRow {
     pub status_text: &'static str,
     /// `true` when at least one of preset-file or bin-symlink exists.
     pub is_installed: bool,
+    /// Existing launcher is outside Shine's ownership proof and must be
+    /// preserved rather than reported as an applicable update.
+    pub(crate) link_conflict: bool,
     pub(crate) changes: Vec<UpdateChange>,
 }
 
@@ -193,6 +196,35 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 crate::bin_links::LinkRuntime::Bun => "bun",
             };
             let manifest_entry = shell_manifest.find(&canonical_target);
+            let link_is_symlink = link_exists
+                && tokio::fs::symlink_metadata(&link_path)
+                    .await
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink());
+            let link_conflict = if link_exists && !link_is_symlink {
+                let mut managed_roots = vec![
+                    config.presets_dir().join("shell").join(&cat.name),
+                    config.rendered_dir().join("shell").join(&cat.name),
+                    config.installed_shell_dir().join(&cat.name),
+                ];
+                if let Some(overlay) = config.active_presets_overlay_dir() {
+                    managed_roots.push(overlay.join("shell").join(&cat.name));
+                }
+                if let Some(entry) = manifest_entry {
+                    managed_roots.push(entry.source_path.clone());
+                    managed_roots.push(entry.rendered_path.clone());
+                }
+                !crate::bin_links::unlink_managed_command(
+                    config.bin_dir(),
+                    &link_name,
+                    &managed_roots,
+                    true,
+                )
+                .await?
+                .skipped
+                .is_empty()
+            } else {
+                false
+            };
             // Extracted preset files and category snapshots are shared deployment
             // caches, not proof that every command in the category was installed.
             // A command is active when it has a manifest receipt or a launcher
@@ -366,6 +398,7 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 status_sym: sym,
                 status_text,
                 is_installed,
+                link_conflict,
                 changes,
             });
         }
@@ -1454,6 +1487,7 @@ mod tests {
                 needs_source: true,
                 content_hash: crate::install_core::hash_content(bytes),
             }],
+            ..ShellManifest::default()
         }
         .save(&config)
         .await

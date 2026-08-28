@@ -22,6 +22,7 @@ pub enum LifecycleOperation {
 pub enum LifecycleStatus {
     Changed,
     Unchanged,
+    Pending,
     Previewed,
     Skipped,
     Preserved,
@@ -38,6 +39,15 @@ pub enum LifecycleEffect {
     ResourceRemovePreviewed,
     ReceiptWritten,
     ReceiptRemoved,
+    ReceiptWritePreviewed,
+    ReceiptRemovePreviewed,
+    CacheWritten,
+    CacheRemoved,
+    CachePurged,
+    CacheWritePreviewed,
+    CacheRemovePreviewed,
+    CodeExecuted,
+    CodeExecutionPreviewed,
     BackupCreated,
     BackupRestored,
     ManagedKeysRemoved,
@@ -113,6 +123,7 @@ impl LifecycleResultV1 {
             match outcome.status {
                 LifecycleStatus::Changed => summary.changed += 1,
                 LifecycleStatus::Unchanged => summary.unchanged += 1,
+                LifecycleStatus::Pending => summary.pending += 1,
                 LifecycleStatus::Previewed => summary.previewed += 1,
                 LifecycleStatus::Skipped => summary.skipped += 1,
                 LifecycleStatus::Preserved => summary.preserved += 1,
@@ -128,6 +139,7 @@ impl LifecycleResultV1 {
 pub struct LifecycleSummaryV1 {
     pub changed: usize,
     pub unchanged: usize,
+    pub pending: usize,
     pub previewed: usize,
     pub skipped: usize,
     pub preserved: usize,
@@ -145,6 +157,7 @@ mod tests {
         for status in [
             LifecycleStatus::Changed,
             LifecycleStatus::Unchanged,
+            LifecycleStatus::Pending,
             LifecycleStatus::Previewed,
             LifecycleStatus::Skipped,
             LifecycleStatus::Preserved,
@@ -164,6 +177,7 @@ mod tests {
             LifecycleSummaryV1 {
                 changed: 1,
                 unchanged: 1,
+                pending: 1,
                 previewed: 1,
                 skipped: 1,
                 preserved: 1,
@@ -171,5 +185,26 @@ mod tests {
                 failed: 1,
             }
         );
+    }
+
+    #[test]
+    fn pending_and_cross_domain_effect_spellings_are_stable() {
+        let mut result = LifecycleResultV1::new(LifecycleOperation::Update, false);
+        result.push(LifecycleOutcomeV1::new(
+            "shell/tools/tool",
+            None::<String>,
+            LifecycleStatus::Pending,
+            [
+                LifecycleEffect::CacheWritePreviewed,
+                LifecycleEffect::ReceiptWritePreviewed,
+                LifecycleEffect::CodeExecutionPreviewed,
+            ],
+        ));
+
+        let encoded = toml::to_string(&result).unwrap();
+        assert!(encoded.contains("status = \"pending\""));
+        assert!(encoded.contains("\"cache-write-previewed\""));
+        assert!(encoded.contains("\"receipt-write-previewed\""));
+        assert!(encoded.contains("\"code-execution-previewed\""));
     }
 }

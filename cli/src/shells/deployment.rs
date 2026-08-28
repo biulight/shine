@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 const MANIFEST_FILE: &str = "shell-manifest.toml";
+pub(crate) const SHELL_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ShellManifestEntry {
@@ -30,22 +31,51 @@ pub(crate) struct ShellManifestEntry {
     pub content_hash: u64,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ShellManifest {
+    #[serde(default = "legacy_manifest_schema_version")]
+    pub(crate) schema_version: u32,
     #[serde(default)]
     pub entries: Vec<ShellManifestEntry>,
 }
 
+fn legacy_manifest_schema_version() -> u32 {
+    0
+}
+
+impl Default for ShellManifest {
+    fn default() -> Self {
+        Self {
+            schema_version: SHELL_MANIFEST_SCHEMA_VERSION,
+            entries: Vec::new(),
+        }
+    }
+}
+
 impl ShellManifest {
     pub(crate) async fn load(config: &Config) -> Result<Self> {
-        crate::persist::load_toml_or_default(
+        let mut manifest: Self = crate::persist::load_toml_or_default(
             &config.shine_dir().join(MANIFEST_FILE),
             "shell manifest",
         )
-        .await
+        .await?;
+        match manifest.schema_version {
+            0 => manifest.schema_version = SHELL_MANIFEST_SCHEMA_VERSION,
+            SHELL_MANIFEST_SCHEMA_VERSION => {}
+            version => bail!(
+                "shell manifest schema version {version} is newer than this Shine supports ({SHELL_MANIFEST_SCHEMA_VERSION})"
+            ),
+        }
+        Ok(manifest)
     }
 
     pub(crate) async fn save(&self, config: &Config) -> Result<()> {
+        if self.schema_version != SHELL_MANIFEST_SCHEMA_VERSION {
+            bail!(
+                "cannot write shell manifest schema version {}; expected {SHELL_MANIFEST_SCHEMA_VERSION}",
+                self.schema_version
+            );
+        }
         crate::persist::save_toml_atomic(
             self,
             &config.shine_dir().join(MANIFEST_FILE),
@@ -595,6 +625,37 @@ content_hash = 42
         assert_eq!(manifest.entries.len(), 1);
         assert_eq!(manifest.entries[0].bun_dependencies, None);
         assert_eq!(manifest.entries[0].dependency_hash, None);
+    }
+
+    #[tokio::test]
+    async fn shell_manifest_legacy_and_future_versions_are_gated() {
+        let root = crate::test_support::make_temp_dir("shine-shell-manifest-version").await;
+        let config = Config::new_for_test(&root);
+        tokio::fs::write(config.shine_dir().join(MANIFEST_FILE), "entries = []\n")
+            .await
+            .unwrap();
+
+        let legacy = ShellManifest::load(&config).await.unwrap();
+        assert_eq!(legacy.schema_version, SHELL_MANIFEST_SCHEMA_VERSION);
+        let after_read = tokio::fs::read_to_string(config.shine_dir().join(MANIFEST_FILE))
+            .await
+            .unwrap();
+        assert!(!after_read.contains("schema_version"));
+        legacy.save(&config).await.unwrap();
+        let written = tokio::fs::read_to_string(config.shine_dir().join(MANIFEST_FILE))
+            .await
+            .unwrap();
+        assert!(written.contains("schema_version = 1"));
+
+        tokio::fs::write(
+            config.shine_dir().join(MANIFEST_FILE),
+            "schema_version = 2\nentries = []\n",
+        )
+        .await
+        .unwrap();
+        let error = ShellManifest::load(&config).await.unwrap_err();
+        assert!(error.to_string().contains("newer than this Shine supports"));
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 
     #[tokio::test]

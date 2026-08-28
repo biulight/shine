@@ -6,7 +6,11 @@ use super::report::{remove_report_summary_parts, unlink_report_summary_parts};
 use crate::config::Config;
 use crate::output;
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
+use utils::lifecycle::{
+    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+};
 
 pub async fn handle_uninstall(
     config: &Config,
@@ -14,7 +18,178 @@ pub async fn handle_uninstall(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
+    handle_uninstall_with_result(config, target, purge, dry_run)
+        .await
+        .map(|_| ())
+}
+
+pub(crate) async fn handle_uninstall_with_result(
+    config: &Config,
+    target: Option<&str>,
+    purge: bool,
+    dry_run: bool,
+) -> Result<LifecycleResultV1> {
+    let manifest_before = super::deployment::ShellManifest::load(config).await?;
+    let selection = target
+        .map(super::metadata::parse_lifecycle_target)
+        .transpose()?;
+    let mut targets = if let Some(selection) = selection {
+        manifest_before
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.category == selection.category
+                    && selection
+                        .command
+                        .is_none_or(|command| entry.command == command)
+            })
+            .map(|entry| (entry.category.clone(), entry.command.clone()))
+            .collect::<Vec<_>>()
+    } else {
+        manifest_before
+            .entries
+            .iter()
+            .map(|entry| (entry.category.clone(), entry.command.clone()))
+            .collect::<Vec<_>>()
+    };
+    if targets.is_empty()
+        && let Ok(rows) = crate::status::build_shell_rows(config).await
+    {
+        targets.extend(
+            rows.into_iter()
+                .filter(|row| row.is_installed)
+                .filter_map(|row| {
+                    let command = row.label.split('/').next_back()?.to_string();
+                    let selected = selection.is_none_or(|selection| {
+                        selection.category == row.category
+                            && selection.command.is_none_or(|wanted| wanted == command)
+                    });
+                    selected.then_some((row.category, command))
+                }),
+        );
+    }
+
+    let selected_targets = targets.iter().cloned().collect::<BTreeSet<_>>();
+    let mut target_states = Vec::with_capacity(targets.len());
+    for (category, command) in &targets {
+        target_states
+            .push(probe_uninstall_target(config, &manifest_before, category, command).await?);
+    }
+
+    handle_uninstall_execute(config, target, purge, dry_run).await?;
+
+    let manifest_after = if dry_run {
+        manifest_before.clone()
+    } else {
+        super::deployment::ShellManifest::load(config).await?
+    };
+    let mut result = LifecycleResultV1::new(LifecycleOperation::Uninstall, dry_run);
+    for state in target_states {
+        let category_removed = if dry_run {
+            !manifest_before.entries.iter().any(|entry| {
+                entry.category == state.category
+                    && !selected_targets.contains(&(entry.category.clone(), entry.command.clone()))
+            })
+        } else {
+            !manifest_after
+                .entries
+                .iter()
+                .any(|entry| entry.category == state.category)
+        };
+        let mut effects = Vec::new();
+        if state.managed_launcher {
+            effects.push(if dry_run {
+                LifecycleEffect::ResourceRemovePreviewed
+            } else {
+                LifecycleEffect::ResourceRemoved
+            });
+        } else if state.foreign_launcher {
+            effects.push(LifecycleEffect::UserResourcePreserved);
+        }
+        effects.push(if dry_run {
+            LifecycleEffect::ReceiptRemovePreviewed
+        } else {
+            LifecycleEffect::ReceiptRemoved
+        });
+        if category_removed {
+            effects.push(if dry_run {
+                LifecycleEffect::CacheRemovePreviewed
+            } else {
+                LifecycleEffect::CacheRemoved
+            });
+        }
+        let outcome = LifecycleOutcomeV1::new(
+            format!("shell/{}/{}", state.category, state.command),
+            None::<String>,
+            if state.foreign_launcher {
+                LifecycleStatus::Conflict
+            } else if dry_run {
+                LifecycleStatus::Previewed
+            } else {
+                LifecycleStatus::Changed
+            },
+            effects,
+        );
+        result.push(if state.foreign_launcher {
+            outcome.with_diagnostic_code("shell_command_conflict")
+        } else {
+            outcome
+        });
+    }
+    Ok(result)
+}
+
+struct UninstallTargetState {
+    category: String,
+    command: String,
+    managed_launcher: bool,
+    foreign_launcher: bool,
+}
+
+async fn probe_uninstall_target(
+    config: &Config,
+    manifest: &super::deployment::ShellManifest,
+    category: &str,
+    command: &str,
+) -> Result<UninstallTargetState> {
+    let canonical = format!("shell/{category}/{command}");
+    let entry = manifest.find(&canonical);
+    let mut managed_roots = vec![
+        config.presets_dir().join("shell").join(category),
+        config.rendered_dir().join("shell").join(category),
+        config.installed_shell_dir().join(category),
+    ];
+    if let Some(overlay) = config.active_presets_overlay_dir() {
+        managed_roots.push(overlay.join("shell").join(category));
+    }
+    if let Some(entry) = entry {
+        managed_roots.push(entry.source_path.clone());
+        managed_roots.push(entry.rendered_path.clone());
+    }
+    let report = crate::bin_links::unlink_managed_command(
+        config.bin_dir(),
+        OsStr::new(command),
+        &managed_roots,
+        true,
+    )
+    .await?;
+    Ok(UninstallTargetState {
+        category: category.to_string(),
+        command: command.to_string(),
+        managed_launcher: !report.removed.is_empty(),
+        foreign_launcher: !report.skipped.is_empty(),
+    })
+}
+
+async fn handle_uninstall_execute(
+    config: &Config,
+    target: Option<&str>,
+    purge: bool,
+    dry_run: bool,
+) -> Result<()> {
     crate::config::print_presets_note(config);
+    // Reject unsupported runtime state before unlinking or removing shared state.
+    let _manifest_gate = super::deployment::ShellManifest::load(config).await?;
     if dry_run {
         println!(
             "{}",
@@ -420,9 +595,17 @@ mod tests {
             .await
             .unwrap();
 
-        handle_uninstall(&config, Some("utils/shine-env-export"), false, true)
-            .await
-            .unwrap();
+        let result =
+            handle_uninstall_with_result(&config, Some("utils/shine-env-export"), false, true)
+                .await
+                .unwrap();
+
+        assert_eq!(result.outcomes[0].status, LifecycleStatus::Previewed);
+        assert!(
+            result.outcomes[0]
+                .effects
+                .contains(&LifecycleEffect::CacheRemovePreviewed)
+        );
 
         let command = crate::bin_links::command_path_for_name(
             config.bin_dir(),
@@ -459,9 +642,47 @@ mod tests {
         .unwrap();
         fs::write(&command, b"user-owned command\n").await.unwrap();
 
-        handle_uninstall(&config, Some("utils/shine-env-export"), false, false)
+        let update = super::super::install::collect_update_lifecycle_result(&config)
             .await
             .unwrap();
+        let pending = update
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target == "shell/utils/shine-env-export")
+            .unwrap();
+        assert_eq!(pending.status, LifecycleStatus::Conflict);
+
+        let mut separator = crate::output::SectionSeparator::new();
+        let (_, upgrade) = super::super::install::handle_upgrade_installed_target_with_result(
+            &config,
+            Some("utils"),
+            false,
+            &mut separator,
+        )
+        .await
+        .unwrap();
+        let upgraded = upgrade
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target == "shell/utils/shine-env-export")
+            .unwrap();
+        assert_eq!(upgraded.status, LifecycleStatus::Conflict);
+        assert_eq!(
+            fs::read_to_string(&command).await.unwrap(),
+            "user-owned command\n"
+        );
+
+        let result =
+            handle_uninstall_with_result(&config, Some("utils/shine-env-export"), false, false)
+                .await
+                .unwrap();
+
+        assert_eq!(result.outcomes[0].status, LifecycleStatus::Conflict);
+        assert!(
+            result.outcomes[0]
+                .effects
+                .contains(&LifecycleEffect::UserResourcePreserved)
+        );
 
         assert_eq!(
             fs::read_to_string(&command).await.unwrap(),

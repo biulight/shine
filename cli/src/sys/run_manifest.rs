@@ -2,7 +2,7 @@
 //! by `(os_id, item_id)`. Read by `sys::handle_list`/`handle_info`/`handle_status`
 //! to show recorded status; written by the init/apply/uninstall execution paths.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -10,11 +10,27 @@ use super::model::SysItemStatus;
 use super::resources::SystemReceipt;
 
 pub(super) const SYS_MANIFEST_FILE: &str = "sys-manifest.toml";
+pub(super) const SYS_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(super) struct SysRunManifest {
+    #[serde(default = "legacy_manifest_schema_version")]
+    pub(super) schema_version: u32,
     #[serde(default)]
     pub(super) entries: Vec<SysRunEntry>,
+}
+
+fn legacy_manifest_schema_version() -> u32 {
+    0
+}
+
+impl Default for SysRunManifest {
+    fn default() -> Self {
+        Self {
+            schema_version: SYS_MANIFEST_SCHEMA_VERSION,
+            entries: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,11 +59,28 @@ fn default_profile_enabled() -> bool {
 
 impl SysRunManifest {
     pub(super) async fn load(shine_dir: &Path) -> Result<Self> {
-        crate::persist::load_toml_or_default(&shine_dir.join(SYS_MANIFEST_FILE), "sys manifest")
-            .await
+        let mut manifest: Self = crate::persist::load_toml_or_default(
+            &shine_dir.join(SYS_MANIFEST_FILE),
+            "sys manifest",
+        )
+        .await?;
+        match manifest.schema_version {
+            0 => manifest.schema_version = SYS_MANIFEST_SCHEMA_VERSION,
+            SYS_MANIFEST_SCHEMA_VERSION => {}
+            version => bail!(
+                "sys manifest schema version {version} is newer than this Shine supports ({SYS_MANIFEST_SCHEMA_VERSION})"
+            ),
+        }
+        Ok(manifest)
     }
 
     pub(super) async fn save(&self, shine_dir: &Path) -> Result<()> {
+        if self.schema_version != SYS_MANIFEST_SCHEMA_VERSION {
+            bail!(
+                "cannot write sys manifest schema version {}; expected {SYS_MANIFEST_SCHEMA_VERSION}",
+                self.schema_version
+            );
+        }
         crate::persist::save_toml_atomic(self, &shine_dir.join(SYS_MANIFEST_FILE), "sys manifest")
             .await
     }
@@ -62,5 +95,32 @@ impl SysRunManifest {
         } else {
             self.entries.push(entry);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sys_manifest_legacy_and_future_versions_are_gated() {
+        let root = crate::test_support::make_temp_dir("shine-sys-manifest-version").await;
+        let path = root.join(SYS_MANIFEST_FILE);
+        tokio::fs::write(&path, "entries = []\n").await.unwrap();
+
+        let legacy = SysRunManifest::load(&root).await.unwrap();
+        assert_eq!(legacy.schema_version, SYS_MANIFEST_SCHEMA_VERSION);
+        let after_read = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(!after_read.contains("schema_version"));
+        legacy.save(&root).await.unwrap();
+        let written = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(written.contains("schema_version = 1"));
+
+        tokio::fs::write(&path, "schema_version = 2\nentries = []\n")
+            .await
+            .unwrap();
+        let error = SysRunManifest::load(&root).await.unwrap_err();
+        assert!(error.to_string().contains("newer than this Shine supports"));
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 }

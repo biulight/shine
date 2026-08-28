@@ -183,6 +183,8 @@ content_hash = 7
 
         let manifest = AppManifest::load(&dir).await.unwrap();
         assert_eq!(manifest.schema_version, APP_MANIFEST_SCHEMA_VERSION);
+        let after_read = fs::read_to_string(dir.join(MANIFEST_FILE)).await.unwrap();
+        assert!(!after_read.contains("schema_version"));
         manifest.save(&dir).await.unwrap();
 
         let written = fs::read_to_string(dir.join(MANIFEST_FILE)).await.unwrap();

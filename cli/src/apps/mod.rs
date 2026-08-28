@@ -26,7 +26,9 @@ pub use metadata::{
 pub use refresh::handle_refresh;
 pub use uninstall::handle_uninstall;
 pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
-pub(crate) use upgrade::{handle_upgrade_installed_target, handle_upgrade_installed_with_output};
+pub(crate) use upgrade::{
+    handle_upgrade_installed_target_with_result, handle_upgrade_installed_with_output_with_result,
+};
 
 use crate::config::Config;
 use crate::install_core::manifest::{self, AppEntry, AppInstallStrategy, hash_content};
@@ -713,12 +715,22 @@ mod tests {
         let other_before = fs::read(&other_dest).await.unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report =
-            handle_upgrade_installed_target(&config, Some("sample"), false, false, &mut sep)
-                .await
-                .unwrap();
+        let (report, lifecycle) = handle_upgrade_installed_target_with_result(
+            &config,
+            Some("sample"),
+            false,
+            false,
+            &mut sep,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(report.updated, 1);
+        assert!(lifecycle.outcomes.iter().any(|outcome| {
+            outcome.target == "app/sample"
+                && outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome.resource.as_deref() == Some("daemon.jsonc")
+        }));
         assert_eq!(fs::read(&other_dest).await.unwrap(), other_before);
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
@@ -765,11 +777,19 @@ mod tests {
         .await;
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, lifecycle) =
+            handle_upgrade_installed_target_with_result(&config, None, false, false, &mut sep)
+                .await
+                .unwrap();
 
         assert_eq!(report.updated, 1);
+        assert!(lifecycle.outcomes.iter().any(|outcome| {
+            outcome.resource.as_deref() == Some("hook:post-upgrade")
+                && outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome
+                    .effects
+                    .contains(&utils::lifecycle::LifecycleEffect::CodeExecuted)
+        }));
         assert_eq!(fs::read_to_string(&marker).await.unwrap(), "x");
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
@@ -850,11 +870,19 @@ mod tests {
         .await;
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
-            .await
-            .unwrap();
+        let (report, lifecycle) =
+            handle_upgrade_installed_target_with_result(&config, None, false, false, &mut sep)
+                .await
+                .unwrap();
 
         assert_eq!(report.updated, 1);
+        assert!(lifecycle.outcomes.iter().any(|outcome| {
+            outcome.resource.as_deref() == Some("hook:post-upgrade")
+                && outcome.status == utils::lifecycle::LifecycleStatus::Skipped
+                && outcome
+                    .diagnostic_codes
+                    .contains(&"app_hook_permission_required".to_string())
+        }));
         assert!(
             !marker.exists(),
             "external hook must be skipped unless allow_app_hooks is enabled"

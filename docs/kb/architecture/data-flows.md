@@ -19,6 +19,15 @@ rendered output, and receipt, rebuilds source-command profile wrappers from the 
 and removes shared category material only after the last installed command is gone. Foreign command
 entries are never removed.
 
+Every mutating or dry-run Shell lifecycle entry loads `shell-manifest.toml` before extraction,
+snapshot, render, launcher, receipt, or profile work. Legacy v0 normalizes in memory, successful
+mutations save schema v1, read-only status/update does not rewrite it, and a future version fails
+before mutation. The Shell adapter emits one `shell/<category>/<command>` outcome per installed or
+selected command. Read-only update maps typed row changes to `pending` plus write-preview effects;
+foreign launcher ownership is `conflict`, not pending, and upgrade preserves that launcher and its
+receipt. Shared cache/snapshot/rendered effects attach to affected commands without turning source
+presence into installation evidence.
+
 ## App install (`shine app install <category>`)
 
 `cli/src/apps/mod.rs` orchestrates:
@@ -48,9 +57,10 @@ entries are never removed.
    `schema_version = 1`.
 6. **Result and report** — the App adapter records safe file/receipt canonical targets, logical
    resources, statuses, effects, and diagnostic codes in `shine-core`'s `LifecycleResultV1`. The
-   transitional Phase 1 adapter still renders the established terminal output inline; hook,
-   teardown, preset-cache, and purge effects remain follow-up scope. Reusable results never include
-   absolute destinations, content, raw errors, environment values, or secret values.
+   transitional Phase 1 adapter still renders the established terminal output inline. App upgrade,
+   hooks, implicit teardown, embedded preset-cache, and purge now join the same result; hook and
+   teardown failures retain their non-fatal command semantics. Reusable results never include
+   absolute destinations, content, raw errors or child output, environment values, or secret values.
 
 ## App uninstall
 
@@ -83,6 +93,14 @@ re-applies recorded managed resources and replaces the receipt after convergence
 the receipt comparison includes the normalized domain, DNS servers, and platform resource path.
 Update and sys-info output render those receipt differences field by field (`old -> new`) so the
 user can inspect the pending system change before granting administrator access to upgrade.
+
+Managed apply/upgrade/uninstall loads the independently versioned `sys-manifest.toml` before
+resource, elevation, or composed-profile mutation. Read-only update uses the same typed receipt
+comparison to produce both the existing field-difference rows and `pending` `sys/<item>` outcomes.
+Built-in drivers return typed resource/backup effects and typed user-modification conflicts; the
+adapter never classifies reusable results by parsing `detail` or raw errors. No-op upgrade does not
+rewrite the receipt merely to refresh metadata. Bootstrap execution, profile enable/disable, and
+composed-profile sync remain outside the structured managed-resource result.
 
 `shine update --diff` expands stale shell/app rows, while `shine update <TARGET>` resolves one
 installed shell/app through the same aliases as `shine info` and prints only its stale files. Each

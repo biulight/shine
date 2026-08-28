@@ -69,10 +69,51 @@ pub(crate) async fn handle_install_with_result(
     // When the user has configured a custom presets directory, the app preset
     // files are already there — skip the embedded-asset extraction step.
     if !config.is_external_presets {
-        // Refresh the managed embedded preset cache on each install so metadata
-        // and transformed source updates from the current binary take effect.
-        let _extract_report =
-            crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
+        if dry_run {
+            for cat in &categories {
+                lifecycle_result.push(app_outcome(
+                    &cat.name,
+                    "preset-cache",
+                    LifecycleStatus::Previewed,
+                    [LifecycleEffect::CacheWritePreviewed],
+                ));
+            }
+        } else {
+            // Refresh the managed embedded preset cache on each install so metadata
+            // and transformed source updates from the current binary take effect.
+            let extract_report =
+                crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
+            let cache_changed =
+                !extract_report.created.is_empty() || !extract_report.overwritten.is_empty();
+            for cat in &categories {
+                lifecycle_result.push(app_outcome(
+                    &cat.name,
+                    "preset-cache",
+                    if cache_changed {
+                        LifecycleStatus::Changed
+                    } else {
+                        LifecycleStatus::Unchanged
+                    },
+                    if cache_changed {
+                        vec![LifecycleEffect::CacheWritten]
+                    } else {
+                        Vec::new()
+                    },
+                ));
+            }
+        }
+    } else {
+        for cat in &categories {
+            lifecycle_result.push(
+                app_outcome(
+                    &cat.name,
+                    "preset-cache",
+                    LifecycleStatus::Skipped,
+                    [LifecycleEffect::UserResourcePreserved],
+                )
+                .with_diagnostic_code("app_external_preset_cache_preserved"),
+            );
+        }
     }
     validate_unique_install_destinations(&categories, config)?;
     let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
@@ -287,7 +328,10 @@ pub(crate) async fn handle_install_with_result(
                         &cat.name,
                         &file.source_rel.display().to_string(),
                         LifecycleStatus::Previewed,
-                        [LifecycleEffect::ResourceWritePreviewed],
+                        [
+                            LifecycleEffect::ResourceWritePreviewed,
+                            LifecycleEffect::ReceiptWritePreviewed,
+                        ],
                     ));
                 }
                 Err(e) => {
@@ -308,7 +352,7 @@ pub(crate) async fn handle_install_with_result(
 
     if !dry_run {
         manifest.save(config.shine_dir()).await?;
-        super::hooks::run_app_hooks(
+        let hook_result = super::hooks::run_app_hooks(
             config,
             |name| categories.iter().find(|c| c.name == name),
             &changed_categories,
@@ -316,6 +360,7 @@ pub(crate) async fn handle_install_with_result(
             true,
         )
         .await;
+        lifecycle_result.outcomes.extend(hook_result.outcomes);
     }
 
     let mut summary_parts: Vec<String> = Vec::new();
@@ -426,7 +471,10 @@ mod tests {
             .await
             .unwrap();
         assert!(uninstall_result.summary().changed > 0);
-        assert_eq!(uninstall_result.summary().failed, 0);
+        assert!(uninstall_result.outcomes.iter().all(|outcome| {
+            outcome.status != LifecycleStatus::Failed
+                || outcome.resource.as_deref() == Some("artifact:teardown")
+        }));
 
         let serialized = serde_json::to_string(&uninstall_result).unwrap();
         assert!(!serialized.contains(&dir.display().to_string()));
@@ -455,6 +503,22 @@ mod tests {
                 LifecycleEffect::ReceiptWritten,
             ],
         ));
+        result.push(LifecycleOutcomeV1::new(
+            "shell/sample/tool",
+            Some("preset-cache"),
+            LifecycleStatus::Pending,
+            [
+                LifecycleEffect::ReceiptWritePreviewed,
+                LifecycleEffect::ReceiptRemovePreviewed,
+                LifecycleEffect::CacheWritten,
+                LifecycleEffect::CacheRemoved,
+                LifecycleEffect::CachePurged,
+                LifecycleEffect::CacheWritePreviewed,
+                LifecycleEffect::CacheRemovePreviewed,
+                LifecycleEffect::CodeExecuted,
+                LifecycleEffect::CodeExecutionPreviewed,
+            ],
+        ));
 
         assert_eq!(
             serde_json::to_string_pretty(&result).unwrap(),
@@ -471,6 +535,22 @@ mod tests {
         "backup-created",
         "resource-written",
         "receipt-written"
+      ]
+    },
+    {
+      "target": "shell/sample/tool",
+      "resource": "preset-cache",
+      "status": "pending",
+      "effects": [
+        "receipt-write-previewed",
+        "receipt-remove-previewed",
+        "cache-written",
+        "cache-removed",
+        "cache-purged",
+        "cache-write-previewed",
+        "cache-remove-previewed",
+        "code-executed",
+        "code-execution-previewed"
       ]
     }
   ]
@@ -508,11 +588,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(install.summary().changed, 1);
-        assert!(
-            install.outcomes[0]
-                .effects
-                .contains(&LifecycleEffect::BackupCreated)
-        );
+        assert!(install.outcomes.iter().any(|outcome| {
+            outcome.resource.as_deref() == Some("config.toml")
+                && outcome.effects.contains(&LifecycleEffect::BackupCreated)
+        }));
 
         let uninstall = handle_uninstall_with_result(&config, Some("sample"), false, false, false)
             .await
@@ -563,6 +642,47 @@ mod tests {
         assert!(error.to_string().contains("newer than this Shine supports"));
         assert!(!destination_root.join("config.toml").exists());
 
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn embedded_install_dry_run_previews_cache_without_extracting_it() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+
+        let result = handle_install_with_result(&config, Some("git"), true, false)
+            .await
+            .unwrap();
+
+        let cache = result
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.resource.as_deref() == Some("preset-cache"))
+            .unwrap();
+        assert_eq!(cache.status, LifecycleStatus::Previewed);
+        assert_eq!(cache.effects, [LifecycleEffect::CacheWritePreviewed]);
+        assert!(!config.presets_dir().join("app/git").exists());
+        assert!(!config.shine_dir().join("app-manifest.toml").exists());
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn future_app_manifest_rejects_embedded_cache_extraction() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::write(
+            config.shine_dir().join("app-manifest.toml"),
+            "schema_version = 2\n",
+        )
+        .await
+        .unwrap();
+
+        let error = handle_install_with_result(&config, Some("git"), false, false)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("newer than this Shine supports"));
+        assert!(!config.presets_dir().join("app/git").exists());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -697,10 +817,13 @@ source = \"file.conf\"\n",
 
         assert!(result.dry_run);
         assert_eq!(result.summary().previewed, 1);
-        assert_eq!(
-            result.outcomes[0].effects,
-            vec![LifecycleEffect::ResourceWritePreviewed]
-        );
+        assert!(result.outcomes.iter().any(|outcome| {
+            outcome.effects
+                == vec![
+                    LifecycleEffect::ResourceWritePreviewed,
+                    LifecycleEffect::ReceiptWritePreviewed,
+                ]
+        }));
         assert!(!marker.exists());
         assert!(!destination.exists());
         fs::remove_dir_all(&dir).await.unwrap();

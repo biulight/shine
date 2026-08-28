@@ -15,6 +15,9 @@ use super::{
     SysDriverKind, SysInstalledRow, SysItem, SysItemMode, SysItemOutcome, SysItemStatus,
     SysUpdateRow, SysUpgradeReport,
 };
+use utils::lifecycle::{
+    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SysAction {
@@ -39,15 +42,7 @@ impl ManagedOutputMode {
 }
 
 pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) -> Result<()> {
-    let report = run_managed(
-        config,
-        item,
-        SysAction::Apply,
-        dry_run,
-        ManagedOutputMode::Explicit,
-        None,
-    )
-    .await?;
+    let (report, _) = handle_apply_with_result(config, item, dry_run).await?;
     if report.failed > 0 {
         bail!(
             "{} managed system configuration item(s) failed",
@@ -57,8 +52,36 @@ pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) ->
     Ok(())
 }
 
+pub(crate) async fn handle_apply_with_result(
+    config: &Config,
+    item: Option<&str>,
+    dry_run: bool,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    run_managed_with_result(
+        config,
+        item,
+        SysAction::Apply,
+        dry_run,
+        ManagedOutputMode::Explicit,
+        None,
+    )
+    .await
+}
+
 pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Result<()> {
-    let report = run_managed(
+    let (report, _) = handle_uninstall_with_result(config, item, dry_run).await?;
+    if report.failed > 0 {
+        bail!("failed to remove managed system configuration `{item}`");
+    }
+    Ok(())
+}
+
+pub(crate) async fn handle_uninstall_with_result(
+    config: &Config,
+    item: &str,
+    dry_run: bool,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    run_managed_with_result(
         config,
         Some(item),
         SysAction::Remove,
@@ -66,11 +89,7 @@ pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Res
         ManagedOutputMode::Explicit,
         None,
     )
-    .await?;
-    if report.failed > 0 {
-        bail!("failed to remove managed system configuration `{item}`");
-    }
-    Ok(())
+    .await
 }
 
 pub async fn handle_upgrade_managed(
@@ -78,7 +97,18 @@ pub async fn handle_upgrade_managed(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<SysUpgradeReport> {
-    let mut report = handle_upgrade_managed_target(config, None, verbose, sep).await?;
+    handle_upgrade_managed_with_result(config, verbose, sep)
+        .await
+        .map(|(report, _)| report)
+}
+
+pub(crate) async fn handle_upgrade_managed_with_result(
+    config: &Config,
+    verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    let (mut report, lifecycle_result) =
+        handle_upgrade_managed_target_with_result(config, None, verbose, sep).await?;
     if let Some(outcome) = super::profile_commands::sync_composed_profile(config).await? {
         let changed = matches!(
             outcome.status,
@@ -95,7 +125,7 @@ pub async fn handle_upgrade_managed(
             report.skipped += 1;
         }
     }
-    Ok(report)
+    Ok((report, lifecycle_result))
 }
 
 pub async fn handle_upgrade_managed_target(
@@ -104,7 +134,18 @@ pub async fn handle_upgrade_managed_target(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<SysUpgradeReport> {
-    run_managed(
+    handle_upgrade_managed_target_with_result(config, item, verbose, sep)
+        .await
+        .map(|(report, _)| report)
+}
+
+pub(crate) async fn handle_upgrade_managed_target_with_result(
+    config: &Config,
+    item: Option<&str>,
+    verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    run_managed_with_result(
         config,
         item,
         SysAction::Apply,
@@ -116,8 +157,16 @@ pub async fn handle_upgrade_managed_target(
 }
 
 pub async fn managed_updates(config: &Config) -> Result<Vec<SysUpdateRow>> {
+    managed_updates_with_result(config)
+        .await
+        .map(|(rows, _)| rows)
+}
+
+pub(crate) async fn managed_updates_with_result(
+    config: &Config,
+) -> Result<(Vec<SysUpdateRow>, LifecycleResultV1)> {
     let os_id = detect_os_id().await?;
-    managed_updates_for_os(config, &os_id).await
+    managed_updates_for_os_with_result(config, &os_id).await
 }
 
 pub(crate) async fn installed_managed(config: &Config) -> Result<Vec<SysInstalledRow>> {
@@ -144,7 +193,11 @@ async fn installed_managed_for_os(config: &Config, os_id: &str) -> Result<Vec<Sy
     Ok(rows)
 }
 
-async fn managed_updates_for_os(config: &Config, os_id: &str) -> Result<Vec<SysUpdateRow>> {
+async fn managed_updates_for_os_with_result(
+    config: &Config,
+    os_id: &str,
+) -> Result<(Vec<SysUpdateRow>, LifecycleResultV1)> {
+    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Update, false);
     let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
     let recorded = run_manifest
         .entries
@@ -152,7 +205,7 @@ async fn managed_updates_for_os(config: &Config, os_id: &str) -> Result<Vec<SysU
         .filter(|entry| entry.os_id == os_id && entry.managed)
         .collect::<Vec<_>>();
     if recorded.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), lifecycle_result));
     }
 
     let loaded = load_sys_preset(config, os_id).await?;
@@ -166,6 +219,15 @@ async fn managed_updates_for_os(config: &Config, os_id: &str) -> Result<Vec<SysU
                 && item.mode == SysItemMode::Managed
                 && item.driver != SysDriverKind::Script
         }) else {
+            lifecycle_result.push(
+                LifecycleOutcomeV1::new(
+                    format!("sys/{}", entry.item_id),
+                    None::<String>,
+                    LifecycleStatus::Skipped,
+                    [],
+                )
+                .with_diagnostic_code("sys_managed_item_unavailable"),
+            );
             continue;
         };
         let context = resources::DriverContext {
@@ -179,30 +241,47 @@ async fn managed_updates_for_os(config: &Config, os_id: &str) -> Result<Vec<SysU
         let details = resources::BuiltinDriver::new(item.driver)
             .update_details(&context, entry.receipt.as_ref())?;
         if !details.is_empty() {
+            lifecycle_result.push(LifecycleOutcomeV1::new(
+                format!("sys/{}", item.id),
+                None::<String>,
+                LifecycleStatus::Pending,
+                [
+                    LifecycleEffect::ResourceWritePreviewed,
+                    LifecycleEffect::ReceiptWritePreviewed,
+                ],
+            ));
             updates.push(SysUpdateRow {
                 item_id: item.id.clone(),
                 label: item.label.clone(),
                 details,
             });
+        } else {
+            lifecycle_result.push(LifecycleOutcomeV1::new(
+                format!("sys/{}", item.id),
+                None::<String>,
+                LifecycleStatus::Unchanged,
+                [],
+            ));
         }
     }
 
-    Ok(updates)
+    Ok((updates, lifecycle_result))
 }
 
-async fn run_managed(
+async fn run_managed_with_result(
     config: &Config,
     requested: Option<&str>,
     action: SysAction,
     dry_run: bool,
     output_mode: ManagedOutputMode,
     sep: Option<&mut crate::output::SectionSeparator>,
-) -> Result<SysUpgradeReport> {
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
     let os_id = detect_os_id().await?;
-    run_managed_for_os(config, &os_id, requested, action, dry_run, output_mode, sep).await
+    run_managed_for_os_with_result(config, &os_id, requested, action, dry_run, output_mode, sep)
+        .await
 }
 
-async fn run_managed_for_os(
+async fn run_managed_for_os_with_result(
     config: &Config,
     os_id: &str,
     requested: Option<&str>,
@@ -210,7 +289,13 @@ async fn run_managed_for_os(
     dry_run: bool,
     output_mode: ManagedOutputMode,
     mut sep: Option<&mut crate::output::SectionSeparator>,
-) -> Result<SysUpgradeReport> {
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    let operation = match (action, output_mode) {
+        (SysAction::Remove, _) => LifecycleOperation::Uninstall,
+        (SysAction::Apply, ManagedOutputMode::Upgrade { .. }) => LifecycleOperation::Upgrade,
+        (SysAction::Apply, ManagedOutputMode::Explicit) => LifecycleOperation::Install,
+    };
+    let mut lifecycle_result = LifecycleResultV1::new(operation, dry_run);
     let mut run_manifest = SysRunManifest::load(config.shine_dir()).await?;
 
     // Built-in resources can be removed entirely from their recorded receipt,
@@ -231,14 +316,42 @@ async fn run_managed_for_os(
         println!("{}", colors::bold("Remove Managed System Config"));
         println!("  {} {}", colors::symbol("•"), entry.label);
         if receipt.requires_admin() && !dry_run && !authorize_admin(1).await? {
-            return Ok(SysUpgradeReport {
-                failed: 1,
-                ..SysUpgradeReport::default()
-            });
+            lifecycle_result.push(
+                LifecycleOutcomeV1::new(
+                    format!("sys/{item_id}"),
+                    None::<String>,
+                    LifecycleStatus::Failed,
+                    [],
+                )
+                .with_diagnostic_code("sys_admin_not_authorized"),
+            );
+            return Ok((
+                SysUpgradeReport {
+                    failed: 1,
+                    ..SysUpgradeReport::default()
+                },
+                lifecycle_result,
+            ));
         }
         let driver = resources::BuiltinDriver::new(receipt.driver());
         match driver.remove(None, receipt, dry_run).await {
             Ok(outcome) => {
+                let mut effects = outcome.effects.clone();
+                effects.push(if dry_run {
+                    LifecycleEffect::ReceiptRemovePreviewed
+                } else {
+                    LifecycleEffect::ReceiptRemoved
+                });
+                lifecycle_result.push(LifecycleOutcomeV1::new(
+                    format!("sys/{item_id}"),
+                    None::<String>,
+                    if dry_run {
+                        LifecycleStatus::Previewed
+                    } else {
+                        LifecycleStatus::Changed
+                    },
+                    effects,
+                ));
                 let status = if dry_run || !outcome.changed {
                     SysItemStatus::Skipped
                 } else {
@@ -260,13 +373,19 @@ async fn run_managed_for_os(
                     });
                     run_manifest.save(config.shine_dir()).await?;
                 }
-                return Ok(SysUpgradeReport {
-                    updated: usize::from(!dry_run && outcome.changed),
-                    skipped: usize::from(dry_run || !outcome.changed),
-                    failed: 0,
-                });
+                return Ok((
+                    SysUpgradeReport {
+                        updated: usize::from(!dry_run && outcome.changed),
+                        skipped: usize::from(dry_run || !outcome.changed),
+                        failed: 0,
+                    },
+                    lifecycle_result,
+                ));
             }
             Err(error) => {
+                let user_modified = error
+                    .downcast_ref::<resources::ResourceConflict>()
+                    .is_some();
                 print_item_outcome(
                     &SysItemOutcome {
                         item_id: item_id.to_string(),
@@ -277,10 +396,34 @@ async fn run_managed_for_os(
                     },
                     14,
                 );
-                return Ok(SysUpgradeReport {
-                    failed: 1,
-                    ..SysUpgradeReport::default()
-                });
+                lifecycle_result.push(
+                    LifecycleOutcomeV1::new(
+                        format!("sys/{item_id}"),
+                        None::<String>,
+                        if user_modified {
+                            LifecycleStatus::Preserved
+                        } else {
+                            LifecycleStatus::Failed
+                        },
+                        if user_modified {
+                            vec![LifecycleEffect::UserResourcePreserved]
+                        } else {
+                            Vec::new()
+                        },
+                    )
+                    .with_diagnostic_code(if user_modified {
+                        "sys_resource_user_modified"
+                    } else {
+                        "sys_remove_failed"
+                    }),
+                );
+                return Ok((
+                    SysUpgradeReport {
+                        failed: 1,
+                        ..SysUpgradeReport::default()
+                    },
+                    lifecycle_result,
+                ));
             }
         }
     }
@@ -291,7 +434,7 @@ async fn run_managed_for_os(
             .iter()
             .any(|entry| entry.os_id == os_id && entry.managed)
     {
-        return Ok(SysUpgradeReport::default());
+        return Ok((SysUpgradeReport::default(), lifecycle_result));
     }
     let loaded = load_sys_preset(config, os_id).await?;
     let mut selected: Vec<&SysItem> = Vec::new();
@@ -326,7 +469,7 @@ async fn run_managed_for_os(
                 colors::dim("No managed system configuration items selected.")
             );
         }
-        return Ok(SysUpgradeReport::default());
+        return Ok((SysUpgradeReport::default(), lifecycle_result));
     }
 
     let show_all_outcomes = output_mode.show_all_outcomes();
@@ -356,6 +499,15 @@ async fn run_managed_for_os(
                     item.id,
                     missing.join(", ")
                 );
+                lifecycle_result.push(
+                    LifecycleOutcomeV1::new(
+                        format!("sys/{}", item.id),
+                        None::<String>,
+                        LifecycleStatus::Failed,
+                        [],
+                    )
+                    .with_diagnostic_code("sys_missing_required_env"),
+                );
                 continue;
             }
             let context = resources::DriverContext {
@@ -369,27 +521,58 @@ async fn run_managed_for_os(
             match resources::BuiltinDriver::new(item.driver)
                 .plan(&context, action == SysAction::Remove)
             {
-                Ok(plan) => println!(
-                    "  {} {}{}{}",
-                    colors::dim("[dry-run]"),
-                    plan.description,
-                    if plan.requires_admin { " [admin]" } else { "" },
-                    plan.restart_hint
-                        .as_deref()
-                        .map(|hint| format!(" [restart required: {hint}]"))
-                        .unwrap_or_default()
-                ),
+                Ok(plan) => {
+                    println!(
+                        "  {} {}{}{}",
+                        colors::dim("[dry-run]"),
+                        plan.description,
+                        if plan.requires_admin { " [admin]" } else { "" },
+                        plan.restart_hint
+                            .as_deref()
+                            .map(|hint| format!(" [restart required: {hint}]"))
+                            .unwrap_or_default()
+                    );
+                    lifecycle_result.push(LifecycleOutcomeV1::new(
+                        format!("sys/{}", item.id),
+                        None::<String>,
+                        LifecycleStatus::Previewed,
+                        [
+                            if action == SysAction::Remove {
+                                LifecycleEffect::ResourceRemovePreviewed
+                            } else {
+                                LifecycleEffect::ResourceWritePreviewed
+                            },
+                            if action == SysAction::Remove {
+                                LifecycleEffect::ReceiptRemovePreviewed
+                            } else {
+                                LifecycleEffect::ReceiptWritePreviewed
+                            },
+                        ],
+                    ));
+                }
                 Err(error) => {
                     failed += 1;
                     eprintln!("  {} {}: {error:#}", colors::symbol_stderr("✗"), item.id);
+                    lifecycle_result.push(
+                        LifecycleOutcomeV1::new(
+                            format!("sys/{}", item.id),
+                            None::<String>,
+                            LifecycleStatus::Failed,
+                            [],
+                        )
+                        .with_diagnostic_code("sys_plan_failed"),
+                    );
                 }
             }
         }
-        return Ok(SysUpgradeReport {
-            skipped: selected.len() - failed,
-            failed,
-            ..SysUpgradeReport::default()
-        });
+        return Ok((
+            SysUpgradeReport {
+                skipped: selected.len() - failed,
+                failed,
+                ..SysUpgradeReport::default()
+            },
+            lifecycle_result,
+        ));
     }
 
     let mut needs_admin = false;
@@ -429,14 +612,29 @@ async fn run_managed_for_os(
             section_started = true;
         }
         if !authorize_admin(selected.len()).await? {
-            return Ok(SysUpgradeReport {
-                failed: selected.len(),
-                ..SysUpgradeReport::default()
-            });
+            for item in &selected {
+                lifecycle_result.push(
+                    LifecycleOutcomeV1::new(
+                        format!("sys/{}", item.id),
+                        None::<String>,
+                        LifecycleStatus::Failed,
+                        [],
+                    )
+                    .with_diagnostic_code("sys_admin_not_authorized"),
+                );
+            }
+            return Ok((
+                SysUpgradeReport {
+                    failed: selected.len(),
+                    ..SysUpgradeReport::default()
+                },
+                lifecycle_result,
+            ));
         }
     }
 
     let mut report = SysUpgradeReport::default();
+    let mut manifest_changed = false;
 
     for item in &selected {
         let missing = item
@@ -459,6 +657,15 @@ async fn run_managed_for_os(
             }
             print_item_outcome(&outcome, item.label.len().max(14));
             report.failed += 1;
+            lifecycle_result.push(
+                LifecycleOutcomeV1::new(
+                    format!("sys/{}", item.id),
+                    None::<String>,
+                    LifecycleStatus::Failed,
+                    [],
+                )
+                .with_diagnostic_code("sys_missing_required_env"),
+            );
             continue;
         }
 
@@ -489,30 +696,79 @@ async fn run_managed_for_os(
                 )),
             },
         };
-        let outcome = match result {
+        let (outcome, structured_outcome) = match result {
             Ok(resource) => {
+                let mut effects = resource.effects.clone();
+                let structured_status = if action == SysAction::Remove {
+                    effects.push(LifecycleEffect::ReceiptRemoved);
+                    LifecycleStatus::Changed
+                } else if resource.changed {
+                    effects.push(LifecycleEffect::ReceiptWritten);
+                    LifecycleStatus::Changed
+                } else {
+                    LifecycleStatus::Unchanged
+                };
+                let structured_outcome = LifecycleOutcomeV1::new(
+                    format!("sys/{}", item.id),
+                    None::<String>,
+                    structured_status,
+                    effects,
+                );
                 next_receipt = resource.receipt;
                 restart_hint = resource.restart_hint;
-                SysItemOutcome {
-                    item_id: item.id.clone(),
-                    label: item.label.clone(),
-                    status: if resource.changed {
-                        SysItemStatus::Updated
-                    } else {
-                        SysItemStatus::AlreadyInstalled
+                (
+                    SysItemOutcome {
+                        item_id: item.id.clone(),
+                        label: item.label.clone(),
+                        status: if resource.changed {
+                            SysItemStatus::Updated
+                        } else {
+                            SysItemStatus::AlreadyInstalled
+                        },
+                        detail: resource.detail,
+                        logs: Vec::new(),
                     },
-                    detail: resource.detail,
-                    logs: Vec::new(),
-                }
+                    structured_outcome,
+                )
             }
-            Err(error) => SysItemOutcome {
-                item_id: item.id.clone(),
-                label: item.label.clone(),
-                status: SysItemStatus::Failed,
-                detail: format!("{error:#}"),
-                logs: Vec::new(),
-            },
+            Err(error) => {
+                let user_modified = error
+                    .downcast_ref::<resources::ResourceConflict>()
+                    .is_some();
+                let structured_outcome = LifecycleOutcomeV1::new(
+                    format!("sys/{}", item.id),
+                    None::<String>,
+                    if user_modified {
+                        LifecycleStatus::Preserved
+                    } else {
+                        LifecycleStatus::Failed
+                    },
+                    if user_modified {
+                        vec![LifecycleEffect::UserResourcePreserved]
+                    } else {
+                        Vec::new()
+                    },
+                )
+                .with_diagnostic_code(if user_modified {
+                    "sys_resource_user_modified"
+                } else if action == SysAction::Remove {
+                    "sys_remove_failed"
+                } else {
+                    "sys_apply_failed"
+                });
+                (
+                    SysItemOutcome {
+                        item_id: item.id.clone(),
+                        label: item.label.clone(),
+                        status: SysItemStatus::Failed,
+                        detail: format!("{error:#}"),
+                        logs: Vec::new(),
+                    },
+                    structured_outcome,
+                )
+            }
         };
+        lifecycle_result.push(structured_outcome);
         if should_print_managed_outcome(show_all_outcomes, outcome.status) {
             if !section_started {
                 begin_managed_section(&mut sep, action, &selected, false);
@@ -541,7 +797,11 @@ async fn run_managed_for_os(
             run_manifest
                 .entries
                 .retain(|entry| !(entry.os_id == os_id && entry.item_id == item.id));
-        } else {
+            manifest_changed = true;
+        } else if matches!(
+            outcome.status,
+            SysItemStatus::Updated | SysItemStatus::Installed | SysItemStatus::Completed
+        ) {
             run_manifest.upsert(SysRunEntry {
                 os_id: os_id.to_string(),
                 item_id: item.id.clone(),
@@ -553,11 +813,14 @@ async fn run_managed_for_os(
                 profile_enabled: false,
                 receipt: next_receipt,
             });
+            manifest_changed = true;
         }
     }
 
-    run_manifest.save(config.shine_dir()).await?;
-    Ok(report)
+    if manifest_changed {
+        run_manifest.save(config.shine_dir()).await?;
+    }
+    Ok((report, lifecycle_result))
 }
 
 async fn authorize_admin(item_count: usize) -> Result<bool> {
@@ -766,11 +1029,21 @@ resource = "/etc/resolver/private.example"
             .env
             .insert("PRIVATE_DNS_SERVERS".to_string(), "10.0.0.3".to_string());
 
-        let updates = managed_updates_for_os(&config, "macos").await.unwrap();
+        let (updates, lifecycle) = managed_updates_for_os_with_result(&config, "macos")
+            .await
+            .unwrap();
 
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].item_id, "split-dns");
         assert_eq!(updates[0].details, ["Servers: 10.0.0.2 -> 10.0.0.3"]);
+        assert_eq!(lifecycle.summary().pending, 1);
+        assert_eq!(
+            lifecycle.outcomes[0].effects,
+            [
+                LifecycleEffect::ResourceWritePreviewed,
+                LifecycleEffect::ReceiptWritePreviewed,
+            ]
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -859,7 +1132,7 @@ target = {:?}
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        let applied = run_managed_for_os(
+        let (applied, applied_lifecycle) = run_managed_for_os_with_result(
             &config,
             "fakeos",
             Some("managed-file-test"),
@@ -871,9 +1144,15 @@ target = {:?}
         .await
         .unwrap();
         assert_eq!(applied.updated, 1);
+        assert_eq!(applied_lifecycle.summary().changed, 1);
+        assert!(
+            applied_lifecycle.outcomes[0]
+                .effects
+                .contains(&LifecycleEffect::ReceiptWritten)
+        );
         assert_eq!(fs::read_to_string(&destination).await.unwrap(), "managed");
 
-        let unchanged = run_managed_for_os(
+        let (unchanged, unchanged_lifecycle) = run_managed_for_os_with_result(
             &config,
             "fakeos",
             None,
@@ -886,9 +1165,31 @@ target = {:?}
         .unwrap();
         assert_eq!(unchanged.updated, 0);
         assert_eq!(unchanged.skipped, 1);
+        assert_eq!(unchanged_lifecycle.summary().unchanged, 1);
+
+        fs::write(&destination, "user edit").await.unwrap();
+        let (preserved, preserved_lifecycle) = run_managed_for_os_with_result(
+            &config,
+            "fakeos",
+            Some("managed-file-test"),
+            SysAction::Remove,
+            false,
+            ManagedOutputMode::Explicit,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(preserved.failed, 1);
+        assert_eq!(preserved_lifecycle.summary().preserved, 1);
+        assert_eq!(
+            preserved_lifecycle.outcomes[0].diagnostic_codes,
+            ["sys_resource_user_modified"]
+        );
+        assert_eq!(fs::read_to_string(&destination).await.unwrap(), "user edit");
+        fs::write(&destination, "managed").await.unwrap();
 
         fs::remove_dir_all(&os_dir).await.unwrap();
-        let removed = run_managed_for_os(
+        let (removed, removed_lifecycle) = run_managed_for_os_with_result(
             &config,
             "fakeos",
             Some("managed-file-test"),
@@ -900,6 +1201,12 @@ target = {:?}
         .await
         .unwrap();
         assert_eq!(removed.updated, 1);
+        assert_eq!(removed_lifecycle.summary().changed, 1);
+        assert!(
+            removed_lifecycle.outcomes[0]
+                .effects
+                .contains(&LifecycleEffect::ReceiptRemoved)
+        );
         assert!(!destination.exists());
         assert!(
             SysRunManifest::load(config.shine_dir())
@@ -909,6 +1216,121 @@ target = {:?}
                 .is_empty()
         );
 
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_env_maps_to_safe_structured_failure() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/fakeos");
+        fs::create_dir_all(&os_dir).await.unwrap();
+        fs::write(
+            os_dir.join("shine.toml"),
+            format!(
+                r#"
+version = 2
+description = "Managed resource test"
+
+[[items]]
+id = "managed-file-test"
+label = "Managed file test"
+mode = "managed"
+driver = "managed-file"
+required_env = ["REQUIRED_TOKEN"]
+
+[items.config]
+source = "desired.txt"
+target = {:?}
+"#,
+                dir.join("managed-output.txt").display().to_string()
+            ),
+        )
+        .await
+        .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let (report, lifecycle) = run_managed_for_os_with_result(
+            &config,
+            "fakeos",
+            Some("managed-file-test"),
+            SysAction::Apply,
+            true,
+            ManagedOutputMode::Explicit,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.failed, 1);
+        assert_eq!(lifecycle.summary().failed, 1);
+        assert_eq!(
+            lifecycle.outcomes[0].diagnostic_codes,
+            ["sys_missing_required_env"]
+        );
+        assert!(
+            !serde_json::to_string(&lifecycle)
+                .unwrap()
+                .contains("REQUIRED_TOKEN")
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn future_manifest_rejects_apply_before_resource_mutation() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/fakeos");
+        fs::create_dir_all(&os_dir).await.unwrap();
+        let destination = dir.join("managed-output.txt");
+        fs::write(os_dir.join("desired.txt"), "managed")
+            .await
+            .unwrap();
+        fs::write(
+            os_dir.join("shine.toml"),
+            format!(
+                r#"
+version = 2
+
+description = "Managed resource test"
+
+[[items]]
+id = "managed-file-test"
+label = "Managed file test"
+mode = "managed"
+driver = "managed-file"
+
+[items.config]
+source = "desired.txt"
+target = {:?}
+"#,
+                destination.display().to_string()
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(
+            dir.join(SYS_MANIFEST_FILE),
+            "schema_version = 2\nentries = []\n",
+        )
+        .await
+        .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let error = run_managed_for_os_with_result(
+            &config,
+            "fakeos",
+            Some("managed-file-test"),
+            SysAction::Apply,
+            false,
+            ManagedOutputMode::Explicit,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("newer than this Shine supports"));
+        assert!(!destination.exists());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

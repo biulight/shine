@@ -1,20 +1,22 @@
 # Shine Structured Lifecycle Contract PRD
 
-> **Status:** Phase 1A in progress. This document scopes the first executable slice of
-> [ROADMAP.md](ROADMAP.md); it is not released CLI behavior or a public preset-authoring contract.
+> **Status:** Phase 1 structured lifecycle slices 1–5 complete; renderer separation remains
+> pending. This document records the executable Phase 1 contract from [ROADMAP.md](ROADMAP.md); it
+> is not released JSON behavior or a public preset-authoring contract.
 
 ## 1. Summary
 
 Shine already gives App, Shell, and managed Sys resources safe install, update, upgrade, and
 uninstall behavior, but each domain exposes different Rust return types and mixes execution with
-terminal rendering. Phase 1A introduces one versioned lifecycle result envelope, explicit runtime
+terminal rendering. Phase 1 introduces one versioned lifecycle result envelope, explicit runtime
 manifest compatibility, and an incremental migration path that preserves each domain's ownership
 rules.
 
-The first vertical slice covers App install and uninstall. It records structured results alongside
-the existing renderer, versions `app-manifest.toml`, and leaves command output and mutation semantics
-unchanged. Later slices adapt App upgrade, Shell, and managed Sys before terminal rendering is fully
-separated from execution.
+The completed execution slices cover App install/upgrade/uninstall plus hooks, implicit teardown,
+embedded preset cache, and purge; Shell install/update/upgrade/uninstall; and managed Sys
+apply/update/upgrade/uninstall. `app-manifest.toml`, `shell-manifest.toml`, and `sys-manifest.toml`
+are independently versioned. Existing renderers, output, permission prompts, and exit semantics
+remain in place until the final Phase 1 renderer-separation slice.
 
 ## 2. Problem
 
@@ -44,7 +46,7 @@ frontend behavior or treating terminal output as an API.
 
 ## 4. Non-goals
 
-- No public JSON lifecycle command in Phase 1A.
+- No public JSON lifecycle command in Phase 1.
 - No reviewable Plan, approval, permission derivation, journal, rollback, or recovery; those belong
   to Roadmap Phases 3 and 4.
 - No directory-layout migration to `crates/shine-core` or `crates/shine-cli`.
@@ -77,16 +79,21 @@ Each `LifecycleOutcomeV1` contains:
 - a canonical lifecycle target such as `app/ghostty`, `shell/utils/shine-theme-sync`, or
   `sys/split-dns`;
 - an optional logical resource name relative to that target;
-- one status: `changed`, `unchanged`, `previewed`, `skipped`, `preserved`, `conflict`, or `failed`;
+- one status: `changed`, `unchanged`, `pending`, `previewed`, `skipped`, `preserved`, `conflict`, or
+  `failed`;
 - zero or more structured effects;
 - zero or more stable diagnostic codes.
 
-Effects describe ownership-relevant facts such as a resource or receipt being written or removed,
-a backup being created or restored, managed keys being removed, or a user modification being
-preserved or explicitly overridden.
+Effects describe ownership-relevant facts. Contract v1 includes resource and receipt writes,
+removals and previews; cache writes, removals, purge and previews; code execution and its preview;
+backup creation/restoration; managed-key removal; and managed/user preservation or explicit
+override. Exact spellings are pinned by `utils/src/lifecycle.rs` serialization tests.
 
-Dry-run outcomes are `previewed`, not a Roadmap Phase 3 Plan. Existing dry-run paths may be
-conservative and are not input-snapshot-bound or approval-capable.
+Read-only `update` results use `dry_run = false`: an applicable change is `pending`, while an
+ownership conflict remains `conflict`. Explicit dry-run outcomes use `dry_run = true` and
+`previewed`; they are not a Roadmap Phase 3 Plan. `changed` means this execution actually changed
+Shine-owned state. Existing dry-run paths remain conservative and are not input-snapshot-bound or
+approval-capable.
 
 ### 5.3 Safe diagnostics
 
@@ -108,8 +115,9 @@ safe-field design.
 - Shell command activation is command-scoped: `shell/<category>/<command>`. Category operations
   produce one outcome per installed command where practical.
 - Managed Sys ownership is item-scoped: `sys/<item>`.
-- Bootstrap Sys outcomes may later reuse `sys/<item>`, but Phase 1A does not expand bootstrap
+- Bootstrap Sys outcomes may later reuse `sys/<item>`, but Phase 1 does not expand bootstrap
   software ownership or uninstall semantics.
+- Only shared, global App cache/manifest purge uses the domain-root target `app`.
 
 Canonical identity controls reporting and selection only. Filesystem ownership continues to come
 from the domain manifest, receipt, managed marker, and current safety invariants.
@@ -128,26 +136,41 @@ Each runtime manifest migrates independently to a top-level `schema_version`:
 6. A version bump is required for an incompatible shape or semantic reinterpretation. Additive
    optional fields may remain within a version when older readers can safely ignore them.
 
-Phase 1A applies this policy only to `app-manifest.toml`; Shell and Sys follow in their own slices.
+This policy applies independently to `app-manifest.toml`, `shell-manifest.toml`, and
+`sys-manifest.toml`, each currently at schema version 1. The per-resource Sys receipt `version`
+remains a separate compatibility contract.
 
-## 8. Phase 1A — App vertical slice
+## 8. Phase 1 execution slices
 
 ### 8.1 Implementation
 
 1. Add the contract types to `shine-core` without Clap, terminal, Config, process, or filesystem
    dependencies.
-2. Add internal App install/uninstall entry points that return `LifecycleResultV1`.
+2. Add internal App, Shell, and managed Sys lifecycle entry points that return
+   `LifecycleResultV1`.
 3. Preserve the existing public handlers and terminal rendering while they delegate to the result
    producing path.
-4. Map every handled App file outcome to a canonical category target and logical source resource.
-5. Add `schema_version = 1` to `AppManifest`, normalize legacy version 0 on load, and reject unknown
-   versions.
+4. Map handled App files/helpers, Shell commands, and managed Sys items to their canonical targets,
+   logical resources, effects, and stable diagnostic codes.
+5. Add `schema_version = 1` to all three runtime manifests, normalize legacy version 0 on load, and
+   reject unknown versions before mutation.
 
-This first adapter covers App file and receipt outcomes. Preset-cache extraction/removal,
-post-install hooks, best-effort artifact teardown, and `--purge` cleanup keep their existing
-terminal-only reporting until a later App slice defines structured effects for those operations.
-Consequently Phase 1A establishes the seam but does not by itself complete the Roadmap Phase 1
-structured-result gate.
+The App adapter now also covers upgrade branches, preset-cache extraction/removal, `post_install`
+and `post_upgrade`, best-effort uninstall teardown, and category/global purge. Hook and teardown
+failures remain non-fatal; only the existing fatal generator class changes the aggregate upgrade
+exit behavior.
+
+The Shell adapter emits one outcome per selected or installed command. Read-only update derives
+`pending` from the existing typed `ShellRow`/`UpdateChange` assessment, while foreign launcher
+ownership remains `conflict`. Upgrade assesses the same targets before and after execution and
+records snapshot, rendered-template, launcher, profile, cache, and receipt work as effects rather
+than extra target counts. Shared category state is removed only after the last command receipt.
+
+The managed Sys adapter covers built-in managed-resource drivers only. Driver execution returns
+typed resource effects and a typed user-modification conflict instead of requiring the adapter to
+parse display details or errors. Receipt comparison produces both the safe existing CLI field
+differences and a `pending` lifecycle outcome. Bootstrap, profile enable/disable, and composed
+profile synchronization are intentionally outside this slice.
 
 ### 8.2 Outcome mapping
 
@@ -156,7 +179,7 @@ structured-result gate.
 | Installed | changed | resource-written, receipt-written |
 | BackedUpAndInstalled | changed | backup-created, resource-written, receipt-written |
 | AlreadyManaged | unchanged | none |
-| DryRun | previewed | resource-write-previewed |
+| DryRun | previewed | resource-write-previewed, receipt-write-previewed |
 | Generator unavailable with last-known-good install | preserved | managed-resource-preserved |
 | Install/materialization error handled per file | failed | stable diagnostic code |
 | Removed Copy resource | changed | resource-removed, receipt-removed |
@@ -165,14 +188,14 @@ structured-result gate.
 | Missing destination with stale receipt | changed | receipt-removed |
 | User-modified destination kept | preserved | user-resource-preserved |
 | Forced removal of modified state | changed | user-modification-overridden plus removal effects |
-| Uninstall DryRun | previewed | resource-remove-previewed |
+| Uninstall DryRun | previewed | resource-remove-previewed, receipt-remove-previewed |
 
 The existing terminal summary may continue to call a missing destination “skipped” for compatibility
 during this slice; the structured result records the receipt mutation accurately.
 
 ## 9. Acceptance matrix
 
-Phase 1A is complete when:
+Execution slices 1–5 are complete when:
 
 - App install produces structured changed, unchanged, previewed, preserved, and failed outcomes for
   the existing handled branches.
@@ -181,31 +204,37 @@ Phase 1A is complete when:
 - install → no-op install → uninstall round-trip tests assert both filesystem/manifest state and
   structured results.
 - targeted App uninstall/upgrade characterization proves other categories remain unchanged.
-- an unversioned App manifest loads and is written as version 1 after a successful mutation.
-- an unsupported future App manifest version fails before filesystem mutation.
+- Shell embedded, external snapshot, and external live tests cover install → pending update →
+  upgrade → uninstall, sibling preservation, foreign launcher conflict, and last-reference cache
+  cleanup.
+- managed Sys fake-OS tests cover resource/receipt round trips, receipt-only uninstall, typed
+  pending differences, missing env, user preservation, and driver failure mapping without touching
+  real system resources.
+- unversioned App, Shell, and Sys manifests load without read-only rewrites and are written as
+  version 1 by the next successful mutation.
+- unsupported future App, Shell, and Sys manifest versions fail before domain mutation.
 - a serialization golden test pins Contract v1 field names and enum spellings.
 - result serialization contains no absolute destination, raw error, content, environment, or secret
   value.
-- existing App tests, formatting, clippy, and `git diff --check` pass.
+- applicable App, Shell, Sys, formatting, clippy, and `git diff --check` checks pass.
 - representative CLI output remains unchanged; no public manual change is required because no
   command, flag, output promise, or authoring contract is added.
 
-## 10. Follow-up slices
+## 10. Slice status
 
-1. App upgrade returns the same result envelope and stops maintaining a separate aggregate-only
-   contract.
-2. App hook, teardown, preset-cache, and purge effects join the result before renderer separation.
-3. Shell install/update/upgrade/uninstall adapts command-scoped receipts and shared deployment
-   effects.
-4. Managed Sys adapts item outcomes and receipt differences.
-5. Runtime manifest versions land for Shell and Sys with legacy fixtures.
-6. Terminal renderers consume completed results after characterization tests pin current output.
-7. Phase 2 moves reusable executors and host abstractions behind `shine-core` without changing the
-   contract.
+1. **Complete:** App upgrade structured outcomes.
+2. **Complete:** App hooks, teardown, preset-cache, and purge effects.
+3. **Complete:** Shell command-scoped install/update/upgrade/uninstall outcomes.
+4. **Complete:** managed Sys item outcomes and typed receipt differences.
+5. **Complete:** Shell and Sys manifest schema v1 plus legacy/future gates.
+6. **Pending:** terminal renderers consume completed results after characterization tests pin
+   current output.
+7. **Pending / Phase 2:** move reusable executors and host abstractions behind `shine-core` without
+   changing Contract v1.
 
 ## 11. Documentation impact
 
-This PRD and its ADR are internal sources. Phase 1A adds no released command, flag, public JSON
-schema, preset field, or user workflow, so the English and Simplified Chinese manuals remain
-unchanged. Public documentation becomes mandatory when a machine-readable lifecycle surface or
-user-visible compatibility error is released.
+This PRD and its ADR are internal sources. These Phase 1 slices add no released command, flag,
+public JSON schema, preset field, or user workflow, so the English and Simplified Chinese manuals
+remain unchanged. Public documentation becomes mandatory when a machine-readable lifecycle surface
+or user-visible compatibility error is released.

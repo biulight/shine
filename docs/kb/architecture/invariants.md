@@ -10,6 +10,16 @@ bugs. Check this list before changing the modules named in each entry.
   codes. They must not copy raw errors/logs, source or destination content, environment or secret
   values, subscription URLs, credentials, or absolute destination paths into a reusable result.
   Human CLI diagnostics remain subject to their domain-specific redaction rules.
+- **Lifecycle status distinguishes observation from execution.** Read-only `update` uses
+  `dry_run = false` and `Pending`; explicit dry-run uses `dry_run = true` and `Previewed`.
+  `Changed` means this execution changed Shine-owned state. App hooks/teardown may record execution
+  effects without changing their established non-fatal exit semantics; managed Sys user
+  modification remains a typed preservation conflict while the CLI keeps its existing failure exit.
+- **Every runtime manifest is a pre-mutation gate.** App, Shell, and Sys load their own manifest
+  before destination/resource, embedded cache, snapshot/render, launcher, receipt, or profile
+  mutation. Missing `schema_version` is legacy v0, read-only loads never rewrite it, the next
+  successful mutation writes v1, and an unsupported future version fails first. The inner Sys
+  receipt `version` is independent of `sys-manifest.toml`'s schema version.
 
 - **Uninstall never touches user files.** `presets::remove_prefix` removes only embedded-asset
   files; `bin_links::unlink_managed` removes only symlinks pointing into the managed presets dir,
@@ -175,6 +185,11 @@ bugs. Check this list before changing the modules named in each entry.
 - **External uninstall never deletes source.** It may remove Shine-owned snapshots, rendered
   files, manifest entries, and managed launchers, including legacy launchers pointing into the
   external tree. The external presets and overlay directories remain untouched.
+- **Shell update/upgrade must preserve foreign launchers.** Ownership is checked with the same
+  managed-root proof used by uninstall. A regular launcher outside that proof is a structured
+  `Conflict`, is not counted as a pending update, is excluded from forced launcher refresh, and
+  retains its command receipt. Compatible legacy/stale symlinks keep their existing upgrade repair
+  behavior.
 - **Preset materialization excludes `node_modules/` at every depth.** External Shell snapshots and
   overlay copies retain `package.json` and `bun.lock`, but never copy a local installation tree into
   Shine-owned state or embedded extraction.

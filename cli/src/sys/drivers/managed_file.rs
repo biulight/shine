@@ -5,11 +5,12 @@ use crate::install_core::file_ops::{
 };
 use crate::install_core::{AppEntry, AppInstallStrategy, apply_transforms, hash_content};
 use crate::sys::resources::{
-    DriverContext, ManagedFileReceipt, RECEIPT_VERSION, ResourceOutcome, SystemReceipt,
-    config_string, optional_config_string,
+    DriverContext, ManagedFileReceipt, RECEIPT_VERSION, ResourceConflict, ResourceOutcome,
+    SystemReceipt, config_string, optional_config_string,
 };
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
+use utils::lifecycle::LifecycleEffect;
 
 fn managed_file_desired(context: &DriverContext<'_>) -> Result<(PathBuf, Vec<u8>, Option<String>)> {
     let source = config_string(&context.item.config, "source")?;
@@ -102,25 +103,29 @@ pub(in crate::sys) async fn apply_managed_file(
     if context.dry_run {
         return Ok(ResourceOutcome {
             changed: true,
+            effects: vec![LifecycleEffect::ResourceWritePreviewed],
             detail: destination.display().to_string(),
             receipt: None,
             restart_hint,
         });
     }
+    let mut effects = Vec::new();
     if let Some(previous) = previous {
         if previous.destination != destination {
-            remove_managed_file(previous, false).await?;
+            effects.extend(remove_managed_file(previous, false).await?.effects);
         } else if destination.exists() {
             let current = tokio::fs::read(&destination).await?;
             if hash_content(&current) != previous.content_hash {
-                bail!(
+                return Err(ResourceConflict::user_modified(format!(
                     "managed file {} was modified; keeping user content",
                     destination.display()
-                );
+                ))
+                .into());
             }
             if current == content {
                 return Ok(ResourceOutcome {
                     changed: false,
+                    effects: Vec::new(),
                     detail: destination.display().to_string(),
                     receipt: Some(SystemReceipt::ManagedFile(previous.clone())),
                     restart_hint: None,
@@ -135,6 +140,12 @@ pub(in crate::sys) async fn apply_managed_file(
         install_bytes(&content, &destination, is_managed, false, true).await?
     };
     let changed = !matches!(outcome, InstallOutcome::AlreadyManaged);
+    if changed {
+        effects.push(LifecycleEffect::ResourceWritten);
+    }
+    if matches!(outcome, InstallOutcome::BackedUpAndInstalled { .. }) {
+        effects.push(LifecycleEffect::BackupCreated);
+    }
     let backup = match outcome {
         InstallOutcome::BackedUpAndInstalled { backup, .. } => Some(backup),
         _ => previous.and_then(|receipt| receipt.backup.clone()),
@@ -149,6 +160,7 @@ pub(in crate::sys) async fn apply_managed_file(
     };
     Ok(ResourceOutcome {
         changed,
+        effects,
         detail: destination.display().to_string(),
         receipt: Some(SystemReceipt::ManagedFile(receipt)),
         restart_hint,
@@ -174,13 +186,26 @@ pub(in crate::sys) async fn remove_managed_file(
         uninstall_entry(&entry, dry_run, false).await?
     };
     if matches!(outcome, UninstallOutcome::UserModified) {
-        bail!(
+        return Err(ResourceConflict::user_modified(format!(
             "managed file {} was modified; keeping user content",
             receipt.destination.display()
-        );
+        ))
+        .into());
     }
+    let changed = !matches!(outcome, UninstallOutcome::NotFound);
+    let effects = match outcome {
+        UninstallOutcome::Removed | UninstallOutcome::ForceRemoved => {
+            vec![LifecycleEffect::ResourceRemoved]
+        }
+        UninstallOutcome::RestoredBackup { .. } | UninstallOutcome::ForceRestoredBackup { .. } => {
+            vec![LifecycleEffect::BackupRestored]
+        }
+        UninstallOutcome::DryRun => vec![LifecycleEffect::ResourceRemovePreviewed],
+        UninstallOutcome::NotFound | UninstallOutcome::UserModified => Vec::new(),
+    };
     Ok(ResourceOutcome {
-        changed: !matches!(outcome, UninstallOutcome::NotFound),
+        changed,
+        effects,
         detail: receipt.destination.display().to_string(),
         receipt: None,
         restart_hint: receipt.restart_hint.clone(),

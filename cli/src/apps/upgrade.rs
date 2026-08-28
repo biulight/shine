@@ -21,6 +21,9 @@ use super::{
     installed_content_hash, resolve_install_destination, uninstall_app_entry,
     validate_unique_install_destinations,
 };
+use utils::lifecycle::{
+    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+};
 
 #[derive(Debug, Default)]
 pub struct AppUpgradeReport {
@@ -128,19 +131,31 @@ pub(crate) async fn handle_upgrade_installed_with_output(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<AppUpgradeReport> {
-    handle_upgrade_installed_target(config, None, prune_stale, verbose, sep).await
+    handle_upgrade_installed_with_output_with_result(config, prune_stale, verbose, sep)
+        .await
+        .map(|(report, _)| report)
 }
 
-pub(crate) async fn handle_upgrade_installed_target(
+pub(crate) async fn handle_upgrade_installed_with_output_with_result(
+    config: &Config,
+    prune_stale: bool,
+    verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
+    handle_upgrade_installed_target_with_result(config, None, prune_stale, verbose, sep).await
+}
+
+pub(crate) async fn handle_upgrade_installed_target_with_result(
     config: &Config,
     category_filter: Option<&str>,
     prune_stale: bool,
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
-) -> Result<AppUpgradeReport> {
+) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
+    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Upgrade, false);
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
     if manifest.entries.is_empty() {
-        return Ok(AppUpgradeReport::default());
+        return Ok((AppUpgradeReport::default(), lifecycle_result));
     }
 
     let selected_entries = manifest
@@ -169,7 +184,35 @@ pub(crate) async fn handle_upgrade_installed_target(
     if !config.is_external_presets {
         for category in &installed_categories {
             let prefix = format!("app/{category}");
-            let _ = crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
+            let report =
+                crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
+            let changed = !report.created.is_empty() || !report.overwritten.is_empty();
+            lifecycle_result.push(app_upgrade_outcome(
+                category,
+                "preset-cache",
+                if changed {
+                    LifecycleStatus::Changed
+                } else {
+                    LifecycleStatus::Unchanged
+                },
+                if changed {
+                    vec![LifecycleEffect::CacheWritten]
+                } else {
+                    Vec::new()
+                },
+            ));
+        }
+    } else {
+        for category in &installed_categories {
+            lifecycle_result.push(
+                app_upgrade_outcome(
+                    category,
+                    "preset-cache",
+                    LifecycleStatus::Skipped,
+                    [LifecycleEffect::UserResourcePreserved],
+                )
+                .with_diagnostic_code("app_external_preset_cache_preserved"),
+            );
         }
     }
 
@@ -211,13 +254,22 @@ pub(crate) async fn handle_upgrade_installed_target(
                 entry.source
             );
             skipped += 1;
+            lifecycle_result.push(
+                LifecycleOutcomeV1::new(
+                    "app/unknown",
+                    None::<String>,
+                    LifecycleStatus::Skipped,
+                    [],
+                )
+                .with_diagnostic_code("app_manifest_source_invalid"),
+            );
             continue;
         };
 
         let Some(cat) = categories_by_name.get(cat_name) else {
             section.begin();
             let previous_updated = updated;
-            handle_stale_entry(
+            let stale_outcome = handle_stale_entry(
                 config,
                 entry,
                 prune_stale,
@@ -230,6 +282,7 @@ pub(crate) async fn handle_upgrade_installed_target(
                 },
             )
             .await?;
+            lifecycle_result.push(stale_lifecycle_outcome(cat_name, file_rel, stale_outcome));
             if updated > previous_updated {
                 updated_categories.insert(cat_name.to_string());
                 *updated_files_by_category
@@ -245,7 +298,7 @@ pub(crate) async fn handle_upgrade_installed_target(
         else {
             section.begin();
             let previous_updated = updated;
-            handle_stale_entry(
+            let stale_outcome = handle_stale_entry(
                 config,
                 entry,
                 prune_stale,
@@ -258,6 +311,7 @@ pub(crate) async fn handle_upgrade_installed_target(
                 },
             )
             .await?;
+            lifecycle_result.push(stale_lifecycle_outcome(cat_name, file_rel, stale_outcome));
             if updated > previous_updated {
                 updated_categories.insert(cat_name.to_string());
                 *updated_files_by_category
@@ -274,17 +328,37 @@ pub(crate) async fn handle_upgrade_installed_target(
         {
             section.print_manual_refresh(&entry.source, cat_name, file_rel);
             skipped += 1;
+            lifecycle_result.push(
+                app_upgrade_outcome(cat_name, file_rel, LifecycleStatus::Skipped, [])
+                    .with_diagnostic_code("app_manual_refresh_required"),
+            );
             continue;
         }
 
         match try_upgrade_entry(config, &manifest, entry, cat, file, env_map, &mut section).await {
-            EntryUpgradeResult::Updated(new_entry) => {
+            EntryUpgradeResult::Updated {
+                entry: new_entry,
+                relocated,
+            } => {
                 updated_categories.insert(cat.name.clone());
                 *updated_files_by_category
                     .entry(cat.name.clone())
                     .or_default() += 1;
                 pending_upserts.push(new_entry);
                 updated += 1;
+                let mut effects = vec![
+                    LifecycleEffect::ResourceWritten,
+                    LifecycleEffect::ReceiptWritten,
+                ];
+                if relocated {
+                    effects.push(LifecycleEffect::ResourceRemoved);
+                }
+                lifecycle_result.push(app_upgrade_outcome(
+                    cat_name,
+                    file_rel,
+                    LifecycleStatus::Changed,
+                    effects,
+                ));
                 if let Some(hint) = &file.restart_hint {
                     restart_hints.insert(hint.clone());
                 }
@@ -292,16 +366,44 @@ pub(crate) async fn handle_upgrade_installed_target(
             EntryUpgradeResult::UserModified => {
                 user_modified += 1;
                 skipped += 1;
+                lifecycle_result.push(app_upgrade_outcome(
+                    cat_name,
+                    file_rel,
+                    LifecycleStatus::Preserved,
+                    [LifecycleEffect::UserResourcePreserved],
+                ));
+            }
+            EntryUpgradeResult::Conflict(code) => {
+                user_modified += 1;
+                skipped += 1;
+                lifecycle_result.push(
+                    app_upgrade_outcome(cat_name, file_rel, LifecycleStatus::Conflict, [])
+                        .with_diagnostic_code(code),
+                );
             }
             EntryUpgradeResult::Skipped => {
                 section.print_up_to_date(&entry.source);
                 skipped += 1;
+                lifecycle_result.push(app_upgrade_outcome(
+                    cat_name,
+                    file_rel,
+                    LifecycleStatus::Unchanged,
+                    [],
+                ));
             }
             EntryUpgradeResult::Failed => {
                 skipped += 1;
+                lifecycle_result.push(
+                    app_upgrade_outcome(cat_name, file_rel, LifecycleStatus::Failed, [])
+                        .with_diagnostic_code("app_upgrade_failed"),
+                );
             }
             EntryUpgradeResult::FatalGenerator => {
                 failed += 1;
+                lifecycle_result.push(
+                    app_upgrade_outcome(cat_name, file_rel, LifecycleStatus::Failed, [])
+                        .with_diagnostic_code("app_generator_unavailable"),
+                );
             }
         }
     }
@@ -310,7 +412,7 @@ pub(crate) async fn handle_upgrade_installed_target(
         manifest.remove_by_dest(&destination);
     }
 
-    let (new_updated, new_skipped, new_failed, new_upserts, new_restart_hints) =
+    let (new_updated, new_skipped, new_failed, new_upserts, new_restart_hints, new_outcomes) =
         install_new_category_files(
             config,
             &categories_by_name,
@@ -319,6 +421,7 @@ pub(crate) async fn handle_upgrade_installed_target(
             &mut section,
         )
         .await?;
+    lifecycle_result.outcomes.extend(new_outcomes);
     updated += new_updated;
     skipped += new_skipped;
     for entry in &new_upserts {
@@ -339,7 +442,7 @@ pub(crate) async fn handle_upgrade_installed_target(
 
     section.print_category_updates(&updated_files_by_category);
 
-    super::hooks::run_app_hooks(
+    let hook_result = super::hooks::run_app_hooks(
         config,
         |name| categories_by_name.get(name),
         &updated_categories,
@@ -347,20 +450,25 @@ pub(crate) async fn handle_upgrade_installed_target(
         verbose,
     )
     .await;
+    lifecycle_result.outcomes.extend(hook_result.outcomes);
 
-    Ok(AppUpgradeReport {
-        updated,
-        updated_categories: updated_categories.len(),
-        skipped,
-        failed: failed + new_failed,
-        user_modified,
-        restart_hints,
-    })
+    Ok((
+        AppUpgradeReport {
+            updated,
+            updated_categories: updated_categories.len(),
+            skipped,
+            failed: failed + new_failed,
+            user_modified,
+            restart_hints,
+        },
+        lifecycle_result,
+    ))
 }
 
 enum EntryUpgradeResult {
-    Updated(AppEntry),
+    Updated { entry: AppEntry, relocated: bool },
     UserModified,
+    Conflict(&'static str),
     Skipped,
     Failed,
     FatalGenerator,
@@ -474,15 +582,18 @@ async fn try_upgrade_entry(
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
             section.print_file_updated(&display_name, &entry.destination, config);
-            EntryUpgradeResult::Updated(AppEntry {
-                source: entry.source.clone(),
-                destination: entry.destination.clone(),
-                backup: entry.backup.clone(),
-                content_hash: hash,
-                install_strategy: file.install_strategy.clone(),
-                uses_env: file.transforms.iter().any(|t| t == "template"),
-                requires_admin: file.requires_admin,
-            })
+            EntryUpgradeResult::Updated {
+                entry: AppEntry {
+                    source: entry.source.clone(),
+                    destination: entry.destination.clone(),
+                    backup: entry.backup.clone(),
+                    content_hash: hash,
+                    install_strategy: file.install_strategy.clone(),
+                    uses_env: file.transforms.iter().any(|t| t == "template"),
+                    requires_admin: file.requires_admin,
+                },
+                relocated: false,
+            }
         }
         Ok(InstallOutcome::AlreadyManaged) | Ok(InstallOutcome::DryRun) => {
             EntryUpgradeResult::Skipped
@@ -515,7 +626,7 @@ async fn relocate_upgrade_entry(
             path_display::format_home(&desired_destination, &config.home_dir),
             conflict.source
         );
-        return EntryUpgradeResult::UserModified;
+        return EntryUpgradeResult::Conflict("app_destination_already_managed");
     }
     if desired_destination.exists() {
         section.begin();
@@ -525,7 +636,7 @@ async fn relocate_upgrade_entry(
             entry.source,
             path_display::format_home(&desired_destination, &config.home_dir)
         );
-        return EntryUpgradeResult::UserModified;
+        return EntryUpgradeResult::Conflict("app_destination_occupied");
     }
 
     match tokio::fs::read(&entry.destination).await {
@@ -538,7 +649,7 @@ async fn relocate_upgrade_entry(
                     colors::symbol("!"),
                     entry.source
                 );
-                return EntryUpgradeResult::UserModified;
+                return EntryUpgradeResult::Conflict("app_relocation_source_modified");
             }
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -615,23 +726,28 @@ async fn relocate_upgrade_entry(
         .map(str::to_owned)
         .unwrap_or_else(|| format!("{}/{}", cat.name, file.source_rel.display()));
     section.print_file_updated(&display_name, &desired_destination, config);
-    EntryUpgradeResult::Updated(AppEntry {
-        source: entry.source.clone(),
-        destination: desired_destination,
-        backup,
-        content_hash: hash,
-        install_strategy: file.install_strategy.clone(),
-        uses_env: file
-            .transforms
-            .iter()
-            .any(|transform| transform == "template")
-            || file.generator.is_some(),
-        requires_admin: file.requires_admin,
-    })
+    EntryUpgradeResult::Updated {
+        entry: AppEntry {
+            source: entry.source.clone(),
+            destination: desired_destination,
+            backup,
+            content_hash: hash,
+            install_strategy: file.install_strategy.clone(),
+            uses_env: file
+                .transforms
+                .iter()
+                .any(|transform| transform == "template")
+                || file.generator.is_some(),
+            requires_admin: file.requires_admin,
+        },
+        relocated: true,
+    }
 }
 
+#[derive(Clone, Copy)]
 enum StaleCleanupOutcome {
     Removed,
+    RestoredBackup,
     NotFound,
     UserModified,
     Skipped,
@@ -646,7 +762,9 @@ fn apply_stale_outcome(
     skipped: &mut usize,
 ) {
     match outcome {
-        StaleCleanupOutcome::Removed | StaleCleanupOutcome::NotFound => {
+        StaleCleanupOutcome::Removed
+        | StaleCleanupOutcome::RestoredBackup
+        | StaleCleanupOutcome::NotFound => {
             pending_removals.push(destination);
             *updated += 1;
         }
@@ -675,7 +793,7 @@ async fn handle_stale_entry(
     prune_stale: bool,
     interactive: bool,
     counters: &mut StaleEntryCounters<'_>,
-) -> Result<()> {
+) -> Result<StaleCleanupOutcome> {
     let outcome = cleanup_stale_entry(config, entry, prune_stale, interactive).await?;
     apply_stale_outcome(
         outcome,
@@ -685,7 +803,7 @@ async fn handle_stale_entry(
         counters.user_modified,
         counters.skipped,
     );
-    Ok(())
+    Ok(outcome)
 }
 
 async fn install_new_category_files(
@@ -694,12 +812,20 @@ async fn install_new_category_files(
     manifest: &AppManifest,
     env_map: &BTreeMap<String, String>,
     section: &mut UpgradeSection<'_>,
-) -> Result<(usize, usize, usize, Vec<AppEntry>, BTreeSet<String>)> {
+) -> Result<(
+    usize,
+    usize,
+    usize,
+    Vec<AppEntry>,
+    BTreeSet<String>,
+    Vec<LifecycleOutcomeV1>,
+)> {
     let mut updated = 0usize;
     let mut skipped = 0usize;
     let mut failed = 0usize;
     let mut new_upserts: Vec<AppEntry> = Vec::new();
     let mut restart_hints = BTreeSet::new();
+    let mut outcomes = Vec::new();
 
     for cat in categories_by_name.values() {
         for file in &cat.files {
@@ -721,6 +847,15 @@ async fn install_new_category_files(
                         file.source_rel.display()
                     );
                     skipped += 1;
+                    outcomes.push(
+                        app_upgrade_outcome(
+                            &cat.name,
+                            &file.source_rel.display().to_string(),
+                            LifecycleStatus::Failed,
+                            [],
+                        )
+                        .with_diagnostic_code("app_destination_invalid"),
+                    );
                     continue;
                 }
             };
@@ -742,6 +877,15 @@ async fn install_new_category_files(
                     source
                 );
                 skipped += 1;
+                outcomes.push(
+                    app_upgrade_outcome(
+                        &cat.name,
+                        &file.source_rel.display().to_string(),
+                        LifecycleStatus::Conflict,
+                        [],
+                    )
+                    .with_diagnostic_code("app_destination_occupied"),
+                );
                 continue;
             }
 
@@ -756,8 +900,26 @@ async fn install_new_category_files(
                         .is_some_and(|generator| env_map.contains_key(&generator.when_env))
                     {
                         failed += 1;
+                        outcomes.push(
+                            app_upgrade_outcome(
+                                &cat.name,
+                                &file.source_rel.display().to_string(),
+                                LifecycleStatus::Failed,
+                                [],
+                            )
+                            .with_diagnostic_code("app_generator_unavailable"),
+                        );
                     } else {
                         skipped += 1;
+                        outcomes.push(
+                            app_upgrade_outcome(
+                                &cat.name,
+                                &file.source_rel.display().to_string(),
+                                LifecycleStatus::Failed,
+                                [],
+                            )
+                            .with_diagnostic_code("app_materialization_failed"),
+                        );
                     }
                     continue;
                 }
@@ -786,6 +948,15 @@ async fn install_new_category_files(
                         requires_admin: file.requires_admin,
                     });
                     updated += 1;
+                    outcomes.push(app_upgrade_outcome(
+                        &cat.name,
+                        &file.source_rel.display().to_string(),
+                        LifecycleStatus::Changed,
+                        [
+                            LifecycleEffect::ResourceWritten,
+                            LifecycleEffect::ReceiptWritten,
+                        ],
+                    ));
                     if let Some(hint) = &file.restart_hint {
                         restart_hints.insert(hint.clone());
                     }
@@ -798,20 +969,51 @@ async fn install_new_category_files(
                         source
                     );
                     skipped += 1;
+                    outcomes.push(
+                        app_upgrade_outcome(
+                            &cat.name,
+                            &file.source_rel.display().to_string(),
+                            LifecycleStatus::Conflict,
+                            [],
+                        )
+                        .with_diagnostic_code("app_destination_occupied"),
+                    );
                 }
                 Ok(InstallOutcome::DryRun) => {
                     skipped += 1;
+                    outcomes.push(app_upgrade_outcome(
+                        &cat.name,
+                        &file.source_rel.display().to_string(),
+                        LifecycleStatus::Skipped,
+                        [],
+                    ));
                 }
                 Err(e) => {
                     section.begin();
                     eprintln!("  {} {}: {e:#}", colors::symbol_stderr("✗"), source);
                     skipped += 1;
+                    outcomes.push(
+                        app_upgrade_outcome(
+                            &cat.name,
+                            &file.source_rel.display().to_string(),
+                            LifecycleStatus::Failed,
+                            [],
+                        )
+                        .with_diagnostic_code("app_install_failed"),
+                    );
                 }
             }
         }
     }
 
-    Ok((updated, skipped, failed, new_upserts, restart_hints))
+    Ok((
+        updated,
+        skipped,
+        failed,
+        new_upserts,
+        restart_hints,
+        outcomes,
+    ))
 }
 
 async fn cleanup_stale_entry(
@@ -864,7 +1066,7 @@ async fn cleanup_stale_entry(
                     path_display::format_home(&backup, &config.home_dir)
                 ),
             );
-            Ok(StaleCleanupOutcome::Removed)
+            Ok(StaleCleanupOutcome::RestoredBackup)
         }
         UninstallOutcome::ForceRemoved | UninstallOutcome::ForceRestoredBackup { .. } => {
             Ok(StaleCleanupOutcome::Removed)
@@ -882,6 +1084,58 @@ async fn cleanup_stale_entry(
             Ok(StaleCleanupOutcome::UserModified)
         }
         UninstallOutcome::DryRun => Ok(StaleCleanupOutcome::Skipped),
+    }
+}
+
+fn app_upgrade_outcome(
+    category: &str,
+    resource: &str,
+    status: LifecycleStatus,
+    effects: impl IntoIterator<Item = LifecycleEffect>,
+) -> LifecycleOutcomeV1 {
+    LifecycleOutcomeV1::new(format!("app/{category}"), Some(resource), status, effects)
+}
+
+fn stale_lifecycle_outcome(
+    category: &str,
+    resource: &str,
+    outcome: StaleCleanupOutcome,
+) -> LifecycleOutcomeV1 {
+    match outcome {
+        StaleCleanupOutcome::Removed => app_upgrade_outcome(
+            category,
+            resource,
+            LifecycleStatus::Changed,
+            [
+                LifecycleEffect::ResourceRemoved,
+                LifecycleEffect::ReceiptRemoved,
+            ],
+        ),
+        StaleCleanupOutcome::RestoredBackup => app_upgrade_outcome(
+            category,
+            resource,
+            LifecycleStatus::Changed,
+            [
+                LifecycleEffect::BackupRestored,
+                LifecycleEffect::ReceiptRemoved,
+            ],
+        ),
+        StaleCleanupOutcome::NotFound => app_upgrade_outcome(
+            category,
+            resource,
+            LifecycleStatus::Changed,
+            [LifecycleEffect::ReceiptRemoved],
+        ),
+        StaleCleanupOutcome::UserModified => app_upgrade_outcome(
+            category,
+            resource,
+            LifecycleStatus::Preserved,
+            [LifecycleEffect::UserResourcePreserved],
+        ),
+        StaleCleanupOutcome::Skipped => {
+            app_upgrade_outcome(category, resource, LifecycleStatus::Skipped, [])
+                .with_diagnostic_code("app_stale_cleanup_declined")
+        }
     }
 }
 
@@ -1017,9 +1271,14 @@ mod tests {
         )
         .await;
 
-        let EntryUpgradeResult::Updated(updated) = result else {
+        let EntryUpgradeResult::Updated {
+            entry: updated,
+            relocated,
+        } = result
+        else {
             panic!("expected relocation to update")
         };
+        assert!(relocated);
         assert_eq!(updated.destination, new_destination);
         assert_eq!(fs::read(&updated.destination).await.unwrap(), b"managed\n");
         assert!(!old_destination.exists());
@@ -1044,7 +1303,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, EntryUpgradeResult::UserModified));
+        assert!(matches!(result, EntryUpgradeResult::Conflict(_)));
         assert_eq!(fs::read(old_destination).await.unwrap(), b"modified\n");
         assert!(!new_destination.exists());
         fs::remove_dir_all(config.home_dir).await.unwrap();
@@ -1068,7 +1327,7 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(result, EntryUpgradeResult::UserModified));
+        assert!(matches!(result, EntryUpgradeResult::Conflict(_)));
         assert_eq!(fs::read(old_destination).await.unwrap(), b"managed\n");
         assert_eq!(fs::read(new_destination).await.unwrap(), b"mine\n");
         fs::remove_dir_all(config.home_dir).await.unwrap();
