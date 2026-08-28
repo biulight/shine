@@ -14,5 +14,6 @@ categories = ["config"]
 [dependencies]
 anyhow = { workspace = true }
 directories = { workspace = true }
+serde = { version = "1.0.228", features = ["derive"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }

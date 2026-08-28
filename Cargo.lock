@@ -1547,6 +1547,7 @@ version = "1.8.0"
 dependencies = [
  "anyhow",
  "directories",
+ "serde",
  "toml",
  "toml_edit",
 ]

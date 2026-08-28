@@ -31,17 +31,26 @@ entries are never removed.
    until a `Config` resolves the current user's platform data directory. Duplicate effective
    destinations fail before any writes. Legacy categories without `shine.toml` (git, starship) use
    `apps/annotation.rs` to read a `shine-dest:` comment from the file itself.
-2. **Transforms** — `install_core/transforms/` applies `jsonc-to-json` and/or `template`
+2. **Runtime state gate** — `install_core/manifest.rs` loads `app-manifest.toml` before env
+   initialization, embedded extraction, generator execution, or destination writes. A missing
+   `schema_version` is legacy v0 and normalizes to v1 in memory; an unsupported future version
+   fails before lifecycle mutation.
+3. **Transforms** — `install_core/transforms/` applies `jsonc-to-json` and/or `template`
    (`@@VAR@@` substitution from the `[env]` config table) in declaration order, in memory, before
    writing.
-3. **File ops** — `install_core/file_ops.rs` backs up any pre-existing user file to
+4. **File ops** — `install_core/file_ops.rs` backs up any pre-existing user file to
    `<name>.shine.bak`, then writes the (transformed) content to `dest`. Destinations with
    `requires_admin = true` (e.g. `/etc/docker/daemon.json`) go through the sudo path, serialized
    by a cross-process advisory lock (`$TMPDIR/shine-admin.lock`, `create_dir` as mutex).
-4. **Manifest** — `install_core/manifest.rs` upserts an `AppEntry` into `~/.shine/app-manifest.toml`,
+5. **Manifest** — `install_core/manifest.rs` upserts an `AppEntry` into `~/.shine/app-manifest.toml`,
    recording dest, content hash, strategy, and **`requires_admin`** (must persist — uninstall
-   routes on it; see lessons entry 2026-07-04).
-5. **Report** — `apps/report.rs` prints the outcome.
+   routes on it; see lessons entry 2026-07-04). Successful saves from mutation commands write
+   `schema_version = 1`.
+6. **Result and report** — the App adapter records safe file/receipt canonical targets, logical
+   resources, statuses, effects, and diagnostic codes in `shine-core`'s `LifecycleResultV1`. The
+   transitional Phase 1 adapter still renders the established terminal output inline; hook,
+   teardown, preset-cache, and purge effects remain follow-up scope. Reusable results never include
+   absolute destinations, content, raw errors, environment values, or secret values.
 
 ## App uninstall
 

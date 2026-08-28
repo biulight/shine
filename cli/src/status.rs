@@ -865,6 +865,7 @@ mod tests {
             &sample_app_file(),
             &AppManifest {
                 entries: vec![entry],
+                ..AppManifest::default()
             },
             &BTreeMap::new(),
         )
@@ -921,6 +922,7 @@ mod tests {
                 dir.join("dest/old.txt"),
                 crate::install_core::hash_content(b"old"),
             )],
+            ..AppManifest::default()
         };
 
         let assessment =
@@ -957,6 +959,7 @@ mod tests {
                 old_destination,
                 crate::install_core::hash_content(b"managed"),
             )],
+            ..AppManifest::default()
         };
 
         let assessment = assess_app_file(
@@ -1021,6 +1024,7 @@ mod tests {
                 old_destination.clone(),
                 crate::install_core::hash_content(b"generated snapshot"),
             )],
+            ..AppManifest::default()
         };
 
         let assessment =
@@ -1052,6 +1056,7 @@ mod tests {
                 dir.join("old/dest.txt"),
                 crate::install_core::hash_content(b"old content"),
             )],
+            ..AppManifest::default()
         };
 
         let assessment = assess_app_file(

@@ -949,6 +949,7 @@ mod tests {
         };
         let manifest = AppManifest {
             entries: vec![entry.clone()],
+            ..AppManifest::default()
         };
         let category = metadata::AppCategory {
             name: "sample".to_string(),

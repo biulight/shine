@@ -12,6 +12,9 @@ use anyhow::{Context, Result};
 use file_ops::UninstallOutcome;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use utils::lifecycle::{
+    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+};
 
 use crate::install_core::file_ops;
 
@@ -22,6 +25,19 @@ pub async fn handle_uninstall(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
+    handle_uninstall_with_result(config, category, force, purge, dry_run)
+        .await
+        .map(|_| ())
+}
+
+pub(crate) async fn handle_uninstall_with_result(
+    config: &Config,
+    category: Option<&str>,
+    force: bool,
+    purge: bool,
+    dry_run: bool,
+) -> Result<LifecycleResultV1> {
+    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Uninstall, dry_run);
     if dry_run {
         println!("{}", colors::dim("[dry-run] No files will be modified."));
     }
@@ -35,7 +51,7 @@ pub async fn handle_uninstall(
                 "{}",
                 colors::dim(&format!("No installed files found for category '{cat}'."))
             );
-            return Ok(());
+            return Ok(lifecycle_result);
         }
         filtered
     } else {
@@ -72,39 +88,89 @@ pub async fn handle_uninstall(
                 print_removed(config, &entry.destination);
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
+                lifecycle_result.push(app_uninstall_outcome(
+                    entry,
+                    LifecycleStatus::Changed,
+                    [removal_effect(entry), LifecycleEffect::ReceiptRemoved],
+                ));
             }
             Ok(UninstallOutcome::RestoredBackup { backup }) => {
                 print_removed_with_restore(config, &entry.destination, &backup);
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 restored += 1;
+                lifecycle_result.push(app_uninstall_outcome(
+                    entry,
+                    LifecycleStatus::Changed,
+                    [
+                        LifecycleEffect::BackupRestored,
+                        LifecycleEffect::ReceiptRemoved,
+                    ],
+                ));
             }
             Ok(UninstallOutcome::ForceRemoved) => {
                 print_force_removed(&entry.destination);
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
+                lifecycle_result.push(app_uninstall_outcome(
+                    entry,
+                    LifecycleStatus::Changed,
+                    [
+                        LifecycleEffect::UserModificationOverridden,
+                        removal_effect(entry),
+                        LifecycleEffect::ReceiptRemoved,
+                    ],
+                ));
             }
             Ok(UninstallOutcome::ForceRestoredBackup { backup }) => {
                 print_force_removed_with_restore(&entry.destination, &backup);
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 restored += 1;
+                lifecycle_result.push(app_uninstall_outcome(
+                    entry,
+                    LifecycleStatus::Changed,
+                    [
+                        LifecycleEffect::UserModificationOverridden,
+                        LifecycleEffect::BackupRestored,
+                        LifecycleEffect::ReceiptRemoved,
+                    ],
+                ));
             }
             Ok(UninstallOutcome::NotFound) => {
                 print_uninstall_not_found(config, &entry.destination);
                 manifest.remove_by_dest(&entry.destination);
                 skipped += 1;
+                lifecycle_result.push(app_uninstall_outcome(
+                    entry,
+                    LifecycleStatus::Changed,
+                    [LifecycleEffect::ReceiptRemoved],
+                ));
             }
             Ok(UninstallOutcome::UserModified) => {
                 print_user_modified_kept(config, &entry.destination);
                 user_modified += 1;
+                lifecycle_result.push(app_uninstall_outcome(
+                    entry,
+                    LifecycleStatus::Preserved,
+                    [LifecycleEffect::UserResourcePreserved],
+                ));
             }
             Ok(UninstallOutcome::DryRun) => {
                 print_uninstall_dry_run(config, &entry.destination);
                 skipped += 1;
+                lifecycle_result.push(app_uninstall_outcome(
+                    entry,
+                    LifecycleStatus::Previewed,
+                    [LifecycleEffect::ResourceRemovePreviewed],
+                ));
             }
             Err(e) => {
                 print_uninstall_error(config, &entry.destination, &e);
+                lifecycle_result.push(
+                    app_uninstall_outcome(entry, LifecycleStatus::Failed, [])
+                        .with_diagnostic_code("app_uninstall_failed"),
+                );
             }
         }
     }
@@ -181,7 +247,30 @@ pub async fn handle_uninstall(
     }
     output::footer("Done", &summary_parts);
 
-    Ok(())
+    Ok(lifecycle_result)
+}
+
+fn removal_effect(entry: &AppEntry) -> LifecycleEffect {
+    match &entry.install_strategy {
+        crate::install_core::manifest::AppInstallStrategy::Copy => LifecycleEffect::ResourceRemoved,
+        crate::install_core::manifest::AppInstallStrategy::JsonMerge { .. } => {
+            LifecycleEffect::ManagedKeysRemoved
+        }
+    }
+}
+
+fn app_uninstall_outcome(
+    entry: &AppEntry,
+    status: LifecycleStatus,
+    effects: impl IntoIterator<Item = LifecycleEffect>,
+) -> LifecycleOutcomeV1 {
+    match super::app_source_parts(&entry.source) {
+        Some((category, resource)) => {
+            LifecycleOutcomeV1::new(format!("app/{category}"), Some(resource), status, effects)
+        }
+        None => LifecycleOutcomeV1::new("app/unknown", None::<String>, status, effects)
+            .with_diagnostic_code("app_manifest_source_invalid"),
+    }
 }
 
 async fn uninstall_entries_for_category(
@@ -274,9 +363,16 @@ mod tests {
         let manifest_before = AppManifest::load(config.shine_dir()).await.unwrap();
         let count_before = manifest_before.entries.len();
 
-        handle_uninstall(&config, None, false, false, true)
+        let result = handle_uninstall_with_result(&config, None, false, false, true)
             .await
             .unwrap();
+        assert!(result.dry_run);
+        assert_eq!(result.summary().previewed, count_before);
+        assert!(
+            result.outcomes.iter().all(|outcome| {
+                outcome.effects == vec![LifecycleEffect::ResourceRemovePreviewed]
+            })
+        );
 
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_eq!(
@@ -338,6 +434,7 @@ mod tests {
                 uses_env: false,
                 requires_admin: false,
             }],
+            ..AppManifest::default()
         };
         let mut entries_by_dest = BTreeMap::new();
 
@@ -375,9 +472,15 @@ mod tests {
         let dest = dir.join(".config/sample/daemon.json");
         fs::write(&dest, b"{\"debug\": false}\n").await.unwrap();
 
-        handle_uninstall(&config, Some("sample"), true, false, false)
+        let result = handle_uninstall_with_result(&config, Some("sample"), true, false, false)
             .await
             .unwrap();
+        assert_eq!(result.summary().changed, 1);
+        assert!(
+            result.outcomes[0]
+                .effects
+                .contains(&LifecycleEffect::UserModificationOverridden)
+        );
 
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert!(
@@ -432,9 +535,16 @@ mod tests {
             .count();
 
         // Uninstall only that category
-        handle_uninstall(&config, Some(&first_category), false, false, false)
-            .await
-            .unwrap();
+        let result =
+            handle_uninstall_with_result(&config, Some(&first_category), false, false, false)
+                .await
+                .unwrap();
+        assert!(
+            result
+                .outcomes
+                .iter()
+                .all(|outcome| outcome.target == format!("app/{first_category}"))
+        );
 
         let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_eq!(
@@ -455,6 +565,108 @@ mod tests {
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
         fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn structured_uninstall_preserves_user_modified_resource_and_receipt() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let destination = dir.join("destination/config.toml");
+        fs::create_dir_all(destination.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(&destination, b"user change\n").await.unwrap();
+        let manifest = AppManifest {
+            entries: vec![AppEntry {
+                source: "app/sample/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::install_core::hash_content(b"installed\n"),
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+            ..AppManifest::default()
+        };
+        manifest.save(config.shine_dir()).await.unwrap();
+
+        let result = handle_uninstall_with_result(&config, None, false, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(result.summary().preserved, 1);
+        assert_eq!(
+            result.outcomes[0].effects,
+            vec![LifecycleEffect::UserResourcePreserved]
+        );
+        assert_eq!(fs::read(&destination).await.unwrap(), b"user change\n");
+        assert_eq!(
+            AppManifest::load(config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn structured_uninstall_reports_stale_receipt_cleanup_as_change() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest {
+            entries: vec![AppEntry {
+                source: "app/sample/missing.toml".to_string(),
+                destination: dir.join("destination/missing.toml"),
+                backup: None,
+                content_hash: crate::install_core::hash_content(b"installed\n"),
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+            ..AppManifest::default()
+        };
+        manifest.save(config.shine_dir()).await.unwrap();
+
+        let result = handle_uninstall_with_result(&config, None, false, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(result.summary().changed, 1);
+        assert_eq!(
+            result.outcomes[0].effects,
+            vec![LifecycleEffect::ReceiptRemoved]
+        );
+        assert!(
+            AppManifest::load(config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn json_merge_uninstall_uses_managed_key_effect() {
+        let entry = AppEntry {
+            source: "app/sample/settings.json".to_string(),
+            destination: PathBuf::from("settings.json"),
+            backup: None,
+            content_hash: 1,
+            install_strategy: AppInstallStrategy::JsonMerge {
+                managed_keys: vec!["proxy".to_string()],
+            },
+            uses_env: false,
+            requires_admin: false,
+        };
+
+        assert_eq!(removal_effect(&entry), LifecycleEffect::ManagedKeysRemoved);
     }
 
     #[cfg(unix)]

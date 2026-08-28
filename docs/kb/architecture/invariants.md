@@ -5,6 +5,12 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **Reusable lifecycle results contain identities and codes, never payloads.** Structured outcomes
+  may record canonical targets, logical resource names, status, effects, and stable diagnostic
+  codes. They must not copy raw errors/logs, source or destination content, environment or secret
+  values, subscription URLs, credentials, or absolute destination paths into a reusable result.
+  Human CLI diagnostics remain subject to their domain-specific redaction rules.
+
 - **Uninstall never touches user files.** `presets::remove_prefix` removes only embedded-asset
   files; `bin_links::unlink_managed` removes only symlinks pointing into the managed presets dir,
   plus **regular files that carry the `# shine-managed` marker and a `# shine-target:` under the

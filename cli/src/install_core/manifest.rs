@@ -1,13 +1,29 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const MANIFEST_FILE: &str = "app-manifest.toml";
+pub const APP_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AppManifest {
+    #[serde(default = "legacy_manifest_schema_version")]
+    pub schema_version: u32,
     #[serde(default)]
     pub entries: Vec<AppEntry>,
+}
+
+fn legacy_manifest_schema_version() -> u32 {
+    0
+}
+
+impl Default for AppManifest {
+    fn default() -> Self {
+        Self {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: Vec::new(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
@@ -55,10 +71,26 @@ pub fn hash_content(bytes: &[u8]) -> u64 {
 
 impl AppManifest {
     pub async fn load(shine_dir: &Path) -> Result<Self> {
-        crate::persist::load_toml_or_default(&shine_dir.join(MANIFEST_FILE), "app manifest").await
+        let mut manifest: Self =
+            crate::persist::load_toml_or_default(&shine_dir.join(MANIFEST_FILE), "app manifest")
+                .await?;
+        match manifest.schema_version {
+            0 => manifest.schema_version = APP_MANIFEST_SCHEMA_VERSION,
+            APP_MANIFEST_SCHEMA_VERSION => {}
+            version => bail!(
+                "app manifest schema version {version} is newer than this Shine supports ({APP_MANIFEST_SCHEMA_VERSION})"
+            ),
+        }
+        Ok(manifest)
     }
 
     pub async fn save(&self, shine_dir: &Path) -> Result<()> {
+        if self.schema_version != APP_MANIFEST_SCHEMA_VERSION {
+            bail!(
+                "cannot write app manifest schema version {}; expected {APP_MANIFEST_SCHEMA_VERSION}",
+                self.schema_version
+            );
+        }
         crate::persist::save_toml_atomic(self, &shine_dir.join(MANIFEST_FILE), "app manifest").await
     }
 
@@ -126,11 +158,47 @@ mod tests {
         manifest.save(&dir).await.unwrap();
 
         let loaded = AppManifest::load(&dir).await.unwrap();
+        assert_eq!(loaded.schema_version, APP_MANIFEST_SCHEMA_VERSION);
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(
             loaded.entries[0].destination,
             PathBuf::from("/tmp/foo.toml")
         );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_unversioned_manifest_normalizes_and_writes_version_one() {
+        let dir = make_temp_dir().await;
+        fs::write(
+            dir.join(MANIFEST_FILE),
+            r#"[[entries]]
+source = "app/test/foo.toml"
+destination = "/tmp/foo.toml"
+content_hash = 7
+"#,
+        )
+        .await
+        .unwrap();
+
+        let manifest = AppManifest::load(&dir).await.unwrap();
+        assert_eq!(manifest.schema_version, APP_MANIFEST_SCHEMA_VERSION);
+        manifest.save(&dir).await.unwrap();
+
+        let written = fs::read_to_string(dir.join(MANIFEST_FILE)).await.unwrap();
+        assert!(written.contains("schema_version = 1"));
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn future_manifest_version_fails_before_use() {
+        let dir = make_temp_dir().await;
+        fs::write(dir.join(MANIFEST_FILE), "schema_version = 2\n")
+            .await
+            .unwrap();
+
+        let error = AppManifest::load(&dir).await.unwrap_err();
+        assert!(error.to_string().contains("newer than this Shine supports"));
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

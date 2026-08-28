@@ -14,6 +14,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/` | Main `shine` binary plus its library crate |
 | `cli/build.rs` | `rust-embed` rebuild trigger for `presets/` |
 | `utils/` | Reusable `shine-core` package with no CLI/Tauri dependency |
+| `utils/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
 | `presets/` | Embedded shell, app, and OS bootstrap assets |
 | `skills/shine-preset-author/` | Portable AI workflow and kind-specific preset author references |
 | `docs/manual/` | Default English public manual |
