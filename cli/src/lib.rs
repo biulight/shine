@@ -16,6 +16,7 @@ pub mod output;
 pub mod path_display;
 pub mod persist;
 pub mod platform;
+pub(crate) mod presentation;
 pub mod preset_commands;
 pub mod preset_meta;
 pub mod preset_validation;

@@ -1,6 +1,8 @@
 use super::metadata::{self, AppCategory};
-use crate::colors;
 use crate::config::Config;
+#[cfg(test)]
+use crate::presentation::TerminalRenderer;
+use crate::presentation::{LifecycleReporter, PresentationEvent};
 use anyhow::{Context, Result, bail};
 use directories::BaseDirs;
 use tokio::fs;
@@ -57,10 +59,21 @@ pub async fn handle_unbuild(config: &Config, app_id: &str) -> Result<()> {
 /// is gated by `allow_app_hooks` for external presets and its failures are
 /// non-fatal (a broken teardown must not block file removal). `dry_run` prints
 /// the intended script without running it.
+#[cfg(test)]
 pub(crate) async fn run_teardown_for_uninstall(
     config: &Config,
     cat: &AppCategory,
     dry_run: bool,
+) -> Option<LifecycleOutcomeV1> {
+    let mut renderer = TerminalRenderer::stdio();
+    run_teardown_for_uninstall_with_reporter(config, cat, dry_run, &mut renderer).await
+}
+
+pub(crate) async fn run_teardown_for_uninstall_with_reporter(
+    config: &Config,
+    cat: &AppCategory,
+    dry_run: bool,
+    reporter: &mut dyn LifecycleReporter,
 ) -> Option<LifecycleOutcomeV1> {
     let (teardown, runtime) = cat
         .artifact
@@ -69,10 +82,10 @@ pub(crate) async fn run_teardown_for_uninstall(
     let app_id = &cat.name;
 
     if config.is_external_presets && !config.allow_app_hooks {
-        println!(
+        reporter.emit(PresentationEvent::stdout(format!(
             "  {} {app_id}: artifact teardown skipped (set allow_app_hooks = true to allow external app hooks; manual: shine app artifact remove {app_id})",
-            colors::symbol("!"),
-        );
+            super::report::symbol("!"),
+        )));
         return Some(
             teardown_outcome(app_id, LifecycleStatus::Skipped, [])
                 .with_diagnostic_code("app_teardown_permission_required"),
@@ -80,10 +93,10 @@ pub(crate) async fn run_teardown_for_uninstall(
     }
 
     if dry_run {
-        println!(
+        reporter.emit(PresentationEvent::stdout(format!(
             "  {} {app_id}: [dry-run] would run artifact teardown ({teardown})",
-            colors::symbol("!"),
-        );
+            super::report::symbol("!"),
+        )));
         return Some(teardown_outcome(
             app_id,
             LifecycleStatus::Previewed,
@@ -94,10 +107,10 @@ pub(crate) async fn run_teardown_for_uninstall(
     let mut command = match artifact_command(config, app_id, teardown, runtime).await {
         Ok(command) => command,
         Err(e) => {
-            eprintln!(
+            reporter.emit(PresentationEvent::stderr(format!(
                 "  {} {app_id}: artifact teardown skipped: {e:#}",
-                colors::symbol("!"),
-            );
+                super::report::symbol("!"),
+            )));
             return Some(
                 teardown_outcome(app_id, LifecycleStatus::Failed, [])
                     .with_diagnostic_code("app_teardown_setup_failed"),
@@ -106,10 +119,10 @@ pub(crate) async fn run_teardown_for_uninstall(
     };
     match command.status().await {
         Ok(status) if status.success() => {
-            println!(
+            reporter.emit(PresentationEvent::stdout(format!(
                 "  {} {app_id}: artifact teardown completed",
-                colors::symbol("✓")
-            );
+                super::report::symbol("✓")
+            )));
             Some(teardown_outcome(
                 app_id,
                 LifecycleStatus::Changed,
@@ -117,20 +130,20 @@ pub(crate) async fn run_teardown_for_uninstall(
             ))
         }
         Ok(status) => {
-            eprintln!(
+            reporter.emit(PresentationEvent::stderr(format!(
                 "  {} {app_id}: artifact teardown failed: exited with {status}",
-                colors::symbol("!"),
-            );
+                super::report::symbol("!"),
+            )));
             Some(
                 teardown_outcome(app_id, LifecycleStatus::Failed, [])
                     .with_diagnostic_code("app_teardown_failed"),
             )
         }
         Err(e) => {
-            eprintln!(
+            reporter.emit(PresentationEvent::stderr(format!(
                 "  {} {app_id}: artifact teardown failed: {e}",
-                colors::symbol("!"),
-            );
+                super::report::symbol("!"),
+            )));
             Some(
                 teardown_outcome(app_id, LifecycleStatus::Failed, [])
                     .with_diagnostic_code("app_teardown_failed"),

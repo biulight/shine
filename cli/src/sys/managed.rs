@@ -1,13 +1,19 @@
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 
-use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
+use crate::presentation::{
+    LifecycleInteraction, LifecycleReporter, PresentationEvent, TerminalInteraction,
+    TerminalRenderer,
+};
 
 use super::commands::current_unix_timestamp;
 use super::detect::detect_os_id;
-use super::execution::print_item_outcome;
+use super::execution::{
+    item_outcome_lines, presentation_bold, presentation_dim, presentation_symbol,
+    presentation_symbol_stderr, presentation_yellow,
+};
 use super::manifest::load_sys_preset;
 use super::resources::{self, SystemDriver};
 use super::run_manifest::{SysRunEntry, SysRunManifest};
@@ -29,6 +35,16 @@ pub(super) enum SysAction {
 enum ManagedOutputMode {
     Explicit,
     Upgrade { verbose: bool },
+}
+
+#[derive(Clone, Copy)]
+struct ManagedRunRequest<'a> {
+    config: &'a Config,
+    os_id: &'a str,
+    requested: Option<&'a str>,
+    action: SysAction,
+    dry_run: bool,
+    output_mode: ManagedOutputMode,
 }
 
 impl ManagedOutputMode {
@@ -107,17 +123,38 @@ pub(crate) async fn handle_upgrade_managed_with_result(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
-    let (mut report, lifecycle_result) =
-        handle_upgrade_managed_target_with_result(config, None, verbose, sep).await?;
+    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+    let mut interaction = TerminalInteraction;
+    handle_upgrade_managed_with_reporter(config, verbose, &mut renderer, &mut interaction).await
+}
+
+async fn handle_upgrade_managed_with_reporter(
+    config: &Config,
+    verbose: bool,
+    reporter: &mut dyn LifecycleReporter,
+    interaction: &mut dyn LifecycleInteraction,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    let (mut report, lifecycle_result) = run_managed_with_reporter(
+        config,
+        None,
+        SysAction::Apply,
+        false,
+        ManagedOutputMode::Upgrade { verbose },
+        reporter,
+        interaction,
+    )
+    .await?;
     if let Some(outcome) = super::profile_commands::sync_composed_profile(config).await? {
         let changed = matches!(
             outcome.status,
             SysItemStatus::Updated | SysItemStatus::NeedsAction
         );
         if changed || verbose {
-            sep.begin();
-            println!("{}", colors::bold("System Shell Profile"));
-            print_item_outcome(&outcome, 14);
+            reporter.emit(PresentationEvent::SectionStart);
+            reporter.emit(PresentationEvent::stdout(presentation_bold(
+                "System Shell Profile",
+            )));
+            emit_item_outcome(reporter, &outcome, 14);
         }
         if changed {
             report.updated += 1;
@@ -145,13 +182,16 @@ pub(crate) async fn handle_upgrade_managed_target_with_result(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
-    run_managed_with_result(
+    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+    let mut interaction = TerminalInteraction;
+    run_managed_with_reporter(
         config,
         item,
         SysAction::Apply,
         false,
         ManagedOutputMode::Upgrade { verbose },
-        Some(sep),
+        &mut renderer,
+        &mut interaction,
     )
     .await
 }
@@ -281,6 +321,31 @@ async fn run_managed_with_result(
         .await
 }
 
+async fn run_managed_with_reporter(
+    config: &Config,
+    requested: Option<&str>,
+    action: SysAction,
+    dry_run: bool,
+    output_mode: ManagedOutputMode,
+    reporter: &mut dyn LifecycleReporter,
+    interaction: &mut dyn LifecycleInteraction,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    let os_id = detect_os_id().await?;
+    run_managed_for_os_with_reporter(
+        ManagedRunRequest {
+            config,
+            os_id: &os_id,
+            requested,
+            action,
+            dry_run,
+            output_mode,
+        },
+        reporter,
+        interaction,
+    )
+    .await
+}
+
 async fn run_managed_for_os_with_result(
     config: &Config,
     os_id: &str,
@@ -288,8 +353,55 @@ async fn run_managed_for_os_with_result(
     action: SysAction,
     dry_run: bool,
     output_mode: ManagedOutputMode,
-    mut sep: Option<&mut crate::output::SectionSeparator>,
+    sep: Option<&mut crate::output::SectionSeparator>,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    if let Some(sep) = sep {
+        let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+        let mut interaction = TerminalInteraction;
+        return run_managed_for_os_with_reporter(
+            ManagedRunRequest {
+                config,
+                os_id,
+                requested,
+                action,
+                dry_run,
+                output_mode,
+            },
+            &mut renderer,
+            &mut interaction,
+        )
+        .await;
+    }
+    let mut renderer = TerminalRenderer::stdio();
+    let mut interaction = TerminalInteraction;
+    run_managed_for_os_with_reporter(
+        ManagedRunRequest {
+            config,
+            os_id,
+            requested,
+            action,
+            dry_run,
+            output_mode,
+        },
+        &mut renderer,
+        &mut interaction,
+    )
+    .await
+}
+
+async fn run_managed_for_os_with_reporter(
+    request: ManagedRunRequest<'_>,
+    reporter: &mut dyn LifecycleReporter,
+    interaction: &mut dyn LifecycleInteraction,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    let ManagedRunRequest {
+        config,
+        os_id,
+        requested,
+        action,
+        dry_run,
+        output_mode,
+    } = request;
     let operation = match (action, output_mode) {
         (SysAction::Remove, _) => LifecycleOperation::Uninstall,
         (SysAction::Apply, ManagedOutputMode::Upgrade { .. }) => LifecycleOperation::Upgrade,
@@ -310,12 +422,16 @@ async fn run_managed_for_os_with_result(
         && let Some(receipt) = entry.receipt.as_ref()
         && receipt.driver() != SysDriverKind::Script
     {
-        if let Some(sep) = &mut sep {
-            sep.begin();
-        }
-        println!("{}", colors::bold("Remove Managed System Config"));
-        println!("  {} {}", colors::symbol("•"), entry.label);
-        if receipt.requires_admin() && !dry_run && !authorize_admin(1).await? {
+        reporter.emit(PresentationEvent::SectionStart);
+        reporter.emit(PresentationEvent::stdout(presentation_bold(
+            "Remove Managed System Config",
+        )));
+        reporter.emit(PresentationEvent::stdout(format!(
+            "  {} {}",
+            presentation_symbol("•"),
+            entry.label
+        )));
+        if receipt.requires_admin() && !dry_run && !interaction.authorize_admin(1).await? {
             lifecycle_result.push(
                 LifecycleOutcomeV1::new(
                     format!("sys/{item_id}"),
@@ -357,7 +473,8 @@ async fn run_managed_for_os_with_result(
                 } else {
                     SysItemStatus::Updated
                 };
-                print_item_outcome(
+                emit_item_outcome(
+                    reporter,
                     &SysItemOutcome {
                         item_id: item_id.to_string(),
                         label: entry.label,
@@ -386,7 +503,8 @@ async fn run_managed_for_os_with_result(
                 let user_modified = error
                     .downcast_ref::<resources::ResourceConflict>()
                     .is_some();
-                print_item_outcome(
+                emit_item_outcome(
+                    reporter,
                     &SysItemOutcome {
                         item_id: item_id.to_string(),
                         label: entry.label,
@@ -464,10 +582,9 @@ async fn run_managed_for_os_with_result(
 
     if selected.is_empty() {
         if output_mode.is_explicit() {
-            println!(
-                "{}",
-                colors::dim("No managed system configuration items selected.")
-            );
+            reporter.emit(PresentationEvent::stdout(presentation_dim(
+                "No managed system configuration items selected.",
+            )));
         }
         return Ok((SysUpgradeReport::default(), lifecycle_result));
     }
@@ -475,7 +592,7 @@ async fn run_managed_for_os_with_result(
     let show_all_outcomes = output_mode.show_all_outcomes();
     let mut section_started = false;
     if show_all_outcomes {
-        begin_managed_section(&mut sep, action, &selected, true);
+        begin_managed_section(reporter, action, &selected, true);
         section_started = true;
     }
 
@@ -493,12 +610,12 @@ async fn run_managed_for_os_with_result(
                 .collect::<Vec<_>>();
             if !missing.is_empty() {
                 failed += 1;
-                eprintln!(
+                reporter.emit(PresentationEvent::stderr(format!(
                     "  {} {}: missing environment variable(s): {}",
-                    colors::symbol("✗"),
+                    presentation_symbol("✗"),
                     item.id,
                     missing.join(", ")
-                );
+                )));
                 lifecycle_result.push(
                     LifecycleOutcomeV1::new(
                         format!("sys/{}", item.id),
@@ -522,16 +639,16 @@ async fn run_managed_for_os_with_result(
                 .plan(&context, action == SysAction::Remove)
             {
                 Ok(plan) => {
-                    println!(
+                    reporter.emit(PresentationEvent::stdout(format!(
                         "  {} {}{}{}",
-                        colors::dim("[dry-run]"),
+                        presentation_dim("[dry-run]"),
                         plan.description,
                         if plan.requires_admin { " [admin]" } else { "" },
                         plan.restart_hint
                             .as_deref()
                             .map(|hint| format!(" [restart required: {hint}]"))
                             .unwrap_or_default()
-                    );
+                    )));
                     lifecycle_result.push(LifecycleOutcomeV1::new(
                         format!("sys/{}", item.id),
                         None::<String>,
@@ -552,7 +669,11 @@ async fn run_managed_for_os_with_result(
                 }
                 Err(error) => {
                     failed += 1;
-                    eprintln!("  {} {}: {error:#}", colors::symbol_stderr("✗"), item.id);
+                    reporter.emit(PresentationEvent::stderr(format!(
+                        "  {} {}: {error:#}",
+                        presentation_symbol_stderr("✗"),
+                        item.id
+                    )));
                     lifecycle_result.push(
                         LifecycleOutcomeV1::new(
                             format!("sys/{}", item.id),
@@ -608,10 +729,10 @@ async fn run_managed_for_os_with_result(
     }
     if needs_admin {
         if !section_started {
-            begin_managed_section(&mut sep, action, &selected, false);
+            begin_managed_section(reporter, action, &selected, false);
             section_started = true;
         }
-        if !authorize_admin(selected.len()).await? {
+        if !interaction.authorize_admin(selected.len()).await? {
             for item in &selected {
                 lifecycle_result.push(
                     LifecycleOutcomeV1::new(
@@ -652,10 +773,10 @@ async fn run_managed_for_os_with_result(
                 logs: Vec::new(),
             };
             if !section_started {
-                begin_managed_section(&mut sep, action, &selected, false);
+                begin_managed_section(reporter, action, &selected, false);
                 section_started = true;
             }
-            print_item_outcome(&outcome, item.label.len().max(14));
+            emit_item_outcome(reporter, &outcome, item.label.len().max(14));
             report.failed += 1;
             lifecycle_result.push(
                 LifecycleOutcomeV1::new(
@@ -771,14 +892,18 @@ async fn run_managed_for_os_with_result(
         lifecycle_result.push(structured_outcome);
         if should_print_managed_outcome(show_all_outcomes, outcome.status) {
             if !section_started {
-                begin_managed_section(&mut sep, action, &selected, false);
+                begin_managed_section(reporter, action, &selected, false);
                 section_started = true;
             }
-            print_item_outcome(&outcome, item.label.len().max(14));
+            emit_item_outcome(reporter, &outcome, item.label.len().max(14));
             if let Some(hint) = restart_hint
                 && outcome.status != SysItemStatus::Failed
             {
-                println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+                reporter.emit(PresentationEvent::stdout(format!(
+                    "  {} {}",
+                    presentation_symbol("!"),
+                    presentation_yellow(&hint)
+                )));
             }
         }
         if outcome.status == SysItemStatus::Failed {
@@ -823,30 +948,35 @@ async fn run_managed_for_os_with_result(
     Ok((report, lifecycle_result))
 }
 
-async fn authorize_admin(item_count: usize) -> Result<bool> {
-    crate::privilege::ensure_admin(item_count).await
-}
-
 fn begin_managed_section(
-    sep: &mut Option<&mut crate::output::SectionSeparator>,
+    reporter: &mut dyn LifecycleReporter,
     action: SysAction,
     selected: &[&SysItem],
     show_selection: bool,
 ) {
-    if let Some(sep) = sep {
-        sep.begin();
-    }
-    println!(
-        "{}",
-        colors::bold(match action {
-            SysAction::Apply => "Managed System Configs",
-            SysAction::Remove => "Remove Managed System Config",
-        })
-    );
+    reporter.emit(PresentationEvent::SectionStart);
+    reporter.emit(PresentationEvent::stdout(presentation_bold(match action {
+        SysAction::Apply => "Managed System Configs",
+        SysAction::Remove => "Remove Managed System Config",
+    })));
     if show_selection {
         for item in selected {
-            println!("  {} {}", colors::symbol("•"), item.label);
+            reporter.emit(PresentationEvent::stdout(format!(
+                "  {} {}",
+                presentation_symbol("•"),
+                item.label
+            )));
         }
+    }
+}
+
+fn emit_item_outcome(
+    reporter: &mut dyn LifecycleReporter,
+    outcome: &SysItemOutcome,
+    label_width: usize,
+) {
+    for line in item_outcome_lines(outcome, label_width) {
+        reporter.emit(PresentationEvent::stdout(line));
     }
 }
 

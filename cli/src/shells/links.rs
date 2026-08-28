@@ -41,11 +41,12 @@ pub(super) fn build_link_specs(
         .collect()
 }
 
-pub(super) fn print_link_conflicts(
+pub(super) fn link_conflict_render_lines(
     config: &Config,
     conflicts: &[crate::bin_links::LinkConflict],
     category_hint: Option<&str>,
-) {
+) -> Vec<String> {
+    let mut rendered = Vec::new();
     for conflict in conflicts {
         let lines = link_conflict_detail_lines(config, conflict, category_hint);
         if let Some((first, rest)) = lines.split_first() {
@@ -54,16 +55,17 @@ pub(super) fn print_link_conflicts(
                 .file_name()
                 .and_then(OsStr::to_str)
                 .unwrap_or("unknown");
-            output::detail_line(
+            rendered.push(output::detail_line_text(
                 "Link Conflict",
                 &colors::yellow(command),
                 Some(first.clone()),
-            );
+            ));
             for line in rest {
-                println!("{}{}", " ".repeat(16), colors::dim(line));
+                rendered.push(format!("{}{}", " ".repeat(16), colors::dim(line)));
             }
         }
     }
+    rendered
 }
 
 fn link_conflict_detail_lines(

@@ -174,26 +174,28 @@ fn powershell_path_expr(value: &str) -> String {
     }
 }
 
-pub(super) fn print_source_command_activation_hint(
+pub(super) fn source_command_activation_hint_lines(
     config: &Config,
     shell_config_path: &Path,
     source_commands: &[String],
-) {
+) -> Vec<String> {
     if source_commands.is_empty() {
-        return;
+        return Vec::new();
     }
 
-    output::hint_line(
-        "Next Step",
-        &format!(
-            "run `{}` once, or open a new shell",
-            shell_source_command(&config.shell_type, shell_config_path)
+    vec![
+        output::hint_line_text(
+            "Next Step",
+            &format!(
+                "run `{}` once, or open a new shell",
+                shell_source_command(&config.shell_type, shell_config_path)
+            ),
         ),
-    );
-    output::hint_line(
-        "Commands",
-        &format!("available after reload: {}", source_commands.join(", ")),
-    );
+        output::hint_line_text(
+            "Commands",
+            &format!("available after reload: {}", source_commands.join(", ")),
+        ),
+    ]
 }
 
 fn sentinel() -> crate::sentinel::Sentinel<'static> {

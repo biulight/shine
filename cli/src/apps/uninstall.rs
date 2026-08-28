@@ -1,13 +1,8 @@
-use super::report::{
-    print_force_removed, print_force_removed_with_restore, print_removed,
-    print_removed_with_restore, print_uninstall_dry_run, print_uninstall_error,
-    print_uninstall_not_found, print_user_modified_kept,
-};
+use super::report;
 use super::{metadata, resolve_install_destination, uninstall_app_entry};
-use crate::colors;
 use crate::config::Config;
 use crate::install_core::manifest::{AppEntry, AppManifest};
-use crate::output;
+use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use anyhow::{Context, Result};
 use file_ops::UninstallOutcome;
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,11 +20,13 @@ pub async fn handle_uninstall(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
-    handle_uninstall_with_result(config, category, force, purge, dry_run)
+    let mut renderer = TerminalRenderer::stdio();
+    handle_uninstall_with_reporter(config, category, force, purge, dry_run, &mut renderer)
         .await
         .map(|_| ())
 }
 
+#[cfg(test)]
 pub(crate) async fn handle_uninstall_with_result(
     config: &Config,
     category: Option<&str>,
@@ -37,9 +34,21 @@ pub(crate) async fn handle_uninstall_with_result(
     purge: bool,
     dry_run: bool,
 ) -> Result<LifecycleResultV1> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_uninstall_with_reporter(config, category, force, purge, dry_run, &mut renderer).await
+}
+
+async fn handle_uninstall_with_reporter(
+    config: &Config,
+    category: Option<&str>,
+    force: bool,
+    purge: bool,
+    dry_run: bool,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<LifecycleResultV1> {
     let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Uninstall, dry_run);
     if dry_run {
-        println!("{}", colors::dim("[dry-run] No files will be modified."));
+        reporter.emit(PresentationEvent::stdout(report::dry_run_header_text()));
     }
 
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
@@ -47,10 +56,9 @@ pub(crate) async fn handle_uninstall_with_result(
     let entries: Vec<_> = if let Some(cat) = category {
         let filtered = uninstall_entries_for_category(config, &manifest, cat).await?;
         if filtered.is_empty() {
-            println!(
-                "{}",
-                colors::dim(&format!("No installed files found for category '{cat}'."))
-            );
+            reporter.emit(PresentationEvent::stdout(report::no_installed_files_text(
+                cat,
+            )));
             return Ok(lifecycle_result);
         }
         filtered
@@ -72,8 +80,10 @@ pub(crate) async fn handle_uninstall_with_result(
             .unwrap_or_default();
         for cat in &categories {
             if involved_categories.contains(&cat.name)
-                && let Some(outcome) =
-                    super::build::run_teardown_for_uninstall(config, cat, dry_run).await
+                && let Some(outcome) = super::build::run_teardown_for_uninstall_with_reporter(
+                    config, cat, dry_run, reporter,
+                )
+                .await
             {
                 lifecycle_result.push(outcome);
             }
@@ -88,7 +98,10 @@ pub(crate) async fn handle_uninstall_with_result(
     for entry in &entries {
         match uninstall_app_entry(entry, dry_run, force).await {
             Ok(UninstallOutcome::Removed) => {
-                print_removed(config, &entry.destination);
+                reporter.emit(PresentationEvent::stdout(report::removed_text(
+                    config,
+                    &entry.destination,
+                )));
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 lifecycle_result.push(app_uninstall_outcome(
@@ -98,7 +111,9 @@ pub(crate) async fn handle_uninstall_with_result(
                 ));
             }
             Ok(UninstallOutcome::RestoredBackup { backup }) => {
-                print_removed_with_restore(config, &entry.destination, &backup);
+                reporter.emit(PresentationEvent::stdout(
+                    report::removed_with_restore_text(config, &entry.destination, &backup),
+                ));
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 restored += 1;
@@ -112,7 +127,9 @@ pub(crate) async fn handle_uninstall_with_result(
                 ));
             }
             Ok(UninstallOutcome::ForceRemoved) => {
-                print_force_removed(&entry.destination);
+                reporter.emit(PresentationEvent::stdout(report::force_removed_text(
+                    &entry.destination,
+                )));
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 lifecycle_result.push(app_uninstall_outcome(
@@ -126,7 +143,9 @@ pub(crate) async fn handle_uninstall_with_result(
                 ));
             }
             Ok(UninstallOutcome::ForceRestoredBackup { backup }) => {
-                print_force_removed_with_restore(&entry.destination, &backup);
+                reporter.emit(PresentationEvent::stdout(
+                    report::force_removed_with_restore_text(&entry.destination, &backup),
+                ));
                 manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 restored += 1;
@@ -141,7 +160,10 @@ pub(crate) async fn handle_uninstall_with_result(
                 ));
             }
             Ok(UninstallOutcome::NotFound) => {
-                print_uninstall_not_found(config, &entry.destination);
+                reporter.emit(PresentationEvent::stdout(report::uninstall_not_found_text(
+                    config,
+                    &entry.destination,
+                )));
                 manifest.remove_by_dest(&entry.destination);
                 skipped += 1;
                 lifecycle_result.push(app_uninstall_outcome(
@@ -151,7 +173,10 @@ pub(crate) async fn handle_uninstall_with_result(
                 ));
             }
             Ok(UninstallOutcome::UserModified) => {
-                print_user_modified_kept(config, &entry.destination);
+                reporter.emit(PresentationEvent::stdout(report::user_modified_kept_text(
+                    config,
+                    &entry.destination,
+                )));
                 user_modified += 1;
                 lifecycle_result.push(app_uninstall_outcome(
                     entry,
@@ -160,7 +185,10 @@ pub(crate) async fn handle_uninstall_with_result(
                 ));
             }
             Ok(UninstallOutcome::DryRun) => {
-                print_uninstall_dry_run(config, &entry.destination);
+                reporter.emit(PresentationEvent::stdout(report::uninstall_dry_run_text(
+                    config,
+                    &entry.destination,
+                )));
                 skipped += 1;
                 lifecycle_result.push(app_uninstall_outcome(
                     entry,
@@ -172,7 +200,11 @@ pub(crate) async fn handle_uninstall_with_result(
                 ));
             }
             Err(e) => {
-                print_uninstall_error(config, &entry.destination, &e);
+                reporter.emit(PresentationEvent::stderr(report::uninstall_error_text(
+                    config,
+                    &entry.destination,
+                    &e,
+                )));
                 lifecycle_result.push(
                     app_uninstall_outcome(entry, LifecycleStatus::Failed, [])
                         .with_diagnostic_code("app_uninstall_failed"),
@@ -246,11 +278,7 @@ pub(crate) async fn handle_uninstall_with_result(
                     })?;
                     purged = true;
                 }
-                println!(
-                    "  {}  {}",
-                    colors::symbol("✓"),
-                    colors::dim(&format!("app/{cat} presets directory purged")),
-                );
+                reporter.emit(PresentationEvent::stdout(report::purge_category_text(cat)));
                 lifecycle_result.push(LifecycleOutcomeV1::new(
                     format!("app/{cat}"),
                     Some("purge"),
@@ -281,11 +309,7 @@ pub(crate) async fn handle_uninstall_with_result(
                         .context("removing app manifest")?;
                     purge_effects.push(LifecycleEffect::ReceiptRemoved);
                 }
-                println!(
-                    "  {}  {}",
-                    colors::symbol("✓"),
-                    colors::dim("app presets directory and manifest purged"),
-                );
+                reporter.emit(PresentationEvent::stdout(report::purge_all_text()));
                 lifecycle_result.push(LifecycleOutcomeV1::new(
                     "app",
                     Some("purge"),
@@ -312,24 +336,11 @@ pub(crate) async fn handle_uninstall_with_result(
         );
     }
 
-    let mut summary_parts: Vec<String> = Vec::new();
-    if removed > 0 {
-        let restore_note = if restored > 0 {
-            format!(", {restored} backups restored")
-        } else {
-            String::new()
-        };
-        summary_parts.push(colors::green(&format!("{removed} removed{restore_note}")));
-    }
-    if user_modified > 0 {
-        summary_parts.push(colors::yellow(&format!(
-            "{user_modified} user-modified (kept)"
-        )));
-    }
-    if skipped > 0 {
-        summary_parts.push(colors::dim(&format!("{skipped} skipped")));
-    }
-    output::footer("Done", &summary_parts);
+    let summary_parts = report::uninstall_summary_parts(removed, restored, user_modified, skipped);
+    reporter.emit(PresentationEvent::BlankLine);
+    reporter.emit(PresentationEvent::stdout(report::done_summary_text(
+        &summary_parts,
+    )));
 
     Ok(lifecycle_result)
 }

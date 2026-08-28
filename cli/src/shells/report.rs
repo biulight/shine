@@ -1,6 +1,26 @@
 use super::metadata;
 use crate::colors;
 
+pub(super) fn style_dim(value: &str) -> String {
+    colors::dim(value)
+}
+
+pub(super) fn style_green(value: &str) -> String {
+    colors::green(value)
+}
+
+pub(super) fn style_yellow(value: &str) -> String {
+    colors::yellow(value)
+}
+
+pub(super) fn style_bold(value: &str) -> String {
+    colors::bold(value)
+}
+
+pub(super) fn style_symbol(value: &str) -> String {
+    colors::symbol(value)
+}
+
 #[derive(Debug, Default)]
 pub struct ShellUpgradeReport {
     /// User-facing shell targets that were brought up to date. A target is
@@ -416,5 +436,28 @@ mod info_tests {
         assert!(handle_info(&config, "not-a-preset").await.is_err());
 
         tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_render_tests {
+    use super::*;
+
+    #[test]
+    fn shell_lifecycle_summary_parts_keep_legacy_wording() {
+        let report = crate::bin_links::LinkReport {
+            created: vec!["created".into()],
+            overwritten: vec!["updated".into()],
+            skipped: vec!["current".into()],
+            conflicts: Vec::new(),
+        };
+        assert_eq!(
+            link_report_summary_parts(&report),
+            vec!["1 created", "1 updated", "1 up to date"]
+        );
+        assert_eq!(
+            upgrade_link_report_summary_parts(&report, false),
+            vec!["1 created", "1 updated"]
+        );
     }
 }

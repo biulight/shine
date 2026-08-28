@@ -474,30 +474,34 @@ impl Config {
 /// shell deployment mode. This makes built-in, external, and overlay-backed
 /// runs report provenance with the same vocabulary.
 pub fn print_presets_note(config: &Config) {
+    for line in presets_note_lines(config) {
+        println!("{line}");
+    }
+}
+
+pub(crate) fn presets_note_lines(config: &Config) -> Vec<String> {
+    let mut lines = Vec::new();
     if config.is_external_presets {
-        println!(
-            "{}",
-            crate::colors::external_presets_note(config.presets_dir())
-        );
+        lines.push(crate::colors::external_presets_note(config.presets_dir()));
         if let Some(dir) = config.active_presets_overlay_dir() {
-            println!("{}", crate::colors::presets_overlay_note(dir));
+            lines.push(crate::colors::presets_overlay_note(dir));
         }
         let deployment = match config.external_shell_mode {
             ExternalShellMode::Snapshot => "snapshot · changes require `shine upgrade`",
             ExternalShellMode::Live => "live · content applies on next invocation",
         };
-        println!(
-            "{}",
-            crate::colors::dim(&crate::colors::shell_deployment_note(deployment))
-        );
-        println!();
+        lines.push(crate::colors::dim(&crate::colors::shell_deployment_note(
+            deployment,
+        )));
+        lines.push(String::new());
     } else {
-        println!("{}", crate::colors::presets_source_note("built-in"));
+        lines.push(crate::colors::presets_source_note("built-in"));
         if let Some(dir) = config.active_presets_overlay_dir() {
-            println!("{}", crate::colors::presets_overlay_note(dir));
+            lines.push(crate::colors::presets_overlay_note(dir));
         }
-        println!();
+        lines.push(String::new());
     }
+    lines
 }
 
 impl Default for Config {

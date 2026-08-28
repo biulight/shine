@@ -2,7 +2,8 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-28
-- **Evidence**: `utils/src/lifecycle.rs`, `cli/src/apps/{install,upgrade,uninstall,hooks,build}.rs`,
+- **Evidence**: `utils/src/lifecycle.rs`, `cli/src/presentation.rs`,
+  `cli/src/apps/{install,upgrade,uninstall,hooks,build,report}.rs`,
   `cli/src/shells/{install,uninstall,deployment}.rs`, `cli/src/sys/{managed,resources,run_manifest}.rs`,
   `cli/src/install_core/manifest.rs`
 
@@ -30,8 +31,10 @@ receipt, and execution models.
 
 Reusable results contain structured effect and diagnostic codes only. They do not contain arbitrary
 error prose, raw logs, source/destination content, environment or secret values, or absolute
-destination paths. Human rendering remains a frontend responsibility even while the first migration
-slices temporarily generate results alongside existing inline output.
+destination paths. Human rendering is a frontend responsibility: lifecycle paths emit CLI-private
+presentation events to a replaceable reporter, while confirmations and administrator authorization
+use a separate interaction port. These presentation values are not serialized or added to the
+reusable result.
 
 Before any public JSON surface existed, Contract v1 added `pending`. Read-only `update` has
 `dry_run = false` and reports applicable work as `pending`; explicit dry-run has `dry_run = true`
@@ -45,11 +48,13 @@ successful write, and an unsupported future version fails before mutation. An in
 or semantic reinterpretation requires a version bump. Sys resource receipt versions remain
 independent of the container manifest schema.
 
-Execution slices 1–5 cover App files, upgrade, hooks, teardown, embedded cache and purge; Shell
+Execution slices 1–6 cover App files, upgrade, hooks, teardown, embedded cache and purge; Shell
 command-scoped lifecycle; managed Sys built-in resources; and all three manifest gates. Existing
 aggregate report types remain CLI compatibility adapters: reusable facts come from structured
 results, while restart hints, Shell presentation totals, and Sys field-difference prose remain
-frontend metadata. Renderer separation remains a characterization-backed follow-up.
+frontend metadata. A writer-backed terminal renderer preserves stdout/stderr routing and shared
+upgrade-section ordering; recording implementations support characterization tests without a real
+terminal.
 
 ## Consequences
 
@@ -60,7 +65,7 @@ frontend metadata. Renderer separation remains a characterization-backed follow-
   future structured diagnostic message design must define safe fields rather than serializing raw
   errors.
 - Runtime state migrations become explicit and reject future incompatible formats before writes.
-- Initial adapters may still print during execution; completion of Phase 1 requires renderers to
-  consume results after behavior is characterized.
+- Executors no longer own stdout/stderr or upgrade-section state. Presentation events are emitted
+  as outcomes complete so partial progress remains visible before prompts or later failures.
 - This decision adds no public command or preset syntax, so it does not publish an unreleased schema
   in the user manual.

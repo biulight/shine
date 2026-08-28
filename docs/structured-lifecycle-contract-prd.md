@@ -1,8 +1,9 @@
 # Shine Structured Lifecycle Contract PRD
 
-> **Status:** Phase 1 structured lifecycle slices 1–5 complete; renderer separation remains
-> pending. This document records the executable Phase 1 contract from [ROADMAP.md](ROADMAP.md); it
-> is not released JSON behavior or a public preset-authoring contract.
+> **Status:** Phase 1 structured lifecycle slices 1–6 complete. The broader Roadmap Phase 1 gate
+> still requires its full acceptance suite. This document records the executable Phase 1 contract
+> from [ROADMAP.md](ROADMAP.md); it is not released JSON behavior or a public preset-authoring
+> contract.
 
 ## 1. Summary
 
@@ -15,8 +16,9 @@ rules.
 The completed execution slices cover App install/upgrade/uninstall plus hooks, implicit teardown,
 embedded preset cache, and purge; Shell install/update/upgrade/uninstall; and managed Sys
 apply/update/upgrade/uninstall. `app-manifest.toml`, `shell-manifest.toml`, and `sys-manifest.toml`
-are independently versioned. Existing renderers, output, permission prompts, and exit semantics
-remain in place until the final Phase 1 renderer-separation slice.
+are independently versioned. CLI-private presentation events and interaction adapters now preserve
+the existing output, permission prompts, and exit semantics without making terminal rendering part
+of lifecycle execution.
 
 ## 2. Problem
 
@@ -149,7 +151,7 @@ remains a separate compatibility contract.
 2. Add internal App, Shell, and managed Sys lifecycle entry points that return
    `LifecycleResultV1`.
 3. Preserve the existing public handlers and terminal rendering while they delegate to the result
-   producing path.
+   producing path through CLI-private reporter and interaction ports.
 4. Map handled App files/helpers, Shell commands, and managed Sys items to their canonical targets,
    logical resources, effects, and stable diagnostic codes.
 5. Add `schema_version = 1` to all three runtime manifests, normalize legacy version 0 on load, and
@@ -227,8 +229,9 @@ Execution slices 1–5 are complete when:
 3. **Complete:** Shell command-scoped install/update/upgrade/uninstall outcomes.
 4. **Complete:** managed Sys item outcomes and typed receipt differences.
 5. **Complete:** Shell and Sys manifest schema v1 plus legacy/future gates.
-6. **Pending:** terminal renderers consume completed results after characterization tests pin
-   current output.
+6. **Complete:** App, Shell, and managed Sys execution emit CLI-private presentation events through
+   a writer-backed renderer; upgrade sections and interactive confirmation/authorization remain
+   frontend concerns, with characterization tests pinning stream and separator behavior.
 7. **Pending / Phase 2:** move reusable executors and host abstractions behind `shine-core` without
    changing Contract v1.
 

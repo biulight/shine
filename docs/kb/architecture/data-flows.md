@@ -28,6 +28,10 @@ foreign launcher ownership is `conflict`, not pending, and upgrade preserves tha
 receipt. Shared cache/snapshot/rendered effects attach to affected commands without turning source
 presence into installation evidence.
 
+Shell execution emits CLI-private presentation events instead of writing terminal output. The
+terminal renderer owns shared upgrade-section state, while writer-backed recording tests pin
+quiet/verbose sections, conflicts, profile hints, and stdout/stderr routing.
+
 ## App install (`shine app install <category>`)
 
 `cli/src/apps/mod.rs` orchestrates:
@@ -56,11 +60,12 @@ presence into installation evidence.
    routes on it; see lessons entry 2026-07-04). Successful saves from mutation commands write
    `schema_version = 1`.
 6. **Result and report** — the App adapter records safe file/receipt canonical targets, logical
-   resources, statuses, effects, and diagnostic codes in `shine-core`'s `LifecycleResultV1`. The
-   transitional Phase 1 adapter still renders the established terminal output inline. App upgrade,
-   hooks, implicit teardown, embedded preset-cache, and purge now join the same result; hook and
-   teardown failures retain their non-fatal command semantics. Reusable results never include
-   absolute destinations, content, raw errors or child output, environment values, or secret values.
+   resources, statuses, effects, and diagnostic codes in `shine-core`'s `LifecycleResultV1`.
+   App upgrade, hooks, implicit teardown, embedded preset-cache, and purge join the same result;
+   hook and teardown failures retain their non-fatal command semantics. CLI-private presentation
+   events flow through a writer-backed reporter, and stale cleanup confirmation uses the frontend
+   interaction adapter. Reusable results never include absolute destinations, content, raw errors
+   or child output, environment values, or secret values.
 
 ## App uninstall
 
@@ -101,6 +106,10 @@ Built-in drivers return typed resource/backup effects and typed user-modificatio
 adapter never classifies reusable results by parsing `detail` or raw errors. No-op upgrade does not
 rewrite the receipt merely to refresh metadata. Bootstrap execution, profile enable/disable, and
 composed-profile sync remain outside the structured managed-resource result.
+
+Managed Sys presentation also flows through the CLI reporter. Item ownership is rendered before
+the interaction adapter requests administrator authorization, preserving prompt context without
+making terminal or privilege APIs part of the reusable lifecycle result.
 
 `shine update --diff` expands stale shell/app rows, while `shine update <TARGET>` resolves one
 installed shell/app through the same aliases as `shine info` and prints only its stale files. Each

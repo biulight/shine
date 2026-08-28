@@ -81,6 +81,12 @@ pub(super) fn print_item_install_start(item: &SysItem, requires_admin: bool) {
 }
 
 pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
+    for line in item_outcome_lines(outcome, label_width) {
+        println!("{line}");
+    }
+}
+
+pub(super) fn item_outcome_lines(outcome: &SysItemOutcome, label_width: usize) -> Vec<String> {
     let symbol = status_symbol(outcome.status);
     let label = format!("{:<label_width$}", outcome.label);
     let status = format!("{:<17}", status_text(outcome.status));
@@ -89,16 +95,17 @@ pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
     } else {
         colors::dim(&outcome.detail)
     };
-    println!(
+    let mut lines = vec![format!(
         "  {} {} {} {}",
         colors::symbol(symbol),
         colors::bold(&label),
         colors::status_label(&status, symbol),
         detail
-    );
+    )];
     for line in &outcome.logs {
-        println!("    {}", colors::dim(line));
+        lines.push(format!("    {}", colors::dim(line)));
     }
+    lines
 }
 
 pub(super) fn status_symbol(status: SysItemStatus) -> &'static str {
@@ -122,6 +129,10 @@ pub(super) fn status_text(status: SysItemStatus) -> &'static str {
 }
 
 pub(super) fn print_sys_summary(outcomes: &[SysItemOutcome]) {
+    println!("{}", sys_summary_text(outcomes));
+}
+
+pub(super) fn sys_summary_text(outcomes: &[SysItemOutcome]) -> String {
     let mut counts = BTreeMap::<SysItemStatus, usize>::new();
     for outcome in outcomes {
         *counts.entry(outcome.status).or_default() += 1;
@@ -142,7 +153,27 @@ pub(super) fn print_sys_summary(outcomes: &[SysItemOutcome]) {
             .map(|count| format!("{count} {}", status_text(status)))
     })
     .collect::<Vec<_>>();
-    println!("{}", colors::dim(&format!("Summary: {}", parts.join(", "))));
+    colors::dim(&format!("Summary: {}", parts.join(", ")))
+}
+
+pub(super) fn presentation_bold(value: &str) -> String {
+    colors::bold(value)
+}
+
+pub(super) fn presentation_dim(value: &str) -> String {
+    colors::dim(value)
+}
+
+pub(super) fn presentation_symbol(value: &str) -> String {
+    colors::symbol(value)
+}
+
+pub(super) fn presentation_symbol_stderr(value: &str) -> String {
+    colors::symbol_stderr(value)
+}
+
+pub(super) fn presentation_yellow(value: &str) -> String {
+    colors::yellow(value)
 }
 
 #[cfg(test)]
@@ -172,6 +203,26 @@ install = { kind = "script", path = "install/zerotier.sh" }
         assert_eq!(
             item_install_start_text(&manifest.items[0], false),
             "sys/zerotier (ZeroTier) installing"
+        );
+    }
+
+    #[test]
+    fn managed_item_outcome_lines_preserve_detail_and_log_order() {
+        let outcome = SysItemOutcome {
+            item_id: "split-dns".to_string(),
+            label: "Split DNS".to_string(),
+            status: SysItemStatus::Updated,
+            detail: "receipt refreshed".to_string(),
+            logs: vec!["first".to_string(), "second".to_string()],
+        };
+
+        assert_eq!(
+            item_outcome_lines(&outcome, 14),
+            vec![
+                "  ✓ Split DNS      updated           receipt refreshed",
+                "    first",
+                "    second",
+            ]
         );
     }
 }

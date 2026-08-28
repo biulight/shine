@@ -19,6 +19,12 @@ pub struct SectionSeparator {
     preamble: Option<String>,
 }
 
+pub(crate) enum SectionPrefix {
+    None,
+    BlankLine,
+    Preamble(String),
+}
+
 impl SectionSeparator {
     pub fn new() -> Self {
         Self::default()
@@ -36,12 +42,23 @@ impl SectionSeparator {
     /// Call immediately before printing a section's header, only on the path
     /// where the section is actually about to print something.
     pub fn begin(&mut self) {
-        if self.printed {
-            println!();
-        } else if let Some(preamble) = self.preamble.take() {
-            println!("{preamble}");
+        match self.next_prefix() {
+            SectionPrefix::None => {}
+            SectionPrefix::BlankLine => println!(),
+            SectionPrefix::Preamble(preamble) => println!("{preamble}"),
         }
+    }
+
+    pub(crate) fn next_prefix(&mut self) -> SectionPrefix {
+        let prefix = if self.printed {
+            SectionPrefix::BlankLine
+        } else if let Some(preamble) = self.preamble.take() {
+            SectionPrefix::Preamble(preamble)
+        } else {
+            SectionPrefix::None
+        };
         self.printed = true;
+        prefix
     }
 
     pub fn has_printed(&self) -> bool {
@@ -57,6 +74,15 @@ fn join_summary(parts: &[String]) -> String {
     }
 }
 
+pub(crate) fn summary_line_text(label: &str, parts: &[String]) -> String {
+    format!(
+        "{}{}{}",
+        colors::bold(label),
+        pad(label, SUMMARY_LABEL_WIDTH),
+        join_summary(parts)
+    )
+}
+
 /// Appends `"{count} {label}"` (styled with `color`) to `parts` when `count`
 /// is nonzero. Collapses the repeated `if count > 0 { parts.push(color(...))
 /// }` idiom used when building summary footers from several counters.
@@ -67,12 +93,7 @@ pub fn push_count(parts: &mut Vec<String>, count: usize, color: fn(&str) -> Stri
 }
 
 pub fn summary_line(label: &str, parts: &[String]) {
-    println!(
-        "{}{}{}",
-        colors::bold(label),
-        pad(label, SUMMARY_LABEL_WIDTH),
-        join_summary(parts)
-    );
+    println!("{}", summary_line_text(label, parts));
 }
 
 pub fn footer(label: &str, parts: &[String]) {
@@ -135,28 +156,36 @@ fn format_columns(items: &[String], terminal_width: Option<usize>) -> String {
 }
 
 pub fn detail_line(label: &str, status: &str, detail: Option<String>) {
+    println!("{}", detail_line_text(label, status, detail));
+}
+
+pub(crate) fn detail_line_text(label: &str, status: &str, detail: Option<String>) -> String {
     let detail = detail
         .filter(|value| !value.is_empty())
         .map(|value| format!("  {}", colors::dim(&value)))
         .unwrap_or_default();
 
-    println!(
+    format!(
         "{}{}{}{}{}",
         colors::bold(label),
         pad(label, DETAIL_LABEL_WIDTH),
         status,
         pad_plain(visible_len_without_ansi(status), DETAIL_STATUS_WIDTH),
         detail
-    );
+    )
 }
 
 pub fn hint_line(label: &str, detail: &str) {
-    println!(
+    println!("{}", hint_line_text(label, detail));
+}
+
+pub(crate) fn hint_line_text(label: &str, detail: &str) -> String {
+    format!(
         "{}{}{}",
         colors::bold(label),
         pad(label, DETAIL_LABEL_WIDTH),
         colors::dim(detail)
-    );
+    )
 }
 
 fn pad(label: &str, width: usize) -> String {

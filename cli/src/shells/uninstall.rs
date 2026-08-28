@@ -2,9 +2,12 @@ use super::install::installed_source_commands;
 use super::profile::{
     remove_managed_shell_profile, remove_path_from_shell_config, write_managed_shell_profile,
 };
-use super::report::{remove_report_summary_parts, unlink_report_summary_parts};
+use super::report::{
+    remove_report_summary_parts, style_dim, style_symbol, unlink_report_summary_parts,
+};
 use crate::config::Config;
 use crate::output;
+use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -18,16 +21,29 @@ pub async fn handle_uninstall(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
-    handle_uninstall_with_result(config, target, purge, dry_run)
+    let mut renderer = TerminalRenderer::stdio();
+    handle_uninstall_with_reporter(config, target, purge, dry_run, &mut renderer)
         .await
         .map(|_| ())
 }
 
+#[cfg(test)]
 pub(crate) async fn handle_uninstall_with_result(
     config: &Config,
     target: Option<&str>,
     purge: bool,
     dry_run: bool,
+) -> Result<LifecycleResultV1> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_uninstall_with_reporter(config, target, purge, dry_run, &mut renderer).await
+}
+
+async fn handle_uninstall_with_reporter(
+    config: &Config,
+    target: Option<&str>,
+    purge: bool,
+    dry_run: bool,
+    reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
     let manifest_before = super::deployment::ShellManifest::load(config).await?;
     let selection = target
@@ -76,7 +92,7 @@ pub(crate) async fn handle_uninstall_with_result(
             .push(probe_uninstall_target(config, &manifest_before, category, command).await?);
     }
 
-    handle_uninstall_execute(config, target, purge, dry_run).await?;
+    handle_uninstall_execute(config, target, purge, dry_run, reporter).await?;
 
     let manifest_after = if dry_run {
         manifest_before.clone()
@@ -186,15 +202,17 @@ async fn handle_uninstall_execute(
     target: Option<&str>,
     purge: bool,
     dry_run: bool,
+    reporter: &mut dyn LifecycleReporter,
 ) -> Result<()> {
-    crate::config::print_presets_note(config);
+    for line in crate::config::presets_note_lines(config) {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
     // Reject unsupported runtime state before unlinking or removing shared state.
     let _manifest_gate = super::deployment::ShellManifest::load(config).await?;
     if dry_run {
-        println!(
-            "{}",
-            crate::colors::dim("[dry-run] No files will be modified.")
-        );
+        reporter.emit(PresentationEvent::stdout(style_dim(
+            "[dry-run] No files will be modified.",
+        )));
     }
     let selection = target
         .map(super::metadata::parse_lifecycle_target)
@@ -202,7 +220,15 @@ async fn handle_uninstall_execute(
     if let Some(selection) = selection
         && let Some(command) = selection.command
     {
-        return handle_uninstall_command(config, selection.category, command, purge, dry_run).await;
+        return handle_uninstall_command(
+            config,
+            selection.category,
+            command,
+            purge,
+            dry_run,
+            reporter,
+        )
+        .await;
     }
     let category = selection.map(|selection| selection.category);
 
@@ -246,17 +272,20 @@ async fn handle_uninstall_execute(
         ]
         .concat(),
     };
-    output::summary_line("Bin Links", &unlink_report_summary_parts(&unlink_report));
+    reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+        "Bin Links",
+        &unlink_report_summary_parts(&unlink_report),
+    )));
 
     // When the user has a custom presets directory, the source files are theirs —
     // only remove the embedded-managed files when using the default directory.
     if !config.is_external_presets {
         let remove_report =
             crate::presets::remove_prefix(&prefix, config.presets_dir(), dry_run).await?;
-        output::summary_line(
+        reporter.emit(PresentationEvent::stdout(output::summary_line_text(
             "Shell Presets",
             &remove_report_summary_parts(&remove_report),
-        );
+        )));
     }
 
     // Only purge managed directories when using the default presets directory.
@@ -276,11 +305,11 @@ async fn handle_uninstall_execute(
             let _ = tokio::fs::remove_dir(config.presets_dir()).await;
             let _ = tokio::fs::remove_dir(config.bin_dir()).await;
         }
-        println!(
+        reporter.emit(PresentationEvent::stdout(format!(
             "  {}  {}",
-            crate::colors::symbol("✓"),
-            crate::colors::dim("managed directories purged (if empty)"),
-        );
+            style_symbol("✓"),
+            style_dim("managed directories purged (if empty)"),
+        )));
     }
 
     // Remove rendered_dir files — always shine-managed regardless of external-presets mode.
@@ -333,6 +362,7 @@ async fn handle_uninstall_command(
     command: &str,
     purge: bool,
     dry_run: bool,
+    reporter: &mut dyn LifecycleReporter,
 ) -> Result<()> {
     let mut manifest = super::deployment::ShellManifest::load(config).await?;
     let canonical = format!("shell/{category}/{command}");
@@ -382,7 +412,10 @@ async fn handle_uninstall_command(
             unlink_report.skipped[0].display()
         );
     }
-    output::summary_line("Bin Links", &unlink_report_summary_parts(&unlink_report));
+    reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+        "Bin Links",
+        &unlink_report_summary_parts(&unlink_report),
+    )));
 
     let other_manifest_entry = manifest
         .entries
@@ -443,7 +476,10 @@ async fn handle_uninstall_command(
                 dry_run,
             )
             .await?;
-            output::summary_line("Shell Presets", &remove_report_summary_parts(&report));
+            reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+                "Shell Presets",
+                &remove_report_summary_parts(&report),
+            )));
         }
         if !dry_run {
             remove_dir_if_present(&config.rendered_dir().join("shell").join(category)).await?;

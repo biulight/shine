@@ -37,6 +37,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/path_display.rs` | Home-relative terminal path formatting |
 | `cli/src/colors.rs` | Terminal color helpers |
 | `cli/src/output.rs` | Shared command output mode and rendering support |
+| `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
 | `cli/src/platform.rs` | Platform classification shared across command domains |
 | `cli/src/privilege.rs` | Cross-platform administrator/elevation orchestration |
 | `cli/src/proc.rs` | Small domain-neutral subprocess helpers |

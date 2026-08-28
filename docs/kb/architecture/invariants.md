@@ -10,6 +10,11 @@ bugs. Check this list before changing the modules named in each entry.
   codes. They must not copy raw errors/logs, source or destination content, environment or secret
   values, subscription URLs, credentials, or absolute destination paths into a reusable result.
   Human CLI diagnostics remain subject to their domain-specific redaction rules.
+- **Lifecycle presentation is a CLI-only side channel, never a result payload.** App, Shell, and
+  managed Sys may emit home-relative paths, human diagnostics, hook notes, and section events to a
+  replaceable reporter, but those events are not serializable and must never be copied into
+  `LifecycleResultV1`. Confirmation and administrator authorization use the separate interaction
+  port so reusable execution does not depend on dialoguer or terminal rendering.
 - **Lifecycle status distinguishes observation from execution.** Read-only `update` uses
   `dry_run = false` and `Pending`; explicit dry-run uses `dry_run = true` and `Previewed`.
   `Changed` means this execution changed Shine-owned state. App hooks/teardown may record execution

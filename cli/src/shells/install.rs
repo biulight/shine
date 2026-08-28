@@ -1,17 +1,17 @@
-use super::links::{build_link_specs, print_link_conflicts};
+use super::links::{build_link_specs, link_conflict_render_lines};
 use super::profile::{
-    append_path_to_shell_config, managed_shell_profile_path, print_source_command_activation_hint,
-    shell_source_command,
+    append_path_to_shell_config, managed_shell_profile_path, shell_source_command,
+    source_command_activation_hint_lines,
 };
 use super::report::{
-    ShellUpgradeReport, link_report_summary_parts, preset_extract_summary_parts,
-    upgrade_link_report_summary_parts,
+    ShellUpgradeReport, link_report_summary_parts, preset_extract_summary_parts, style_bold,
+    style_dim, style_green, style_symbol, style_yellow, upgrade_link_report_summary_parts,
 };
 use super::template::{ScriptTemplate, apply_template_to_scripts};
 use super::{PathUpdateStatus, get_shell_config_path, metadata};
-use crate::colors;
 use crate::config::Config;
 use crate::output;
+use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -56,18 +56,32 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
 }
 
 pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) -> Result<()> {
-    handle_install_with_result(config, target, force)
+    let mut renderer = TerminalRenderer::stdio();
+    handle_install_with_reporter(config, target, force, &mut renderer)
         .await
         .map(|_| ())
 }
 
+#[cfg(test)]
 pub(crate) async fn handle_install_with_result(
     config: &Config,
     target: Option<&str>,
     force: bool,
 ) -> Result<LifecycleResultV1> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_install_with_reporter(config, target, force, &mut renderer).await
+}
+
+async fn handle_install_with_reporter(
+    config: &Config,
+    target: Option<&str>,
+    force: bool,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<LifecycleResultV1> {
     let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Install, false);
-    crate::config::print_presets_note(config);
+    for line in crate::config::presets_note_lines(config) {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
     // Reject unsupported runtime state before extraction, snapshots, links, or profiles.
     let manifest_before = super::deployment::ShellManifest::load(config).await?;
     let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
@@ -90,7 +104,10 @@ pub(crate) async fn handle_install_with_result(
     if !config.is_external_presets {
         let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
         cache_written = !report.created.is_empty() || !report.overwritten.is_empty();
-        output::summary_line("Shell Presets", &preset_extract_summary_parts(&report));
+        reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+            "Shell Presets",
+            &preset_extract_summary_parts(&report),
+        )));
     }
 
     // Embedded extraction populates the installed preset cache but must not expand a
@@ -105,11 +122,14 @@ pub(crate) async fn handle_install_with_result(
         && config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
     {
         let summary = if snapshots_updated > 0 {
-            colors::green(&format!("{snapshots_updated} updated"))
+            style_green(&format!("{snapshots_updated} updated"))
         } else {
-            colors::dim("up to date")
+            style_dim("up to date")
         };
-        output::summary_line("Shell Snapshots", &[summary]);
+        reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+            "Shell Snapshots",
+            &[summary],
+        )));
     }
     // Build (template_source, rendered_dest) pairs for all scripts.
     // apply_template_to_scripts renders source → rendered_dir, never modifies presets_dir.
@@ -131,8 +151,13 @@ pub(crate) async fn handle_install_with_result(
     };
     super::deployment::update_manifest(config, &categories, manifest_scope).await?;
 
-    output::summary_line("Bin Links", &link_report_summary_parts(&link_report));
-    print_link_conflicts(config, &link_report.conflicts, category_filter);
+    reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+        "Bin Links",
+        &link_report_summary_parts(&link_report),
+    )));
+    for line in link_conflict_render_lines(config, &link_report.conflicts, category_filter) {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
 
     let source_commands = installed_source_commands(config).await?;
     let installed_commands = installed_source_commands_for_categories(config, &categories).await?;
@@ -143,29 +168,33 @@ pub(crate) async fn handle_install_with_result(
     let config_updated = matches!(&shell_update.config_status, PathUpdateStatus::Updated(_));
     let profile_path = managed_shell_profile_path(config);
     if shell_update.profile_updated {
-        output::detail_line(
+        reporter.emit(PresentationEvent::stdout(output::detail_line_text(
             "Shell Profile",
-            &colors::green("updated"),
+            &style_green("updated"),
             Some(profile_path.display().to_string()),
-        );
+        )));
     }
     match shell_update.config_status {
         PathUpdateStatus::AlreadyConfigured => {
-            output::detail_line(
+            reporter.emit(PresentationEvent::stdout(output::detail_line_text(
                 "Shell Config",
-                &colors::dim("up to date"),
+                &style_dim("up to date"),
                 Some(shell_config_path.display().to_string()),
-            );
+            )));
         }
         PathUpdateStatus::Updated(path) => {
-            output::detail_line(
+            reporter.emit(PresentationEvent::stdout(output::detail_line_text(
                 "Shell Config",
-                &colors::green("updated"),
+                &style_green("updated"),
                 Some(path.display().to_string()),
-            );
+            )));
         }
     }
-    print_source_command_activation_hint(config, &shell_config_path, &installed_commands);
+    for line in
+        source_command_activation_hint_lines(config, &shell_config_path, &installed_commands)
+    {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
 
     for category in &categories {
         for file in &category.files {
@@ -229,17 +258,21 @@ pub(crate) async fn handle_install_with_result(
 /// rendering templates, creating links, updating manifests, or editing shell
 /// profiles.
 pub async fn handle_install_dry_run(config: &Config, target: Option<&str>) -> Result<()> {
-    handle_install_dry_run_with_result(config, target)
+    let mut renderer = TerminalRenderer::stdio();
+    handle_install_dry_run_with_reporter(config, target, &mut renderer)
         .await
         .map(|_| ())
 }
 
-pub(crate) async fn handle_install_dry_run_with_result(
+async fn handle_install_dry_run_with_reporter(
     config: &Config,
     target: Option<&str>,
+    reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
     let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Install, true);
-    crate::config::print_presets_note(config);
+    for line in crate::config::presets_note_lines(config) {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
     let _manifest_gate = super::deployment::ShellManifest::load(config).await?;
     let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
     let categories = match selection {
@@ -258,11 +291,11 @@ pub(crate) async fn handle_install_dry_run_with_result(
             anyhow::bail!("duplicate requested shell command: {command}");
         }
         let target = crate::bin_links::command_path_for_name(config.bin_dir(), &spec.link_name);
-        println!(
+        reporter.emit(PresentationEvent::stdout(format!(
             "Would link shell command {command}: {} -> {}",
             target.display(),
             spec.source.display()
-        );
+        )));
         let canonical = categories
             .iter()
             .find_map(|category| {
@@ -289,7 +322,9 @@ pub(crate) async fn handle_install_dry_run_with_result(
             effects,
         ));
     }
-    println!("Dry run: no shell files, links, manifests, or profiles were changed.");
+    reporter.emit(PresentationEvent::stdout(
+        "Dry run: no shell files, links, manifests, or profiles were changed.",
+    ));
     Ok(lifecycle_result)
 }
 
@@ -328,6 +363,17 @@ pub(crate) async fn handle_upgrade_installed_target_with_result(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+    handle_upgrade_installed_target_with_reporter(config, category_filter, verbose, &mut renderer)
+        .await
+}
+
+async fn handle_upgrade_installed_target_with_reporter(
+    config: &Config,
+    category_filter: Option<&str>,
+    verbose: bool,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
     let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Upgrade, false);
     let all_categories = if config.is_external_presets {
         metadata::load_installed_categories(config, None).await?
@@ -357,7 +403,9 @@ pub(crate) async fn handle_upgrade_installed_target_with_result(
             anyhow::bail!("shell preset is not installed: {category}");
         }
         if verbose {
-            println!("{}", colors::dim("No installed shell presets found."));
+            reporter.emit(PresentationEvent::stdout(style_dim(
+                "No installed shell presets found.",
+            )));
         }
         return Ok((ShellUpgradeReport::default(), lifecycle_result));
     }
@@ -476,58 +524,66 @@ pub(crate) async fn handle_upgrade_installed_target_with_result(
         updated_shell_config.is_some(),
     );
     if has_visible_result {
-        sep.begin();
+        reporter.emit(PresentationEvent::SectionStart);
         if verbose {
-            output::summary_line(
+            reporter.emit(PresentationEvent::stdout(output::summary_line_text(
                 "Shell Presets",
-                &[colors::dim(&format!(
+                &[style_dim(&format!(
                     "{} installed categories",
                     installed_categories.len()
                 ))],
-            );
+            )));
         } else {
-            println!("{}", colors::bold("Shell Presets"));
+            reporter.emit(PresentationEvent::stdout(style_bold("Shell Presets")));
         }
 
         for category in &updated_categories {
-            println!("  {} {category}", colors::symbol("✓"));
+            reporter.emit(PresentationEvent::stdout(format!(
+                "  {} {category}",
+                style_symbol("✓")
+            )));
         }
         if verbose && snapshots_updated > 0 {
-            println!(
+            reporter.emit(PresentationEvent::stdout(format!(
                 "  {} {}",
-                colors::symbol("✓"),
-                colors::green(&format!("{snapshots_updated} snapshot(s) updated"))
-            );
+                style_symbol("✓"),
+                style_green(&format!("{snapshots_updated} snapshot(s) updated"))
+            )));
         }
         if verbose && !template_report.updated.is_empty() {
-            output::summary_line(
+            reporter.emit(PresentationEvent::stdout(output::summary_line_text(
                 "Templates",
-                &[colors::green(&format!(
+                &[style_green(&format!(
                     "{} rendered",
                     template_report.updated.len()
                 ))],
-            );
+            )));
         }
         if should_print_link_summary(verbose, link_report.conflicts.len()) {
             if verbose && !link_parts.is_empty() {
-                output::summary_line("Bin Links", &link_parts);
-            } else if !link_report.conflicts.is_empty() {
-                output::summary_line(
+                reporter.emit(PresentationEvent::stdout(output::summary_line_text(
                     "Bin Links",
-                    &[colors::yellow(&format!(
+                    &link_parts,
+                )));
+            } else if !link_report.conflicts.is_empty() {
+                reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+                    "Bin Links",
+                    &[style_yellow(&format!(
                         "{} conflicts",
                         link_report.conflicts.len()
                     ))],
-                );
+                )));
             }
         }
-        print_link_conflicts(config, &link_report.conflicts, None);
+        for line in link_conflict_render_lines(config, &link_report.conflicts, None) {
+            reporter.emit(PresentationEvent::stdout(line));
+        }
         if let Some(path) = &updated_shell_config {
-            output::detail_line(
+            reporter.emit(PresentationEvent::stdout(output::detail_line_text(
                 "Shell Config",
-                &colors::green("updated"),
+                &style_green("updated"),
                 Some(path.display().to_string()),
-            );
+            )));
         }
     }
 
@@ -730,13 +786,13 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
     if shell_update.profile_updated {
         output::detail_line(
             "Shell Profile",
-            &colors::green("updated"),
+            &style_green("updated"),
             Some(profile_path.display().to_string()),
         );
     } else {
         output::detail_line(
             "Shell Profile",
-            &colors::dim("up to date"),
+            &style_dim("up to date"),
             Some(profile_path.display().to_string()),
         );
     }
@@ -745,14 +801,14 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
         PathUpdateStatus::AlreadyConfigured => {
             output::detail_line(
                 "Shell Config",
-                &colors::dim("up to date"),
+                &style_dim("up to date"),
                 Some(shell_config_path.display().to_string()),
             );
         }
         PathUpdateStatus::Updated(path) => {
             output::detail_line(
                 "Shell Config",
-                &colors::green("updated"),
+                &style_green("updated"),
                 Some(path.display().to_string()),
             );
         }
@@ -762,7 +818,7 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
         let shell: &'static str = config.shell_type.into();
         output::detail_line(
             "Completion",
-            &colors::yellow("unsupported"),
+            &style_yellow("unsupported"),
             Some(format!("{shell}; PATH setup was installed")),
         );
     }

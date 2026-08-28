@@ -1,16 +1,12 @@
-use super::report::{
-    print_already_managed, print_dry_run_install, print_install_error, print_install_success,
-    print_install_success_with_backup,
-};
+use super::report;
 use super::{
     install_prepared_content, materialize_file_content, materialize_static_file_content, metadata,
     resolve_install_destination, validate_unique_install_destinations,
 };
-use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
 use crate::install_core::manifest::{AppEntry, AppManifest};
-use crate::output;
+use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use anyhow::Result;
 use file_ops::InstallOutcome;
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,21 +22,36 @@ pub async fn handle_install(
     dry_run: bool,
     force: bool,
 ) -> Result<()> {
-    handle_install_with_result(config, category, dry_run, force)
+    let mut renderer = TerminalRenderer::stdio();
+    handle_install_with_reporter(config, category, dry_run, force, &mut renderer)
         .await
         .map(|_| ())
 }
 
+#[cfg(test)]
 pub(crate) async fn handle_install_with_result(
     config: &Config,
     category: Option<&str>,
     dry_run: bool,
     force: bool,
 ) -> Result<LifecycleResultV1> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_install_with_reporter(config, category, dry_run, force, &mut renderer).await
+}
+
+async fn handle_install_with_reporter(
+    config: &Config,
+    category: Option<&str>,
+    dry_run: bool,
+    force: bool,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<LifecycleResultV1> {
     let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Install, dry_run);
-    crate::config::print_presets_note(config);
+    for line in crate::config::presets_note_lines(config) {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
     if dry_run {
-        println!("{}", colors::dim("[dry-run] No files will be modified."));
+        reporter.emit(PresentationEvent::stdout(report::dry_run_header_text()));
     }
 
     let prefix = match category {
@@ -117,10 +128,9 @@ pub(crate) async fn handle_install_with_result(
     }
     validate_unique_install_destinations(&categories, config)?;
     let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
-    output::summary_line(
-        "App Configs",
-        &[colors::dim(&format!("{total_available} files available"))],
-    );
+    reporter.emit(PresentationEvent::stdout(report::app_configs_summary_text(
+        total_available,
+    )));
 
     let mut generated_content: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     let mut unavailable_generators: BTreeSet<String> = BTreeSet::new();
@@ -148,12 +158,12 @@ pub(crate) async fn handle_install_with_result(
                 Err(error)
                     if manifest.find_by_dest(&destination).is_some() && destination.exists() =>
                 {
-                    eprintln!(
-                        "  {} {}/{}: generator unavailable; installed copy kept ({error:#})",
-                        colors::symbol("!"),
-                        cat.name,
-                        file.source_rel.display()
-                    );
+                    reporter.emit(PresentationEvent::stderr(
+                        report::generator_unavailable_text(
+                            &format!("{}/{}", cat.name, file.source_rel.display()),
+                            &error,
+                        ),
+                    ));
                     unavailable_generators.insert(key);
                 }
                 Err(error) => return Err(error),
@@ -188,10 +198,10 @@ pub(crate) async fn handle_install_with_result(
             let destination = match resolve_install_destination(cat, file, config) {
                 Ok(d) => d,
                 Err(e) => {
-                    eprintln!(
-                        "  {} {display_name}: bad destination: {e:#}",
-                        colors::symbol("✗")
-                    );
+                    reporter.emit(PresentationEvent::stderr(report::destination_error_text(
+                        &display_name,
+                        &e,
+                    )));
                     lifecycle_result.push(
                         app_outcome(
                             &cat.name,
@@ -221,7 +231,9 @@ pub(crate) async fn handle_install_with_result(
                 match materialized {
                     Ok(content) => content,
                     Err(error) => {
-                        eprintln!("  {} {display_name}: {error:#}", colors::symbol_stderr("✗"));
+                        reporter.emit(PresentationEvent::stderr(
+                            report::materialization_error_text(&display_name, &error),
+                        ));
                         lifecycle_result.push(
                             app_outcome(
                                 &cat.name,
@@ -239,20 +251,18 @@ pub(crate) async fn handle_install_with_result(
                 install_prepared_content(file, &content, &destination, is_managed, dry_run, force)
                     .await;
 
-            let transform_label = if !file.transforms.is_empty() {
-                format!(
-                    "  {}",
-                    colors::dim(&format!("[{}]", file.transforms.join(", ")))
-                )
-            } else {
-                String::new()
-            };
+            let transform_label = report::transform_label(&file.transforms);
 
             let file_label = file.source_rel.display().to_string();
 
             match outcome {
                 Ok(InstallOutcome::Installed { hash }) => {
-                    print_install_success(&file_label, &transform_label, &destination, config);
+                    reporter.emit(PresentationEvent::stdout(report::install_success_text(
+                        &file_label,
+                        &transform_label,
+                        &destination,
+                        config,
+                    )));
                     manifest.upsert(AppEntry {
                         source: format!("app/{}/{}", cat.name, file.source_rel.display()),
                         destination,
@@ -278,7 +288,9 @@ pub(crate) async fn handle_install_with_result(
                     }
                 }
                 Ok(InstallOutcome::AlreadyManaged) => {
-                    print_already_managed(&file_label);
+                    reporter.emit(PresentationEvent::stdout(report::already_managed_text(
+                        &file_label,
+                    )));
                     skipped += 1;
                     lifecycle_result.push(app_outcome(
                         &cat.name,
@@ -288,13 +300,15 @@ pub(crate) async fn handle_install_with_result(
                     ));
                 }
                 Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
-                    print_install_success_with_backup(
-                        &file_label,
-                        &transform_label,
-                        &destination,
-                        &backup,
-                        config,
-                    );
+                    reporter.emit(PresentationEvent::stdout(
+                        report::install_success_with_backup_text(
+                            &file_label,
+                            &transform_label,
+                            &destination,
+                            &backup,
+                            config,
+                        ),
+                    ));
                     manifest.upsert(AppEntry {
                         source: format!("app/{}/{}", cat.name, file.source_rel.display()),
                         destination,
@@ -322,7 +336,12 @@ pub(crate) async fn handle_install_with_result(
                     }
                 }
                 Ok(InstallOutcome::DryRun) => {
-                    print_dry_run_install(&file_label, &transform_label, &destination, config);
+                    reporter.emit(PresentationEvent::stdout(report::dry_run_install_text(
+                        &file_label,
+                        &transform_label,
+                        &destination,
+                        config,
+                    )));
                     skipped += 1;
                     lifecycle_result.push(app_outcome(
                         &cat.name,
@@ -335,7 +354,10 @@ pub(crate) async fn handle_install_with_result(
                     ));
                 }
                 Err(e) => {
-                    print_install_error(&display_name, &e);
+                    reporter.emit(PresentationEvent::stderr(report::install_error_text(
+                        &display_name,
+                        &e,
+                    )));
                     lifecycle_result.push(
                         app_outcome(
                             &cat.name,
@@ -352,34 +374,25 @@ pub(crate) async fn handle_install_with_result(
 
     if !dry_run {
         manifest.save(config.shine_dir()).await?;
-        let hook_result = super::hooks::run_app_hooks(
+        let hook_result = super::hooks::run_app_hooks_with_reporter(
             config,
             |name| categories.iter().find(|c| c.name == name),
             &changed_categories,
             super::hooks::HookPhase::PostInstall,
             true,
+            reporter,
         )
         .await;
         lifecycle_result.outcomes.extend(hook_result.outcomes);
     }
 
-    let mut summary_parts: Vec<String> = Vec::new();
-    if installed > 0 {
-        let backup_note = if backed_up > 0 {
-            format!(", {backed_up} backed up")
-        } else {
-            String::new()
-        };
-        summary_parts.push(colors::green(&format!(
-            "{installed} installed{backup_note}"
-        )));
-    }
-    if skipped > 0 {
-        summary_parts.push(colors::dim(&format!("{skipped} skipped")));
-    }
-    output::footer("Done", &summary_parts);
+    let summary_parts = report::install_summary_parts(installed, backed_up, skipped);
+    reporter.emit(PresentationEvent::BlankLine);
+    reporter.emit(PresentationEvent::stdout(report::done_summary_text(
+        &summary_parts,
+    )));
     for hint in restart_hints {
-        println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+        reporter.emit(PresentationEvent::stdout(report::restart_hint_text(&hint)));
     }
 
     Ok(lifecycle_result)

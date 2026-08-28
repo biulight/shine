@@ -9,8 +9,8 @@
 use std::collections::BTreeSet;
 use tokio::process::Command;
 
-use crate::colors;
 use crate::config::Config;
+use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use utils::lifecycle::{LifecycleEffect, LifecycleOutcomeV1, LifecycleStatus};
 
 use super::metadata::{AppCategory, AppHook};
@@ -65,6 +65,26 @@ pub(crate) async fn run_app_hooks<'a>(
     phase: HookPhase,
     show_success: bool,
 ) -> HookRunResult {
+    let mut renderer = TerminalRenderer::stdio();
+    run_app_hooks_with_reporter(
+        config,
+        get_category,
+        changed,
+        phase,
+        show_success,
+        &mut renderer,
+    )
+    .await
+}
+
+pub(crate) async fn run_app_hooks_with_reporter<'a>(
+    config: &Config,
+    get_category: impl Fn(&str) -> Option<&'a AppCategory>,
+    changed: &BTreeSet<String>,
+    phase: HookPhase,
+    show_success: bool,
+    reporter: &mut dyn LifecycleReporter,
+) -> HookRunResult {
     let label = phase.label();
     let resource = phase.resource();
     let mut result = HookRunResult::default();
@@ -77,11 +97,11 @@ pub(crate) async fn run_app_hooks<'a>(
             continue;
         }
         if config.is_external_presets && !config.allow_app_hooks {
-            println!(
+            reporter.emit(PresentationEvent::stdout(format!(
                 "  {} {category}: {label} hook skipped (set allow_app_hooks = true to allow external app hooks; manual: {})",
-                colors::symbol("!"),
+                super::report::symbol("!"),
                 hook_sequence_display(hooks)
-            );
+            )));
             result.outcomes.push(
                 LifecycleOutcomeV1::new(
                     format!("app/{category}"),
@@ -107,32 +127,32 @@ pub(crate) async fn run_app_hooks<'a>(
                     }
                 }
                 Ok(output) => {
-                    eprintln!(
+                    reporter.emit(PresentationEvent::stderr(format!(
                         "  {} {category}: {label} hook failed: {} exited with {}{}",
-                        colors::symbol("!"),
+                        super::report::symbol("!"),
                         hook.command,
                         output.status,
                         command_output_detail(&output)
-                    );
+                    )));
                     completed = false;
                     break;
                 }
                 Err(e) => {
-                    eprintln!(
+                    reporter.emit(PresentationEvent::stderr(format!(
                         "  {} {category}: {label} hook failed: {}: {e}",
-                        colors::symbol("!"),
+                        super::report::symbol("!"),
                         hook.command
-                    );
+                    )));
                     completed = false;
                     break;
                 }
             }
         }
         if completed && show_success {
-            println!(
+            reporter.emit(PresentationEvent::stdout(format!(
                 "  {} {category}: {label} hook completed",
-                colors::symbol("✓")
-            );
+                super::report::symbol("✓")
+            )));
         }
         result.outcomes.push(if completed {
             LifecycleOutcomeV1::new(
@@ -152,7 +172,10 @@ pub(crate) async fn run_app_hooks<'a>(
         });
         for note in &notes {
             for line in note.lines() {
-                println!("     {}", colors::dim(line));
+                reporter.emit(PresentationEvent::stdout(format!(
+                    "     {}",
+                    super::report::dim(line)
+                )));
             }
         }
         result.notes.extend(notes);

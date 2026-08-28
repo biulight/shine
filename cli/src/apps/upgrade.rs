@@ -1,21 +1,20 @@
 use anyhow::Result;
-use dialoguer::Confirm;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
-use crate::output;
 use crate::path_display;
+use crate::presentation::{
+    LifecycleInteraction, LifecycleReporter, PresentationEvent, TerminalInteraction,
+    TerminalRenderer,
+};
 
 use super::file_ops::{InstallOutcome, UninstallOutcome};
 use super::manifest::{AppEntry, AppManifest};
 use super::metadata;
-use super::report::{
-    print_install_error, print_install_success, print_stale_not_found, print_stale_removed,
-};
+use super::report;
 use super::{
     app_category_from_source, app_source_parts, desired_content_hash, install_prepared_content,
     installed_content_hash, resolve_install_destination, uninstall_app_entry,
@@ -38,20 +37,16 @@ pub struct AppUpgradeReport {
 }
 
 struct UpgradeSection<'a> {
-    sep: &'a mut crate::output::SectionSeparator,
+    reporter: &'a mut dyn LifecycleReporter,
     verbose: bool,
     installed_count: usize,
     started: bool,
 }
 
 impl<'a> UpgradeSection<'a> {
-    fn new(
-        sep: &'a mut crate::output::SectionSeparator,
-        verbose: bool,
-        installed_count: usize,
-    ) -> Self {
+    fn new(reporter: &'a mut dyn LifecycleReporter, verbose: bool, installed_count: usize) -> Self {
         Self {
-            sep,
+            reporter,
             verbose,
             installed_count,
             started: false,
@@ -62,42 +57,43 @@ impl<'a> UpgradeSection<'a> {
         if self.started {
             return;
         }
-        self.sep.begin();
-        if self.verbose {
-            output::summary_line(
-                "App Configs",
-                &[colors::dim(&format!(
-                    "{} installed file(s)",
-                    self.installed_count
-                ))],
-            );
-        } else {
-            println!("{}", colors::bold("App Configs"));
-        }
+        self.reporter.emit(PresentationEvent::SectionStart);
+        self.reporter
+            .emit(PresentationEvent::stdout(report::upgrade_header_text(
+                self.verbose,
+                self.installed_count,
+            )));
         self.started = true;
     }
 
     fn print_up_to_date(&mut self, source: &str) {
         if self.verbose {
             self.begin();
-            println!("  {} {source}: up to date", colors::symbol("✓"));
+            self.reporter
+                .emit(PresentationEvent::stdout(report::up_to_date_text(source)));
         }
     }
 
     fn print_manual_refresh(&mut self, source: &str, category: &str, file: &str) {
         if self.verbose {
             self.begin();
-            println!(
-                "  {} {source}: manual refresh only (shine app refresh {category} {file})",
-                colors::symbol("•")
-            );
+            self.reporter
+                .emit(PresentationEvent::stdout(report::manual_refresh_text(
+                    source, category, file,
+                )));
         }
     }
 
     fn print_file_updated(&mut self, display_name: &str, destination: &Path, config: &Config) {
         if self.verbose {
             self.begin();
-            print_install_success(display_name, "", destination, config);
+            self.reporter
+                .emit(PresentationEvent::stdout(report::install_success_text(
+                    display_name,
+                    "",
+                    destination,
+                    config,
+                )));
         }
     }
 
@@ -107,13 +103,40 @@ impl<'a> UpgradeSection<'a> {
         }
         self.begin();
         for (category, count) in updated_files {
-            let noun = if *count == 1 { "file" } else { "files" };
-            println!(
-                "  {} {category}  {}",
-                colors::symbol("✓"),
-                colors::dim(&format!("{count} {noun} updated"))
-            );
+            self.reporter
+                .emit(PresentationEvent::stdout(report::category_updated_text(
+                    category, *count,
+                )));
         }
+    }
+
+    fn warning(&mut self, source: &str, detail: impl AsRef<str>) {
+        self.begin();
+        self.reporter
+            .emit(PresentationEvent::stderr(report::warning_text(
+                source, detail,
+            )));
+    }
+
+    fn error(&mut self, source: &str, error: &anyhow::Error) {
+        self.begin();
+        self.reporter
+            .emit(PresentationEvent::stderr(report::install_error_text(
+                source, error,
+            )));
+    }
+
+    fn legacy_error(&mut self, source: &str, detail: impl AsRef<str>) {
+        self.begin();
+        self.reporter
+            .emit(PresentationEvent::stderr(report::legacy_error_text(
+                source, detail,
+            )));
+    }
+
+    fn stdout(&mut self, text: String) {
+        self.begin();
+        self.reporter.emit(PresentationEvent::stdout(text));
     }
 }
 
@@ -151,6 +174,27 @@ pub(crate) async fn handle_upgrade_installed_target_with_result(
     prune_stale: bool,
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
+) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
+    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+    let mut interaction = TerminalInteraction;
+    handle_upgrade_installed_target_with_reporter(
+        config,
+        category_filter,
+        prune_stale,
+        verbose,
+        &mut renderer,
+        &mut interaction,
+    )
+    .await
+}
+
+async fn handle_upgrade_installed_target_with_reporter(
+    config: &Config,
+    category_filter: Option<&str>,
+    prune_stale: bool,
+    verbose: bool,
+    reporter: &mut dyn LifecycleReporter,
+    interaction: &mut dyn LifecycleInteraction,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
     let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Upgrade, false);
     let mut manifest = AppManifest::load(config.shine_dir()).await?;
@@ -230,7 +274,7 @@ pub(crate) async fn handle_upgrade_installed_target_with_result(
     }
     validate_unique_install_destinations(categories_by_name.values(), config)?;
 
-    let mut section = UpgradeSection::new(sep, verbose, selected_entries.len());
+    let mut section = UpgradeSection::new(reporter, verbose, selected_entries.len());
     if verbose {
         section.begin();
     }
@@ -247,12 +291,7 @@ pub(crate) async fn handle_upgrade_installed_target_with_result(
 
     for entry in selected_entries {
         let Some((cat_name, file_rel)) = app_source_parts(&entry.source) else {
-            section.begin();
-            eprintln!(
-                "  {} {}: invalid source, skipped",
-                colors::symbol("!"),
-                entry.source
-            );
+            section.warning(&entry.source, "invalid source, skipped");
             skipped += 1;
             lifecycle_result.push(
                 LifecycleOutcomeV1::new(
@@ -280,6 +319,8 @@ pub(crate) async fn handle_upgrade_installed_target_with_result(
                     user_modified: &mut user_modified,
                     skipped: &mut skipped,
                 },
+                &mut section,
+                interaction,
             )
             .await?;
             lifecycle_result.push(stale_lifecycle_outcome(cat_name, file_rel, stale_outcome));
@@ -309,6 +350,8 @@ pub(crate) async fn handle_upgrade_installed_target_with_result(
                     user_modified: &mut user_modified,
                     skipped: &mut skipped,
                 },
+                &mut section,
+                interaction,
             )
             .await?;
             lifecycle_result.push(stale_lifecycle_outcome(cat_name, file_rel, stale_outcome));
@@ -442,12 +485,13 @@ pub(crate) async fn handle_upgrade_installed_target_with_result(
 
     section.print_category_updates(&updated_files_by_category);
 
-    let hook_result = super::hooks::run_app_hooks(
+    let hook_result = super::hooks::run_app_hooks_with_reporter(
         config,
         |name| categories_by_name.get(name),
         &updated_categories,
         super::hooks::HookPhase::PostUpgrade,
         verbose,
+        section.reporter,
     )
     .await;
     lifecycle_result.outcomes.extend(hook_result.outcomes);
@@ -486,8 +530,7 @@ async fn try_upgrade_entry(
     let desired_destination = match resolve_install_destination(cat, file, config) {
         Ok(destination) => destination,
         Err(error) => {
-            section.begin();
-            print_install_error(&entry.source, &error);
+            section.error(&entry.source, &error);
             return EntryUpgradeResult::Failed;
         }
     };
@@ -509,8 +552,7 @@ async fn try_upgrade_entry(
     let content = match upgrade_file_content(config, cat, file, env_map).await {
         Ok(c) => c,
         Err(e) => {
-            section.begin();
-            print_install_error(&entry.source, &e);
+            section.error(&entry.source, &e);
             return if file
                 .generator
                 .as_ref()
@@ -527,8 +569,7 @@ async fn try_upgrade_entry(
     let new_hash = match desired_content_hash(file, &content) {
         Ok(h) => h,
         Err(e) => {
-            section.begin();
-            print_install_error(&entry.source, &e);
+            section.error(&entry.source, &e);
             return EntryUpgradeResult::Failed;
         }
     };
@@ -538,27 +579,16 @@ async fn try_upgrade_entry(
             let current_hash = match installed_content_hash(file, &current) {
                 Ok(Some(h)) => h,
                 Ok(None) => {
-                    section.begin();
-                    eprintln!(
-                        "  {} {}: managed keys missing, skipped",
-                        colors::symbol("!"),
-                        entry.source
-                    );
+                    section.warning(&entry.source, "managed keys missing, skipped");
                     return EntryUpgradeResult::UserModified;
                 }
                 Err(e) => {
-                    section.begin();
-                    print_install_error(&entry.source, &e);
+                    section.error(&entry.source, &e);
                     return EntryUpgradeResult::Failed;
                 }
             };
             if current_hash != entry.content_hash {
-                section.begin();
-                eprintln!(
-                    "  {} {}: user-modified, skipped",
-                    colors::symbol("!"),
-                    entry.source
-                );
+                section.warning(&entry.source, "user-modified, skipped");
                 return EntryUpgradeResult::UserModified;
             }
             if new_hash == entry.content_hash {
@@ -567,8 +597,7 @@ async fn try_upgrade_entry(
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
-            section.begin();
-            print_install_error(&entry.source, &anyhow::Error::from(e));
+            section.error(&entry.source, &anyhow::Error::from(e));
             return EntryUpgradeResult::Failed;
         }
     }
@@ -599,8 +628,7 @@ async fn try_upgrade_entry(
             EntryUpgradeResult::Skipped
         }
         Err(e) => {
-            section.begin();
-            print_install_error(&entry.source, &e);
+            section.error(&entry.source, &e);
             EntryUpgradeResult::Failed
         }
     }
@@ -618,23 +646,23 @@ async fn relocate_upgrade_entry(
     section: &mut UpgradeSection<'_>,
 ) -> EntryUpgradeResult {
     if let Some(conflict) = manifest.find_by_dest(&desired_destination) {
-        section.begin();
-        eprintln!(
-            "  {} {}: destination move blocked; {} is already managed by {}",
-            colors::symbol("!"),
-            entry.source,
-            path_display::format_home(&desired_destination, &config.home_dir),
-            conflict.source
+        section.warning(
+            &entry.source,
+            format!(
+                "destination move blocked; {} is already managed by {}",
+                path_display::format_home(&desired_destination, &config.home_dir),
+                conflict.source
+            ),
         );
         return EntryUpgradeResult::Conflict("app_destination_already_managed");
     }
     if desired_destination.exists() {
-        section.begin();
-        eprintln!(
-            "  {} {}: destination move blocked; {} already exists and is not managed",
-            colors::symbol("!"),
-            entry.source,
-            path_display::format_home(&desired_destination, &config.home_dir)
+        section.warning(
+            &entry.source,
+            format!(
+                "destination move blocked; {} already exists and is not managed",
+                path_display::format_home(&desired_destination, &config.home_dir)
+            ),
         );
         return EntryUpgradeResult::Conflict("app_destination_occupied");
     }
@@ -643,19 +671,16 @@ async fn relocate_upgrade_entry(
         Ok(current) => match installed_content_hash(file, &current) {
             Ok(Some(hash)) if hash == entry.content_hash => {}
             Ok(_) | Err(_) => {
-                section.begin();
-                eprintln!(
-                    "  {} {}: destination move blocked; installed file is user-modified",
-                    colors::symbol("!"),
-                    entry.source
+                section.warning(
+                    &entry.source,
+                    "destination move blocked; installed file is user-modified",
                 );
                 return EntryUpgradeResult::Conflict("app_relocation_source_modified");
             }
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
-            section.begin();
-            print_install_error(&entry.source, &anyhow::Error::from(error));
+            section.error(&entry.source, &anyhow::Error::from(error));
             return EntryUpgradeResult::Failed;
         }
     }
@@ -663,8 +688,7 @@ async fn relocate_upgrade_entry(
     let content = match upgrade_file_content(config, cat, file, env_map).await {
         Ok(content) => content,
         Err(error) => {
-            section.begin();
-            print_install_error(&entry.source, &error);
+            section.error(&entry.source, &error);
             return EntryUpgradeResult::Failed;
         }
     };
@@ -678,8 +702,7 @@ async fn relocate_upgrade_entry(
                 return EntryUpgradeResult::Skipped;
             }
             Err(error) => {
-                section.begin();
-                print_install_error(&entry.source, &error);
+                section.error(&entry.source, &error);
                 return EntryUpgradeResult::Failed;
             }
         };
@@ -710,11 +733,9 @@ async fn relocate_upgrade_entry(
                 requires_admin: file.requires_admin,
             };
             let _ = uninstall_app_entry(&rollback, false, true).await;
-            section.begin();
-            eprintln!(
-                "  {} {}: destination move could not remove the old managed file; new copy rolled back",
-                colors::symbol("!"),
-                entry.source
+            section.warning(
+                &entry.source,
+                "destination move could not remove the old managed file; new copy rolled back",
             );
             return EntryUpgradeResult::Failed;
         }
@@ -793,8 +814,18 @@ async fn handle_stale_entry(
     prune_stale: bool,
     interactive: bool,
     counters: &mut StaleEntryCounters<'_>,
+    section: &mut UpgradeSection<'_>,
+    interaction: &mut dyn LifecycleInteraction,
 ) -> Result<StaleCleanupOutcome> {
-    let outcome = cleanup_stale_entry(config, entry, prune_stale, interactive).await?;
+    let outcome = cleanup_stale_entry(
+        config,
+        entry,
+        prune_stale,
+        interactive,
+        section,
+        interaction,
+    )
+    .await?;
     apply_stale_outcome(
         outcome,
         entry.destination.clone(),
@@ -839,12 +870,9 @@ async fn install_new_category_files(
             let destination = match resolve_install_destination(cat, file, config) {
                 Ok(d) => d,
                 Err(e) => {
-                    section.begin();
-                    eprintln!(
-                        "  {} {}/{}: bad destination: {e:#}",
-                        colors::symbol("✗"),
-                        cat.name,
-                        file.source_rel.display()
+                    section.legacy_error(
+                        &format!("{}/{}", cat.name, file.source_rel.display()),
+                        format!("bad destination: {e:#}"),
                     );
                     skipped += 1;
                     outcomes.push(
@@ -870,12 +898,7 @@ async fn install_new_category_files(
             }
 
             if destination.exists() && file.install_strategy.is_copy() {
-                section.begin();
-                eprintln!(
-                    "  {} {}: destination exists and is not managed, skipped",
-                    colors::symbol("!"),
-                    source
-                );
+                section.warning(&source, "destination exists and is not managed, skipped");
                 skipped += 1;
                 outcomes.push(
                     app_upgrade_outcome(
@@ -892,8 +915,7 @@ async fn install_new_category_files(
             let content = match upgrade_file_content(config, cat, file, env_map).await {
                 Ok(content) => content,
                 Err(e) => {
-                    section.begin();
-                    eprintln!("  {} {}: {e:#}", colors::symbol_stderr("✗"), source);
+                    section.error(&source, &e);
                     if file
                         .generator
                         .as_ref()
@@ -962,12 +984,7 @@ async fn install_new_category_files(
                     }
                 }
                 Ok(InstallOutcome::AlreadyManaged) => {
-                    section.begin();
-                    eprintln!(
-                        "  {} {}: destination exists and is not managed, skipped",
-                        colors::symbol("!"),
-                        source
-                    );
+                    section.warning(&source, "destination exists and is not managed, skipped");
                     skipped += 1;
                     outcomes.push(
                         app_upgrade_outcome(
@@ -989,8 +1006,7 @@ async fn install_new_category_files(
                     ));
                 }
                 Err(e) => {
-                    section.begin();
-                    eprintln!("  {} {}: {e:#}", colors::symbol_stderr("✗"), source);
+                    section.error(&source, &e);
                     skipped += 1;
                     outcomes.push(
                         app_upgrade_outcome(
@@ -1021,6 +1037,8 @@ async fn cleanup_stale_entry(
     entry: &AppEntry,
     prune_stale: bool,
     interactive: bool,
+    section: &mut UpgradeSection<'_>,
+    interaction: &mut dyn LifecycleInteraction,
 ) -> Result<StaleCleanupOutcome> {
     let should_remove = if prune_stale {
         true
@@ -1030,57 +1048,49 @@ async fn cleanup_stale_entry(
             entry.source,
             path_display::format_home(&entry.destination, &config.home_dir)
         );
-        Confirm::new()
-            .with_prompt(prompt)
-            .default(false)
-            .interact()?
+        interaction.confirm(&prompt, false)?
     } else {
-        eprintln!(
-            "  {} {}: stale source, skipped (use --prune-stale to clean)",
-            colors::symbol("!"),
-            entry.source
+        section.warning(
+            &entry.source,
+            "stale source, skipped (use --prune-stale to clean)",
         );
         return Ok(StaleCleanupOutcome::Skipped);
     };
 
     if !should_remove {
-        eprintln!(
-            "  {} {}: stale source, skipped",
-            colors::symbol("!"),
-            entry.source
-        );
+        section.warning(&entry.source, "stale source, skipped");
         return Ok(StaleCleanupOutcome::Skipped);
     }
 
     match uninstall_app_entry(entry, false, false).await? {
         UninstallOutcome::Removed => {
-            print_stale_removed(config, &entry.destination, "(removed stale managed file)");
+            section.stdout(report::stale_removed_text(
+                config,
+                &entry.destination,
+                "(removed stale managed file)",
+            ));
             Ok(StaleCleanupOutcome::Removed)
         }
         UninstallOutcome::RestoredBackup { backup } => {
-            print_stale_removed(
+            section.stdout(report::stale_removed_text(
                 config,
                 &entry.destination,
                 format!(
                     "(removed stale file, restored {})",
                     path_display::format_home(&backup, &config.home_dir)
                 ),
-            );
+            ));
             Ok(StaleCleanupOutcome::RestoredBackup)
         }
         UninstallOutcome::ForceRemoved | UninstallOutcome::ForceRestoredBackup { .. } => {
             Ok(StaleCleanupOutcome::Removed)
         }
         UninstallOutcome::NotFound => {
-            print_stale_not_found(config, &entry.destination);
+            section.stdout(report::stale_not_found_text(config, &entry.destination));
             Ok(StaleCleanupOutcome::NotFound)
         }
         UninstallOutcome::UserModified => {
-            eprintln!(
-                "  {} {}: stale source but user-modified, kept",
-                colors::symbol("!"),
-                entry.source
-            );
+            section.warning(&entry.source, "stale source but user-modified, kept");
             Ok(StaleCleanupOutcome::UserModified)
         }
         UninstallOutcome::DryRun => Ok(StaleCleanupOutcome::Skipped),
@@ -1241,14 +1251,14 @@ mod tests {
 
     #[test]
     fn no_op_rows_only_start_the_app_section_in_verbose_mode() {
-        let mut quiet_separator = crate::output::SectionSeparator::new();
-        let mut quiet = UpgradeSection::new(&mut quiet_separator, false, 1);
+        let mut quiet_renderer = TerminalRenderer::new(Vec::new(), Vec::new(), None);
+        let mut quiet = UpgradeSection::new(&mut quiet_renderer, false, 1);
         quiet.print_up_to_date("app/sample/config.toml");
         quiet.print_manual_refresh("app/sample/generated.txt", "sample", "generated.txt");
         assert!(!quiet.started);
 
-        let mut verbose_separator = crate::output::SectionSeparator::new();
-        let mut verbose = UpgradeSection::new(&mut verbose_separator, true, 1);
+        let mut verbose_renderer = TerminalRenderer::new(Vec::new(), Vec::new(), None);
+        let mut verbose = UpgradeSection::new(&mut verbose_renderer, true, 1);
         verbose.print_up_to_date("app/sample/config.toml");
         assert!(verbose.started);
     }
@@ -1257,8 +1267,8 @@ mod tests {
     async fn relocation_moves_an_unmodified_managed_file() {
         let (config, manifest, entry, category, old_destination, new_destination) =
             relocation_fixture(false, false).await;
-        let mut separator = crate::output::SectionSeparator::new();
-        let mut section = UpgradeSection::new(&mut separator, false, 1);
+        let mut renderer = TerminalRenderer::new(Vec::new(), Vec::new(), None);
+        let mut section = UpgradeSection::new(&mut renderer, false, 1);
         let result = relocate_upgrade_entry(
             &config,
             &manifest,
@@ -1289,8 +1299,8 @@ mod tests {
     async fn relocation_keeps_a_user_modified_old_file() {
         let (config, manifest, entry, category, old_destination, new_destination) =
             relocation_fixture(true, false).await;
-        let mut separator = crate::output::SectionSeparator::new();
-        let mut section = UpgradeSection::new(&mut separator, false, 1);
+        let mut renderer = TerminalRenderer::new(Vec::new(), Vec::new(), None);
+        let mut section = UpgradeSection::new(&mut renderer, false, 1);
         let result = relocate_upgrade_entry(
             &config,
             &manifest,
@@ -1313,8 +1323,8 @@ mod tests {
     async fn relocation_does_not_overwrite_an_unmanaged_new_destination() {
         let (config, manifest, entry, category, old_destination, new_destination) =
             relocation_fixture(false, true).await;
-        let mut separator = crate::output::SectionSeparator::new();
-        let mut section = UpgradeSection::new(&mut separator, false, 1);
+        let mut renderer = TerminalRenderer::new(Vec::new(), Vec::new(), None);
+        let mut section = UpgradeSection::new(&mut renderer, false, 1);
         let result = relocate_upgrade_entry(
             &config,
             &manifest,
