@@ -76,6 +76,16 @@ Reverse of install, driven entirely by the manifest — never by re-scanning pre
 3. Restore `<name>.shine.bak` if one exists.
 4. Remove the manifest entry.
 
+## App update (`shine update`)
+
+App update loads active categories, the App manifest, and effective env once, then derives each
+`AppRow` and `LifecycleOutcomeV1` from the same `AppFileAssessment`. This keeps terminal filtering
+compatible while preventing an automatic generator from running a second time solely to build the
+structured result. Manifest-owned current files are `unchanged`; source, new-file, relocation, or
+missing-destination work is `pending`; user-modified destinations are `conflict` with a safe code
+and preservation effect. Preview effects describe resource/receipt work without copying the
+assessment's absolute paths or content into the reusable result.
+
 ## App upgrade (`shine upgrade`)
 
 `apps/upgrade.rs::handle_upgrade_installed` re-applies presets (including re-running transforms
@@ -98,6 +108,8 @@ re-applies recorded managed resources and replaces the receipt after convergence
 the receipt comparison includes the normalized domain, DNS servers, and platform resource path.
 Update and sys-info output render those receipt differences field by field (`old -> new`) so the
 user can inspect the pending system change before granting administrator access to upgrade.
+The managed-file driver compares only its desired destination and content hash with the recorded
+receipt and emits safe field labels rather than paths or content.
 
 Managed apply/upgrade/uninstall loads the independently versioned `sys-manifest.toml` before
 resource, elevation, or composed-profile mutation. Read-only update uses the same typed receipt

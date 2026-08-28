@@ -187,7 +187,10 @@ impl BuiltinDriver {
                 }
                 Ok(details)
             }
-            SysDriverKind::ManagedFile | SysDriverKind::Script => Ok(Vec::new()),
+            SysDriverKind::ManagedFile => {
+                managed_file::managed_file_update_details(context, previous)
+            }
+            SysDriverKind::Script => Ok(Vec::new()),
         }
     }
 }

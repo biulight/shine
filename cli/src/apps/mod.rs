@@ -740,6 +740,170 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
+    async fn structured_app_lifecycle_covers_update_upgrade_and_target_isolation() {
+        let _guard = env_lock();
+        let dir = make_temp_dir().await;
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::set_var("HOME", dir.to_str().unwrap()) };
+
+        write_external_sample_app(&dir, b"{\"value\":\"initial\"}\n").await;
+        let other_dir = dir.join("presets/app/other");
+        fs::create_dir_all(&other_dir).await.unwrap();
+        fs::write(
+            other_dir.join("shine.toml"),
+            "description = \"Other app\"\ndest = \"~/.config/other\"\n\n[[files]]\nsource = \"config.json\"\ntarget = \"config.json\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(other_dir.join("config.json"), b"{\"value\":1}\n")
+            .await
+            .unwrap();
+
+        let sample_destination = dir.join(".config/sample/daemon.json");
+        fs::create_dir_all(sample_destination.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(&sample_destination, b"user original\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let install = install::handle_install_with_result(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+        assert!(install.outcomes.iter().any(|outcome| {
+            outcome.target == "app/sample"
+                && outcome.resource.as_deref() == Some("daemon.jsonc")
+                && outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome
+                    .effects
+                    .contains(&utils::lifecycle::LifecycleEffect::BackupCreated)
+        }));
+        install::handle_install_with_result(&config, Some("other"), false, false)
+            .await
+            .unwrap();
+
+        write_external_sample_app(&dir, b"{\"value\":\"private-source-token\"}\n").await;
+        fs::write(other_dir.join("config.json"), b"{\"value\":2}\n")
+            .await
+            .unwrap();
+        let other_destination = dir.join(".config/other/config.json");
+        let other_before = fs::read(&other_destination).await.unwrap();
+        let other_manifest_before = AppManifest::load(config.shine_dir())
+            .await
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|entry| entry.source == "app/other/config.json")
+            .unwrap();
+
+        let categories = metadata::load_active_categories(&config, None)
+            .await
+            .unwrap();
+        let (_rows, update) = crate::status::build_app_rows_with_lifecycle(&config, &categories)
+            .await
+            .unwrap();
+        let pending = update
+            .outcomes
+            .iter()
+            .find(|outcome| {
+                outcome.target == "app/sample"
+                    && outcome.resource.as_deref() == Some("daemon.jsonc")
+            })
+            .unwrap();
+        assert_eq!(pending.status, utils::lifecycle::LifecycleStatus::Pending);
+        assert_eq!(
+            pending.effects,
+            [
+                utils::lifecycle::LifecycleEffect::ResourceWritePreviewed,
+                utils::lifecycle::LifecycleEffect::ReceiptWritePreviewed,
+            ]
+        );
+        let serialized = serde_json::to_string(&update).unwrap();
+        assert!(!serialized.contains(&dir.display().to_string()));
+        assert!(!serialized.contains("private-source-token"));
+
+        let mut separator = crate::output::SectionSeparator::new();
+        let (report, upgrade) = upgrade::handle_upgrade_installed_target_with_result(
+            &config,
+            Some("sample"),
+            false,
+            false,
+            &mut separator,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.updated, 1);
+        assert!(upgrade.outcomes.iter().any(|outcome| {
+            outcome.target == "app/sample"
+                && outcome.resource.as_deref() == Some("daemon.jsonc")
+                && outcome.status == utils::lifecycle::LifecycleStatus::Changed
+        }));
+        assert_eq!(fs::read(&other_destination).await.unwrap(), other_before);
+        let other_manifest_after = AppManifest::load(config.shine_dir())
+            .await
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|entry| entry.source == "app/other/config.json")
+            .unwrap();
+        assert_eq!(
+            toml::to_string(&other_manifest_after).unwrap(),
+            toml::to_string(&other_manifest_before).unwrap()
+        );
+
+        let categories = metadata::load_active_categories(&config, None)
+            .await
+            .unwrap();
+        let (_rows, after_upgrade) =
+            crate::status::build_app_rows_with_lifecycle(&config, &categories)
+                .await
+                .unwrap();
+        assert!(after_upgrade.outcomes.iter().any(|outcome| {
+            outcome.target == "app/sample"
+                && outcome.resource.as_deref() == Some("daemon.jsonc")
+                && outcome.status == utils::lifecycle::LifecycleStatus::Unchanged
+        }));
+        assert!(after_upgrade.outcomes.iter().any(|outcome| {
+            outcome.target == "app/other"
+                && outcome.status == utils::lifecycle::LifecycleStatus::Pending
+        }));
+
+        let uninstall =
+            uninstall::handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+                .await
+                .unwrap();
+        assert!(uninstall.outcomes.iter().any(|outcome| {
+            outcome.target == "app/sample"
+                && outcome.resource.as_deref() == Some("daemon.jsonc")
+                && outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome
+                    .effects
+                    .contains(&utils::lifecycle::LifecycleEffect::BackupRestored)
+        }));
+        assert_eq!(
+            fs::read(&sample_destination).await.unwrap(),
+            b"user original\n"
+        );
+        assert!(other_destination.exists());
+        assert!(
+            AppManifest::load(config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| entry.source == "app/other/config.json")
+        );
+
+        // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
+        unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
     async fn upgrade_runs_post_upgrade_hook_after_file_update_when_allowed() {
         let _guard = env_lock();
         let dir = make_temp_dir().await;

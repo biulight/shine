@@ -20,6 +20,15 @@ bugs. Check this list before changing the modules named in each entry.
   `Changed` means this execution changed Shine-owned state. App hooks/teardown may record execution
   effects without changing their established non-fatal exit semantics; managed Sys user
   modification remains a typed preservation conflict while the CLI keeps its existing failure exit.
+- **App update presentation and reusable results share one assessment pass.** `AppRow` and
+  `LifecycleOutcomeV1` must derive from the same per-file `AppFileAssessment`; do not rebuild rows
+  to obtain the structured result. Automatic generators may execute during the established status
+  path, so evaluating the file twice can duplicate external code execution and observe inconsistent
+  snapshots. Assessment paths remain CLI-private and must not enter the lifecycle result.
+- **Managed-file update details are field labels, not payloads.** The read-only comparison may
+  report that destination or content changed, but must not copy the destination, desired bytes, or
+  environment values into structured lifecycle outcomes. Ownership and user-modification checks
+  still occur at apply/remove time against the receipt and live resource.
 - **Every runtime manifest is a pre-mutation gate.** App, Shell, and Sys load their own manifest
   before destination/resource, embedded cache, snapshot/render, launcher, receipt, or profile
   mutation. Missing `schema_version` is legacy v0, read-only loads never rewrite it, the next

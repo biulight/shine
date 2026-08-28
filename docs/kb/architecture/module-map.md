@@ -150,7 +150,7 @@ logic.
 | `cli/src/preset_validation.rs` | Config-independent preset discovery, static validation report, and text/JSON rendering |
 | `cli/src/git_pull.rs` | FF-only external source pulls and managed overlay mirroring |
 | `cli/src/state.rs` | Versioned runtime-state cleanup |
-| `cli/src/status.rs` | Shared installed-status row builders |
+| `cli/src/status.rs` | Shared typed App/Shell status assessment, row builders, and App read-only lifecycle results |
 
 Config discovery priority is documented as a behavioral contract in
 [`data-flows.md`](data-flows.md#config-discovery) and

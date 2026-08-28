@@ -17,6 +17,9 @@ use anyhow::Result;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use utils::lifecycle::{
+    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+};
 
 // ---------------------------------------------------------------------------
 // Shared row types
@@ -473,17 +476,36 @@ async fn shell_source_status(
 
 /// Build app config rows for the given pre-loaded categories.
 pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Result<Vec<AppRow>> {
+    build_app_rows_with_lifecycle(config, categories)
+        .await
+        .map(|(rows, _)| rows)
+}
+
+pub(crate) async fn build_app_rows_with_lifecycle(
+    config: &Config,
+    categories: &[AppCategory],
+) -> Result<(Vec<AppRow>, LifecycleResultV1)> {
     let manifest = AppManifest::load(config.shine_dir()).await?;
     let env = EnvConfig::load_or_init(config).await.ok();
     let empty_map = BTreeMap::new();
     let env_map = env.as_ref().map(|e| e.as_map()).unwrap_or(&empty_map);
     let mut rows: Vec<AppRow> = Vec::new();
+    let mut lifecycle = LifecycleResultV1::new(LifecycleOperation::Update, false);
 
     for cat in categories {
+        let mut assessments = Vec::with_capacity(cat.files.len());
+        for file in &cat.files {
+            let assessment = assess_app_file(config, cat, file, &manifest, env_map).await;
+            if let Some(outcome) = app_update_outcome(cat, file, &assessment, &manifest) {
+                lifecycle.push(outcome);
+            }
+            assessments.push(assessment);
+        }
+
         if cat.has_explicit_files && cat.list_mode == AppListMode::Files {
-            for file in &cat.files {
-                let (dest_opt, status) =
-                    app_file_row_status(config, cat, file, &manifest, env_map).await;
+            for (file, assessment) in cat.files.iter().zip(&assessments) {
+                let dest_opt = assessment.destination.clone();
+                let status = assessment.status;
 
                 let label = file
                     .display_name
@@ -516,12 +538,10 @@ pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Resu
                 });
             }
         } else {
-            let mut file_statuses: Vec<FileStatus> = Vec::new();
-
-            for file in &cat.files {
-                let (_, status) = app_file_row_status(config, cat, file, &manifest, env_map).await;
-                file_statuses.push(status);
-            }
+            let file_statuses = assessments
+                .iter()
+                .map(|assessment| assessment.status)
+                .collect::<Vec<_>>();
 
             let has_installed = file_statuses.iter().any(|s| {
                 matches!(
@@ -585,9 +605,79 @@ pub async fn build_app_rows(config: &Config, categories: &[AppCategory]) -> Resu
         }
     }
 
-    Ok(rows)
+    Ok((rows, lifecycle))
 }
 
+fn app_update_outcome(
+    category: &AppCategory,
+    file: &crate::apps::AppFile,
+    assessment: &AppFileAssessment,
+    manifest: &AppManifest,
+) -> Option<LifecycleOutcomeV1> {
+    let source = format!("app/{}/{}", category.name, file.source_rel.display());
+    let manifest_owned = manifest.find_by_source(&source).is_some()
+        || assessment
+            .destination
+            .as_ref()
+            .is_some_and(|destination| manifest.find_by_dest(destination).is_some())
+        || assessment
+            .changes
+            .iter()
+            .any(|change| matches!(change, UpdateChange::NewFile { .. }));
+    if !manifest_owned {
+        return None;
+    }
+
+    let target = format!("app/{}", category.name);
+    let resource = Some(file.source_rel.display().to_string());
+    match assessment.status {
+        FileStatus::UpToDate => Some(LifecycleOutcomeV1::new(
+            target,
+            resource,
+            LifecycleStatus::Unchanged,
+            [],
+        )),
+        FileStatus::UpdateAvail => {
+            let relocated = assessment
+                .changes
+                .iter()
+                .any(|change| matches!(change, UpdateChange::DestinationRelocated { .. }));
+            let mut effects = Vec::new();
+            if relocated {
+                effects.push(LifecycleEffect::ResourceRemovePreviewed);
+            }
+            effects.push(LifecycleEffect::ResourceWritePreviewed);
+            effects.push(LifecycleEffect::ReceiptWritePreviewed);
+            Some(LifecycleOutcomeV1::new(
+                target,
+                resource,
+                LifecycleStatus::Pending,
+                effects,
+            ))
+        }
+        FileStatus::Missing => Some(LifecycleOutcomeV1::new(
+            target,
+            resource,
+            LifecycleStatus::Pending,
+            [
+                LifecycleEffect::ResourceWritePreviewed,
+                LifecycleEffect::ReceiptWritePreviewed,
+            ],
+        )),
+        FileStatus::UserModified => Some(
+            LifecycleOutcomeV1::new(
+                target,
+                resource,
+                LifecycleStatus::Conflict,
+                [LifecycleEffect::UserResourcePreserved],
+            )
+            .with_diagnostic_code("app_user_modified"),
+        ),
+        FileStatus::NotInstalled | FileStatus::Partial => None,
+    }
+}
+
+#[cfg(test)]
 pub(crate) async fn app_file_row_status(
     config: &Config,
     cat: &AppCategory,
@@ -803,6 +893,81 @@ mod tests {
             uses_env: false,
             requires_admin: false,
         }
+    }
+
+    #[test]
+    fn app_update_outcomes_map_owned_conflicts_missing_files_and_relocations() {
+        let destination = PathBuf::from("/private/machine/dest.txt");
+        let manifest = AppManifest {
+            entries: vec![sample_app_entry(destination.clone(), 1)],
+            ..AppManifest::default()
+        };
+        let category = sample_app_category();
+        let file = sample_app_file();
+
+        let missing = app_update_outcome(
+            &category,
+            &file,
+            &AppFileAssessment {
+                destination: Some(destination.clone()),
+                status: FileStatus::Missing,
+                changes: Vec::new(),
+            },
+            &manifest,
+        )
+        .unwrap();
+        assert_eq!(missing.status, LifecycleStatus::Pending);
+        assert_eq!(
+            missing.effects,
+            [
+                LifecycleEffect::ResourceWritePreviewed,
+                LifecycleEffect::ReceiptWritePreviewed,
+            ]
+        );
+
+        let conflict = app_update_outcome(
+            &category,
+            &file,
+            &AppFileAssessment {
+                destination: Some(destination.clone()),
+                status: FileStatus::UserModified,
+                changes: Vec::new(),
+            },
+            &manifest,
+        )
+        .unwrap();
+        assert_eq!(conflict.status, LifecycleStatus::Conflict);
+        assert_eq!(conflict.effects, [LifecycleEffect::UserResourcePreserved]);
+        assert_eq!(conflict.diagnostic_codes, ["app_user_modified"]);
+
+        let relocated = app_update_outcome(
+            &category,
+            &file,
+            &AppFileAssessment {
+                destination: Some(PathBuf::from("/private/machine/new.txt")),
+                status: FileStatus::UpdateAvail,
+                changes: vec![UpdateChange::DestinationRelocated {
+                    from: destination,
+                    to: PathBuf::from("/private/machine/new.txt"),
+                }],
+            },
+            &manifest,
+        )
+        .unwrap();
+        assert_eq!(relocated.status, LifecycleStatus::Pending);
+        assert_eq!(
+            relocated.effects,
+            [
+                LifecycleEffect::ResourceRemovePreviewed,
+                LifecycleEffect::ResourceWritePreviewed,
+                LifecycleEffect::ReceiptWritePreviewed,
+            ]
+        );
+        assert!(
+            !serde_json::to_string(&relocated)
+                .unwrap()
+                .contains("/private/machine")
+        );
     }
 
     #[tokio::test]

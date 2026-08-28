@@ -3,7 +3,9 @@ use crate::colors;
 use crate::config::Config;
 use crate::info::UpdateDiffs;
 use crate::output;
-use crate::status::{AppRow, FileStatus, ShellRow, build_app_rows, build_shell_rows};
+use crate::status::{
+    AppRow, FileStatus, ShellRow, build_app_rows, build_app_rows_with_lifecycle, build_shell_rows,
+};
 use crate::sys;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -35,13 +37,28 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
         .collect();
 
     let cats_result = load_active_categories(config, None).await;
-    let app_rows = match cats_result {
-        Ok(cats) => build_app_rows(config, &cats).await?,
-        Err(_) => Vec::new(),
+    let (app_rows, app_lifecycle) = match cats_result {
+        Ok(cats) => build_app_rows_with_lifecycle(config, &cats).await?,
+        Err(_) => (
+            Vec::new(),
+            utils::lifecycle::LifecycleResultV1::new(
+                utils::lifecycle::LifecycleOperation::Update,
+                false,
+            ),
+        ),
     };
+    let pending_app = app_lifecycle
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.status == utils::lifecycle::LifecycleStatus::Pending)
+        .map(|outcome| outcome.target.as_str())
+        .collect::<BTreeSet<_>>();
     let update_app: Vec<&AppRow> = app_rows
         .iter()
-        .filter(|r| r.file_status == FileStatus::UpdateAvail)
+        .filter(|r| {
+            r.file_status == FileStatus::UpdateAvail
+                && pending_app.contains(format!("app/{}", r.category).as_str())
+        })
         .collect();
     let update_app = app_update_categories(&update_app);
     let update_sys = sys::managed_updates(config).await.unwrap_or_default();

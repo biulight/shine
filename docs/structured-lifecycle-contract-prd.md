@@ -1,9 +1,8 @@
 # Shine Structured Lifecycle Contract PRD
 
-> **Status:** Phase 1 structured lifecycle slices 1–6 complete. The broader Roadmap Phase 1 gate
-> still requires its full acceptance suite. This document records the executable Phase 1 contract
-> from [ROADMAP.md](ROADMAP.md); it is not released JSON behavior or a public preset-authoring
-> contract.
+> **Status:** Roadmap Phase 1 structured lifecycle contract and acceptance gate complete. This
+> document records the executable Phase 1 contract from [ROADMAP.md](ROADMAP.md); it is not released
+> JSON behavior or a public preset-authoring contract.
 
 ## 1. Summary
 
@@ -13,12 +12,14 @@ terminal rendering. Phase 1 introduces one versioned lifecycle result envelope, 
 manifest compatibility, and an incremental migration path that preserves each domain's ownership
 rules.
 
-The completed execution slices cover App install/upgrade/uninstall plus hooks, implicit teardown,
+The completed execution slices cover App install/update/upgrade/uninstall plus hooks, implicit teardown,
 embedded preset cache, and purge; Shell install/update/upgrade/uninstall; and managed Sys
 apply/update/upgrade/uninstall. `app-manifest.toml`, `shell-manifest.toml`, and `sys-manifest.toml`
 are independently versioned. CLI-private presentation events and interaction adapters now preserve
 the existing output, permission prompts, and exit semantics without making terminal rendering part
-of lifecycle execution.
+of lifecycle execution. App read-only update rows and structured outcomes share one typed
+assessment pass, and the acceptance suite pins complete App, Shell snapshot, and managed Sys
+lifecycle chains plus repository-wide built-in Preset validation.
 
 ## 2. Problem
 
@@ -160,7 +161,9 @@ remains a separate compatibility contract.
 The App adapter now also covers upgrade branches, preset-cache extraction/removal, `post_install`
 and `post_upgrade`, best-effort uninstall teardown, and category/global purge. Hook and teardown
 failures remain non-fatal; only the existing fatal generator class changes the aggregate upgrade
-exit behavior.
+exit behavior. Read-only App update derives its rows and `pending`/`unchanged`/`conflict` outcomes
+from the same per-file assessment, so an automatic generator is never evaluated twice merely to
+produce the reusable result.
 
 The Shell adapter emits one outcome per selected or installed command. Read-only update derives
 `pending` from the existing typed `ShellRow`/`UpdateChange` assessment, while foreign launcher
@@ -197,7 +200,7 @@ during this slice; the structured result records the receipt mutation accurately
 
 ## 9. Acceptance matrix
 
-Execution slices 1–5 are complete when:
+The Roadmap Phase 1 acceptance gate is complete when:
 
 - App install produces structured changed, unchanged, previewed, preserved, and failed outcomes for
   the existing handled branches.
@@ -232,7 +235,10 @@ Execution slices 1–5 are complete when:
 6. **Complete:** App, Shell, and managed Sys execution emit CLI-private presentation events through
    a writer-backed renderer; upgrade sections and interactive confirmation/authorization remain
    frontend concerns, with characterization tests pinning stream and separator behavior.
-7. **Pending / Phase 2:** move reusable executors and host abstractions behind `shine-core` without
+7. **Complete:** repository-wide built-in Preset validation and App, external snapshot Shell, and
+   fake-OS managed Sys install → update → upgrade → uninstall acceptance chains close the broader
+   Roadmap Phase 1 gate, including targeted ownership isolation and safe result serialization.
+8. **Pending / Phase 2:** move reusable executors and host abstractions behind `shine-core` without
    changing Contract v1.
 
 ## 11. Documentation impact

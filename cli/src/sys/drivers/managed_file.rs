@@ -70,6 +70,26 @@ fn managed_file_desired(context: &DriverContext<'_>) -> Result<(PathBuf, Vec<u8>
     ))
 }
 
+pub(in crate::sys) fn managed_file_update_details(
+    context: &DriverContext<'_>,
+    previous: Option<&SystemReceipt>,
+) -> Result<Vec<String>> {
+    let (destination, content, _restart_hint) = managed_file_desired(context)?;
+    let Some(SystemReceipt::ManagedFile(previous)) = previous else {
+        return Ok(vec![
+            "Receipt: missing or incompatible -> desired managed file state".to_string(),
+        ]);
+    };
+    let mut details = Vec::new();
+    if previous.destination != destination {
+        details.push("Destination: changed".to_string());
+    }
+    if previous.content_hash != hash_content(&content) {
+        details.push("Content: changed".to_string());
+    }
+    Ok(details)
+}
+
 pub(in crate::sys) async fn managed_file_up_to_date(
     context: &DriverContext<'_>,
     previous: Option<&SystemReceipt>,

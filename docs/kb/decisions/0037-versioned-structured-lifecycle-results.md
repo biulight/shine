@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-28
-- **Evidence**: `utils/src/lifecycle.rs`, `cli/src/presentation.rs`,
+- **Evidence**: `utils/src/lifecycle.rs`, `cli/src/presentation.rs`, `cli/src/status.rs`,
   `cli/src/apps/{install,upgrade,uninstall,hooks,build,report}.rs`,
   `cli/src/shells/{install,uninstall,deployment}.rs`, `cli/src/sys/{managed,resources,run_manifest}.rs`,
   `cli/src/install_core/manifest.rs`
@@ -48,13 +48,13 @@ successful write, and an unsupported future version fails before mutation. An in
 or semantic reinterpretation requires a version bump. Sys resource receipt versions remain
 independent of the container manifest schema.
 
-Execution slices 1–6 cover App files, upgrade, hooks, teardown, embedded cache and purge; Shell
-command-scoped lifecycle; managed Sys built-in resources; and all three manifest gates. Existing
-aggregate report types remain CLI compatibility adapters: reusable facts come from structured
-results, while restart hints, Shell presentation totals, and Sys field-difference prose remain
-frontend metadata. A writer-backed terminal renderer preserves stdout/stderr routing and shared
-upgrade-section ordering; recording implementations support characterization tests without a real
-terminal.
+Execution slices cover App files, read-only update, upgrade, hooks, teardown, embedded cache and
+purge; Shell command-scoped lifecycle; managed Sys built-in resources; and all three manifest
+gates. App update rows and outcomes derive from one typed assessment pass. Existing aggregate
+report types remain CLI compatibility adapters: reusable facts come from structured results, while
+restart hints, Shell presentation totals, and Sys field-difference prose remain frontend metadata.
+A writer-backed terminal renderer preserves stdout/stderr routing and shared upgrade-section
+ordering; recording implementations support characterization tests without a real terminal.
 
 ## Consequences
 

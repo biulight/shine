@@ -530,6 +530,26 @@ items = ["git"]
     }
 
     #[tokio::test]
+    async fn all_built_in_presets_pass_static_validation() {
+        let presets = Path::new(env!("CARGO_MANIFEST_DIR")).join("presets");
+
+        let report = validate_path(&presets).await;
+
+        assert!(report.valid, "{report:#?}");
+        assert_eq!(report.schema_version, PRESET_VALIDATION_SCHEMA_VERSION);
+        assert_eq!(report.summary.errors, 0);
+        for kind in ["app", "shell", "sys"] {
+            assert!(
+                report
+                    .categories
+                    .iter()
+                    .any(|category| category.kind == kind),
+                "built-in validation did not discover any {kind} categories"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn reports_other_platform_errors_and_partial_repository_failure() {
         let root = fixture_root("preset-validation-invalid").await;
         write(

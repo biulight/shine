@@ -1000,51 +1000,67 @@ mod tests {
         crate::test_support::make_temp_dir("shine-sys").await
     }
 
-    #[cfg(any())]
     #[tokio::test]
     async fn managed_item_apply_upgrade_and_uninstall_lifecycle() {
         let dir = make_temp_dir().await;
         let os_dir = dir.join("presets/sys/fakeos");
         fs::create_dir_all(&os_dir).await.unwrap();
+        let first_destination = dir.join("first-managed.txt");
+        let second_destination = dir.join("second-managed.txt");
+        fs::write(os_dir.join("first.txt"), "first v1")
+            .await
+            .unwrap();
+        fs::write(os_dir.join("second.txt"), "second v1")
+            .await
+            .unwrap();
+        fs::write(&first_destination, "first original")
+            .await
+            .unwrap();
         fs::write(
             os_dir.join("shine.toml"),
-            r#"
+            format!(
+                r#"
 version = 2
 
-description = "Managed test"
+description = "Managed resource test"
 
 [[items]]
-id = "managed-test"
-label = "Managed test"
+id = "first"
+label = "First managed file"
 mode = "managed"
-required_env = ["ACTION_LOG"]
-"#,
-        )
-        .await
-        .unwrap();
-        fs::write(
-            os_dir.join("init.sh"),
-            r#"#!/bin/bash
-set -eu
-printf '%s\n' "$2" >> "$ACTION_LOG"
-printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
-"#,
-        )
-        .await
-        .unwrap();
+driver = "managed-file"
 
-        let action_log = dir.join("actions");
+[items.config]
+source = "first.txt"
+target = {:?}
+
+[[items]]
+id = "second"
+label = "Second managed file"
+mode = "managed"
+driver = "managed-file"
+
+[items.config]
+source = "second.txt"
+target = {:?}
+"#,
+                first_destination.display().to_string(),
+                second_destination.display().to_string(),
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(os_dir.join("init.sh"), "#!/bin/sh\n")
+            .await
+            .unwrap();
+
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        config.allow_sys_code = true;
-        config
-            .env
-            .insert("ACTION_LOG".to_string(), action_log.display().to_string());
 
-        run_managed_for_os(
+        let (first_install, first_lifecycle) = run_managed_for_os_with_result(
             &config,
             "fakeos",
-            Some("managed-test"),
+            Some("first"),
             SysAction::Apply,
             false,
             ManagedOutputMode::Explicit,
@@ -1052,18 +1068,53 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
         )
         .await
         .unwrap();
-        let first_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
-        assert!(
-            first_manifest
-                .entries
-                .iter()
-                .any(|entry| { entry.item_id == "managed-test" && entry.managed })
-        );
-
-        let report = run_managed_for_os(
+        assert_eq!(first_install.updated, 1);
+        assert!(first_lifecycle.outcomes.iter().any(|outcome| {
+            outcome.target == "sys/first"
+                && outcome.status == LifecycleStatus::Changed
+                && outcome.effects.contains(&LifecycleEffect::BackupCreated)
+        }));
+        let (second_install, second_lifecycle) = run_managed_for_os_with_result(
             &config,
             "fakeos",
+            Some("second"),
+            SysAction::Apply,
+            false,
+            ManagedOutputMode::Explicit,
             None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(second_install.updated, 1);
+        assert_eq!(second_lifecycle.summary().changed, 1);
+        let second_manifest_before = SysRunManifest::load(config.shine_dir())
+            .await
+            .unwrap()
+            .entries
+            .into_iter()
+            .find(|entry| entry.item_id == "second")
+            .unwrap();
+
+        fs::write(os_dir.join("first.txt"), "first v2")
+            .await
+            .unwrap();
+        let (updates, update_lifecycle) = managed_updates_for_os_with_result(&config, "fakeos")
+            .await
+            .unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].item_id, "first");
+        assert_eq!(updates[0].details, ["Content: changed"]);
+        assert!(update_lifecycle.outcomes.iter().any(|outcome| {
+            outcome.target == "sys/first" && outcome.status == LifecycleStatus::Pending
+        }));
+        assert!(update_lifecycle.outcomes.iter().any(|outcome| {
+            outcome.target == "sys/second" && outcome.status == LifecycleStatus::Unchanged
+        }));
+
+        let (upgrade, upgrade_lifecycle) = run_managed_for_os_with_result(
+            &config,
+            "fakeos",
+            Some("first"),
             SysAction::Apply,
             false,
             ManagedOutputMode::Upgrade { verbose: false },
@@ -1071,11 +1122,44 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
         )
         .await
         .unwrap();
-        assert_eq!(report.updated, 1);
-        run_managed_for_os(
+        assert_eq!(upgrade.updated, 1);
+        assert!(upgrade_lifecycle.outcomes.iter().any(|outcome| {
+            outcome.target == "sys/first" && outcome.status == LifecycleStatus::Changed
+        }));
+        assert_eq!(
+            fs::read_to_string(&first_destination).await.unwrap(),
+            "first v2"
+        );
+        assert_eq!(
+            fs::read_to_string(&second_destination).await.unwrap(),
+            "second v1"
+        );
+        let manifest_after_upgrade = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        assert_eq!(
+            manifest_after_upgrade
+                .entries
+                .iter()
+                .find(|entry| entry.item_id == "second")
+                .unwrap(),
+            &second_manifest_before
+        );
+
+        let (current_updates, current_lifecycle) =
+            managed_updates_for_os_with_result(&config, "fakeos")
+                .await
+                .unwrap();
+        assert!(current_updates.is_empty());
+        assert!(
+            current_lifecycle
+                .outcomes
+                .iter()
+                .all(|outcome| { matches!(outcome.status, LifecycleStatus::Unchanged) })
+        );
+
+        let (uninstall, uninstall_lifecycle) = run_managed_for_os_with_result(
             &config,
             "fakeos",
-            Some("managed-test"),
+            Some("first"),
             SysAction::Remove,
             false,
             ManagedOutputMode::Explicit,
@@ -1083,14 +1167,24 @@ printf 'SHINE_SYS_STATUS\t%s\t%s\n' "updated" "$2"
         )
         .await
         .unwrap();
-
-        let actions = fs::read_to_string(&action_log).await.unwrap();
+        assert_eq!(uninstall.updated, 1);
+        assert!(uninstall_lifecycle.outcomes.iter().any(|outcome| {
+            outcome.target == "sys/first"
+                && outcome.status == LifecycleStatus::Changed
+                && outcome.effects.contains(&LifecycleEffect::BackupRestored)
+                && outcome.effects.contains(&LifecycleEffect::ReceiptRemoved)
+        }));
         assert_eq!(
-            actions.lines().collect::<Vec<_>>(),
-            ["apply", "apply", "remove"]
+            fs::read_to_string(&first_destination).await.unwrap(),
+            "first original"
+        );
+        assert_eq!(
+            fs::read_to_string(&second_destination).await.unwrap(),
+            "second v1"
         );
         let final_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
-        assert!(final_manifest.entries.is_empty());
+        assert_eq!(final_manifest.entries.len(), 1);
+        assert_eq!(final_manifest.entries[0], second_manifest_before);
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

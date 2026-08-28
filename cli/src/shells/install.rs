@@ -1166,6 +1166,98 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn structured_snapshot_lifecycle_covers_update_upgrade_and_uninstall() {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("one.sh"), b"#!/bin/sh\necho one\n")
+            .await
+            .unwrap();
+        fs::write(category.join("two.sh"), b"#!/bin/sh\necho two\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        let install = handle_install_with_result(&config, Some("custom/one"), false)
+            .await
+            .unwrap();
+        assert!(install.outcomes.iter().any(|outcome| {
+            outcome.target == "shell/custom/one" && outcome.status == LifecycleStatus::Changed
+        }));
+        let sibling =
+            crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("two"));
+        assert!(!sibling.exists());
+        assert!(config.installed_shell_dir().join("custom/two.sh").exists());
+
+        fs::write(category.join("one.sh"), b"#!/bin/sh\necho updated\n")
+            .await
+            .unwrap();
+        let update = collect_update_lifecycle_result(&config).await.unwrap();
+        let pending = update
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target == "shell/custom/one")
+            .unwrap();
+        assert_eq!(pending.status, LifecycleStatus::Pending);
+        assert!(
+            pending
+                .effects
+                .contains(&LifecycleEffect::CacheWritePreviewed)
+        );
+
+        let mut separator = crate::output::SectionSeparator::new();
+        let (report, upgrade) = handle_upgrade_installed_target_with_result(
+            &config,
+            Some("custom"),
+            false,
+            &mut separator,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.updated_targets, ["custom/one"]);
+        assert!(upgrade.outcomes.iter().any(|outcome| {
+            outcome.target == "shell/custom/one" && outcome.status == LifecycleStatus::Changed
+        }));
+        assert!(!sibling.exists());
+        assert_eq!(
+            fs::read(category.join("one.sh")).await.unwrap(),
+            b"#!/bin/sh\necho updated\n"
+        );
+
+        let current = collect_update_lifecycle_result(&config).await.unwrap();
+        assert!(current.outcomes.iter().any(|outcome| {
+            outcome.target == "shell/custom/one" && outcome.status == LifecycleStatus::Unchanged
+        }));
+
+        let uninstall = super::super::uninstall::handle_uninstall_with_result(
+            &config,
+            Some("custom/one"),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(uninstall.outcomes.iter().any(|outcome| {
+            outcome.target == "shell/custom/one" && outcome.status == LifecycleStatus::Changed
+        }));
+        assert!(!config.installed_shell_dir().join("custom").exists());
+        assert!(category.join("one.sh").exists());
+        assert!(category.join("two.sh").exists());
+        assert!(!sibling.exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
     async fn make_executable(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(path).await.unwrap().permissions();
