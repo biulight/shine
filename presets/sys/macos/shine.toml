@@ -6,6 +6,7 @@ default_profile = "recommended"
 id = "homebrew"
 label = "Homebrew"
 description = "Install or verify the Homebrew package manager."
+permissions = { schema_version = 1, filesystem = [{ access = ["execute"], base = "preset", path = "install/homebrew.sh" }], network = [{ scope = "any" }], commands = ["/bin/bash", "curl"] }
 
 detect = { kind = "command", command = "brew", version_args = ["--version"] }
 install = { kind = "script", path = "install/homebrew.sh" }
@@ -19,6 +20,7 @@ fragment = "profile/homebrew.sh"
 id = "rust"
 label = "Rust"
 description = "Install Rustup and the Rust toolchain."
+permissions = { schema_version = 1, filesystem = [{ access = ["execute"], base = "preset", path = "install/rust.sh" }], network = [{ scope = "any" }], commands = ["curl", "sh"] }
 
 detect = { kind = "command", command = "rustup", version_args = ["--version"] }
 install = { kind = "script", path = "install/rust.sh" }
@@ -27,6 +29,7 @@ install = { kind = "script", path = "install/rust.sh" }
 id = "yazi"
 label = "Yazi"
 description = "Install the Yazi terminal file manager."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "yazi", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "yazi" }
@@ -41,6 +44,7 @@ fragment = "profile/yazi.sh"
 id = "starship"
 label = "Starship"
 description = "Install the Starship shell prompt."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "starship", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "starship" }
@@ -55,6 +59,7 @@ eval = ["starship", "init", "{shell}"]
 id = "neovim"
 label = "Neovim"
 description = "Install Neovim with Homebrew."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "nvim", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "neovim" }
@@ -63,6 +68,7 @@ install = { kind = "package", provider = "homebrew", package = "neovim" }
 id = "astronvim"
 label = "AstroNvim"
 description = "Install the AstroNvim template into ~/.config/nvim when no config exists."
+permissions = { schema_version = 1, filesystem = [{ access = ["execute"], base = "preset", path = "install/astronvim.sh" }], network = [{ scope = "host", host = "github.com" }], commands = ["git"] }
 
 detect = { kind = "path", path = "$HOME/.config/nvim" }
 install = { kind = "script", path = "install/astronvim.sh" }
@@ -71,6 +77,7 @@ install = { kind = "script", path = "install/astronvim.sh" }
 id = "zerotier"
 label = "ZeroTier"
 description = "Install the ZeroTier One macOS client."
+permissions = { schema_version = 1 }
 
 [items.detect]
 kind = "any"
@@ -90,6 +97,7 @@ success_hint = "open ZeroTier and join a network"
 id = "split-dns"
 label = "Private split DNS"
 description = "Route one private DNS suffix to DNS servers reachable through ZeroTier."
+permissions = { schema_version = 1, administrator = true, environment = [{ name = "PRIVATE_DNS_DOMAIN", sensitivity = "plain" }, { name = "PRIVATE_DNS_SERVERS", sensitivity = "plain" }], system = [{ capability = "split-dns", resource = "private-domain" }] }
 mode = "managed"
 driver = "split-dns"
 requires_admin = true
@@ -103,6 +111,7 @@ servers_env = "PRIVATE_DNS_SERVERS"
 id = "zsh-autosuggestions"
 label = "zsh-autosuggestions"
 description = "Install zsh command autosuggestions."
+permissions = { schema_version = 1 }
 
 [items.detect]
 kind = "any"
@@ -126,6 +135,7 @@ fragment = "profile/zsh-autosuggestions.sh"
 id = "zsh-syntax-highlighting"
 label = "zsh-syntax-highlighting"
 description = "Install zsh command syntax highlighting."
+permissions = { schema_version = 1 }
 
 [items.detect]
 kind = "any"
@@ -149,6 +159,7 @@ fragment = "profile/zsh-syntax-highlighting.sh"
 id = "zsh-vi-mode"
 label = "zsh-vi-mode"
 description = "Install vi-style zsh editing mode."
+permissions = { schema_version = 1 }
 
 [items.detect]
 kind = "any"
@@ -171,6 +182,7 @@ fragment = "profile/zsh-vi-mode.sh"
 id = "zoxide"
 label = "zoxide"
 description = "Install smarter directory jumping."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "zoxide", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "zoxide" }
@@ -185,6 +197,7 @@ eval = ["zoxide", "init", "{shell}"]
 id = "atuin"
 label = "Atuin"
 description = "Install the Atuin shell history sync client."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "atuin", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "atuin" }
@@ -199,6 +212,7 @@ eval = ["atuin", "init", "{shell}"]
 id = "fzf"
 label = "fzf"
 description = "Install the fzf command-line fuzzy finder."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "fzf", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "fzf" }
@@ -213,6 +227,7 @@ eval = ["fzf", "--{shell}"]
 id = "bat"
 label = "bat"
 description = "Install the bat command-line file viewer."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "bat", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "bat" }
@@ -227,6 +242,7 @@ aliases = { cat = "bat" }
 id = "eza"
 label = "eza"
 description = "Install the eza modern ls replacement."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "eza", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "eza" }
@@ -241,6 +257,7 @@ aliases = { ls = "eza --icons", ll = "eza -la --icons", lt = "eza --tree" }
 id = "nvm"
 label = "nvm"
 description = "Install Node Version Manager with Homebrew."
+permissions = { schema_version = 1 }
 
 [items.detect]
 kind = "any"
@@ -269,6 +286,7 @@ fragment = "profile/nvm.post.sh"
 id = "bun"
 label = "Bun"
 description = "Install the Bun JavaScript runtime."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "bun", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "bun" }
@@ -282,6 +300,7 @@ fragment = "profile/bun.sh"
 id = "pnpm"
 label = "pnpm"
 description = "Install the pnpm package manager."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "pnpm", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "pnpm" }
@@ -295,6 +314,7 @@ fragment = "profile/pnpm.sh"
 id = "mise"
 label = "mise"
 description = "Install the mise development environment manager."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "mise", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "mise" }
@@ -309,6 +329,7 @@ eval = ["mise", "activate", "{shell}"]
 id = "fastfetch"
 label = "Fastfetch"
 description = "Install Fastfetch for manual system summaries."
+permissions = { schema_version = 1 }
 
 detect = { kind = "command", command = "fastfetch", version_args = ["--version"] }
 install = { kind = "package", provider = "homebrew", package = "fastfetch" }

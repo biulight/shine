@@ -27,6 +27,13 @@ The contract foundation does not yet route CLI commands through this flow. Exist
 remain compatibility paths, `allow_app_hooks` and `allow_sys_code` remain active, and no code may
 describe those paths as a security Plan before pure planners and apply enforcement land.
 
+Permission declaration schema v1 is parsed from the same immutable snapshot: one App category
+table, one table per Shell command/platform variant, and one table per Sys item. Static validation
+checks version, placement, structured paths, payload-free identities, and duplicates without
+executing Preset code. Typed metadata continues to describe Core-bounded effects; explicit tables
+record additional capabilities. Missing tables warn but do not change runtime execution. A future
+pure planner will combine both sources into the required/declared resolution used by `PlanV1`.
+
 ## Shell install and uninstall
 
 Shell lifecycle targets are either a category (`utils`) or one command in a category

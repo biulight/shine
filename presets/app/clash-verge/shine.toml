@@ -37,6 +37,20 @@ script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
 
+[permissions]
+schema_version = 1
+filesystem = [
+  { access = ["execute"], base = "preset", path = "build.ts" },
+  { access = ["execute"], base = "preset", path = "unbuild.ts" },
+]
+network = [{ scope = "any" }]
+commands = ["bun", "shine"]
+environment = [
+  { name = "CLASH_PROFILES_FILE", sensitivity = "plain" },
+  { name = "CLASH_CONTROLLER_URL", sensitivity = "plain" },
+  { name = "CLASH_CONTROLLER_TOKEN", sensitivity = "secret" },
+]
+
 # The single composite enhancement payload, installed verbatim (plain Copy — no
 # templating, so the file is always valid YAML). build.ts splits its keys into
 # CVR's bound Merge / Rules / Proxies / Groups files. The copy shipped here is

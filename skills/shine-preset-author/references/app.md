@@ -18,6 +18,19 @@ installed Shine release.
 Prefer explicit file lists. Keep sources and generator/artifact scripts inside
 the category. Never use absolute source paths or `..`.
 
+## Permission declaration
+
+Every App category has one top-level `[permissions]` table with
+`schema_version = 1`. Ordinary managed destinations and receipt operations are
+already bounded by typed App metadata; use the table for additional commands,
+network access, environment names, administrator authorization, system
+capabilities, or filesystem effects of hooks, generators, and artifacts.
+
+Environment entries contain only a name and `plain`/`secret` sensitivity.
+Filesystem entries use `access`, a structured `base` (`home`, `shine`,
+`data-dir`, `preset`, or `absolute`), and a normalized path. A declaration does
+not enable external code: `allow_app_hooks` remains a separate user opt-in.
+
 ## Optional behavior
 
 - `transforms` supports only transforms accepted by the current validator,

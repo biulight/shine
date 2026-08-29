@@ -44,6 +44,11 @@ detect = { kind = "command", command = "my-tool", version_args = ["--version"] }
 # Keep scripts inside this category. For Windows, use a .ps1 script instead.
 install = { kind = "script", path = "install/my-tool.sh" }
 
+[items.permissions]
+schema_version = 1
+filesystem = [{ access = ["execute"], base = "preset", path = "install/my-tool.sh" }]
+# Add reviewed command, network, administrator, environment, and system identities used by the script.
+
 [profiles.recommended]
 items = ["my-tool"]
 "#;
@@ -58,4 +63,23 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
         println!("Created sys preset template: {}", path.display());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_template_contains_valid_permission_declaration() {
+        let manifest = manifest::parse_and_validate_manifest(SYS_TEMPLATE).unwrap();
+
+        assert_eq!(manifest.items.len(), 1);
+        assert_eq!(
+            manifest.items[0]
+                .permissions
+                .as_ref()
+                .map(|permissions| permissions.schema_version),
+            Some(1)
+        );
+    }
 }

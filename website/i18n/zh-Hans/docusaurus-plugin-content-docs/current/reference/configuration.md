@@ -49,8 +49,8 @@ enabled = false
 | `presets_overlay_git` | 由 Shine 浅克隆并镜像到 `~/.shine/overlay/` 的 Git overlay URL |
 | `presets_overlay_git_branch` | Git overlay 跟踪的分支；省略时使用远端默认分支 |
 | `app_default_dest_root` | 未声明目标路径的旧式 app 预设默认根目录 |
-| `allow_app_hooks` | 允许外部 app 预设在安装或升级后运行生命周期钩子 |
-| `allow_sys_code` | 仅全局配置可授予：允许外部 sys 脚本和持久的可执行 profile 代码；项目配置不能自行启用 |
+| `allow_app_hooks` | 允许外部 app 预设在安装或升级后运行生命周期钩子；schema-v1 声明不会授予该权限 |
+| `allow_sys_code` | 仅全局配置可授予：允许外部 sys 脚本和持久的可执行 profile 代码；项目配置不能自行启用，Preset 声明也不能替代它 |
 | `sync_terminal_theme` | 控制受管 Unix shell profile 是否自动运行终端主题同步，默认为启用 |
 | `gpg_recipients` | `shine env secret encrypt` 默认 GPG recipient 列表 |
 | `secret_backend` | 默认密钥后端，省略时为 `gpg` |

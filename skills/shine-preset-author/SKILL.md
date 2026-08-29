@@ -39,7 +39,9 @@ the authority for templates and validation.
 5. Edit the generated or copied files. Keep every referenced source, script,
    fragment, package manifest, and lockfile inside the category. Use explicit
    `shine.toml` metadata even though legacy app and shell auto-discovery remains
-   compatible.
+   compatible. Keep every generated `schema_version = 1` permission declaration,
+   classify environment names as `plain` or `secret`, and declare only identities —
+   never arguments, values, ciphertext, credentials, or private checkout paths.
 6. Run `shine preset validate <category-path> --format json`. Treat
    `valid: false` as blocking, fix diagnostics by their stable `code`, and rerun
    until `valid: true`. Warnings require a conscious explanation.

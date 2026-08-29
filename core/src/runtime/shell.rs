@@ -7,6 +7,7 @@ use super::{
 use crate::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
 };
+use crate::permission::PermissionDeclarationV1;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,6 +31,7 @@ struct ShellFileToml {
     runtime: Option<String>,
     transforms: Option<Vec<String>>,
     env: Option<Vec<String>>,
+    permissions: Option<PermissionDeclarationV1>,
 }
 
 pub const SHELL_MANIFEST_FILE: &str = "shell-manifest.toml";
@@ -147,6 +149,7 @@ pub struct ShellFile {
     pub runtime: LinkRuntime,
     pub transforms: Vec<String>,
     pub env: Vec<crate::env::EnvVarSpec>,
+    pub permissions: Option<PermissionDeclarationV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1951,6 +1954,11 @@ impl<H: FileSystemHost> CoreRuntime<H> {
                 if runtime != LinkRuntime::Bun && !env.is_empty() {
                     bail!("{metadata_path}: `env` is only valid when `runtime = \"bun\"`");
                 }
+                if let Some(permissions) = &entry.permissions {
+                    permissions
+                        .validate()
+                        .with_context(|| format!("invalid permissions in {metadata_path}"))?;
+                }
                 let logical = format!("{prefix}{}", shell_logical_path(&source_rel));
                 let bytes = self.presets().get(&logical).with_context(|| {
                     format!(
@@ -1970,6 +1978,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
                     runtime,
                     transforms,
                     env,
+                    permissions: entry.permissions.clone(),
                 });
             }
         } else {
@@ -1989,6 +1998,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
                     runtime: LinkRuntime::Native,
                     transforms: Vec::new(),
                     env: Vec::new(),
+                    permissions: None,
                     source_rel,
                 });
             }

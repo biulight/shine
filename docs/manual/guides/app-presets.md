@@ -90,6 +90,11 @@ Generators supplied by external presets or overlays are executable code and requ
 `SHINE_APP_*` path variables and limits runtime and output size. Run only presets you have reviewed
 and trust.
 
+The category's `[permissions]` table separately declares review identities for generator, hook,
+and artifact commands, network scopes, and environment-name sensitivity. It is statically
+validated but does not enable external code or replace `allow_app_hooks`; never put a URL token,
+environment value, command arguments, or ciphertext in the declaration.
+
 ### Surge URI subscriptions
 
 The built-in `surge` preset can convert an HTTPS Base64 URI subscription into a managed

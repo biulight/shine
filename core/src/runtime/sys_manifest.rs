@@ -24,6 +24,11 @@ pub fn validate_sys_manifest(manifest: &SysManifest) -> Result<()> {
     }
     let mut ids = BTreeSet::new();
     for item in &manifest.items {
+        if let Some(permissions) = &item.permissions {
+            permissions
+                .validate()
+                .with_context(|| format!("invalid permissions for sys item `{}`", item.id))?;
+        }
         validate_item_id(&item.id)?;
         if item.label.trim().is_empty() {
             bail!("sys bootstrap item `{}` must have a label", item.id);

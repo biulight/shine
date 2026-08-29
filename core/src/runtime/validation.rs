@@ -4,6 +4,7 @@ use super::{
     CoreRuntime, FileKind, FileSystemHost, InMemoryHost, PresetSnapshot, PresetSourceKind,
     RuntimeContext, RuntimePlatform, SysDriverKind, SysInstall,
 };
+use crate::permission::PermissionDeclarationV1;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -96,8 +97,14 @@ pub async fn validate_preset_path(
     let validation_home = repository_root.join(".shine-validation-home");
     let mut reports = Vec::new();
     for category in categories {
+        let mut diagnostics = permission_declaration_diagnostics(&snapshot, &category);
+        let permission_error = diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == PresetDiagnosticSeverity::Error);
         let mut diagnostic = if category.kind == "app" {
-            validate_all_app_destination_branches(&snapshot, &category)
+            (!permission_error)
+                .then(|| validate_all_app_destination_branches(&snapshot, &category))
+                .transpose()
                 .err()
                 .map(|error| error_diagnostic("app", &category.root, format!("{error:#}")))
         } else {
@@ -107,7 +114,7 @@ pub async fn validate_preset_path(
             .get(&format!("{}/{}/shine.toml", category.kind, category.name))
             .is_some();
         for platform in RuntimePlatform::ALL {
-            if diagnostic.is_some() {
+            if permission_error || diagnostic.is_some() {
                 break;
             }
             let mut context = RuntimeContext::isolated(
@@ -141,8 +148,12 @@ pub async fn validate_preset_path(
                 }
             }
         }
-        let mut diagnostics = diagnostic.into_iter().collect::<Vec<_>>();
-        if diagnostics.is_empty() && !has_metadata {
+        diagnostics.extend(diagnostic);
+        if !has_metadata
+            && !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.severity == PresetDiagnosticSeverity::Error)
+        {
             diagnostics.push(PresetDiagnostic {
                 severity: PresetDiagnosticSeverity::Warning,
                 code: "legacy_metadata".to_string(),
@@ -153,6 +164,10 @@ pub async fn validate_preset_path(
                 path: Some(category.root.clone()),
             });
         }
+        diagnostics.sort_by_key(|diagnostic| match diagnostic.severity {
+            PresetDiagnosticSeverity::Error => 0,
+            PresetDiagnosticSeverity::Warning => 1,
+        });
         let valid = diagnostics
             .iter()
             .all(|diagnostic| diagnostic.severity != PresetDiagnosticSeverity::Error);
@@ -165,6 +180,193 @@ pub async fn validate_preset_path(
         });
     }
     finish(canonical, Vec::new(), reports)
+}
+
+fn permission_declaration_diagnostics(
+    snapshot: &PresetSnapshot,
+    category: &CategoryPath,
+) -> Vec<PresetDiagnostic> {
+    let logical = format!("{}/{}/shine.toml", category.kind, category.name);
+    let Some(bytes) = snapshot.get(&logical) else {
+        return Vec::new();
+    };
+    let Ok(value) = toml::from_slice::<toml::Value>(bytes) else {
+        return Vec::new();
+    };
+    let Some(table) = value.as_table() else {
+        return Vec::new();
+    };
+    let path = category.root.join("shine.toml");
+    match category.kind {
+        "app" => validate_app_permissions(table, category, &path),
+        "shell" => validate_shell_permissions(table, category, &path),
+        "sys" => validate_sys_permissions(table, category, &path),
+        _ => unreachable!(),
+    }
+}
+
+fn validate_app_permissions(
+    table: &toml::Table,
+    category: &CategoryPath,
+    path: &Path,
+) -> Vec<PresetDiagnostic> {
+    let target = format!("app/{}", category.name);
+    let mut diagnostics = Vec::new();
+    match table.get("permissions") {
+        Some(value) => {
+            if let Some(diagnostic) = validate_permission_value(value, &target, path) {
+                diagnostics.push(diagnostic);
+            }
+        }
+        None => diagnostics.push(missing_permission_diagnostic(&target, path)),
+    }
+    if table
+        .get("files")
+        .and_then(toml::Value::as_array)
+        .is_some_and(|files| files.iter().any(|file| file.get("permissions").is_some()))
+    {
+        diagnostics.push(permission_error_diagnostic(
+            "invalid_permission_declaration",
+            format!(
+                "{target} must declare permissions at the App category root, not inside `[[files]]`"
+            ),
+            path,
+        ));
+    }
+    diagnostics
+}
+
+fn validate_shell_permissions(
+    table: &toml::Table,
+    category: &CategoryPath,
+    path: &Path,
+) -> Vec<PresetDiagnostic> {
+    let mut diagnostics = Vec::new();
+    if table.contains_key("permissions") {
+        diagnostics.push(permission_error_diagnostic(
+            "invalid_permission_declaration",
+            format!(
+                "shell/{} must declare permissions inside each `[[files]]` entry",
+                category.name
+            ),
+            path,
+        ));
+    }
+    let Some(files) = table.get("files").and_then(toml::Value::as_array) else {
+        return diagnostics;
+    };
+    for (index, file) in files.iter().enumerate() {
+        let identity = file
+            .get("target")
+            .or_else(|| file.get("source"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or("unknown");
+        let target = format!("shell/{}/{identity}", category.name);
+        match file.get("permissions") {
+            Some(value) => {
+                if let Some(diagnostic) = validate_permission_value(value, &target, path) {
+                    diagnostics.push(diagnostic);
+                }
+            }
+            None => diagnostics.push(PresetDiagnostic {
+                severity: PresetDiagnosticSeverity::Warning,
+                code: "missing_permission_declaration".to_string(),
+                message: format!(
+                    "{target} (`[[files]]` entry {}) has no versioned permission declaration; compatibility execution is unchanged",
+                    index + 1
+                ),
+                path: Some(path.to_path_buf()),
+            }),
+        }
+    }
+    diagnostics
+}
+
+fn validate_sys_permissions(
+    table: &toml::Table,
+    category: &CategoryPath,
+    path: &Path,
+) -> Vec<PresetDiagnostic> {
+    let mut diagnostics = Vec::new();
+    if table.contains_key("permissions") {
+        diagnostics.push(permission_error_diagnostic(
+            "invalid_permission_declaration",
+            format!(
+                "sys/{} must declare permissions inside each `[[items]]` entry",
+                category.name
+            ),
+            path,
+        ));
+    }
+    let Some(items) = table.get("items").and_then(toml::Value::as_array) else {
+        return diagnostics;
+    };
+    for (index, item) in items.iter().enumerate() {
+        let identity = item
+            .get("id")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("unknown");
+        let target = format!("sys/{identity}");
+        match item.get("permissions") {
+            Some(value) => {
+                if let Some(diagnostic) = validate_permission_value(value, &target, path) {
+                    diagnostics.push(diagnostic);
+                }
+            }
+            None => diagnostics.push(PresetDiagnostic {
+                severity: PresetDiagnosticSeverity::Warning,
+                code: "missing_permission_declaration".to_string(),
+                message: format!(
+                    "{target} (`[[items]]` entry {}) has no versioned permission declaration; compatibility execution is unchanged",
+                    index + 1
+                ),
+                path: Some(path.to_path_buf()),
+            }),
+        }
+    }
+    diagnostics
+}
+
+fn validate_permission_value(
+    value: &toml::Value,
+    target: &str,
+    path: &Path,
+) -> Option<PresetDiagnostic> {
+    let declaration = match value.clone().try_into::<PermissionDeclarationV1>() {
+        Ok(declaration) => declaration,
+        Err(_) => {
+            return Some(permission_error_diagnostic(
+                "invalid_permission_declaration",
+                format!(
+                    "{target} has malformed permission fields or fields unsupported by this schema"
+                ),
+                path,
+            ));
+        }
+    };
+    declaration.validate().err().map(|error| {
+        permission_error_diagnostic(error.diagnostic_code(), format!("{target}: {error}"), path)
+    })
+}
+
+fn missing_permission_diagnostic(target: &str, path: &Path) -> PresetDiagnostic {
+    PresetDiagnostic {
+        severity: PresetDiagnosticSeverity::Warning,
+        code: "missing_permission_declaration".to_string(),
+        message: format!(
+            "{target} has no versioned permission declaration; compatibility execution is unchanged"
+        ),
+        path: Some(path.to_path_buf()),
+    }
+}
+
+fn permission_error_diagnostic(code: &str, message: String, path: &Path) -> PresetDiagnostic {
+    PresetDiagnostic {
+        severity: PresetDiagnosticSeverity::Error,
+        code: code.to_string(),
+        message,
+        path: Some(path.to_path_buf()),
+    }
 }
 
 fn validate_all_app_destination_branches(
@@ -694,6 +896,71 @@ mod tests {
             assert!(
                 !is_portable_relative_path(path),
                 "expected {path:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn permission_validation_uses_the_effective_overlay_manifest() {
+        let category = CategoryPath {
+            kind: "app",
+            name: "demo".to_string(),
+            root: PathBuf::from("app/demo"),
+        };
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n".to_vec(),
+            )
+            .overlay_file("app/demo/shine.toml", b"dest = '~/.config/demo'\n".to_vec())
+            .build();
+
+        let diagnostics = permission_declaration_diagnostics(&snapshot, &category);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "missing_permission_declaration");
+
+        let invalid = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n".to_vec(),
+            )
+            .overlay_file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 2\n".to_vec(),
+            )
+            .build();
+        let diagnostics = permission_declaration_diagnostics(&invalid, &category);
+        assert_eq!(diagnostics[0].code, "unsupported_permission_schema");
+    }
+
+    #[test]
+    fn permission_declarations_use_each_domain_target_placement() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n".to_vec(),
+            )
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'tool.sh'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file(
+                "sys/demo/shine.toml",
+                b"version = 2\n[[items]]\nid = 'tool'\nlabel = 'Tool'\n[items.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .build();
+
+        for kind in ["app", "shell", "sys"] {
+            let category = CategoryPath {
+                kind,
+                name: "demo".to_string(),
+                root: PathBuf::from(format!("{kind}/demo")),
+            };
+            assert!(
+                permission_declaration_diagnostics(&snapshot, &category).is_empty(),
+                "{kind} declaration should be accepted at its target-local placement"
             );
         }
     }

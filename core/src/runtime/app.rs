@@ -6,6 +6,7 @@ use crate::install::{AppEntry, AppInstallStrategy, AppManifest, hash_content};
 use crate::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
 };
+use crate::permission::PermissionDeclarationV1;
 use crate::runtime::{
     AppFileInspection, CoreRuntime, FileSystemHost, InspectionChange, InspectionFileStatus,
     PrivilegedFileSystemHost, ProcessHost, ProcessIo, ProcessRequest, RuntimeEvent,
@@ -34,6 +35,7 @@ pub struct AppCategory {
     pub uses_metadata: bool,
     pub has_explicit_files: bool,
     pub artifact: Option<AppArtifact>,
+    pub permissions: Option<PermissionDeclarationV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

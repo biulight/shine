@@ -1,6 +1,6 @@
 # Shine Security Plan and Trust Model PRD
 
-> **Status:** Roadmap Phase 3 contract foundation implemented; permission declarations, pure
+> **Status:** Roadmap Phase 3 contract foundation and permission declarations implemented; pure
 > planners, CLI enforcement, and coarse-grant migration remain future slices. This document is
 > internal and does not define released CLI, JSON, or Preset behavior.
 
@@ -12,9 +12,10 @@ captured runtime context, Core-owned App/Shell/Sys execution, and real/in-memory
 a reviewable Plan that derives all required permissions and is bound to the exact source and state
 inputs later applied.
 
-The first slice adds the versioned Plan, permission, snapshot digest, fingerprint, and approval
-contracts to `shine-core`. It does not route current commands through them. Existing dry-run and
-status paths remain compatibility behavior and are not security Plans.
+The first slice added the versioned Plan, permission, snapshot digest, fingerprint, and approval
+contracts to `shine-core`. The second added target-local permission declarations, static
+validation, and built-in migration. Neither routes current commands through a security Plan;
+existing dry-run and status paths remain compatibility behavior.
 
 ## Goals
 
@@ -87,8 +88,8 @@ inputs and validate that result before the first mutation; approval is never a r
 
 1. **Complete — contract foundation:** Plan/permission/snapshot/approval types, deterministic
    Preset digest, safe serialization, and fail-closed tests.
-2. **Permission declarations:** versioned Preset syntax, static validation, built-in migration, and
-   explicit compatibility for existing coarse grants.
+2. **Complete — permission declarations:** versioned target-local Preset syntax, static validation,
+   built-in migration, and explicit compatibility for existing coarse grants.
 3. **Pure planners:** App, Shell, and managed Sys read-only assessment that cannot invoke process,
    write, privileged, or external-code capabilities.
 4. **Approval enforcement:** CLI rendering and confirmation followed by re-plan, exact approval

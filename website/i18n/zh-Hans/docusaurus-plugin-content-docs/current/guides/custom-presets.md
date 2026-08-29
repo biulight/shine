@@ -49,6 +49,36 @@ shine preset validate . --format json
 默认输出文本；`--format json` 输出 skill 使用的稳定 `schema_version: 1` 报告。校验错误的
 退出码为 1，warning 不会导致失败。
 
+## 声明权限
+
+新预设使用权限 schema v1 声明可审查的 capability identity。App 在类别根部使用
+`[permissions]`；Shell 的每个 `[[files]]` 命令分别使用 `[files.permissions]`；Sys 的每个
+`[[items]]` target 分别使用 `[items.permissions]`。缺少声明时仍保持兼容，但会产生
+`missing_permission_declaration` warning；不支持的版本、未知字段、非法 identity 和重复项均为错误。
+
+```toml
+[permissions]
+schema_version = 1
+administrator = true
+filesystem = [
+  { access = ["read", "write"], base = "home", path = ".config/example" },
+  { access = ["execute"], base = "preset", path = "build.ts" },
+]
+network = [{ scope = "host", host = "api.example.com" }]
+commands = ["bun"]
+environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
+system = [{ capability = "split-dns", resource = "private-domain" }]
+```
+
+Filesystem base 只接受 `home`、`shine`、`data-dir`、`preset` 或 `absolute`；非绝对路径必须是
+规范化相对路径，`.` 表示所选 base 的根。Command 只能填写一个不带参数的 program identity。
+Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。普通 destination、launcher、
+receipt 和固定 package provider 已由现有强类型 metadata 约束，不需要重复描述其内部机制。
+
+权限声明不是授权，也不能证明 opaque script 已完整披露行为。外部 App 代码仍需
+`allow_app_hooks = true`；外部 Sys 代码仍需全局 `allow_sys_code = true`。安全 Plan 的 planner 与
+enforcement 尚未接入，因此当前生命周期执行行为不变。
+
 ## 从来源文件夹到已安装能力
 
 任何能把预设文件夹放到机器上的工具或流程，都可以充当同步层。Shine 不依赖 Git，也不承担通用

@@ -4,6 +4,9 @@ list_mode = "category"
 [dest]
 unix = "~/.config/ghostty"
 
+[permissions]
+schema_version = 1
+
 [[files]]
 source = "config.ghostty"
 target = "config.ghostty"

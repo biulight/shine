@@ -224,6 +224,7 @@ items = ["git"]
         assert!(report.valid, "{report:#?}");
         assert_eq!(report.schema_version, PRESET_VALIDATION_SCHEMA_VERSION);
         assert_eq!(report.summary.errors, 0);
+        assert_eq!(report.summary.warnings, 0, "{report:#?}");
         for kind in ["app", "shell", "sys"] {
             assert!(
                 report
@@ -421,14 +422,20 @@ target = "same.toml"
 source = "mac.sh"
 target = "tool"
 platforms = ["macos"]
+[files.permissions]
+schema_version = 1
 [[files]]
 source = "linux.sh"
 target = "tool"
 platforms = ["linux"]
+[files.permissions]
+schema_version = 1
 [[files]]
 source = "windows.ps1"
 target = "tool"
 platforms = ["windows"]
+[files.permissions]
+schema_version = 1
 "#,
         );
         write(category.join("mac.sh"), "#!/bin/sh\n");
@@ -437,6 +444,7 @@ platforms = ["windows"]
 
         let valid = validate_path(&category).await;
         assert!(valid.valid, "{valid:#?}");
+        assert_eq!(valid.summary.warnings, 0, "{valid:#?}");
 
         write(
             category.join("shine.toml"),
@@ -449,6 +457,25 @@ platforms = []
         let empty = validate_path(&category).await;
         assert!(!empty.valid);
         assert_eq!(empty.categories[0].diagnostics[0].code, "invalid_metadata");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_app_and_shell_categories_keep_only_the_legacy_warning() {
+        let root = fixture_root("preset-validation-legacy-permissions").await;
+        write(
+            root.join("app/editor/config.toml"),
+            "# shine-dest: ~/.config/editor/config.toml\ntheme = 'dark'\n",
+        );
+        write(root.join("shell/tools/tool.sh"), "#!/bin/sh\necho tool\n");
+
+        let report = validate_path(&root).await;
+        assert!(report.valid, "{report:#?}");
+        assert_eq!(report.summary.warnings, 2, "{report:#?}");
+        assert!(report.categories.iter().all(|category| {
+            category.diagnostics.len() == 1 && category.diagnostics[0].code == "legacy_metadata"
+        }));
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -484,6 +511,93 @@ platforms = ["macos"]
                 .contains("macos")
         );
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_permission_declarations_warn_without_blocking_compatibility() {
+        let root = fixture_root("preset-validation-permission-warning").await;
+        let category = root.join("app/editor");
+        write(
+            category.join("shine.toml"),
+            "dest = '~/.config/editor'\n[[files]]\nsource = 'config.toml'\n",
+        );
+        write(category.join("config.toml"), "theme = 'dark'\n");
+
+        let report = validate_path(&category).await;
+        assert!(report.valid, "{report:#?}");
+        assert_eq!(report.summary.warnings, 1);
+        assert_eq!(
+            report.categories[0].diagnostics[0].code,
+            "missing_permission_declaration"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn permission_schema_errors_have_stable_diagnostic_codes() {
+        let root = fixture_root("preset-validation-permission-errors").await;
+        let category = root.join("app/editor");
+        write(
+            category.join("shine.toml"),
+            r#"dest = "~/.config/editor"
+[permissions]
+schema_version = 2
+[[files]]
+source = "config.toml"
+"#,
+        );
+        write(category.join("config.toml"), "theme = 'dark'\n");
+
+        let unsupported = validate_path(&category).await;
+        assert!(!unsupported.valid);
+        assert_eq!(
+            unsupported.categories[0].diagnostics[0].code,
+            "unsupported_permission_schema"
+        );
+
+        write(
+            category.join("shine.toml"),
+            r#"dest = "~/.config/editor"
+[permissions]
+schema_version = 1
+commands = ["bun", "bun"]
+[[files]]
+source = "config.toml"
+"#,
+        );
+        let duplicate = validate_path(&category).await;
+        assert!(!duplicate.valid);
+        assert_eq!(
+            duplicate.categories[0].diagnostics[0].code,
+            "duplicate_permission"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn permission_declarations_must_use_the_domain_target_placement() {
+        let root = fixture_root("preset-validation-permission-placement").await;
+        let category = root.join("shell/tools");
+        write(
+            category.join("shine.toml"),
+            r#"[permissions]
+schema_version = 1
+[[files]]
+source = "tool.sh"
+target = "tool"
+[files.permissions]
+schema_version = 1
+"#,
+        );
+        write(category.join("tool.sh"), "#!/bin/sh\n");
+
+        let report = validate_path(&category).await;
+        assert!(!report.valid);
+        assert_eq!(
+            report.categories[0].diagnostics[0].code,
+            "invalid_permission_declaration"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

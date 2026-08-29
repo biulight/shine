@@ -18,7 +18,10 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
    pages in the same change.
 7. Run `shine preset validate <path> --format json` before runtime-specific checks. It validates
    repository roots, category directories, and manifests without loading config or executing code.
-8. After changing a built-in App destination or App/Shell file selector, run
+8. Keep schema-v1 permission declarations at the execution target boundary: one App category
+   table, one table per Shell file/platform variant, and one table per Sys item. Declare identities
+   only; never place argv, values, ciphertext, credentials, or physical checkout paths in them.
+9. After changing a built-in App destination or App/Shell file selector, run
    `SHINE_UPDATE_PRESET_CAPABILITIES=1 cargo test built_in_preset_platform_capability_docs_are_current`
    and commit both regenerated public-manual blocks.
 

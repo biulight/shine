@@ -30,6 +30,9 @@ needs_source = false
 # Optional: limit a file to specific platforms.
 # platforms = ["macos"]    # exact: macos/linux/windows; unix groups macOS + Linux
 
+[files.permissions]
+schema_version = 1
+
 # PowerShell scripts are also supported:
 # source = "my_tool.ps1"
 
@@ -42,6 +45,13 @@ needs_source = false
 # description = "What mytool does."  # or a `// ...` header at the top of my_tool.ts
 # transforms = ["template"] # opt into @@VAR@@ env substitution (static, needs `shine upgrade`)
 # env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]  # inject shine values at launch; read via Bun.env
+# [files.permissions]
+# schema_version = 1
+# commands = ["bun"]
+# environment = [
+#   { name = "API_URL", sensitivity = "plain" },
+#   { name = "SERVICE_TOKEN", sensitivity = "secret" },
+# ]
 "#;
 
 pub async fn handle_init_template(force: bool) -> Result<()> {
@@ -1390,6 +1400,13 @@ mod tests {
         );
         assert_eq!(categories[0].files[0].command_name, "mytool");
         assert!(!categories[0].files[0].needs_source);
+        assert_eq!(
+            categories[0].files[0]
+                .permissions
+                .as_ref()
+                .map(|permissions| permissions.schema_version),
+            Some(1)
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

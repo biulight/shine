@@ -877,6 +877,7 @@ required_env = ["NOT-AN-ENV"]
             detect: None,
             install: None,
             shell: Vec::new(),
+            permissions: None,
         };
         let rendered = format_interactive_item(&item);
         assert!(rendered.contains("Neovim"));
@@ -899,6 +900,7 @@ required_env = ["NOT-AN-ENV"]
             detect: None,
             install: None,
             shell: Vec::new(),
+            permissions: None,
         };
         let rendered = format_interactive_item(&item);
         assert_eq!(rendered, "Atuin");
@@ -2055,6 +2057,52 @@ items = ["touch-file"]
             !dir.join(SYS_MANIFEST_FILE).exists(),
             "dry-run must not write sys manifest"
         );
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn permission_declaration_does_not_bypass_external_sys_code_gate() {
+        let dir = make_temp_dir().await;
+        let os_dir = dir.join("presets/sys/fakeos");
+        fs::create_dir_all(os_dir.join("install")).await.unwrap();
+
+        fs::write(
+            os_dir.join("shine.toml"),
+            r#"
+version = 2
+description = "Fake OS"
+default_profile = "recommended"
+
+[[items]]
+id = "touch-file"
+label = "Touch file"
+permissions = { schema_version = 1, filesystem = [{ access = ["execute"], base = "preset", path = "install/touch-file.sh" }], commands = ["sh"] }
+install = { kind = "script", path = "install/touch-file.sh" }
+
+[profiles.recommended]
+items = ["touch-file"]
+"#,
+        )
+        .await
+        .unwrap();
+
+        let sentinel = dir.join("executed");
+        let script = format!("#!/bin/sh\ntouch {}\n", sentinel.display());
+        fs::write(os_dir.join("install/touch-file.sh"), script)
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+
+        let error = handle_init_for_os(&config, "fakeos", &[], None, false, false, false)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("allow_sys_code = true"));
+        assert!(!sentinel.exists(), "script must not have been executed");
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

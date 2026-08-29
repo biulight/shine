@@ -3,6 +3,7 @@ use super::{
     ArtifactRuntime, CoreRuntime, RuntimePlatform,
 };
 use crate::install::AppInstallStrategy;
+use crate::permission::PermissionDeclarationV1;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -17,6 +18,7 @@ struct CategoryToml {
     post_install: Option<HookSpecToml>,
     artifact: Option<ArtifactToml>,
     files: Option<Vec<FileToml>>,
+    permissions: Option<PermissionDeclarationV1>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -180,11 +182,18 @@ impl<H> CoreRuntime<H> {
                 uses_metadata: false,
                 has_explicit_files: false,
                 artifact: None,
+                permissions: None,
             }));
         };
 
         let parsed: CategoryToml = toml::from_slice(metadata)
             .with_context(|| format!("failed to parse app/{name}/shine.toml"))?;
+        if let Some(permissions) = &parsed.permissions {
+            permissions
+                .validate()
+                .with_context(|| format!("invalid permissions in {metadata_path}"))?;
+        }
+        let permissions = parsed.permissions.clone();
         let Some(destination_root) = parsed.dest.select(name, self.context().platform)? else {
             return Ok(None);
         };
@@ -290,6 +299,7 @@ impl<H> CoreRuntime<H> {
             uses_metadata: true,
             has_explicit_files: explicit,
             artifact: artifact(parsed.artifact, &metadata_path)?,
+            permissions,
         }))
     }
 

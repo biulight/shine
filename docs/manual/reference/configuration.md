@@ -50,8 +50,8 @@ enabled = false
 | `presets_overlay_git` | Git overlay URL shallow-cloned and mirrored under `~/.shine/overlay/` |
 | `presets_overlay_git_branch` | Tracked overlay branch; omit for the remote default branch |
 | `app_default_dest_root` | Default root for legacy application presets without a destination |
-| `allow_app_hooks` | Permit lifecycle hooks in external application presets |
-| `allow_sys_code` | Global-only permission for external sys scripts and persistent executable profile code; project config cannot enable it |
+| `allow_app_hooks` | Permit lifecycle hooks in external application presets; schema-v1 declarations do not grant this permission |
+| `allow_sys_code` | Global-only permission for external sys scripts and persistent executable profile code; project config cannot enable it and Preset declarations do not replace it |
 | `sync_terminal_theme` | Enable automatic terminal theme synchronization in managed Unix profiles; defaults on |
 | `gpg_recipients` | Default GPG recipients for `shine env secret encrypt` |
 | `secret_backend` | Default secret backend; `gpg` when omitted |

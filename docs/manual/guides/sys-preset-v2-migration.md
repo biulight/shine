@@ -23,6 +23,12 @@ External install scripts, base profile files, fragments, `eval`, and `source` re
 global `allow_sys_code = true` setting. Static detection, provider metadata, PATH, environment, and
 aliases do not need that permission. Start from `shine preset copy sys/<os>` and validate with:
 
+Every `[[items]]` target also carries permission schema v1. Fixed providers and managed targets are
+already bounded by typed metadata; item scripts conservatively declare their Preset-relative
+executable path plus reviewed command, network, administrator, environment, and system identities.
+This declaration is validated but does not replace `allow_sys_code` or make opaque code statically
+provable.
+
 ```bash
 shine sys list
 shine sys info <ITEM>

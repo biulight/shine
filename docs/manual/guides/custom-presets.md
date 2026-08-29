@@ -56,6 +56,39 @@ check for updates, write files, access the network, or execute preset code.
 The default output is text. `--format json` emits the stable `schema_version: 1` report used by the
 skill; validation errors exit with status 1, while warnings do not.
 
+## Declare permissions
+
+New Presets declare reviewable capability identities with permission schema v1. App permissions
+belong to the category root, each Shell `[[files]]` command has its own `[files.permissions]`, and
+each Sys `[[items]]` target has its own `[items.permissions]`. Missing declarations remain
+compatible but produce `missing_permission_declaration`; unsupported versions, unknown fields,
+invalid identities, and duplicates are errors.
+
+```toml
+[permissions]
+schema_version = 1
+administrator = true
+filesystem = [
+  { access = ["read", "write"], base = "home", path = ".config/example" },
+  { access = ["execute"], base = "preset", path = "build.ts" },
+]
+network = [{ scope = "host", host = "api.example.com" }]
+commands = ["bun"]
+environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
+system = [{ capability = "split-dns", resource = "private-domain" }]
+```
+
+Filesystem bases are `home`, `shine`, `data-dir`, `preset`, or `absolute`; non-absolute paths are
+normalized relative paths, with `.` meaning the selected base root. Commands contain one program
+identity without arguments. Environment entries contain names and `plain`/`secret` sensitivity,
+never values or ciphertext. Existing typed metadata already bounds ordinary destinations,
+launchers, receipts, and fixed package providers, so do not repeat those mechanics.
+
+A declaration is not an authorization grant and does not prove opaque script behavior complete.
+External App code still requires `allow_app_hooks = true`; external Sys code still requires the
+global `allow_sys_code = true`. Current lifecycle execution is unchanged while security Plan
+planners and enforcement remain under development.
+
 ## From source folders to installed capabilities
 
 Any tool or process that places a preset folder on a machine can be the synchronization layer.

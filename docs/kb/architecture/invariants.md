@@ -16,6 +16,13 @@ bugs. Check this list before changing the modules named in each entry.
   overlay origin. It must not include physical source roots: relocating unchanged source is not a
   semantic change, while changing an effective layer is. State observations use the same framed
   SHA-256 contract and represent secrets only by opaque handles or versions, never plaintext.
+- **A Preset permission declaration is not a grant.** App categories, Shell commands, and Sys items
+  may declare schema-v1 capability identities, but those declarations do not bypass
+  `allow_app_hooks`, `allow_sys_code`, administrator authorization, ownership checks, or future
+  Plan approval. Filesystem declarations use logical bases and never embed a physical Preset
+  checkout path; command entries contain no argv and environment entries contain names and
+  sensitivity only. Missing declarations are a static compatibility warning until the enforcement
+  migration explicitly changes that policy.
 
 - **Host observation is explicit and domain execution receives captured inputs.** A shared runtime
   bootstrap discovers external/overlay directories and constructs snapshots through the selected

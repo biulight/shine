@@ -1,4 +1,5 @@
 use super::{SysDriverKind, SysItemStatus};
+use crate::permission::PermissionDeclarationV1;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -39,6 +40,8 @@ pub struct SysItem {
     pub install: Option<SysInstall>,
     #[serde(default)]
     pub shell: Vec<SysShellIntegration>,
+    #[serde(default)]
+    pub permissions: Option<PermissionDeclarationV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

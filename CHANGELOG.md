@@ -7,6 +7,12 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ## [Unreleased]
 
+### Features
+
+- Added versioned, target-local Preset permission declarations with strict static validation and
+  migrated every built-in App, Shell, and Sys target. Existing external-code grants remain the
+  execution gates while missing declarations produce a compatibility warning.
+
 ## [1.8.0] — 2026-08-28
 
 ### Features

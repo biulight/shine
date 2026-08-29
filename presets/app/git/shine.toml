@@ -1,0 +1,11 @@
+description = "Git configuration with common aliases and portable defaults."
+dest = "~"
+list_mode = "category"
+
+[permissions]
+schema_version = 1
+
+[[files]]
+source = "gitconfig"
+target = ".gitconfig"
+description = "Personal Git configuration."

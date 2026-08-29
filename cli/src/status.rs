@@ -554,6 +554,7 @@ mod tests {
             uses_metadata: true,
             has_explicit_files: true,
             artifact: None,
+            permissions: None,
         }
     }
 
@@ -1627,6 +1628,7 @@ mod tests {
             uses_metadata: true,
             has_explicit_files: true,
             artifact: None,
+            permissions: None,
         };
 
         let rows = build_app_rows(&config, &[category]).await.unwrap();
@@ -1702,6 +1704,7 @@ mod tests {
             uses_metadata: true,
             has_explicit_files: true,
             artifact: None,
+            permissions: None,
         };
 
         let rows = build_app_rows(&config, &[category]).await.unwrap();

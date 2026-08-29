@@ -3,6 +3,9 @@ description = "Docker Desktop proxy settings"
 [dest]
 windows = "~/AppData/Roaming/Docker"
 
+[permissions]
+schema_version = 1
+
 [[files]]
 source = "settings-store.jsonc"
 target = "settings-store.json"

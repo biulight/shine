@@ -71,6 +71,10 @@ shine app refresh <CATEGORY> <SOURCE_FILE>
 
 外部预设或 overlay 提供的 generator 属于可执行代码，需要设置 `allow_app_hooks = true`。Shine 只向它传入预设显式声明的 env 值及固定的 `SHINE_APP_*` 路径变量，并限制执行时间和输出大小；仍应只运行自己审阅和信任的预设。
 
+类别根部的 `[permissions]` 会另外声明 generator、hook、artifact 的 command、network scope 和
+环境变量敏感度，供静态校验与后续安全 Plan 使用。该声明不会启用外部代码，也不能替代
+`allow_app_hooks`；其中不得写入 URL token、环境变量值、命令参数或密文。
+
 ### Surge URI 订阅
 
 内置 `surge` 预设可把 HTTPS Base64 URI 订阅转换为受管的 `subscription-proxies.conf`。此功能需要 Bun，支持兼容的 `ss://` 和 `vmess://` 记录；VLESS、不支持的 transport、插件、坏记录与重复项会被跳过，并只输出不含凭据的摘要。用户维护的 `local-proxies.conf` 不会被改写。

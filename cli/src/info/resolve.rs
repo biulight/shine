@@ -276,6 +276,7 @@ mod tests {
                 uses_metadata: true,
                 has_explicit_files: true,
                 artifact: None,
+                permissions: None,
             },
             file: crate::apps::AppFile {
                 source_rel: PathBuf::from(source),
@@ -315,6 +316,7 @@ mod tests {
                 runtime: crate::bin_links::LinkRuntime::Native,
                 transforms: vec![],
                 env: vec![],
+                permissions: None,
             },
             source_path: PathBuf::from(format!("/tmp/{source}")),
             installed_source_path: PathBuf::from(format!("/tmp/{source}")),
