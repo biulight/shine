@@ -93,6 +93,7 @@ pub async fn validate_preset_path(
         Ok(snapshot) => snapshot,
         Err(diagnostic) => return finish(canonical, vec![diagnostic], Vec::new()),
     };
+    let validation_home = repository_root.join(".shine-validation-home");
     let mut reports = Vec::new();
     for category in categories {
         let mut diagnostic = if category.kind == "app" {
@@ -110,10 +111,10 @@ pub async fn validate_preset_path(
                 break;
             }
             let mut context = RuntimeContext::isolated(
-                PathBuf::from("/validation-home"),
-                PathBuf::from("/validation-home/.shine"),
+                validation_home.clone(),
+                validation_home.join(".shine"),
                 repository_root.clone(),
-                PathBuf::from("/validation-home/.shine/bin"),
+                validation_home.join(".shine/bin"),
                 platform,
             );
             context.is_external_presets = true;
@@ -196,12 +197,7 @@ fn validate_destination_value(value: &toml::Value) -> anyhow::Result<()> {
                 .get("path")
                 .and_then(toml::Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("data-dir destination requires path"))?;
-            let relative = Path::new(path);
-            if relative.is_absolute()
-                || relative
-                    .components()
-                    .any(|part| matches!(part, std::path::Component::ParentDir))
-            {
+            if !is_portable_relative_path(path) {
                 anyhow::bail!(
                     "data-dir destination path must be relative and stay inside its root"
                 );
@@ -223,20 +219,49 @@ fn validate_destination_value(value: &toml::Value) -> anyhow::Result<()> {
 }
 
 fn validate_destination_path(path: &str) -> anyhow::Result<()> {
-    let expanded = path.replacen('~', "/validation-home", 1);
-    let absolute = Path::new(&expanded).is_absolute()
-        || expanded.as_bytes().get(1) == Some(&b':')
-        || path.starts_with('$');
-    if !absolute {
+    if !is_portable_absolute_destination(path) {
         anyhow::bail!("destination root must be absolute after expansion");
     }
-    if Path::new(path)
-        .components()
-        .any(|part| matches!(part, std::path::Component::ParentDir))
-    {
+    if has_parent_segment(path) {
         anyhow::bail!("destination root must not contain '..'");
     }
     Ok(())
+}
+
+fn is_portable_absolute_destination(path: &str) -> bool {
+    path == "~"
+        || path == "$HOME"
+        || path.starts_with("~/")
+        || path.starts_with("~\\")
+        || path.starts_with("$HOME/")
+        || path.starts_with('/')
+        || is_windows_absolute(path)
+}
+
+fn is_windows_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    drive || path.starts_with("\\\\")
+}
+
+fn is_portable_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.starts_with('\\')
+        && !is_windows_drive_path(path)
+        && !has_parent_segment(path)
+}
+
+fn is_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn has_parent_segment(path: &str) -> bool {
+    path.split(['/', '\\']).any(|part| part == "..")
 }
 
 async fn validate_sys_category(
@@ -299,10 +324,7 @@ async fn validate_sys_category(
                 .get("target")
                 .and_then(toml::Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("managed-file requires target"))?;
-            let validation_path = target.replacen('~', "/validation-home", 1);
-            let path = Path::new(&validation_path);
-            let windows_absolute = validation_path.as_bytes().get(1) == Some(&b':');
-            if !path.is_absolute() && !windows_absolute {
+            if !is_portable_absolute_destination(target) {
                 anyhow::bail!("managed-file target must resolve to an absolute path");
             }
         }
@@ -316,14 +338,10 @@ fn validate_snapshot_reference<'a>(
     relative: &str,
     label: &str,
 ) -> anyhow::Result<&'a [u8]> {
-    let path = Path::new(relative);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
+    if !is_portable_relative_path(relative) {
         anyhow::bail!("{label} must be a file inside the preset category");
     }
+    let path = Path::new(relative);
     snapshot
         .get(&format!("sys/{category}/{}", logical_path(path)))
         .ok_or_else(|| anyhow::anyhow!("{label} is missing or unreadable"))
@@ -618,5 +636,65 @@ fn finish(
         },
         diagnostics,
         categories,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn destination_validation_is_independent_of_host_path_syntax() {
+        for path in [
+            "~",
+            "~/.config/tool",
+            r"~\AppData\Roaming\tool",
+            "$HOME",
+            "$HOME/.config/tool",
+            "/etc/tool",
+            r"C:\ProgramData\tool",
+            r"\\server\share\tool",
+        ] {
+            validate_destination_path(path).unwrap_or_else(|error| {
+                panic!("expected {path:?} to be a portable absolute destination: {error:#}")
+            });
+        }
+
+        for path in ["relative/tool", r"C:relative\tool", r"\rooted\tool"] {
+            assert!(
+                validate_destination_path(path).is_err(),
+                "expected {path:?} to be rejected"
+            );
+        }
+        for path in ["~/../tool", r"C:\ProgramData\..\tool"] {
+            assert!(
+                validate_destination_path(path).is_err(),
+                "expected {path:?} to reject a parent segment"
+            );
+        }
+    }
+
+    #[test]
+    fn relative_validation_rejects_foreign_platform_roots() {
+        for path in ["nested/file", r"nested\file"] {
+            assert!(
+                is_portable_relative_path(path),
+                "expected {path:?} to be relative"
+            );
+        }
+        for path in [
+            "",
+            "/absolute/file",
+            r"\rooted\file",
+            r"C:\absolute\file",
+            r"C:drive-relative\file",
+            "../outside",
+            r"..\outside",
+        ] {
+            assert!(
+                !is_portable_relative_path(path),
+                "expected {path:?} to be rejected"
+            );
+        }
     }
 }

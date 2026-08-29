@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-29 — Cross-platform validation must not use host-native path parsing
+
+- **Symptom**: Windows CI rejected every built-in App preset destination and reported a missing-file
+  fixture as invalid metadata before it reached the missing reference.
+- **Root cause**: static validation simulated macOS, Linux, and Windows metadata with a fixed Unix
+  `/validation-home`, then used the Windows host's `Path::is_absolute()` and component parser.
+  Target-platform paths were therefore interpreted using the runner's path grammar.
+- **Fix**: use a native absolute synthetic home derived from the canonical preset root for runtime
+  simulation, and validate declared absolute, relative, and parent-path syntax lexically across both
+  separator styles.
+- **Rule**: validators that evaluate multiple target platforms on one host must separate target
+  path grammar from host filesystem paths; use host-native paths only for captured runtime context.
+
 ## 2026-08-29 — Platform-selected preset tests must follow the selected source
 
 - **Symptom**: the Windows Rust test job failed while checking that Shell info rendered expected

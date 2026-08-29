@@ -584,28 +584,30 @@ impl PlatformDestToml {
 
 fn validate_destination(path: &str, platform: RuntimePlatform, category: &str) -> Result<()> {
     let home = path == "~"
+        || path == "$HOME"
         || path.starts_with("~/")
         || path.starts_with("~\\")
         || path.starts_with("$HOME/");
-    let unix = path.starts_with('/');
-    let bytes = path.as_bytes();
-    let drive = bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'/' | b'\\');
-    let unc = path.starts_with("\\\\") || path.starts_with("//");
-    if !(home
-        || match platform {
-            RuntimePlatform::Windows => drive || unc,
-            _ => unix,
-        })
-    {
+    if !(home || is_platform_absolute(path, platform)) {
         bail!("app/{category}/shine.toml dest must be absolute after expansion");
     }
     if path.split(['/', '\\']).any(|part| part == "..") {
         bail!("app/{category}/shine.toml dest must not contain '..'");
     }
     Ok(())
+}
+
+fn is_platform_absolute(path: &str, platform: RuntimePlatform) -> bool {
+    let bytes = path.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\');
+    let unc = path.starts_with("\\\\") || path.starts_with("//");
+    match platform {
+        RuntimePlatform::Windows => drive || unc,
+        _ => path.starts_with('/'),
+    }
 }
 
 fn platform_matches(
@@ -638,17 +640,22 @@ fn platform_matches(
 
 fn expand_path(raw: &str, context: &super::RuntimeContext) -> Result<PathBuf> {
     let home = context.home_dir.to_string_lossy();
-    let expanded = if raw == "~" || raw == "$HOME" {
-        home.to_string()
+    let (expanded, expanded_home) = if raw == "~" || raw == "$HOME" {
+        (home.to_string(), true)
     } else if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
-        context.home_dir.join(rest).display().to_string()
+        (context.home_dir.join(rest).display().to_string(), true)
     } else if let Some(rest) = raw.strip_prefix("$HOME/") {
-        context.home_dir.join(rest).display().to_string()
+        (context.home_dir.join(rest).display().to_string(), true)
     } else {
-        raw.to_string()
+        (raw.to_string(), false)
     };
     let path = PathBuf::from(expanded);
-    if !path.is_absolute() {
+    let absolute = if expanded_home {
+        path.is_absolute()
+    } else {
+        is_platform_absolute(raw, context.platform)
+    };
+    if !absolute {
         bail!(
             "destination path must be absolute after expansion, got: {}",
             path.display()
@@ -693,6 +700,7 @@ mod tests {
 
     #[test]
     fn parses_app_category_from_snapshot_and_selects_platform() {
+        let home = std::env::temp_dir().join("shine-app-metadata-test");
         let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
             .file(
                 "app/demo/shine.toml",
@@ -704,10 +712,10 @@ mod tests {
         let runtime = CoreRuntime::new(
             InMemoryHost::new(),
             RuntimeContext::isolated(
-                PathBuf::from("/home/me"),
-                PathBuf::from("/home/me/.shine"),
-                PathBuf::from("/presets"),
-                PathBuf::from("/bin"),
+                home.clone(),
+                home.join(".shine"),
+                home.join("presets"),
+                home.join("bin"),
                 RuntimePlatform::Linux,
             ),
             snapshot,
@@ -718,7 +726,34 @@ mod tests {
             runtime
                 .app_destination(&categories[0], &categories[0].files[0])
                 .unwrap(),
-            PathBuf::from("/home/me/.config/demo/config.toml")
+            home.join(".config/demo/config.toml")
         );
+    }
+
+    #[test]
+    fn expansion_uses_runtime_platform_for_non_home_paths() {
+        let native_home = std::env::current_dir().unwrap().join("validation-home");
+        let context = |platform| {
+            RuntimeContext::isolated(
+                native_home.clone(),
+                native_home.join(".shine"),
+                native_home.join("presets"),
+                native_home.join(".shine/bin"),
+                platform,
+            )
+        };
+
+        assert!(expand_path("/etc/tool", &context(RuntimePlatform::Linux)).is_ok());
+        assert!(expand_path("/etc/tool", &context(RuntimePlatform::Macos)).is_ok());
+        assert!(expand_path("/etc/tool", &context(RuntimePlatform::Windows)).is_err());
+        assert!(expand_path(r"C:\ProgramData\tool", &context(RuntimePlatform::Windows)).is_ok());
+        assert!(expand_path(r"C:\ProgramData\tool", &context(RuntimePlatform::Linux)).is_err());
+
+        for platform in RuntimePlatform::ALL {
+            assert_eq!(
+                expand_path("~/.config/tool", &context(platform)).unwrap(),
+                native_home.join(".config/tool")
+            );
+        }
     }
 }
