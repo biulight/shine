@@ -64,7 +64,7 @@ transforms = []
 pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
     let (path, overwritten) =
-        utils::init_template::write_shine_toml_template(&dir, force, APP_TEMPLATE)?;
+        shine_core::init_template::write_shine_toml_template(&dir, force, APP_TEMPLATE)?;
     if overwritten {
         println!("Updated app preset template: {}", path.display());
     } else {
@@ -380,7 +380,7 @@ mod tests {
 
         assert!(!destination.exists());
         assert!(
-            AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -423,7 +423,8 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
 
         let (path, overwritten) =
-            utils::init_template::write_shine_toml_template(&cat_dir, false, APP_TEMPLATE).unwrap();
+            shine_core::init_template::write_shine_toml_template(&cat_dir, false, APP_TEMPLATE)
+                .unwrap();
         fs::write(cat_dir.join("config.toml"), b"name = \"sample\"\n")
             .await
             .unwrap();
@@ -461,8 +462,8 @@ mod tests {
         let dir = make_temp_dir().await;
         fs::write(dir.join("shine.toml"), b"old").await.unwrap();
 
-        let err =
-            utils::init_template::write_shine_toml_template(&dir, false, APP_TEMPLATE).unwrap_err();
+        let err = shine_core::init_template::write_shine_toml_template(&dir, false, APP_TEMPLATE)
+            .unwrap_err();
         assert!(
             err.to_string().contains("use --force to overwrite"),
             "unexpected error: {err:#}"
@@ -470,7 +471,7 @@ mod tests {
         assert_eq!(fs::read(dir.join("shine.toml")).await.unwrap(), b"old");
 
         let (_path, overwritten) =
-            utils::init_template::write_shine_toml_template(&dir, true, APP_TEMPLATE).unwrap();
+            shine_core::init_template::write_shine_toml_template(&dir, true, APP_TEMPLATE).unwrap();
         assert!(overwritten);
         let content = fs::read_to_string(dir.join("shine.toml")).await.unwrap();
         assert!(content.contains("dest = \"~/.config/my-app\""));
@@ -615,7 +616,7 @@ mod tests {
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
         let before = fs::read(&dest).await.unwrap();
-        let manifest_before = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest_before = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         let hash_before = manifest_before.entries[0].content_hash;
@@ -633,7 +634,7 @@ mod tests {
         assert_eq!(report.updated, 1, "changed source should update");
         assert_eq!(report.skipped, 0);
         assert_ne!(fs::read(&dest).await.unwrap(), before);
-        let manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
@@ -695,7 +696,7 @@ mod tests {
         assert_eq!(report.updated, 1);
         assert!(lifecycle.outcomes.iter().any(|outcome| {
             outcome.target == "app/sample"
-                && outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
                 && outcome.resource.as_deref() == Some("daemon.jsonc")
         }));
         assert_eq!(fs::read(&other_dest).await.unwrap(), other_before);
@@ -743,10 +744,10 @@ mod tests {
         assert!(install.outcomes.iter().any(|outcome| {
             outcome.target == "app/sample"
                 && outcome.resource.as_deref() == Some("daemon.jsonc")
-                && outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
                 && outcome
                     .effects
-                    .contains(&utils::lifecycle::LifecycleEffect::BackupCreated)
+                    .contains(&shine_core::lifecycle::LifecycleEffect::BackupCreated)
         }));
         install::handle_install_with_result(&config, Some("other"), false, false)
             .await
@@ -759,7 +760,7 @@ mod tests {
         let other_destination = dir.join(".config/other/config.json");
         let other_before = fs::read(&other_destination).await.unwrap();
         let other_manifest_before =
-            AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -781,12 +782,15 @@ mod tests {
                     && outcome.resource.as_deref() == Some("daemon.jsonc")
             })
             .unwrap();
-        assert_eq!(pending.status, utils::lifecycle::LifecycleStatus::Pending);
+        assert_eq!(
+            pending.status,
+            shine_core::lifecycle::LifecycleStatus::Pending
+        );
         assert_eq!(
             pending.effects,
             [
-                utils::lifecycle::LifecycleEffect::ResourceWritePreviewed,
-                utils::lifecycle::LifecycleEffect::ReceiptWritePreviewed,
+                shine_core::lifecycle::LifecycleEffect::ResourceWritePreviewed,
+                shine_core::lifecycle::LifecycleEffect::ReceiptWritePreviewed,
             ]
         );
         let serialized = serde_json::to_string(&update).unwrap();
@@ -807,16 +811,17 @@ mod tests {
         assert!(upgrade.outcomes.iter().any(|outcome| {
             outcome.target == "app/sample"
                 && outcome.resource.as_deref() == Some("daemon.jsonc")
-                && outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
         }));
         assert_eq!(fs::read(&other_destination).await.unwrap(), other_before);
-        let other_manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap()
-            .entries
-            .into_iter()
-            .find(|entry| entry.source == "app/other/config.json")
-            .unwrap();
+        let other_manifest_after =
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .into_iter()
+                .find(|entry| entry.source == "app/other/config.json")
+                .unwrap();
         assert_eq!(
             toml::to_string(&other_manifest_after).unwrap(),
             toml::to_string(&other_manifest_before).unwrap()
@@ -832,11 +837,11 @@ mod tests {
         assert!(after_upgrade.outcomes.iter().any(|outcome| {
             outcome.target == "app/sample"
                 && outcome.resource.as_deref() == Some("daemon.jsonc")
-                && outcome.status == utils::lifecycle::LifecycleStatus::Unchanged
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Unchanged
         }));
         assert!(after_upgrade.outcomes.iter().any(|outcome| {
             outcome.target == "app/other"
-                && outcome.status == utils::lifecycle::LifecycleStatus::Pending
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Pending
         }));
 
         let uninstall =
@@ -846,10 +851,10 @@ mod tests {
         assert!(uninstall.outcomes.iter().any(|outcome| {
             outcome.target == "app/sample"
                 && outcome.resource.as_deref() == Some("daemon.jsonc")
-                && outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
                 && outcome
                     .effects
-                    .contains(&utils::lifecycle::LifecycleEffect::BackupRestored)
+                    .contains(&shine_core::lifecycle::LifecycleEffect::BackupRestored)
         }));
         assert_eq!(
             fs::read(&sample_destination).await.unwrap(),
@@ -857,7 +862,7 @@ mod tests {
         );
         assert!(other_destination.exists());
         assert!(
-            AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -917,10 +922,10 @@ mod tests {
         assert_eq!(report.updated, 1);
         assert!(lifecycle.outcomes.iter().any(|outcome| {
             outcome.resource.as_deref() == Some("hook:post-upgrade")
-                && outcome.status == utils::lifecycle::LifecycleStatus::Changed
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
                 && outcome
                     .effects
-                    .contains(&utils::lifecycle::LifecycleEffect::CodeExecuted)
+                    .contains(&shine_core::lifecycle::LifecycleEffect::CodeExecuted)
         }));
         assert_eq!(fs::read_to_string(&marker).await.unwrap(), "x");
 
@@ -1010,7 +1015,7 @@ mod tests {
         assert_eq!(report.updated, 1);
         assert!(lifecycle.outcomes.iter().any(|outcome| {
             outcome.resource.as_deref() == Some("hook:post-upgrade")
-                && outcome.status == utils::lifecycle::LifecycleStatus::Skipped
+                && outcome.status == shine_core::lifecycle::LifecycleStatus::Skipped
                 && outcome
                     .diagnostic_codes
                     .contains(&"app_hook_permission_required".to_string())
@@ -1065,7 +1070,7 @@ mod tests {
             b"background = \n",
             "new file should be transformed before install"
         );
-        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert!(
@@ -1117,7 +1122,7 @@ mod tests {
             "existing managed file and unmanaged new file should be skipped"
         );
         assert_eq!(fs::read(&new_dest).await.unwrap(), b"user-owned\n");
-        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert!(
@@ -1159,7 +1164,7 @@ mod tests {
         assert_eq!(report.updated, 1, "stale cleanup should count as a change");
         assert_eq!(report.skipped, 0);
         assert!(!dest.exists(), "unmodified stale file should be removed");
-        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert!(
@@ -1201,7 +1206,7 @@ mod tests {
 
         assert_eq!(report.updated, 1, "manifest cleanup should count as change");
         assert_eq!(report.skipped, 0);
-        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert!(
@@ -1243,7 +1248,7 @@ mod tests {
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
         assert!(dest.exists(), "stale file should be left in place");
-        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert!(
@@ -1287,7 +1292,7 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert_eq!(report.user_modified, 1);
         assert_eq!(fs::read(&dest).await.unwrap(), b"{\"user\":true}\n");
-        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert!(
@@ -1346,7 +1351,7 @@ mod tests {
             fs::read(&dest).await.unwrap(),
             b"{\n  \"proxy\": \"new\"\n}\n"
         );
-        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         let entry = manifest.find_by_dest(&dest).unwrap();

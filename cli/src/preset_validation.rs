@@ -6,7 +6,7 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 
-pub use utils::runtime::{
+pub use shine_core::runtime::{
     PRESET_VALIDATION_SCHEMA_VERSION, PresetCategoryValidation, PresetDiagnostic,
     PresetDiagnosticSeverity, PresetValidationReportV1, PresetValidationSummary,
 };
@@ -22,7 +22,7 @@ pub async fn handle_validate(path: &Path, format: PresetValidationFormat) -> Res
 
 pub async fn validate_path(path: &Path) -> PresetValidationReportV1 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    utils::runtime::validate_preset_path(&utils::runtime::RealHost, &cwd, path).await
+    shine_core::runtime::validate_preset_path(&shine_core::runtime::RealHost, &cwd, path).await
 }
 
 #[cfg(test)]

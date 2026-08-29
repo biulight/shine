@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-27
-- **Evidence**: `utils/src/runtime/{context,app_metadata,shell}.rs`
+- **Evidence**: `core/src/runtime/{context,app_metadata,shell}.rs`
 
 ## Context
 

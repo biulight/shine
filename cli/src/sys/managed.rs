@@ -11,7 +11,7 @@ use super::execution::{
     presentation_symbol_stderr,
 };
 use super::{SysInstalledRow, SysItemOutcome, SysItemStatus, SysUpdateRow, SysUpgradeReport};
-use utils::lifecycle::{LifecycleOperation, LifecycleResultV1};
+use shine_core::lifecycle::{LifecycleOperation, LifecycleResultV1};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SysAction {
@@ -329,12 +329,12 @@ async fn run_managed_for_os_with_reporter(
     };
     let core = runtime
         .run_managed_sys(
-            utils::runtime::SysManagedRequest {
+            shine_core::runtime::SysManagedRequest {
                 os_id: os_id.to_string(),
                 target: requested.map(str::to_string),
                 action: match action {
-                    SysAction::Apply => utils::runtime::SysManagedAction::Apply,
-                    SysAction::Remove => utils::runtime::SysManagedAction::Remove,
+                    SysAction::Apply => shine_core::runtime::SysManagedAction::Apply,
+                    SysAction::Remove => shine_core::runtime::SysManagedAction::Remove,
                 },
                 dry_run,
                 operation,
@@ -384,10 +384,10 @@ impl ManagedObserver<'_> {
     }
 }
 
-impl utils::runtime::RuntimeObserver for ManagedObserver<'_> {
-    fn emit(&mut self, event: utils::runtime::RuntimeEvent) {
+impl shine_core::runtime::RuntimeObserver for ManagedObserver<'_> {
+    fn emit(&mut self, event: shine_core::runtime::RuntimeEvent) {
         match event {
-            utils::runtime::RuntimeEvent::Progress {
+            shine_core::runtime::RuntimeEvent::Progress {
                 code: "sys_managed_item",
                 target,
             } => {
@@ -397,7 +397,7 @@ impl utils::runtime::RuntimeObserver for ManagedObserver<'_> {
                     presentation_symbol("•")
                 )));
             }
-            utils::runtime::RuntimeEvent::Warning { detail, .. } => {
+            shine_core::runtime::RuntimeEvent::Warning { detail, .. } => {
                 self.begin();
                 self.reporter.emit(PresentationEvent::stderr(format!(
                     "  {} {detail}",
@@ -432,9 +432,9 @@ mod tests {
     use crate::config::Config;
     use crate::sys::run_manifest::SYS_MANIFEST_FILE;
     use crate::sys::run_manifest::SysRunManifest;
+    use shine_core::lifecycle::{LifecycleEffect, LifecycleStatus};
     use std::path::PathBuf;
     use tokio::fs;
-    use utils::lifecycle::{LifecycleEffect, LifecycleStatus};
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-sys").await
@@ -528,7 +528,7 @@ target = {:?}
         assert_eq!(second_install.updated, 1);
         assert_eq!(second_lifecycle.summary().changed, 1);
         let second_manifest_before =
-            SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -576,7 +576,7 @@ target = {:?}
             "second v1"
         );
         let manifest_after_upgrade =
-            SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap();
         assert_eq!(
@@ -626,9 +626,10 @@ target = {:?}
             fs::read_to_string(&second_destination).await.unwrap(),
             "second v1"
         );
-        let final_manifest = SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
-            .await
-            .unwrap();
+        let final_manifest =
+            SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap();
         assert_eq!(final_manifest.entries.len(), 1);
         assert_eq!(final_manifest.entries[0], second_manifest_before);
 
@@ -879,7 +880,7 @@ target = {:?}
         );
         assert!(!destination.exists());
         assert!(
-            SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries

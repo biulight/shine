@@ -8,7 +8,7 @@ use super::AppListMode;
 
 pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
     crate::config::print_presets_note(config);
-    let mut observer = utils::runtime::NullObserver;
+    let mut observer = shine_core::runtime::NullObserver;
     let inspections = crate::core_runtime::from_config(config)
         .await?
         .inspect_apps(&mut observer)
@@ -62,13 +62,13 @@ pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
                 let status = if directly_installed {
                     any_installed = true;
                     match inspection.status {
-                        utils::runtime::InspectionFileStatus::Partial => {
+                        shine_core::runtime::InspectionFileStatus::Partial => {
                             format!("  {}", colors::yellow("installed, missing managed keys"))
                         }
-                        utils::runtime::InspectionFileStatus::UserModified => {
+                        shine_core::runtime::InspectionFileStatus::UserModified => {
                             format!("  {}", colors::yellow("installed, user-modified"))
                         }
-                        utils::runtime::InspectionFileStatus::Missing => {
+                        shine_core::runtime::InspectionFileStatus::Missing => {
                             format!("  {}", colors::yellow("installed, missing on disk"))
                         }
                         _ => format!("  {}", colors::green("installed, up to date")),

@@ -352,7 +352,7 @@ async fn handle_init_for_os(
     let mut observer = BatchBootstrapObserver::default();
     let batch = runtime
         .run_sys_bootstrap_batch(
-            utils::runtime::SysBootstrapBatchRequest {
+            shine_core::runtime::SysBootstrapBatchRequest {
                 os_id: os_id.to_string(),
                 requested: requested.to_vec(),
                 preset: preset.map(str::to_string),
@@ -412,10 +412,10 @@ struct BatchBootstrapObserver {
     label_width: usize,
 }
 
-impl utils::runtime::RuntimeObserver for BatchBootstrapObserver {
-    fn emit(&mut self, event: utils::runtime::RuntimeEvent) {
+impl shine_core::runtime::RuntimeObserver for BatchBootstrapObserver {
+    fn emit(&mut self, event: shine_core::runtime::RuntimeEvent) {
         match event {
-            utils::runtime::RuntimeEvent::Interaction {
+            shine_core::runtime::RuntimeEvent::Interaction {
                 code: "sys_bootstrap_selection",
                 target,
             } => {
@@ -425,7 +425,7 @@ impl utils::runtime::RuntimeObserver for BatchBootstrapObserver {
                 println!("{}", colors::dim("Use Space to toggle, Enter to confirm."));
                 println!();
             }
-            utils::runtime::RuntimeEvent::SysBootstrapSelection {
+            shine_core::runtime::RuntimeEvent::SysBootstrapSelection {
                 os_id,
                 shell,
                 item_ids,
@@ -440,7 +440,7 @@ impl utils::runtime::RuntimeObserver for BatchBootstrapObserver {
                 self.label_width = sys_item_label_width(&selection, &labels);
                 print_run_header(&os_id, &shell, &selection);
             }
-            utils::runtime::RuntimeEvent::SysBootstrapItemStart {
+            shine_core::runtime::RuntimeEvent::SysBootstrapItemStart {
                 item_id,
                 label,
                 requires_admin,
@@ -456,7 +456,7 @@ impl utils::runtime::RuntimeObserver for BatchBootstrapObserver {
                     colors::dim(&format!("sys/{item_id} ({label}) installing{admin}"))
                 );
             }
-            utils::runtime::RuntimeEvent::SysBootstrapOutcome(outcome) => {
+            shine_core::runtime::RuntimeEvent::SysBootstrapOutcome(outcome) => {
                 print_item_outcome(&outcome, self.label_width.max(14));
             }
             _ => {}
@@ -629,7 +629,7 @@ package = "tool"
     #[tokio::test]
     async fn sys_run_manifest_load_returns_empty_when_missing() {
         let dir = make_temp_dir().await;
-        let manifest = SysRunManifest::load(&utils::runtime::RealHost, &dir)
+        let manifest = SysRunManifest::load(&shine_core::runtime::RealHost, &dir)
             .await
             .unwrap();
         assert!(manifest.entries.is_empty());
@@ -661,11 +661,11 @@ managed = true
         let mut manifest = SysRunManifest::default();
         manifest.upsert(sample_sys_run_entry("macos", "rust", "Rust"));
         manifest
-            .save(&utils::runtime::RealHost, &dir)
+            .save(&shine_core::runtime::RealHost, &dir)
             .await
             .unwrap();
 
-        let loaded = SysRunManifest::load(&utils::runtime::RealHost, &dir)
+        let loaded = SysRunManifest::load(&shine_core::runtime::RealHost, &dir)
             .await
             .unwrap();
         assert_eq!(loaded, manifest);
@@ -2120,7 +2120,7 @@ esac
 
         let calls = fs::read_to_string(&calls).await.unwrap();
         assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "second"]);
-        let sys_manifest = SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let sys_manifest = SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert_eq!(sys_manifest.entries.len(), 2);
@@ -2239,7 +2239,7 @@ esac
         assert!(err.to_string().contains("sys bootstrap failed"));
         let calls = fs::read_to_string(&calls).await.unwrap();
         assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "fails"]);
-        let sys_manifest = SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let sys_manifest = SysRunManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert_eq!(sys_manifest.entries.len(), 1);

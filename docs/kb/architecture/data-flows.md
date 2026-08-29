@@ -284,7 +284,7 @@ and runs that staged copy; neither external-source paths nor `Path::is_file` can
 preset state after shared bootstrap capture.
 
 Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`.
-`utils/src/runtime/sys_profile/compose.rs` combines base pre/post content with all enabled item
+`core/src/runtime/sys_profile/compose.rs` combines base pre/post content with all enabled item
 integrations in stable manifest order. Core reconciles the two generated files before its profile
 block module updates the existing pre/post sentinels. Composition
 happens once after item execution, and render failure leaves the last installed profile intact.
@@ -343,7 +343,7 @@ usable. `shine preset overlay link --git <url>` writes the config and clones imm
 `SHINE_CONFIG_DIR` env → `SHINE_PRESETS` env (presets dir only) → `presets_dir` in
 `config.toml` → default `~/.shine/`. Project-local configs inherit unset keys from the global
 config (see lessons entry 2026-07-04 on inheritance). `Config` saves go through
-`utils::sync_table`, which preserves TOML comments.
+`shine_core::sync_table`, which preserves TOML comments.
 
 ## Dynamic shell completion
 

@@ -1,7 +1,7 @@
 # 0018 — Manual app generator refresh
 
 - **Status**: accepted
-- **Evidence**: `cli/src/apps/refresh.rs`, `utils/src/runtime/{app,app_metadata}.rs`,
+- **Evidence**: `cli/src/apps/refresh.rs`, `core/src/runtime/{app,app_metadata}.rs`,
   `presets/app/surge/shine.toml`
 - **Amends**: ADR 0016's assumption that every enabled generator is remote
   desired state polled by update and upgrade.

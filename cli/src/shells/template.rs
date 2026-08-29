@@ -25,7 +25,7 @@ pub(super) async fn apply_template_to_scripts(
     runtime.context_mut_for_cli().env = EnvConfig::load_or_init(config).await?.as_map().clone();
     let scripts = script_pairs
         .iter()
-        .map(|script| utils::runtime::ShellScriptTemplate {
+        .map(|script| shine_core::runtime::ShellScriptTemplate {
             source_path: script.source_path.clone(),
             rendered_path: script.rendered_path.clone(),
             display_name: script.display_name.clone(),

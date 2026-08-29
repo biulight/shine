@@ -54,7 +54,7 @@ fn is_true(value: &bool) -> bool {
     *value
 }
 
-pub use utils::runtime::ExternalShellMode;
+pub use shine_core::runtime::ExternalShellMode;
 
 /// A command whose protected environment values are injected by a shine proxy.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

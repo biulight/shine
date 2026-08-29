@@ -5,7 +5,7 @@ use std::path::Path;
 const PACKAGE_JSON: &str = "package.json";
 const LOCK_FILE: &str = "bun.lock";
 
-pub use utils::runtime::{BunDependencyMode, BunRuntimeSpec};
+pub use shine_core::runtime::{BunDependencyMode, BunRuntimeSpec};
 
 /// Resolve the Bun dependency policy for one physical preset category.
 ///

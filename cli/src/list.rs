@@ -18,7 +18,7 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
     let pending_shell = shell_lifecycle
         .outcomes
         .iter()
-        .filter(|outcome| outcome.status == utils::lifecycle::LifecycleStatus::Pending)
+        .filter(|outcome| outcome.status == shine_core::lifecycle::LifecycleStatus::Pending)
         .map(|outcome| outcome.target.as_str())
         .collect::<BTreeSet<_>>();
     let update_shell: Vec<&ShellRow> = shell_rows
@@ -41,8 +41,8 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
         Ok(cats) => build_app_rows_with_lifecycle(config, &cats).await?,
         Err(_) => (
             Vec::new(),
-            utils::lifecycle::LifecycleResultV1::new(
-                utils::lifecycle::LifecycleOperation::Update,
+            shine_core::lifecycle::LifecycleResultV1::new(
+                shine_core::lifecycle::LifecycleOperation::Update,
                 false,
             ),
         ),
@@ -50,7 +50,7 @@ pub async fn handle_update_list(config: &Config, diff: bool) -> Result<bool> {
     let pending_app = app_lifecycle
         .outcomes
         .iter()
-        .filter(|outcome| outcome.status == utils::lifecycle::LifecycleStatus::Pending)
+        .filter(|outcome| outcome.status == shine_core::lifecycle::LifecycleStatus::Pending)
         .map(|outcome| outcome.target.as_str())
         .collect::<BTreeSet<_>>();
     let update_app: Vec<&AppRow> = app_rows

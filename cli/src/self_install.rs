@@ -377,15 +377,15 @@ fn config_upgrade_summary_parts(
     parts
 }
 
-fn changed_shell_categories(result: &utils::lifecycle::LifecycleResultV1) -> usize {
+fn changed_shell_categories(result: &shine_core::lifecycle::LifecycleResultV1) -> usize {
     result
         .outcomes
         .iter()
         .filter(|outcome| {
-            outcome.status == utils::lifecycle::LifecycleStatus::Changed
+            outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
                 && outcome.target.starts_with("shell/")
                 && outcome.effects.iter().any(|effect| {
-                    !matches!(effect, utils::lifecycle::LifecycleEffect::CacheWritten)
+                    !matches!(effect, shine_core::lifecycle::LifecycleEffect::CacheWritten)
                 })
         })
         .filter_map(|outcome| outcome.target.split('/').nth(1))
@@ -406,12 +406,12 @@ fn is_app_auxiliary_resource(resource: Option<&str>) -> bool {
     )
 }
 
-fn changed_app_categories(result: &utils::lifecycle::LifecycleResultV1) -> usize {
+fn changed_app_categories(result: &shine_core::lifecycle::LifecycleResultV1) -> usize {
     result
         .outcomes
         .iter()
         .filter(|outcome| {
-            outcome.status == utils::lifecycle::LifecycleStatus::Changed
+            outcome.status == shine_core::lifecycle::LifecycleStatus::Changed
                 && outcome.target.starts_with("app/")
                 && !is_app_auxiliary_resource(outcome.resource.as_deref())
         })
@@ -420,15 +420,15 @@ fn changed_app_categories(result: &utils::lifecycle::LifecycleResultV1) -> usize
         .len()
 }
 
-fn preserved_app_resources(result: &utils::lifecycle::LifecycleResultV1) -> usize {
+fn preserved_app_resources(result: &shine_core::lifecycle::LifecycleResultV1) -> usize {
     result
         .outcomes
         .iter()
         .filter(|outcome| {
             matches!(
                 outcome.status,
-                utils::lifecycle::LifecycleStatus::Preserved
-                    | utils::lifecycle::LifecycleStatus::Conflict
+                shine_core::lifecycle::LifecycleStatus::Preserved
+                    | shine_core::lifecycle::LifecycleStatus::Conflict
             ) && outcome.target.starts_with("app/")
                 && !is_app_auxiliary_resource(outcome.resource.as_deref())
         })

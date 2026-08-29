@@ -7,7 +7,7 @@ use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
 use crate::presentation::TerminalInteraction;
-use utils::runtime::{AppFileAction, AppRefreshRequest, RuntimeEvent, RuntimeObserver};
+use shine_core::runtime::{AppFileAction, AppRefreshRequest, RuntimeEvent, RuntimeObserver};
 
 use super::report::{print_install_error, print_install_success};
 
@@ -222,7 +222,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
             .unwrap();
         let cat = &categories[0];
         let file = &cat.files[0];
-        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         let entry = manifest.find_by_dest(&dest).unwrap();

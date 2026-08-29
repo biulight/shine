@@ -5,8 +5,8 @@ use crate::install_core::manifest::{AppEntry, AppManifest};
 use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use anyhow::Result;
 #[cfg(test)]
-use utils::lifecycle::LifecycleEffect;
-use utils::lifecycle::LifecycleResultV1;
+use shine_core::lifecycle::LifecycleEffect;
+use shine_core::lifecycle::LifecycleResultV1;
 
 pub async fn handle_uninstall(
     config: &Config,
@@ -49,7 +49,7 @@ async fn handle_uninstall_with_reporter(
     let mut interaction = crate::presentation::TerminalInteraction;
     let core_report = runtime
         .uninstall_apps(
-            utils::runtime::AppUninstallLifecycleRequest {
+            shine_core::runtime::AppUninstallLifecycleRequest {
                 target: category.map(str::to_string),
                 dry_run,
                 force,
@@ -73,7 +73,7 @@ async fn handle_uninstall_with_reporter(
     let mut skipped = 0usize;
     for file in &core_report.files {
         match file.action {
-            utils::runtime::AppFileAction::Removed => {
+            shine_core::runtime::AppFileAction::Removed => {
                 observer
                     .reporter
                     .emit(PresentationEvent::stdout(report::removed_text(
@@ -82,7 +82,7 @@ async fn handle_uninstall_with_reporter(
                     )));
                 removed += 1;
             }
-            utils::runtime::AppFileAction::Restored => {
+            shine_core::runtime::AppFileAction::Restored => {
                 let backup = file
                     .backup
                     .as_ref()
@@ -93,7 +93,7 @@ async fn handle_uninstall_with_reporter(
                 removed += 1;
                 restored += 1;
             }
-            utils::runtime::AppFileAction::ForceRemoved => {
+            shine_core::runtime::AppFileAction::ForceRemoved => {
                 observer
                     .reporter
                     .emit(PresentationEvent::stdout(report::force_removed_text(
@@ -101,7 +101,7 @@ async fn handle_uninstall_with_reporter(
                     )));
                 removed += 1;
             }
-            utils::runtime::AppFileAction::ForceRestored => {
+            shine_core::runtime::AppFileAction::ForceRestored => {
                 let backup = file
                     .backup
                     .as_ref()
@@ -112,13 +112,13 @@ async fn handle_uninstall_with_reporter(
                 removed += 1;
                 restored += 1;
             }
-            utils::runtime::AppFileAction::Missing => {
+            shine_core::runtime::AppFileAction::Missing => {
                 observer.reporter.emit(PresentationEvent::stdout(
                     report::uninstall_not_found_text(config, &file.destination),
                 ));
                 skipped += 1;
             }
-            utils::runtime::AppFileAction::UserModified => {
+            shine_core::runtime::AppFileAction::UserModified => {
                 observer
                     .reporter
                     .emit(PresentationEvent::stdout(report::user_modified_kept_text(
@@ -127,7 +127,7 @@ async fn handle_uninstall_with_reporter(
                     )));
                 user_modified += 1;
             }
-            utils::runtime::AppFileAction::PreviewRemove => {
+            shine_core::runtime::AppFileAction::PreviewRemove => {
                 observer
                     .reporter
                     .emit(PresentationEvent::stdout(report::uninstall_dry_run_text(
@@ -136,7 +136,7 @@ async fn handle_uninstall_with_reporter(
                     )));
                 skipped += 1;
             }
-            utils::runtime::AppFileAction::Failed => {
+            shine_core::runtime::AppFileAction::Failed => {
                 let error = anyhow::anyhow!(
                     file.error
                         .clone()
@@ -175,9 +175,9 @@ struct UninstallObserver<'a> {
     reporter: &'a mut dyn LifecycleReporter,
 }
 
-impl utils::runtime::RuntimeObserver for UninstallObserver<'_> {
-    fn emit(&mut self, event: utils::runtime::RuntimeEvent) {
-        if let utils::runtime::RuntimeEvent::Warning {
+impl shine_core::runtime::RuntimeObserver for UninstallObserver<'_> {
+    fn emit(&mut self, event: shine_core::runtime::RuntimeEvent) {
+        if let shine_core::runtime::RuntimeEvent::Warning {
             code,
             target,
             detail,
@@ -240,7 +240,7 @@ mod tests {
 
         handle_install(&config, None, false, false).await.unwrap();
 
-        let manifest_before = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest_before = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         let count_before = manifest_before.entries.len();
@@ -280,7 +280,7 @@ mod tests {
                 })
         );
 
-        let manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert_eq!(
@@ -329,7 +329,7 @@ mod tests {
                 .contains(&LifecycleEffect::UserModificationOverridden)
         );
 
-        let manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert!(
@@ -361,7 +361,7 @@ mod tests {
 
         // Install all categories
         handle_install(&config, None, false, false).await.unwrap();
-        let manifest_all = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest_all = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         let total = manifest_all.entries.len();
@@ -397,7 +397,7 @@ mod tests {
                 .all(|outcome| outcome.target == format!("app/{first_category}"))
         );
 
-        let manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert_eq!(
@@ -444,7 +444,7 @@ mod tests {
             ..AppManifest::default()
         };
         manifest
-            .save(&utils::runtime::RealHost, config.shine_dir())
+            .save(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
 
@@ -459,7 +459,7 @@ mod tests {
         );
         assert_eq!(fs::read(&destination).await.unwrap(), b"user change\n");
         assert_eq!(
-            AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -488,7 +488,7 @@ mod tests {
             ..AppManifest::default()
         };
         manifest
-            .save(&utils::runtime::RealHost, config.shine_dir())
+            .save(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
 
@@ -502,7 +502,7 @@ mod tests {
             vec![LifecycleEffect::ReceiptRemoved]
         );
         assert!(
-            AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -533,7 +533,7 @@ mod tests {
             ..AppManifest::default()
         };
         manifest
-            .save(&utils::runtime::RealHost, config.shine_dir())
+            .save(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
 

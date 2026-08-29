@@ -1,17 +1,17 @@
-use std::path::Path;
-use std::path::PathBuf;
-use tokio::fs;
-pub use utils::install::file_ops::{
+pub use shine_core::install::file_ops::{
     InstallOutcome, UninstallOutcome, backup_path, install_bytes_with_host,
     uninstall_entry_with_host,
 };
+use std::path::Path;
+use std::path::PathBuf;
+use tokio::fs;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::install_core::manifest::AppEntry;
     use crate::install_core::{AppInstallStrategy, hash_content};
-    use utils::runtime::RealHost;
+    use shine_core::runtime::RealHost;
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-fileops").await

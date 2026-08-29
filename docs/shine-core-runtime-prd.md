@@ -10,8 +10,9 @@ and replaceable presentation and interaction seams. Phase 2 moves the reusable p
 logic behind `shine-core` so the CLI becomes a frontend instead of a second lifecycle runtime.
 
 The migration preserves commands, exit behavior, terminal output, runtime state formats, ownership
-rules, and Lifecycle Contract v1. The existing `utils/` and root package layout remains in place;
-dependency inversion is the gate, not a directory reshuffle.
+rules, and Lifecycle Contract v1. Dependency inversion remains the architectural gate; the package
+directory and dependency identifier were later aligned with `shine-core` under
+[ADR 0039](kb/decisions/0039-align-core-package-naming.md).
 
 ## Goals
 

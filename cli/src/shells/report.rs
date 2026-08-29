@@ -38,7 +38,9 @@ pub struct ShellUpgradeReport {
     pub path_changed: bool,
 }
 
-pub(super) fn shell_cache_summary_parts(report: &utils::runtime::ShellCacheReport) -> Vec<String> {
+pub(super) fn shell_cache_summary_parts(
+    report: &shine_core::runtime::ShellCacheReport,
+) -> Vec<String> {
     cache_summary_parts(
         report.created.len(),
         report.overwritten.len(),
@@ -80,7 +82,7 @@ pub(super) fn unlink_report_summary_parts(
 }
 
 pub(super) fn shell_cache_remove_summary_parts(
-    report: &utils::runtime::ShellCacheReport,
+    report: &shine_core::runtime::ShellCacheReport,
 ) -> Vec<String> {
     let mut parts = Vec::new();
     if !report.removed.is_empty() {

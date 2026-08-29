@@ -75,7 +75,7 @@ impl LifecycleInteraction for TerminalInteraction {
     }
 }
 
-impl utils::runtime::RuntimeInteraction for TerminalInteraction {
+impl shine_core::runtime::RuntimeInteraction for TerminalInteraction {
     fn confirm(&mut self, code: &'static str, default: bool) -> anyhow::Result<bool> {
         LifecycleInteraction::confirm(self, code, default)
     }

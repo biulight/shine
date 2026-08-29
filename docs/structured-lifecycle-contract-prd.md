@@ -90,7 +90,7 @@ Each `LifecycleOutcomeV1` contains:
 Effects describe ownership-relevant facts. Contract v1 includes resource and receipt writes,
 removals and previews; cache writes, removals, purge and previews; code execution and its preview;
 backup creation/restoration; managed-key removal; and managed/user preservation or explicit
-override. Exact spellings are pinned by `utils/src/lifecycle.rs` serialization tests.
+override. Exact spellings are pinned by `core/src/lifecycle.rs` serialization tests.
 
 Read-only `update` results use `dry_run = false`: an applicable change is `pending`, while an
 ownership conflict remains `conflict`. Explicit dry-run outcomes use `dry_run = true` and

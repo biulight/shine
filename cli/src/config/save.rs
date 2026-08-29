@@ -24,7 +24,7 @@ impl Config {
                     .parse()
                     .context("Fail to parse existing config for comment preservation")?;
 
-                utils::migration::sync_table(doc.as_table_mut(), &new_table);
+                shine_core::migration::sync_table(doc.as_table_mut(), &new_table);
                 doc.to_string()
             }
         } else {

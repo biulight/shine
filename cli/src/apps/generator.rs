@@ -3,8 +3,8 @@
 use super::metadata::{AppCategory, AppFile};
 use crate::config::Config;
 use anyhow::Result;
+use shine_core::runtime::{AppGeneratorRequest, RuntimeEvent, RuntimeObserver};
 use std::collections::BTreeMap;
-use utils::runtime::{AppGeneratorRequest, RuntimeEvent, RuntimeObserver};
 
 pub(super) async fn generate(
     config: &Config,

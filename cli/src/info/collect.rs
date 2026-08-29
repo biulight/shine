@@ -4,8 +4,8 @@ use crate::env::EnvConfig;
 use crate::shells::metadata::ShellCategory;
 use crate::status::{FileStatus, UpdateChange};
 use anyhow::Result;
+use shine_core::runtime::NullObserver;
 use std::path::PathBuf;
-use utils::runtime::NullObserver;
 
 #[derive(Clone)]
 pub(super) struct AppInfoFile {

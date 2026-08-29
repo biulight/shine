@@ -14,20 +14,20 @@ use crate::env::EnvConfig;
 use crate::install_core::{AppEntry, AppManifest};
 use crate::path_display;
 use anyhow::Result;
+use shine_core::lifecycle::{
+    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+};
 #[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::path::PathBuf;
-use utils::lifecycle::{
-    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
-};
 
 // ---------------------------------------------------------------------------
 // Shared row types
 // ---------------------------------------------------------------------------
 
-pub(crate) use utils::runtime::InspectionChange as UpdateChange;
-pub use utils::runtime::InspectionFileStatus as FileStatus;
+pub(crate) use shine_core::runtime::InspectionChange as UpdateChange;
+pub use shine_core::runtime::InspectionFileStatus as FileStatus;
 
 #[cfg(test)]
 pub(crate) struct AppFileAssessment {
@@ -116,7 +116,7 @@ pub(crate) async fn build_app_rows_with_lifecycle(
         .map(|category| category.name.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let inspections = runtime
-        .inspect_apps(&mut utils::runtime::NullObserver)
+        .inspect_apps(&mut shine_core::runtime::NullObserver)
         .await?
         .into_iter()
         .filter(|file| selected.contains(file.category.name.as_str()))
@@ -1328,7 +1328,7 @@ mod tests {
             }],
             ..ShellManifest::default()
         }
-        .save(&utils::runtime::RealHost, &config)
+        .save(&shine_core::runtime::RealHost, &config)
         .await
         .unwrap();
 

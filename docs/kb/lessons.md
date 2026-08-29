@@ -485,7 +485,7 @@ the second was the real blocker.
   in `apply_*_env_override`). `env set`/`encrypt`/`delete` consult it before writing: refuse
   with a clear "this write would have no effect, X currently wins" error by default; `--force`
   writes directly into that override file instead (`write_env_override_entry`, comment- and
-  description-preserving via the same `utils::migration::sync_table` `Config::save()` uses),
+  description-preserving via the same `shine_core::migration::sync_table` `Config::save()` uses),
   and warns loudly when the winning file is the shine-managed overlay mirror, since that
   write is discarded on the next `shine preset pull`.
 - **Rule**: a `set`/`delete`-shaped command must never report success for a write that a

@@ -3,7 +3,7 @@
 - **Status**: accepted
 - **Evidence**: `cli/src/install_core/transforms/template.rs` (`@@[A-Za-z_][A-Za-z0-9_]*@@`),
   `cli/src/install_core/transforms/mod.rs` (bare-string transform registry),
-  `utils/src/runtime/app_metadata.rs` (`AppFile.transforms: Vec<String>`, transform validation),
+  `core/src/runtime/app_metadata.rs` (`AppFile.transforms: Vec<String>`, transform validation),
   `cli/src/shells/{metadata,template}.rs`, `presets/app/clash-verge/{shine.toml,merge.yaml}`,
   `docs/clash-verge-local-subscription-prd.md` §6.1 (line 149)
 

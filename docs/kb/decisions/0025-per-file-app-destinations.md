@@ -1,7 +1,7 @@
 # 0025 — App files may override the category destination
 
 - **Status**: accepted
-- **Evidence**: `utils/src/runtime/{app,app_metadata}.rs`,
+- **Evidence**: `core/src/runtime/{app,app_metadata}.rs`,
   `cli/src/apps/upgrade.rs`, `presets/app/clash-verge/shine.toml`
 
 ## Context

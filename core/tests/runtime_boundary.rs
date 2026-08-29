@@ -49,7 +49,7 @@ fn cli_domain_adapters_do_not_retain_legacy_mutation_or_metadata_fallbacks() {
     ] {
         let source = std::fs::read_to_string(repository_root.join(adapter)).unwrap();
         assert!(
-            source.contains("core_runtime") || source.contains("utils::runtime"),
+            source.contains("core_runtime") || source.contains("shine_core::runtime"),
             "{adapter} must route through Core"
         );
         for forbidden in [

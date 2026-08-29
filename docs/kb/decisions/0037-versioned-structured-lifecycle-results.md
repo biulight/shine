@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-28
-- **Evidence**: `utils/src/lifecycle.rs`, `cli/src/presentation.rs`, `cli/src/status.rs`,
+- **Evidence**: `core/src/lifecycle.rs`, `cli/src/presentation.rs`, `cli/src/status.rs`,
   `cli/src/apps/{install,upgrade,uninstall,hooks,build,report}.rs`,
   `cli/src/shells/{install,uninstall,deployment}.rs`, `cli/src/sys/{managed,resources,run_manifest}.rs`,
   `cli/src/install_core/manifest.rs`

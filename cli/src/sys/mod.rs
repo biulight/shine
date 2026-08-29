@@ -51,7 +51,7 @@ items = ["my-tool"]
 pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
     let (path, overwritten) =
-        utils::init_template::write_shine_toml_template(&dir, force, SYS_TEMPLATE)?;
+        shine_core::init_template::write_shine_toml_template(&dir, force, SYS_TEMPLATE)?;
     if overwritten {
         println!("Updated sys preset template: {}", path.display());
     } else {

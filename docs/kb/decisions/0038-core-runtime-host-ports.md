@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-29
-- **Evidence**: `utils/src/runtime/`, `utils/src/runtime/sys_profile/`, `utils/src/install/`,
+- **Evidence**: `core/src/runtime/`, `core/src/runtime/sys_profile/`, `core/src/install/`,
   `docs/shine-core-runtime-prd.md`
 
 ## Context
@@ -18,8 +18,8 @@ paths, raw errors, and frontend prose must not become fields of `LifecycleResult
 ## Decision
 
 `shine-core` owns a workspace-internal `CoreRuntime`, domain request and assessment types, runtime
-configuration, manifests, preset parsing, lifecycle orchestration, and OS-effect decisions. The
-current package layout remains unchanged.
+configuration, manifests, preset parsing, lifecycle orchestration, and OS-effect decisions.
+Physical package naming is governed by [ADR 0039](0039-align-core-package-naming.md).
 
 External capabilities enter Core through small host ports for filesystem, links, processes,
 privileged mutations, and platform resources. Real and in-memory hosts implement the same ports.

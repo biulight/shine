@@ -7,9 +7,9 @@ use crate::config::Config;
 use crate::output;
 use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use anyhow::Result;
-use utils::lifecycle::LifecycleResultV1;
+use shine_core::lifecycle::LifecycleResultV1;
 #[cfg(test)]
-use utils::lifecycle::{LifecycleEffect, LifecycleStatus};
+use shine_core::lifecycle::{LifecycleEffect, LifecycleStatus};
 
 pub async fn handle_uninstall(
     config: &Config,
@@ -51,7 +51,7 @@ async fn handle_uninstall_with_reporter(
     }
     let core_report = crate::core_runtime::from_config(config)
         .await?
-        .uninstall_shells(utils::runtime::ShellUninstallRequest {
+        .uninstall_shells(shine_core::runtime::ShellUninstallRequest {
             target: target.map(str::to_string),
             dry_run,
             purge,
@@ -132,7 +132,7 @@ mod tests {
         assert!(sibling.exists());
 
         let manifest =
-            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_none());
@@ -187,7 +187,7 @@ mod tests {
                 .exists()
         );
         let manifest =
-            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap();
         assert!(manifest.find("shell/custom/one").is_none());
@@ -226,7 +226,7 @@ mod tests {
         );
         assert!(command.exists());
         let manifest =
-            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_some());
@@ -246,8 +246,8 @@ mod tests {
             config.bin_dir(),
             std::ffi::OsStr::new("shine-env-export"),
         );
-        utils::runtime::unlink_managed_command_with_host(
-            &utils::runtime::RealHost,
+        shine_core::runtime::unlink_managed_command_with_host(
+            &shine_core::runtime::RealHost,
             config.bin_dir(),
             std::ffi::OsStr::new("shine-env-export"),
             &[config.presets_dir().join("shell/utils")],
@@ -304,7 +304,7 @@ mod tests {
             "user-owned command\n"
         );
         let manifest =
-            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_none());

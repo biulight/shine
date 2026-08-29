@@ -14,7 +14,7 @@ pub async fn handle_profile_disable(config: &Config, item_id: &str, dry_run: boo
 
 pub(super) async fn sync_composed_profile(
     config: &Config,
-) -> Result<Option<utils::runtime::SysItemOutcome>> {
+) -> Result<Option<shine_core::runtime::SysItemOutcome>> {
     let os_id = detect_os_id().await?;
     crate::core_runtime::from_config(config)
         .await?
@@ -34,7 +34,7 @@ async fn handle_profile_state(
     let sys_shell: &'static str = config.shell_type.into();
     let report = crate::core_runtime::from_config(config)
         .await?
-        .set_sys_profile_state(utils::runtime::SysProfileStateRequest {
+        .set_sys_profile_state(shine_core::runtime::SysProfileStateRequest {
             os_id,
             item_id: item_id.to_string(),
             enabled,

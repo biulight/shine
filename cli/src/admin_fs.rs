@@ -3,9 +3,9 @@
 use anyhow::Result;
 use std::io::IsTerminal;
 
-pub(crate) async fn admin_lock() -> Result<utils::runtime::PrivilegedOperationGuard> {
-    use utils::runtime::PrivilegedFileSystemHost;
-    utils::runtime::RealHost
+pub(crate) async fn admin_lock() -> Result<shine_core::runtime::PrivilegedOperationGuard> {
+    use shine_core::runtime::PrivilegedFileSystemHost;
+    shine_core::runtime::RealHost
         .acquire_privileged_operation()
         .await
 }

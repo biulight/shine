@@ -14,7 +14,7 @@ use super::ShellType;
 use super::{ShellConfigUpdate, get_shell_config_paths};
 
 pub(super) fn managed_shell_profile_path(config: &Config) -> PathBuf {
-    utils::runtime::managed_shell_profile_path(config.shine_dir(), config.shell_type)
+    shine_core::runtime::managed_shell_profile_path(config.shine_dir(), config.shell_type)
 }
 
 #[cfg(test)]
@@ -24,11 +24,11 @@ pub(super) fn managed_profile_snippet(
     home_dir: &Path,
     source_commands: &[String],
 ) -> String {
-    utils::runtime::managed_profile_snippet(*shell, bin_dir, home_dir, source_commands)
+    shine_core::runtime::managed_profile_snippet(*shell, bin_dir, home_dir, source_commands)
 }
 
 pub(super) fn supports_completion_registration(shell: &ShellType) -> bool {
-    utils::runtime::supports_completion_registration(*shell)
+    shine_core::runtime::supports_completion_registration(*shell)
 }
 
 #[cfg(test)]
@@ -37,21 +37,21 @@ pub(super) fn shell_config_snippet(
     profile_path: &Path,
     home_dir: &Path,
 ) -> String {
-    utils::runtime::shell_config_snippet(*shell, profile_path, home_dir)
+    shine_core::runtime::shell_config_snippet(*shell, profile_path, home_dir)
 }
 
 #[cfg(test)]
 pub(super) fn powershell_bin_assignment(bin: &str) -> String {
-    utils::runtime::powershell_bin_assignment(bin)
+    shine_core::runtime::powershell_bin_assignment(bin)
 }
 
 pub(super) fn shell_source_command(shell: &ShellType, path: &Path) -> String {
-    utils::runtime::shell_source_command(*shell, path)
+    shine_core::runtime::shell_source_command(*shell, path)
 }
 
 #[cfg(test)]
 pub(super) fn powershell_quote(path: &Path) -> String {
-    utils::runtime::powershell_quote(path)
+    shine_core::runtime::powershell_quote(path)
 }
 
 pub(super) fn source_command_activation_hint_lines(
@@ -79,7 +79,7 @@ pub(super) fn source_command_activation_hint_lines(
 
 #[cfg(test)]
 pub(super) fn remove_sentinel_block(content: &str) -> String {
-    utils::runtime::remove_shell_sentinel(content)
+    shine_core::runtime::remove_shell_sentinel(content)
 }
 
 #[cfg(test)]

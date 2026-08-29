@@ -22,16 +22,16 @@ pub use report::{ShellUpgradeReport, handle_info, handle_list};
 pub use uninstall::handle_uninstall;
 
 use anyhow::{Result, bail};
+pub use shine_core::runtime::ShellType;
 use std::path::{Path, PathBuf};
-pub use utils::runtime::ShellType;
 
 pub const SENTINEL_START: &str = "# >>> shine >>>";
 #[cfg(test)]
-const SENTINEL_END: &str = utils::runtime::SHELL_SENTINEL_END;
+const SENTINEL_END: &str = shine_core::runtime::SHELL_SENTINEL_END;
 
-use utils::runtime::PathUpdateStatus;
+use shine_core::runtime::PathUpdateStatus;
 #[cfg(test)]
-use utils::runtime::ShellConfigUpdate;
+use shine_core::runtime::ShellConfigUpdate;
 
 pub fn get_shell() -> Result<ShellType> {
     match std::env::var("SHELL") {

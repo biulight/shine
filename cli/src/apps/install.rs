@@ -6,11 +6,11 @@ use crate::presentation::{
     LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
 use anyhow::{Result, anyhow};
-use std::collections::BTreeSet;
-use utils::lifecycle::LifecycleResultV1;
+use shine_core::lifecycle::LifecycleResultV1;
 #[cfg(test)]
-use utils::lifecycle::LifecycleStatus;
-use utils::runtime::{AppFileAction, AppLifecycleRequest, RuntimeEvent, RuntimeObserver};
+use shine_core::lifecycle::LifecycleStatus;
+use shine_core::runtime::{AppFileAction, AppLifecycleRequest, RuntimeEvent, RuntimeObserver};
+use std::collections::BTreeSet;
 
 pub async fn handle_install(
     config: &Config,
@@ -245,8 +245,8 @@ mod tests {
     use crate::presets;
     #[cfg(unix)]
     use crate::test_support::env_lock;
+    use shine_core::lifecycle::{LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1};
     use tokio::fs;
-    use utils::lifecycle::{LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1};
 
     async fn make_temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-apps").await
@@ -286,7 +286,7 @@ mod tests {
         );
 
         // At least the manifest should have entries
-        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert!(
@@ -320,7 +320,7 @@ mod tests {
         let serialized = serde_json::to_string(&uninstall_result).unwrap();
         assert!(!serialized.contains(&dir.display().to_string()));
 
-        let manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert!(
@@ -543,13 +543,13 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         handle_install(&config, None, false, false).await.unwrap();
-        let manifest_first = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest_first = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         let count_first = manifest_first.entries.len();
 
         handle_install(&config, None, false, false).await.unwrap();
-        let manifest_second = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest_second = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
 
@@ -788,7 +788,7 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             })
         );
 
-        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         assert!(

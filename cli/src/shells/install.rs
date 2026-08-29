@@ -13,12 +13,12 @@ use crate::config::Config;
 use crate::output;
 use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use anyhow::{Context, Result};
+use shine_core::lifecycle::{
+    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+};
 use std::collections::BTreeSet;
 #[cfg(test)]
 use std::path::Path;
-use utils::lifecycle::{
-    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
-};
 
 const SHELL_TEMPLATE: &str = r#"# Shell preset metadata for shine.
 description = "My shell helper commands."
@@ -47,7 +47,7 @@ needs_source = false
 pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
     let (path, overwritten) =
-        utils::init_template::write_shine_toml_template(&dir, force, SHELL_TEMPLATE)?;
+        shine_core::init_template::write_shine_toml_template(&dir, force, SHELL_TEMPLATE)?;
     if overwritten {
         println!("Updated shell preset template: {}", path.display());
     } else {
@@ -86,7 +86,7 @@ async fn handle_install_with_reporter(
     let category_filter = selection.map(|target| target.category);
     let core_report = crate::core_runtime::from_config(config)
         .await?
-        .install_shells(utils::runtime::ShellLifecycleRequest {
+        .install_shells(shine_core::runtime::ShellLifecycleRequest {
             target: target.map(str::to_string),
             dry_run: false,
             force,
@@ -178,7 +178,7 @@ async fn handle_install_dry_run_with_reporter(
     }
     let core_report = crate::core_runtime::from_config(config)
         .await?
-        .install_shells(utils::runtime::ShellLifecycleRequest {
+        .install_shells(shine_core::runtime::ShellLifecycleRequest {
             target: target.map(str::to_string),
             dry_run: true,
             force: false,
@@ -245,7 +245,7 @@ async fn handle_upgrade_installed_target_with_reporter(
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
     let core = crate::core_runtime::from_config(config)
         .await?
-        .upgrade_shells(utils::runtime::ShellUpgradeRequest {
+        .upgrade_shells(shine_core::runtime::ShellUpgradeRequest {
             category: category_filter.map(str::to_string),
         })
         .await?;
@@ -593,7 +593,7 @@ mod tests {
         assert!(!sibling.exists());
 
         let manifest =
-            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_some());
@@ -629,7 +629,7 @@ mod tests {
             .unwrap();
 
         let manifest =
-            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_some());
@@ -693,8 +693,8 @@ mod tests {
             config.bin_dir(),
             std::ffi::OsStr::new("shine-theme-sync"),
         );
-        utils::runtime::unlink_managed_command_with_host(
-            &utils::runtime::RealHost,
+        shine_core::runtime::unlink_managed_command_with_host(
+            &shine_core::runtime::RealHost,
             config.bin_dir(),
             std::ffi::OsStr::new("shine-env-export"),
             &[config.presets_dir().join("shell/utils")],
@@ -1363,7 +1363,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
 
         let (path, overwritten) =
-            utils::init_template::write_shine_toml_template(&cat_dir, false, SHELL_TEMPLATE)
+            shine_core::init_template::write_shine_toml_template(&cat_dir, false, SHELL_TEMPLATE)
                 .unwrap();
         fs::write(
             cat_dir.join("my_tool.sh"),
@@ -1399,7 +1399,7 @@ mod tests {
         let dir = make_temp_dir().await;
         fs::write(dir.join("shine.toml"), b"old").await.unwrap();
 
-        let err = utils::init_template::write_shine_toml_template(&dir, false, SHELL_TEMPLATE)
+        let err = shine_core::init_template::write_shine_toml_template(&dir, false, SHELL_TEMPLATE)
             .unwrap_err();
         assert!(
             err.to_string().contains("use --force to overwrite"),
@@ -1408,7 +1408,8 @@ mod tests {
         assert_eq!(fs::read(dir.join("shine.toml")).await.unwrap(), b"old");
 
         let (_path, overwritten) =
-            utils::init_template::write_shine_toml_template(&dir, true, SHELL_TEMPLATE).unwrap();
+            shine_core::init_template::write_shine_toml_template(&dir, true, SHELL_TEMPLATE)
+                .unwrap();
         assert!(overwritten);
         let content = fs::read_to_string(dir.join("shine.toml")).await.unwrap();
         assert!(content.contains("target = \"mytool\""));
@@ -1748,7 +1749,7 @@ mod tests {
                 .exists()
         );
         let manifest =
-            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap();
         let entry = manifest.find("shell/custom/mytool").unwrap();
@@ -1969,7 +1970,7 @@ mod tests {
             config.installed_shell_dir().join("custom/tool.sh")
         );
         assert!(
-            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap()
                 .find("shell/custom/mytool")
@@ -2011,7 +2012,7 @@ mod tests {
             source
         );
         let manifest =
-            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap();
         assert_eq!(

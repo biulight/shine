@@ -3,8 +3,8 @@
 use crate::config::Config;
 use anyhow::{Result, bail};
 
-pub use utils::runtime::parse_shell_lifecycle_target as parse_lifecycle_target;
-pub use utils::runtime::{ShellCategory, ShellFile, ShellTarget};
+pub use shine_core::runtime::parse_shell_lifecycle_target as parse_lifecycle_target;
+pub use shine_core::runtime::{ShellCategory, ShellFile, ShellTarget};
 
 pub async fn load_active_target(
     config: &Config,

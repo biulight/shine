@@ -7,8 +7,8 @@ use crate::env::EnvConfig;
 use crate::presentation::{
     LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
-use utils::lifecycle::{LifecycleResultV1, LifecycleStatus};
-use utils::runtime::{AppFileAction, AppUpgradeRequest, RuntimeEvent, RuntimeObserver};
+use shine_core::lifecycle::{LifecycleResultV1, LifecycleStatus};
+use shine_core::runtime::{AppFileAction, AppUpgradeRequest, RuntimeEvent, RuntimeObserver};
 
 use super::report;
 

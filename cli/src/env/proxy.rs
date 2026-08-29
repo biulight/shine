@@ -320,7 +320,7 @@ async fn mutate_rules(
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .with_context(|| format!("parsing {}", path.display()))?;
-    utils::migration::sync_table(doc.as_table_mut(), &table);
+    shine_core::migration::sync_table(doc.as_table_mut(), &table);
     atomic_write(path, doc.to_string().as_bytes()).await
 }
 

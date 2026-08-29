@@ -92,7 +92,7 @@ bugs. Check this list before changing the modules named in each entry.
 - **Sentinel blocks are the only thing shine writes to user shell configs**
   (`# >>> shine >>>` … `# <<< shine <<<`, Core Shell profile handling; sys uses per-phase sentinels
   like `# >>> shine <os> sys pre >>>`). Both delegate to the shared primitives in
-  `utils/src/sentinel.rs` (`find_block`/`extract_block_with_newline`/`remove_block_bytewise`/
+  `core/src/sentinel.rs` (`find_block`/`extract_block_with_newline`/`remove_block_bytewise`/
   `remove_block_linewise`/`insert_block`/`trim_outer_blank_lines`).
 - **Two sentinel removal styles exist and must not be unified without golden-output proof.**
   `sentinel::remove_block_bytewise` (shells' semantics) consumes one preceding blank line and
@@ -113,7 +113,7 @@ bugs. Check this list before changing the modules named in each entry.
   only the comparison layer normalizes.
 - **Paths under `$HOME` are written as `$HOME/...`**, not absolute, for portability.
 - **PowerShell profiles: preserve a leading BOM** when rewriting the file
-  (`utils/src/runtime/sys_profile/blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
+  (`core/src/runtime/sys_profile/blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
   `Documents/WindowsPowerShell/` profile files so pwsh and Windows PowerShell stay in sync.
 - **Sys profile composition is activation-additive, not selection-replacing.** A targeted item or
   named selection profile enables successful item integrations but never disables previously
@@ -123,7 +123,7 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Config files
 
-- **All `config.toml` writes go through `utils::sync_table`**, which preserves user comments.
+- **All `config.toml` writes go through `shine_core::sync_table`**, which preserves user comments.
   Never serialize the whole file from a struct — that destroys comments.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and

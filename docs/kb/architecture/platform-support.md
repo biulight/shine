@@ -205,12 +205,12 @@ For a change that claims support on one or more of these platforms:
 | Area | Authoritative implementation or documentation |
 | --- | --- |
 | Platform and release-target mapping | [`cli/src/platform.rs`](../../../cli/src/platform.rs) |
-| App platform filtering | [`utils/src/runtime/app_metadata.rs`](../../../utils/src/runtime/app_metadata.rs) |
+| App platform filtering | [`core/src/runtime/app_metadata.rs`](../../../core/src/runtime/app_metadata.rs) |
 | Shell launchers and Windows shims | [`cli/src/bin_links.rs`](../../../cli/src/bin_links.rs) |
 | Shell and PowerShell profile locations | [`cli/src/shells/mod.rs`](../../../cli/src/shells/mod.rs), [`cli/src/shells/profile.rs`](../../../cli/src/shells/profile.rs) |
 | System preset manifests | [`presets/sys/macos/shine.toml`](../../../presets/sys/macos/shine.toml), [`presets/sys/ubuntu/shine.toml`](../../../presets/sys/ubuntu/shine.toml), [`presets/sys/windows/shine.toml`](../../../presets/sys/windows/shine.toml) |
 | Package provider routing | [`cli/src/sys/bootstrap.rs`](../../../cli/src/sys/bootstrap.rs) |
-| Cross-platform split DNS | [`utils/src/runtime/sys.rs`](../../../utils/src/runtime/sys.rs) |
+| Cross-platform split DNS | [`core/src/runtime/sys.rs`](../../../core/src/runtime/sys.rs) |
 | Terminal theme resolution | [`cli/src/theme/mod.rs`](../../../cli/src/theme/mod.rs) |
 | SSH platform boundary | [`cli/src/ssh/mod.rs`](../../../cli/src/ssh/mod.rs), [`docs/manual/guides/ssh-transfer.md`](../../manual/guides/ssh-transfer.md) |
 | HTTP service platform boundary | [`cli/src/serve.rs`](../../../cli/src/serve.rs) |

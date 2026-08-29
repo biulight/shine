@@ -3,7 +3,7 @@
 use crate::config::Config;
 use anyhow::Result;
 
-pub use utils::runtime::{
+pub use shine_core::runtime::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
 };
 

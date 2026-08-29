@@ -8,9 +8,9 @@ pub mod workspace;
 
 use crate::config::Config;
 use anyhow::{Result, bail};
+pub use shine_core::env::EnvVarSpec;
+pub(crate) use shine_core::env::{parse_env_specs, validate_env_key};
 use std::collections::BTreeMap;
-pub use utils::env::EnvVarSpec;
-pub(crate) use utils::env::{parse_env_specs, validate_env_key};
 
 /// User-editable environment variables stored in `config.toml` under `[env]`.
 ///

@@ -7,7 +7,7 @@ and feature-specific authoring guidance belong in `docs/kb/`.
 `shine` is a self-contained Rust CLI that bundles shell scripts, app config presets, and OS
 bootstrap presets into one binary (`rust-embed`), installs them under `~/.shine/`, and supports
 safe, manifest-tracked uninstall. The workspace root is the publishable `shine-cli` package
-(binary plus the `cli` library); `utils/` is the reusable `shine-core` package.
+(binary plus the `cli` library); `core/` is the reusable `shine-core` package.
 
 ## Required workflow
 
@@ -154,7 +154,7 @@ More diagnostic cases: [`operations/troubleshooting.md`](docs/kb/operations/trou
 | Update checks and self-install | `cli/src/update_check/`, `cli/src/self_install.rs` |
 | Personal task registry | `cli/src/task/` |
 | Embedded assets | `presets/` |
-| Shared library | `utils/` |
+| Shared core | `core/` |
 
 Use the detailed [module map](docs/kb/architecture/module-map.md) for per-file ownership and command
 routing. Use [data flows](docs/kb/architecture/data-flows.md) before changing behavior that spans

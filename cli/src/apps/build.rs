@@ -3,7 +3,7 @@
 use super::metadata;
 use crate::config::Config;
 use anyhow::{Context, Result, bail};
-use utils::runtime::{AppArtifactAction, AppArtifactRequest, RuntimeEvent, RuntimeObserver};
+use shine_core::runtime::{AppArtifactAction, AppArtifactRequest, RuntimeEvent, RuntimeObserver};
 
 pub async fn handle_build(config: &Config, app_id: &str) -> Result<()> {
     run_explicit(config, app_id, AppArtifactAction::Apply).await

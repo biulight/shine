@@ -7,7 +7,7 @@
 use crate::config::Config;
 use anyhow::{Context, Result};
 use directories::BaseDirs;
-use utils::runtime::{
+use shine_core::runtime::{
     CoreRuntime, PresetSnapshotRequest, PresetSnapshotSource, RealHost, RuntimeContext,
     RuntimePlatform, capture_embedded_preset_snapshot, capture_preset_snapshot,
 };

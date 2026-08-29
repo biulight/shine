@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
-use std::path::{Path, PathBuf};
 #[cfg(test)]
-pub(crate) use utils::runtime::RuntimePlatform as OperatingSystem;
+pub(crate) use shine_core::runtime::RuntimePlatform as OperatingSystem;
+use std::path::{Path, PathBuf};
 
 pub fn executable_name_for_os(os: &str) -> &'static str {
     if os == "windows" {
