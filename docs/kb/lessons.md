@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-30 — Platform-only external Preset fixtures must satisfy enforced Plan declarations
+
+- **Symptom**: Windows CI failed the Docker Desktop JSON merge roundtrip before mutation with
+  `app_permission_declaration_missing`, while Linux and macOS passed.
+- **Root cause**: lifecycle Plan enforcement made permission declarations mandatory for external
+  Presets, but the only undeclared lifecycle fixture was compiled exclusively on Windows and was
+  therefore invisible to the Linux quality job and non-Windows test suites.
+- **Fix**: give the Windows external App fixture the same schema-v1 category declaration required
+  of real external App Presets.
+- **Rule**: when a fail-closed metadata contract becomes mandatory, migrate platform-gated external
+  fixtures together with built-ins and shared fixtures; host-only tests are contract consumers too.
+
 ## 2026-08-30 — Reviewable environment permissions require executor allowlists
 
 - **Symptom**: App artifact execution inherited the complete active `[env]` table, so a security

@@ -773,6 +773,8 @@ source = \"file.conf\"\n",
             format!(
                 "description = \"Docker Desktop proxy settings\"\n\
 dest = \"{dest_root}\"\n\n\
+[permissions]\n\
+schema_version = 1\n\n\
 [[files]]\n\
 source = \"settings-store.jsonc\"\n\
 target = \"settings-store.json\"\n\
