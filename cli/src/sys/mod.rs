@@ -1,31 +1,22 @@
-mod bootstrap;
 mod commands;
 mod detect;
-mod drivers;
 mod execution;
 mod managed;
+#[cfg(test)]
 mod manifest;
 mod model;
-mod profile;
-mod profile_blocks;
 mod profile_commands;
-mod profile_compose;
 mod render;
-mod resources;
 mod run_manifest;
 mod selection;
 
 use model::{
-    LoadedSysPreset, ResolvedSelection, SYS_PROFILE_PHASES, SelectionSource,
-    ShellProfileBlockPosition, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall,
-    SysInstalledRow, SysItem, SysItemMode, SysItemOutcome, SysItemStatus, SysManifest,
-    SysPackageProvider, SysProfilePhase, SysShellIntegration, SysShellKind, SysUpdateRow,
-    SysUpgradeReport,
+    LoadedSysPreset, ResolvedSelection, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall,
+    SysInstalledRow, SysItem, SysItemMode, SysItemOutcome, SysItemStatus, SysPackageProvider,
+    SysUpdateRow, SysUpgradeReport,
 };
-use render::sys_init_theme;
 
 use anyhow::{Context, Result};
-use std::path::Path;
 
 pub use commands::{handle_info, handle_init, handle_list, handle_status};
 pub use detect::detect_os_id;
@@ -67,12 +58,4 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
         println!("Created sys preset template: {}", path.display());
     }
     Ok(())
-}
-
-pub(crate) fn validate_preset_category(
-    name: &str,
-    root: &Path,
-) -> std::result::Result<bool, crate::preset_validation::PresetValidationFailure> {
-    manifest::validate_preset_category(name, root)?;
-    Ok(true)
 }

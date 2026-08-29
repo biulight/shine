@@ -38,17 +38,6 @@ pub(super) fn generator_unavailable_text(display_name: &str, error: &anyhow::Err
     )
 }
 
-pub(super) fn destination_error_text(display_name: &str, error: &anyhow::Error) -> String {
-    format!(
-        "  {} {display_name}: bad destination: {error:#}",
-        colors::symbol_stderr("✗")
-    )
-}
-
-pub(super) fn materialization_error_text(display_name: &str, error: &anyhow::Error) -> String {
-    format!("  {} {display_name}: {error:#}", colors::symbol_stderr("✗"))
-}
-
 pub(super) fn restart_hint_text(hint: &str) -> String {
     format!("  {} {}", colors::symbol("!"), colors::yellow(hint))
 }
@@ -142,13 +131,6 @@ pub(super) fn up_to_date_text(source: &str) -> String {
     format!("  {} {source}: up to date", colors::symbol("✓"))
 }
 
-pub(super) fn manual_refresh_text(source: &str, category: &str, file: &str) -> String {
-    format!(
-        "  {} {source}: manual refresh only (shine app refresh {category} {file})",
-        colors::symbol("•")
-    )
-}
-
 pub(super) fn category_updated_text(category: &str, count: usize) -> String {
     let noun = if count == 1 { "file" } else { "files" };
     format!(
@@ -160,10 +142,6 @@ pub(super) fn category_updated_text(category: &str, count: usize) -> String {
 
 pub(super) fn warning_text(source: &str, detail: impl AsRef<str>) -> String {
     format!("  {} {source}: {}", colors::symbol("!"), detail.as_ref())
-}
-
-pub(super) fn legacy_error_text(source: &str, detail: impl AsRef<str>) -> String {
-    format!("  {} {source}: {}", colors::symbol("✗"), detail.as_ref())
 }
 
 // --- Install/upgrade outcome reporting --------------------------------------------------
@@ -262,15 +240,6 @@ pub(super) fn stale_removed_text(
         colors::symbol("✓"),
         colors::dim(&path_display::format_home(destination, &config.home_dir)),
         colors::dim(note.as_ref()),
-    )
-}
-
-pub(super) fn stale_not_found_text(config: &Config, destination: &Path) -> String {
-    format!(
-        "  {} {}  {}",
-        colors::dim("-"),
-        colors::dim(&path_display::format_home(destination, &config.home_dir)),
-        colors::dim("stale destination missing, manifest cleaned"),
     )
 }
 

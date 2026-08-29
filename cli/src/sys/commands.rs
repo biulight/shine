@@ -1,29 +1,19 @@
 use anyhow::{Context, Result, bail};
-use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::colors;
 use crate::config::Config;
 
-use super::bootstrap::{preflight_standard_bootstrap_item, run_standard_bootstrap_item};
 use super::detect::detect_os_id;
 use super::execution::{
-    manifest_item_labels, print_item_outcome, print_run_header, print_sys_summary, status_text,
-    sys_item_label_width,
+    print_item_outcome, print_run_header, print_sys_summary, status_text, sys_item_label_width,
 };
 use super::managed::managed_updates;
-use super::manifest::{self, load_sys_preset};
-use super::profile::install_sys_profile_loader_with_templates;
-use super::profile_compose::{compose_sys_profiles, enabled_profile_items};
 use super::render::{driver_name, item_mode_name, print_available_item, print_dry_run};
-use super::resources;
-use super::run_manifest::{SysRunEntry, SysRunManifest};
-use super::selection::resolve_selection;
+use super::run_manifest::SysRunEntry;
 use super::{
     SysDetection, SysDetectionProbe, SysInstall, SysItemMode, SysItemOutcome, SysItemStatus,
-    SysManifest, SysPackageProvider,
+    SysPackageProvider,
 };
 
 pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
@@ -33,7 +23,8 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     } else {
         Some(detect_os_id().await?)
     };
-    let mut presets = load_available_sys_manifests(config).await?;
+    let runtime = crate::core_runtime::from_config(config)?;
+    let mut presets = runtime.available_sys_manifests()?;
     if !all {
         presets.retain(|(os_id, _)| Some(os_id.as_str()) == current_os.as_deref());
     }
@@ -46,7 +37,7 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
         bail!("No system preset found for `{current_os}`");
     }
 
-    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let run_manifest = runtime.inspect_sys_run_manifest().await?;
     println!("{}\n", colors::bold("System Items"));
     for (index, (os_id, manifest)) in presets.iter().enumerate() {
         if index > 0 {
@@ -95,7 +86,8 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
 pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
     crate::config::print_presets_note(config);
     let os_id = detect_os_id().await?;
-    let presets = load_available_sys_manifests(config).await?;
+    let runtime = crate::core_runtime::from_config(config)?;
+    let presets = runtime.available_sys_manifests()?;
     let manifest = presets
         .iter()
         .find(|(candidate, _)| candidate == &os_id)
@@ -114,7 +106,7 @@ pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
                 .join(", ");
             format!("unknown sys item `{item_id}` for {os_id}. Available: {available}")
         })?;
-    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let run_manifest = runtime.inspect_sys_run_manifest().await?;
     let entry = run_manifest
         .entries
         .iter()
@@ -261,7 +253,9 @@ fn package_provider_name(provider: SysPackageProvider) -> &'static str {
 
 pub async fn handle_status(config: &Config) -> Result<()> {
     let os_id = detect_os_id().await?;
-    let manifest = SysRunManifest::load(config.shine_dir()).await?;
+    let manifest = crate::core_runtime::from_config(config)?
+        .inspect_sys_run_manifest()
+        .await?;
     let entries: Vec<&SysRunEntry> = manifest
         .entries
         .iter()
@@ -340,10 +334,7 @@ async fn handle_init_for_os(
     proxy: bool,
 ) -> Result<()> {
     crate::config::print_presets_note(config);
-
-    let loaded = load_sys_preset(config, os_id).await?;
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let selection = resolve_selection(&loaded.manifest, requested, preset, interactive)?;
     let sys_shell: &'static str = config.shell_type.into();
     let proxy_env = if proxy {
         super::execution::proxy_env_vars(config)
@@ -351,125 +342,61 @@ async fn handle_init_for_os(
         Vec::new()
     };
 
+    let mut runtime = crate::core_runtime::from_config(config)?;
+    runtime.context_mut_for_cli().proxy_env = proxy_env
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), value.clone()))
+        .collect();
+    let mut interaction = crate::presentation::TerminalInteraction;
+    let mut observer = BatchBootstrapObserver::default();
+    let batch = runtime
+        .run_sys_bootstrap_batch(
+            utils::runtime::SysBootstrapBatchRequest {
+                os_id: os_id.to_string(),
+                requested: requested.to_vec(),
+                preset: preset.map(str::to_string),
+                interactive,
+                sys_shell: sys_shell.to_string(),
+                dry_run,
+                force_profile,
+            },
+            &mut interaction,
+            &mut observer,
+        )
+        .await;
+    let report = if dry_run {
+        batch?
+    } else {
+        batch.map_err(bootstrap_preflight_error)?
+    };
+
     if dry_run {
-        print_dry_run(config, os_id, &loaded, &selection, sys_shell, &proxy_env).await?;
+        print_dry_run(
+            os_id,
+            &report.loaded,
+            &report.selection,
+            sys_shell,
+            &proxy_env,
+            &report.previews,
+        )
+        .await?;
         return Ok(());
     }
-
-    if selection.item_ids.is_empty() {
+    if report.selection.item_ids.is_empty() {
         println!(
             "{}",
             colors::dim(&format!(
                 "No sys bootstrap items selected for {} ({}).",
                 os_id,
-                selection.source.describe()
+                report.selection.source.describe()
             ))
         );
         return Ok(());
     }
-
-    // Validate every code-execution and profile input before the first installer mutates the
-    // system. The actual execution paths repeat their permission checks as defense in depth.
-    for item_id in &selection.item_ids {
-        let item = loaded
-            .manifest
-            .items
-            .iter()
-            .find(|item| item.id == *item_id)
-            .with_context(|| format!("selected sys item `{item_id}` disappeared"))?;
-        let missing_env = item
-            .required_env
-            .iter()
-            .filter(|key| !config.env.contains_key(*key))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !missing_env.is_empty() {
-            anyhow::bail!(
-                "sys item `{item_id}` requires missing config env: {}",
-                missing_env.join(", ")
-            );
-        }
-        preflight_standard_bootstrap_item(config, &loaded, item)
-            .map_err(bootstrap_preflight_error)?;
-    }
-    let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
-    let mut preflight_enabled =
-        enabled_profile_items(&loaded.manifest, &run_manifest.entries, os_id);
-    for item_id in &selection.item_ids {
-        if loaded
-            .manifest
-            .items
-            .iter()
-            .find(|item| item.id == *item_id)
-            .is_some_and(|item| !item.shell.is_empty())
-        {
-            preflight_enabled.insert(item_id.clone());
-        }
-    }
-    compose_sys_profiles(config, os_id, &loaded, &preflight_enabled, sys_shell)
-        .await
-        .map_err(bootstrap_preflight_error)?;
-
-    print_run_header(os_id, sys_shell, &selection);
-
-    let item_labels = manifest_item_labels(&loaded.manifest);
-    let label_width = sys_item_label_width(&selection, &item_labels);
-    let mut outcomes = Vec::new();
-    for item_id in &selection.item_ids {
-        let item = loaded
-            .manifest
-            .items
-            .iter()
-            .find(|item| item.id == *item_id)
-            .with_context(|| format!("selected sys item `{item_id}` disappeared"))?;
-        let outcome =
-            run_standard_bootstrap_item(config, os_id, &loaded, item, sys_shell, &proxy_env)
-                .await?;
-        print_item_outcome(&outcome, label_width);
-        let failed = outcome.status == SysItemStatus::Failed;
-        outcomes.push(outcome);
-        if failed {
-            break;
-        }
-    }
-
-    if outcomes
-        .iter()
-        .any(|outcome| outcome.status != SysItemStatus::Failed)
-    {
-        let run_manifest = SysRunManifest::load(config.shine_dir()).await?;
-        let mut enabled = enabled_profile_items(&loaded.manifest, &run_manifest.entries, os_id);
-        for outcome in &outcomes {
-            if outcome.status != SysItemStatus::Failed
-                && loaded
-                    .manifest
-                    .items
-                    .iter()
-                    .find(|item| item.id == outcome.item_id)
-                    .is_some_and(|item| !item.shell.is_empty())
-            {
-                enabled.insert(outcome.item_id.clone());
-            }
-        }
-        let templates = compose_sys_profiles(config, os_id, &loaded, &enabled, sys_shell).await?;
-        let profile = install_sys_profile_loader_with_templates(
-            config,
-            os_id,
-            &loaded.root,
-            sys_shell,
-            force_profile,
-            Some(&templates),
-        )
-        .await?;
-        print_item_outcome(&profile, label_width);
-        outcomes.push(profile);
-    }
-
     println!();
-    print_sys_summary(&outcomes);
-    record_sys_item_outcomes(config, os_id, &loaded.manifest, &outcomes).await?;
-
-    if outcomes
+    print_sys_summary(&report.outcomes);
+    if report
+        .outcomes
         .iter()
         .any(|outcome| outcome.status == SysItemStatus::Failed)
     {
@@ -479,147 +406,66 @@ async fn handle_init_for_os(
     Ok(())
 }
 
+#[derive(Default)]
+struct BatchBootstrapObserver {
+    label_width: usize,
+}
+
+impl utils::runtime::RuntimeObserver for BatchBootstrapObserver {
+    fn emit(&mut self, event: utils::runtime::RuntimeEvent) {
+        match event {
+            utils::runtime::RuntimeEvent::Interaction {
+                code: "sys_bootstrap_selection",
+                target,
+            } => {
+                if !target.is_empty() {
+                    println!("{}", colors::dim(&format!("Default profile: {target}")));
+                }
+                println!("{}", colors::dim("Use Space to toggle, Enter to confirm."));
+                println!();
+            }
+            utils::runtime::RuntimeEvent::SysBootstrapSelection {
+                os_id,
+                shell,
+                item_ids,
+                item_labels,
+                source,
+            } => {
+                let selection = super::ResolvedSelection { item_ids, source };
+                let labels = item_labels
+                    .iter()
+                    .map(|(id, label)| (id.as_str(), label.clone()))
+                    .collect();
+                self.label_width = sys_item_label_width(&selection, &labels);
+                print_run_header(&os_id, &shell, &selection);
+            }
+            utils::runtime::RuntimeEvent::SysBootstrapItemStart {
+                item_id,
+                label,
+                requires_admin,
+            } => {
+                let admin = if requires_admin {
+                    " (administrator access required)"
+                } else {
+                    ""
+                };
+                println!(
+                    "  {} {}",
+                    colors::symbol("•"),
+                    colors::dim(&format!("sys/{item_id} ({label}) installing{admin}"))
+                );
+            }
+            utils::runtime::RuntimeEvent::SysBootstrapOutcome(outcome) => {
+                print_item_outcome(&outcome, self.label_width.max(14));
+            }
+            _ => {}
+        }
+    }
+}
+
 fn bootstrap_preflight_error(error: anyhow::Error) -> anyhow::Error {
     let no_changes = colors::dim_stderr("No system changes were made.");
     anyhow::anyhow!("{error}\n\n{no_changes}")
-}
-
-async fn record_sys_item_outcomes(
-    config: &Config,
-    os_id: &str,
-    sys_manifest: &SysManifest,
-    outcomes: &[SysItemOutcome],
-) -> Result<()> {
-    // "profile" is a synthetic item for shell-profile wiring, not a recorded sys item.
-    // Failed items are dropped so a transient failure doesn't mask a future success;
-    // Skipped/NeedsAction are kept so `shine sys status` reflects what the user chose.
-    let entries = outcomes
-        .iter()
-        .filter(|outcome| outcome.item_id != "profile" && outcome.status != SysItemStatus::Failed)
-        .map(|outcome| SysRunEntry {
-            os_id: os_id.to_string(),
-            item_id: outcome.item_id.clone(),
-            label: sys_manifest
-                .items
-                .iter()
-                .find(|item| item.id == outcome.item_id)
-                .map(|item| item.label.clone())
-                .unwrap_or_else(|| outcome.label.clone()),
-            status: outcome.status,
-            detail: outcome.detail.clone(),
-            updated_at: current_unix_timestamp().to_string(),
-            managed: sys_manifest
-                .items
-                .iter()
-                .find(|item| item.id == outcome.item_id)
-                .is_some_and(|item| item.mode == SysItemMode::Managed),
-            profile_enabled: sys_manifest
-                .items
-                .iter()
-                .find(|item| item.id == outcome.item_id)
-                .is_some_and(|item| item.mode == SysItemMode::Init && !item.shell.is_empty()),
-            receipt: sys_manifest
-                .items
-                .iter()
-                .find(|item| item.id == outcome.item_id)
-                .filter(|item| item.mode == SysItemMode::Managed)
-                .map(|_| resources::SystemReceipt::script()),
-        })
-        .collect::<Vec<_>>();
-
-    if entries.is_empty() {
-        return Ok(());
-    }
-
-    let mut manifest = SysRunManifest::load(config.shine_dir()).await?;
-    for entry in entries {
-        manifest.upsert(entry);
-    }
-    manifest.save(config.shine_dir()).await
-}
-
-pub(super) fn current_unix_timestamp() -> u64 {
-    // `duration_since` only errs if the system clock is set before the Unix epoch,
-    // which is not a realistic scenario; fall back to 0 rather than failing the run.
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
-}
-
-async fn load_available_sys_manifests(config: &Config) -> Result<Vec<(String, SysManifest)>> {
-    if config.is_external_presets {
-        let mut manifests: BTreeMap<String, SysManifest> =
-            load_fs_sys_manifests(config.presets_dir())
-                .await?
-                .into_iter()
-                .collect();
-        if let Some(overlay) = config.active_presets_overlay_dir() {
-            manifests.extend(load_fs_sys_manifests(overlay).await?);
-        }
-        Ok(manifests.into_iter().collect())
-    } else {
-        load_embedded_sys_manifests()
-    }
-}
-
-fn load_embedded_sys_manifests() -> Result<Vec<(String, SysManifest)>> {
-    let mut os_ids: BTreeSet<String> = BTreeSet::new();
-
-    for path in crate::presets::asset_paths("sys") {
-        let without_prefix = match path.strip_prefix("sys/") {
-            Some(s) => s,
-            None => continue,
-        };
-        let slash = match without_prefix.find('/') {
-            Some(p) => p,
-            None => continue,
-        };
-        os_ids.insert(without_prefix[..slash].to_string());
-    }
-
-    os_ids
-        .into_iter()
-        .map(|os_id| {
-            let toml_path = format!("sys/{os_id}/shine.toml");
-            let bytes = crate::presets::read_asset_bytes(&toml_path)
-                .with_context(|| format!("missing embedded preset manifest `{toml_path}`"))?;
-            let content = String::from_utf8(bytes)
-                .with_context(|| format!("preset manifest `{toml_path}` is not UTF-8"))?;
-            let manifest = manifest::parse_and_validate_manifest(&content)
-                .with_context(|| format!("parsing embedded preset manifest `{toml_path}`"))?;
-            Ok((os_id, manifest))
-        })
-        .collect()
-}
-
-async fn load_fs_sys_manifests(presets_dir: &Path) -> Result<Vec<(String, SysManifest)>> {
-    let sys_root = presets_dir.join("sys");
-    if !sys_root.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut entries: BTreeMap<String, SysManifest> = BTreeMap::new();
-    let mut dir = tokio::fs::read_dir(&sys_root)
-        .await
-        .with_context(|| format!("reading {}", sys_root.display()))?;
-
-    while let Some(entry) = dir.next_entry().await? {
-        let ft = entry.file_type().await?;
-        if !ft.is_dir() {
-            continue;
-        }
-        let os_id = entry.file_name().to_string_lossy().to_string();
-        let toml_path = sys_root.join(&os_id).join("shine.toml");
-        let content = tokio::fs::read_to_string(&toml_path)
-            .await
-            .with_context(|| format!("reading {}", toml_path.display()))?;
-        let manifest = manifest::parse_and_validate_manifest(&content)
-            .with_context(|| format!("parsing {}", toml_path.display()))?;
-        entries.insert(os_id, manifest);
-    }
-
-    Ok(entries.into_iter().collect())
 }
 
 // Legacy dispatcher tests are intentionally retained as historical fixtures but

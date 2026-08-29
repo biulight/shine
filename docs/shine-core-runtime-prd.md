@@ -1,6 +1,6 @@
 # Shine Core Runtime Extraction PRD
 
-> **Status:** Roadmap Phase 2 implementation contract.
+> **Status:** Roadmap Phase 2 implemented; compatibility verification remains continuous.
 > This document is internal and does not define released CLI or JSON behavior.
 
 ## Summary
@@ -47,7 +47,7 @@ Core receives all external capabilities through ports:
 Events may carry private paths and human diagnostics needed by the CLI, but they never enter
 `LifecycleResultV1`. The CLI maps them to its existing stdout/stderr text and prompt order.
 
-## Migration slices
+## Implemented slices
 
 1. Move shared persistence, transforms, manifest compatibility, configuration, preset discovery,
    validation, canonical identities, and inspection models into Core.
@@ -61,7 +61,10 @@ Events may carry private paths and human diagnostics needed by the CLI, but they
 6. Remove superseded CLI implementations, enforce dependency boundaries, and close the Phase 2
    acceptance matrix.
 
-Every slice must compile and retain the previous CLI characterization suite.
+The slices landed in dependency order and each retained the CLI characterization suite. App,
+Shell, managed Sys, bootstrap/profile, preset validation, and App/Shell inspection now enter
+through `CoreRuntime`; the remaining CLI modules are routing, interaction, embedded-snapshot, and
+terminal-rendering adapters. SSH secret-broker inspection remains intentionally outside this work.
 
 ## Acceptance
 

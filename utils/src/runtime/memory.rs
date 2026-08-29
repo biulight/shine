@@ -1,6 +1,6 @@
 use super::host::{
-    FileKind, FileMetadata, FileSystemHost, HostError, HostOperation, ProcessHost, ProcessOutput,
-    ProcessRequest,
+    FileKind, FileMetadata, FileSystemHost, HostError, HostOperation, PrivilegedFileSystemHost,
+    ProcessHost, ProcessOutput, ProcessRequest, SplitDnsHost, SplitDnsRequest, SplitDnsState,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
@@ -18,6 +18,7 @@ enum MemoryNode {
 #[derive(Default)]
 struct MemoryState {
     nodes: BTreeMap<PathBuf, MemoryNode>,
+    modes: BTreeMap<PathBuf, u32>,
     operations: Vec<HostOperation>,
     process_outputs: VecDeque<anyhow::Result<ProcessOutput>>,
 }
@@ -36,7 +37,8 @@ impl InMemoryHost {
         let path = path.into();
         let mut state = self.state.lock().expect("in-memory host lock");
         insert_parent_dirs(&mut state.nodes, &path);
-        state.nodes.insert(path, MemoryNode::File(bytes));
+        state.nodes.insert(path.clone(), MemoryNode::File(bytes));
+        state.modes.insert(path, 0o100644);
     }
 
     pub fn queue_process_output(&self, output: anyhow::Result<ProcessOutput>) {
@@ -106,6 +108,7 @@ impl FileSystemHost for InMemoryHost {
             state
                 .nodes
                 .insert(path.to_path_buf(), MemoryNode::File(bytes.to_vec()));
+            state.modes.insert(path.to_path_buf(), 0o100644);
             state
                 .operations
                 .push(HostOperation::Write(path.to_path_buf()));
@@ -147,9 +150,69 @@ impl FileSystemHost for InMemoryHost {
             if state.nodes.remove(path).is_none() {
                 return Err(not_found(path));
             }
+            state.modes.remove(path);
             state
                 .operations
                 .push(HostOperation::Remove(path.to_path_buf()));
+            Ok(())
+        })
+    }
+
+    fn remove_dir_all<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().expect("in-memory host lock");
+            if !state.nodes.contains_key(path) {
+                return Err(not_found(path));
+            }
+            state
+                .nodes
+                .retain(|candidate, _| candidate != path && !candidate.starts_with(path));
+            state
+                .modes
+                .retain(|candidate, _| candidate != path && !candidate.starts_with(path));
+            state
+                .operations
+                .push(HostOperation::RemoveDirectory(path.to_path_buf()));
+            Ok(())
+        })
+    }
+
+    fn set_executable<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().expect("in-memory host lock");
+            if !matches!(state.nodes.get(path), Some(MemoryNode::File(_))) {
+                return Err(not_found(path));
+            }
+            state
+                .operations
+                .push(HostOperation::SetExecutable(path.to_path_buf()));
+            let mode = state.modes.entry(path.to_path_buf()).or_insert(0o100644);
+            *mode |= 0o111;
+            Ok(())
+        })
+    }
+
+    fn set_mode<'a>(
+        &'a self,
+        path: &'a Path,
+        mode: u32,
+    ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().expect("in-memory host lock");
+            if !matches!(state.nodes.get(path), Some(MemoryNode::File(_))) {
+                return Err(not_found(path));
+            }
+            state.modes.insert(path.to_path_buf(), mode);
+            state.operations.push(HostOperation::SetMode {
+                path: path.to_path_buf(),
+                mode,
+            });
             Ok(())
         })
     }
@@ -164,14 +227,17 @@ impl FileSystemHost for InMemoryHost {
                 Some(MemoryNode::Directory) => Ok(FileMetadata {
                     kind: FileKind::Directory,
                     len: 0,
+                    unix_mode: None,
                 }),
                 Some(MemoryNode::File(bytes)) => Ok(FileMetadata {
                     kind: FileKind::File,
                     len: bytes.len() as u64,
+                    unix_mode: state.modes.get(path).copied(),
                 }),
                 Some(MemoryNode::Symlink(target)) => Ok(FileMetadata {
                     kind: FileKind::Symlink,
                     len: target.as_os_str().len() as u64,
+                    unix_mode: None,
                 }),
                 None => Err(not_found(path)),
             }
@@ -188,8 +254,37 @@ impl FileSystemHost for InMemoryHost {
             let Some(node) = state.nodes.remove(from) else {
                 return Err(not_found(from));
             };
+            let mode = state.modes.remove(from);
+            let descendants = if matches!(node, MemoryNode::Directory) {
+                state
+                    .nodes
+                    .keys()
+                    .filter(|path| path.starts_with(from))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let moved_descendants = descendants
+                .into_iter()
+                .filter_map(|path| {
+                    let relative = path.strip_prefix(from).ok()?.to_path_buf();
+                    let node = state.nodes.remove(&path)?;
+                    let mode = state.modes.remove(&path);
+                    Some((to.join(relative), node, mode))
+                })
+                .collect::<Vec<_>>();
             insert_parent_dirs(&mut state.nodes, to);
             state.nodes.insert(to.to_path_buf(), node);
+            if let Some(mode) = mode {
+                state.modes.insert(to.to_path_buf(), mode);
+            }
+            for (path, node, mode) in moved_descendants {
+                state.nodes.insert(path.clone(), node);
+                if let Some(mode) = mode {
+                    state.modes.insert(path, mode);
+                }
+            }
             state
                 .operations
                 .push(HostOperation::Remove(from.to_path_buf()));
@@ -254,6 +349,43 @@ impl FileSystemHost for InMemoryHost {
     }
 }
 
+impl PrivilegedFileSystemHost for InMemoryHost {
+    fn write_privileged<'a>(
+        &'a self,
+        path: &'a Path,
+        bytes: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            self.write_atomic(path, bytes)
+                .await
+                .map_err(|error| error.into_anyhow("privileged write"))
+        })
+    }
+    fn move_privileged<'a>(
+        &'a self,
+        from: &'a Path,
+        to: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            self.rename(from, to)
+                .await
+                .map_err(|error| error.into_anyhow("privileged move"))
+        })
+    }
+    fn remove_privileged<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            match self.remove_file(path).await {
+                Ok(()) => Ok(()),
+                Err(error) if error.is_not_found() => Ok(()),
+                Err(error) => Err(error.into_anyhow("privileged remove")),
+            }
+        })
+    }
+}
+
 impl ProcessHost for InMemoryHost {
     fn run<'a>(
         &'a self,
@@ -269,6 +401,59 @@ impl ProcessHost for InMemoryHost {
                 .process_outputs
                 .pop_front()
                 .unwrap_or_else(|| Ok(ProcessOutput::default()))
+        })
+    }
+}
+
+impl SplitDnsHost for InMemoryHost {
+    fn inspect_split_dns<'a>(
+        &'a self,
+        request: &'a SplitDnsRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<SplitDnsState>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().expect("in-memory host lock");
+            state.operations.push(HostOperation::InspectSplitDns {
+                domain: request.domain.clone(),
+            });
+            Ok(match state.nodes.get(&request.resource) {
+                Some(MemoryNode::File(content)) => SplitDnsState {
+                    exists: true,
+                    content: content.clone(),
+                },
+                _ => SplitDnsState::default(),
+            })
+        })
+    }
+
+    fn apply_split_dns<'a>(
+        &'a self,
+        request: &'a SplitDnsRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().expect("in-memory host lock");
+            insert_parent_dirs(&mut state.nodes, &request.resource);
+            state.nodes.insert(
+                request.resource.clone(),
+                MemoryNode::File(request.content.clone()),
+            );
+            state.operations.push(HostOperation::ApplySplitDns {
+                domain: request.domain.clone(),
+            });
+            Ok(())
+        })
+    }
+
+    fn remove_split_dns<'a>(
+        &'a self,
+        request: &'a SplitDnsRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().expect("in-memory host lock");
+            state.nodes.remove(&request.resource);
+            state.operations.push(HostOperation::RemoveSplitDns {
+                domain: request.domain.clone(),
+            });
+            Ok(())
         })
     }
 }

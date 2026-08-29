@@ -1,17 +1,12 @@
 use super::report;
-use super::{metadata, resolve_install_destination, uninstall_app_entry};
 use crate::config::Config;
+#[cfg(test)]
 use crate::install_core::manifest::{AppEntry, AppManifest};
 use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
-use anyhow::{Context, Result};
-use file_ops::UninstallOutcome;
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-use utils::lifecycle::{
-    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
-};
-
-use crate::install_core::file_ops;
+use anyhow::Result;
+#[cfg(test)]
+use utils::lifecycle::LifecycleEffect;
+use utils::lifecycle::LifecycleResultV1;
 
 pub async fn handle_uninstall(
     config: &Config,
@@ -46,369 +41,160 @@ async fn handle_uninstall_with_reporter(
     dry_run: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
-    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Uninstall, dry_run);
     if dry_run {
         reporter.emit(PresentationEvent::stdout(report::dry_run_header_text()));
     }
-
-    let mut manifest = AppManifest::load(config.shine_dir()).await?;
-
-    let entries: Vec<_> = if let Some(cat) = category {
-        let filtered = uninstall_entries_for_category(config, &manifest, cat).await?;
-        if filtered.is_empty() {
-            reporter.emit(PresentationEvent::stdout(report::no_installed_files_text(
-                cat,
+    let runtime = crate::core_runtime::from_config(config)?;
+    let mut observer = UninstallObserver { reporter };
+    let mut interaction = crate::presentation::TerminalInteraction;
+    let core_report = runtime
+        .uninstall_apps(
+            utils::runtime::AppUninstallLifecycleRequest {
+                target: category.map(str::to_string),
+                dry_run,
+                force,
+                purge,
+            },
+            &mut observer,
+            &mut interaction,
+        )
+        .await?;
+    if let Some(category) = category.filter(|_| core_report.files.is_empty()) {
+        observer
+            .reporter
+            .emit(PresentationEvent::stdout(report::no_installed_files_text(
+                category,
             )));
-            return Ok(lifecycle_result);
-        }
-        filtered
-    } else {
-        manifest.entries.clone()
-    };
-
-    // Run each involved category's artifact teardown (best-effort) *before*
-    // removing its files, so a teardown script sees the same on-disk state
-    // `build` saw. Loaded from metadata (still present until `remove_prefix`
-    // below); a metadata-load failure just skips teardown, never blocks removal.
-    let involved_categories: BTreeSet<String> = entries
-        .iter()
-        .filter_map(|entry| super::app_category_from_source(&entry.source))
-        .collect();
-    if !involved_categories.is_empty() {
-        let categories = metadata::load_active_categories(config, category)
-            .await
-            .unwrap_or_default();
-        for cat in &categories {
-            if involved_categories.contains(&cat.name)
-                && let Some(outcome) = super::build::run_teardown_for_uninstall_with_reporter(
-                    config, cat, dry_run, reporter,
-                )
-                .await
-            {
-                lifecycle_result.push(outcome);
-            }
-        }
+        return Ok(core_report.lifecycle);
     }
-
     let mut removed = 0usize;
     let mut restored = 0usize;
     let mut user_modified = 0usize;
     let mut skipped = 0usize;
-
-    for entry in &entries {
-        match uninstall_app_entry(entry, dry_run, force).await {
-            Ok(UninstallOutcome::Removed) => {
-                reporter.emit(PresentationEvent::stdout(report::removed_text(
-                    config,
-                    &entry.destination,
-                )));
-                manifest.remove_by_dest(&entry.destination);
+    for file in &core_report.files {
+        match file.action {
+            utils::runtime::AppFileAction::Removed => {
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::removed_text(
+                        config,
+                        &file.destination,
+                    )));
                 removed += 1;
-                lifecycle_result.push(app_uninstall_outcome(
-                    entry,
-                    LifecycleStatus::Changed,
-                    [removal_effect(entry), LifecycleEffect::ReceiptRemoved],
-                ));
             }
-            Ok(UninstallOutcome::RestoredBackup { backup }) => {
-                reporter.emit(PresentationEvent::stdout(
-                    report::removed_with_restore_text(config, &entry.destination, &backup),
+            utils::runtime::AppFileAction::Restored => {
+                let backup = file
+                    .backup
+                    .as_ref()
+                    .expect("Core restored App backup report");
+                observer.reporter.emit(PresentationEvent::stdout(
+                    report::removed_with_restore_text(config, &file.destination, backup),
                 ));
-                manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 restored += 1;
-                lifecycle_result.push(app_uninstall_outcome(
-                    entry,
-                    LifecycleStatus::Changed,
-                    [
-                        LifecycleEffect::BackupRestored,
-                        LifecycleEffect::ReceiptRemoved,
-                    ],
-                ));
             }
-            Ok(UninstallOutcome::ForceRemoved) => {
-                reporter.emit(PresentationEvent::stdout(report::force_removed_text(
-                    &entry.destination,
-                )));
-                manifest.remove_by_dest(&entry.destination);
+            utils::runtime::AppFileAction::ForceRemoved => {
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::force_removed_text(
+                        &file.destination,
+                    )));
                 removed += 1;
-                lifecycle_result.push(app_uninstall_outcome(
-                    entry,
-                    LifecycleStatus::Changed,
-                    [
-                        LifecycleEffect::UserModificationOverridden,
-                        removal_effect(entry),
-                        LifecycleEffect::ReceiptRemoved,
-                    ],
-                ));
             }
-            Ok(UninstallOutcome::ForceRestoredBackup { backup }) => {
-                reporter.emit(PresentationEvent::stdout(
-                    report::force_removed_with_restore_text(&entry.destination, &backup),
+            utils::runtime::AppFileAction::ForceRestored => {
+                let backup = file
+                    .backup
+                    .as_ref()
+                    .expect("Core force-restored App backup report");
+                observer.reporter.emit(PresentationEvent::stdout(
+                    report::force_removed_with_restore_text(&file.destination, backup),
                 ));
-                manifest.remove_by_dest(&entry.destination);
                 removed += 1;
                 restored += 1;
-                lifecycle_result.push(app_uninstall_outcome(
-                    entry,
-                    LifecycleStatus::Changed,
-                    [
-                        LifecycleEffect::UserModificationOverridden,
-                        LifecycleEffect::BackupRestored,
-                        LifecycleEffect::ReceiptRemoved,
-                    ],
-                ));
             }
-            Ok(UninstallOutcome::NotFound) => {
-                reporter.emit(PresentationEvent::stdout(report::uninstall_not_found_text(
-                    config,
-                    &entry.destination,
-                )));
-                manifest.remove_by_dest(&entry.destination);
+            utils::runtime::AppFileAction::Missing => {
+                observer.reporter.emit(PresentationEvent::stdout(
+                    report::uninstall_not_found_text(config, &file.destination),
+                ));
                 skipped += 1;
-                lifecycle_result.push(app_uninstall_outcome(
-                    entry,
-                    LifecycleStatus::Changed,
-                    [LifecycleEffect::ReceiptRemoved],
-                ));
             }
-            Ok(UninstallOutcome::UserModified) => {
-                reporter.emit(PresentationEvent::stdout(report::user_modified_kept_text(
-                    config,
-                    &entry.destination,
-                )));
+            utils::runtime::AppFileAction::UserModified => {
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::user_modified_kept_text(
+                        config,
+                        &file.destination,
+                    )));
                 user_modified += 1;
-                lifecycle_result.push(app_uninstall_outcome(
-                    entry,
-                    LifecycleStatus::Preserved,
-                    [LifecycleEffect::UserResourcePreserved],
-                ));
             }
-            Ok(UninstallOutcome::DryRun) => {
-                reporter.emit(PresentationEvent::stdout(report::uninstall_dry_run_text(
-                    config,
-                    &entry.destination,
-                )));
+            utils::runtime::AppFileAction::PreviewRemove => {
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::uninstall_dry_run_text(
+                        config,
+                        &file.destination,
+                    )));
                 skipped += 1;
-                lifecycle_result.push(app_uninstall_outcome(
-                    entry,
-                    LifecycleStatus::Previewed,
-                    [
-                        LifecycleEffect::ResourceRemovePreviewed,
-                        LifecycleEffect::ReceiptRemovePreviewed,
-                    ],
-                ));
             }
-            Err(e) => {
-                reporter.emit(PresentationEvent::stderr(report::uninstall_error_text(
-                    config,
-                    &entry.destination,
-                    &e,
-                )));
-                lifecycle_result.push(
-                    app_uninstall_outcome(entry, LifecycleStatus::Failed, [])
-                        .with_diagnostic_code("app_uninstall_failed"),
+            utils::runtime::AppFileAction::Failed => {
+                let error = anyhow::anyhow!(
+                    file.error
+                        .clone()
+                        .unwrap_or_else(|| "App uninstall failed".to_string())
                 );
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stderr(report::uninstall_error_text(
+                        config,
+                        &file.destination,
+                        &error,
+                    )));
             }
+            _ => {}
         }
     }
-
-    if !dry_run {
-        manifest.save(config.shine_dir()).await?;
+    if purge && !config.is_external_presets {
+        observer
+            .reporter
+            .emit(PresentationEvent::stdout(match category {
+                Some(category) => report::purge_category_text(category),
+                None => report::purge_all_text(),
+            }));
     }
-
-    // Only clean up extracted preset files when using embedded presets.
-    // For external presets the presets_dir is user-managed and must not be touched.
-    if !config.is_external_presets {
-        let remove_prefix_key = match category {
-            Some(cat) => format!("app/{cat}"),
-            None => "app".to_string(),
-        };
-        let remove_report =
-            crate::presets::remove_prefix(&remove_prefix_key, config.presets_dir(), dry_run)
-                .await?;
-        let cache_target = category
-            .map(|cat| format!("app/{cat}"))
-            .unwrap_or_else(|| "app".to_string());
-        let cache_status = if dry_run && !remove_report.removed.is_empty() {
-            LifecycleStatus::Previewed
-        } else if !remove_report.removed.is_empty() {
-            LifecycleStatus::Changed
-        } else {
-            LifecycleStatus::Unchanged
-        };
-        let cache_effects = match cache_status {
-            LifecycleStatus::Previewed => vec![LifecycleEffect::CacheRemovePreviewed],
-            LifecycleStatus::Changed => vec![LifecycleEffect::CacheRemoved],
-            _ => Vec::new(),
-        };
-        lifecycle_result.push(LifecycleOutcomeV1::new(
-            cache_target,
-            Some("preset-cache"),
-            cache_status,
-            cache_effects,
-        ));
-
-        if purge && dry_run {
-            lifecycle_result.push(LifecycleOutcomeV1::new(
-                category
-                    .map(|cat| format!("app/{cat}"))
-                    .unwrap_or_else(|| "app".to_string()),
-                Some("purge"),
-                LifecycleStatus::Previewed,
-                if category.is_some() {
-                    vec![LifecycleEffect::CacheRemovePreviewed]
-                } else {
-                    vec![
-                        LifecycleEffect::CacheRemovePreviewed,
-                        LifecycleEffect::ReceiptRemovePreviewed,
-                    ]
-                },
-            ));
-        } else if purge {
-            if let Some(cat) = category {
-                let cat_dir = config.presets_dir().join("app").join(cat);
-                let mut purged = false;
-                if cat_dir.exists() {
-                    tokio::fs::remove_dir_all(&cat_dir).await.with_context(|| {
-                        format!(
-                            "removing app category presets directory: {}",
-                            cat_dir.display()
-                        )
-                    })?;
-                    purged = true;
-                }
-                reporter.emit(PresentationEvent::stdout(report::purge_category_text(cat)));
-                lifecycle_result.push(LifecycleOutcomeV1::new(
-                    format!("app/{cat}"),
-                    Some("purge"),
-                    if purged {
-                        LifecycleStatus::Changed
-                    } else {
-                        LifecycleStatus::Unchanged
-                    },
-                    if purged {
-                        vec![LifecycleEffect::CachePurged]
-                    } else {
-                        Vec::new()
-                    },
-                ));
-            } else {
-                let app_dir = config.presets_dir().join("app");
-                let mut purge_effects = Vec::new();
-                if app_dir.exists() {
-                    tokio::fs::remove_dir_all(&app_dir).await.with_context(|| {
-                        format!("removing app presets directory: {}", app_dir.display())
-                    })?;
-                    purge_effects.push(LifecycleEffect::CachePurged);
-                }
-                let manifest_path = config.shine_dir().join("app-manifest.toml");
-                if manifest_path.exists() {
-                    tokio::fs::remove_file(&manifest_path)
-                        .await
-                        .context("removing app manifest")?;
-                    purge_effects.push(LifecycleEffect::ReceiptRemoved);
-                }
-                reporter.emit(PresentationEvent::stdout(report::purge_all_text()));
-                lifecycle_result.push(LifecycleOutcomeV1::new(
-                    "app",
-                    Some("purge"),
-                    if purge_effects.is_empty() {
-                        LifecycleStatus::Unchanged
-                    } else {
-                        LifecycleStatus::Changed
-                    },
-                    purge_effects,
-                ));
-            }
-        }
-    } else if purge {
-        lifecycle_result.push(
-            LifecycleOutcomeV1::new(
-                category
-                    .map(|cat| format!("app/{cat}"))
-                    .unwrap_or_else(|| "app".to_string()),
-                Some("purge"),
-                LifecycleStatus::Skipped,
-                [LifecycleEffect::UserResourcePreserved],
-            )
-            .with_diagnostic_code("app_external_preset_cache_preserved"),
-        );
-    }
-
     let summary_parts = report::uninstall_summary_parts(removed, restored, user_modified, skipped);
-    reporter.emit(PresentationEvent::BlankLine);
-    reporter.emit(PresentationEvent::stdout(report::done_summary_text(
-        &summary_parts,
-    )));
-
-    Ok(lifecycle_result)
+    observer.reporter.emit(PresentationEvent::BlankLine);
+    observer
+        .reporter
+        .emit(PresentationEvent::stdout(report::done_summary_text(
+            &summary_parts,
+        )));
+    Ok(core_report.lifecycle)
 }
 
-fn removal_effect(entry: &AppEntry) -> LifecycleEffect {
-    match &entry.install_strategy {
-        crate::install_core::manifest::AppInstallStrategy::Copy => LifecycleEffect::ResourceRemoved,
-        crate::install_core::manifest::AppInstallStrategy::JsonMerge { .. } => {
-            LifecycleEffect::ManagedKeysRemoved
-        }
-    }
+struct UninstallObserver<'a> {
+    reporter: &'a mut dyn LifecycleReporter,
 }
 
-fn app_uninstall_outcome(
-    entry: &AppEntry,
-    status: LifecycleStatus,
-    effects: impl IntoIterator<Item = LifecycleEffect>,
-) -> LifecycleOutcomeV1 {
-    match super::app_source_parts(&entry.source) {
-        Some((category, resource)) => {
-            LifecycleOutcomeV1::new(format!("app/{category}"), Some(resource), status, effects)
-        }
-        None => LifecycleOutcomeV1::new("app/unknown", None::<String>, status, effects)
-            .with_diagnostic_code("app_manifest_source_invalid"),
-    }
-}
-
-async fn uninstall_entries_for_category(
-    config: &Config,
-    manifest: &AppManifest,
-    category: &str,
-) -> Result<Vec<AppEntry>> {
-    let prefix = format!("app/{category}/");
-    let mut entries_by_dest: BTreeMap<PathBuf, AppEntry> = manifest
-        .entries
-        .iter()
-        .filter(|entry| entry.source.starts_with(&prefix))
-        .map(|entry| (entry.destination.clone(), entry.clone()))
-        .collect();
-
-    let categories = metadata::load_active_categories(config, Some(category)).await?;
-
-    for cat in categories.iter().filter(|cat| cat.name == category) {
-        append_manifest_entries_for_category_destinations(
-            config,
-            manifest,
-            cat,
-            &mut entries_by_dest,
-        );
-    }
-
-    Ok(entries_by_dest.into_values().collect())
-}
-
-fn append_manifest_entries_for_category_destinations(
-    config: &Config,
-    manifest: &AppManifest,
-    category: &metadata::AppCategory,
-    entries_by_dest: &mut BTreeMap<PathBuf, AppEntry>,
-) {
-    for file in &category.files {
-        let Ok(destination) = resolve_install_destination(category, file, config) else {
-            continue;
-        };
-        if let Some(entry) = manifest.find_by_dest(&destination) {
-            entries_by_dest
-                .entry(entry.destination.clone())
-                .or_insert_with(|| entry.clone());
+impl utils::runtime::RuntimeObserver for UninstallObserver<'_> {
+    fn emit(&mut self, event: utils::runtime::RuntimeEvent) {
+        if let utils::runtime::RuntimeEvent::Warning {
+            code,
+            target,
+            detail,
+        } = event
+        {
+            let category = target
+                .as_deref()
+                .and_then(|value| value.strip_prefix("app/"))
+                .unwrap_or("app");
+            if code == "app_artifact_permission_required" {
+                self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: artifact teardown skipped (set allow_app_hooks = true to allow external app hooks; manual: shine app artifact remove {category})", report::symbol("!"))));
+            } else {
+                self.reporter.emit(PresentationEvent::stderr(format!(
+                    "  {} {category}: artifact teardown failed: {detail}",
+                    report::symbol("!")
+                )));
+            }
         }
     }
 }
@@ -419,7 +205,6 @@ mod tests {
     #[cfg(unix)]
     use super::super::install::handle_install;
     use super::*;
-    use crate::apps::metadata::{AppCategory, AppDestinationRoot, AppFile, AppListMode};
     use crate::install_core::manifest::AppInstallStrategy;
     #[cfg(unix)]
     use crate::test_support::env_lock;
@@ -508,67 +293,6 @@ mod tests {
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn uninstall_category_selection_matches_current_destination() {
-        let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
-        let destination_root = dir.join(".docker");
-        let destination = destination_root.join("daemon.json");
-        let category = AppCategory {
-            name: "docker-engine".to_string(),
-            description: None,
-            destination_root: Some(destination_root.display().to_string()),
-            files: vec![AppFile {
-                source_rel: PathBuf::from("daemon.jsonc"),
-                target_rel: PathBuf::from("daemon.json"),
-                destination_root: Some(AppDestinationRoot::Path(
-                    destination_root.display().to_string(),
-                )),
-                description: None,
-                display_name: None,
-                legacy_dest_annotation: None,
-                transforms: vec![],
-                install_strategy: AppInstallStrategy::Copy,
-                requires_admin: false,
-                restart_hint: None,
-                generator: None,
-            }],
-            list_mode: AppListMode::Files,
-            post_upgrade: Vec::new(),
-            post_install: Vec::new(),
-            uses_metadata: true,
-            has_explicit_files: true,
-            artifact: None,
-        };
-        let manifest = AppManifest {
-            entries: vec![AppEntry {
-                source: "app/docker/daemon.jsonc".to_string(),
-                destination: destination.clone(),
-                backup: None,
-                content_hash: 42,
-                install_strategy: AppInstallStrategy::Copy,
-                uses_env: false,
-                requires_admin: false,
-            }],
-            ..AppManifest::default()
-        };
-        let mut entries_by_dest = BTreeMap::new();
-
-        append_manifest_entries_for_category_destinations(
-            &config,
-            &manifest,
-            &category,
-            &mut entries_by_dest,
-        );
-
-        assert!(
-            entries_by_dest.contains_key(&destination),
-            "category uninstall should find legacy manifest entries by current destination"
-        );
-
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -830,23 +554,6 @@ mod tests {
         );
         assert!(!config.shine_dir().join("app-manifest.toml").exists());
         fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[test]
-    fn json_merge_uninstall_uses_managed_key_effect() {
-        let entry = AppEntry {
-            source: "app/sample/settings.json".to_string(),
-            destination: PathBuf::from("settings.json"),
-            backup: None,
-            content_hash: 1,
-            install_strategy: AppInstallStrategy::JsonMerge {
-                managed_keys: vec!["proxy".to_string()],
-            },
-            uses_env: false,
-            requires_admin: false,
-        };
-
-        assert_eq!(removal_effect(&entry), LifecycleEffect::ManagedKeysRemoved);
     }
 
     #[cfg(unix)]

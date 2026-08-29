@@ -6,34 +6,7 @@ use tokio::process::Command;
 const PACKAGE_JSON: &str = "package.json";
 const LOCK_FILE: &str = "bun.lock";
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum BunDependencyMode {
-    #[default]
-    Disabled,
-    Locked,
-}
-
-impl BunDependencyMode {
-    pub fn as_manifest_value(self) -> Option<&'static str> {
-        match self {
-            Self::Disabled => None,
-            Self::Locked => Some("locked"),
-        }
-    }
-
-    pub fn install_arg(self) -> &'static str {
-        match self {
-            Self::Disabled => "--no-install",
-            Self::Locked => "--install=fallback",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct BunRuntimeSpec {
-    pub dependency_mode: BunDependencyMode,
-    pub dependency_hash: Option<u64>,
-}
+pub use utils::runtime::{BunDependencyMode, BunRuntimeSpec};
 
 /// Resolve the Bun dependency policy for one physical preset category.
 ///

@@ -2,4 +2,6 @@
 
 #[cfg(test)]
 pub(super) use utils::runtime::SYS_MANIFEST_FILE;
-pub(super) use utils::runtime::{SysRunEntry, SysRunManifest};
+pub(super) use utils::runtime::SysRunEntry;
+#[cfg(test)]
+pub(super) use utils::runtime::SysRunManifest;

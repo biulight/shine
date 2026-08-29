@@ -1,19 +1,20 @@
-use super::links::{build_link_specs, link_conflict_render_lines};
+use super::links::link_conflict_render_lines;
+#[cfg(test)]
+use super::profile::append_path_to_shell_config;
 use super::profile::{
-    append_path_to_shell_config, managed_shell_profile_path, shell_source_command,
-    source_command_activation_hint_lines,
+    managed_shell_profile_path, shell_source_command, source_command_activation_hint_lines,
 };
 use super::report::{
-    ShellUpgradeReport, link_report_summary_parts, preset_extract_summary_parts, style_bold,
-    style_dim, style_green, style_symbol, style_yellow, upgrade_link_report_summary_parts,
+    ShellUpgradeReport, link_report_summary_parts, shell_cache_summary_parts, style_bold,
+    style_dim, style_green, style_symbol, style_yellow,
 };
-use super::template::{ScriptTemplate, apply_template_to_scripts};
 use super::{PathUpdateStatus, get_shell_config_path, metadata};
 use crate::config::Config;
 use crate::output;
 use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
+#[cfg(test)]
 use std::path::Path;
 use utils::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
@@ -78,51 +79,29 @@ async fn handle_install_with_reporter(
     force: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
-    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Install, false);
     for line in crate::config::presets_note_lines(config) {
         reporter.emit(PresentationEvent::stdout(line));
     }
-    // Reject unsupported runtime state before extraction, snapshots, links, or profiles.
-    let manifest_before = super::deployment::ShellManifest::load(config).await?;
     let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
     let category_filter = selection.map(|target| target.category);
-    let mut categories = match selection {
-        Some(target) => metadata::load_active_target(config, target).await?,
-        None => metadata::load_active_categories(config, None).await?,
-    };
-    if categories.is_empty() {
-        anyhow::bail!("no shell preset categories found");
-    }
-
-    let prefix = match category_filter {
-        Some(category) => format!("shell/{category}"),
-        None => "shell".to_string(),
-    };
-
-    // When using the default presets directory, extract the embedded assets first.
-    let mut cache_written = false;
+    let core_report = crate::core_runtime::from_config(config)?
+        .install_shells(utils::runtime::ShellLifecycleRequest {
+            target: target.map(str::to_string),
+            dry_run: false,
+            force,
+        })
+        .await?;
     if !config.is_external_presets {
-        let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
-        cache_written = !report.created.is_empty() || !report.overwritten.is_empty();
         reporter.emit(PresentationEvent::stdout(output::summary_line_text(
             "Shell Presets",
-            &preset_extract_summary_parts(&report),
+            &shell_cache_summary_parts(&core_report.cache),
         )));
     }
-
-    // Embedded extraction populates the installed preset cache but must not expand a
-    // command-scoped selection into every command in its category.
-    if let Some(selection) = selection {
-        categories = metadata::load_active_target(config, selection).await?;
-    }
-    super::deployment::validate_snapshot_categories(config, &categories).await?;
-    let snapshots_updated =
-        super::deployment::materialize_snapshot_categories(config, &categories).await?;
     if config.is_external_presets
         && config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
     {
-        let summary = if snapshots_updated > 0 {
-            style_green(&format!("{snapshots_updated} updated"))
+        let summary = if core_report.snapshots_updated > 0 {
+            style_green(&format!("{} updated", core_report.snapshots_updated))
         } else {
             style_dim("up to date")
         };
@@ -131,41 +110,18 @@ async fn handle_install_with_reporter(
             &[summary],
         )));
     }
-    // Build (template_source, rendered_dest) pairs for all scripts.
-    // apply_template_to_scripts renders source → rendered_dir, never modifies presets_dir.
-    let script_pairs = build_script_pairs(config, &categories);
-
-    // Apply env-variable substitution to scripts that opt in via `# shine-template: true`.
-    // Output goes to rendered_dir; presets_dir templates are left untouched.
-    let template_report = apply_template_to_scripts(config, &script_pairs).await?;
-
-    // Symlinks point to the rendered file when one was produced, otherwise to the
-    // raw source in presets_dir (non-template scripts).
-    let link_specs = build_link_specs(config, &categories)?;
-    let link_report =
-        crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, force).await?;
-    let manifest_scope = if selection.is_some_and(|target| target.command.is_some()) {
-        super::deployment::ManifestUpdateScope::Commands
-    } else {
-        super::deployment::ManifestUpdateScope::Categories
-    };
-    super::deployment::update_manifest(config, &categories, manifest_scope).await?;
-
     reporter.emit(PresentationEvent::stdout(output::summary_line_text(
         "Bin Links",
-        &link_report_summary_parts(&link_report),
+        &link_report_summary_parts(&core_report.links),
     )));
-    for line in link_conflict_render_lines(config, &link_report.conflicts, category_filter) {
+    for line in link_conflict_render_lines(config, &core_report.links.conflicts, category_filter) {
         reporter.emit(PresentationEvent::stdout(line));
     }
-
-    let source_commands = installed_source_commands(config).await?;
-    let installed_commands = installed_source_commands_for_categories(config, &categories).await?;
-
     let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
-    let shell_update = append_path_to_shell_config(config, force, &source_commands).await?;
-    let profile_updated = shell_update.profile_updated;
-    let config_updated = matches!(&shell_update.config_status, PathUpdateStatus::Updated(_));
+    let shell_update = core_report
+        .profile
+        .as_ref()
+        .expect("Core Shell install profile report");
     let profile_path = managed_shell_profile_path(config);
     if shell_update.profile_updated {
         reporter.emit(PresentationEvent::stdout(output::detail_line_text(
@@ -174,7 +130,7 @@ async fn handle_install_with_reporter(
             Some(profile_path.display().to_string()),
         )));
     }
-    match shell_update.config_status {
+    match &shell_update.config_status {
         PathUpdateStatus::AlreadyConfigured => {
             reporter.emit(PresentationEvent::stdout(output::detail_line_text(
                 "Shell Config",
@@ -190,68 +146,15 @@ async fn handle_install_with_reporter(
             )));
         }
     }
-    for line in
-        source_command_activation_hint_lines(config, &shell_config_path, &installed_commands)
-    {
+    for line in source_command_activation_hint_lines(
+        config,
+        &shell_config_path,
+        &core_report.source_commands,
+    ) {
         reporter.emit(PresentationEvent::stdout(line));
     }
 
-    for category in &categories {
-        for file in &category.files {
-            let target = format!("shell/{}/{}", category.name, file.command_name);
-            let link_path = crate::bin_links::command_path_for_name(
-                config.bin_dir(),
-                std::ffi::OsStr::new(&file.command_name),
-            );
-            let conflict = link_report
-                .conflicts
-                .iter()
-                .any(|conflict| conflict.link_path == link_path);
-            let link_changed = link_report
-                .created
-                .iter()
-                .chain(&link_report.overwritten)
-                .any(|path| path == &link_path);
-            let template_changed = template_report
-                .updated
-                .iter()
-                .any(|name| name == &format!("{}/{}", category.name, file.command_name));
-            let receipt_changed = manifest_before.find(&target).is_none();
-            let profile_changed = profile_updated || config_updated;
-            let changed = cache_written
-                || snapshots_updated > 0
-                || link_changed
-                || template_changed
-                || receipt_changed
-                || profile_changed;
-            let mut effects = Vec::new();
-            if cache_written {
-                effects.push(LifecycleEffect::CacheWritten);
-            }
-            if snapshots_updated > 0 || link_changed || template_changed || profile_changed {
-                effects.push(LifecycleEffect::ResourceWritten);
-            }
-            if receipt_changed || link_changed {
-                effects.push(LifecycleEffect::ReceiptWritten);
-            }
-            lifecycle_result.push(if conflict {
-                LifecycleOutcomeV1::new(target, None::<String>, LifecycleStatus::Conflict, [])
-                    .with_diagnostic_code("shell_command_conflict")
-            } else {
-                LifecycleOutcomeV1::new(
-                    target,
-                    None::<String>,
-                    if changed {
-                        LifecycleStatus::Changed
-                    } else {
-                        LifecycleStatus::Unchanged
-                    },
-                    effects,
-                )
-            });
-        }
-    }
-    Ok(lifecycle_result)
+    Ok(core_report.lifecycle)
 }
 
 /// Resolve and validate a shell installation plan without extracting presets,
@@ -269,63 +172,27 @@ async fn handle_install_dry_run_with_reporter(
     target: Option<&str>,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
-    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Install, true);
     for line in crate::config::presets_note_lines(config) {
         reporter.emit(PresentationEvent::stdout(line));
     }
-    let _manifest_gate = super::deployment::ShellManifest::load(config).await?;
-    let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
-    let categories = match selection {
-        Some(target) => metadata::load_active_target(config, target).await?,
-        None => metadata::load_active_categories(config, None).await?,
-    };
-    if categories.is_empty() {
-        anyhow::bail!("no shell preset categories found");
-    }
-    super::deployment::validate_snapshot_categories(config, &categories).await?;
-    let specs = build_link_specs(config, &categories)?;
-    let mut command_names = BTreeSet::new();
-    for spec in &specs {
-        let command = spec.link_name.to_string_lossy().to_string();
-        if !command_names.insert(command.clone()) {
-            anyhow::bail!("duplicate requested shell command: {command}");
-        }
-        let target = crate::bin_links::command_path_for_name(config.bin_dir(), &spec.link_name);
+    let core_report = crate::core_runtime::from_config(config)?
+        .install_shells(utils::runtime::ShellLifecycleRequest {
+            target: target.map(str::to_string),
+            dry_run: true,
+            force: false,
+        })
+        .await?;
+    for (command, target, source) in &core_report.planned_links {
         reporter.emit(PresentationEvent::stdout(format!(
             "Would link shell command {command}: {} -> {}",
             target.display(),
-            spec.source.display()
+            source.display()
         )));
-        let canonical = categories
-            .iter()
-            .find_map(|category| {
-                category
-                    .files
-                    .iter()
-                    .find(|file| file.command_name == command)
-                    .map(|_| format!("shell/{}/{}", category.name, command))
-            })
-            .unwrap_or_else(|| format!("shell/unknown/{command}"));
-        let mut effects = vec![
-            LifecycleEffect::ResourceWritePreviewed,
-            LifecycleEffect::ReceiptWritePreviewed,
-        ];
-        if !config.is_external_presets
-            || config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
-        {
-            effects.push(LifecycleEffect::CacheWritePreviewed);
-        }
-        lifecycle_result.push(LifecycleOutcomeV1::new(
-            canonical,
-            None::<String>,
-            LifecycleStatus::Previewed,
-            effects,
-        ));
     }
     reporter.emit(PresentationEvent::stdout(
         "Dry run: no shell files, links, manifests, or profiles were changed.",
     ));
-    Ok(lifecycle_result)
+    Ok(core_report.lifecycle)
 }
 
 pub async fn handle_upgrade_installed(
@@ -374,170 +241,63 @@ async fn handle_upgrade_installed_target_with_reporter(
     verbose: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
-    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Upgrade, false);
-    let all_categories = if config.is_external_presets {
-        metadata::load_installed_categories(config, None).await?
-    } else {
-        metadata::load_embedded_categories(None)?
-    };
-    let shell_manifest = super::deployment::ShellManifest::load(config).await?;
-
-    let installed_commands: Vec<(String, String)> = all_categories
-        .iter()
-        .filter(|cat| category_filter.is_none_or(|filter| cat.name == filter))
-        .flat_map(|cat| {
-            cat.files.iter().filter_map(|file| {
-                let link = crate::bin_links::command_path_for_name(
-                    config.bin_dir(),
-                    std::ffi::OsStr::new(&file.command_name),
-                );
-                let canonical = format!("shell/{}/{}", cat.name, file.command_name);
-                (shell_link_exists(&link) || shell_manifest.find(&canonical).is_some())
-                    .then(|| (cat.name.clone(), file.command_name.clone()))
-            })
+    let core = crate::core_runtime::from_config(config)?
+        .upgrade_shells(utils::runtime::ShellUpgradeRequest {
+            category: category_filter.map(str::to_string),
         })
-        .collect();
-
-    if installed_commands.is_empty() {
-        if let Some(category) = category_filter {
-            anyhow::bail!("shell preset is not installed: {category}");
-        }
+        .await?;
+    if core.runs.is_empty() {
         if verbose {
             reporter.emit(PresentationEvent::stdout(style_dim(
                 "No installed shell presets found.",
             )));
         }
-        return Ok((ShellUpgradeReport::default(), lifecycle_result));
+        return Ok((ShellUpgradeReport::default(), core.lifecycle));
     }
 
-    let installed_categories: std::collections::BTreeSet<String> = installed_commands
+    let snapshots_updated = core.runs.iter().map(|run| run.snapshots_updated).sum();
+    let templates_updated = core
+        .runs
         .iter()
-        .map(|(cat_name, _)| cat_name.clone())
-        .collect();
-
-    let pending_targets = pending_upgrade_targets(config, &installed_commands).await?;
-    let conflicting_targets = conflicting_upgrade_targets(config, &installed_commands).await?;
-
-    let mut cache_updated_categories = BTreeSet::new();
-    if !config.is_external_presets {
-        for category in &installed_categories {
-            let prefix = format!("shell/{category}");
-            let report =
-                crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
-            if !report.created.is_empty() || !report.overwritten.is_empty() {
-                cache_updated_categories.insert(category.clone());
-            }
-        }
-    }
-
-    let categories = metadata::load_installed_categories(config, None).await?;
-    let mut categories: Vec<_> = categories
-        .into_iter()
-        .filter(|cat| installed_categories.contains(&cat.name))
-        .collect();
-    for cat in &mut categories {
-        cat.files.retain(|file| {
-            installed_commands.contains(&(cat.name.clone(), file.command_name.clone()))
-        });
-    }
-
-    super::deployment::validate_snapshot_categories(config, &categories).await?;
-    let snapshots_updated =
-        super::deployment::materialize_snapshot_categories(config, &categories).await?;
-
-    let script_pairs = build_script_pairs(config, &categories);
-    let template_report = apply_template_to_scripts(config, &script_pairs).await?;
-
-    let link_specs = build_link_specs(config, &categories)?;
-    let conflicting_commands = conflicting_targets
+        .map(|run| run.templates.updated.len())
+        .sum();
+    let links_created = core.runs.iter().map(|run| run.links.created.len()).sum();
+    let links_updated = core
+        .runs
         .iter()
-        .filter_map(|target| target.split('/').next_back())
-        .collect::<BTreeSet<_>>();
-    let (conflicting_specs, applicable_specs): (Vec<_>, Vec<_>) = link_specs
-        .into_iter()
-        .partition(|spec| conflicting_commands.contains(spec.link_name.to_string_lossy().as_ref()));
-    let mut link_report =
-        crate::bin_links::link_executables_with_names(config.bin_dir(), &applicable_specs, true)
-            .await?;
-    link_report
-        .conflicts
-        .extend(
-            conflicting_specs
-                .into_iter()
-                .map(|spec| crate::bin_links::LinkConflict {
-                    link_path: crate::bin_links::command_path_for_name(
-                        config.bin_dir(),
-                        &spec.link_name,
-                    ),
-                    source: spec.source,
-                    kind: crate::bin_links::LinkConflictKind::ExistingEntry,
-                }),
-        );
-    let mut manifest_categories = categories.clone();
-    for category in &mut manifest_categories {
-        category.files.retain(|file| {
-            !conflicting_targets.contains(&format!("{}/{}", category.name, file.command_name))
-        });
-    }
-    super::deployment::update_manifest(
-        config,
-        &manifest_categories,
-        super::deployment::ManifestUpdateScope::Commands,
-    )
-    .await?;
-
-    let link_parts = upgrade_link_report_summary_parts(&link_report, verbose);
-
-    let source_commands = installed_source_commands(config).await?;
-
-    let shell_update = append_path_to_shell_config(config, false, &source_commands).await?;
-    let updated_shell_config = match shell_update.config_status {
-        PathUpdateStatus::AlreadyConfigured => None,
-        PathUpdateStatus::Updated(path) => Some(path),
-    };
-    let profile_changed = shell_update.profile_updated || updated_shell_config.is_some();
-
-    let remaining_targets = pending_upgrade_targets(config, &installed_commands).await?;
-    let mut updated_targets = pending_targets
-        .difference(&remaining_targets)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    updated_targets.extend(template_report.updated.iter().cloned());
-    for link in link_report.created.iter().chain(&link_report.overwritten) {
-        let Some(command) = link.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        updated_targets.extend(
-            installed_commands
-                .iter()
-                .filter(|(_, installed_command)| installed_command == command)
-                .map(|(category, installed_command)| format!("{category}/{installed_command}")),
-        );
-    }
-    let updated_targets = updated_targets.into_iter().collect::<Vec<_>>();
-    let updated_categories = lifecycle_categories(&updated_targets);
-
+        .map(|run| run.links.overwritten.len())
+        .sum();
+    let link_conflicts = core.runs.iter().map(|run| run.links.conflicts.len()).sum();
+    let path_changed = core.runs.iter().any(|run| {
+        run.profile.as_ref().is_some_and(|profile| {
+            profile.profile_updated || matches!(profile.config_status, PathUpdateStatus::Updated(_))
+        })
+    });
     let has_visible_result = should_print_upgrade_section(
         verbose,
-        !updated_categories.is_empty(),
-        !link_report.conflicts.is_empty(),
-        updated_shell_config.is_some(),
+        !core.updated_categories.is_empty(),
+        link_conflicts > 0,
+        path_changed,
     );
     if has_visible_result {
         reporter.emit(PresentationEvent::SectionStart);
         if verbose {
+            let installed_categories = core
+                .runs
+                .iter()
+                .flat_map(|run| run.categories.iter().map(|category| category.name.as_str()))
+                .collect::<BTreeSet<_>>()
+                .len();
             reporter.emit(PresentationEvent::stdout(output::summary_line_text(
                 "Shell Presets",
                 &[style_dim(&format!(
-                    "{} installed categories",
-                    installed_categories.len()
+                    "{installed_categories} installed categories"
                 ))],
             )));
         } else {
             reporter.emit(PresentationEvent::stdout(style_bold("Shell Presets")));
         }
-
-        for category in &updated_categories {
+        for category in &core.updated_categories {
             reporter.emit(PresentationEvent::stdout(format!(
                 "  {} {category}",
                 style_symbol("✓")
@@ -550,35 +310,43 @@ async fn handle_upgrade_installed_target_with_reporter(
                 style_green(&format!("{snapshots_updated} snapshot(s) updated"))
             )));
         }
-        if verbose && !template_report.updated.is_empty() {
+        if verbose && templates_updated > 0 {
             reporter.emit(PresentationEvent::stdout(output::summary_line_text(
                 "Templates",
-                &[style_green(&format!(
-                    "{} rendered",
-                    template_report.updated.len()
-                ))],
+                &[style_green(&format!("{templates_updated} rendered"))],
             )));
         }
-        if should_print_link_summary(verbose, link_report.conflicts.len()) {
-            if verbose && !link_parts.is_empty() {
+        if should_print_link_summary(verbose, link_conflicts) {
+            let parts = vec![
+                (links_created > 0).then(|| style_green(&format!("{links_created} created"))),
+                (links_updated > 0).then(|| style_green(&format!("{links_updated} updated"))),
+                (link_conflicts > 0).then(|| style_yellow(&format!("{link_conflicts} conflicts"))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+            if !parts.is_empty() {
                 reporter.emit(PresentationEvent::stdout(output::summary_line_text(
                     "Bin Links",
-                    &link_parts,
-                )));
-            } else if !link_report.conflicts.is_empty() {
-                reporter.emit(PresentationEvent::stdout(output::summary_line_text(
-                    "Bin Links",
-                    &[style_yellow(&format!(
-                        "{} conflicts",
-                        link_report.conflicts.len()
-                    ))],
+                    &parts,
                 )));
             }
         }
-        for line in link_conflict_render_lines(config, &link_report.conflicts, None) {
-            reporter.emit(PresentationEvent::stdout(line));
+        for run in &core.runs {
+            for line in link_conflict_render_lines(config, &run.links.conflicts, category_filter) {
+                reporter.emit(PresentationEvent::stdout(line));
+            }
         }
-        if let Some(path) = &updated_shell_config {
+        if path_changed
+            && let Some(path) = core.runs.iter().find_map(|run| {
+                run.profile
+                    .as_ref()
+                    .and_then(|profile| match &profile.config_status {
+                        PathUpdateStatus::Updated(path) => Some(path),
+                        PathUpdateStatus::AlreadyConfigured => None,
+                    })
+            })
+        {
             reporter.emit(PresentationEvent::stdout(output::detail_line_text(
                 "Shell Config",
                 &style_green("updated"),
@@ -586,71 +354,20 @@ async fn handle_upgrade_installed_target_with_reporter(
             )));
         }
     }
-
-    for (category, command) in &installed_commands {
-        let short_target = format!("{category}/{command}");
-        let canonical = format!("shell/{short_target}");
-        let link_path = crate::bin_links::command_path_for_name(
-            config.bin_dir(),
-            std::ffi::OsStr::new(command),
-        );
-        let conflict = link_report
-            .conflicts
-            .iter()
-            .any(|conflict| conflict.link_path == link_path);
-        let was_pending = pending_targets.contains(&short_target);
-        let still_pending = remaining_targets.contains(&short_target);
-        let mut effects = Vec::new();
-        if cache_updated_categories.contains(category) {
-            effects.push(LifecycleEffect::CacheWritten);
-        }
-        if was_pending && !still_pending {
-            effects.push(LifecycleEffect::ResourceWritten);
-            effects.push(LifecycleEffect::ReceiptWritten);
-        }
-        if profile_changed && !effects.contains(&LifecycleEffect::ResourceWritten) {
-            effects.push(LifecycleEffect::ResourceWritten);
-        }
-        lifecycle_result.push(if conflict {
-            LifecycleOutcomeV1::new(
-                canonical,
-                None::<String>,
-                LifecycleStatus::Conflict,
-                effects,
-            )
-            .with_diagnostic_code("shell_command_conflict")
-        } else if still_pending {
-            LifecycleOutcomeV1::new(canonical, None::<String>, LifecycleStatus::Failed, effects)
-                .with_diagnostic_code("shell_upgrade_not_converged")
-        } else {
-            LifecycleOutcomeV1::new(
-                canonical,
-                None::<String>,
-                if was_pending || cache_updated_categories.contains(category) || profile_changed {
-                    LifecycleStatus::Changed
-                } else {
-                    LifecycleStatus::Unchanged
-                },
-                effects,
-            )
-        });
-    }
-
     Ok((
         ShellUpgradeReport {
-            updated_targets,
-            updated_categories,
+            updated_targets: core.updated_targets,
+            updated_categories: core.updated_categories,
             snapshots_updated,
-            templates_updated: template_report.updated.len(),
-            links_created: link_report.created.len(),
-            links_updated: link_report.overwritten.len(),
-            link_conflicts: link_report.conflicts.len(),
-            path_changed: updated_shell_config.is_some(),
+            templates_updated,
+            links_created,
+            links_updated,
+            link_conflicts,
+            path_changed,
         },
-        lifecycle_result,
+        core.lifecycle,
     ))
 }
-
 fn should_print_upgrade_section(
     verbose: bool,
     targets_updated: bool,
@@ -662,53 +379,6 @@ fn should_print_upgrade_section(
 
 fn should_print_link_summary(verbose: bool, conflict_count: usize) -> bool {
     verbose || conflict_count > 0
-}
-
-fn lifecycle_categories(targets: &[String]) -> Vec<String> {
-    targets
-        .iter()
-        .filter_map(|target| {
-            target
-                .split_once('/')
-                .map(|(category, _)| category.to_string())
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-async fn pending_upgrade_targets(
-    config: &Config,
-    installed_commands: &[(String, String)],
-) -> Result<BTreeSet<String>> {
-    let installed_targets = installed_commands
-        .iter()
-        .map(|(category, command)| format!("{category}/{command}"))
-        .collect::<BTreeSet<_>>();
-    Ok(crate::status::build_shell_rows(config)
-        .await?
-        .into_iter()
-        .filter(|row| {
-            row.status_sym == "↑" && !row.link_conflict && installed_targets.contains(&row.label)
-        })
-        .map(|row| row.label)
-        .collect())
-}
-
-async fn conflicting_upgrade_targets(
-    config: &Config,
-    installed_commands: &[(String, String)],
-) -> Result<BTreeSet<String>> {
-    let installed_targets = installed_commands
-        .iter()
-        .map(|(category, command)| format!("{category}/{command}"))
-        .collect::<BTreeSet<_>>();
-    Ok(crate::status::build_shell_rows(config)
-        .await?
-        .into_iter()
-        .filter(|row| row.link_conflict && installed_targets.contains(&row.label))
-        .map(|row| row.label)
-        .collect())
 }
 
 pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<LifecycleResultV1> {
@@ -778,9 +448,11 @@ pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<L
 }
 
 pub async fn handle_completion_install(config: &Config) -> Result<()> {
-    let source_commands = installed_source_commands(config).await?;
+    let completion = crate::core_runtime::from_config(config)?
+        .install_shell_completion(false)
+        .await?;
     let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
-    let shell_update = append_path_to_shell_config(config, false, &source_commands).await?;
+    let shell_update = completion.profile;
     let profile_path = managed_shell_profile_path(config);
 
     if shell_update.profile_updated {
@@ -833,65 +505,6 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn shell_link_exists(link: &Path) -> bool {
-    link.exists()
-        || std::fs::symlink_metadata(link)
-            .map(|meta| meta.file_type().is_symlink())
-            .unwrap_or(false)
-}
-
-/// For each script that declares `# shine-template: true`, read the template from
-/// `source_path` (presets_dir — never modified), substitute env variables from
-fn build_script_pairs(
-    config: &Config,
-    categories: &[metadata::ShellCategory],
-) -> Vec<ScriptTemplate> {
-    categories
-        .iter()
-        .flat_map(|cat| {
-            cat.files.iter().map(|file| {
-                let source =
-                    super::deployment::deployment_source_path(config, &cat.name, &file.source_rel);
-                let rendered =
-                    super::deployment::rendered_path(config, &cat.name, &file.source_rel);
-                ScriptTemplate {
-                    source_path: source,
-                    rendered_path: rendered,
-                    display_name: format!("{}/{}", cat.name, file.command_name),
-                    transforms: file.transforms.clone(),
-                }
-            })
-        })
-        .collect()
-}
-
-pub(super) async fn installed_source_commands(config: &Config) -> Result<Vec<String>> {
-    let categories = metadata::load_installed_categories(config, None).await?;
-    installed_source_commands_for_categories(config, &categories).await
-}
-
-async fn installed_source_commands_for_categories(
-    config: &Config,
-    categories: &[metadata::ShellCategory],
-) -> Result<Vec<String>> {
-    let mut commands = categories
-        .iter()
-        .flat_map(|cat| cat.files.iter())
-        .filter(|file| file.needs_source)
-        .filter(|file| {
-            let link = crate::bin_links::command_path_for_name(
-                config.bin_dir(),
-                std::ffi::OsStr::new(&file.command_name),
-            );
-            shell_link_exists(&link)
-        })
-        .map(|file| file.command_name.clone())
-        .collect::<Vec<_>>();
-    commands.sort();
-    commands.dedup();
-    Ok(commands)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::ShellType;
@@ -916,17 +529,6 @@ mod tests {
         assert!(!should_print_link_summary(false, 0));
         assert!(should_print_link_summary(true, 0));
         assert!(should_print_link_summary(false, 1));
-    }
-
-    #[test]
-    fn lifecycle_categories_count_each_shell_category_once() {
-        let targets = vec![
-            "proxy/setproxy".to_string(),
-            "proxy/usetproxy".to_string(),
-            "utils/copyfile".to_string(),
-        ];
-
-        assert_eq!(lifecycle_categories(&targets), vec!["proxy", "utils"]);
     }
 
     async fn make_temp_dir() -> PathBuf {
@@ -1615,10 +1217,9 @@ mod tests {
         handle_install(&config, Some("agent"), false).await.unwrap();
         handle_install(&config, Some("proxy"), false).await.unwrap();
 
-        let proxy_only = metadata::load_installed_categories(&config, Some("proxy"))
-            .await
-            .unwrap();
-        let commands = installed_source_commands_for_categories(&config, &proxy_only)
+        let commands = crate::core_runtime::from_config(&config)
+            .unwrap()
+            .installed_shell_source_commands(Some("proxy"))
             .await
             .unwrap();
 
@@ -1880,7 +1481,11 @@ mod tests {
         );
         assert!(launcher_content.contains("bun"));
 
-        let source_commands = installed_source_commands(&config).await.unwrap();
+        let source_commands = crate::core_runtime::from_config(&config)
+            .unwrap()
+            .installed_shell_source_commands(None)
+            .await
+            .unwrap();
         assert!(!source_commands.contains(&"ccenv".to_string()));
 
         fs::remove_dir_all(&dir).await.unwrap();

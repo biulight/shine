@@ -34,13 +34,13 @@ quiet/verbose sections, conflicts, profile hints, and stdout/stderr routing.
 
 ## App install (`shine app install <category>`)
 
-Phase 2 Core extraction owns App manifest/schema types, transforms, hashes, persistence, and normal
-managed-file effects in `shine-core`. `CoreRuntime` also provides a host-neutral prepared App
-executor used by the Core-only harness; it loads the manifest before mutation, maps Contract v1,
-and preserves target isolation. CLI compatibility adapters continue to render the established
-events while remaining orchestration is migrated behind that executor.
+`CoreRuntime` owns the complete App lifecycle from an immutable preset snapshot: metadata and
+destination resolution, one-pass assessment, generators, transforms, Copy/JSON merge, relocation,
+ownership, hooks, artifacts, embedded cache, manifest persistence, and Contract v1 mapping. The
+CLI captures config plus `rust-embed` bytes, submits the request, and renders typed events/reports.
+There is no prepared-file or CLI fallback executor.
 
-`cli/src/apps/mod.rs` orchestrates:
+The Core flow is:
 
 1. **Metadata** — `apps/metadata.rs` parses `presets/app/<category>/shine.toml` (category `dest`,
    optional per-`[[files]]` `dest`, `transforms`, `requires_admin`, …). A file destination overrides
@@ -94,7 +94,7 @@ assessment's absolute paths or content into the reusable result.
 
 ## App upgrade (`shine upgrade`)
 
-`apps/upgrade.rs::handle_upgrade_installed` re-applies presets (including re-running transforms
+Core App upgrade re-applies presets (including re-running transforms
 with the *current* `[env]` values) to every manifest-tracked install, and cleans up stale entries
 whose preset no longer exists. `shine upgrade app/<category>` selects manifest entries before the
 stale/update loop, so no other app category can be mutated. Shell and managed-sys targeted upgrades
@@ -261,13 +261,12 @@ owner-only file on Unix. Export never edits or removes the workspace definition 
 
 ## Sys bootstrap (`shine sys bootstrap`)
 
-Sys driver/status types, receipts, resource outcomes, and `sys-manifest.toml` are Core-owned.
-`CoreRuntime` has an in-memory managed-file apply/remove executor that shares App file ownership
-primitives; platform-specific split-DNS/bootstrap/profile orchestration remains on the active Phase
-2 migration path and does not expand Lifecycle Contract v1.
+Sys driver/status types, receipts, resource outcomes, `sys-manifest.toml`, split-DNS, bootstrap,
+and profile orchestration are Core-owned. Managed mutations return Contract v1; bootstrap and
+profile retain their separate typed domain reports.
 
-Selection resolves explicit ordered items, a named selection profile, or the existing
-interactive/default path through `sys/selection.rs`. Explicit items accept only `mode = "init"`,
+Core selection resolves explicit ordered items, a named selection profile, or the existing
+interactive/default path through the interaction port. Explicit items accept only `mode = "init"`,
 deduplicate by first occurrence, and never widen to sibling items.
 
 Every executable sys manifest declares `version = 2`. Each init item has both `[items.detect]` and
@@ -276,9 +275,10 @@ provider argv or one per-item script, limits runtime/output, detects again, and 
 canonical `sys/<item>` outcome. A v1 or unknown manifest version fails before detection, elevation,
 installer execution, or profile writes.
 
-Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`. `sys/profile_compose.rs` combines base pre/post content
-with all enabled item integrations in stable manifest order. `sys/profile.rs` reconciles the two
-generated files before `sys/profile_blocks.rs` updates the existing pre/post sentinels. Composition
+Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`.
+`utils/src/runtime/sys_profile/compose.rs` combines base pre/post content with all enabled item
+integrations in stable manifest order. Core reconciles the two generated files before its profile
+block module updates the existing pre/post sentinels. Composition
 happens once after item execution, and render failure leaves the last installed profile intact.
 `sys profile enable/disable` changes only this activation state and generated profile content.
 

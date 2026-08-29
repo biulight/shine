@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
 pub(crate) use utils::runtime::RuntimePlatform as OperatingSystem;
 
 pub fn executable_name_for_os(os: &str) -> &'static str {
@@ -12,10 +13,6 @@ pub fn executable_name_for_os(os: &str) -> &'static str {
 
 pub fn current_executable_name() -> &'static str {
     executable_name_for_os(std::env::consts::OS)
-}
-
-pub(crate) fn current_platform() -> OperatingSystem {
-    OperatingSystem::current()
 }
 
 pub fn release_target(os: &str, arch: &str) -> Result<String> {

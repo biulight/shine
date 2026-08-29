@@ -1,22 +1,25 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use crate::config::Config;
-use crate::install_core::eol_eq;
-use crate::shells::ShellType;
+use crate::install::eol_eq;
+#[cfg(test)]
+use crate::runtime::RealHost;
+use crate::runtime::{
+    FileSystemHost, SYS_PROFILE_PHASES, ShellProfileBlockPosition, ShellType, SysProfilePhase,
+};
 
-use super::profile::SysShellProfileUpdate;
-use super::{SYS_PROFILE_PHASES, ShellProfileBlockPosition, SysProfilePhase};
+use super::{SysProfileRuntimeConfig, SysShellProfileUpdate};
 
 pub(super) async fn update_sys_shell_profiles(
-    config: &Config,
+    host: &impl FileSystemHost,
+    config: &SysProfileRuntimeConfig,
     os_id: &str,
     sys_shell: &str,
 ) -> Result<SysShellProfileUpdate> {
     match os_id {
-        "macos" => update_macos_shell_profile(config, os_id).await,
-        "ubuntu" => update_ubuntu_shell_profile(config, os_id, sys_shell).await,
-        "windows" => update_windows_shell_profile(config, os_id).await,
+        "macos" => update_macos_shell_profile(host, config, os_id).await,
+        "ubuntu" => update_ubuntu_shell_profile(host, config, os_id, sys_shell).await,
+        "windows" => update_windows_shell_profile(host, config, os_id).await,
         _ => Ok(SysShellProfileUpdate {
             updated: false,
             unsupported_shell: true,
@@ -25,9 +28,13 @@ pub(super) async fn update_sys_shell_profiles(
     }
 }
 
-async fn update_macos_shell_profile(config: &Config, os_id: &str) -> Result<SysShellProfileUpdate> {
+async fn update_macos_shell_profile(
+    host: &impl FileSystemHost,
+    config: &SysProfileRuntimeConfig,
+    os_id: &str,
+) -> Result<SysShellProfileUpdate> {
     let path = config.home_dir.join(".zshrc");
-    let updated = update_sys_shell_profile_blocks(&path, os_id, None).await?;
+    let updated = update_sys_shell_profile_blocks_with_host(host, &path, os_id, None).await?;
     Ok(SysShellProfileUpdate {
         updated,
         unsupported_shell: false,
@@ -36,19 +43,21 @@ async fn update_macos_shell_profile(config: &Config, os_id: &str) -> Result<SysS
 }
 
 async fn update_ubuntu_shell_profile(
-    config: &Config,
+    host: &impl FileSystemHost,
+    config: &SysProfileRuntimeConfig,
     os_id: &str,
     sys_shell: &str,
 ) -> Result<SysShellProfileUpdate> {
     match config.shell_type {
         ShellType::Bash => {
-            let updated = update_sys_shell_profile_blocks(
+            let updated = update_sys_shell_profile_blocks_with_host(
+                host,
                 &config.home_dir.join(".bashrc"),
                 os_id,
                 Some("bash"),
             )
             .await?;
-            remove_sys_shell_profile_blocks(&config.home_dir.join(".zshrc"), os_id).await?;
+            remove_sys_shell_profile_blocks(host, &config.home_dir.join(".zshrc"), os_id).await?;
             Ok(SysShellProfileUpdate {
                 updated,
                 unsupported_shell: false,
@@ -56,13 +65,14 @@ async fn update_ubuntu_shell_profile(
             })
         }
         ShellType::Zsh => {
-            let updated = update_sys_shell_profile_blocks(
+            let updated = update_sys_shell_profile_blocks_with_host(
+                host,
                 &config.home_dir.join(".zshrc"),
                 os_id,
                 Some("zsh"),
             )
             .await?;
-            remove_sys_shell_profile_blocks(&config.home_dir.join(".bashrc"), os_id).await?;
+            remove_sys_shell_profile_blocks(host, &config.home_dir.join(".bashrc"), os_id).await?;
             Ok(SysShellProfileUpdate {
                 updated,
                 unsupported_shell: false,
@@ -78,7 +88,8 @@ async fn update_ubuntu_shell_profile(
 }
 
 async fn update_windows_shell_profile(
-    config: &Config,
+    host: &impl FileSystemHost,
+    config: &SysProfileRuntimeConfig,
     os_id: &str,
 ) -> Result<SysShellProfileUpdate> {
     let mut updated = false;
@@ -90,7 +101,7 @@ async fn update_windows_shell_profile(
             .home_dir
             .join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
     ] {
-        updated |= update_sys_shell_profile_blocks(&path, os_id, None).await?;
+        updated |= update_sys_shell_profile_blocks_with_host(host, &path, os_id, None).await?;
     }
     Ok(SysShellProfileUpdate {
         updated,
@@ -99,21 +110,33 @@ async fn update_windows_shell_profile(
     })
 }
 
+#[cfg(test)]
 pub(super) async fn update_sys_shell_profile_blocks(
     path: &Path,
     os_id: &str,
     shell_name: Option<&str>,
 ) -> Result<bool> {
+    update_sys_shell_profile_blocks_with_host(&RealHost, path, os_id, shell_name).await
+}
+
+async fn update_sys_shell_profile_blocks_with_host(
+    host: &impl FileSystemHost,
+    path: &Path,
+    os_id: &str,
+    shell_name: Option<&str>,
+) -> Result<bool> {
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
+        host.create_dir_all(parent)
             .await
-            .with_context(|| format!("creating {}", parent.display()))?;
+            .map_err(|error| error.into_anyhow("creating sys shell profile directory"))?;
     }
 
-    let content = match tokio::fs::read_to_string(path).await {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    let content = match host.read(path).await {
+        Ok(bytes) => {
+            String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?
+        }
+        Err(error) if error.is_not_found() => String::new(),
+        Err(error) => return Err(error.into_anyhow("reading sys shell profile")),
     };
     let had_utf8_bom = content.contains('\u{feff}');
     let bom_was_at_start = content.starts_with('\u{feff}');
@@ -157,16 +180,20 @@ pub(super) async fn update_sys_shell_profile_blocks(
         updated.insert(0, '\u{feff}');
     }
 
-    tokio::fs::write(path, updated)
+    host.write_atomic(path, updated.as_bytes())
         .await
-        .with_context(|| format!("writing {}", path.display()))?;
+        .map_err(|error| error.into_anyhow("writing sys shell profile"))?;
     Ok(true)
 }
 
-async fn remove_sys_shell_profile_blocks(path: &Path, os_id: &str) -> Result<bool> {
-    let mut updated = remove_shell_profile_block(path, legacy_sys_sentinel(os_id)).await?;
+async fn remove_sys_shell_profile_blocks(
+    host: &impl FileSystemHost,
+    path: &Path,
+    os_id: &str,
+) -> Result<bool> {
+    let mut updated = remove_shell_profile_block(host, path, legacy_sys_sentinel(os_id)).await?;
     for phase in SYS_PROFILE_PHASES {
-        updated |= remove_shell_profile_block(path, sys_sentinel(os_id, phase)).await?;
+        updated |= remove_shell_profile_block(host, path, sys_sentinel(os_id, phase)).await?;
     }
     Ok(updated)
 }
@@ -282,17 +309,23 @@ fn trim_outer_blank_lines(content: &str) -> String {
     crate::sentinel::trim_outer_blank_lines(content)
 }
 
-async fn remove_shell_profile_block(path: &Path, sentinel: (&str, &str)) -> Result<bool> {
-    let Ok(content) = tokio::fs::read_to_string(path).await else {
+async fn remove_shell_profile_block(
+    host: &impl FileSystemHost,
+    path: &Path,
+    sentinel: (&str, &str),
+) -> Result<bool> {
+    let Ok(bytes) = host.read(path).await else {
         return Ok(false);
     };
+    let content =
+        String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
     let updated = remove_sentinel_block(&content, sentinel);
     if updated == content {
         return Ok(false);
     }
-    tokio::fs::write(path, updated)
+    host.write_atomic(path, updated.as_bytes())
         .await
-        .with_context(|| format!("writing {}", path.display()))?;
+        .map_err(|error| error.into_anyhow("writing sys shell profile"))?;
     Ok(true)
 }
 
@@ -314,6 +347,12 @@ fn sys_loader_display(os_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn make_temp_dir(label: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("{label}-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&path).await.unwrap();
+        path
+    }
 
     const SENTINEL: (&str, &str) = ("START", "END");
 
@@ -438,7 +477,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_sys_shell_profile_blocks_inserts_pre_and_post_on_empty_file() {
-        let dir = crate::test_support::make_temp_dir("shine-sys-profile").await;
+        let dir = make_temp_dir("shine-sys-profile").await;
         let path = dir.join("profile.sh");
 
         let updated = update_sys_shell_profile_blocks(&path, "ubuntu", Some("bash"))
@@ -457,7 +496,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_sys_shell_profile_blocks_is_idempotent_when_already_up_to_date() {
-        let dir = crate::test_support::make_temp_dir("shine-sys-profile").await;
+        let dir = make_temp_dir("shine-sys-profile").await;
         let path = dir.join("profile.sh");
 
         assert!(
@@ -477,7 +516,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_sys_shell_profile_blocks_ignores_crlf_and_preserves_endings() {
-        let dir = crate::test_support::make_temp_dir("shine-sys-profile").await;
+        let dir = make_temp_dir("shine-sys-profile").await;
         let path = dir.join("profile.sh");
 
         // Install (writes the block LF).
@@ -505,7 +544,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_sys_shell_profile_blocks_preserves_leading_bom() {
-        let dir = crate::test_support::make_temp_dir("shine-sys-profile").await;
+        let dir = make_temp_dir("shine-sys-profile").await;
         let path = dir.join("profile.ps1");
         tokio::fs::write(&path, "\u{feff}# existing content\n")
             .await
@@ -531,7 +570,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_sys_shell_profile_blocks_migrates_legacy_sentinel() {
-        let dir = crate::test_support::make_temp_dir("shine-sys-profile").await;
+        let dir = make_temp_dir("shine-sys-profile").await;
         let path = dir.join("profile.sh");
         let (legacy_start, legacy_end) = legacy_sys_sentinel("ubuntu");
         tokio::fs::write(&path, format!("{legacy_start}\nold body\n{legacy_end}\n"))

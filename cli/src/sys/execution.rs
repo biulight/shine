@@ -2,18 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::colors;
 
-use super::{
-    ResolvedSelection, SysItem, SysItemOutcome, SysItemStatus, SysManifest,
-    selection::format_item_ids,
-};
-
-pub(super) fn manifest_item_labels(manifest: &SysManifest) -> BTreeMap<&str, String> {
-    manifest
-        .items
-        .iter()
-        .map(|item| (item.id.as_str(), item.label.clone()))
-        .collect()
-}
+#[cfg(test)]
+use super::SysItem;
+use super::{ResolvedSelection, SysItemOutcome, SysItemStatus, selection::format_item_ids};
 
 pub(super) fn sys_item_label_width(
     selection: &ResolvedSelection,
@@ -63,6 +54,7 @@ pub(super) fn proxy_env_vars(config: &crate::config::Config) -> Vec<(&'static st
     ]
 }
 
+#[cfg(test)]
 pub(super) fn item_install_start_text(item: &SysItem, requires_admin: bool) -> String {
     let admin_note = if requires_admin {
         " (administrator access required)"
@@ -70,14 +62,6 @@ pub(super) fn item_install_start_text(item: &SysItem, requires_admin: bool) -> S
         ""
     };
     format!("sys/{} ({}) installing{admin_note}", item.id, item.label)
-}
-
-pub(super) fn print_item_install_start(item: &SysItem, requires_admin: bool) {
-    println!(
-        "  {} {}",
-        colors::symbol("•"),
-        colors::dim(&item_install_start_text(item, requires_admin))
-    );
 }
 
 pub(super) fn print_item_outcome(outcome: &SysItemOutcome, label_width: usize) {
@@ -170,10 +154,6 @@ pub(super) fn presentation_symbol(value: &str) -> String {
 
 pub(super) fn presentation_symbol_stderr(value: &str) -> String {
     colors::symbol_stderr(value)
-}
-
-pub(super) fn presentation_yellow(value: &str) -> String {
-    colors::yellow(value)
 }
 
 #[cfg(test)]

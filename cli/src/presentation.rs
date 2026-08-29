@@ -49,6 +49,7 @@ pub(crate) trait LifecycleReporter {
 pub(crate) trait LifecycleInteraction {
     fn confirm(&mut self, prompt: &str, default: bool) -> anyhow::Result<bool>;
 
+    #[allow(dead_code)]
     fn authorize_admin<'a>(
         &'a mut self,
         item_count: usize,
@@ -71,6 +72,41 @@ impl LifecycleInteraction for TerminalInteraction {
         item_count: usize,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + 'a>> {
         Box::pin(crate::privilege::ensure_admin(item_count))
+    }
+}
+
+impl utils::runtime::RuntimeInteraction for TerminalInteraction {
+    fn confirm(&mut self, code: &'static str, default: bool) -> anyhow::Result<bool> {
+        LifecycleInteraction::confirm(self, code, default)
+    }
+
+    fn authorize_admin<'a>(
+        &'a mut self,
+        item_count: usize,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + 'a>> {
+        Box::pin(crate::privilege::ensure_admin(item_count))
+    }
+
+    fn select_many(
+        &mut self,
+        code: &'static str,
+        choices: &[String],
+        defaults: &[String],
+    ) -> anyhow::Result<Vec<String>> {
+        let selected = dialoguer::MultiSelect::new()
+            .with_prompt(code)
+            .items(choices)
+            .defaults(
+                &choices
+                    .iter()
+                    .map(|choice| defaults.contains(choice))
+                    .collect::<Vec<_>>(),
+            )
+            .interact()?;
+        Ok(selected
+            .into_iter()
+            .map(|index| choices[index].clone())
+            .collect())
     }
 }
 

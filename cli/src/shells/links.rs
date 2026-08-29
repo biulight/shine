@@ -1,45 +1,9 @@
-use super::metadata;
 use crate::colors;
 use crate::config::Config;
 use crate::output;
 use crate::path_display;
-use anyhow::Result;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::path::Path;
-
-pub(super) fn build_link_specs(
-    config: &Config,
-    categories: &[metadata::ShellCategory],
-) -> Result<Vec<crate::bin_links::LinkSpec>> {
-    categories
-        .iter()
-        .flat_map(|cat| {
-            cat.files.iter().map(|file| {
-                let source =
-                    super::deployment::deployment_source_path(config, &cat.name, &file.source_rel);
-                let rendered =
-                    super::deployment::rendered_path(config, &cat.name, &file.source_rel);
-                let has_transforms = !file.transforms.is_empty()
-                    || std::fs::read(&source)
-                        .ok()
-                        .is_some_and(|bytes| crate::presets::parse_template_annotation(&bytes));
-                let effective = if has_transforms { rendered } else { source };
-                let bun_runtime = super::deployment::bun_runtime_spec(config, &cat.name, file)?;
-                Ok(crate::bin_links::LinkSpec {
-                    source: effective,
-                    link_name: OsString::from(&file.command_name),
-                    runtime: file.runtime,
-                    bun_dependencies: bun_runtime.dependency_mode,
-                    env: file.env.iter().map(|spec| spec.to_with_arg()).collect(),
-                    render_target: (config.is_external_presets
-                        && config.external_shell_mode == crate::config::ExternalShellMode::Live
-                        && has_transforms)
-                        .then(|| format!("shell/{}/{}", cat.name, file.command_name)),
-                })
-            })
-        })
-        .collect()
-}
 
 pub(super) fn link_conflict_render_lines(
     config: &Config,

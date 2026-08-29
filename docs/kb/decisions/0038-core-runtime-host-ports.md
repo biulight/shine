@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-29
-- **Evidence**: `utils/src/runtime/`, `utils/src/install/`,
+- **Evidence**: `utils/src/runtime/`, `utils/src/runtime/sys_profile/`, `utils/src/install/`,
   `docs/shine-core-runtime-prd.md`
 
 ## Context
@@ -48,3 +48,6 @@ source/state snapshot for approval and do not derive permissions.
 - Domain-specific models remain distinct; no generic action IR is introduced early.
 - Moving a domain requires moving its manifests and resource decisions with it, not wrapping the
   old CLI executor behind a callback.
+- App generator/hook/artifact/cache, Shell launcher/profile/live-render, Sys bootstrap/profile and
+  split-DNS, preset validation, and App/Shell inspection therefore execute in Core. CLI adapters
+  may render typed reports and events but may not retain a fallback resource executor.

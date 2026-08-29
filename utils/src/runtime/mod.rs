@@ -4,31 +4,82 @@
 //! They are not a stable third-party API in Roadmap Phase 2.
 
 mod app;
+mod app_metadata;
 mod host;
+mod inspection;
+pub mod launcher;
 mod memory;
 mod preset;
+mod profile;
 mod shell;
 mod sys;
+mod sys_bootstrap;
+mod sys_manifest;
+mod sys_model;
+mod sys_profile;
+mod validation;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub use host::{
-    FileKind, FileMetadata, FileSystemHost, HostError, HostOperation, NullObserver, ProcessHost,
-    ProcessOutput, ProcessRequest, RealHost, RuntimeEvent, RuntimeInteraction, RuntimeObserver,
+    FileKind, FileMetadata, FileSystemHost, HostError, HostOperation, NullObserver,
+    PrivilegedFileSystemHost, ProcessHost, ProcessIo, ProcessOutput, ProcessRequest, RealHost,
+    RuntimeEvent, RuntimeInteraction, RuntimeObserver, SplitDnsHost, SplitDnsRequest,
+    SplitDnsState,
+};
+pub use inspection::{
+    AppFileInspection, DomainInspectionReport, InspectionChange, InspectionFileStatus,
+    ShellFileInspection,
+};
+pub use launcher::{
+    LinkConflict, LinkConflictKind, LinkReport, LinkSpec, UnlinkReport, command_path_for_name,
+    link_executables_with_host, link_executables_with_names, link_is_current,
+    link_is_current_with_host, link_stem, unlink_managed, unlink_managed_command,
+    unlink_managed_command_with_host,
 };
 pub use memory::InMemoryHost;
-pub use preset::{PresetSnapshot, PresetSourceKind, PresetValidationIssue, PresetValidationReport};
+pub use preset::{
+    PresetFile, PresetFileOrigin, PresetSnapshot, PresetSourceKind, PresetValidationIssue,
+    PresetValidationReport,
+};
+pub use profile::{
+    PathUpdateStatus, SHELL_SENTINEL_END, SHELL_SENTINEL_START, ShellConfigUpdate,
+    ShellProfileRemoval, managed_profile_snippet, managed_shell_profile_path,
+    powershell_bin_assignment, powershell_quote, remove_shell_sentinel, shell_config_snippet,
+    shell_source_command, supports_completion_registration,
+};
 pub use shell::{
-    ExternalShellMode, LinkRuntime, SHELL_MANIFEST_FILE, SHELL_MANIFEST_SCHEMA_VERSION,
-    ShellCategory, ShellFile, ShellManifest, ShellManifestEntry, ShellTarget, ShellType,
-    parse_shell_lifecycle_target,
+    BunDependencyMode, BunRuntimeSpec, ExternalShellMode, LinkRuntime, SHELL_MANIFEST_FILE,
+    SHELL_MANIFEST_SCHEMA_VERSION, ShellCacheReport, ShellCacheRequest, ShellCategory,
+    ShellCompletionReport, ShellFile, ShellLifecycleReport, ShellLifecycleRequest, ShellManifest,
+    ShellManifestEntry, ShellManifestUpdateScope, ShellScriptTemplate, ShellTarget,
+    ShellTemplateReport, ShellType, ShellUninstallReport, ShellUninstallRequest,
+    ShellUpgradeLifecycleReport, ShellUpgradeRequest, parse_shell_lifecycle_target,
 };
 pub use sys::{
     ManagedFileReceipt, ManagedFileRemoveRequest, ManagedFileRequest, RECEIPT_VERSION,
     ResourceConflict, ResourceOutcome, ResourcePlan, SYS_MANIFEST_FILE,
-    SYS_MANIFEST_SCHEMA_VERSION, SplitDnsReceipt, SysDriverKind, SysItemStatus, SysRunEntry,
-    SysRunManifest, SystemReceipt,
+    SYS_MANIFEST_SCHEMA_VERSION, SplitDnsDomainRequest, SplitDnsReceipt, SysDriverKind,
+    SysItemStatus, SysManagedAction, SysManagedReport, SysManagedRequest, SysRunEntry,
+    SysRunManifest, SystemReceipt, remove_split_dns_with_host, split_dns_receipt,
+};
+pub use sys_bootstrap::{
+    SysBootstrapBatchReport, SysBootstrapBatchRequest, SysBootstrapReport, SysBootstrapRequest,
+    sys_install_requires_admin,
+};
+pub use sys_manifest::{parse_sys_manifest, validate_sys_manifest};
+pub use sys_model::{
+    LoadedSysPreset, ResolvedSelection, SYS_PROFILE_PHASES, SelectionSource,
+    ShellProfileBlockPosition, SysDetection, SysDetectionProbe, SysInstall, SysInstalledRow,
+    SysItem, SysItemMode, SysItemOutcome, SysManifest, SysPackageProvider, SysProfile,
+    SysProfilePhase, SysShellIntegration, SysShellKind, SysUpdateRow, SysUpgradeReport,
+};
+pub use sys_profile::{SysProfileStateReport, SysProfileStateRequest};
+pub use validation::{
+    PRESET_VALIDATION_SCHEMA_VERSION, PresetCategoryValidation, PresetDiagnostic,
+    PresetDiagnosticSeverity, PresetValidationReportV1, PresetValidationSummary,
+    validate_preset_path,
 };
 
 /// Fully resolved runtime inputs. Domain code must not rediscover these from
@@ -39,8 +90,59 @@ pub struct RuntimeContext {
     pub shine_dir: PathBuf,
     pub presets_dir: PathBuf,
     pub bin_dir: PathBuf,
+    pub cache_dir: PathBuf,
+    pub data_dir: PathBuf,
+    pub app_default_dest_root: PathBuf,
+    pub overlay_dir: Option<PathBuf>,
     pub platform: RuntimePlatform,
+    pub shell: ShellType,
+    pub shell_config_paths: Vec<PathBuf>,
+    pub external_shell_mode: ExternalShellMode,
+    pub is_external_presets: bool,
+    pub allow_app_hooks: bool,
+    pub allow_sys_code: bool,
+    pub linux_split_dns_ready: bool,
+    pub running_as_admin: bool,
+    pub captured_unix_time: u64,
     pub env: BTreeMap<String, String>,
+    pub path_env: Option<String>,
+    pub proxy_env: BTreeMap<String, String>,
+}
+
+impl RuntimeContext {
+    /// Construct the deterministic defaults used by Core-only tests and
+    /// embedders that do not need distribution policy.
+    pub fn isolated(
+        home_dir: PathBuf,
+        shine_dir: PathBuf,
+        presets_dir: PathBuf,
+        bin_dir: PathBuf,
+        platform: RuntimePlatform,
+    ) -> Self {
+        Self {
+            cache_dir: shine_dir.join("cache"),
+            data_dir: home_dir.join(".local/share"),
+            app_default_dest_root: home_dir.join(".config"),
+            home_dir: home_dir.clone(),
+            shine_dir,
+            presets_dir,
+            bin_dir,
+            overlay_dir: None,
+            platform,
+            shell: ShellType::default(),
+            shell_config_paths: vec![home_dir.join(".zshrc")],
+            external_shell_mode: ExternalShellMode::Snapshot,
+            is_external_presets: false,
+            allow_app_hooks: false,
+            allow_sys_code: false,
+            linux_split_dns_ready: true,
+            running_as_admin: false,
+            captured_unix_time: 0,
+            env: BTreeMap::new(),
+            path_env: None,
+            proxy_env: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -118,6 +220,12 @@ impl<H> CoreRuntime<H> {
         &self.context
     }
 
+    /// Frontend adapter hook used while legacy configuration loading is being
+    /// collapsed into one captured context. Domain executors never call this.
+    pub fn context_mut_for_cli(&mut self) -> &mut RuntimeContext {
+        &mut self.context
+    }
+
     pub fn presets(&self) -> &PresetSnapshot {
         &self.presets
     }
@@ -161,19 +269,26 @@ impl<H: FileSystemHost> CoreRuntime<H> {
     }
 }
 
+pub use app::{
+    AppArtifact, AppArtifactAction, AppArtifactRequest, AppCacheRequest, AppCategory,
+    AppDestinationRoot, AppFile, AppFileAction, AppFileLifecycleReport, AppGenerator,
+    AppGeneratorRequest, AppHook, AppHookPhase, AppHookReport, AppHookRequest, AppLifecycleReport,
+    AppLifecycleRequest, AppListMode, AppRefreshRequest, AppUninstallLifecycleRequest,
+    AppUpgradeLifecycleReport, AppUpgradeRequest, ArtifactRuntime,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn context() -> RuntimeContext {
-        RuntimeContext {
-            home_dir: PathBuf::from("/home/test"),
-            shine_dir: PathBuf::from("/home/test/.shine"),
-            presets_dir: PathBuf::from("/home/test/.shine/presets"),
-            bin_dir: PathBuf::from("/home/test/.shine/bin"),
-            platform: RuntimePlatform::Linux,
-            env: BTreeMap::new(),
-        }
+        RuntimeContext::isolated(
+            PathBuf::from("/home/test"),
+            PathBuf::from("/home/test/.shine"),
+            PathBuf::from("/home/test/.shine/presets"),
+            PathBuf::from("/home/test/.shine/bin"),
+            RuntimePlatform::Linux,
+        )
     }
 
     #[tokio::test]
@@ -200,7 +315,3 @@ mod tests {
         }));
     }
 }
-pub use app::{
-    AppArtifact, AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook,
-    AppInstallRequest, AppListMode, AppUninstallRequest, ArtifactRuntime, PreparedAppFile,
-};

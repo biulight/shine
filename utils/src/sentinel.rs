@@ -47,11 +47,10 @@ pub fn extract_block_with_newline<'a>(content: &'a str, sentinel: &Sentinel) -> 
 ///
 /// No-op if either marker is missing. When present, consumes one preceding
 /// blank line (a literal `"\n\n"` tail immediately before the start marker)
-/// and the trailing newline immediately after the end marker, if present.
+/// and the trailing LF or CRLF immediately after the end marker, if present.
 ///
-/// On CRLF input, neither the preceding blank line nor the trailing newline
-/// is consumed: the checks look for a literal `"\n\n"` tail / leading
-/// `'\n'`, which a `"\r\n"` sequence doesn't satisfy. CRLF bytes elsewhere in
+/// On CRLF input the preceding blank line is not consumed because the check
+/// deliberately looks for a literal `"\n\n"` tail. CRLF bytes elsewhere in
 /// `content` are left untouched (this function never rewrites line endings).
 pub fn remove_block_bytewise(content: &str, sentinel: &Sentinel) -> String {
     let start = match content.find(sentinel.start) {
@@ -62,7 +61,9 @@ pub fn remove_block_bytewise(content: &str, sentinel: &Sentinel) -> String {
         Some(i) => i + sentinel.end.len(),
         None => return content.to_string(),
     };
-    let end = if content[end_marker..].starts_with('\n') {
+    let end = if content[end_marker..].starts_with("\r\n") {
+        end_marker + 2
+    } else if content[end_marker..].starts_with('\n') {
         end_marker + 1
     } else {
         end_marker

@@ -5,6 +5,7 @@ pub mod colors;
 pub mod commands;
 pub mod completion;
 pub mod config;
+pub(crate) mod core_runtime;
 pub mod env;
 pub mod git_pull;
 pub mod home;
@@ -18,7 +19,8 @@ pub mod persist;
 pub mod platform;
 pub(crate) mod presentation;
 pub mod preset_commands;
-pub mod preset_meta;
+#[cfg(test)]
+mod preset_meta;
 pub mod preset_validation;
 pub mod presets;
 pub mod privilege;

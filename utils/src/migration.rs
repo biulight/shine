@@ -109,11 +109,11 @@ mod tests {
 
     #[test]
     fn test_convert_to_edit_toml_value_float() {
-        let v = toml::Value::Float(3.14);
+        let v = toml::Value::Float(2.5);
         let result = convert_to_edit_toml_value(&v);
         assert!(matches!(result, toml_edit::Value::Float(_)));
         if let toml_edit::Value::Float(f) = result {
-            assert_eq!(*f.value(), 3.14);
+            assert_eq!(*f.value(), 2.5);
         }
     }
 
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn test_convert_to_edit_toml_value_datetime() {
         let dt: toml::value::Datetime = "1979-05-27T07:32:00Z".parse().unwrap();
-        let v = toml::Value::Datetime(dt.clone());
+        let v = toml::Value::Datetime(dt);
         let result = convert_to_edit_toml_value(&v);
         assert!(matches!(result, toml_edit::Value::Datetime(_)));
         if let toml_edit::Value::Datetime(d) = result {
@@ -329,8 +329,8 @@ TOKEN = { value = "old", description = "API token" }
             &TargetValue::from(42i64)
         ));
         assert!(values_equal(
-            &EditValue::from(3.14f64),
-            &TargetValue::from(3.14f64)
+            &EditValue::from(2.5f64),
+            &TargetValue::from(2.5f64)
         ));
         assert!(values_equal(
             &EditValue::from(true),

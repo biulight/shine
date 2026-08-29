@@ -16,6 +16,13 @@ Update this file when modules move, split, merge, or take on a different respons
 | `utils/` | Reusable `shine-core` package with no CLI/Tauri dependency |
 | `utils/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
 | `utils/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
+| `utils/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `utils/src/runtime/shell.rs` | Complete Shell assessment/install/upgrade/uninstall/live render, launcher, cache, profile, and manifest orchestration |
+| `utils/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS orchestration, and run-manifest persistence |
+| `utils/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
+| `utils/src/runtime/sys_profile/` | Sys profile composition, three-way reconciliation, phase sentinels, BOM and CRLF behavior |
+| `utils/src/runtime/validation.rs` | Preset discovery, V1 diagnostics, and App/Shell/Sys schema validation |
+| `utils/src/runtime/inspection.rs` | Typed App/Shell inspection status and structural change vocabulary |
 | `utils/src/install/` | Core-owned transforms, EOL handling, App manifest, and host-neutral managed-file operations |
 | `utils/src/persist.rs` | Core-owned atomic persistence and versioned TOML helpers |
 | `presets/` | Embedded shell, app, and OS bootstrap assets |
@@ -80,18 +87,15 @@ Update this file when modules move, split, merge, or take on a different respons
 | Path | Responsibility |
 |---|---|
 | `cli/src/apps/mod.rs` | Shared app kernel and handler re-exports |
-| `cli/src/apps/install.rs` | App install orchestration and structured file/cache/hook outcomes |
-| `cli/src/apps/uninstall.rs` | Manifest-driven category uninstall and structured teardown/cache/purge outcomes |
-| `cli/src/apps/upgrade.rs` | Installed app upgrades, stale-entry cleanup, and structured outcomes |
+| `cli/src/apps/install.rs` | Core App-install request adapter and terminal rendering |
+| `cli/src/apps/uninstall.rs` | Core App-uninstall request adapter and terminal rendering |
+| `cli/src/apps/upgrade.rs` | Core App-upgrade request adapter and terminal rendering |
 | `cli/src/apps/info.rs` | App list/info status |
 | `cli/src/apps/report.rs` | Install/uninstall outcome formatting |
-| `cli/src/apps/metadata.rs` | `shine.toml` app schema and parsing |
+| `cli/src/apps/metadata.rs` | Compatibility re-exports of Core App metadata types |
 | `cli/src/apps/annotation.rs` | Legacy `shine-dest:` annotation parsing |
-| `cli/src/apps/generator.rs` | `[[files]].generator` execution, limits, and permission gate |
-| `cli/src/apps/refresh.rs` | Explicit generator refresh with ownership/modification guards |
-| `cli/src/apps/hooks.rs` | Shared `post_install`/`post_upgrade` hook runner |
-| `cli/src/apps/build.rs` | Explicit artifact apply/remove and uninstall teardown |
-| `cli/src/apps/json_merge.rs` | Managed-key JSON merge strategy |
+| `cli/src/apps/refresh.rs` | Core explicit-generator-refresh adapter |
+| `cli/src/apps/build.rs` | Core artifact apply/remove adapter |
 | `cli/src/install_core/file_ops.rs` | Copy, backup, restore, privileged filesystem operations |
 | `cli/src/install_core/manifest.rs` | Compatibility re-export of Core-owned `app-manifest.toml` types |
 | `utils/src/install/` | App manifest, file ownership primitives, `jsonc-to-json`/`template`, and EOL helpers |
@@ -104,15 +108,12 @@ logic.
 | Path | Responsibility |
 |---|---|
 | `cli/src/shells/mod.rs` | Shell types, shared accessors, handler re-exports |
-| `cli/src/shells/deployment.rs` | Embedded/external snapshot/live orchestration using Core-owned Shell models and manifest |
-| `cli/src/shells/install.rs` | Category/command install, read-only pending assessment, and installed-shell upgrade results |
+| `cli/src/shells/deployment.rs` | Hidden live-render Core adapter |
+| `cli/src/shells/install.rs` | Core category/command install and upgrade adapter |
 | `cli/src/shells/uninstall.rs` | Category/command uninstall results with sibling/cache and foreign-launcher protection |
 | `cli/src/shells/links.rs` | Launcher/link specifications and conflict reporting |
 | `cli/src/shells/report.rs` | Shell list/install/uninstall/upgrade reporting |
-| `cli/src/shells/profile.rs` | PATH/source-command profile blocks |
-| `cli/src/shells/template.rs` | Installed shell template rendering |
-| `cli/src/shells/metadata.rs` | Shell category/file metadata parsing |
-| `cli/src/bin_links.rs` | Native symlinks/shims and managed Bun launchers in `~/.shine/bin/` |
+| `cli/src/shells/metadata.rs` | Compatibility re-exports of Core Shell metadata types |
 | `cli/src/bun_runtime.rs` | Shared source-scoped Bun dependency policy and command construction |
 | `cli/src/sentinel.rs` | Shared sentinel-block primitives used by shell and sys profiles |
 
@@ -120,22 +121,16 @@ logic.
 
 | Path | Responsibility |
 |---|---|
-| `cli/src/sys/commands.rs` | List/info/status/bootstrap orchestration and manifest loading |
-| `cli/src/sys/bootstrap.rs` | Read-only detection plus Homebrew/APT/Winget/script install actions |
+| `cli/src/sys/commands.rs` | Sys list/info/status rendering and Core bootstrap batch adapter |
 | `cli/src/sys/detect.rs` | OS and Linux distribution detection |
 | `cli/src/sys/managed.rs` | Managed-resource apply/update/remove/upgrade and structured result adapters |
-| `cli/src/sys/model.rs` | Sys manifest and runtime outcome models |
-| `cli/src/sys/manifest.rs` | Preset parsing and validation |
+| `cli/src/sys/model.rs` | Compatibility re-exports of Core Sys models |
+| `cli/src/sys/manifest.rs` | Core parser compatibility adapter |
 | `cli/src/sys/run_manifest.rs` | Compatibility re-export of Core-owned Sys manifest and receipt state |
-| `cli/src/sys/selection.rs` | Positional/profile/interactive item selection |
+| `cli/src/sys/selection.rs` | Selected-item terminal formatting only |
 | `cli/src/sys/execution.rs` | Bootstrap reporting and proxy environment |
 | `cli/src/sys/render.rs` | System command presentation helpers |
-| `cli/src/sys/resources.rs` | Typed `SystemDriver` resource outcomes/conflicts and built-in dispatch |
-| `cli/src/sys/drivers/` | Built-in managed-resource drivers such as split DNS and managed file |
-| `cli/src/sys/profile.rs` | Generated profile install and three-way reconciliation |
-| `cli/src/sys/profile_compose.rs` | Deterministic base plus enabled-item composition |
-| `cli/src/sys/profile_commands.rs` | Explicit profile enable/disable |
-| `cli/src/sys/profile_blocks.rs` | Phase-specific sentinel insertion/removal and BOM handling |
+| `cli/src/sys/profile_commands.rs` | Core profile enable/disable adapter and rendering |
 
 ## Configuration, presets, and runtime state
 
@@ -148,11 +143,11 @@ logic.
 | `cli/src/config/env_layer.rs` | `[env]` parsing/defaults and override files |
 | `cli/src/presets.rs` | Embedded extraction, active asset reads, category enumeration |
 | `cli/src/preset_commands.rs` | Preset copy/export/link/unlink/overlay commands |
-| `cli/src/preset_meta.rs` | Shared preset kind and canonical target metadata |
-| `cli/src/preset_validation.rs` | Config-independent preset discovery, static validation report, and text/JSON rendering |
+| `cli/src/preset_meta.rs` | Test-only Core capability-report renderer for public manual parity |
+| `cli/src/preset_validation.rs` | Core validation report text/JSON rendering and exit mapping |
 | `cli/src/git_pull.rs` | FF-only external source pulls and managed overlay mirroring |
 | `cli/src/state.rs` | Versioned runtime-state cleanup |
-| `cli/src/status.rs` | Shared typed App/Shell status assessment, row builders, and App read-only lifecycle results |
+| `cli/src/status.rs` | Core App/Shell inspection-to-terminal row adapter |
 
 Config discovery priority is documented as a behavioral contract in
 [`data-flows.md`](data-flows.md#config-discovery) and

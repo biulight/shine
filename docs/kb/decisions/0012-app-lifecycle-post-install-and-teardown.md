@@ -1,9 +1,9 @@
 # 0012 — App lifecycle: `post_install` hooks and artifact `teardown`
 
 - **Status**: accepted
-- **Evidence**: `cli/src/apps/hooks.rs` (`run_app_hooks`, `HookPhase`), `cli/src/apps/build.rs`
+- **Evidence**: `utils/src/runtime/app.rs`, `cli/src/apps/build.rs`
   (`handle_unbuild`, `run_teardown_for_uninstall`), `cli/src/apps/install.rs`,
-  `cli/src/apps/uninstall.rs`, `cli/src/apps/metadata.rs` (`AppCategory.post_install`,
+  `cli/src/apps/uninstall.rs`, `utils/src/runtime/app_metadata.rs` (`AppCategory.post_install`,
   `AppArtifact.teardown`), `shine app artifact remove <app-id>`, `presets/app/surge/unbuild.ts`
 - **Supersedes**: the "not auto-reversed" consequence of
   [ADR 0009](0009-app-artifact-build-explicit-command.md)

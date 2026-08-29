@@ -2,20 +2,20 @@ use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::config::Config;
-
 use super::{
+    SysProfileRuntimeConfig, external_code_permission_error, require_external_code_permission,
+};
+use crate::runtime::{
     LoadedSysPreset, SysManifest, SysProfilePhase, SysShellIntegration, SysShellKind,
-    bootstrap::{external_code_permission_error, require_external_code_permission},
 };
 
-pub(super) struct ComposedSysProfiles {
-    pub(super) pre: Vec<u8>,
-    pub(super) post: Vec<u8>,
+pub(crate) struct ComposedSysProfiles {
+    pub(crate) pre: Vec<u8>,
+    pub(crate) post: Vec<u8>,
 }
 
 pub(super) async fn compose_sys_profiles(
-    config: &Config,
+    config: &SysProfileRuntimeConfig,
     os_id: &str,
     loaded: &LoadedSysPreset,
     enabled_items: &BTreeSet<String>,
@@ -63,7 +63,7 @@ pub(super) async fn compose_sys_profiles(
 
 pub(super) fn enabled_profile_items(
     manifest: &SysManifest,
-    entries: &[super::run_manifest::SysRunEntry],
+    entries: &[crate::runtime::SysRunEntry],
     os_id: &str,
 ) -> BTreeSet<String> {
     entries
@@ -82,7 +82,7 @@ pub(super) fn enabled_profile_items(
 }
 
 async fn read_base_profile(
-    config: &Config,
+    config: &SysProfileRuntimeConfig,
     os_id: &str,
     phase: SysProfilePhase,
 ) -> Result<Vec<u8>> {
@@ -92,23 +92,15 @@ async fn read_base_profile(
         .join("profile")
         .join(format!("base.{}.{ext}", phase.as_str()));
     let path = config.preset_path(&relative);
-    if path.is_file() {
+    if let Some(bytes) = config.preset_bytes(&relative) {
         require_external_code_permission(config, &path, "base profile")?;
-        return tokio::fs::read(&path)
-            .await
-            .with_context(|| format!("reading {}", path.display()));
-    }
-    if !config.is_external_presets {
-        let asset = relative.to_string_lossy().replace('\\', "/");
-        if let Some(bytes) = crate::presets::read_asset_bytes(&asset) {
-            return Ok(bytes);
-        }
+        return Ok(bytes);
     }
     Ok(Vec::new())
 }
 
 async fn render_integration(
-    config: &Config,
+    config: &SysProfileRuntimeConfig,
     os_id: &str,
     item_id: &str,
     integration: &SysShellIntegration,
@@ -127,19 +119,11 @@ async fn render_integration(
     if let Some(fragment) = &integration.fragment {
         let relative = Path::new("sys").join(os_id).join(fragment);
         let path = config.preset_path(&relative);
-        let body = if path.is_file() {
+        let body = if let Some(bytes) = config.preset_bytes(&relative) {
             require_external_code_permission(config, &path, "profile fragment")?;
-            tokio::fs::read_to_string(&path)
-                .await
-                .with_context(|| format!("reading {}", path.display()))?
-        } else if !config.is_external_presets {
-            let asset = relative.to_string_lossy().replace('\\', "/");
-            if let Some(bytes) = crate::presets::read_asset_bytes(&asset) {
-                String::from_utf8(bytes)
-                    .with_context(|| format!("embedded profile fragment `{asset}` is not UTF-8"))?
-            } else {
-                bail!("sys profile fragment is missing: {}", path.display());
-            }
+            String::from_utf8(bytes).with_context(|| {
+                format!("sys profile fragment `{}` is not UTF-8", relative.display())
+            })?
         } else {
             bail!("sys profile fragment is missing: {}", path.display());
         };
@@ -154,7 +138,7 @@ async fn render_integration(
 }
 
 fn external_profile_code_error(
-    config: &Config,
+    config: &SysProfileRuntimeConfig,
     item_id: &str,
     integration: &SysShellIntegration,
 ) -> anyhow::Error {
@@ -329,25 +313,6 @@ fn indent(value: &str, prefix: &str) -> String {
         .collect()
 }
 
-impl SysShellKind {
-    fn from_runtime(value: &str) -> Option<Self> {
-        match value {
-            "bash" => Some(Self::Bash),
-            "zsh" => Some(Self::Zsh),
-            "powershell" => Some(Self::Powershell),
-            _ => None,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Bash => "bash",
-            Self::Zsh => "zsh",
-            Self::Powershell => "powershell",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,8 +371,19 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("shine-profile-permission-{}", uuid::Uuid::new_v4()));
         let overlay = dir.join("overlay");
-        let config =
-            Config::new_for_test(&dir).with_presets_overlay_dir_override(Some(overlay.clone()));
+        let config = SysProfileRuntimeConfig {
+            home_dir: dir.clone(),
+            shine_dir: dir.clone(),
+            presets_dir: dir.join("presets"),
+            overlay_dir: Some(overlay.clone()),
+            shell_type: crate::runtime::ShellType::Zsh,
+            is_external_presets: false,
+            allow_sys_code: false,
+            snapshot: crate::runtime::PresetSnapshot::builder(
+                crate::runtime::PresetSourceKind::Embedded,
+            )
+            .build(),
+        };
 
         let error = render_integration(
             &config,

@@ -1,20 +1,16 @@
+use super::metadata;
 use super::report;
-use super::{
-    install_prepared_content, materialize_file_content, materialize_static_file_content, metadata,
-    resolve_install_destination, validate_unique_install_destinations,
-};
 use crate::config::Config;
 use crate::env::EnvConfig;
-use crate::install_core::manifest::{AppEntry, AppManifest};
-use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
-use anyhow::Result;
-use file_ops::InstallOutcome;
-use std::collections::{BTreeMap, BTreeSet};
-use utils::lifecycle::{
-    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+use crate::presentation::{
+    LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
-
-use crate::install_core::file_ops;
+use anyhow::{Result, anyhow};
+use std::collections::BTreeSet;
+use utils::lifecycle::LifecycleResultV1;
+#[cfg(test)]
+use utils::lifecycle::LifecycleStatus;
+use utils::runtime::{AppFileAction, AppLifecycleRequest, RuntimeEvent, RuntimeObserver};
 
 pub async fn handle_install(
     config: &Config,
@@ -46,7 +42,6 @@ async fn handle_install_with_reporter(
     force: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
-    let mut lifecycle_result = LifecycleResultV1::new(LifecycleOperation::Install, dry_run);
     for line in crate::config::presets_note_lines(config) {
         reporter.emit(PresentationEvent::stdout(line));
     }
@@ -54,357 +49,186 @@ async fn handle_install_with_reporter(
         reporter.emit(PresentationEvent::stdout(report::dry_run_header_text()));
     }
 
-    let prefix = match category {
-        Some(cat) => format!("app/{cat}"),
-        None => "app".to_string(),
-    };
-
-    // Resolve platform availability before config initialization or embedded
-    // extraction so a targeted request for an unavailable category has no
-    // lifecycle side effects.
-    let categories = metadata::load_active_categories(config, category).await?;
-    if let Some(category) = category
-        && categories.is_empty()
-    {
-        anyhow::bail!("app preset category not found: {category}");
-    }
-
-    // Reject an unsupported runtime-state schema before config initialization,
-    // preset extraction, generator execution, or destination writes.
-    let mut manifest = AppManifest::load(config.shine_dir()).await?;
-
-    // Load env config once — used by the `template` transform.
+    let mut runtime = crate::core_runtime::from_config(config)?;
     let env = EnvConfig::load_or_init(config).await?;
-    let env_map = env.as_map();
-
-    // When the user has configured a custom presets directory, the app preset
-    // files are already there — skip the embedded-asset extraction step.
-    if !config.is_external_presets {
-        if dry_run {
-            for cat in &categories {
-                lifecycle_result.push(app_outcome(
-                    &cat.name,
-                    "preset-cache",
-                    LifecycleStatus::Previewed,
-                    [LifecycleEffect::CacheWritePreviewed],
-                ));
-            }
-        } else {
-            // Refresh the managed embedded preset cache on each install so metadata
-            // and transformed source updates from the current binary take effect.
-            let extract_report =
-                crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
-            let cache_changed =
-                !extract_report.created.is_empty() || !extract_report.overwritten.is_empty();
-            for cat in &categories {
-                lifecycle_result.push(app_outcome(
-                    &cat.name,
-                    "preset-cache",
-                    if cache_changed {
-                        LifecycleStatus::Changed
-                    } else {
-                        LifecycleStatus::Unchanged
-                    },
-                    if cache_changed {
-                        vec![LifecycleEffect::CacheWritten]
-                    } else {
-                        Vec::new()
-                    },
-                ));
-            }
-        }
-    } else {
-        for cat in &categories {
-            lifecycle_result.push(
-                app_outcome(
-                    &cat.name,
-                    "preset-cache",
-                    LifecycleStatus::Skipped,
-                    [LifecycleEffect::UserResourcePreserved],
-                )
-                .with_diagnostic_code("app_external_preset_cache_preserved"),
-            );
-        }
-    }
-    validate_unique_install_destinations(&categories, config)?;
-    let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
+    runtime.context_mut_for_cli().env = env.as_map().clone();
+    let categories = runtime.app_categories(category)?;
+    let total_available = categories.iter().map(|value| value.files.len()).sum();
     reporter.emit(PresentationEvent::stdout(report::app_configs_summary_text(
         total_available,
     )));
-
-    let mut generated_content: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    let mut unavailable_generators: BTreeSet<String> = BTreeSet::new();
-
-    // Run enabled generators before any install writes. A first-time failure
-    // aborts cleanly; an existing managed destination is the last-known-good
-    // snapshot and is kept with a warning.
-    for cat in &categories {
-        for file in &cat.files {
-            if dry_run {
-                continue;
-            }
-            let Some(generator) = &file.generator else {
-                continue;
-            };
-            if !env_map.contains_key(&generator.when_env) {
-                continue;
-            }
-            let key = format!("{}/{}", cat.name, file.source_rel.display());
-            let destination = resolve_install_destination(cat, file, config)?;
-            match materialize_file_content(config, cat, file, env_map).await {
-                Ok(content) => {
-                    generated_content.insert(key, content);
-                }
-                Err(error)
-                    if manifest.find_by_dest(&destination).is_some() && destination.exists() =>
-                {
-                    reporter.emit(PresentationEvent::stderr(
-                        report::generator_unavailable_text(
-                            &format!("{}/{}", cat.name, file.source_rel.display()),
-                            &error,
-                        ),
-                    ));
-                    unavailable_generators.insert(key);
-                }
-                Err(error) => return Err(error),
-            }
-        }
-    }
-
+    let mut observer = InstallObserver {
+        reporter,
+        categories: &categories,
+    };
+    let mut interaction = TerminalInteraction;
+    let core_report = runtime
+        .install_apps(
+            AppLifecycleRequest {
+                target: category.map(str::to_string),
+                dry_run,
+                force,
+            },
+            &mut observer,
+            &mut interaction,
+        )
+        .await?;
     let mut installed = 0usize;
     let mut skipped = 0usize;
     let mut backed_up = 0usize;
     let mut restart_hints = BTreeSet::new();
-    // Categories with at least one file actually written this run — the trigger
-    // set for `post_install` hooks (mirrors `post_upgrade`'s changed-only rule).
-    let mut changed_categories: BTreeSet<String> = BTreeSet::new();
-
-    for cat in &categories {
-        for file in &cat.files {
-            let display_name = format!("{}/{}", cat.name, file.source_rel.display());
-            if unavailable_generators.contains(&display_name) {
-                skipped += 1;
-                lifecycle_result.push(
-                    app_outcome(
-                        &cat.name,
-                        &file.source_rel.display().to_string(),
-                        LifecycleStatus::Preserved,
-                        [LifecycleEffect::ManagedResourcePreserved],
-                    )
-                    .with_diagnostic_code("app_generator_unavailable"),
-                );
-                continue;
-            }
-            let destination = match resolve_install_destination(cat, file, config) {
-                Ok(d) => d,
-                Err(e) => {
-                    reporter.emit(PresentationEvent::stderr(report::destination_error_text(
-                        &display_name,
-                        &e,
-                    )));
-                    lifecycle_result.push(
-                        app_outcome(
-                            &cat.name,
-                            &file.source_rel.display().to_string(),
-                            LifecycleStatus::Failed,
-                            [],
-                        )
-                        .with_diagnostic_code("app_destination_invalid"),
-                    );
-                    continue;
-                }
-            };
-
-            let is_managed = manifest.find_by_dest(&destination).is_some();
-
-            let file_uses_env =
-                file.transforms.iter().any(|t| t == "template") || file.generator.is_some();
-
-            let content = if let Some(content) = generated_content.remove(&display_name) {
-                content
-            } else {
-                let materialized = if dry_run {
-                    materialize_static_file_content(config, cat, file, env_map).await
-                } else {
-                    materialize_file_content(config, cat, file, env_map).await
-                };
-                match materialized {
-                    Ok(content) => content,
-                    Err(error) => {
-                        reporter.emit(PresentationEvent::stderr(
-                            report::materialization_error_text(&display_name, &error),
-                        ));
-                        lifecycle_result.push(
-                            app_outcome(
-                                &cat.name,
-                                &file.source_rel.display().to_string(),
-                                LifecycleStatus::Failed,
-                                [],
-                            )
-                            .with_diagnostic_code("app_materialization_failed"),
-                        );
-                        continue;
-                    }
-                }
-            };
-            let outcome =
-                install_prepared_content(file, &content, &destination, is_managed, dry_run, force)
-                    .await;
-
-            let transform_label = report::transform_label(&file.transforms);
-
-            let file_label = file.source_rel.display().to_string();
-
-            match outcome {
-                Ok(InstallOutcome::Installed { hash }) => {
-                    reporter.emit(PresentationEvent::stdout(report::install_success_text(
-                        &file_label,
-                        &transform_label,
-                        &destination,
-                        config,
-                    )));
-                    manifest.upsert(AppEntry {
-                        source: format!("app/{}/{}", cat.name, file.source_rel.display()),
-                        destination,
-                        backup: None,
-                        content_hash: hash,
-                        install_strategy: file.install_strategy.clone(),
-                        uses_env: file_uses_env,
-                        requires_admin: file.requires_admin,
-                    });
-                    installed += 1;
-                    lifecycle_result.push(app_outcome(
-                        &cat.name,
-                        &file.source_rel.display().to_string(),
-                        LifecycleStatus::Changed,
-                        [
-                            LifecycleEffect::ResourceWritten,
-                            LifecycleEffect::ReceiptWritten,
-                        ],
-                    ));
-                    changed_categories.insert(cat.name.clone());
-                    if let Some(hint) = &file.restart_hint {
-                        restart_hints.insert(hint.clone());
-                    }
-                }
-                Ok(InstallOutcome::AlreadyManaged) => {
-                    reporter.emit(PresentationEvent::stdout(report::already_managed_text(
-                        &file_label,
-                    )));
-                    skipped += 1;
-                    lifecycle_result.push(app_outcome(
-                        &cat.name,
-                        &file.source_rel.display().to_string(),
-                        LifecycleStatus::Unchanged,
-                        [],
-                    ));
-                }
-                Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
-                    reporter.emit(PresentationEvent::stdout(
+    for file in &core_report.files {
+        let label = file.source.display().to_string();
+        let display_name = format!("{}/{}", file.category, file.source.display());
+        let transform_label = report::transform_label(&file.transforms);
+        match file.action {
+            AppFileAction::Installed | AppFileAction::BackedUp => {
+                installed += 1;
+                if file.action == AppFileAction::BackedUp {
+                    let backup = file.backup.as_ref().expect("Core backed-up App report");
+                    backed_up += 1;
+                    observer.reporter.emit(PresentationEvent::stdout(
                         report::install_success_with_backup_text(
-                            &file_label,
+                            &label,
                             &transform_label,
-                            &destination,
-                            &backup,
+                            &file.destination,
+                            backup,
                             config,
                         ),
                     ));
-                    manifest.upsert(AppEntry {
-                        source: format!("app/{}/{}", cat.name, file.source_rel.display()),
-                        destination,
-                        backup: Some(backup),
-                        content_hash: hash,
-                        install_strategy: file.install_strategy.clone(),
-                        uses_env: file_uses_env,
-                        requires_admin: file.requires_admin,
-                    });
-                    installed += 1;
-                    backed_up += 1;
-                    lifecycle_result.push(app_outcome(
-                        &cat.name,
-                        &file.source_rel.display().to_string(),
-                        LifecycleStatus::Changed,
-                        [
-                            LifecycleEffect::BackupCreated,
-                            LifecycleEffect::ResourceWritten,
-                            LifecycleEffect::ReceiptWritten,
-                        ],
-                    ));
-                    changed_categories.insert(cat.name.clone());
-                    if let Some(hint) = &file.restart_hint {
-                        restart_hints.insert(hint.clone());
-                    }
-                }
-                Ok(InstallOutcome::DryRun) => {
-                    reporter.emit(PresentationEvent::stdout(report::dry_run_install_text(
-                        &file_label,
-                        &transform_label,
-                        &destination,
-                        config,
-                    )));
-                    skipped += 1;
-                    lifecycle_result.push(app_outcome(
-                        &cat.name,
-                        &file.source_rel.display().to_string(),
-                        LifecycleStatus::Previewed,
-                        [
-                            LifecycleEffect::ResourceWritePreviewed,
-                            LifecycleEffect::ReceiptWritePreviewed,
-                        ],
+                } else {
+                    observer.reporter.emit(PresentationEvent::stdout(
+                        report::install_success_text(
+                            &label,
+                            &transform_label,
+                            &file.destination,
+                            config,
+                        ),
                     ));
                 }
-                Err(e) => {
-                    reporter.emit(PresentationEvent::stderr(report::install_error_text(
-                        &display_name,
-                        &e,
-                    )));
-                    lifecycle_result.push(
-                        app_outcome(
-                            &cat.name,
-                            &file.source_rel.display().to_string(),
-                            LifecycleStatus::Failed,
-                            [],
-                        )
-                        .with_diagnostic_code("app_install_failed"),
-                    );
+                if let Some(hint) = &file.restart_hint {
+                    restart_hints.insert(hint.clone());
                 }
             }
+            AppFileAction::Unchanged => {
+                skipped += 1;
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::already_managed_text(
+                        &label,
+                    )));
+            }
+            AppFileAction::PreviewInstall => {
+                skipped += 1;
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::dry_run_install_text(
+                        &label,
+                        &transform_label,
+                        &file.destination,
+                        config,
+                    )));
+            }
+            AppFileAction::GeneratorPreserved => {
+                skipped += 1;
+                if let Some(error) = &file.generator_error {
+                    observer.reporter.emit(PresentationEvent::stderr(
+                        report::generator_unavailable_text(&display_name, &anyhow!(error.clone())),
+                    ));
+                }
+            }
+            AppFileAction::Failed => {
+                if let Some(error) = &file.error {
+                    observer
+                        .reporter
+                        .emit(PresentationEvent::stderr(report::install_error_text(
+                            &display_name,
+                            &anyhow!(error.clone()),
+                        )));
+                }
+            }
+            _ => skipped += 1,
         }
     }
-
-    if !dry_run {
-        manifest.save(config.shine_dir()).await?;
-        let hook_result = super::hooks::run_app_hooks_with_reporter(
-            config,
-            |name| categories.iter().find(|c| c.name == name),
-            &changed_categories,
-            super::hooks::HookPhase::PostInstall,
-            true,
-            reporter,
-        )
-        .await;
-        lifecycle_result.outcomes.extend(hook_result.outcomes);
-    }
-
     let summary_parts = report::install_summary_parts(installed, backed_up, skipped);
-    reporter.emit(PresentationEvent::BlankLine);
-    reporter.emit(PresentationEvent::stdout(report::done_summary_text(
-        &summary_parts,
-    )));
+    observer.reporter.emit(PresentationEvent::BlankLine);
+    observer
+        .reporter
+        .emit(PresentationEvent::stdout(report::done_summary_text(
+            &summary_parts,
+        )));
     for hint in restart_hints {
-        reporter.emit(PresentationEvent::stdout(report::restart_hint_text(&hint)));
+        observer
+            .reporter
+            .emit(PresentationEvent::stdout(report::restart_hint_text(&hint)));
     }
-
-    Ok(lifecycle_result)
+    Ok(core_report.lifecycle)
 }
 
-fn app_outcome(
-    category: &str,
-    resource: &str,
-    status: LifecycleStatus,
-    effects: impl IntoIterator<Item = LifecycleEffect>,
-) -> LifecycleOutcomeV1 {
-    LifecycleOutcomeV1::new(format!("app/{category}"), Some(resource), status, effects)
+struct InstallObserver<'a> {
+    reporter: &'a mut dyn LifecycleReporter,
+    categories: &'a [metadata::AppCategory],
+}
+
+impl RuntimeObserver for InstallObserver<'_> {
+    fn emit(&mut self, event: RuntimeEvent) {
+        match event {
+            RuntimeEvent::Warning {
+                code,
+                target,
+                detail,
+            } => {
+                let category = target
+                    .as_deref()
+                    .and_then(|value| value.strip_prefix("app/"))
+                    .unwrap_or("app");
+                if code == "app_hook_permission_required" {
+                    let hooks = self
+                        .categories
+                        .iter()
+                        .find(|value| value.name == category)
+                        .map(|value| value.post_install.as_slice())
+                        .unwrap_or_default();
+                    let sequence = hooks
+                        .iter()
+                        .map(|hook| {
+                            std::iter::once(hook.command.as_str())
+                                .chain(hook.args.iter().map(String::as_str))
+                                .map(crate::shell_quote::quote_if_needed)
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" && ");
+                    self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: post-install hook skipped (set allow_app_hooks = true to allow external app hooks; manual: {sequence})", report::symbol("!"))));
+                } else {
+                    self.reporter.emit(PresentationEvent::stderr(format!(
+                        "  {} {category}: post-install hook failed: {detail}",
+                        report::symbol("!")
+                    )));
+                }
+            }
+            RuntimeEvent::Progress {
+                code: "app_hook_completed",
+                target,
+            } => {
+                let category = target.strip_prefix("app/").unwrap_or(&target);
+                self.reporter.emit(PresentationEvent::stdout(format!(
+                    "  {} {category}: post-install hook completed",
+                    report::symbol("✓")
+                )));
+            }
+            RuntimeEvent::ProcessOutput { text, .. } => {
+                for line in text.lines() {
+                    self.reporter.emit(PresentationEvent::stdout(format!(
+                        "     {}",
+                        report::dim(line)
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -414,6 +238,7 @@ mod tests {
     use super::super::uninstall::handle_uninstall;
     use super::super::uninstall::handle_uninstall_with_result;
     use super::*;
+    use crate::apps::resolve_install_destination;
     use crate::config::Config;
     use crate::install_core::manifest::AppManifest;
     #[cfg(unix)]
@@ -421,6 +246,7 @@ mod tests {
     #[cfg(unix)]
     use crate::test_support::env_lock;
     use tokio::fs;
+    use utils::lifecycle::{LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1};
 
     async fn make_temp_dir() -> std::path::PathBuf {
         crate::test_support::make_temp_dir("shine-apps").await

@@ -4,7 +4,6 @@ mod links;
 pub mod metadata;
 mod profile;
 mod report;
-mod template;
 mod uninstall;
 
 #[doc(hidden)]
@@ -17,7 +16,6 @@ pub use install::{
 pub(crate) use install::{
     handle_upgrade_installed_target_with_result, handle_upgrade_installed_with_result,
 };
-pub(crate) use metadata::validate_preset_category;
 #[doc(hidden)]
 pub use report::handle_list_with_presets_note;
 pub use report::{ShellUpgradeReport, handle_info, handle_list};
@@ -28,19 +26,12 @@ use std::path::{Path, PathBuf};
 pub use utils::runtime::ShellType;
 
 pub const SENTINEL_START: &str = "# >>> shine >>>";
-const SENTINEL_END: &str = "# <<< shine <<<";
+#[cfg(test)]
+const SENTINEL_END: &str = utils::runtime::SHELL_SENTINEL_END;
 
-#[derive(Debug)]
-enum PathUpdateStatus {
-    AlreadyConfigured,
-    Updated(PathBuf),
-}
-
-#[derive(Debug)]
-struct ShellConfigUpdate {
-    profile_updated: bool,
-    config_status: PathUpdateStatus,
-}
+use utils::runtime::PathUpdateStatus;
+#[cfg(test)]
+use utils::runtime::ShellConfigUpdate;
 
 pub fn get_shell() -> Result<ShellType> {
     match std::env::var("SHELL") {
@@ -76,6 +67,13 @@ fn get_shell_config_paths(shell_type: &ShellType, home_path: &Path) -> Result<Ve
         }
         ShellType::Elvish => Ok(vec![home_path.join(".config/elvish/rc.elv")]),
     }
+}
+
+pub(crate) fn shell_config_paths_for_core(
+    shell_type: &ShellType,
+    home_path: &Path,
+) -> Result<Vec<PathBuf>> {
+    get_shell_config_paths(shell_type, home_path)
 }
 
 #[cfg(test)]

@@ -29,11 +29,11 @@ bugs. Check this list before changing the modules named in each entry.
   `Changed` means this execution changed Shine-owned state. App hooks/teardown may record execution
   effects without changing their established non-fatal exit semantics; managed Sys user
   modification remains a typed preservation conflict while the CLI keeps its existing failure exit.
-- **App update presentation and reusable results share one assessment pass.** `AppRow` and
+- **App update presentation and reusable results share one Core assessment pass.** `AppRow` and
   `LifecycleOutcomeV1` must derive from the same per-file `AppFileAssessment`; do not rebuild rows
   to obtain the structured result. Automatic generators may execute during the established status
   path, so evaluating the file twice can duplicate external code execution and observe inconsistent
-  snapshots. Assessment paths remain CLI-private and must not enter the lifecycle result.
+  snapshots. Typed inspection paths remain non-serializable and must not enter the lifecycle result.
 - **Managed-file update details are field labels, not payloads.** The read-only comparison may
   report that destination or content changed, but must not copy the destination, desired bytes, or
   environment values into structured lifecycle outcomes. Ownership and user-modification checks
@@ -84,9 +84,9 @@ bugs. Check this list before changing the modules named in each entry.
 ## Shell profile editing
 
 - **Sentinel blocks are the only thing shine writes to user shell configs**
-  (`# >>> shine >>>` … `# <<< shine <<<`, `shells/profile.rs`; sys uses per-phase sentinels like
-  `# >>> shine <os> sys pre >>>`, `sys/profile_blocks.rs`). Both delegate to the shared primitives in
-  `cli/src/sentinel.rs` (`find_block`/`extract_block_with_newline`/`remove_block_bytewise`/
+  (`# >>> shine >>>` … `# <<< shine <<<`, Core Shell profile handling; sys uses per-phase sentinels
+  like `# >>> shine <os> sys pre >>>`). Both delegate to the shared primitives in
+  `utils/src/sentinel.rs` (`find_block`/`extract_block_with_newline`/`remove_block_bytewise`/
   `remove_block_linewise`/`insert_block`/`trim_outer_blank_lines`).
 - **Two sentinel removal styles exist and must not be unified without golden-output proof.**
   `sentinel::remove_block_bytewise` (shells' semantics) consumes one preceding blank line and
@@ -97,9 +97,9 @@ bugs. Check this list before changing the modules named in each entry.
   own.
 - **Line-ending differences must not register as changes on the sys path.** Preset templates are
   pinned LF (repo `.gitattributes`: `presets/** text eol=lf`), so the rust-embed'd template is
-  byte-deterministic across build hosts. The sys reconciliation (`sys/profile.rs`) and the
-  sentinel idempotency check (`sys/profile_blocks.rs`) compare content line-ending-agnostically via
-  `install_core::eol_eq`/`normalize_eol`: a pure CRLF↔LF difference (e.g. a Windows editor
+  byte-deterministic across build hosts. Core Sys reconciliation (`runtime/sys_profile/`) compares
+  content line-ending-agnostically via `install::eol_eq`/`normalize_eol`: a pure CRLF↔LF difference
+  (e.g. a Windows editor
   re-saving an installed loader file or profile) reports **no update** and leaves the user's file
   bytes untouched. When on-disk endings differ, the three-way merge skips `git merge-file` (which
   would see spurious per-line diffs) and uses the pure-Rust fallback over normalized bytes.
@@ -107,7 +107,7 @@ bugs. Check this list before changing the modules named in each entry.
   only the comparison layer normalizes.
 - **Paths under `$HOME` are written as `$HOME/...`**, not absolute, for portability.
 - **PowerShell profiles: preserve a leading BOM** when rewriting the file
-  (`cli/src/sys/profile_blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
+  (`utils/src/runtime/sys_profile/blocks.rs`, commit `81244f8`), and update **both** `Documents/PowerShell/` and
   `Documents/WindowsPowerShell/` profile files so pwsh and Windows PowerShell stay in sync.
 - **Sys profile composition is activation-additive, not selection-replacing.** A targeted item or
   named selection profile enables successful item integrations but never disables previously
@@ -177,8 +177,8 @@ bugs. Check this list before changing the modules named in each entry.
 - **`cli/build.rs` must keep `cargo:rerun-if-changed=presets`.** Without it, preset edits
   don't trigger re-embedding and the binary silently ships stale assets.
 - **The generated built-in platform capability blocks must use runtime selector semantics.**
-  `preset_meta::tests::built_in_preset_platform_capability_docs_are_current` derives App category
-  and Shell command visibility from the pristine embedded metadata for macOS, Linux, and Windows,
+  `preset_meta::tests::built_in_preset_platform_capability_docs_are_current` asks Core to derive App
+  category and Shell command visibility from the pristine immutable snapshot for macOS, Linux, and Windows,
   then checks the delimited blocks in both public manual locales. Do not maintain a parallel
   platform map or weaken the test to trust prose labels; a preset metadata change and both generated
   blocks must land together. Regenerate them with

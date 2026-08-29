@@ -1,7 +1,6 @@
-use super::{installed_content_hash, metadata, resolve_install_destination};
+use super::metadata;
 use crate::colors;
 use crate::config::Config;
-use crate::install_core::manifest::AppManifest;
 use crate::path_display;
 use anyhow::Result;
 
@@ -9,13 +8,18 @@ use super::AppListMode;
 
 pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
     crate::config::print_presets_note(config);
-    let categories = metadata::load_active_categories(config, Some(category)).await?;
-    let cat = categories
+    let mut observer = utils::runtime::NullObserver;
+    let inspections = crate::core_runtime::from_config(config)?
+        .inspect_apps(&mut observer)
+        .await?;
+    let selected = inspections
         .iter()
-        .find(|c| c.name == category)
+        .filter(|inspection| inspection.category.name == category)
+        .collect::<Vec<_>>();
+    let cat = selected
+        .first()
+        .map(|inspection| &inspection.category)
         .ok_or_else(|| anyhow::anyhow!("app preset category not found: {category}"))?;
-
-    let manifest = AppManifest::load(config.shine_dir()).await?;
 
     // Header
     if let Some(desc) = &cat.description {
@@ -44,53 +48,41 @@ pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
 
     let mut any_installed = false;
 
-    for file in &cat.files {
+    for inspection in selected {
+        let file = &inspection.file;
         let source_name = file.source_rel.display().to_string();
         let padding = " ".repeat(col_width.saturating_sub(source_name.len()));
-
-        // Not migrated to status::app_entry_status: this inline computation
-        // distinguishes "missing on disk" (read error) from JsonMerge's
-        // "missing managed keys" (Ok(None)) with separate wording, and never
-        // checks source_hash_for_file for an available update — collapsing
-        // it onto the shared FileStatus enum (which conflates both missing
-        // cases into FileStatus::Missing and would newly report
-        // UpdateAvail here) would be a real behavior change, not a
-        // same-behavior extraction. Left as a known, documented duplicate.
-        let dest_str = match resolve_install_destination(cat, file, config) {
-            Ok(dest) => {
-                let status = match manifest.find_by_dest(&dest) {
-                    None => String::new(),
-                    Some(entry) => {
-                        any_installed = true;
-                        match tokio::fs::read(&dest).await {
-                            Ok(bytes) => match installed_content_hash(file, &bytes) {
-                                Ok(Some(hash)) if hash == entry.content_hash => {
-                                    format!("  {}", colors::green("installed, up to date"))
-                                }
-                                Ok(None) => {
-                                    format!(
-                                        "  {}",
-                                        colors::yellow("installed, missing managed keys")
-                                    )
-                                }
-                                Ok(Some(_)) | Err(_) => {
-                                    format!("  {}", colors::yellow("installed, user-modified"))
-                                }
-                            },
-                            Err(_) => {
-                                format!("  {}", colors::yellow("installed, missing on disk"))
-                            }
+        let dest_str = match &inspection.destination {
+            Some(dest) => {
+                let directly_installed = inspection
+                    .manifest_entry
+                    .as_ref()
+                    .is_some_and(|entry| entry.destination == *dest);
+                let status = if directly_installed {
+                    any_installed = true;
+                    match inspection.status {
+                        utils::runtime::InspectionFileStatus::Partial => {
+                            format!("  {}", colors::yellow("installed, missing managed keys"))
                         }
+                        utils::runtime::InspectionFileStatus::UserModified => {
+                            format!("  {}", colors::yellow("installed, user-modified"))
+                        }
+                        utils::runtime::InspectionFileStatus::Missing => {
+                            format!("  {}", colors::yellow("installed, missing on disk"))
+                        }
+                        _ => format!("  {}", colors::green("installed, up to date")),
                     }
+                } else {
+                    String::new()
                 };
                 format!(
                     "{}  {}{}",
                     colors::dim("→"),
-                    colors::dim(&path_display::format_home(&dest, &config.home_dir)),
+                    colors::dim(&path_display::format_home(dest, &config.home_dir)),
                     status
                 )
             }
-            Err(_) => colors::dim("(destination unresolvable)"),
+            None => colors::dim("(destination unresolvable)"),
         };
 
         let file_desc = file

@@ -1,22 +1,15 @@
 //! Explicit refresh of manifest-owned generated app files.
 
 use anyhow::{Result, bail};
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::colors;
 use crate::config::Config;
 use crate::env::EnvConfig;
-use crate::install_core::file_ops::InstallOutcome;
-use crate::install_core::manifest::{AppEntry, AppManifest};
+use crate::presentation::TerminalInteraction;
+use utils::runtime::{AppFileAction, AppRefreshRequest, RuntimeEvent, RuntimeObserver};
 
-use super::hooks::{HookPhase, run_app_hooks};
-use super::metadata;
 use super::report::{print_install_error, print_install_success};
-use super::{
-    desired_content_hash, install_prepared_content, installed_content_hash,
-    materialize_file_content, resolve_install_destination,
-};
 
 pub async fn handle_refresh(
     config: &Config,
@@ -25,168 +18,58 @@ pub async fn handle_refresh(
     force: bool,
 ) -> Result<()> {
     crate::config::print_presets_note(config);
-    let categories = metadata::load_active_categories(config, Some(category)).await?;
-    let cat = categories
-        .iter()
-        .find(|cat| cat.name == category)
-        .ok_or_else(|| anyhow::anyhow!("app preset category not found: {category}"))?;
+    let mut runtime = crate::core_runtime::from_config(config)?;
     let env = EnvConfig::load_or_init(config).await?;
-    let env_map = env.as_map();
-    let mut manifest = AppManifest::load(config.shine_dir()).await?;
-
-    let candidates = if let Some(selector) = file_selector {
-        let file = cat
-            .files
-            .iter()
-            .find(|file| file.source_rel == Path::new(selector))
-            .ok_or_else(|| anyhow::anyhow!("app '{category}' file not found: {selector}"))?;
-        if file.generator.is_none() {
-            bail!("app '{category}' file is not generated: {selector}");
-        }
-        vec![file]
-    } else {
-        cat.files
-            .iter()
-            .filter(|file| file.generator.is_some())
-            .collect::<Vec<_>>()
-    };
-
-    if candidates.is_empty() {
-        bail!("app '{category}' has no generated files");
-    }
-
-    let mut selected = Vec::new();
-    for file in candidates {
-        let destination = resolve_install_destination(cat, file, config)?;
-        let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
-            if file_selector.is_some() {
-                bail!(
-                    "app '{category}' generated file is not installed: {}",
-                    file.source_rel.display()
-                );
-            }
-            continue;
-        };
-        selected.push((file, destination, entry));
-    }
-    if selected.is_empty() {
-        bail!(
-            "app '{category}' has no installed generated files; run `shine install app/{category}` first"
-        );
-    }
+    runtime.context_mut_for_cli().env = env.as_map().clone();
 
     println!(
         "{}",
         colors::bold(&format!("Refreshing app generators: {category}"))
     );
-    let mut updated = 0usize;
-    let mut unchanged = 0usize;
-    let mut failed = 0usize;
-
-    for (file, destination, entry) in selected {
-        let label = format!("{category}/{}", file.source_rel.display());
-        let generator = file.generator.as_ref().expect("candidate has generator");
-        if !env_map.contains_key(&generator.when_env) {
-            eprintln!(
-                "  {} {label}: generator requires config env '{}'",
-                colors::symbol_stderr("✗"),
-                generator.when_env
-            );
-            failed += 1;
-            continue;
-        }
-
-        let content = match materialize_file_content(config, cat, file, env_map).await {
-            Ok(content) => content,
-            Err(error) => {
-                print_install_error(&label, &error);
-                failed += 1;
-                continue;
-            }
-        };
-        let desired_hash = match desired_content_hash(file, &content) {
-            Ok(hash) => hash,
-            Err(error) => {
-                print_install_error(&label, &error);
-                failed += 1;
-                continue;
-            }
-        };
-
-        let (destination_exists, current_hash) = match tokio::fs::read(&destination).await {
-            Ok(bytes) => match installed_content_hash(file, &bytes) {
-                Ok(hash) => (true, hash),
-                Err(error) => {
-                    if !force {
-                        print_install_error(&label, &error);
-                        failed += 1;
-                        continue;
-                    }
-                    (true, None)
-                }
+    let mut observer = RefreshObserver;
+    let mut interaction = TerminalInteraction;
+    let report = runtime
+        .refresh_app_generators(
+            AppRefreshRequest {
+                category: category.to_string(),
+                file: file_selector.map(Path::new).map(Path::to_path_buf),
+                force,
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (false, None),
-            Err(error) => {
-                print_install_error(&label, &error.into());
-                failed += 1;
-                continue;
-            }
-        };
-
-        if current_hash == Some(entry.content_hash) && desired_hash == entry.content_hash {
-            println!(
-                "  {} {label}  {}",
-                colors::dim("-"),
-                colors::dim("already up to date")
-            );
-            unchanged += 1;
-            continue;
-        }
-        if destination_exists && current_hash != Some(entry.content_hash) && !force {
-            eprintln!(
-                "  {} {label}: user-modified, kept (use --force to overwrite)",
-                colors::symbol("!")
-            );
-            failed += 1;
-            continue;
-        }
-
-        match install_prepared_content(file, &content, &destination, true, false, true).await {
-            Ok(InstallOutcome::Installed { hash })
-            | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
-                print_install_success(&label, "", &destination, config);
-                manifest.upsert(AppEntry {
-                    source: entry.source,
-                    destination,
-                    backup: entry.backup,
-                    content_hash: hash,
-                    install_strategy: file.install_strategy.clone(),
-                    uses_env: true,
-                    requires_admin: file.requires_admin,
-                });
+            &mut observer,
+            &mut interaction,
+        )
+        .await?;
+    let mut updated = 0;
+    let mut unchanged = 0;
+    let mut failed = 0;
+    for file in report.files {
+        let label = format!("{category}/{}", file.source.display());
+        match file.action {
+            AppFileAction::Installed | AppFileAction::BackedUp => {
+                print_install_success(&label, "", &file.destination, config);
                 updated += 1;
             }
-            Ok(InstallOutcome::AlreadyManaged) => {
+            AppFileAction::Unchanged => {
+                println!(
+                    "  {} {label}  {}",
+                    colors::dim("-"),
+                    colors::dim("already up to date")
+                );
                 unchanged += 1;
             }
-            Ok(InstallOutcome::DryRun) => unreachable!("refresh is never a dry run"),
-            Err(error) => {
-                print_install_error(&label, &error);
+            AppFileAction::UserModified => {
+                eprintln!(
+                    "  {} {label}: user-modified, kept (use --force to overwrite)",
+                    colors::symbol("!")
+                );
                 failed += 1;
             }
+            AppFileAction::Failed => {
+                print_install_error(&label, &anyhow::anyhow!(file.error.unwrap_or_default()));
+                failed += 1;
+            }
+            _ => unchanged += 1,
         }
-    }
-
-    if updated > 0 {
-        manifest.save(config.shine_dir()).await?;
-        run_app_hooks(
-            config,
-            |name| categories.iter().find(|cat| cat.name == name),
-            &BTreeSet::from([category.to_string()]),
-            HookPhase::PostUpgrade,
-            true,
-        )
-        .await;
     }
 
     println!(
@@ -201,10 +84,38 @@ pub async fn handle_refresh(
     Ok(())
 }
 
+struct RefreshObserver;
+
+impl RuntimeObserver for RefreshObserver {
+    fn emit(&mut self, event: RuntimeEvent) {
+        match event {
+            RuntimeEvent::Warning { detail, .. } => eprintln!("  {} {detail}", colors::symbol("!")),
+            RuntimeEvent::ProcessOutput { text, .. } => {
+                for line in text.lines() {
+                    println!("     {}", colors::dim(line));
+                }
+            }
+            RuntimeEvent::Progress {
+                code: "app_hook_completed",
+                target,
+            } => {
+                println!(
+                    "  {} {}: post-upgrade hook completed",
+                    colors::symbol("✓"),
+                    target.trim_start_matches("app/")
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::apps::metadata;
     use crate::apps::{handle_install, handle_upgrade_installed};
+    use crate::install_core::manifest::AppManifest;
     use crate::status::{FileStatus, app_entry_status};
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;

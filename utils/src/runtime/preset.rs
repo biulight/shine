@@ -1,10 +1,24 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresetSourceKind {
     Embedded,
     External,
     Overlay,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PresetFileOrigin {
+    pub source_kind: PresetSourceKind,
+    pub physical_path: Option<PathBuf>,
+    pub category_root: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PresetFile {
+    pub bytes: Vec<u8>,
+    pub origin: PresetFileOrigin,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,6 +38,8 @@ pub struct PresetValidationReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PresetSnapshot {
     source_kind: PresetSourceKind,
+    base: BTreeMap<String, PresetFile>,
+    overlay: BTreeMap<String, PresetFile>,
     files: BTreeMap<String, Vec<u8>>,
 }
 
@@ -31,7 +47,10 @@ impl PresetSnapshot {
     pub fn builder(source_kind: PresetSourceKind) -> PresetSnapshotBuilder {
         PresetSnapshotBuilder {
             source_kind,
-            files: BTreeMap::new(),
+            base_root: None,
+            overlay_root: None,
+            base: BTreeMap::new(),
+            overlay: BTreeMap::new(),
         }
     }
 
@@ -45,6 +64,18 @@ impl PresetSnapshot {
 
     pub fn get(&self, path: &str) -> Option<&[u8]> {
         self.files.get(path).map(Vec::as_slice)
+    }
+
+    pub fn file(&self, path: &str) -> Option<&PresetFile> {
+        self.overlay.get(path).or_else(|| self.base.get(path))
+    }
+
+    pub fn origin(&self, path: &str) -> Option<&PresetFileOrigin> {
+        self.file(path).map(|file| &file.origin)
+    }
+
+    pub fn is_overlay(&self, path: &str) -> bool {
+        self.overlay.contains_key(path)
     }
 
     pub fn validate(&self) -> PresetValidationReport {
@@ -84,21 +115,94 @@ impl PresetSnapshot {
 
 pub struct PresetSnapshotBuilder {
     source_kind: PresetSourceKind,
-    files: BTreeMap<String, Vec<u8>>,
+    base_root: Option<PathBuf>,
+    overlay_root: Option<PathBuf>,
+    base: BTreeMap<String, PresetFile>,
+    overlay: BTreeMap<String, PresetFile>,
 }
 
 impl PresetSnapshotBuilder {
     pub fn file(mut self, path: impl Into<String>, bytes: Vec<u8>) -> Self {
-        self.files.insert(path.into(), bytes);
+        let path = normalize_logical_path(path.into());
+        let physical_path = self.base_root.as_ref().map(|root| root.join(&path));
+        let category_root = self
+            .base_root
+            .as_deref()
+            .and_then(|root| category_root(root, &path));
+        self.base.insert(
+            path,
+            PresetFile {
+                bytes,
+                origin: PresetFileOrigin {
+                    source_kind: self.source_kind,
+                    physical_path,
+                    category_root,
+                },
+            },
+        );
+        self
+    }
+
+    pub fn base_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.base_root = Some(root.into());
+        self
+    }
+
+    pub fn overlay_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.overlay_root = Some(root.into());
+        self
+    }
+
+    pub fn overlay_file(mut self, path: impl Into<String>, bytes: Vec<u8>) -> Self {
+        let path = normalize_logical_path(path.into());
+        let physical_path = self.overlay_root.as_ref().map(|root| root.join(&path));
+        let category_root = self
+            .overlay_root
+            .as_deref()
+            .and_then(|root| category_root(root, &path));
+        self.overlay.insert(
+            path,
+            PresetFile {
+                bytes,
+                origin: PresetFileOrigin {
+                    source_kind: PresetSourceKind::Overlay,
+                    physical_path,
+                    category_root,
+                },
+            },
+        );
         self
     }
 
     pub fn build(self) -> PresetSnapshot {
+        let mut files = self
+            .base
+            .iter()
+            .map(|(path, file)| (path.clone(), file.bytes.clone()))
+            .collect::<BTreeMap<_, _>>();
+        files.extend(
+            self.overlay
+                .iter()
+                .map(|(path, file)| (path.clone(), file.bytes.clone())),
+        );
         PresetSnapshot {
             source_kind: self.source_kind,
-            files: self.files,
+            base: self.base,
+            overlay: self.overlay,
+            files,
         }
     }
+}
+
+fn normalize_logical_path(path: String) -> String {
+    path.replace('\\', "/")
+}
+
+fn category_root(root: &Path, logical_path: &str) -> Option<PathBuf> {
+    let mut components = logical_path.split('/');
+    let kind = components.next()?;
+    let category = components.next()?;
+    matches!(kind, "app" | "shell" | "sys").then(|| root.join(kind).join(category))
 }
 
 #[cfg(test)]

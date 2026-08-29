@@ -1,18 +1,269 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use similar::{DiffTag, TextDiff};
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
-use crate::config::Config;
-use crate::install_core::{eol_eq, normalize_eol};
+use crate::install::{eol_eq, normalize_eol};
+use crate::runtime::{
+    CoreRuntime, FileSystemHost, LoadedSysPreset, PresetSnapshot, ProcessHost, ProcessIo,
+    ProcessRequest, SYS_PROFILE_PHASES, ShellType, SysItemMode, SysItemOutcome, SysItemStatus,
+    SysProfilePhase, SysRunEntry,
+};
 
-use super::profile_blocks::update_sys_shell_profiles;
-use super::profile_compose::ComposedSysProfiles;
-use super::{SYS_PROFILE_PHASES, SysItemOutcome, SysItemStatus, SysProfilePhase};
+mod blocks;
+mod compose;
 
-pub(super) async fn install_sys_profile_loader_with_templates(
-    config: &Config,
+use blocks::update_sys_shell_profiles;
+use compose::ComposedSysProfiles;
+
+#[derive(Clone)]
+struct SysProfileRuntimeConfig {
+    home_dir: PathBuf,
+    shine_dir: PathBuf,
+    presets_dir: PathBuf,
+    overlay_dir: Option<PathBuf>,
+    shell_type: ShellType,
+    is_external_presets: bool,
+    allow_sys_code: bool,
+    snapshot: PresetSnapshot,
+}
+
+impl SysProfileRuntimeConfig {
+    fn active_presets_overlay_dir(&self) -> Option<&Path> {
+        self.overlay_dir.as_deref()
+    }
+
+    fn global_config_path(&self) -> PathBuf {
+        self.shine_dir.join("config.toml")
+    }
+
+    fn preset_path(&self, relative: &Path) -> PathBuf {
+        let logical = relative.to_string_lossy().replace('\\', "/");
+        self.snapshot
+            .origin(&logical)
+            .and_then(|origin| origin.physical_path.clone())
+            .unwrap_or_else(|| self.presets_dir.join(relative))
+    }
+
+    fn preset_bytes(&self, relative: &Path) -> Option<Vec<u8>> {
+        let logical = relative.to_string_lossy().replace('\\', "/");
+        self.snapshot.get(&logical).map(ToOwned::to_owned)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SysProfileStateRequest {
+    pub os_id: String,
+    pub item_id: String,
+    pub enabled: bool,
+    pub dry_run: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SysProfileStateReport {
+    pub outcome: Option<SysItemOutcome>,
+}
+
+impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
+    fn sys_profile_config(&self) -> SysProfileRuntimeConfig {
+        SysProfileRuntimeConfig {
+            home_dir: self.context().home_dir.clone(),
+            shine_dir: self.context().shine_dir.clone(),
+            presets_dir: self.context().presets_dir.clone(),
+            overlay_dir: self.context().overlay_dir.clone(),
+            shell_type: self.context().shell,
+            is_external_presets: self.context().is_external_presets,
+            allow_sys_code: self.context().allow_sys_code,
+            snapshot: self.presets().clone(),
+        }
+    }
+
+    pub async fn install_composed_sys_profile(
+        &self,
+        os_id: &str,
+        loaded: &LoadedSysPreset,
+        enabled_items: &std::collections::BTreeSet<String>,
+        sys_shell: &str,
+        force_profile: bool,
+    ) -> Result<SysItemOutcome> {
+        let config = self.sys_profile_config();
+        let templates =
+            compose::compose_sys_profiles(&config, os_id, loaded, enabled_items, sys_shell).await?;
+        install_sys_profile_loader_with_templates(
+            self.host(),
+            &config,
+            os_id,
+            &loaded.root,
+            sys_shell,
+            force_profile,
+            Some(&templates),
+        )
+        .await
+    }
+
+    pub fn enabled_sys_profile_items(
+        &self,
+        manifest: &crate::runtime::SysManifest,
+        entries: &[SysRunEntry],
+        os_id: &str,
+    ) -> std::collections::BTreeSet<String> {
+        compose::enabled_profile_items(manifest, entries, os_id)
+    }
+
+    pub async fn preflight_composed_sys_profile(
+        &self,
+        os_id: &str,
+        loaded: &LoadedSysPreset,
+        enabled_items: &std::collections::BTreeSet<String>,
+        sys_shell: &str,
+    ) -> Result<()> {
+        let config = self.sys_profile_config();
+        compose::compose_sys_profiles(&config, os_id, loaded, enabled_items, sys_shell)
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn sync_composed_sys_profile(&self, os_id: &str) -> Result<SysItemOutcome> {
+        let loaded = self.load_sys_preset(os_id).await?;
+        let manifest =
+            super::sys::load_manifest_with_host(self.host(), &self.context().shine_dir).await?;
+        let enabled = compose::enabled_profile_items(&loaded.manifest, &manifest.entries, os_id);
+        let shell: &'static str = self.context().shell.into();
+        self.install_composed_sys_profile(os_id, &loaded, &enabled, shell, false)
+            .await
+    }
+}
+
+impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
+    pub async fn set_sys_profile_state(
+        &self,
+        request: SysProfileStateRequest,
+    ) -> Result<SysProfileStateReport> {
+        let loaded = self.load_sys_preset(&request.os_id).await?;
+        let item = loaded
+            .manifest
+            .items
+            .iter()
+            .find(|item| item.id == request.item_id)
+            .with_context(|| {
+                format!(
+                    "unknown sys item `{}` for {}",
+                    request.item_id, request.os_id
+                )
+            })?;
+        if item.mode != SysItemMode::Init {
+            bail!(
+                "managed sys item `{}` has no bootstrap shell integration",
+                request.item_id
+            );
+        }
+        if item.shell.is_empty() {
+            bail!(
+                "sys item `{}` declares no shell integration",
+                request.item_id
+            );
+        }
+        if request.enabled && !self.sys_item_is_present(item).await? {
+            bail!(
+                "sys item `{}` is not currently detected; run `shine sys bootstrap {}` first",
+                request.item_id,
+                request.item_id
+            );
+        }
+        let mut manifest =
+            super::sys::load_manifest_with_host(self.host(), &self.context().shine_dir).await?;
+        let existing = manifest.entries.iter_mut().find(|entry| {
+            entry.os_id == request.os_id && entry.item_id == request.item_id && !entry.managed
+        });
+        match existing {
+            Some(entry) => entry.profile_enabled = request.enabled,
+            None if request.enabled => manifest.upsert(SysRunEntry {
+                os_id: request.os_id.clone(),
+                item_id: item.id.clone(),
+                label: item.label.clone(),
+                status: SysItemStatus::AlreadyInstalled,
+                detail: "shell integration enabled after live detection".to_string(),
+                updated_at: self.context().captured_unix_time.to_string(),
+                managed: false,
+                profile_enabled: true,
+                receipt: None,
+            }),
+            None => {}
+        }
+        let enabled =
+            compose::enabled_profile_items(&loaded.manifest, &manifest.entries, &request.os_id);
+        if request.dry_run {
+            return Ok(SysProfileStateReport { outcome: None });
+        }
+        let shell: &'static str = self.context().shell.into();
+        let outcome = self
+            .install_composed_sys_profile(&request.os_id, &loaded, &enabled, shell, false)
+            .await?;
+        super::sys::save_manifest_with_host(self.host(), &self.context().shine_dir, &manifest)
+            .await?;
+        Ok(SysProfileStateReport {
+            outcome: Some(outcome),
+        })
+    }
+}
+
+fn require_external_code_permission(
+    config: &SysProfileRuntimeConfig,
+    path: &Path,
+    label: &str,
+) -> Result<()> {
+    let overlay_code = config
+        .active_presets_overlay_dir()
+        .is_some_and(|overlay| path.starts_with(overlay));
+    if (config.is_external_presets || overlay_code) && !config.allow_sys_code {
+        return Err(external_code_permission_error(
+            config,
+            &format!("executable sys {label}"),
+            Some(path),
+        ));
+    }
+    Ok(())
+}
+
+fn external_code_permission_error(
+    config: &SysProfileRuntimeConfig,
+    capability: &str,
+    code_path: Option<&Path>,
+) -> anyhow::Error {
+    let overlay = config.active_presets_overlay_dir();
+    let (reason, remediation) = match (config.is_external_presets, overlay.is_some()) {
+        (true, true) => (
+            "an external preset source and preset overlay are active",
+            "Disable both the external preset source and preset overlay",
+        ),
+        (true, false) => (
+            "an external preset source is active",
+            "Disable the external preset source",
+        ),
+        (false, true) => ("a preset overlay is active", "Disable the preset overlay"),
+        (false, false) => unreachable!("external code permission error without an external source"),
+    };
+    let mut source_details = String::new();
+    if config.is_external_presets {
+        source_details.push_str(&format!(
+            "Preset source:  {}\n",
+            config.presets_dir.display()
+        ));
+    }
+    if let Some(path) = overlay {
+        source_details.push_str(&format!("Preset overlay: {}\n", path.display()));
+    }
+    if let Some(path) = code_path {
+        source_details.push_str(&format!("Code path:      {}\n", path.display()));
+    }
+    anyhow::anyhow!(
+        "{capability} is blocked because {reason}.\n\n{source_details}After reviewing the active preset sources, choose one:\n\n  Allow external sys code:\n    Set allow_sys_code = true in {}\n\n  Keep external sys code blocked:\n    {remediation}.",
+        config.global_config_path().display()
+    )
+}
+
+async fn install_sys_profile_loader_with_templates(
+    host: &(impl FileSystemHost + ProcessHost),
+    config: &SysProfileRuntimeConfig,
     os_id: &str,
     script_dir: &Path,
     sys_shell: &str,
@@ -20,6 +271,7 @@ pub(super) async fn install_sys_profile_loader_with_templates(
     templates: Option<&ComposedSysProfiles>,
 ) -> Result<SysItemOutcome> {
     let update = install_sys_profile_files_with_templates(
+        host,
         config,
         os_id,
         script_dir,
@@ -27,7 +279,7 @@ pub(super) async fn install_sys_profile_loader_with_templates(
         templates,
     )
     .await?;
-    let shell_update = update_sys_shell_profiles(config, os_id, sys_shell).await?;
+    let shell_update = update_sys_shell_profiles(host, config, os_id, sys_shell).await?;
     let status = if update.needs_action {
         SysItemStatus::NeedsAction
     } else if update.updated || shell_update.updated {
@@ -67,7 +319,8 @@ pub(super) struct SysShellProfileUpdate {
 }
 
 async fn install_sys_profile_files_with_templates(
-    config: &Config,
+    host: &(impl FileSystemHost + ProcessHost),
+    config: &SysProfileRuntimeConfig,
     os_id: &str,
     script_dir: &Path,
     force_profile: bool,
@@ -75,9 +328,9 @@ async fn install_sys_profile_files_with_templates(
 ) -> Result<SysProfileFileUpdate> {
     let ext = if os_id == "windows" { "ps1" } else { "sh" };
     let profile_dir = config.home_dir.join(".shine/profile");
-    tokio::fs::create_dir_all(&profile_dir)
+    host.create_dir_all(&profile_dir)
         .await
-        .with_context(|| format!("creating {}", profile_dir.display()))?;
+        .map_err(|error| error.into_anyhow("creating sys profile directory"))?;
 
     let mut updated = false;
     let mut needs_action = false;
@@ -89,13 +342,16 @@ async fn install_sys_profile_files_with_templates(
             SysProfilePhase::Post => templates.post.as_slice(),
         });
         let phase_update = install_sys_profile_phase_with_template(
-            &profile_dir,
-            os_id,
-            script_dir,
-            phase,
-            ext,
-            force_profile,
-            template,
+            host,
+            ProfilePhaseInstall {
+                profile_dir: &profile_dir,
+                os_id,
+                script_dir,
+                phase,
+                ext,
+                force_profile,
+                template_override: template,
+            },
         )
         .await?;
 
@@ -121,30 +377,47 @@ async fn install_sys_profile_phase(
     force_profile: bool,
 ) -> Result<SysProfileFileUpdate> {
     install_sys_profile_phase_with_template(
+        &crate::runtime::RealHost,
+        ProfilePhaseInstall {
+            profile_dir,
+            os_id,
+            script_dir,
+            phase,
+            ext,
+            force_profile,
+            template_override: None,
+        },
+    )
+    .await
+}
+
+struct ProfilePhaseInstall<'a> {
+    profile_dir: &'a Path,
+    os_id: &'a str,
+    script_dir: &'a Path,
+    phase: SysProfilePhase,
+    ext: &'a str,
+    force_profile: bool,
+    template_override: Option<&'a [u8]>,
+}
+
+async fn install_sys_profile_phase_with_template(
+    host: &(impl FileSystemHost + ProcessHost),
+    request: ProfilePhaseInstall<'_>,
+) -> Result<SysProfileFileUpdate> {
+    let ProfilePhaseInstall {
         profile_dir,
         os_id,
         script_dir,
         phase,
         ext,
         force_profile,
-        None,
-    )
-    .await
-}
-
-async fn install_sys_profile_phase_with_template(
-    profile_dir: &Path,
-    os_id: &str,
-    script_dir: &Path,
-    phase: SysProfilePhase,
-    ext: &str,
-    force_profile: bool,
-    template_override: Option<&[u8]>,
-) -> Result<SysProfileFileUpdate> {
+        template_override,
+    } = request;
     let template_path = script_dir.join(format!("profile.{}.{ext}", phase.as_str()));
     let template_raw = match template_override {
         Some(template) => template.to_vec(),
-        None => read_sys_profile_template(&template_path, os_id, phase, ext).await?,
+        None => read_sys_profile_template(host, &template_path, os_id, phase, ext).await?,
     };
     // Normalize line endings for all comparisons/merges so a pure CRLF↔LF
     // difference (e.g. a Windows editor re-saving an installed file) is not
@@ -160,6 +433,7 @@ async fn install_sys_profile_phase_with_template(
 
     if force_profile {
         return apply_force_profile(
+            host,
             &active_path,
             &base_path,
             &new_path,
@@ -170,10 +444,11 @@ async fn install_sys_profile_phase_with_template(
         .await;
     }
 
-    let active_raw = match tokio::fs::read(&active_path).await {
+    let active_raw = match host.read(&active_path).await {
         Ok(active) => active,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if error.is_not_found() => {
             return handle_fresh_install(
+                host,
                 &active_path,
                 &base_path,
                 &new_path,
@@ -182,14 +457,15 @@ async fn install_sys_profile_phase_with_template(
             )
             .await;
         }
-        Err(err) => return Err(err).with_context(|| format!("reading {}", active_path.display())),
+        Err(error) => return Err(error.into_anyhow("reading active sys profile")),
     };
     let active = normalize_eol(&active_raw);
 
-    let base_raw = match tokio::fs::read(&base_path).await {
+    let base_raw = match host.read(&base_path).await {
         Ok(base) => base,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if error.is_not_found() => {
             return handle_missing_base(
+                host,
                 &active_path,
                 &base_path,
                 &new_path,
@@ -199,7 +475,7 @@ async fn install_sys_profile_phase_with_template(
             )
             .await;
         }
-        Err(err) => return Err(err).with_context(|| format!("reading {}", base_path.display())),
+        Err(error) => return Err(error.into_anyhow("reading sys profile merge base")),
     };
     let base = normalize_eol(&base_raw);
 
@@ -211,39 +487,39 @@ async fn install_sys_profile_phase_with_template(
         && base == base_raw
         && template == template_raw;
 
-    apply_merge_result(MergeInputs {
-        active_path: &active_path,
-        base_path: &base_path,
-        template_path: &template_path,
-        new_path: &new_path,
-        merge_path: &merge_path,
-        base: &base,
-        active: &active,
-        template: &template,
-        allow_git_merge,
-    })
+    apply_merge_result(
+        host,
+        MergeInputs {
+            active_path: &active_path,
+            base_path: &base_path,
+            template_path: &template_path,
+            new_path: &new_path,
+            merge_path: &merge_path,
+            base: &base,
+            active: &active,
+            template: &template,
+            allow_git_merge,
+        },
+    )
     .await
 }
 
 async fn read_sys_profile_template(
+    host: &impl FileSystemHost,
     template_path: &Path,
     os_id: &str,
     phase: SysProfilePhase,
     ext: &str,
 ) -> Result<Vec<u8>> {
-    match tokio::fs::read(template_path).await {
-        Ok(template) => Ok(template),
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            let asset_path = format!("sys/{os_id}/profile.{}.{ext}", phase.as_str());
-            crate::presets::read_asset_bytes(&asset_path)
-                .with_context(|| format!("reading {}", template_path.display()))
-        }
-        Err(err) => Err(err).with_context(|| format!("reading {}", template_path.display())),
-    }
+    let _ = (os_id, phase, ext);
+    host.read(template_path)
+        .await
+        .map_err(|error| error.into_anyhow("reading sys profile template"))
 }
 
 /// Paths and file contents needed to reconcile a single sys profile file
 /// against its base snapshot and the latest template.
+#[derive(Clone, Copy)]
 struct MergeInputs<'a> {
     active_path: &'a Path,
     base_path: &'a Path,
@@ -260,6 +536,7 @@ struct MergeInputs<'a> {
 }
 
 async fn apply_force_profile(
+    host: &impl FileSystemHost,
     active_path: &Path,
     base_path: &Path,
     new_path: &Path,
@@ -267,27 +544,21 @@ async fn apply_force_profile(
     ext: &str,
     template: &[u8],
 ) -> Result<SysProfileFileUpdate> {
-    let backup = if let Ok(active) = tokio::fs::read(active_path).await
+    let backup = if let Ok(active) = host.read(active_path).await
         && !eol_eq(&active, template)
     {
         let backup_path = profile_backup_path(active_path, ext);
-        tokio::fs::copy(active_path, &backup_path)
+        host.write_atomic(&backup_path, &active)
             .await
-            .with_context(|| {
-                format!(
-                    "backing up sys profile {} to {}",
-                    active_path.display(),
-                    backup_path.display()
-                )
-            })?;
+            .map_err(|error| error.into_anyhow("backing up sys profile"))?;
         Some(backup_path)
     } else {
         None
     };
-    write_if_changed(active_path, template).await?;
-    write_if_changed(base_path, template).await?;
-    remove_if_exists(new_path).await?;
-    remove_if_exists(merge_path).await?;
+    write_if_changed(host, active_path, template).await?;
+    write_if_changed(host, base_path, template).await?;
+    remove_if_exists(host, new_path).await?;
+    remove_if_exists(host, merge_path).await?;
     let detail = backup
         .map(|path| {
             format!(
@@ -305,20 +576,21 @@ async fn apply_force_profile(
 }
 
 async fn handle_fresh_install(
+    host: &impl FileSystemHost,
     active_path: &Path,
     base_path: &Path,
     new_path: &Path,
     merge_path: &Path,
     template: &[u8],
 ) -> Result<SysProfileFileUpdate> {
-    tokio::fs::write(active_path, template)
+    host.write_atomic(active_path, template)
         .await
-        .with_context(|| format!("writing {}", active_path.display()))?;
-    tokio::fs::write(base_path, template)
+        .map_err(|error| error.into_anyhow("writing active sys profile"))?;
+    host.write_atomic(base_path, template)
         .await
-        .with_context(|| format!("writing {}", base_path.display()))?;
-    remove_if_exists(new_path).await?;
-    remove_if_exists(merge_path).await?;
+        .map_err(|error| error.into_anyhow("writing sys profile merge base"))?;
+    remove_if_exists(host, new_path).await?;
+    remove_if_exists(host, merge_path).await?;
     Ok(SysProfileFileUpdate {
         updated: true,
         needs_action: false,
@@ -327,6 +599,7 @@ async fn handle_fresh_install(
 }
 
 async fn handle_missing_base(
+    host: &impl FileSystemHost,
     active_path: &Path,
     base_path: &Path,
     new_path: &Path,
@@ -335,11 +608,11 @@ async fn handle_missing_base(
     active: &[u8],
 ) -> Result<SysProfileFileUpdate> {
     if active == template {
-        tokio::fs::write(base_path, template)
+        host.write_atomic(base_path, template)
             .await
-            .with_context(|| format!("writing {}", base_path.display()))?;
-        remove_if_exists(new_path).await?;
-        remove_if_exists(merge_path).await?;
+            .map_err(|error| error.into_anyhow("writing sys profile merge base"))?;
+        remove_if_exists(host, new_path).await?;
+        remove_if_exists(host, merge_path).await?;
         return Ok(SysProfileFileUpdate {
             updated: true,
             needs_action: false,
@@ -347,21 +620,21 @@ async fn handle_missing_base(
         });
     }
     if is_initial_user_profile_edit(template, active) {
-        tokio::fs::write(base_path, template)
+        host.write_atomic(base_path, template)
             .await
-            .with_context(|| format!("writing {}", base_path.display()))?;
-        remove_if_exists(new_path).await?;
-        remove_if_exists(merge_path).await?;
+            .map_err(|error| error.into_anyhow("writing sys profile merge base"))?;
+        remove_if_exists(host, new_path).await?;
+        remove_if_exists(host, merge_path).await?;
         return Ok(SysProfileFileUpdate {
             updated: true,
             needs_action: false,
             detail: format!("{} initialized with user edits", base_path.display()),
         });
     }
-    tokio::fs::write(new_path, template)
+    host.write_atomic(new_path, template)
         .await
-        .with_context(|| format!("writing {}", new_path.display()))?;
-    remove_if_exists(merge_path).await?;
+        .map_err(|error| error.into_anyhow("writing new sys profile template"))?;
+    remove_if_exists(host, merge_path).await?;
     Ok(SysProfileFileUpdate {
         updated: true,
         needs_action: true,
@@ -373,23 +646,27 @@ async fn handle_missing_base(
     })
 }
 
-async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpdate> {
+async fn apply_merge_result(
+    host: &(impl FileSystemHost + ProcessHost),
+    inputs: MergeInputs<'_>,
+) -> Result<SysProfileFileUpdate> {
+    let merge_inputs = inputs;
     let MergeInputs {
         active_path,
         base_path,
-        template_path,
+        template_path: _,
         new_path,
         merge_path,
         base,
         active,
         template,
-        allow_git_merge,
+        allow_git_merge: _,
     } = inputs;
 
     if active == template {
-        let updated = write_if_changed(base_path, template).await?;
-        remove_if_exists(new_path).await?;
-        remove_if_exists(merge_path).await?;
+        let updated = write_if_changed(host, base_path, template).await?;
+        remove_if_exists(host, new_path).await?;
+        remove_if_exists(host, merge_path).await?;
         return Ok(SysProfileFileUpdate {
             updated,
             needs_action: false,
@@ -397,8 +674,8 @@ async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpd
         });
     }
     if base == template {
-        remove_if_exists(new_path).await?;
-        remove_if_exists(merge_path).await?;
+        remove_if_exists(host, new_path).await?;
+        remove_if_exists(host, merge_path).await?;
         return Ok(SysProfileFileUpdate {
             updated: false,
             needs_action: false,
@@ -406,40 +683,30 @@ async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpd
         });
     }
     if active == base {
-        tokio::fs::write(active_path, template)
+        host.write_atomic(active_path, template)
             .await
-            .with_context(|| format!("writing {}", active_path.display()))?;
-        tokio::fs::write(base_path, template)
+            .map_err(|error| error.into_anyhow("writing active sys profile"))?;
+        host.write_atomic(base_path, template)
             .await
-            .with_context(|| format!("writing {}", base_path.display()))?;
-        remove_if_exists(new_path).await?;
-        remove_if_exists(merge_path).await?;
+            .map_err(|error| error.into_anyhow("writing sys profile merge base"))?;
+        remove_if_exists(host, new_path).await?;
+        remove_if_exists(host, merge_path).await?;
         return Ok(SysProfileFileUpdate {
             updated: true,
             needs_action: false,
             detail: format!("{} updated", active_path.display()),
         });
     }
-    match merge_sys_profile(
-        active_path,
-        base_path,
-        template_path,
-        base,
-        active,
-        template,
-        allow_git_merge,
-    )
-    .await?
-    {
+    match merge_sys_profile(host, &merge_inputs).await? {
         ProfileMerge::Clean(merged) => {
-            tokio::fs::write(active_path, merged)
+            host.write_atomic(active_path, &merged)
                 .await
-                .with_context(|| format!("writing {}", active_path.display()))?;
-            tokio::fs::write(base_path, template)
+                .map_err(|error| error.into_anyhow("writing merged sys profile"))?;
+            host.write_atomic(base_path, template)
                 .await
-                .with_context(|| format!("writing {}", base_path.display()))?;
-            remove_if_exists(new_path).await?;
-            remove_if_exists(merge_path).await?;
+                .map_err(|error| error.into_anyhow("writing sys profile merge base"))?;
+            remove_if_exists(host, new_path).await?;
+            remove_if_exists(host, merge_path).await?;
             Ok(SysProfileFileUpdate {
                 updated: true,
                 needs_action: false,
@@ -447,12 +714,12 @@ async fn apply_merge_result(inputs: MergeInputs<'_>) -> Result<SysProfileFileUpd
             })
         }
         ProfileMerge::Conflict(merged) => {
-            tokio::fs::write(new_path, template)
+            host.write_atomic(new_path, template)
                 .await
-                .with_context(|| format!("writing {}", new_path.display()))?;
-            tokio::fs::write(merge_path, merged)
+                .map_err(|error| error.into_anyhow("writing new sys profile template"))?;
+            host.write_atomic(merge_path, &merged)
                 .await
-                .with_context(|| format!("writing {}", merge_path.display()))?;
+                .map_err(|error| error.into_anyhow("writing sys profile merge conflict"))?;
             Ok(SysProfileFileUpdate {
                 updated: true,
                 needs_action: true,
@@ -473,49 +740,68 @@ enum ProfileMerge {
 }
 
 async fn merge_sys_profile(
-    active_path: &Path,
-    base_path: &Path,
-    template_path: &Path,
-    base: &[u8],
-    active: &[u8],
-    template: &[u8],
-    allow_git_merge: bool,
+    host: &impl ProcessHost,
+    inputs: &MergeInputs<'_>,
 ) -> Result<ProfileMerge> {
-    if allow_git_merge
-        && let Some(result) = try_git_merge_file(active_path, base_path, template_path).await?
+    if inputs.allow_git_merge
+        && let Some(result) = try_git_merge_file(
+            host,
+            inputs.active_path,
+            inputs.base_path,
+            inputs.template_path,
+        )
+        .await?
     {
         return Ok(result);
     }
 
-    Ok(match fallback_three_way_merge(base, active, template) {
-        Some(merged) => ProfileMerge::Clean(merged),
-        None => ProfileMerge::Conflict(conflict_marker_merge(base, active, template)),
-    })
+    Ok(
+        match fallback_three_way_merge(inputs.base, inputs.active, inputs.template) {
+            Some(merged) => ProfileMerge::Clean(merged),
+            None => ProfileMerge::Conflict(conflict_marker_merge(
+                inputs.base,
+                inputs.active,
+                inputs.template,
+            )),
+        },
+    )
 }
 
 async fn try_git_merge_file(
+    host: &impl ProcessHost,
     active_path: &Path,
     base_path: &Path,
     template_path: &Path,
 ) -> Result<Option<ProfileMerge>> {
-    let output = match tokio::process::Command::new("git")
-        .arg("merge-file")
-        .arg("-p")
-        .arg(active_path)
-        .arg(base_path)
-        .arg(template_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+    let output = match host
+        .run(ProcessRequest {
+            program: "git".to_string(),
+            args: vec![
+                "merge-file".to_string(),
+                "-p".to_string(),
+                active_path.to_string_lossy().into_owned(),
+                base_path.to_string_lossy().into_owned(),
+                template_path.to_string_lossy().into_owned(),
+            ],
+            io: ProcessIo::Captured,
+            stdout_limit: Some(4 * 1024 * 1024),
+            stderr_limit: Some(1024 * 1024),
+            ..ProcessRequest::default()
+        })
         .await
     {
         Ok(output) => output,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err).context("running git merge-file"),
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.context("running git merge-file")),
     };
 
-    match output.status.code() {
+    match output.exit_code {
         Some(0) => Ok(Some(ProfileMerge::Clean(output.stdout))),
         Some(1) => Ok(Some(ProfileMerge::Conflict(output.stdout))),
         _ => Ok(None),
@@ -693,21 +979,21 @@ fn conflict_marker_merge(base: &[u8], active: &[u8], template: &[u8]) -> Vec<u8>
     out
 }
 
-async fn write_if_changed(path: &Path, content: &[u8]) -> Result<bool> {
-    if tokio::fs::read(path).await.ok().as_deref() == Some(content) {
+async fn write_if_changed(host: &impl FileSystemHost, path: &Path, content: &[u8]) -> Result<bool> {
+    if host.read(path).await.ok().as_deref() == Some(content) {
         return Ok(false);
     }
-    tokio::fs::write(path, content)
+    host.write_atomic(path, content)
         .await
-        .with_context(|| format!("writing {}", path.display()))?;
+        .map_err(|error| error.into_anyhow("writing sys profile"))?;
     Ok(true)
 }
 
-async fn remove_if_exists(path: &Path) -> Result<bool> {
-    match tokio::fs::remove_file(path).await {
+async fn remove_if_exists(host: &impl FileSystemHost, path: &Path) -> Result<bool> {
+    match host.remove_file(path).await {
         Ok(()) => Ok(true),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(err) => Err(err).with_context(|| format!("removing {}", path.display())),
+        Err(error) if error.is_not_found() => Ok(false),
+        Err(error) => Err(error.into_anyhow("removing sys profile artifact")),
     }
 }
 
@@ -754,12 +1040,72 @@ fn sys_profile_merge_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::{
+        InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext, RuntimePlatform,
+    };
+    use std::collections::BTreeSet;
     use tokio::fs;
+
+    #[tokio::test]
+    async fn in_memory_profile_composition_updates_loaders_and_shell_blocks_through_host() {
+        let host = InMemoryHost::new();
+        let context = RuntimeContext::isolated(
+            PathBuf::from("/virtual/home"),
+            PathBuf::from("/virtual/home/.shine"),
+            PathBuf::from("/virtual/home/.shine/presets"),
+            PathBuf::from("/virtual/home/.shine/bin"),
+            RuntimePlatform::Linux,
+        );
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/ubuntu/shine.toml",
+                b"version = 2\nitems = []\n".to_vec(),
+            )
+            .file(
+                "sys/ubuntu/profile/base.pre.sh",
+                b"export SHINE_PRE=1\n".to_vec(),
+            )
+            .file(
+                "sys/ubuntu/profile/base.post.sh",
+                b"export SHINE_POST=1\n".to_vec(),
+            )
+            .build();
+        let runtime = CoreRuntime::new(host.clone(), context, snapshot);
+        let loaded = runtime.load_sys_preset("ubuntu").await.unwrap();
+
+        let first = runtime
+            .install_composed_sys_profile("ubuntu", &loaded, &BTreeSet::new(), "zsh", false)
+            .await
+            .unwrap();
+        assert_eq!(first.status, SysItemStatus::Updated);
+        assert_eq!(
+            host.read(Path::new("/virtual/home/.shine/profile/ubuntu-sys.pre.sh"))
+                .await
+                .unwrap(),
+            b"export SHINE_PRE=1\n"
+        );
+        let zshrc =
+            String::from_utf8(host.read(Path::new("/virtual/home/.zshrc")).await.unwrap()).unwrap();
+        assert!(zshrc.contains("shine ubuntu sys pre"));
+        assert!(zshrc.contains("shine ubuntu sys post"));
+
+        let second = runtime
+            .install_composed_sys_profile("ubuntu", &loaded, &BTreeSet::new(), "zsh", false)
+            .await
+            .unwrap();
+        assert_eq!(second.status, SysItemStatus::Skipped);
+    }
+
+    async fn make_temp_dir(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("{label}-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&path).await.unwrap();
+        path
+    }
 
     /// Fresh-installs `template` into a temp profile dir and returns
     /// `(profile_dir, script_dir, active_path)` for follow-up assertions.
     async fn setup_phase(template: &str) -> (PathBuf, PathBuf, PathBuf) {
-        let dir = crate::test_support::make_temp_dir("shine-sys-profile-eol").await;
+        let dir = make_temp_dir("shine-sys-profile-eol").await;
         let profile_dir = dir.join("profile");
         let script_dir = dir.join("script");
         fs::create_dir_all(&profile_dir).await.unwrap();

@@ -1,9 +1,11 @@
+#[cfg(test)]
 mod annotation;
 mod build;
+#[cfg(test)]
 mod generator;
-mod hooks;
 mod info;
 mod install;
+#[cfg(test)]
 mod json_merge;
 mod metadata;
 mod refresh;
@@ -16,9 +18,6 @@ pub use build::{handle_build, handle_unbuild};
 pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};
 pub use install::handle_install;
-#[cfg(test)]
-pub(crate) use metadata::built_in_platform_availability;
-pub(crate) use metadata::validate_preset_category;
 pub use metadata::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
     load_active_categories, load_embedded_categories, load_installed_categories,
@@ -30,12 +29,16 @@ pub(crate) use upgrade::{
     handle_upgrade_installed_target_with_result, handle_upgrade_installed_with_output_with_result,
 };
 
+#[cfg(test)]
 use crate::config::Config;
-use crate::install_core::manifest::{self, AppEntry, AppInstallStrategy, hash_content};
-use crate::install_core::{file_ops, transforms};
+#[cfg(test)]
+use crate::install_core::manifest::{self, AppInstallStrategy, hash_content};
+#[cfg(test)]
+use crate::install_core::transforms;
 use anyhow::{Context, Result};
-use file_ops::{InstallOutcome, UninstallOutcome};
+#[cfg(test)]
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::path::{Path, PathBuf};
 const APP_TEMPLATE: &str = r#"# App preset metadata for shine.
 description = "My app configuration."
@@ -73,6 +76,7 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
 /// Hash the effective install content for `file` — applies transforms if declared.
 ///
 /// Returns `None` when the source cannot be read (e.g. not yet extracted).
+#[cfg(test)]
 pub async fn materialize_file_content(
     config: &Config,
     cat: &metadata::AppCategory,
@@ -87,6 +91,7 @@ pub async fn materialize_file_content(
 
 /// Read and transform only the declared static source. Used by installation
 /// dry-runs so inspecting a plan can never execute a generator.
+#[cfg(test)]
 async fn materialize_static_file_content(
     config: &Config,
     cat: &metadata::AppCategory,
@@ -107,6 +112,7 @@ async fn materialize_static_file_content(
     apply_file_transforms(file, raw, env)
 }
 
+#[cfg(test)]
 fn apply_file_transforms(
     file: &metadata::AppFile,
     raw: Vec<u8>,
@@ -120,6 +126,7 @@ fn apply_file_transforms(
     }
 }
 
+#[cfg(test)]
 pub async fn source_bytes_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
@@ -129,6 +136,7 @@ pub async fn source_bytes_for_file(
     materialize_file_content(config, cat, file, env).await.ok()
 }
 
+#[cfg(test)]
 pub async fn source_hash_for_file(
     config: &Config,
     cat: &metadata::AppCategory,
@@ -150,6 +158,7 @@ pub async fn source_hash_for_file(
     desired_content_hash(file, &effective).ok()
 }
 
+#[cfg(test)]
 pub fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u64> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(hash_content(bytes)),
@@ -159,6 +168,7 @@ pub fn desired_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<u6
     }
 }
 
+#[cfg(test)]
 pub fn installed_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<Option<u64>> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(Some(hash_content(bytes))),
@@ -168,57 +178,7 @@ pub fn installed_content_hash(file: &metadata::AppFile, bytes: &[u8]) -> Result<
     }
 }
 
-async fn install_prepared_content(
-    file: &metadata::AppFile,
-    content: &[u8],
-    destination: &Path,
-    is_managed: bool,
-    dry_run: bool,
-    force: bool,
-) -> Result<InstallOutcome> {
-    match &file.install_strategy {
-        AppInstallStrategy::Copy => {
-            if file.requires_admin {
-                file_ops::install_bytes_admin(content, destination, is_managed, dry_run, force)
-                    .await
-            } else {
-                file_ops::install_bytes(content, destination, is_managed, dry_run, force).await
-            }
-        }
-        AppInstallStrategy::JsonMerge { managed_keys } => {
-            json_merge::install(content, destination, dry_run, managed_keys).await
-        }
-    }
-}
-
-async fn uninstall_app_entry(
-    entry: &AppEntry,
-    dry_run: bool,
-    force: bool,
-) -> Result<UninstallOutcome> {
-    match &entry.install_strategy {
-        AppInstallStrategy::Copy if entry.requires_admin => {
-            file_ops::uninstall_entry_admin(entry, dry_run, force).await
-        }
-        AppInstallStrategy::Copy => file_ops::uninstall_entry(entry, dry_run, force).await,
-        AppInstallStrategy::JsonMerge { managed_keys } => {
-            json_merge::uninstall(entry, dry_run, force, managed_keys).await
-        }
-    }
-}
-
-fn app_category_from_source(source: &str) -> Option<String> {
-    app_source_parts(source).map(|(category, _)| category.to_string())
-}
-
-fn app_source_parts(source: &str) -> Option<(&str, &str)> {
-    let mut parts = source.splitn(3, '/');
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some("app"), Some(category), Some(file)) => Some((category, file)),
-        _ => None,
-    }
-}
-
+#[cfg(test)]
 pub fn resolve_install_destination(
     category: &metadata::AppCategory,
     file: &metadata::AppFile,
@@ -248,6 +208,7 @@ pub fn resolve_install_destination(
     )
 }
 
+#[cfg(test)]
 fn expand_destination_root(dest_root: &str, config: &Config) -> Result<PathBuf> {
     let expanded = crate::config::full_expand_with_home(dest_root, &config.home_dir)
         .with_context(|| format!("failed to expand destination root: {dest_root}"))?;
@@ -264,6 +225,7 @@ fn expand_destination_root(dest_root: &str, config: &Config) -> Result<PathBuf> 
     Ok(root)
 }
 
+#[cfg(test)]
 fn data_dir_for_config(config: &Config) -> Result<PathBuf> {
     if config.home_dir == crate::home::effective_home_dir() {
         return directories::BaseDirs::new()
@@ -279,6 +241,7 @@ fn data_dir_for_config(config: &Config) -> Result<PathBuf> {
     }
 }
 
+#[cfg(test)]
 fn validate_unique_install_destinations<'a>(
     categories: impl IntoIterator<Item = &'a metadata::AppCategory>,
     config: &Config,
@@ -303,12 +266,12 @@ fn validate_unique_install_destinations<'a>(
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 fn is_install_destination_root_absolute(_expanded: &str, root: &Path) -> bool {
     root.is_absolute()
 }
 
-#[cfg(not(windows))]
+#[cfg(all(test, not(windows)))]
 fn is_install_destination_root_absolute(expanded: &str, root: &Path) -> bool {
     root.is_absolute() || expanded.starts_with('/')
 }
