@@ -692,7 +692,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         Ok(has_metadata)
     }
 
-    pub async fn install_shells(
+    pub(crate) async fn install_shells(
         &self,
         request: ShellLifecycleRequest,
     ) -> Result<ShellLifecycleReport> {
@@ -1007,7 +1007,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
 
     /// Upgrade only commands recorded as installed. Category-targeted upgrade
     /// never widens into uninstalled siblings.
-    pub async fn upgrade_shells(
+    pub(crate) async fn upgrade_shells(
         &self,
         request: ShellUpgradeRequest,
     ) -> Result<ShellUpgradeLifecycleReport> {
@@ -1086,7 +1086,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
 
     /// Complete command/category/all Shell uninstall. Shared category state is
     /// removed only after the last installed sibling is selected.
-    pub async fn uninstall_shells(
+    pub(crate) async fn uninstall_shells(
         &self,
         request: ShellUninstallRequest,
     ) -> Result<ShellUninstallReport> {

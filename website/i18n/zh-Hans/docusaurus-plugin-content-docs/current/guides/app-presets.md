@@ -44,6 +44,10 @@ shine app uninstall starship
 shine app uninstall starship --purge
 ```
 
+install、upgrade 和 uninstall 会在 mutation 前显示绑定快照的 Plan，确认默认是 No；非交互
+执行使用命令级 `--yes`。该参数仍会显示并重新校验 Plan，不能绕过缺失权限、被阻塞的 teardown
+或外部代码 gate。upgrade 仅在审阅命令包含 `--prune-stale` 时移除 App stale 文件。
+
 默认情况下，安装后被用户修改过的文件会保留并标记为用户修改。若安装时创建过备份，安全卸载会恢复原文件。`--purge` 还会删除相应预设目录；卸载全部类别时也会删除 manifest。
 
 ## 配置变换
@@ -163,6 +167,24 @@ Shine 只读取 `profiles.yaml` 定位这些绑定文件，不会修改订阅、
 ## 生命周期钩子
 
 预设作者可以声明 `post_install` 和 `post_upgrade` 钩子：前者在安装实际写入文件后运行，后者只在 `shine upgrade` 实际更新该类别至少一个文件后运行；未变化的类别不会触发。
+
+钩子读取的每个环境输入都必须列入钩子的 `env`，并在类别权限声明中声明同名变量。Plan 审阅会对
+`plain` 值取 hash，并以 opaque revision 绑定 `secret` 值；Plan 不会序列化任何原值。缺少钩子输入
+或 secret identity 时不能批准。
+
+```toml
+post_upgrade = [
+  { command = "my-reloader", env = ["API_URL", "API_TOKEN"] },
+]
+
+[permissions]
+schema_version = 1
+environment = [
+  { name = "API_URL", sensitivity = "plain" },
+  { name = "API_TOKEN", sensitivity = "secret" },
+]
+commands = ["my-reloader"]
+```
 
 外部预设中的钩子和 generator 需要在配置中显式允许：
 

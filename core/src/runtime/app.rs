@@ -49,6 +49,7 @@ pub struct AppHook {
     pub command: String,
     pub args: Vec<String>,
     pub show_output: bool,
+    pub env: Vec<EnvVarSpec>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -254,7 +255,7 @@ where
     /// Execute the complete App install lifecycle from one immutable preset
     /// snapshot. Generators are assessed once before the first mutation and
     /// their result is reused for installation, receipt hashing and hooks.
-    pub async fn install_apps(
+    pub(crate) async fn install_apps(
         &self,
         request: AppLifecycleRequest,
         observer: &mut impl RuntimeObserver,
@@ -484,7 +485,7 @@ where
 
     /// Execute teardown, owned resource removal, receipt reconciliation and
     /// embedded-cache cleanup as one Core-owned uninstall lifecycle.
-    pub async fn uninstall_apps(
+    pub(crate) async fn uninstall_apps(
         &self,
         request: AppUninstallLifecycleRequest,
         observer: &mut impl RuntimeObserver,
@@ -975,7 +976,7 @@ where
     /// Reconcile only manifest-installed App categories against one immutable
     /// preset assessment. Automatic generators run once; manual generators
     /// remain explicit-refresh only.
-    pub async fn upgrade_apps(
+    pub(crate) async fn upgrade_apps(
         &self,
         request: AppUpgradeRequest,
         observer: &mut impl RuntimeObserver,
@@ -1983,7 +1984,7 @@ fn managed_json_payload(
         .collect()
 }
 
-fn installed_json_hash(bytes: &[u8], managed_keys: &[String]) -> Result<Option<u64>> {
+pub(crate) fn installed_json_hash(bytes: &[u8], managed_keys: &[String]) -> Result<Option<u64>> {
     let current = parse_json_object(bytes, "json-merge: destination must be a JSON object")?;
     let managed = managed_keys
         .iter()
@@ -2157,11 +2158,22 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             let mut completed = true;
             let mut notes = Vec::new();
             for hook in hooks {
+                let env = hook
+                    .env
+                    .iter()
+                    .filter_map(|spec| {
+                        self.context
+                            .env
+                            .get(&spec.source)
+                            .map(|value| (spec.target.clone(), value.clone()))
+                    })
+                    .collect();
                 let output = self
                     .host
                     .run(ProcessRequest {
                         program: hook.command.clone(),
                         args: hook.args.clone(),
+                        env,
                         ..ProcessRequest::default()
                     })
                     .await;

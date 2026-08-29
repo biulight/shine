@@ -963,7 +963,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.ps1\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.ps1\"\ntarget = \"setproxy\"\nneeds_source = true\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -998,7 +998,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1042,7 +1042,7 @@ mod tests {
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1096,7 +1096,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1143,7 +1143,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1183,7 +1183,7 @@ mod tests {
         fs::create_dir_all(&old_category).await.unwrap();
         fs::write(
             old_category.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1255,7 +1255,7 @@ mod tests {
         fs::create_dir_all(&old_category).await.unwrap();
         fs::write(
             old_category.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1381,7 +1381,7 @@ mod tests {
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1464,7 +1464,7 @@ mod tests {
         fs::write(
             cat_dir.join("shine.toml"),
             format!(
-                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\n"
+                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\npermissions = {{ schema_version = 1 }}\n"
             ),
         )
         .await
@@ -1502,7 +1502,7 @@ mod tests {
         fs::write(
             cat_dir.join("shine.toml"),
             format!(
-                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\n"
+                "[[files]]\nsource = \"{old_source}\"\ntarget = \"ccenv\"\nneeds_source = true\npermissions = {{ schema_version = 1 }}\n"
             ),
         )
         .await
@@ -1520,7 +1520,7 @@ mod tests {
 
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"cc.ts\"\ntarget = \"ccenv\"\nruntime = \"bun\"\nplatforms = [\"unix\", \"windows\"]\n",
+            b"[[files]]\nsource = \"cc.ts\"\ntarget = \"ccenv\"\nruntime = \"bun\"\nplatforms = [\"unix\", \"windows\"]\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();
@@ -1548,7 +1548,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\npermissions = { schema_version = 1, environment = [{ name = \"PROXY_NO_PROXY\", sensitivity = \"plain\" }] }\n",
         )
         .await
         .unwrap();

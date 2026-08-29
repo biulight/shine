@@ -6,10 +6,14 @@ use crate::presentation::{
     LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
 use anyhow::{Result, anyhow};
+use shine_core::lifecycle::LifecycleOperation;
 use shine_core::lifecycle::LifecycleResultV1;
 #[cfg(test)]
 use shine_core::lifecycle::LifecycleStatus;
-use shine_core::runtime::{AppFileAction, AppLifecycleRequest, RuntimeEvent, RuntimeObserver};
+use shine_core::runtime::{
+    AppFileAction, AppLifecycleRequest, AppPlanRequest, PlanningInputVersions, RuntimeEvent,
+    RuntimeObserver,
+};
 use std::collections::BTreeSet;
 
 pub async fn handle_install(
@@ -18,8 +22,18 @@ pub async fn handle_install(
     dry_run: bool,
     force: bool,
 ) -> Result<()> {
+    handle_install_approved(config, category, dry_run, force, true).await
+}
+
+pub async fn handle_install_approved(
+    config: &Config,
+    category: Option<&str>,
+    dry_run: bool,
+    force: bool,
+    yes: bool,
+) -> Result<()> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_install_with_reporter(config, category, dry_run, force, &mut renderer)
+    handle_install_with_reporter(config, category, dry_run, force, yes, &mut renderer)
         .await
         .map(|_| ())
 }
@@ -32,7 +46,7 @@ pub(crate) async fn handle_install_with_result(
     force: bool,
 ) -> Result<LifecycleResultV1> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_install_with_reporter(config, category, dry_run, force, &mut renderer).await
+    handle_install_with_reporter(config, category, dry_run, force, true, &mut renderer).await
 }
 
 async fn handle_install_with_reporter(
@@ -40,6 +54,7 @@ async fn handle_install_with_reporter(
     category: Option<&str>,
     dry_run: bool,
     force: bool,
+    yes: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
     for line in crate::config::presets_note_lines(config) {
@@ -49,7 +64,34 @@ async fn handle_install_with_reporter(
         reporter.emit(PresentationEvent::stdout(report::dry_run_header_text()));
     }
 
-    let mut runtime = crate::core_runtime::from_config(config).await?;
+    let plan_request = AppPlanRequest {
+        operation: LifecycleOperation::Install,
+        target: category.map(str::to_string),
+        force,
+        purge: false,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let reviewed = if dry_run {
+        None
+    } else {
+        crate::lifecycle_plan::review_plans(
+            config,
+            [crate::lifecycle_plan::LifecyclePlanRequest::app(
+                plan_request.clone(),
+                config,
+            )],
+            yes,
+        )
+        .await?
+        .into_iter()
+        .next()
+    };
+    let mut runtime = if let Some(reviewed) = &reviewed {
+        crate::lifecycle_plan::prepare_runtime(config, reviewed).await?
+    } else {
+        crate::core_runtime::from_config(config).await?
+    };
     let env = EnvConfig::load_or_init(config).await?;
     runtime.context_mut_for_cli().env = env.as_map().clone();
     let categories = runtime.app_categories(category)?;
@@ -62,17 +104,31 @@ async fn handle_install_with_reporter(
         categories: &categories,
     };
     let mut interaction = TerminalInteraction;
-    let core_report = runtime
-        .install_apps(
-            AppLifecycleRequest {
-                target: category.map(str::to_string),
-                dry_run,
-                force,
-            },
-            &mut observer,
-            &mut interaction,
-        )
-        .await?;
+    let core_report = if let Some(reviewed) = &reviewed {
+        runtime
+            .install_apps_approved(
+                match &reviewed.request {
+                    crate::lifecycle_plan::LifecyclePlanRequest::App(request) => request.clone(),
+                    _ => unreachable!("reviewed App Plan"),
+                },
+                &reviewed.approval,
+                &mut observer,
+                &mut interaction,
+            )
+            .await?
+    } else {
+        runtime
+            .preview_install_apps(
+                AppLifecycleRequest {
+                    target: category.map(str::to_string),
+                    dry_run,
+                    force,
+                },
+                &mut observer,
+                &mut interaction,
+            )
+            .await?
+    };
     let mut installed = 0usize;
     let mut skipped = 0usize;
     let mut backed_up = 0usize;
@@ -267,7 +323,7 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        let install_result = handle_install_with_result(&config, None, false, false)
+        let install_result = handle_install_with_result(&config, Some("git"), false, false)
             .await
             .unwrap();
         assert!(install_result.summary().changed > 0);
@@ -303,14 +359,15 @@ mod tests {
             );
         }
 
-        let no_op_result = handle_install_with_result(&config, None, false, false)
+        let no_op_result = handle_install_with_result(&config, Some("git"), false, false)
             .await
             .unwrap();
         assert!(no_op_result.summary().unchanged > 0);
 
-        let uninstall_result = handle_uninstall_with_result(&config, None, false, false, false)
-            .await
-            .unwrap();
+        let uninstall_result =
+            handle_uninstall_with_result(&config, Some("git"), false, false, false)
+                .await
+                .unwrap();
         assert!(uninstall_result.summary().changed > 0);
         assert!(uninstall_result.outcomes.iter().all(|outcome| {
             outcome.status != LifecycleStatus::Failed
@@ -411,7 +468,7 @@ mod tests {
         fs::write(
             category_dir.join("shine.toml"),
             format!(
-                "description = \"Sample\"\ndest = {:?}\n\n[[files]]\nsource = \"config.toml\"\n",
+                "description = \"Sample\"\ndest = {:?}\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"config.toml\"\n",
                 destination_root.to_string_lossy()
             ),
         )
@@ -542,13 +599,17 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, None, false, false).await.unwrap();
+        handle_install(&config, Some("git"), false, false)
+            .await
+            .unwrap();
         let manifest_first = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         let count_first = manifest_first.entries.len();
 
-        handle_install(&config, None, false, false).await.unwrap();
+        handle_install(&config, Some("git"), false, false)
+            .await
+            .unwrap();
         let manifest_second = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
@@ -578,6 +639,9 @@ mod tests {
                 "description = \"hook test\"\n\
 dest = \"{dest_root}\"\n\
 post_install = {{ command = \"/bin/sh\", args = [\"-c\", \"touch {marker}\"] }}\n\n\
+[permissions]\n\
+schema_version = 1\n\
+commands = [\"/bin/sh\"]\n\n\
 [[files]]\n\
 source = \"file.conf\"\n",
                 marker = marker.display()

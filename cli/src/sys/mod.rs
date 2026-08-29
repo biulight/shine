@@ -22,11 +22,11 @@ pub use commands::{handle_info, handle_init, handle_list, handle_status};
 pub use detect::detect_os_id;
 pub(crate) use managed::installed_managed;
 pub use managed::{
-    handle_apply, handle_uninstall, handle_upgrade_managed, handle_upgrade_managed_target,
-    managed_updates,
+    handle_apply, handle_apply_approved, handle_uninstall, handle_uninstall_approved,
+    handle_upgrade_managed, handle_upgrade_managed_target, managed_updates,
 };
 pub(crate) use managed::{
-    handle_upgrade_managed_target_with_result, handle_upgrade_managed_with_result,
+    handle_upgrade_managed_target_with_result_approved, handle_upgrade_managed_with_result_prepared,
 };
 pub use profile_commands::{handle_profile_disable, handle_profile_enable};
 

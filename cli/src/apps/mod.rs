@@ -17,16 +17,19 @@ pub use build::{handle_build, handle_unbuild};
 #[doc(hidden)]
 pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};
-pub use install::handle_install;
+pub use install::{handle_install, handle_install_approved};
 pub use metadata::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
     load_active_categories, load_embedded_categories, load_installed_categories,
 };
 pub use refresh::handle_refresh;
-pub use uninstall::handle_uninstall;
+pub use uninstall::{handle_uninstall, handle_uninstall_approved};
+#[cfg(test)]
+pub(crate) use upgrade::handle_upgrade_installed_target_with_result;
 pub use upgrade::{AppUpgradeReport, handle_upgrade_installed};
 pub(crate) use upgrade::{
-    handle_upgrade_installed_target_with_result, handle_upgrade_installed_with_output_with_result,
+    handle_upgrade_installed_target_with_result_approved,
+    handle_upgrade_installed_with_output_with_result_prepared,
 };
 
 #[cfg(test)]
@@ -344,7 +347,7 @@ mod tests {
     ) {
         let cat_dir = dir.join("presets/app/sample");
         fs::create_dir_all(&cat_dir).await.unwrap();
-        let mut manifest = "description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n".to_string();
+        let mut manifest = "description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n".to_string();
         if extra_body.is_some() {
             manifest.push_str(
                 "\n[[files]]\nsource = \"theme.conf\"\ntarget = \"themes/theme.conf\"\ntransforms = [\"template\"]\n",
@@ -671,7 +674,7 @@ mod tests {
         fs::create_dir_all(&other_dir).await.unwrap();
         fs::write(
             other_dir.join("shine.toml"),
-            "description = \"Other app\"\ndest = \"~/.config/other\"\n\n[[files]]\nsource = \"config.json\"\ntarget = \"config.json\"\n",
+            "description = \"Other app\"\ndest = \"~/.config/other\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"config.json\"\ntarget = \"config.json\"\n",
         )
         .await
         .unwrap();
@@ -733,7 +736,7 @@ mod tests {
         fs::create_dir_all(&other_dir).await.unwrap();
         fs::write(
             other_dir.join("shine.toml"),
-            "description = \"Other app\"\ndest = \"~/.config/other\"\n\n[[files]]\nsource = \"config.json\"\ntarget = \"config.json\"\n",
+            "description = \"Other app\"\ndest = \"~/.config/other\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"config.json\"\ntarget = \"config.json\"\n",
         )
         .await
         .unwrap();
@@ -1021,19 +1024,12 @@ mod tests {
         .await;
 
         let mut sep = crate::output::SectionSeparator::new();
-        let (report, lifecycle) =
+        let error =
             handle_upgrade_installed_target_with_result(&config, None, false, false, &mut sep)
                 .await
-                .unwrap();
+                .unwrap_err();
 
-        assert_eq!(report.updated, 1);
-        assert!(lifecycle.outcomes.iter().any(|outcome| {
-            outcome.resource.as_deref() == Some("hook:post-upgrade")
-                && outcome.status == shine_core::lifecycle::LifecycleStatus::Skipped
-                && outcome
-                    .diagnostic_codes
-                    .contains(&"app_hook_permission_required".to_string())
-        }));
+        assert!(error.to_string().contains("Plan is blocked"));
         assert!(
             !marker.exists(),
             "external hook must be skipped unless allow_app_hooks is enabled"
@@ -1126,15 +1122,11 @@ mod tests {
         fs::write(&new_dest, b"user-owned\n").await.unwrap();
 
         let mut sep = crate::output::SectionSeparator::new();
-        let report = handle_upgrade_installed(&config, false, &mut sep)
+        let error = handle_upgrade_installed(&config, false, &mut sep)
             .await
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(report.updated, 0, "unmanaged existing file must not update");
-        assert_eq!(
-            report.skipped, 2,
-            "existing managed file and unmanaged new file should be skipped"
-        );
+        assert!(error.to_string().contains("Plan is blocked"));
         assert_eq!(fs::read(&new_dest).await.unwrap(), b"user-owned\n");
         let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
@@ -1338,7 +1330,7 @@ mod tests {
         let cat_dir = dir.join("presets/app/sample");
         fs::write(
             cat_dir.join("shine.toml"),
-            b"description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[[files]]\nsource = \"daemon-renamed.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"jsonc-to-json\"]\n",
+            b"description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"daemon-renamed.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"jsonc-to-json\"]\n",
         )
         .await
         .unwrap();

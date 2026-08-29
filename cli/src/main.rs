@@ -29,7 +29,7 @@ use cli::preset_commands::{
 use cli::self_install::{
     handle_config_upgrade, handle_self_install, handle_self_upgrade, handle_update,
 };
-use cli::shim::{handle_install_shim, handle_uninstall_shim};
+use cli::shim::{handle_install_shim_approved, handle_uninstall_shim_approved};
 
 fn main() -> Result<()> {
     completion::complete_from_env();
@@ -119,13 +119,15 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Install {
             target,
             replace_managed,
-        } => handle_install_shim(&config, &target, replace_managed).await,
+            yes,
+        } => handle_install_shim_approved(&config, &target, replace_managed, yes).await,
         Commands::Uninstall {
             target,
             force,
             purge,
             dry_run,
-        } => handle_uninstall_shim(&config, &target, force, purge, dry_run).await,
+            yes,
+        } => handle_uninstall_shim_approved(&config, &target, force, purge, dry_run, yes).await,
         Commands::App { command } => match command {
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
             AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
@@ -133,12 +135,14 @@ async fn run(cli: Cli) -> Result<()> {
                 category,
                 dry_run,
                 replace_managed,
+                yes,
             } => {
-                Box::pin(apps::handle_install(
+                Box::pin(apps::handle_install_approved(
                     &config,
                     category.as_deref(),
                     dry_run,
                     replace_managed,
+                    yes,
                 ))
                 .await
             }
@@ -160,13 +164,15 @@ async fn run(cli: Cli) -> Result<()> {
                 force,
                 purge,
                 dry_run,
+                yes,
             } => {
-                Box::pin(apps::handle_uninstall(
+                Box::pin(apps::handle_uninstall_approved(
                     &config,
                     category.as_deref(),
                     force,
                     purge,
                     dry_run,
+                    yes,
                 ))
                 .await
             }
@@ -206,11 +212,23 @@ async fn run(cli: Cli) -> Result<()> {
             if cmd.pull {
                 git_pull::handle_pull(&config, cmd.verbose).await?;
                 let config = Box::pin(Config::load_or_init()).await?;
-                handle_config_upgrade(&config, cmd.target.as_deref(), cmd.verbose, cmd.prune_stale)
-                    .await
+                handle_config_upgrade(
+                    &config,
+                    cmd.target.as_deref(),
+                    cmd.verbose,
+                    cmd.prune_stale,
+                    cmd.yes,
+                )
+                .await
             } else {
-                handle_config_upgrade(&config, cmd.target.as_deref(), cmd.verbose, cmd.prune_stale)
-                    .await
+                handle_config_upgrade(
+                    &config,
+                    cmd.target.as_deref(),
+                    cmd.verbose,
+                    cmd.prune_stale,
+                    cmd.yes,
+                )
+                .await
             }
         }
         Commands::Preset { command } => match command {
@@ -271,16 +289,19 @@ async fn run(cli: Cli) -> Result<()> {
                 target,
                 dry_run: true,
                 replace_managed: _,
+                yes: _,
             } => Box::pin(shells::handle_install_dry_run(&config, target.as_deref())).await,
             ShellCommands::Install {
                 target,
                 dry_run: false,
                 replace_managed,
+                yes,
             } => {
-                Box::pin(shells::handle_install(
+                Box::pin(shells::handle_install_approved(
                     &config,
                     target.as_deref(),
                     replace_managed,
+                    yes,
                 ))
                 .await
             }
@@ -288,12 +309,14 @@ async fn run(cli: Cli) -> Result<()> {
                 target,
                 purge,
                 dry_run,
+                yes,
             } => {
-                Box::pin(shells::handle_uninstall(
+                Box::pin(shells::handle_uninstall_approved(
                     &config,
                     target.as_deref(),
                     purge,
                     dry_run,
+                    yes,
                 ))
                 .await
             }
@@ -524,11 +547,17 @@ async fn run(cli: Cli) -> Result<()> {
                     Box::pin(sys::handle_profile_disable(&config, &item, dry_run)).await
                 }
             },
-            SysCommands::Apply { item, dry_run } => {
-                Box::pin(sys::handle_apply(&config, item.as_deref(), dry_run)).await
+            SysCommands::Apply { item, dry_run, yes } => {
+                Box::pin(sys::handle_apply_approved(
+                    &config,
+                    item.as_deref(),
+                    dry_run,
+                    yes,
+                ))
+                .await
             }
-            SysCommands::Uninstall { item, dry_run } => {
-                Box::pin(sys::handle_uninstall(&config, &item, dry_run)).await
+            SysCommands::Uninstall { item, dry_run, yes } => {
+                Box::pin(sys::handle_uninstall_approved(&config, &item, dry_run, yes)).await
             }
         },
         Commands::Ssh {
@@ -1055,7 +1084,8 @@ mod tests {
                 target: None,
                 pull: false,
                 verbose: false,
-                prune_stale: false
+                prune_stale: false,
+                yes: false
             })
         ));
 
@@ -1066,7 +1096,8 @@ mod tests {
                 target: None,
                 pull: false,
                 verbose: true,
-                prune_stale: false
+                prune_stale: false,
+                yes: false
             })
         ));
 
@@ -1077,7 +1108,8 @@ mod tests {
                 target: None,
                 pull: false,
                 verbose: false,
-                prune_stale: true
+                prune_stale: true,
+                yes: false
             })
         ));
 
@@ -1088,7 +1120,8 @@ mod tests {
                 target: None,
                 pull: true,
                 verbose: false,
-                prune_stale: false
+                prune_stale: false,
+                yes: false
             })
         ));
 
@@ -1100,6 +1133,7 @@ mod tests {
                 pull: false,
                 verbose: false,
                 prune_stale: false,
+                yes: false,
             }) if target == "app/starship"
         ));
 
@@ -1129,6 +1163,35 @@ mod tests {
             }
         ));
         assert!(Cli::try_parse_from(["shine", "clear"]).is_err());
+    }
+
+    #[test]
+    fn lifecycle_commands_accept_yes_and_reject_dry_run_conflicts() {
+        for args in [
+            vec!["shine", "install", "app/demo", "--yes"],
+            vec!["shine", "uninstall", "app/demo", "--yes"],
+            vec!["shine", "upgrade", "--yes"],
+            vec!["shine", "app", "install", "demo", "--yes"],
+            vec!["shine", "app", "uninstall", "demo", "--yes"],
+            vec!["shine", "shell", "install", "demo", "--yes"],
+            vec!["shine", "shell", "uninstall", "demo", "--yes"],
+            vec!["shine", "sys", "apply", "demo", "--yes"],
+            vec!["shine", "sys", "uninstall", "demo", "--yes"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+
+        for args in [
+            vec!["shine", "uninstall", "app/demo", "--dry-run", "--yes"],
+            vec!["shine", "app", "install", "demo", "--dry-run", "--yes"],
+            vec!["shine", "app", "uninstall", "demo", "--dry-run", "--yes"],
+            vec!["shine", "shell", "install", "demo", "--dry-run", "--yes"],
+            vec!["shine", "shell", "uninstall", "demo", "--dry-run", "--yes"],
+            vec!["shine", "sys", "apply", "demo", "--dry-run", "--yes"],
+            vec!["shine", "sys", "uninstall", "demo", "--dry-run", "--yes"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_err());
+        }
     }
 
     #[test]
@@ -1753,14 +1816,14 @@ mod tests {
         let cli = Cli::try_parse_from(["shine", "install", "proxy"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Install { target, replace_managed: false } if target == "proxy"
+            Commands::Install { target, replace_managed: false, yes: false } if target == "proxy"
         ));
 
         let cli =
             Cli::try_parse_from(["shine", "install", "app/starship", "--replace-managed"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Install { target, replace_managed: true } if target == "app/starship"
+            Commands::Install { target, replace_managed: true, yes: false } if target == "app/starship"
         ));
 
         let cli = Cli::try_parse_from(["shine", "uninstall", "starship"]).unwrap();
@@ -1771,6 +1834,7 @@ mod tests {
                 force: false,
                 purge: false,
                 dry_run: false,
+                yes: false,
             } if target == "starship"
         ));
     }
@@ -2173,7 +2237,8 @@ mod tests {
             Commands::Sys {
                 command: SysCommands::Apply {
                     item: Some(ref item),
-                    dry_run: true
+                    dry_run: true,
+                    yes: false
                 }
             } if item == "split-dns"
         ));
@@ -2184,7 +2249,8 @@ mod tests {
             Commands::Sys {
                 command: SysCommands::Uninstall {
                     ref item,
-                    dry_run: false
+                    dry_run: false,
+                    yes: false
                 }
             } if item == "split-dns"
         ));

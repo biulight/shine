@@ -60,9 +60,10 @@ skill; validation errors exit with status 1, while warnings do not.
 
 New Presets declare reviewable capability identities with permission schema v1. App permissions
 belong to the category root, each Shell `[[files]]` command has its own `[files.permissions]`, and
-each Sys `[[items]]` target has its own `[items.permissions]`. Missing declarations remain
-compatible but produce `missing_permission_declaration`; unsupported versions, unknown fields,
-invalid identities, and duplicates are errors.
+each Sys `[[items]]` target has its own `[items.permissions]`. A protected install, upgrade, or
+uninstall fails closed when a required declaration is missing; static validation reports
+`missing_permission_declaration`. Unsupported versions, unknown fields, invalid identities, and
+duplicates are errors.
 
 ```toml
 [permissions]
@@ -86,8 +87,8 @@ launchers, receipts, and fixed package providers, so do not repeat those mechani
 
 A declaration is not an authorization grant and does not prove opaque script behavior complete.
 External App code still requires `allow_app_hooks = true`; external Sys code still requires the
-global `allow_sys_code = true`. Current lifecycle execution is unchanged while security Plan
-planners and enforcement remain under development.
+global `allow_sys_code = true`. These coarse gates and administrator authorization remain
+additional checks after the declared permissions and reviewed Plan; they do not replace either.
 
 ## From source folders to installed capabilities
 

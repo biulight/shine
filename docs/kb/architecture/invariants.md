@@ -10,9 +10,12 @@ bugs. Check this list before changing the modules named in each entry.
   observations. App, Shell, and managed Sys planners accept only observation host traits; they
   cannot write/remove, execute generator/hook/artifact/bootstrap code, request privilege, or apply
   split-DNS state. Plans cannot carry content, env values, secret plaintext, raw argv, raw errors,
-  or private source paths. A future apply path must
-  regenerate the Plan from fresh captured inputs and match both its fingerprint and exact required
-  permission set before the first mutation; missing or uncomputable permissions fail closed.
+  or private source paths. Protected App, Shell, and managed Sys mutation must enter through an
+  approved Core method that regenerates the Plan from fresh captured inputs and matches both its
+  fingerprint and exact required permission set before the first mutation; missing or uncomputable
+  permissions fail closed. CLI `--yes` skips only the default-No prompt. Dry-run, artifact, refresh,
+  bootstrap, and explicit Sys profile operations are separate contracts and must not be described
+  as approved lifecycle Plans.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, and each file's embedded, external, or
   overlay origin. It must not include physical source roots: relocating unchanged source is not a
@@ -27,8 +30,8 @@ bugs. Check this list before changing the modules named in each entry.
   Plan approval. Filesystem declarations use logical bases and never embed a physical Preset
   checkout path; command entries contain no argv and environment entries contain names and
   sensitivity only. Pure planners merge explicit declarations with Core-bounded typed metadata and
-  receipt ownership. A missing declaration or uncomputable requirement blocks a Plan even though
-  missing declarations remain a static compatibility warning for current, unenforced execution.
+  receipt ownership. A missing declaration or uncomputable requirement blocks protected mutation;
+  it is never converted into a broad implicit grant.
 
 - **Opaque Preset code is described conservatively, never sampled during planning.** A generator
   or lifecycle hook contributes known command/environment/administrator requirements plus an

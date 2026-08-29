@@ -12,6 +12,7 @@ use super::execution::{
 };
 use super::{SysInstalledRow, SysItemOutcome, SysItemStatus, SysUpdateRow, SysUpgradeReport};
 use shine_core::lifecycle::{LifecycleOperation, LifecycleResultV1};
+use shine_core::runtime::{PlanningInputVersions, SysManagedPlanRequest};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SysAction {
@@ -32,6 +33,7 @@ struct ManagedRunRequest<'a> {
     requested: Option<&'a str>,
     action: SysAction,
     dry_run: bool,
+    yes: bool,
     output_mode: ManagedOutputMode,
 }
 
@@ -46,7 +48,16 @@ impl ManagedOutputMode {
 }
 
 pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) -> Result<()> {
-    let (report, _) = handle_apply_with_result(config, item, dry_run).await?;
+    handle_apply_approved(config, item, dry_run, true).await
+}
+
+pub async fn handle_apply_approved(
+    config: &Config,
+    item: Option<&str>,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
+    let (report, _) = handle_apply_with_result_approved(config, item, dry_run, yes).await?;
     if report.failed > 0 {
         bail!(
             "{} managed system configuration item(s) failed",
@@ -56,16 +67,18 @@ pub async fn handle_apply(config: &Config, item: Option<&str>, dry_run: bool) ->
     Ok(())
 }
 
-pub(crate) async fn handle_apply_with_result(
+pub(crate) async fn handle_apply_with_result_approved(
     config: &Config,
     item: Option<&str>,
     dry_run: bool,
+    yes: bool,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
     run_managed_with_result(
         config,
         item,
         SysAction::Apply,
         dry_run,
+        yes,
         ManagedOutputMode::Explicit,
         None,
     )
@@ -73,23 +86,34 @@ pub(crate) async fn handle_apply_with_result(
 }
 
 pub async fn handle_uninstall(config: &Config, item: &str, dry_run: bool) -> Result<()> {
-    let (report, _) = handle_uninstall_with_result(config, item, dry_run).await?;
+    handle_uninstall_approved(config, item, dry_run, true).await
+}
+
+pub async fn handle_uninstall_approved(
+    config: &Config,
+    item: &str,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
+    let (report, _) = handle_uninstall_with_result_approved(config, item, dry_run, yes).await?;
     if report.failed > 0 {
         bail!("failed to remove managed system configuration `{item}`");
     }
     Ok(())
 }
 
-pub(crate) async fn handle_uninstall_with_result(
+pub(crate) async fn handle_uninstall_with_result_approved(
     config: &Config,
     item: &str,
     dry_run: bool,
+    yes: bool,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
     run_managed_with_result(
         config,
         Some(item),
         SysAction::Remove,
         dry_run,
+        yes,
         ManagedOutputMode::Explicit,
         None,
     )
@@ -101,55 +125,71 @@ pub async fn handle_upgrade_managed(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<SysUpgradeReport> {
-    handle_upgrade_managed_with_result(config, verbose, sep)
+    handle_upgrade_managed_with_result_approved(config, verbose, true, sep)
         .await
         .map(|(report, _)| report)
 }
 
-pub(crate) async fn handle_upgrade_managed_with_result(
+pub(crate) async fn handle_upgrade_managed_with_result_approved(
     config: &Config,
     verbose: bool,
+    yes: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
     let mut renderer = TerminalRenderer::stdio_with_separator(sep);
     let mut interaction = TerminalInteraction;
-    handle_upgrade_managed_with_reporter(config, verbose, &mut renderer, &mut interaction).await
+    handle_upgrade_managed_with_reporter(config, verbose, yes, &mut renderer, &mut interaction)
+        .await
+}
+
+pub(crate) async fn handle_upgrade_managed_with_result_prepared(
+    config: &Config,
+    verbose: bool,
+    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    let os_id = detect_os_id().await?;
+    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+    let mut interaction = TerminalInteraction;
+    run_managed_for_os_with_prepared_reporter(
+        ManagedRunRequest {
+            config,
+            os_id: &os_id,
+            requested: None,
+            action: SysAction::Apply,
+            dry_run: false,
+            yes: true,
+            output_mode: ManagedOutputMode::Upgrade { verbose },
+        },
+        prepared,
+        &mut renderer,
+        &mut interaction,
+    )
+    .await
 }
 
 async fn handle_upgrade_managed_with_reporter(
     config: &Config,
     verbose: bool,
+    yes: bool,
     reporter: &mut dyn LifecycleReporter,
     interaction: &mut TerminalInteraction,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
-    let (mut report, lifecycle_result) = run_managed_with_reporter(
-        config,
-        None,
-        SysAction::Apply,
-        false,
-        ManagedOutputMode::Upgrade { verbose },
+    let os_id = detect_os_id().await?;
+    let (report, lifecycle_result) = run_managed_for_os_with_reporter(
+        ManagedRunRequest {
+            config,
+            os_id: &os_id,
+            requested: None,
+            action: SysAction::Apply,
+            dry_run: false,
+            yes,
+            output_mode: ManagedOutputMode::Upgrade { verbose },
+        },
         reporter,
         interaction,
     )
     .await?;
-    if let Some(outcome) = super::profile_commands::sync_composed_profile(config).await? {
-        let changed = matches!(
-            outcome.status,
-            SysItemStatus::Updated | SysItemStatus::NeedsAction
-        );
-        if changed || verbose {
-            reporter.emit(PresentationEvent::SectionStart);
-            reporter.emit(PresentationEvent::stdout(presentation_bold(
-                "System Shell Profile",
-            )));
-            emit_item_outcome(reporter, &outcome, 14);
-        }
-        if changed {
-            report.updated += 1;
-        } else {
-            report.skipped += 1;
-        }
-    }
     Ok((report, lifecycle_result))
 }
 
@@ -159,25 +199,31 @@ pub async fn handle_upgrade_managed_target(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<SysUpgradeReport> {
-    handle_upgrade_managed_target_with_result(config, item, verbose, sep)
+    handle_upgrade_managed_target_with_result_approved(config, item, verbose, true, sep)
         .await
         .map(|(report, _)| report)
 }
 
-pub(crate) async fn handle_upgrade_managed_target_with_result(
+pub(crate) async fn handle_upgrade_managed_target_with_result_approved(
     config: &Config,
     item: Option<&str>,
     verbose: bool,
+    yes: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
     let mut renderer = TerminalRenderer::stdio_with_separator(sep);
     let mut interaction = TerminalInteraction;
-    run_managed_with_reporter(
-        config,
-        item,
-        SysAction::Apply,
-        false,
-        ManagedOutputMode::Upgrade { verbose },
+    let os_id = detect_os_id().await?;
+    run_managed_for_os_with_reporter(
+        ManagedRunRequest {
+            config,
+            os_id: &os_id,
+            requested: item,
+            action: SysAction::Apply,
+            dry_run: false,
+            yes,
+            output_mode: ManagedOutputMode::Upgrade { verbose },
+        },
         &mut renderer,
         &mut interaction,
     )
@@ -225,39 +271,27 @@ async fn run_managed_with_result(
     requested: Option<&str>,
     action: SysAction,
     dry_run: bool,
+    yes: bool,
     output_mode: ManagedOutputMode,
     sep: Option<&mut crate::output::SectionSeparator>,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
     let os_id = detect_os_id().await?;
-    run_managed_for_os_with_result(config, &os_id, requested, action, dry_run, output_mode, sep)
-        .await
-}
-
-async fn run_managed_with_reporter(
-    config: &Config,
-    requested: Option<&str>,
-    action: SysAction,
-    dry_run: bool,
-    output_mode: ManagedOutputMode,
-    reporter: &mut dyn LifecycleReporter,
-    interaction: &mut TerminalInteraction,
-) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
-    let os_id = detect_os_id().await?;
-    run_managed_for_os_with_reporter(
+    run_managed_for_os_with_result_approved(
         ManagedRunRequest {
             config,
             os_id: &os_id,
             requested,
             action,
             dry_run,
+            yes,
             output_mode,
         },
-        reporter,
-        interaction,
+        sep,
     )
     .await
 }
 
+#[cfg(test)]
 async fn run_managed_for_os_with_result(
     config: &Config,
     os_id: &str,
@@ -267,38 +301,33 @@ async fn run_managed_for_os_with_result(
     output_mode: ManagedOutputMode,
     sep: Option<&mut crate::output::SectionSeparator>,
 ) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
-    if let Some(sep) = sep {
-        let mut renderer = TerminalRenderer::stdio_with_separator(sep);
-        let mut interaction = TerminalInteraction;
-        return run_managed_for_os_with_reporter(
-            ManagedRunRequest {
-                config,
-                os_id,
-                requested,
-                action,
-                dry_run,
-                output_mode,
-            },
-            &mut renderer,
-            &mut interaction,
-        )
-        .await;
-    }
-    let mut renderer = TerminalRenderer::stdio();
-    let mut interaction = TerminalInteraction;
-    run_managed_for_os_with_reporter(
+    run_managed_for_os_with_result_approved(
         ManagedRunRequest {
             config,
             os_id,
             requested,
             action,
             dry_run,
+            yes: true,
             output_mode,
         },
-        &mut renderer,
-        &mut interaction,
+        sep,
     )
     .await
+}
+
+async fn run_managed_for_os_with_result_approved(
+    request: ManagedRunRequest<'_>,
+    sep: Option<&mut crate::output::SectionSeparator>,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    if let Some(sep) = sep {
+        let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+        let mut interaction = TerminalInteraction;
+        return run_managed_for_os_with_reporter(request, &mut renderer, &mut interaction).await;
+    }
+    let mut renderer = TerminalRenderer::stdio();
+    let mut interaction = TerminalInteraction;
+    run_managed_for_os_with_reporter(request, &mut renderer, &mut interaction).await
 }
 
 async fn run_managed_for_os_with_reporter(
@@ -312,6 +341,7 @@ async fn run_managed_for_os_with_reporter(
         requested,
         action,
         dry_run,
+        yes,
         output_mode,
     } = request;
     let operation = match (action, output_mode) {
@@ -319,6 +349,35 @@ async fn run_managed_for_os_with_reporter(
         (SysAction::Apply, ManagedOutputMode::Upgrade { .. }) => LifecycleOperation::Upgrade,
         (SysAction::Apply, ManagedOutputMode::Explicit) => LifecycleOperation::Install,
     };
+    let plan_request = SysManagedPlanRequest {
+        operation,
+        os_id: os_id.to_string(),
+        target: requested.map(str::to_string),
+        input_versions: PlanningInputVersions::default(),
+    };
+    if !dry_run {
+        let reviewed = crate::lifecycle_plan::review_plans(
+            config,
+            [crate::lifecycle_plan::LifecyclePlanRequest::sys(
+                plan_request,
+                config,
+            )],
+            yes,
+        )
+        .await?
+        .into_iter()
+        .next()
+        .expect("one reviewed Sys Plan");
+        let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+        return run_managed_for_os_with_prepared_reporter(
+            request,
+            crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime },
+            reporter,
+            interaction,
+        )
+        .await;
+    }
+
     let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await?;
     runtime.context_mut_for_cli().env = env.as_map().clone();
@@ -328,7 +387,7 @@ async fn run_managed_for_os_with_reporter(
         started: false,
     };
     let core = runtime
-        .run_managed_sys(
+        .preview_managed_sys(
             shine_core::runtime::SysManagedRequest {
                 os_id: os_id.to_string(),
                 target: requested.map(str::to_string),
@@ -344,6 +403,51 @@ async fn run_managed_for_os_with_reporter(
         )
         .await?;
 
+    finish_managed_report(core, output_mode, &mut observer)
+}
+
+async fn run_managed_for_os_with_prepared_reporter(
+    request: ManagedRunRequest<'_>,
+    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    reporter: &mut dyn LifecycleReporter,
+    interaction: &mut TerminalInteraction,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
+    let ManagedRunRequest {
+        config,
+        action,
+        output_mode,
+        ..
+    } = request;
+    let crate::lifecycle_plan::PreparedLifecyclePlan {
+        reviewed,
+        mut runtime,
+    } = prepared;
+    let env = EnvConfig::load_or_init(config).await?;
+    runtime.context_mut_for_cli().env = env.as_map().clone();
+    let mut observer = ManagedObserver {
+        reporter,
+        action,
+        started: false,
+    };
+    let core = runtime
+        .run_managed_sys_approved(
+            match &reviewed.request {
+                crate::lifecycle_plan::LifecyclePlanRequest::Sys(request) => request.clone(),
+                _ => unreachable!("reviewed Sys Plan"),
+            },
+            &reviewed.approval,
+            interaction,
+            &mut observer,
+        )
+        .await?;
+    finish_managed_report(core, output_mode, &mut observer)
+}
+
+fn finish_managed_report(
+    core: shine_core::runtime::SysManagedReport,
+    output_mode: ManagedOutputMode,
+    observer: &mut ManagedObserver<'_>,
+) -> Result<(SysUpgradeReport, LifecycleResultV1)> {
     if core.items.is_empty() && output_mode.is_explicit() {
         observer
             .reporter
@@ -469,6 +573,7 @@ id = "first"
 label = "First managed file"
 mode = "managed"
 driver = "managed-file"
+permissions = {{ schema_version = 1 }}
 
 [items.config]
 source = "first.txt"
@@ -479,6 +584,7 @@ id = "second"
 label = "Second managed file"
 mode = "managed"
 driver = "managed-file"
+permissions = {{ schema_version = 1 }}
 
 [items.config]
 source = "second.txt"
@@ -790,6 +896,7 @@ id = "managed-file-test"
 label = "Managed file test"
 mode = "managed"
 driver = "managed-file"
+permissions = {{ schema_version = 1 }}
 
 [items.config]
 source = "desired.txt"

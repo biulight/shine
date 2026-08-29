@@ -53,8 +53,9 @@ shine preset validate . --format json
 
 新预设使用权限 schema v1 声明可审查的 capability identity。App 在类别根部使用
 `[permissions]`；Shell 的每个 `[[files]]` 命令分别使用 `[files.permissions]`；Sys 的每个
-`[[items]]` target 分别使用 `[items.permissions]`。缺少声明时仍保持兼容，但会产生
-`missing_permission_declaration` warning；不支持的版本、未知字段、非法 identity 和重复项均为错误。
+`[[items]]` target 分别使用 `[items.permissions]`。受保护的 install、upgrade 或 uninstall
+在缺少必要声明时会 fail closed；静态校验会报告 `missing_permission_declaration`。不支持的
+版本、未知字段、非法 identity 和重复项均为错误。
 
 ```toml
 [permissions]
@@ -76,8 +77,8 @@ Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值�
 receipt 和固定 package provider 已由现有强类型 metadata 约束，不需要重复描述其内部机制。
 
 权限声明不是授权，也不能证明 opaque script 已完整披露行为。外部 App 代码仍需
-`allow_app_hooks = true`；外部 Sys 代码仍需全局 `allow_sys_code = true`。安全 Plan 的 planner 与
-enforcement 尚未接入，因此当前生命周期执行行为不变。
+`allow_app_hooks = true`；外部 Sys 代码仍需全局 `allow_sys_code = true`。这些粗粒度 gate 和
+管理员授权仍是声明权限与 Plan 审阅之后的额外检查，不能替代其中任何一项。
 
 ## 从来源文件夹到已安装能力
 

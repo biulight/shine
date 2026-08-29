@@ -113,7 +113,7 @@ mod tests {
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n",
+            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\npermissions = { schema_version = 1 }\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\npermissions = { schema_version = 1 }\n",
         )
         .await
         .unwrap();

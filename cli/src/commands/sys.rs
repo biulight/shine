@@ -65,6 +65,9 @@ pub enum SysCommands {
         /// Print what would run without executing
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
     /// Remove a managed system configuration item safely
     Uninstall {
@@ -74,5 +77,8 @@ pub enum SysCommands {
         /// Print what would run without executing
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
 }

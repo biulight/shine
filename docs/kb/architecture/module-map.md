@@ -20,7 +20,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
 | `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, process, privileged, and system mutation ports |
-| `core/src/runtime/planner.rs` | Workspace-internal pure App, Shell, and managed Sys Plan requests, snapshot capture, permission merge, and semantic-step generation |
+| `core/src/runtime/planner.rs` | Pure App, Shell, and managed Sys Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
 | `core/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
 | `core/src/runtime/shell.rs` | Complete Shell assessment/install/upgrade/uninstall/live render, launcher, cache, profile, and manifest orchestration |
 | `core/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS orchestration, and run-manifest persistence |
@@ -54,6 +54,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/output.rs` | Shared command output mode and rendering support |
 | `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
 | `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap |
+| `cli/src/lifecycle_plan.rs` | Stable lifecycle Plan rendering, default-No/non-TTY approval policy, input identities, and batch prevalidation |
 | `cli/src/platform.rs` | Platform classification shared across command domains |
 | `cli/src/privilege.rs` | Cross-platform administrator/elevation orchestration |
 | `cli/src/proc.rs` | Small domain-neutral subprocess helpers |
@@ -80,7 +81,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `preset pull`, `update --pull`, `upgrade --pull` | `cli/src/git_pull.rs` plus top-level routing |
 | `init` | `cli/src/init.rs` |
 | `self install/upgrade` | `cli/src/self_install.rs`, `cli/src/update_check/` |
-| `update [TARGET]`, `upgrade [TARGET]` | filtered app/shell/sys handlers plus update/self-install logic |
+| `update [TARGET]`, `upgrade [TARGET]` | filtered handlers; untargeted upgrade batches Shell/App/managed Sys review in `self_install.rs` |
 | `state migrate` | `cli/src/state.rs` |
 | `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `ssh ...` | `cli/src/ssh/mod.rs` |

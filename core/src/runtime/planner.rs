@@ -4,13 +4,18 @@
 //! materializes Preset code, invokes a process, requests privilege, or writes
 //! through a host.
 
-use super::app::{desired_app_hash, installed_app_hash};
+use super::app::{desired_app_hash, installed_app_hash, installed_json_hash};
 use super::{
-    AppCategory, AppFile, ArtifactRuntime, CoreRuntime, ExternalShellMode, FileKind,
-    FileSystemObservationHost, LinkRuntime, ShellFile, ShellManifest, ShellManifestEntry,
-    SplitDnsObservationHost, SplitDnsRequest, SysDriverKind, SysItem, SysItemMode, SysRunEntry,
-    SysRunManifest, SystemReceipt, command_path_for_name, link_is_current_with_host,
-    parse_shell_lifecycle_target, split_dns_receipt,
+    AppCategory, AppFile, AppLifecycleReport, AppLifecycleRequest, AppUninstallLifecycleRequest,
+    AppUpgradeLifecycleReport, AppUpgradeRequest, ArtifactRuntime, CoreRuntime, ExternalShellMode,
+    FileKind, FileSystemHost, FileSystemObservationHost, LinkRuntime, PrivilegedFileSystemHost,
+    ProcessHost, RuntimeInteraction, RuntimeObserver, ShellFile, ShellLifecycleReport,
+    ShellLifecycleRequest, ShellManifest, ShellManifestEntry, ShellUninstallReport,
+    ShellUninstallRequest, ShellUpgradeLifecycleReport, ShellUpgradeRequest, SplitDnsHost,
+    SplitDnsObservationHost, SplitDnsRequest, SysDriverKind, SysItem, SysItemMode,
+    SysManagedAction, SysManagedReport, SysManagedRequest, SysRunEntry, SysRunManifest,
+    SystemReceipt, command_path_for_name, link_is_current_with_host, parse_shell_lifecycle_target,
+    split_dns_receipt,
 };
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppEntry, AppManifest};
@@ -18,7 +23,7 @@ use crate::lifecycle::LifecycleOperation;
 use crate::permission::{PermissionDeclarationV1, PermissionPathBaseV1};
 use crate::plan::{
     EnvironmentSensitivityV1, FilesystemAccessV1, PermissionSetV1, PermissionV1, PlanActionV1,
-    PlanInputsV1, PlanStepV1, PlanV1, SnapshotDigestBuilderV1, SnapshotDigestV1,
+    PlanApprovalV1, PlanInputsV1, PlanStepV1, PlanV1, SnapshotDigestBuilderV1, SnapshotDigestV1,
 };
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
@@ -84,6 +89,14 @@ pub struct SysManagedPlanRequest {
     pub os_id: String,
     pub target: Option<String>,
     pub input_versions: PlanningInputVersions,
+}
+
+/// Presentation-only App upgrade settings which do not affect the reviewed
+/// operation. Stale removal is intentionally controlled only by
+/// [`AppPlanRequest::prune_stale`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AppApprovedUpgradeOptions {
+    pub show_hook_success: bool,
 }
 
 struct StateCapture {
@@ -258,12 +271,28 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 app_source_parts(&entry.source).map(|(category, _)| category.to_string())
             })
             .collect::<BTreeSet<_>>();
+        let active_sources = categories
+            .iter()
+            .flat_map(|category| {
+                category
+                    .files
+                    .iter()
+                    .map(|file| logical_app_source(category, file))
+            })
+            .collect::<BTreeSet<_>>();
 
         for category in categories {
             permissions.declaration(
                 category.permissions.as_ref(),
                 "app_permission_declaration_missing",
             );
+            if !self.context().is_external_presets
+                && (request.operation == LifecycleOperation::Install
+                    || installed_categories.contains(&category.name))
+            {
+                self.plan_app_cache_convergence(request, &category, state, permissions, steps)
+                    .await?;
+            }
             let mut category_changes = false;
             for file in &category.files {
                 let source = logical_app_source(&category, file);
@@ -305,13 +334,39 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 );
 
                 let destination_exists = path_exists(self.host(), &destination).await?;
-                let destination_owned_by_other = direct.is_some_and(|entry| entry.source != source);
-                let destination_unowned = entry.is_none() && destination_exists;
+                let stale_destination_released =
+                    if request.operation == LifecycleOperation::Upgrade && request.prune_stale {
+                        if let Some(entry) = direct.filter(|entry| {
+                            entry.source != source && !active_sources.contains(&entry.source)
+                        }) {
+                            read_optional(self.host(), &entry.destination)
+                                .await?
+                                .as_deref()
+                                .and_then(|bytes| match &entry.install_strategy {
+                                    crate::install::AppInstallStrategy::Copy => {
+                                        Some(crate::install::hash_content(bytes))
+                                    }
+                                    crate::install::AppInstallStrategy::JsonMerge {
+                                        managed_keys,
+                                    } => installed_json_hash(bytes, managed_keys).ok().flatten(),
+                                })
+                                .is_some_and(|hash| hash == entry.content_hash)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                let destination_owned_by_other = direct.is_some_and(|entry| entry.source != source)
+                    && !stale_destination_released;
+                let destination_unowned =
+                    entry.is_none() && destination_exists && !stale_destination_released;
                 let occupied_relocation = entry
                     .is_some_and(|entry| entry.destination != destination)
                     && destination_exists;
-                let occupied =
-                    destination_owned_by_other || destination_unowned || occupied_relocation;
+                let occupied = destination_owned_by_other
+                    || (destination_unowned && request.operation != LifecycleOperation::Install)
+                    || occupied_relocation;
                 if occupied && !request.force {
                     steps.push(
                         PlanStepV1::new(
@@ -462,6 +517,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     _ => &[],
                 };
                 for (index, hook) in hooks.iter().enumerate() {
+                    capture_app_hook_inputs(
+                        self.context(),
+                        &request.input_versions,
+                        category.permissions.as_ref(),
+                        hook,
+                        state,
+                        permissions,
+                    )?;
                     permissions.require(PermissionV1::Command {
                         program: hook.command.clone(),
                     });
@@ -493,7 +556,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     app_source_parts(&entry.source).is_some_and(|(category, _)| category == target)
                 })
             }) {
-                if self.presets().get(&entry.source).is_none() {
+                if !active_sources.contains(&entry.source) {
                     let (_, resource) =
                         app_source_parts(&entry.source).unwrap_or(("unknown", "unknown"));
                     let category =
@@ -513,6 +576,51 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     );
                 }
             }
+        }
+        Ok(())
+    }
+
+    async fn plan_app_cache_convergence(
+        &self,
+        request: &AppPlanRequest,
+        category: &AppCategory,
+        state: &mut StateCapture,
+        permissions: &mut PermissionAccumulator,
+        steps: &mut Vec<PlanStepV1>,
+    ) -> Result<()> {
+        let prefix = format!("app/{}/", category.name);
+        let overwrite = request.operation == LifecycleOperation::Upgrade || request.force;
+        for (logical, desired) in self
+            .presets()
+            .files()
+            .iter()
+            .filter(|(logical, _)| logical.starts_with(&prefix))
+        {
+            let destination = self.context().presets_dir.join(logical);
+            capture_path_state(self.host(), state, format!("cache:{logical}"), &destination)
+                .await?;
+            let current = read_optional(self.host(), &destination).await?;
+            let action = match current {
+                None => PlanActionV1::Create,
+                Some(current) if overwrite && current.as_slice() != desired.as_slice() => {
+                    PlanActionV1::Update
+                }
+                Some(_) => PlanActionV1::None,
+            };
+            if matches!(action, PlanActionV1::Create | PlanActionV1::Update) {
+                permissions.implicit(PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: review_path(self.context(), &destination),
+                });
+            }
+            steps.push(PlanStepV1::new(
+                format!("app/{}", category.name),
+                Some(format!(
+                    "preset-cache:{}",
+                    logical.trim_start_matches(&prefix)
+                )),
+                action,
+            ));
         }
         Ok(())
     }
@@ -1074,6 +1182,12 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
         state.public("os-id", &request.os_id)?;
         let (manifest, manifest_bytes) =
             load_sys_manifest(self.host(), &self.context().shine_dir).await?;
+        let enabled = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.os_id == request.os_id && entry.managed && entry.profile_enabled)
+            .map(|entry| entry.item_id.as_str())
+            .collect::<BTreeSet<_>>();
         capture_manifest_selection(
             &mut state,
             "manifest:sys",
@@ -1119,10 +1233,13 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
         } else if let Some(loaded) = &loaded {
             for item in loaded.manifest.items.iter().filter(|item| {
                 item.mode == SysItemMode::Managed
-                    && request
-                        .target
-                        .as_ref()
-                        .is_none_or(|target| item.id == *target)
+                    && request.target.as_ref().map_or_else(
+                        || {
+                            request.operation != LifecycleOperation::Upgrade
+                                || enabled.contains(item.id.as_str())
+                        },
+                        |target| item.id == *target,
+                    )
             }) {
                 let entry = manifest
                     .entries
@@ -1271,6 +1388,222 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
             );
         }
         finish_plan(self, request.operation, state, permissions, steps)
+    }
+}
+
+impl<H> CoreRuntime<H>
+where
+    H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost,
+{
+    pub async fn preview_install_apps(
+        &self,
+        request: AppLifecycleRequest,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        if !request.dry_run {
+            bail!("App install mutation requires snapshot-bound approval");
+        }
+        self.install_apps(request, observer, interaction).await
+    }
+
+    pub async fn preview_uninstall_apps(
+        &self,
+        request: AppUninstallLifecycleRequest,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        if !request.dry_run {
+            bail!("App uninstall mutation requires snapshot-bound approval");
+        }
+        self.uninstall_apps(request, observer, interaction).await
+    }
+
+    pub async fn install_apps_approved(
+        &self,
+        request: AppPlanRequest,
+        approval: &PlanApprovalV1,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        if request.operation != LifecycleOperation::Install {
+            bail!("approved App install requires an install Plan");
+        }
+        approval.validate(&self.plan_apps(request.clone()).await?)?;
+        self.install_apps(
+            AppLifecycleRequest {
+                target: request.target,
+                dry_run: false,
+                force: request.force,
+            },
+            observer,
+            interaction,
+        )
+        .await
+    }
+
+    pub async fn uninstall_apps_approved(
+        &self,
+        request: AppPlanRequest,
+        approval: &PlanApprovalV1,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        if request.operation != LifecycleOperation::Uninstall {
+            bail!("approved App uninstall requires an uninstall Plan");
+        }
+        approval.validate(&self.plan_apps(request.clone()).await?)?;
+        self.uninstall_apps(
+            AppUninstallLifecycleRequest {
+                target: request.target,
+                dry_run: false,
+                force: request.force,
+                purge: request.purge,
+            },
+            observer,
+            interaction,
+        )
+        .await
+    }
+
+    pub async fn upgrade_apps_approved(
+        &self,
+        request: AppPlanRequest,
+        approval: &PlanApprovalV1,
+        options: AppApprovedUpgradeOptions,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppUpgradeLifecycleReport> {
+        if request.operation != LifecycleOperation::Upgrade {
+            bail!("approved App upgrade requires an upgrade Plan");
+        }
+        approval.validate(&self.plan_apps(request.clone()).await?)?;
+        self.upgrade_apps(
+            AppUpgradeRequest {
+                category: request.target,
+                prune_stale: request.prune_stale,
+                prompt_stale: false,
+                show_hook_success: options.show_hook_success,
+            },
+            observer,
+            interaction,
+        )
+        .await
+    }
+}
+
+impl<H: FileSystemHost> CoreRuntime<H> {
+    pub async fn preview_install_shells(
+        &self,
+        request: ShellLifecycleRequest,
+    ) -> Result<ShellLifecycleReport> {
+        if !request.dry_run {
+            bail!("Shell install mutation requires snapshot-bound approval");
+        }
+        self.install_shells(request).await
+    }
+
+    pub async fn preview_uninstall_shells(
+        &self,
+        request: ShellUninstallRequest,
+    ) -> Result<ShellUninstallReport> {
+        if !request.dry_run {
+            bail!("Shell uninstall mutation requires snapshot-bound approval");
+        }
+        self.uninstall_shells(request).await
+    }
+
+    pub async fn install_shells_approved(
+        &self,
+        request: ShellPlanRequest,
+        approval: &PlanApprovalV1,
+    ) -> Result<ShellLifecycleReport> {
+        if request.operation != LifecycleOperation::Install {
+            bail!("approved Shell install requires an install Plan");
+        }
+        approval.validate(&self.plan_shells(request.clone()).await?)?;
+        self.install_shells(ShellLifecycleRequest {
+            target: request.target,
+            dry_run: false,
+            force: request.force,
+        })
+        .await
+    }
+
+    pub async fn uninstall_shells_approved(
+        &self,
+        request: ShellPlanRequest,
+        approval: &PlanApprovalV1,
+    ) -> Result<ShellUninstallReport> {
+        if request.operation != LifecycleOperation::Uninstall {
+            bail!("approved Shell uninstall requires an uninstall Plan");
+        }
+        approval.validate(&self.plan_shells(request.clone()).await?)?;
+        self.uninstall_shells(ShellUninstallRequest {
+            target: request.target,
+            dry_run: false,
+            purge: request.purge,
+        })
+        .await
+    }
+
+    pub async fn upgrade_shells_approved(
+        &self,
+        request: ShellPlanRequest,
+        approval: &PlanApprovalV1,
+    ) -> Result<ShellUpgradeLifecycleReport> {
+        if request.operation != LifecycleOperation::Upgrade {
+            bail!("approved Shell upgrade requires an upgrade Plan");
+        }
+        approval.validate(&self.plan_shells(request.clone()).await?)?;
+        self.upgrade_shells(ShellUpgradeRequest {
+            category: request.target,
+        })
+        .await
+    }
+}
+
+impl<H> CoreRuntime<H>
+where
+    H: FileSystemHost + PrivilegedFileSystemHost + SplitDnsHost,
+{
+    pub async fn preview_managed_sys(
+        &self,
+        request: SysManagedRequest,
+        interaction: &mut impl RuntimeInteraction,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<SysManagedReport> {
+        if !request.dry_run {
+            bail!("managed Sys mutation requires snapshot-bound approval");
+        }
+        self.run_managed_sys(request, interaction, observer).await
+    }
+
+    pub async fn run_managed_sys_approved(
+        &self,
+        request: SysManagedPlanRequest,
+        approval: &PlanApprovalV1,
+        interaction: &mut impl RuntimeInteraction,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<SysManagedReport> {
+        approval.validate(&self.plan_managed_sys(request.clone()).await?)?;
+        let action = if request.operation == LifecycleOperation::Uninstall {
+            SysManagedAction::Remove
+        } else {
+            SysManagedAction::Apply
+        };
+        self.run_managed_sys(
+            SysManagedRequest {
+                os_id: request.os_id,
+                target: request.target,
+                action,
+                dry_run: false,
+                operation: request.operation,
+            },
+            interaction,
+            observer,
+        )
+        .await
     }
 }
 
@@ -1479,7 +1812,9 @@ async fn load_app_manifest(
     match manifest.schema_version {
         0 => manifest.schema_version = APP_MANIFEST_SCHEMA_VERSION,
         APP_MANIFEST_SCHEMA_VERSION => {}
-        version => bail!("unsupported app manifest schema version {version}"),
+        version => bail!(
+            "app manifest schema version {version} is newer than this Shine supports ({APP_MANIFEST_SCHEMA_VERSION})"
+        ),
     }
     Ok((manifest, bytes))
 }
@@ -1497,7 +1832,10 @@ async fn load_shell_manifest(
     match manifest.schema_version {
         0 => manifest.schema_version = super::SHELL_MANIFEST_SCHEMA_VERSION,
         super::SHELL_MANIFEST_SCHEMA_VERSION => {}
-        version => bail!("unsupported shell manifest schema version {version}"),
+        version => bail!(
+            "shell manifest schema version {version} is newer than this Shine supports ({})",
+            super::SHELL_MANIFEST_SCHEMA_VERSION
+        ),
     }
     Ok((manifest, bytes))
 }
@@ -1515,7 +1853,10 @@ async fn load_sys_manifest(
     match manifest.schema_version {
         0 => manifest.schema_version = super::SYS_MANIFEST_SCHEMA_VERSION,
         super::SYS_MANIFEST_SCHEMA_VERSION => {}
-        version => bail!("unsupported sys manifest schema version {version}"),
+        version => bail!(
+            "sys manifest schema version {version} is newer than this Shine supports ({})",
+            super::SYS_MANIFEST_SCHEMA_VERSION
+        ),
     }
     Ok((manifest, bytes))
 }
@@ -1655,6 +1996,33 @@ fn capture_declared_env_inputs(
             state,
             permissions,
         )?;
+    }
+    Ok(())
+}
+
+fn capture_app_hook_inputs(
+    context: &super::RuntimeContext,
+    versions: &PlanningInputVersions,
+    declaration: Option<&PermissionDeclarationV1>,
+    hook: &super::AppHook,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    let sensitivity = declaration_sensitivity(declaration);
+    for spec in &hook.env {
+        capture_env_identity(
+            context,
+            versions,
+            &spec.source,
+            sensitivity.get(&spec.source).copied(),
+            state,
+            permissions,
+        )?;
+        if !context.env.contains_key(&spec.source) {
+            permissions
+                .uncomputable
+                .insert("app_hook_env_missing".to_string());
+        }
     }
     Ok(())
 }
@@ -2142,6 +2510,30 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
 
+    struct Interaction;
+
+    impl RuntimeInteraction for Interaction {
+        fn confirm(&mut self, _code: &'static str, default: bool) -> Result<bool> {
+            Ok(default)
+        }
+
+        fn authorize_admin<'a>(
+            &'a mut self,
+            _item_count: usize,
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+            Box::pin(async { Ok(true) })
+        }
+
+        fn select_many(
+            &mut self,
+            _code: &'static str,
+            _choices: &[String],
+            defaults: &[String],
+        ) -> Result<Vec<String>> {
+            Ok(defaults.to_vec())
+        }
+    }
+
     #[derive(Clone)]
     struct ObservationOnlyHost(InMemoryHost);
 
@@ -2489,6 +2881,112 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
             initial.fingerprint().unwrap(),
             changed.fingerprint().unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn approved_app_install_rejects_changed_state_before_mutation() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(
+            runtime.context().home_dir.join(".config/demo/config.toml"),
+            b"foreign".to_vec(),
+        );
+
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan"));
+        assert!(
+            !runtime.host().operations().iter().any(|operation| matches!(
+                operation,
+                super::super::HostOperation::Write(_)
+                    | super::super::HostOperation::Remove(_)
+                    | super::super::HostOperation::Run { .. }
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn bulk_managed_sys_upgrade_plans_only_profile_enabled_items() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'enabled'
+label = 'Enabled'
+mode = 'managed'
+driver = 'managed-file'
+permissions = { schema_version = 1 }
+[items.config]
+source = 'enabled.txt'
+target = '$HOME/.config/enabled.txt'
+[[items]]
+id = 'disabled'
+label = 'Disabled'
+mode = 'managed'
+driver = 'managed-file'
+permissions = { schema_version = 1 }
+[items.config]
+source = 'disabled.txt'
+target = '$HOME/.config/disabled.txt'
+"#
+                .to_vec(),
+            )
+            .file("sys/test/enabled.txt", b"enabled".to_vec())
+            .file("sys/test/disabled.txt", b"disabled".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let entry = |item_id: &str, profile_enabled: bool| SysRunEntry {
+            os_id: "test".to_string(),
+            item_id: item_id.to_string(),
+            label: item_id.to_string(),
+            status: super::super::SysItemStatus::Installed,
+            detail: String::new(),
+            updated_at: "1".to_string(),
+            managed: true,
+            profile_enabled,
+            receipt: None,
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("sys-manifest.toml"),
+            toml::to_string(&SysRunManifest {
+                schema_version: super::super::SYS_MANIFEST_SCHEMA_VERSION,
+                entries: vec![entry("enabled", true), entry("disabled", false)],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+
+        let plan = runtime
+            .plan_managed_sys(SysManagedPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                os_id: "test".to_string(),
+                target: None,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(plan.steps.iter().any(|step| step.target == "sys/enabled"));
+        assert!(!plan.steps.iter().any(|step| step.target == "sys/disabled"));
     }
 
     #[tokio::test]

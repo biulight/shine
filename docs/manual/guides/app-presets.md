@@ -50,6 +50,11 @@ shine app uninstall starship
 shine app uninstall starship --purge
 ```
 
+Install, upgrade, and uninstall show a snapshot-bound Plan before mutation. The prompt defaults to
+No; use command-level `--yes` for non-interactive execution. `--yes` still renders and revalidates
+the Plan and cannot bypass missing permissions, blocked teardown, or external-code gates. App stale
+files are removed during upgrade only when `--prune-stale` was part of the reviewed command.
+
 By default, files modified after installation are preserved and reported as user-modified. A safe
 uninstall restores any backup created during installation. `--purge` also removes the category's
 preset directory; uninstalling every category also removes the manifest.
@@ -238,6 +243,25 @@ Rev. Clear the four editors manually when removing the integration completely.
 Preset authors can declare `post_install` and `post_upgrade`. The former runs after installation
 actually writes files. The latter runs only when `shine upgrade` updates at least one file in that
 category. Unchanged categories do not trigger hooks.
+
+Bind every environment input a hook consumes with its `env` list and declare the same names under
+the category permission declaration. Plan review hashes `plain` values and binds `secret` values by
+an opaque revision; neither value is serialized into the Plan. A missing hook input or secret
+identity blocks approval.
+
+```toml
+post_upgrade = [
+  { command = "my-reloader", env = ["API_URL", "API_TOKEN"] },
+]
+
+[permissions]
+schema_version = 1
+environment = [
+  { name = "API_URL", sensitivity = "plain" },
+  { name = "API_TOKEN", sensitivity = "secret" },
+]
+commands = ["my-reloader"]
+```
 
 Hooks and generators in external presets require explicit permission:
 

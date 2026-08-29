@@ -49,6 +49,8 @@ struct HookToml {
     args: Vec<String>,
     #[serde(default)]
     show_output: bool,
+    #[serde(default)]
+    env: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -453,6 +455,8 @@ fn hooks(value: Option<HookSpecToml>, field: &str, context: &str) -> Result<Vec<
                 command: hook.command,
                 args: hook.args,
                 show_output: hook.show_output,
+                env: crate::env::parse_env_specs(&hook.env)
+                    .with_context(|| format!("{context}: invalid {field}.env"))?,
             })
         })
         .collect()

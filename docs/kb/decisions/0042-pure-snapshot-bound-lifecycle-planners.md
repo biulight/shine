@@ -47,5 +47,5 @@ does not invent or execute teardown code that can no longer be resolved.
   paths.
 - Opaque generator output is deliberately conservative and may request review more often than a
   planner that executed code.
-- CLI rendering, confirmation, re-planning, approval validation, and mutation enforcement remain a
-  separate delivery slice; existing dry-run, status, and lifecycle execution behavior is unchanged.
+- CLI rendering, confirmation, re-planning, approval validation, and mutation enforcement are
+  defined by follow-up ADR 0043; dry-run and status remain separate preview/inspection paths.

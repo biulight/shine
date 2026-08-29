@@ -9,9 +9,22 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
+- Added snapshot-bound lifecycle Plan review and one-shot approval for App, Shell, and managed Sys
+  install, upgrade, and uninstall. Protected commands now support `--yes` for automation while
+  still rendering and revalidating the complete Plan before mutation.
+- Added App lifecycle-hook `env` declarations so Plan fingerprints bind plain input hashes and
+  opaque secret revisions without serializing environment values.
 - Added versioned, target-local Preset permission declarations with strict static validation and
-  migrated every built-in App, Shell, and Sys target. Existing external-code grants remain the
-  execution gates while missing declarations produce a compatibility warning.
+  migrated every built-in App, Shell, and Sys target. Existing external-code grants remain
+  additional execution gates.
+
+### Breaking changes
+
+- Protected mutation from external Presets now fails closed when a required permission declaration
+  is missing or cannot be computed; non-interactive use must pass `--yes`, which conflicts with
+  `--dry-run` where preview is available.
+- Untargeted `shine upgrade` no longer synchronizes the Sys shell profile implicitly. Use
+  `shine sys profile enable/disable` to change that explicit state.
 
 ## [1.8.0] — 2026-08-28
 

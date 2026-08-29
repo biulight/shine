@@ -21,6 +21,9 @@ pub enum AppCommands {
         /// Replace user-modified files that are already managed by shine
         #[arg(long)]
         replace_managed: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
     /// Explicitly refresh installed generated files for an app preset
     Refresh {
@@ -48,6 +51,9 @@ pub enum AppCommands {
         /// Print what would be removed without making any changes
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
     /// Apply or remove an app preset's external artifact integration
     Artifact {

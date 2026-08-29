@@ -12,17 +12,6 @@ pub async fn handle_profile_disable(config: &Config, item_id: &str, dry_run: boo
     handle_profile_state(config, item_id, false, dry_run).await
 }
 
-pub(super) async fn sync_composed_profile(
-    config: &Config,
-) -> Result<Option<shine_core::runtime::SysItemOutcome>> {
-    let os_id = detect_os_id().await?;
-    crate::core_runtime::from_config(config)
-        .await?
-        .sync_composed_sys_profile(&os_id)
-        .await
-        .map(Some)
-}
-
 async fn handle_profile_state(
     config: &Config,
     item_id: &str,

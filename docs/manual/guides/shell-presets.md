@@ -60,6 +60,10 @@ shine shell uninstall utils/shine-env-export
 shine shell uninstall proxy --purge
 ```
 
+Non-dry-run install and uninstall, plus `shine upgrade`, show a snapshot-bound lifecycle Plan. The
+confirmation defaults to No; automation must pass `--yes`, which still renders and revalidates all
+steps and permissions. `--dry-run` remains a separate preview and cannot be combined with `--yes`.
+
 Command-scoped uninstall preserves other installed commands in the category. Shared preset or
 snapshot files may remain while a sibling command still needs them. `--purge` also removes empty
 managed preset directories; without a target, uninstall processes the whole shell preset tree. It

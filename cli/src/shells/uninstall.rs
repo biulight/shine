@@ -7,9 +7,11 @@ use crate::config::Config;
 use crate::output;
 use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use anyhow::Result;
+use shine_core::lifecycle::LifecycleOperation;
 use shine_core::lifecycle::LifecycleResultV1;
 #[cfg(test)]
 use shine_core::lifecycle::{LifecycleEffect, LifecycleStatus};
+use shine_core::runtime::{PlanningInputVersions, ShellPlanRequest};
 
 pub async fn handle_uninstall(
     config: &Config,
@@ -17,8 +19,18 @@ pub async fn handle_uninstall(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
+    handle_uninstall_approved(config, target, purge, dry_run, true).await
+}
+
+pub async fn handle_uninstall_approved(
+    config: &Config,
+    target: Option<&str>,
+    purge: bool,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_uninstall_with_reporter(config, target, purge, dry_run, &mut renderer)
+    handle_uninstall_with_reporter(config, target, purge, dry_run, yes, &mut renderer)
         .await
         .map(|_| ())
 }
@@ -31,7 +43,7 @@ pub(crate) async fn handle_uninstall_with_result(
     dry_run: bool,
 ) -> Result<LifecycleResultV1> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_uninstall_with_reporter(config, target, purge, dry_run, &mut renderer).await
+    handle_uninstall_with_reporter(config, target, purge, dry_run, true, &mut renderer).await
 }
 
 async fn handle_uninstall_with_reporter(
@@ -39,6 +51,7 @@ async fn handle_uninstall_with_reporter(
     target: Option<&str>,
     purge: bool,
     dry_run: bool,
+    yes: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
     for line in crate::config::presets_note_lines(config) {
@@ -49,14 +62,51 @@ async fn handle_uninstall_with_reporter(
             "[dry-run] No files will be modified.",
         )));
     }
-    let core_report = crate::core_runtime::from_config(config)
+    let reviewed = if dry_run {
+        None
+    } else {
+        crate::lifecycle_plan::review_plans(
+            config,
+            [crate::lifecycle_plan::LifecyclePlanRequest::shell(
+                ShellPlanRequest {
+                    operation: LifecycleOperation::Uninstall,
+                    target: target.map(str::to_string),
+                    force: false,
+                    purge,
+                    input_versions: PlanningInputVersions::default(),
+                },
+                config,
+            )],
+            yes,
+        )
         .await?
-        .uninstall_shells(shine_core::runtime::ShellUninstallRequest {
-            target: target.map(str::to_string),
-            dry_run,
-            purge,
-        })
-        .await?;
+        .into_iter()
+        .next()
+    };
+    let runtime = if let Some(reviewed) = &reviewed {
+        crate::lifecycle_plan::prepare_runtime(config, reviewed).await?
+    } else {
+        crate::core_runtime::from_config(config).await?
+    };
+    let core_report = if let Some(reviewed) = &reviewed {
+        runtime
+            .uninstall_shells_approved(
+                match &reviewed.request {
+                    crate::lifecycle_plan::LifecyclePlanRequest::Shell(request) => request.clone(),
+                    _ => unreachable!("reviewed Shell Plan"),
+                },
+                &reviewed.approval,
+            )
+            .await?
+    } else {
+        runtime
+            .preview_uninstall_shells(shine_core::runtime::ShellUninstallRequest {
+                target: target.map(str::to_string),
+                dry_run,
+                purge,
+            })
+            .await?
+    };
     reporter.emit(PresentationEvent::stdout(output::summary_line_text(
         "Bin Links",
         &unlink_report_summary_parts(&core_report.links),
@@ -154,7 +204,7 @@ mod tests {
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"shared.sh\"\ntarget = \"one\"\ntransforms = [\"template\"]\n\n[[files]]\nsource = \"shared.sh\"\ntarget = \"two\"\ntransforms = [\"template\"]\n",
+            b"[[files]]\nsource = \"shared.sh\"\ntarget = \"one\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"shared.sh\"\ntarget = \"two\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -268,20 +318,15 @@ mod tests {
         assert_eq!(pending.status, LifecycleStatus::Conflict);
 
         let mut separator = crate::output::SectionSeparator::new();
-        let (_, upgrade) = super::super::install::handle_upgrade_installed_target_with_result(
+        let error = super::super::install::handle_upgrade_installed_target_with_result(
             &config,
             Some("utils"),
             false,
             &mut separator,
         )
         .await
-        .unwrap();
-        let upgraded = upgrade
-            .outcomes
-            .iter()
-            .find(|outcome| outcome.target == "shell/utils/shine-env-export")
-            .unwrap();
-        assert_eq!(upgraded.status, LifecycleStatus::Conflict);
+        .unwrap_err();
+        assert!(error.to_string().contains("Plan is blocked"));
         assert_eq!(
             fs::read_to_string(&command).await.unwrap(),
             "user-owned command\n"
@@ -464,6 +509,12 @@ mod tests {
         fs::write(&script, b"#!/bin/bash\n# My tool.\necho hi\n")
             .await
             .unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"my_tool.sh\"\ntarget = \"my_tool\"\n[files.permissions]\nschema_version = 1\n",
+        )
+        .await
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&script).await.unwrap().permissions();
         perms.set_mode(perms.mode() | 0o111);

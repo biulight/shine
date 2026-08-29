@@ -14,6 +14,7 @@ pub mod home;
 pub mod info;
 pub mod init;
 pub(crate) mod install_core;
+pub(crate) mod lifecycle_plan;
 pub mod list;
 pub mod output;
 pub mod path_display;

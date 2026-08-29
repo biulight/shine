@@ -10,16 +10,17 @@ mod uninstall;
 pub use deployment::handle_render_live;
 pub(crate) use install::collect_update_lifecycle_result;
 pub use install::{
-    handle_completion_install, handle_init_template, handle_install, handle_install_dry_run,
-    handle_upgrade_installed, handle_upgrade_installed_target,
+    handle_completion_install, handle_init_template, handle_install, handle_install_approved,
+    handle_install_dry_run, handle_upgrade_installed, handle_upgrade_installed_target,
 };
 pub(crate) use install::{
-    handle_upgrade_installed_target_with_result, handle_upgrade_installed_with_result,
+    handle_upgrade_installed_target_with_result_approved,
+    handle_upgrade_installed_with_result_prepared,
 };
 #[doc(hidden)]
 pub use report::handle_list_with_presets_note;
 pub use report::{ShellUpgradeReport, handle_info, handle_list};
-pub use uninstall::handle_uninstall;
+pub use uninstall::{handle_uninstall, handle_uninstall_approved};
 
 use anyhow::{Result, bail};
 pub use shine_core::runtime::ShellType;

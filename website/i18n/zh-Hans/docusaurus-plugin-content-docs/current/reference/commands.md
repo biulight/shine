@@ -32,13 +32,13 @@ shine upgrade app/starship
 | `shine init [--yes]` | 在当前项目创建 `shine.config.toml` |
 | `shine shell <SUBCOMMAND>` | 管理 Shell 命令预设 |
 | `shine app <SUBCOMMAND>` | 管理应用配置预设 |
-| `shine install <TARGET> [--replace-managed]` | 安装或修复一个 app/shell target |
-| `shine uninstall <TARGET> [--force] [--purge] [--dry-run]` | 卸载一个 app/shell target |
+| `shine install <TARGET> [--replace-managed] [--yes]` | 安装或修复一个 app/shell target |
+| `shine uninstall <TARGET> [--force] [--purge] [--dry-run] [--yes]` | 卸载一个 app/shell target |
 | `shine completions <SUBCOMMAND>` | 生成或安装 Shell 补全 |
 | `shine list [--available [KIND]]` | 列出已安装资源，或用 `app`、`shell`、`sys` 浏览可用资源目录 |
 | `shine info <TARGET> [--diff] [--verbose]` | 查看可用或已安装的 app/shell target，或 `sys/<ITEM>` |
 | `shine update [TARGET]` | 检查受管内容和 Shine 稳定版更新 |
-| `shine upgrade [TARGET]` | 应用全部或指定 app、shell、受管 sys 更新 |
+| `shine upgrade [TARGET] [--yes]` | 应用全部或指定 app、shell、受管 sys 更新 |
 | `shine preset <SUBCOMMAND>` | 管理预设来源、overlay、导出和 Git 同步 |
 | `shine state migrate [--dry-run]` | 迁移并清理旧版 Shine 运行时状态 |
 | `shine self <SUBCOMMAND>` | 安装或升级 Shine 程序 |
@@ -56,14 +56,14 @@ shine upgrade app/starship
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed]
-shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed] [--yes]
+shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes]
 
 shine app list
 shine app info <CATEGORY>
-shine app install [CATEGORY] [--dry-run] [--replace-managed]
+shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
 shine app refresh <CATEGORY> [FILE] [--force]
-shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run]
+shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
 shine app artifact apply <APP_ID>
 shine app artifact remove <APP_ID>
 ```
@@ -73,6 +73,10 @@ shine app artifact remove <APP_ID>
 `shell install --dry-run` 会解析 metadata、部署来源、Bun 策略和计划中的命令入口，但不会提取或
 快照预设、渲染模板、创建链接、写入 manifest 或修改 shell profile。
 
+不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation 会先显示绑定快照的安全 Plan，并以
+默认 No 询问一次。`--yes` 仍会完整显示并重新校验 Plan，只跳过提示；重定向输出等非交互
+执行必须传入该参数。`--yes` 与 `--dry-run` 互斥；dry-run 保持原有预览格式，不是已批准 Plan。
+
 `app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。`app artifact apply/remove` 显式运行预设声明的外部集成脚本，Shine 不会把 apply 隐式作为普通安装或升级的一部分。
 
 ## 状态、更新与补全
@@ -81,7 +85,7 @@ shine app artifact remove <APP_ID>
 shine list [--available [<app|shell|sys>]]
 shine info <TARGET> [--diff] [--verbose]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release]
-shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale]
+shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
 shine completions install
 shine completions <bash|zsh|powershell>
@@ -104,6 +108,8 @@ shine completions <bash|zsh|powershell>
   已包含详细信息，因此不会增加更多条目。定向检查不会检查 Shine 版本，仍不能与
   `--refresh-release` 组合使用。
 - `update/upgrade --pull` 会先同步 Git 管理的来源并重新加载配置。
+- 无 target 的 `upgrade` 会一次展示 Shell、App 和已启用 managed Sys 的 Plan，只确认一次，
+  并在写入前复核全部 Plan；它不再隐式修改 Sys profile 的启用状态或组合内容。
 - `upgrade --prune-stale` 移除预设来源中已不存在的旧受管 app 文件。
 - `upgrade` 默认逐项显示实际更新的 App 类别、Shell 类别或受管系统项，并按用户可见
   target 各计数一次；app 行会附带变更文件数。`--verbose` 会展开 app 文件和成功 hook 的
@@ -122,8 +128,8 @@ shine sys status
 shine sys bootstrap [ITEM]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
 shine sys profile enable <ITEM> [--dry-run]
 shine sys profile disable <ITEM> [--dry-run]
-shine sys apply [ITEM] [--dry-run]
-shine sys uninstall <ITEM> [--dry-run]
+shine sys apply [ITEM] [--dry-run] [--yes]
+shine sys uninstall <ITEM> [--dry-run] [--yes]
 ```
 
 位置参数 item 与 `--preset` 互斥。`sys bootstrap` 只确保选中的软件存在，并启用其声明的 shell 集成；重复运行不会升级软件。`sys profile enable/disable` 只修改 Shine 自己管理的集成内容。第三方软件升级请使用其包管理器或上游工具；独立受管系统项可通过 `shine upgrade sys/<ITEM>` 收敛到当前预设状态。

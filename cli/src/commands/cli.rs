@@ -50,6 +50,9 @@ pub enum Commands {
         /// Replace user-modified files that are already managed by shine
         #[arg(long)]
         replace_managed: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long)]
+        yes: bool,
     },
     /// Uninstall one shell or app preset
     Uninstall {
@@ -65,6 +68,9 @@ pub enum Commands {
         /// Print what would be removed without changing anything
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
     /// Generate or install shell completion scripts
     Completions {
@@ -318,4 +324,7 @@ pub struct UpgradeCommand {
     /// Remove stale managed app files whose preset source no longer exists
     #[arg(long)]
     pub prune_stale: bool,
+    /// Approve every displayed lifecycle Plan without prompting
+    #[arg(long)]
+    pub yes: bool,
 }

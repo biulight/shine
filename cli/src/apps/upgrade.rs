@@ -1,14 +1,17 @@
 use anyhow::{Result, anyhow};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::IsTerminal;
 
 use crate::config::Config;
 use crate::env::EnvConfig;
 use crate::presentation::{
     LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
 };
+use shine_core::lifecycle::LifecycleOperation;
 use shine_core::lifecycle::{LifecycleResultV1, LifecycleStatus};
-use shine_core::runtime::{AppFileAction, AppUpgradeRequest, RuntimeEvent, RuntimeObserver};
+use shine_core::runtime::{
+    AppApprovedUpgradeOptions, AppFileAction, AppPlanRequest, PlanningInputVersions, RuntimeEvent,
+    RuntimeObserver,
+};
 
 use super::report;
 
@@ -38,25 +41,79 @@ pub(crate) async fn handle_upgrade_installed_with_output(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<AppUpgradeReport> {
-    handle_upgrade_installed_with_output_with_result(config, prune_stale, verbose, sep)
-        .await
-        .map(|(report, _)| report)
+    handle_upgrade_installed_with_output_with_result_approved(
+        config,
+        prune_stale,
+        verbose,
+        true,
+        sep,
+    )
+    .await
+    .map(|(report, _)| report)
 }
 
-pub(crate) async fn handle_upgrade_installed_with_output_with_result(
+pub(crate) async fn handle_upgrade_installed_with_output_with_result_approved(
     config: &Config,
     prune_stale: bool,
     verbose: bool,
+    yes: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
-    handle_upgrade_installed_target_with_result(config, None, prune_stale, verbose, sep).await
+    handle_upgrade_installed_target_with_result_approved(
+        config,
+        None,
+        prune_stale,
+        verbose,
+        yes,
+        sep,
+    )
+    .await
 }
 
+pub(crate) async fn handle_upgrade_installed_with_output_with_result_prepared(
+    config: &Config,
+    prune_stale: bool,
+    verbose: bool,
+    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
+    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+    handle_upgrade_installed_target_with_prepared_reporter(
+        config,
+        None,
+        prune_stale,
+        verbose,
+        prepared,
+        &mut renderer,
+    )
+    .await
+}
+
+#[cfg(test)]
 pub(crate) async fn handle_upgrade_installed_target_with_result(
     config: &Config,
     category_filter: Option<&str>,
     prune_stale: bool,
     verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
+    handle_upgrade_installed_target_with_result_approved(
+        config,
+        category_filter,
+        prune_stale,
+        verbose,
+        true,
+        sep,
+    )
+    .await
+}
+
+pub(crate) async fn handle_upgrade_installed_target_with_result_approved(
+    config: &Config,
+    category_filter: Option<&str>,
+    prune_stale: bool,
+    verbose: bool,
+    yes: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
     let mut renderer = TerminalRenderer::stdio_with_separator(sep);
@@ -65,6 +122,7 @@ pub(crate) async fn handle_upgrade_installed_target_with_result(
         category_filter,
         prune_stale,
         verbose,
+        yes,
         &mut renderer,
     )
     .await
@@ -75,20 +133,64 @@ async fn handle_upgrade_installed_target_with_reporter(
     category_filter: Option<&str>,
     prune_stale: bool,
     verbose: bool,
+    yes: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
-    let mut runtime = crate::core_runtime::from_config(config).await?;
+    let reviewed = crate::lifecycle_plan::review_plans(
+        config,
+        [crate::lifecycle_plan::LifecyclePlanRequest::app(
+            AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: category_filter.map(str::to_string),
+                force: false,
+                purge: false,
+                prune_stale,
+                input_versions: PlanningInputVersions::default(),
+            },
+            config,
+        )],
+        yes,
+    )
+    .await?
+    .into_iter()
+    .next()
+    .expect("one reviewed App Plan");
+    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    handle_upgrade_installed_target_with_prepared_reporter(
+        config,
+        category_filter,
+        prune_stale,
+        verbose,
+        crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime },
+        reporter,
+    )
+    .await
+}
+
+async fn handle_upgrade_installed_target_with_prepared_reporter(
+    config: &Config,
+    _category_filter: Option<&str>,
+    _prune_stale: bool,
+    verbose: bool,
+    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
+    let crate::lifecycle_plan::PreparedLifecyclePlan {
+        reviewed,
+        mut runtime,
+    } = prepared;
     let env = EnvConfig::load_or_init(config).await?;
     runtime.context_mut_for_cli().env = env.as_map().clone();
-    let prompt_stale = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let mut observer = UpgradeObserver::default();
     let mut interaction = TerminalInteraction;
     let core = runtime
-        .upgrade_apps(
-            AppUpgradeRequest {
-                category: category_filter.map(str::to_string),
-                prune_stale,
-                prompt_stale,
+        .upgrade_apps_approved(
+            match &reviewed.request {
+                crate::lifecycle_plan::LifecyclePlanRequest::App(request) => request.clone(),
+                _ => unreachable!("reviewed App Plan"),
+            },
+            &reviewed.approval,
+            AppApprovedUpgradeOptions {
                 show_hook_success: verbose,
             },
             &mut observer,

@@ -36,13 +36,13 @@ compatibility aliases.
 | `shine init [--yes]` | Create project `shine.config.toml` in the current directory |
 | `shine shell <SUBCOMMAND>` | Manage shell command presets |
 | `shine app <SUBCOMMAND>` | Manage application configuration presets |
-| `shine install <TARGET> [--replace-managed]` | Install or repair an app/shell target |
-| `shine uninstall <TARGET> [--force] [--purge] [--dry-run]` | Uninstall an app/shell target |
+| `shine install <TARGET> [--replace-managed] [--yes]` | Install or repair an app/shell target |
+| `shine uninstall <TARGET> [--force] [--purge] [--dry-run] [--yes]` | Uninstall an app/shell target |
 | `shine completions <SUBCOMMAND>` | Generate or install shell completions |
 | `shine list [--available [KIND]]` | List installed resources, or browse available `app`, `shell`, and `sys` catalogs |
 | `shine info <TARGET> [--diff] [--verbose]` | Inspect an available or installed app/shell target or `sys/<ITEM>` |
 | `shine update [TARGET]` | Check managed content and stable Shine updates |
-| `shine upgrade [TARGET]` | Apply all or selected app, shell, and managed-system updates |
+| `shine upgrade [TARGET] [--yes]` | Apply all or selected app, shell, and managed-system updates |
 | `shine preset <SUBCOMMAND>` | Manage sources, overlays, exports, and Git synchronization |
 | `shine state migrate [--dry-run]` | Migrate and clean legacy runtime state |
 | `shine self <SUBCOMMAND>` | Install or upgrade the Shine binary |
@@ -61,14 +61,14 @@ directory temporarily.
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed]
-shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed] [--yes]
+shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes]
 
 shine app list
 shine app info <CATEGORY>
-shine app install [CATEGORY] [--dry-run] [--replace-managed]
+shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
 shine app refresh <CATEGORY> [FILE] [--force]
-shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run]
+shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
 shine app artifact apply <APP_ID>
 shine app artifact remove <APP_ID>
 ```
@@ -81,6 +81,11 @@ preview with `--dry-run`.
 links, but does not extract or snapshot presets, render templates, create links, write a manifest,
 or edit shell profiles.
 
+Without `--dry-run`, App and Shell lifecycle mutations display a snapshot-bound security Plan and
+ask once with a default answer of No. `--yes` still prints and revalidates the full Plan but skips
+the prompt; redirected or otherwise non-interactive execution must use it. `--yes` and `--dry-run`
+are mutually exclusive. Dry-run retains its existing preview format and is not an approved Plan.
+
 `app refresh` handles only generated files tracked by the manifest and preserves the last successful
 content on failure. Artifact apply/remove explicitly runs an external integration declared by the
 preset; ordinary installation and upgrade do not implicitly apply it.
@@ -91,7 +96,7 @@ preset; ordinary installation and upgrade do not implicitly apply it.
 shine list [--available [<app|shell|sys>]]
 shine info <TARGET> [--diff] [--verbose]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release]
-shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale]
+shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
 shine completions install
 shine completions <bash|zsh|powershell>
@@ -116,6 +121,9 @@ shine completions <bash|zsh|powershell>
   already detailed, so the flag does not add more rows. It cannot combine with `--refresh-release`
   because targeted checks do not perform a Shine release check.
 - `update/upgrade --pull` synchronizes Git-managed sources and reloads configuration first.
+- Untargeted `upgrade` reviews Shell, App, and enabled managed-system Plans together, confirms once,
+  and revalidates all of them before applying changes. It no longer changes Sys profile enablement
+  or composition implicitly.
 - `upgrade --prune-stale` removes old managed app files no longer present in the source.
 - By default, `upgrade` prints each app category, Shell category, or managed-system item it actually
   updates and counts each user-facing target once. App rows include the number of changed files.
@@ -135,8 +143,8 @@ shine sys status
 shine sys bootstrap [ITEM]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
 shine sys profile enable <ITEM> [--dry-run]
 shine sys profile disable <ITEM> [--dry-run]
-shine sys apply [ITEM] [--dry-run]
-shine sys uninstall <ITEM> [--dry-run]
+shine sys apply [ITEM] [--dry-run] [--yes]
+shine sys uninstall <ITEM> [--dry-run] [--yes]
 ```
 
 Positional items and `--preset` are mutually exclusive. `sys bootstrap` ensures only the selected

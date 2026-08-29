@@ -6,7 +6,7 @@ records the cross-module sequences and their gotchas.
 
 ## Pure security Plan assessment
 
-`shine-core::plan` defines a Phase 3 contract separate from current lifecycle execution.
+`shine-core::plan` defines the Phase 3 approval contract used by protected lifecycle execution.
 `runtime::planner` consumes one immutable `PresetSnapshot`, a validated App/Shell/managed Sys
 request, captured runtime inputs, manifests, receipts, and live resource observations. It emits
 ordered semantic steps plus a required permission set; missing declarations, uncomputable
@@ -32,24 +32,26 @@ validated target + immutable Preset snapshot
 Generator and hook triggers are modeled as conservative `execute` plus potential resource steps;
 the code is never run during planning and existing external-code gates remain blockers. A supported
 receipt can drive uninstall after source disappearance, but cannot recreate missing teardown code.
-Frontend review creates approval for one exact ready Plan. The eventual apply flow is deliberately:
+CLI review creates approval for one exact ready Plan. Apply deliberately follows:
 
 ```text
 capture current source/state → regenerate Plan → match approved fingerprint + permissions
     → execute existing Core lifecycle → return LifecycleResultV1
 ```
 
-The planners do not yet route CLI commands through this flow. Existing dry-run/status
-remain compatibility paths, `allow_app_hooks` and `allow_sys_code` remain active, and no code may
-describe those paths as an enforced security Plan before apply enforcement lands.
+App, Shell, and managed Sys install/upgrade/uninstall route through this flow. Untargeted
+`shine upgrade` renders the three final Plans together, confirms once, and prevalidates all three
+before protected mutation starts. `upgrade --pull` pulls and reloads first. Existing dry-run/status
+remain separate preview/inspection paths, and `allow_app_hooks`, `allow_sys_code`, ownership, and
+administrator authorization remain additional gates.
 
 Permission declaration schema v1 is parsed from the same immutable snapshot: one App category
 table, one table per Shell command/platform variant, and one table per Sys item. Static validation
 checks version, placement, structured paths, payload-free identities, and duplicates without
 executing Preset code. Typed metadata continues to describe Core-bounded effects; explicit tables
-record additional capabilities. Missing tables warn but do not change current runtime execution.
-Pure planners combine both sources into the required/declared resolution used by `PlanV1`; missing
-or uncomputable capabilities make that Plan non-ready.
+record additional capabilities. Pure planners combine both sources into the required/declared
+resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
+protected execution fails closed.
 
 ## Shell install and uninstall
 
@@ -159,7 +161,9 @@ creating a duplicate manifest entry.
 
 Managed sys resources participate in the same flow. `shine update` compares the desired built-in
 resource receipt derived from the active env against `sys-manifest.toml`; `shine upgrade` then
-re-applies recorded managed resources and replaces the receipt after convergence. For split DNS,
+re-applies only recorded, profile-enabled managed resources and replaces the receipt after
+convergence. Aggregate upgrade does not implicitly compose the Sys shell profile; use explicit
+`sys profile enable/disable` for that state. For split DNS,
 the receipt comparison includes the normalized domain, DNS servers, and platform resource path.
 Update and sys-info output render those receipt differences field by field (`old -> new`) so the
 user can inspect the pending system change before granting administrator access to upgrade.

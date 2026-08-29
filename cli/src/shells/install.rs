@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use shine_core::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
 };
+use shine_core::runtime::{PlanningInputVersions, ShellPlanRequest};
 use std::collections::BTreeSet;
 #[cfg(test)]
 use std::path::Path;
@@ -67,8 +68,17 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
 }
 
 pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) -> Result<()> {
+    handle_install_approved(config, target, force, true).await
+}
+
+pub async fn handle_install_approved(
+    config: &Config,
+    target: Option<&str>,
+    force: bool,
+    yes: bool,
+) -> Result<()> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_install_with_reporter(config, target, force, &mut renderer)
+    handle_install_with_reporter(config, target, force, yes, &mut renderer)
         .await
         .map(|_| ())
 }
@@ -80,13 +90,14 @@ pub(crate) async fn handle_install_with_result(
     force: bool,
 ) -> Result<LifecycleResultV1> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_install_with_reporter(config, target, force, &mut renderer).await
+    handle_install_with_reporter(config, target, force, true, &mut renderer).await
 }
 
 async fn handle_install_with_reporter(
     config: &Config,
     target: Option<&str>,
     force: bool,
+    yes: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
     for line in crate::config::presets_note_lines(config) {
@@ -94,13 +105,33 @@ async fn handle_install_with_reporter(
     }
     let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
     let category_filter = selection.map(|target| target.category);
-    let core_report = crate::core_runtime::from_config(config)
-        .await?
-        .install_shells(shine_core::runtime::ShellLifecycleRequest {
-            target: target.map(str::to_string),
-            dry_run: false,
-            force,
-        })
+    let reviewed = crate::lifecycle_plan::review_plans(
+        config,
+        [crate::lifecycle_plan::LifecyclePlanRequest::shell(
+            ShellPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: target.map(str::to_string),
+                force,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            },
+            config,
+        )],
+        yes,
+    )
+    .await?
+    .into_iter()
+    .next()
+    .expect("one reviewed Shell Plan");
+    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    let core_report = runtime
+        .install_shells_approved(
+            match &reviewed.request {
+                crate::lifecycle_plan::LifecyclePlanRequest::Shell(request) => request.clone(),
+                _ => unreachable!("reviewed Shell Plan"),
+            },
+            &reviewed.approval,
+        )
         .await?;
     if !config.is_external_presets {
         reporter.emit(PresentationEvent::stdout(output::summary_line_text(
@@ -188,7 +219,7 @@ async fn handle_install_dry_run_with_reporter(
     }
     let core_report = crate::core_runtime::from_config(config)
         .await?
-        .install_shells(shine_core::runtime::ShellLifecycleRequest {
+        .preview_install_shells(shine_core::runtime::ShellLifecycleRequest {
             target: target.map(str::to_string),
             dry_run: true,
             force: false,
@@ -212,17 +243,35 @@ pub async fn handle_upgrade_installed(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<ShellUpgradeReport> {
-    handle_upgrade_installed_with_result(config, verbose, sep)
+    handle_upgrade_installed_with_result_approved(config, verbose, true, sep)
         .await
         .map(|(report, _)| report)
 }
 
-pub(crate) async fn handle_upgrade_installed_with_result(
+pub(crate) async fn handle_upgrade_installed_with_result_approved(
     config: &Config,
     verbose: bool,
+    yes: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
-    handle_upgrade_installed_target_with_result(config, None, verbose, sep).await
+    handle_upgrade_installed_target_with_result_approved(config, None, verbose, yes, sep).await
+}
+
+pub(crate) async fn handle_upgrade_installed_with_result_prepared(
+    config: &Config,
+    verbose: bool,
+    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+    handle_upgrade_installed_target_with_prepared_reporter(
+        config,
+        None,
+        verbose,
+        prepared,
+        &mut renderer,
+    )
+    .await
 }
 
 pub async fn handle_upgrade_installed_target(
@@ -231,33 +280,104 @@ pub async fn handle_upgrade_installed_target(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<ShellUpgradeReport> {
-    handle_upgrade_installed_target_with_result(config, category_filter, verbose, sep)
-        .await
-        .map(|(report, _)| report)
+    handle_upgrade_installed_target_with_result_approved(
+        config,
+        category_filter,
+        verbose,
+        true,
+        sep,
+    )
+    .await
+    .map(|(report, _)| report)
 }
 
+#[cfg(test)]
 pub(crate) async fn handle_upgrade_installed_target_with_result(
     config: &Config,
     category_filter: Option<&str>,
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    handle_upgrade_installed_target_with_result_approved(
+        config,
+        category_filter,
+        verbose,
+        true,
+        sep,
+    )
+    .await
+}
+
+pub(crate) async fn handle_upgrade_installed_target_with_result_approved(
+    config: &Config,
+    category_filter: Option<&str>,
+    verbose: bool,
+    yes: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
     let mut renderer = TerminalRenderer::stdio_with_separator(sep);
-    handle_upgrade_installed_target_with_reporter(config, category_filter, verbose, &mut renderer)
-        .await
+    handle_upgrade_installed_target_with_reporter(
+        config,
+        category_filter,
+        verbose,
+        yes,
+        &mut renderer,
+    )
+    .await
 }
 
 async fn handle_upgrade_installed_target_with_reporter(
     config: &Config,
     category_filter: Option<&str>,
     verbose: bool,
+    yes: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
-    let core = crate::core_runtime::from_config(config)
-        .await?
-        .upgrade_shells(shine_core::runtime::ShellUpgradeRequest {
-            category: category_filter.map(str::to_string),
-        })
+    let reviewed = crate::lifecycle_plan::review_plans(
+        config,
+        [crate::lifecycle_plan::LifecyclePlanRequest::shell(
+            ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: category_filter.map(str::to_string),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            },
+            config,
+        )],
+        yes,
+    )
+    .await?
+    .into_iter()
+    .next()
+    .expect("one reviewed Shell Plan");
+    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    handle_upgrade_installed_target_with_prepared_reporter(
+        config,
+        category_filter,
+        verbose,
+        crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime },
+        reporter,
+    )
+    .await
+}
+
+async fn handle_upgrade_installed_target_with_prepared_reporter(
+    config: &Config,
+    category_filter: Option<&str>,
+    verbose: bool,
+    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    let crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime } = prepared;
+    let core = runtime
+        .upgrade_shells_approved(
+            match &reviewed.request {
+                crate::lifecycle_plan::LifecyclePlanRequest::Shell(request) => request.clone(),
+                _ => unreachable!("reviewed Shell Plan"),
+            },
+            &reviewed.approval,
+        )
         .await?;
     if core.runs.is_empty() {
         if verbose {
@@ -658,7 +778,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("shell preset command not found: utils/not-a-command"));
+        assert!(error.contains("not-a-command"), "{error}");
         assert!(!config.bin_dir().exists());
         assert!(!config.presets_dir().join("shell/utils").exists());
 
@@ -744,7 +864,7 @@ mod tests {
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n",
+            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -792,7 +912,7 @@ mod tests {
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n",
+            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1262,6 +1382,12 @@ mod tests {
         fs::write(&script, b"#!/bin/bash\n# My tool.\necho hi\n")
             .await
             .unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"my_tool.sh\"\ntarget = \"my_tool\"\n[files.permissions]\nschema_version = 1\n",
+        )
+        .await
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&script).await.unwrap().permissions();
         perms.set_mode(perms.mode() | 0o111);
@@ -1276,7 +1402,7 @@ mod tests {
             .unwrap();
 
         // The script must NOT have been extracted from embedded assets into
-        // presets_dir — the only file there is the one we created above.
+        // presets_dir — only the user script and its metadata are present.
         let count = {
             let mut rd = fs::read_dir(&cat_dir).await.unwrap();
             let mut n = 0u32;
@@ -1285,7 +1411,7 @@ mod tests {
             }
             n
         };
-        assert_eq!(count, 1, "no embedded assets should have been extracted");
+        assert_eq!(count, 2, "no embedded assets should have been extracted");
 
         // A bin symlink for the script should have been created.
         let link = config.bin_dir().join("my_tool");
@@ -1302,7 +1428,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1337,7 +1463,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n[[files]]\nsource = \"uset_proxy.sh\"\ntarget = \"usetproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n[files.permissions]\nschema_version = 1\n[[files]]\nsource = \"uset_proxy.sh\"\ntarget = \"usetproxy\"\nneeds_source = true\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1442,7 +1568,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1565,7 +1691,7 @@ mod tests {
 
         fs::write(
             proxy_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1631,7 +1757,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1690,7 +1816,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\nenv = [\"API_URL\", \"SERVICE_TOKEN=API_TOKEN\"]\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\nenv = [\"API_URL\", \"SERVICE_TOKEN=API_TOKEN\"]\n[files.permissions]\nschema_version = 1\nenvironment = [{ name = \"API_URL\", sensitivity = \"plain\" }, { name = \"SERVICE_TOKEN\", sensitivity = \"plain\" }]\n",
         )
         .await
         .unwrap();
@@ -1725,7 +1851,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1784,7 +1910,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1834,7 +1960,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1904,7 +2030,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1960,7 +2086,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -2004,7 +2130,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();

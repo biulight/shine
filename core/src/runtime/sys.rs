@@ -588,7 +588,7 @@ where
 
     /// Core-owned managed Sys lifecycle. Selection and receipt assessment are
     /// performed once and reused for authorization, mutation and reporting.
-    pub async fn run_managed_sys(
+    pub(crate) async fn run_managed_sys(
         &self,
         request: SysManagedRequest,
         interaction: &mut impl RuntimeInteraction,

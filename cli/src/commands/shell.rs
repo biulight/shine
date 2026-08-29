@@ -23,6 +23,9 @@ pub enum ShellCommands {
         /// Replace user-modified managed files, links, and profile integration
         #[arg(long)]
         replace_managed: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
     /// Uninstall shell presets and remove bin symlinks.
     /// Run 'shine shell list' to see installed categories.
@@ -37,5 +40,8 @@ pub enum ShellCommands {
         /// Print what would be removed without making any changes
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed lifecycle Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
 }

@@ -6,7 +6,9 @@ use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer
 use anyhow::Result;
 #[cfg(test)]
 use shine_core::lifecycle::LifecycleEffect;
+use shine_core::lifecycle::LifecycleOperation;
 use shine_core::lifecycle::LifecycleResultV1;
+use shine_core::runtime::{AppPlanRequest, PlanningInputVersions};
 
 pub async fn handle_uninstall(
     config: &Config,
@@ -15,8 +17,19 @@ pub async fn handle_uninstall(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
+    handle_uninstall_approved(config, category, force, purge, dry_run, true).await
+}
+
+pub async fn handle_uninstall_approved(
+    config: &Config,
+    category: Option<&str>,
+    force: bool,
+    purge: bool,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_uninstall_with_reporter(config, category, force, purge, dry_run, &mut renderer)
+    handle_uninstall_with_reporter(config, category, force, purge, dry_run, yes, &mut renderer)
         .await
         .map(|_| ())
 }
@@ -30,7 +43,8 @@ pub(crate) async fn handle_uninstall_with_result(
     dry_run: bool,
 ) -> Result<LifecycleResultV1> {
     let mut renderer = TerminalRenderer::stdio();
-    handle_uninstall_with_reporter(config, category, force, purge, dry_run, &mut renderer).await
+    handle_uninstall_with_reporter(config, category, force, purge, dry_run, true, &mut renderer)
+        .await
 }
 
 async fn handle_uninstall_with_reporter(
@@ -39,26 +53,68 @@ async fn handle_uninstall_with_reporter(
     force: bool,
     purge: bool,
     dry_run: bool,
+    yes: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<LifecycleResultV1> {
     if dry_run {
         reporter.emit(PresentationEvent::stdout(report::dry_run_header_text()));
     }
-    let runtime = crate::core_runtime::from_config(config).await?;
+    let plan_request = AppPlanRequest {
+        operation: LifecycleOperation::Uninstall,
+        target: category.map(str::to_string),
+        force,
+        purge,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let reviewed = if dry_run {
+        None
+    } else {
+        crate::lifecycle_plan::review_plans(
+            config,
+            [crate::lifecycle_plan::LifecyclePlanRequest::app(
+                plan_request,
+                config,
+            )],
+            yes,
+        )
+        .await?
+        .into_iter()
+        .next()
+    };
+    let runtime = if let Some(reviewed) = &reviewed {
+        crate::lifecycle_plan::prepare_runtime(config, reviewed).await?
+    } else {
+        crate::core_runtime::from_config(config).await?
+    };
     let mut observer = UninstallObserver { reporter };
     let mut interaction = crate::presentation::TerminalInteraction;
-    let core_report = runtime
-        .uninstall_apps(
-            shine_core::runtime::AppUninstallLifecycleRequest {
-                target: category.map(str::to_string),
-                dry_run,
-                force,
-                purge,
-            },
-            &mut observer,
-            &mut interaction,
-        )
-        .await?;
+    let core_report = if let Some(reviewed) = &reviewed {
+        runtime
+            .uninstall_apps_approved(
+                match &reviewed.request {
+                    crate::lifecycle_plan::LifecyclePlanRequest::App(request) => request.clone(),
+                    _ => unreachable!("reviewed App Plan"),
+                },
+                &reviewed.approval,
+                &mut observer,
+                &mut interaction,
+            )
+            .await?
+    } else {
+        runtime
+            .preview_uninstall_apps(
+                shine_core::runtime::AppUninstallLifecycleRequest {
+                    target: category.map(str::to_string),
+                    dry_run,
+                    force,
+                    purge,
+                },
+                &mut observer,
+                &mut interaction,
+            )
+            .await?
+    };
     if let Some(category) = category.filter(|_| core_report.files.is_empty()) {
         observer
             .reporter
@@ -218,7 +274,7 @@ mod tests {
     async fn write_external_sample_app(dir: &std::path::Path, body: &[u8]) {
         let cat_dir = dir.join("presets/app/sample");
         fs::create_dir_all(&cat_dir).await.unwrap();
-        let manifest = "description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n".to_string();
+        let manifest = "description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n".to_string();
         fs::write(cat_dir.join("shine.toml"), manifest)
             .await
             .unwrap();
@@ -238,14 +294,16 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, None, false, false).await.unwrap();
+        handle_install(&config, Some("git"), false, false)
+            .await
+            .unwrap();
 
         let manifest_before = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
         let count_before = manifest_before.entries.len();
 
-        let result = handle_uninstall_with_result(&config, None, false, false, true)
+        let result = handle_uninstall_with_result(&config, Some("git"), false, false, true)
             .await
             .unwrap();
         assert!(result.dry_run);
@@ -359,8 +417,13 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        // Install all categories
-        handle_install(&config, None, false, false).await.unwrap();
+        // Install two categories so targeted removal can prove isolation.
+        handle_install(&config, Some("git"), false, false)
+            .await
+            .unwrap();
+        handle_install(&config, Some("starship"), false, false)
+            .await
+            .unwrap();
         let manifest_all = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();

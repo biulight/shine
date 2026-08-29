@@ -97,8 +97,8 @@ shine sys profile enable mise
 
 These commands modify only Shine-owned generated profile content. Disabling does not uninstall the
 software. Enabling first verifies the item's declared detection and asks you to bootstrap it when it
-is missing. `shine upgrade` re-renders the currently enabled integrations but does not upgrade their
-software.
+is missing. `shine upgrade` does not change or re-render profile enablement implicitly; use these
+explicit profile commands when that state should change.
 
 `shine update` and `shine upgrade` still manage only Shine configuration and managed system
 resources. They never upgrade this third-party software.
@@ -114,9 +114,14 @@ Some system configuration is managed declaratively and can be reapplied or safel
 ```bash
 shine sys apply --dry-run
 shine sys apply split-dns
+shine sys apply split-dns --yes # Non-interactive approval
 shine sys uninstall split-dns --dry-run
 shine sys uninstall split-dns
 ```
+
+Non-dry-run managed operations display a snapshot-bound Plan and default to No. `--yes` skips only
+the prompt, not Plan rendering, permission blockers, or fresh validation. Administrator access, if
+required, is requested separately after Plan approval.
 
 For routing private domains across remote LANs to ZeroTier DNS, see the Chinese Biulight guide
 [使用 ZeroTier、CoreDNS 和 Shine 搭建异地私有域名网络](https://blog.biulight.top/timeline/knowledge/zerotier-coredns-split-dns).

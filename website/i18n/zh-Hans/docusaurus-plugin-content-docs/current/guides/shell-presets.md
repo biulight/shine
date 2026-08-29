@@ -54,6 +54,10 @@ shine shell uninstall utils/shine-env-export
 shine shell uninstall proxy --purge
 ```
 
+非 dry-run 的 install、uninstall 以及 `shine upgrade` 会显示绑定快照的生命周期 Plan。确认默认
+是 No；自动化必须传入 `--yes`，但有序步骤和权限仍会显示并重新校验。`--dry-run` 是独立预览，
+不能与 `--yes` 组合。
+
 按命令卸载会保留同类别下其他已安装命令；只要兄弟命令仍需要，共享 preset 或 snapshot 文件
 就可能继续保留。`--purge` 会额外删除空的受管预设目录；未指定 target 时会处理整棵 shell
 预设目录。它不会删除 `~/.shine/config.toml`。

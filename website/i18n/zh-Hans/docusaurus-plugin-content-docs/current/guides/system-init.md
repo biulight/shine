@@ -81,7 +81,8 @@ shine sys profile enable mise
 ```
 
 这些命令只修改 Shine 自己生成的 profile 内容。disable 不卸载软件；enable 会先执行 item 声明的
-检测，缺失时提示先 bootstrap。`shine upgrade` 会重新渲染当前已启用的集成，但不会升级其软件。
+检测，缺失时提示先 bootstrap。`shine upgrade` 不再隐式修改或重新组合 profile 启用状态；需要
+变更该状态时请使用这些显式 profile 命令。
 
 `shine update` 和 `shine upgrade` 仍只处理 Shine 管理的配置和受管系统资源，不会升级这些
 第三方软件。
@@ -95,9 +96,13 @@ shine sys profile enable mise
 ```bash
 shine sys apply --dry-run
 shine sys apply split-dns
+shine sys apply split-dns --yes # 非交互批准
 shine sys uninstall split-dns --dry-run
 shine sys uninstall split-dns
 ```
+
+非 dry-run 的 managed 操作会显示绑定快照的 Plan，确认默认是 No。`--yes` 只跳过提示，不能
+跳过 Plan 展示、权限 blocker 或执行前复核。若项目需要管理员权限，会在 Plan 批准后另行请求。
 
 需要把异地局域网中的私有域名定向到 ZeroTier DNS 时，可参考
 [使用 ZeroTier、CoreDNS 和 Shine 搭建异地私有域名网络](https://blog.biulight.top/timeline/knowledge/zerotier-coredns-split-dns)。

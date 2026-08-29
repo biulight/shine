@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-30 — Executor-side choices expanded reviewed lifecycle work
+
+- **Symptom**: a reviewed App upgrade could still ask to remove stale files, and aggregate upgrade
+  could synchronize the composed Sys profile even though neither mutation was fixed by the Plan.
+- **Root cause**: lifecycle options and shared-state convergence were partly decided inside CLI
+  execution adapters after planning instead of being bound to the reviewed request and steps.
+- **Fix**: make `--prune-stale` the only stale-removal input, disable executor-side stale prompts,
+  batch and prevalidate aggregate lifecycle Plans, and remove implicit Sys profile sync from
+  untargeted upgrade.
+- **Rule**: after Plan review, execution may request administrator authorization but may not add a
+  target, resource, permission, or cleanup action; every such choice belongs in the reviewed Plan.
+
 ## 2026-08-29 — In-memory runtime tests still need host-native captured paths
 
 - **Symptom**: the full Windows `shine-core` suite failed three in-memory App, Shell, and Sys

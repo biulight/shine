@@ -1,8 +1,8 @@
 # Shine Security Plan and Trust Model PRD
 
-> **Status:** Roadmap Phase 3 contract foundation, permission declarations, and pure App/Shell/
-> managed Sys planners implemented; CLI enforcement and coarse-grant migration remain future
-> slices. This document is internal and does not define released CLI or JSON behavior.
+> **Status:** Roadmap Phase 3 contract foundation, permission declarations, pure App/Shell/managed
+> Sys planners, and CLI approval enforcement implemented; coarse-grant migration remains a future
+> slice. This document is internal and does not define a public JSON Plan schema.
 
 ## Summary
 
@@ -13,10 +13,10 @@ a reviewable Plan that derives all required permissions and is bound to the exac
 inputs later applied.
 
 The first slice added the versioned Plan, permission, snapshot digest, fingerprint, and approval
-contracts to `shine-core`. The second added target-local permission declarations, static
-validation, and built-in migration. The third added workspace-internal pure planners for App,
-Shell, and managed Sys. None routes current commands through a security Plan; existing dry-run,
-status, external-code gates, and mutation paths remain compatibility behavior.
+contracts to `shine-core`. The second added target-local permission declarations and validation.
+The third added pure planners for App, Shell, and managed Sys. The fourth routes their protected
+lifecycle mutations through CLI review and fresh Core validation; dry-run remains a separate
+preview and the existing external-code and administrator gates remain in force.
 
 ## Goals
 
@@ -29,10 +29,10 @@ status, external-code gates, and mutation paths remain compatibility behavior.
    requires a new review.
 6. Keep planning free of host mutation, Preset code execution, and secret plaintext.
 
-## Non-goals of the delivered planner slice
+## Non-goals of the delivered enforcement slice
 
 - No bootstrap, App artifact/refresh, or Sys profile planner.
-- No CLI `plan` command, prompt, JSON output, or mutation enforcement.
+- No standalone CLI `plan` command or JSON output.
 - No Declarative Action IR, journal, rollback, or recovery; those remain Roadmap Phase 4.
 - No change to `allow_app_hooks`, `allow_sys_code`, or current external-code behavior.
 
@@ -91,7 +91,7 @@ teardown code.
 
 `PlanApprovalV1` can be created only for a ready Plan. It stores the exact Plan fingerprint and
 required permission set. Validation rejects unsupported schemas, blocked Plans, changed
-permissions, or any changed fingerprint. A future apply path must re-plan from fresh captured
+permissions, or any changed fingerprint. Approved Core entry points re-plan from fresh captured
 inputs and validate that result before the first mutation; approval is never a reusable grant.
 
 ## Delivery sequence
@@ -102,8 +102,8 @@ inputs and validate that result before the first mutation; approval is never a r
    built-in migration, and explicit compatibility for existing coarse grants.
 3. **Complete — pure planners:** App, Shell, and managed Sys read-only assessment that cannot
    invoke process, write, privileged, or external-code capabilities.
-4. **Approval enforcement:** CLI rendering and confirmation followed by re-plan, exact approval
-   validation, and only then existing Core execution.
+4. **Complete — approval enforcement:** CLI rendering and confirmation followed by re-plan, exact
+   approval validation, and only then existing Core execution.
 5. **Trust migration:** move `allow_app_hooks` and `allow_sys_code` users to scoped declarations
    without silently expanding permissions; separately decide auto-generator status compatibility.
 
@@ -124,4 +124,7 @@ handling invariants until its replacement is complete.
   digest and fingerprint.
 - Missing declarations, missing secret identity, foreign ownership, user modification, and opaque
   managed behavior fail closed or preserve state with stable diagnostic codes.
-- The existing CLI, public manuals, and mutation behavior remain unchanged by the planner slice.
+- Protected App, Shell, and managed Sys mutations render a Plan, require approval, and revalidate
+  it; untargeted upgrade approves and prevalidates the three domains as one batch.
+- `--yes` cannot bypass rendering or blockers, non-TTY execution without it fails closed, and
+  `--dry-run` remains distinct and conflicts with `--yes`.

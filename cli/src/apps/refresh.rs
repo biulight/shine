@@ -145,6 +145,14 @@ generator = { script = "second.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
                 r#"description = "sample"
 dest = "{}"
 
+[permissions]
+schema_version = 1
+filesystem = [
+  {{ access = ["execute"], base = "preset", path = "first.sh" }},
+  {{ access = ["execute"], base = "preset", path = "second.sh" }},
+]
+environment = [{{ name = "SOURCE_URL", sensitivity = "plain" }}]
+
 [[files]]
 source = "first.txt"
 generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL", auto = false }}
