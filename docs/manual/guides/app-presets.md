@@ -50,10 +50,11 @@ shine app uninstall starship
 shine app uninstall starship --purge
 ```
 
-Install, upgrade, and uninstall show a snapshot-bound Plan before mutation. The prompt defaults to
-No; use command-level `--yes` for non-interactive execution. `--yes` still renders and revalidates
-the Plan and cannot bypass missing permissions, blocked teardown, or external-code gates. App stale
-files are removed during upgrade only when `--prune-stale` was part of the reviewed command.
+Install, upgrade, uninstall, generator refresh, and artifact apply/remove show a snapshot-bound Plan
+before mutation. The prompt defaults to No; use command-level `--yes` for non-interactive execution.
+`--yes` still renders and revalidates the Plan and cannot bypass missing permissions, blocked
+teardown, or external-code gates. App stale files are removed during upgrade only when
+`--prune-stale` was part of the reviewed command.
 
 By default, files modified after installation are preserved and reported as user-modified. A safe
 uninstall restores any backup created during installation. `--purge` also removes the category's
@@ -88,7 +89,8 @@ shine app refresh <CATEGORY> <SOURCE_FILE>
 `SOURCE_FILE` is the relative `[[files]].source` path. A failed refresh preserves the last successful
 content. A user-modified destination is also preserved unless you explicitly add `--force`.
 Installation, including a repair with `--replace-managed`, runs generators enabled by `when_env`
-regardless of their `auto` setting.
+regardless of their `auto` setting. Refresh displays and revalidates a security Plan; automation
+must add `--yes`.
 
 Generators supplied by external presets or overlays are executable code and require
 `allow_app_hooks = true`. Shine passes only explicitly declared environment values and fixed
@@ -151,7 +153,9 @@ shine app artifact apply surge
 
 Shine does not implicitly run artifacts, although a preset may call `app artifact apply` from a
 lifecycle hook after installation or upgrade actually changes files. A failed manual apply fails the
-command. Scripts receive current `[env]` values and path variables such as `SHINE_APP_HTTP_DIR`,
+command. Manual apply/remove displays and revalidates a security Plan; automation must add `--yes`.
+Scripts receive configured `[artifact].env` sources only, and those sources must also be listed in
+the category's `[permissions].environment`, plus path variables such as `SHINE_APP_HTTP_DIR`,
 `SHINE_CACHE_DIR`, and `SHINE_STATE_DIR`. They can generate resources under
 `~/.shine/http/app/<APP_ID>/`. See [Tasks and the local service](./tasks-and-serve.md) for the complete
 variable list.

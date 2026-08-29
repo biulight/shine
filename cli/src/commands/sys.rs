@@ -8,6 +8,9 @@ pub enum SysProfileCommands {
         item: String,
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed security Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
     /// Disable one item's Shine-managed shell integration without uninstalling software
     Disable {
@@ -15,6 +18,9 @@ pub enum SysProfileCommands {
         item: String,
         #[arg(long)]
         dry_run: bool,
+        /// Approve the displayed security Plan without prompting
+        #[arg(long, conflicts_with = "dry_run")]
+        yes: bool,
     },
 }
 

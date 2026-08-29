@@ -7,16 +7,20 @@ use shine_core::plan::{
     PlanApprovalV1, PlanV1,
 };
 use shine_core::runtime::{
-    AppPlanRequest, CoreRuntime, OpaqueSecretVersion, PlanningInputVersions, RealHost,
-    ShellPlanRequest, SysBootstrapPlanRequest, SysManagedPlanRequest,
+    AppArtifactPlanRequest, AppPlanRequest, AppRefreshPlanRequest, CoreRuntime,
+    OpaqueSecretVersion, PlanningInputVersions, RealHost, ShellPlanRequest,
+    SysBootstrapPlanRequest, SysManagedPlanRequest, SysProfilePlanRequest,
 };
 use std::io::IsTerminal;
 
 #[derive(Clone, Debug)]
 pub(crate) enum LifecyclePlanRequest {
     App(AppPlanRequest),
+    AppRefresh(AppRefreshPlanRequest),
+    AppArtifact(AppArtifactPlanRequest),
     Shell(ShellPlanRequest),
     Sys(SysManagedPlanRequest),
+    SysProfile(SysProfilePlanRequest),
     SysBootstrap {
         request: SysBootstrapPlanRequest,
         proxy_env: std::collections::BTreeMap<String, String>,
@@ -34,9 +38,23 @@ impl LifecyclePlanRequest {
         Self::Shell(request)
     }
 
+    pub(crate) fn app_refresh(mut request: AppRefreshPlanRequest, config: &Config) -> Self {
+        request.input_versions = planning_input_versions(config);
+        Self::AppRefresh(request)
+    }
+
+    pub(crate) fn app_artifact(mut request: AppArtifactPlanRequest, config: &Config) -> Self {
+        request.input_versions = planning_input_versions(config);
+        Self::AppArtifact(request)
+    }
+
     pub(crate) fn sys(mut request: SysManagedPlanRequest, config: &Config) -> Self {
         request.input_versions = planning_input_versions(config);
         Self::Sys(request)
+    }
+
+    pub(crate) fn sys_profile(request: SysProfilePlanRequest) -> Self {
+        Self::SysProfile(request)
     }
 
     pub(crate) fn sys_bootstrap(
@@ -60,8 +78,11 @@ impl LifecyclePlanRequest {
     async fn generate(&self, runtime: &CoreRuntime<RealHost>) -> Result<PlanV1> {
         match self {
             Self::App(request) => runtime.plan_apps(request.clone()).await,
+            Self::AppRefresh(request) => runtime.plan_app_refresh(request.clone()).await,
+            Self::AppArtifact(request) => runtime.plan_app_artifact(request.clone()).await,
             Self::Shell(request) => runtime.plan_shells(request.clone()).await,
             Self::Sys(request) => runtime.plan_managed_sys(request.clone()).await,
+            Self::SysProfile(request) => runtime.plan_sys_profile(request.clone()).await,
             Self::SysBootstrap { request, .. } => runtime.plan_sys_bootstrap(request.clone()).await,
         }
     }
@@ -109,19 +130,19 @@ pub(crate) async fn review_plans(
     }
 
     if blocked {
-        bail!("lifecycle Plan is blocked; no changes were made");
+        bail!("security Plan is blocked; no changes were made");
     }
 
     if needs_confirmation && !yes {
         if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
-            bail!("lifecycle Plan approval requires an interactive terminal or explicit --yes");
+            bail!("security Plan approval requires an interactive terminal or explicit --yes");
         }
         let confirmed = dialoguer::Confirm::new()
-            .with_prompt("Apply this lifecycle Plan?")
+            .with_prompt("Apply this security Plan?")
             .default(false)
             .interact()?;
         if !confirmed {
-            bail!("lifecycle Plan was not approved; no changes were made");
+            bail!("security Plan was not approved; no changes were made");
         }
     }
     planned
@@ -141,7 +162,7 @@ pub(crate) async fn prepare_runtime(
     reviewed: &ReviewedLifecyclePlan,
 ) -> Result<CoreRuntime<RealHost>> {
     if active_config_digest(config).await? != reviewed.config_digest {
-        bail!("active configuration changed after lifecycle Plan review; no changes were made");
+        bail!("active configuration changed after security Plan review; no changes were made");
     }
     let mut runtime = runtime_with_env(config).await?;
     reviewed.request.configure_runtime(&mut runtime);

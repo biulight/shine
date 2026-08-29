@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-30 — Reviewable environment permissions require executor allowlists
+
+- **Symptom**: App artifact execution inherited the complete active `[env]` table, so a security
+  Plan could not prove which environment capabilities the script would receive; reusing the whole
+  category permission table also exposed generator-only values to artifacts.
+- **Root cause**: the execution contract had fixed path variables but no artifact-local environment
+  input list, and permission declarations were treated as a convenient source of values rather than
+  as review identities.
+- **Fix**: add `[artifact].env`, require each source in `[permissions].environment`, pass only those
+  mappings plus fixed `SHINE_APP_*` values, and keep generators scoped to `generator.env`.
+- **Rule**: a permission declaration describes capability identity; it must never implicitly grant
+  or inject a value. Every executable Preset surface needs its own explicit input allowlist.
+
 ## 2026-08-30 — Planner boundary tests must distinguish assessment from approval gates
 
 - **Symptom**: the Core boundary suite rejected `runtime/planner.rs` for mentioning mutation host

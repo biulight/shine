@@ -461,10 +461,15 @@ An application's `[artifact]` can also use Bun for cross-platform apply and tear
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
+env = ["PROFILE_PATH", "API_TOKEN"]
 ```
 
 The default is `native`, which executes the script directly. `bun` accepts only `.ts`, `.js`, `.mts`,
-or `.mjs` and requires Bun on the machine. Artifact scripts receive the current Shine `[env]` and
-application path variables. To run an artifact automatically after installation or upgrade actually
-changes files, separately declare `post_install` or `post_upgrade`; external presets still require
-the user to set `allow_app_hooks = true`.
+or `.mjs` and requires Bun on the machine. `env` is the only Shine `[env]` allowlist passed to the
+artifact and supports `SOURCE=TARGET` aliases; declare each source and sensitivity again under the
+category's `[permissions].environment`. Listed sources are forwarded only when configured; missing
+optional values are omitted. Fixed application path variables are added separately. To
+run an artifact automatically after installation or upgrade actually changes files, declare
+`post_install` or `post_upgrade`; external presets still require the user to set
+`allow_app_hooks = true`. A hook that invokes `shine app artifact apply` runs non-interactively and
+must include `--yes`; the nested command still renders and freshly validates its security Plan.

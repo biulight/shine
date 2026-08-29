@@ -394,6 +394,14 @@ App 类别的 `[artifact]` 也可选择 Bun，使 `build` 与 `unbuild` 脚本�
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
+env = ["PROFILE_PATH", "API_TOKEN"]
 ```
 
-`runtime` 省略时为 `native`，直接执行脚本；`bun` 仅接受 `.ts`、`.js`、`.mts` 或 `.mjs`，并要求运行机器已安装 Bun。构建脚本会收到当前 Shine `[env]` 和 app 路径变量。若希望安装或升级实际改动文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设仍需用户设置 `allow_app_hooks = true`。
+`runtime` 省略时为 `native`，直接执行脚本；`bun` 仅接受 `.ts`、`.js`、`.mts` 或 `.mjs`，并要求
+运行机器已安装 Bun。只有 `env` allowlist 中的 Shine `[env]` 变量会传给 artifact，也可写成
+`SOURCE=TARGET` alias；每个 source 及其敏感度还必须在类别
+`[permissions].environment` 中声明。allowlist 中未配置的可选值会被省略；固定 app 路径变量会
+另外加入。若希望安装或升级实际改动
+文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设仍需用户设置
+`allow_app_hooks = true`。hook 中调用 `shine app artifact apply` 时属于非交互子进程，必须带
+`--yes`；嵌套命令仍会显示并重新校验自己的安全 Plan。

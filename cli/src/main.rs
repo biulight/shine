@@ -150,12 +150,14 @@ async fn run(cli: Cli) -> Result<()> {
                 category,
                 file,
                 force,
+                yes,
             } => {
-                Box::pin(apps::handle_refresh(
+                Box::pin(apps::handle_refresh_approved(
                     &config,
                     &category,
                     file.as_deref(),
                     force,
+                    yes,
                 ))
                 .await
             }
@@ -177,11 +179,11 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
             }
             AppCommands::Artifact { command } => match command {
-                AppArtifactCommands::Apply { app_id } => {
-                    Box::pin(apps::handle_build(&config, &app_id)).await
+                AppArtifactCommands::Apply { app_id, yes } => {
+                    Box::pin(apps::handle_build_approved(&config, &app_id, yes)).await
                 }
-                AppArtifactCommands::Remove { app_id } => {
-                    Box::pin(apps::handle_unbuild(&config, &app_id)).await
+                AppArtifactCommands::Remove { app_id, yes } => {
+                    Box::pin(apps::handle_unbuild_approved(&config, &app_id, yes)).await
                 }
             },
         },
@@ -548,11 +550,17 @@ async fn run(cli: Cli) -> Result<()> {
                 .await
             }
             SysCommands::Profile { command } => match command {
-                SysProfileCommands::Enable { item, dry_run } => {
-                    Box::pin(sys::handle_profile_enable(&config, &item, dry_run)).await
+                SysProfileCommands::Enable { item, dry_run, yes } => {
+                    Box::pin(sys::handle_profile_enable_approved(
+                        &config, &item, dry_run, yes,
+                    ))
+                    .await
                 }
-                SysProfileCommands::Disable { item, dry_run } => {
-                    Box::pin(sys::handle_profile_disable(&config, &item, dry_run)).await
+                SysProfileCommands::Disable { item, dry_run, yes } => {
+                    Box::pin(sys::handle_profile_disable_approved(
+                        &config, &item, dry_run, yes,
+                    ))
+                    .await
                 }
             },
             SysCommands::Apply { item, dry_run, yes } => {
@@ -1180,9 +1188,14 @@ mod tests {
             vec!["shine", "uninstall", "app/demo", "--yes"],
             vec!["shine", "upgrade", "--yes"],
             vec!["shine", "app", "install", "demo", "--yes"],
+            vec!["shine", "app", "refresh", "demo", "--yes"],
             vec!["shine", "app", "uninstall", "demo", "--yes"],
+            vec!["shine", "app", "artifact", "apply", "demo", "--yes"],
+            vec!["shine", "app", "artifact", "remove", "demo", "--yes"],
             vec!["shine", "shell", "install", "demo", "--yes"],
             vec!["shine", "shell", "uninstall", "demo", "--yes"],
+            vec!["shine", "sys", "profile", "enable", "demo", "--yes"],
+            vec!["shine", "sys", "profile", "disable", "demo", "--yes"],
             vec!["shine", "sys", "apply", "demo", "--yes"],
             vec!["shine", "sys", "uninstall", "demo", "--yes"],
         ] {
@@ -1195,6 +1208,24 @@ mod tests {
             vec!["shine", "app", "uninstall", "demo", "--dry-run", "--yes"],
             vec!["shine", "shell", "install", "demo", "--dry-run", "--yes"],
             vec!["shine", "shell", "uninstall", "demo", "--dry-run", "--yes"],
+            vec![
+                "shine",
+                "sys",
+                "profile",
+                "enable",
+                "demo",
+                "--dry-run",
+                "--yes",
+            ],
+            vec![
+                "shine",
+                "sys",
+                "profile",
+                "disable",
+                "demo",
+                "--dry-run",
+                "--yes",
+            ],
             vec!["shine", "sys", "apply", "demo", "--dry-run", "--yes"],
             vec!["shine", "sys", "uninstall", "demo", "--dry-run", "--yes"],
         ] {
@@ -1981,7 +2012,7 @@ mod tests {
                 .command,
             Commands::App {
                 command: AppCommands::Artifact {
-                    command: AppArtifactCommands::Apply { app_id }
+                    command: AppArtifactCommands::Apply { app_id, .. }
                 }
             } if app_id == "surge"
         ));
@@ -2005,6 +2036,7 @@ mod tests {
                     category,
                     file: None,
                     force: false,
+                    ..
                 }
             } if category == "surge"
         ));
@@ -2025,6 +2057,7 @@ mod tests {
                     category,
                     file: Some(file),
                     force: true,
+                    ..
                 }
             } if category == "surge" && file == "subscription-proxies.conf"
         ));
@@ -2228,7 +2261,8 @@ mod tests {
                 command: SysCommands::Profile {
                     command: SysProfileCommands::Disable {
                         ref item,
-                        dry_run: true
+                        dry_run: true,
+                        ..
                     }
                 }
             } if item == "mise"

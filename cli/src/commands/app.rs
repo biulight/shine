@@ -36,6 +36,9 @@ pub enum AppCommands {
         /// Overwrite a managed destination that was modified after install
         #[arg(long)]
         force: bool,
+        /// Approve the displayed security Plan without prompting
+        #[arg(long)]
+        yes: bool,
     },
     /// Uninstall installed app preset files and optionally restore backups
     Uninstall {
@@ -68,10 +71,16 @@ pub enum AppArtifactCommands {
     Apply {
         #[arg(value_name = "APP_ID")]
         app_id: String,
+        /// Approve the displayed security Plan without prompting
+        #[arg(long)]
+        yes: bool,
     },
     /// Remove the artifact integration declared by an app preset
     Remove {
         #[arg(value_name = "APP_ID")]
         app_id: String,
+        /// Approve the displayed security Plan without prompting
+        #[arg(long)]
+        yes: bool,
     },
 }

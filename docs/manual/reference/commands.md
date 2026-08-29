@@ -67,10 +67,10 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [-
 shine app list
 shine app info <CATEGORY>
 shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
-shine app refresh <CATEGORY> [FILE] [--force]
+shine app refresh <CATEGORY> [FILE] [--force] [--yes]
 shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
-shine app artifact apply <APP_ID>
-shine app artifact remove <APP_ID>
+shine app artifact apply <APP_ID> [--yes]
+shine app artifact remove <APP_ID> [--yes]
 ```
 
 `--replace-managed` overwrites managed content modified after installation; inspect
@@ -81,10 +81,11 @@ preview with `--dry-run`.
 links, but does not extract or snapshot presets, render templates, create links, write a manifest,
 or edit shell profiles.
 
-Without `--dry-run`, App and Shell lifecycle mutations display a snapshot-bound security Plan and
-ask once with a default answer of No. `--yes` still prints and revalidates the full Plan but skips
-the prompt; redirected or otherwise non-interactive execution must use it. `--yes` and `--dry-run`
-are mutually exclusive. Dry-run retains its existing preview format and is not an approved Plan.
+Without `--dry-run`, App and Shell lifecycle mutations, App refresh, and artifact apply/remove
+display a snapshot-bound security Plan and ask once with a default answer of No. `--yes` still
+prints and revalidates the full Plan but skips the prompt; redirected or otherwise non-interactive
+execution must use it. `--yes` and `--dry-run` are mutually exclusive where dry-run exists. Dry-run
+retains its existing preview format and is not an approved Plan.
 
 `app refresh` handles only generated files tracked by the manifest and preserves the last successful
 content on failure. Artifact apply/remove explicitly runs an external integration declared by the
@@ -141,8 +142,8 @@ shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
 shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes]
-shine sys profile enable <ITEM> [--dry-run]
-shine sys profile disable <ITEM> [--dry-run]
+shine sys profile enable <ITEM> [--dry-run] [--yes]
+shine sys profile disable <ITEM> [--dry-run] [--yes]
 shine sys apply [ITEM] [--dry-run] [--yes]
 shine sys uninstall <ITEM> [--dry-run] [--yes]
 ```
@@ -151,8 +152,8 @@ Positional items, repeated `--item`, and `--preset` are mutually exclusive. Befo
 `sys bootstrap` renders a snapshot-bound security Plan and asks for default-No approval. Use
 `--yes` for non-interactive approval; it still renders and revalidates the Plan and conflicts with
 `--dry-run`. Bootstrap ensures only the selected software is present and enables its declared
-shell integration; rerunning it never upgrades the software. `sys profile enable/disable` changes
-only Shine-owned integration content. Use the
+shell integration; rerunning it never upgrades the software. `sys profile enable/disable` uses the
+same Plan approval contract and changes only Shine-owned integration content. Use the
 software's own package manager or upstream tool for upgrades; `shine upgrade sys/<ITEM>` converges
 an independent managed item.
 

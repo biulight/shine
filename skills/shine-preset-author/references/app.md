@@ -40,8 +40,12 @@ not enable external code: `allow_app_hooks` remains a separate user opt-in.
   `when_env` key included in `env`. Always provide a static source fallback.
 - `post_install` and `post_upgrade` hooks are argv declarations. Validation does
   not run them, and this skill must never run them.
-- `[artifact]` may declare `script`, optional `teardown`, and `runtime`. This
-  skill validates referenced files but never applies or removes an artifact.
+- `[artifact]` may declare `script`, optional `teardown`, `runtime`, and an
+  explicit `env` allowlist. Every environment source must also have a
+  sensitivity entry in the category permission declaration. This skill
+  validates referenced files but never applies or removes an artifact. A hook
+  that deliberately invokes artifact apply must pass `--yes` for its
+  non-interactive child Plan.
 - Bun code uses `.ts`, `.js`, `.mts`, or `.mjs`. If dependencies are needed,
   place both `package.json` and `bun.lock` at the category root; never declare
   `trustedDependencies`.

@@ -104,8 +104,10 @@ shine sys profile enable mise
 
 These commands modify only Shine-owned generated profile content. Disabling does not uninstall the
 software. Enabling first verifies the item's declared detection and asks you to bootstrap it when it
-is missing. `shine upgrade` does not change or re-render profile enablement implicitly; use these
-explicit profile commands when that state should change.
+is missing. A mutating run displays and freshly validates a snapshot-bound security Plan;
+automation must pass `--yes`, while `--dry-run` remains a separate preview. `shine upgrade` does not
+change or re-render profile enablement implicitly; use these explicit profile commands when that
+state should change.
 
 `shine update` and `shine upgrade` still manage only Shine configuration and managed system
 resources. They never upgrade this third-party software.

@@ -15,6 +15,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Added a dedicated snapshot-bound `sys-bootstrap` Plan, repeated `sys bootstrap --item <ITEM>`
   selection, and approval revalidation before detection, package/script execution, profile writes,
   or receipt mutation.
+- Added specialized snapshot-bound Plans for App generator refresh, artifact apply/remove, and Sys
+  profile enable/disable, with fresh state validation before executable code or profile writes.
 - Added App lifecycle-hook `env` declarations so Plan fingerprints bind plain input hashes and
   opaque secret revisions without serializing environment values.
 - Added versioned, target-local Preset permission declarations with strict static validation and
@@ -28,6 +30,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   `--dry-run` where preview is available.
 - Mutating `sys bootstrap` now requires default-No Plan approval in a terminal or explicit `--yes`
   for non-interactive use. Its existing `--dry-run` remains a separate preview.
+- `app refresh`, `app artifact apply/remove`, and mutating `sys profile enable/disable` now require
+  default-No Plan approval or explicit `--yes`. Generator and artifact processes now receive only
+  their explicit `generator.env` or `[artifact].env` variables plus fixed `SHINE_APP_*` values
+  instead of the full active `[env]` table.
 - Untargeted `shine upgrade` no longer synchronizes the Sys shell profile implicitly. Use
   `shine sys profile enable/disable` to change that explicit state.
 

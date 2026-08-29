@@ -16,11 +16,13 @@
 
 ## Current Baseline
 
-- Workspace 已包含 `shine-core` package，但绝大部分领域逻辑仍位于 `shine-cli` library。
-- App、Shell、Sys 已有各自的 manifest/receipt、update/upgrade 和安全卸载能力，尚缺共同的
-  structured lifecycle contract。
+- Phase 1、Phase 2 的 lifecycle contract 与 Core extraction 已完成；App、Shell、Sys 的领域执行、
+  manifest/receipt 和 host ports 由 `shine-core` 持有，CLI 保留参数、交互和展示。
+- Phase 3 已覆盖 App、Shell、managed Sys lifecycle、Sys bootstrap、App refresh/artifact 与显式
+  Sys profile mutation 的 snapshot-bound security Plan；coarse grant 迁移仍未完成。
 - `shine preset validate` 与 skill-first AI authoring 已存在，应继续作为 schema 和静态验证权威。
-- External code 已有粗粒度 permission gates；GPG/age portable secrets 和 machine-local env 已存在。
+- External code 仍使用 `allow_app_hooks` / `allow_sys_code` 粗粒度 gates；GPG/age portable secrets
+  和 machine-local env 已存在。
 
 ## Guiding Principles
 

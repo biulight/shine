@@ -53,7 +53,8 @@ exclusive.
   during planning.
 - Package providers and interpreter invocation are Core-bounded typed permissions; opaque script
   capabilities continue to come from target-local declarations.
-- App artifact/refresh and explicit Sys profile operations still require their own operation
-  contracts before Roadmap Phase 3 is complete.
+- App artifact/refresh and explicit Sys profile operations still required their own operation
+  contracts at this point; [ADR 0045](0045-specialized-app-and-profile-security-plans.md) later
+  completed that coverage.
 - The coarse `allow_sys_code` gate remains until the scoped trust migration covers every Sys code
   execution surface.

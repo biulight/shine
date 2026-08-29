@@ -44,9 +44,10 @@ shine app uninstall starship
 shine app uninstall starship --purge
 ```
 
-install、upgrade 和 uninstall 会在 mutation 前显示绑定快照的 Plan，确认默认是 No；非交互
-执行使用命令级 `--yes`。该参数仍会显示并重新校验 Plan，不能绕过缺失权限、被阻塞的 teardown
-或外部代码 gate。upgrade 仅在审阅命令包含 `--prune-stale` 时移除 App stale 文件。
+install、upgrade、uninstall、generator refresh 和 artifact apply/remove 会在 mutation 前显示
+绑定快照的 Plan，确认默认是 No；非交互执行使用命令级 `--yes`。该参数仍会显示并重新校验
+Plan，不能绕过缺失权限、被阻塞的 teardown 或外部代码 gate。upgrade 仅在审阅命令包含
+`--prune-stale` 时移除 App stale 文件。
 
 默认情况下，安装后被用户修改过的文件会保留并标记为用户修改。若安装时创建过备份，安全卸载会恢复原文件。`--purge` 还会删除相应预设目录；卸载全部类别时也会删除 manifest。
 
@@ -71,7 +72,10 @@ shine app refresh <CATEGORY>
 shine app refresh <CATEGORY> <SOURCE_FILE>
 ```
 
-指定文件时，`SOURCE_FILE` 是预设 `[[files]].source` 的相对路径。刷新失败会保留上次成功内容；目标已被用户修改时也会保留，只有确认要覆盖时才添加 `--force`。安装和带 `--replace-managed` 的修复安装会运行已由 `when_env` 启用的生成器，不受 `auto` 设置影响。
+指定文件时，`SOURCE_FILE` 是预设 `[[files]].source` 的相对路径。刷新失败会保留上次成功内容；
+目标已被用户修改时也会保留，只有确认要覆盖时才添加 `--force`。安装和带
+`--replace-managed` 的修复安装会运行已由 `when_env` 启用的生成器，不受 `auto` 设置影响。
+refresh 会显示并重新校验安全 Plan；自动化调用必须添加 `--yes`。
 
 外部预设或 overlay 提供的 generator 属于可执行代码，需要设置 `allow_app_hooks = true`。Shine 只向它传入预设显式声明的 env 值及固定的 `SHINE_APP_*` 路径变量，并限制执行时间和输出大小；仍应只运行自己审阅和信任的预设。
 
@@ -117,7 +121,12 @@ shine app refresh surge subscription-proxies.conf
 shine app artifact apply surge
 ```
 
-Shine 不会隐式运行 artifact；预设可通过生命周期钩子在安装或升级实际改动文件后调用 `app artifact apply`。手动应用失败会让命令直接失败。脚本可读取当前 `[env]` 值和 `SHINE_APP_HTTP_DIR`、`SHINE_CACHE_DIR`、`SHINE_STATE_DIR` 等路径变量，适合生成放在 `~/.shine/http/app/<APP_ID>/` 下的本地资源。完整变量说明见[任务与本地服务](./tasks-and-serve.md)。
+Shine 不会隐式运行 artifact；预设可通过生命周期钩子在安装或升级实际改动文件后调用
+`app artifact apply`。手动 apply/remove 会显示并重新校验安全 Plan；自动化调用必须添加
+`--yes`，执行失败会让命令直接失败。脚本只会收到 `[artifact].env` 列出且已配置的 source，并且
+这些 source 还必须在类别 `[permissions].environment` 中声明；此外会加入 `SHINE_APP_HTTP_DIR`、
+`SHINE_CACHE_DIR`、`SHINE_STATE_DIR` 等固定路径变量，适合生成放在
+`~/.shine/http/app/<APP_ID>/` 下的本地资源。完整变量说明见[任务与本地服务](./tasks-and-serve.md)。
 
 内置 `surge` app 预设会把 `local-proxies.conf`、`local-proxy-groups.conf`、`local-rules.conf` 和可选的订阅生成文件安装到 Surge Profiles 目录。设置 `[env]` 中的 `SURGE_PROFILE` 后，`shine app artifact apply surge` 使用内置 Bun artifact 幂等修补活动配置文件的 `[Proxy]`、`[Proxy Group]` 与 `[Rule]` `#!include` 行。Overlay 只需覆盖自己的策略文件，无需提供构建脚本。
 

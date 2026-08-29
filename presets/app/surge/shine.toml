@@ -20,6 +20,7 @@ post_install = [
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
+env = ["SURGE_PROFILE"]
 
 [permissions]
 schema_version = 1

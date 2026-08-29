@@ -62,10 +62,10 @@ shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [-
 shine app list
 shine app info <CATEGORY>
 shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
-shine app refresh <CATEGORY> [FILE] [--force]
+shine app refresh <CATEGORY> [FILE] [--force] [--yes]
 shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
-shine app artifact apply <APP_ID>
-shine app artifact remove <APP_ID>
+shine app artifact apply <APP_ID> [--yes]
+shine app artifact remove <APP_ID> [--yes]
 ```
 
 `--replace-managed` 会覆盖安装后被用户修改的受管内容。先使用 `shine info <TARGET> --diff` 检查差异。`app uninstall --force` 会删除被用户修改过的受管文件，执行前应加 `--dry-run` 预览。
@@ -73,9 +73,10 @@ shine app artifact remove <APP_ID>
 `shell install --dry-run` 会解析 metadata、部署来源、Bun 策略和计划中的命令入口，但不会提取或
 快照预设、渲染模板、创建链接、写入 manifest 或修改 shell profile。
 
-不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation 会先显示绑定快照的安全 Plan，并以
-默认 No 询问一次。`--yes` 仍会完整显示并重新校验 Plan，只跳过提示；重定向输出等非交互
-执行必须传入该参数。`--yes` 与 `--dry-run` 互斥；dry-run 保持原有预览格式，不是已批准 Plan。
+不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation、App refresh 和 artifact apply/remove
+都会先显示绑定快照的安全 Plan，并以默认 No 询问一次。`--yes` 仍会完整显示并重新校验 Plan，
+只跳过提示；重定向输出等非交互执行必须传入该参数。在提供 dry-run 的命令中，`--yes` 与
+`--dry-run` 互斥；dry-run 保持原有预览格式，不是已批准 Plan。
 
 `app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。`app artifact apply/remove` 显式运行预设声明的外部集成脚本，Shine 不会把 apply 隐式作为普通安装或升级的一部分。
 
@@ -126,13 +127,18 @@ shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
 shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes]
-shine sys profile enable <ITEM> [--dry-run]
-shine sys profile disable <ITEM> [--dry-run]
+shine sys profile enable <ITEM> [--dry-run] [--yes]
+shine sys profile disable <ITEM> [--dry-run] [--yes]
 shine sys apply [ITEM] [--dry-run] [--yes]
 shine sys uninstall <ITEM> [--dry-run] [--yes]
 ```
 
-位置参数 item、重复的 `--item` 与 `--preset` 三者互斥。执行变更前，`sys bootstrap` 会展示绑定输入快照的安全 Plan，并以默认否请求确认。非交互环境使用 `--yes`；它仍会展示并重新验证 Plan，且不能与 `--dry-run` 同时使用。Bootstrap 只确保选中的软件存在，并启用其声明的 shell 集成；重复运行不会升级软件。`sys profile enable/disable` 只修改 Shine 自己管理的集成内容。第三方软件升级请使用其包管理器或上游工具；独立受管系统项可通过 `shine upgrade sys/<ITEM>` 收敛到当前预设状态。
+位置参数 item、重复的 `--item` 与 `--preset` 三者互斥。执行变更前，`sys bootstrap` 会展示绑定
+输入快照的安全 Plan，并以默认否请求确认。非交互环境使用 `--yes`；它仍会展示并重新验证
+Plan，且不能与 `--dry-run` 同时使用。Bootstrap 只确保选中的软件存在，并启用其声明的 shell
+集成；重复运行不会升级软件。`sys profile enable/disable` 使用同一套 Plan 批准契约，并且只修改
+Shine 自己管理的集成内容。第三方软件升级请使用其包管理器或上游工具；独立受管系统项可通过
+`shine upgrade sys/<ITEM>` 收敛到当前预设状态。
 
 ## 预设来源与定制
 

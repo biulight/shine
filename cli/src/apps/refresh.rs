@@ -5,9 +5,10 @@ use std::path::Path;
 
 use crate::colors;
 use crate::config::Config;
-use crate::env::EnvConfig;
 use crate::presentation::TerminalInteraction;
-use shine_core::runtime::{AppFileAction, AppRefreshRequest, RuntimeEvent, RuntimeObserver};
+use shine_core::runtime::{
+    AppFileAction, AppRefreshPlanRequest, PlanningInputVersions, RuntimeEvent, RuntimeObserver,
+};
 
 use super::report::{print_install_error, print_install_success};
 
@@ -17,10 +18,36 @@ pub async fn handle_refresh(
     file_selector: Option<&str>,
     force: bool,
 ) -> Result<()> {
+    handle_refresh_approved(config, category, file_selector, force, true).await
+}
+
+pub async fn handle_refresh_approved(
+    config: &Config,
+    category: &str,
+    file_selector: Option<&str>,
+    force: bool,
+    yes: bool,
+) -> Result<()> {
     crate::config::print_presets_note(config);
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    let env = EnvConfig::load_or_init(config).await?;
-    runtime.context_mut_for_cli().env = env.as_map().clone();
+    let plan_request = AppRefreshPlanRequest {
+        category: category.to_string(),
+        file: file_selector.map(Path::new).map(Path::to_path_buf),
+        force,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let reviewed = crate::lifecycle_plan::review_plans(
+        config,
+        [crate::lifecycle_plan::LifecyclePlanRequest::app_refresh(
+            plan_request.clone(),
+            config,
+        )],
+        yes,
+    )
+    .await?
+    .into_iter()
+    .next()
+    .expect("one reviewed App refresh Plan");
+    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
 
     println!(
         "{}",
@@ -29,12 +56,9 @@ pub async fn handle_refresh(
     let mut observer = RefreshObserver;
     let mut interaction = TerminalInteraction;
     let report = runtime
-        .refresh_app_generators(
-            AppRefreshRequest {
-                category: category.to_string(),
-                file: file_selector.map(Path::new).map(Path::to_path_buf),
-                force,
-            },
+        .refresh_app_generators_approved(
+            plan_request,
+            &reviewed.approval,
             &mut observer,
             &mut interaction,
         )

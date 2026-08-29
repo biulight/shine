@@ -233,6 +233,35 @@ fn validate_app_permissions(
             path,
         ));
     }
+    if let Some(artifact) = table.get("artifact").and_then(toml::Value::as_table) {
+        let declared = table
+            .get("permissions")
+            .and_then(toml::Value::as_table)
+            .and_then(|permissions| permissions.get("environment"))
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.get("name").and_then(toml::Value::as_str))
+            .collect::<std::collections::BTreeSet<_>>();
+        for source in artifact
+            .get("env")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .map(|spec| spec.split_once('=').map_or(spec, |(source, _)| source))
+        {
+            if !declared.contains(source) {
+                diagnostics.push(permission_error_diagnostic(
+                    "undeclared_artifact_environment",
+                    format!(
+                        "{target} artifact environment source `{source}` must appear in `[permissions].environment`"
+                    ),
+                    path,
+                ));
+            }
+        }
+    }
     diagnostics
 }
 
@@ -963,5 +992,36 @@ mod tests {
                 "{kind} declaration should be accepted at its target-local placement"
             );
         }
+    }
+
+    #[test]
+    fn app_artifact_environment_sources_require_permission_declarations() {
+        let category = CategoryPath {
+            kind: "app",
+            name: "demo".to_string(),
+            root: PathBuf::from("app/demo"),
+        };
+        let missing = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[artifact]\nscript = 'build.sh'\nenv = ['TOKEN=API_TOKEN']\n[permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .build();
+        let diagnostics = permission_declaration_diagnostics(&missing, &category);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "undeclared_artifact_environment")
+        );
+
+        let declared = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[artifact]\nscript = 'build.sh'\nenv = ['TOKEN=API_TOKEN']\n[permissions]\nschema_version = 1\nenvironment = [{ name = 'TOKEN', sensitivity = 'secret' }]\n"
+                    .to_vec(),
+            )
+            .build();
+        assert!(permission_declaration_diagnostics(&declared, &category).is_empty());
     }
 }

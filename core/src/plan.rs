@@ -291,7 +291,12 @@ pub enum PlanOperationV1 {
     Update,
     Upgrade,
     Uninstall,
+    AppRefresh,
+    AppArtifactApply,
+    AppArtifactRemove,
     SysBootstrap,
+    SysProfileEnable,
+    SysProfileDisable,
 }
 
 impl PlanOperationV1 {
@@ -301,7 +306,12 @@ impl PlanOperationV1 {
             Self::Update => "update",
             Self::Upgrade => "upgrade",
             Self::Uninstall => "uninstall",
+            Self::AppRefresh => "app-refresh",
+            Self::AppArtifactApply => "app-artifact-apply",
+            Self::AppArtifactRemove => "app-artifact-remove",
             Self::SysBootstrap => "sys-bootstrap",
+            Self::SysProfileEnable => "sys-profile-enable",
+            Self::SysProfileDisable => "sys-profile-disable",
         }
     }
 }
@@ -690,22 +700,31 @@ mod tests {
 
     #[test]
     fn specialized_operation_spelling_is_stable() {
-        let plan = PlanV1::new(
-            PlanOperationV1::SysBootstrap,
-            PlanInputsV1 {
-                preset: digest("preset", "sys/demo/shine.toml", b"preset"),
-                state: digest("state", "sys/demo", b"state"),
-            },
-            Vec::new(),
-            PermissionSetV1::default(),
-            &PermissionSetV1::default(),
-            std::iter::empty::<String>(),
-        );
-        assert!(
-            serde_json::to_string(&plan)
-                .unwrap()
-                .contains("\"operation\":\"sys-bootstrap\"")
-        );
+        for (operation, spelling) in [
+            (PlanOperationV1::AppRefresh, "app-refresh"),
+            (PlanOperationV1::AppArtifactApply, "app-artifact-apply"),
+            (PlanOperationV1::AppArtifactRemove, "app-artifact-remove"),
+            (PlanOperationV1::SysBootstrap, "sys-bootstrap"),
+            (PlanOperationV1::SysProfileEnable, "sys-profile-enable"),
+            (PlanOperationV1::SysProfileDisable, "sys-profile-disable"),
+        ] {
+            let plan = PlanV1::new(
+                operation,
+                PlanInputsV1 {
+                    preset: digest("preset", "sys/demo/shine.toml", b"preset"),
+                    state: digest("state", "sys/demo", b"state"),
+                },
+                Vec::new(),
+                PermissionSetV1::default(),
+                &PermissionSetV1::default(),
+                std::iter::empty::<String>(),
+            );
+            assert!(
+                serde_json::to_string(&plan)
+                    .unwrap()
+                    .contains(&format!("\"operation\":\"{spelling}\""))
+            );
+        }
     }
 
     #[test]

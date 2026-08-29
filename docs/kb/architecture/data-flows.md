@@ -6,10 +6,10 @@ records the cross-module sequences and their gotchas.
 
 ## Pure security Plan assessment
 
-`shine-core::plan` defines the Phase 3 approval contract used by protected lifecycle execution.
-`runtime::planner` consumes one immutable `PresetSnapshot`, a validated App/Shell/managed Sys or
-exact Sys bootstrap request, captured runtime inputs, manifests, receipts, and live resource
-observations. It emits
+`shine-core::plan` defines the Phase 3 approval contract used by protected mutation.
+`runtime::planner` consumes one immutable `PresetSnapshot`, a validated App/Shell/managed Sys,
+exact Sys bootstrap, App refresh/artifact, or Sys profile request, captured runtime inputs,
+manifests, receipts, and live resource observations. It emits
 ordered semantic steps plus a required permission set; missing declarations, uncomputable
 permissions, or a blocked step make the Plan non-ready. Planning cannot invoke host mutation or
 Preset code, and its output carries no content, env values, secret plaintext, raw errors, or raw
@@ -30,9 +30,10 @@ validated target + immutable Preset snapshot
     → ordered payload-free PlanV1 + state/Preset digests
 ```
 
-Generator and hook triggers are modeled as conservative `execute` plus potential resource steps;
-the code is never run during planning and existing external-code gates remain blockers. A supported
-receipt can drive uninstall after source disappearance, but cannot recreate missing teardown code.
+Generator, hook, artifact, bootstrap, and profile-code triggers are modeled as conservative
+`execute` plus potential resource steps; the code is never run during planning and existing
+external-code gates remain blockers. A supported receipt can drive uninstall after source
+disappearance, but cannot recreate missing teardown code.
 CLI review creates approval for one exact ready Plan. Apply deliberately follows:
 
 ```text
@@ -40,11 +41,12 @@ capture current source/state → regenerate Plan → match approved fingerprint 
     → execute existing Core lifecycle → return LifecycleResultV1
 ```
 
-App, Shell, managed Sys install/upgrade/uninstall, and exact Sys bootstrap route through this flow. Untargeted
-`shine upgrade` renders the three final Plans together, confirms once, and prevalidates all three
-before protected mutation starts. `upgrade --pull` pulls and reloads first. Existing dry-run/status
-remain separate preview/inspection paths, and `allow_app_hooks`, `allow_sys_code`, ownership, and
-administrator authorization remain additional gates.
+App, Shell, managed Sys install/upgrade/uninstall, exact Sys bootstrap, App refresh/artifact, and
+Sys profile enable/disable route through this flow. Untargeted `shine upgrade` renders the three
+final lifecycle Plans together, confirms once, and prevalidates all three before protected mutation
+starts. `upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate
+preview/inspection paths, and `allow_app_hooks`, `allow_sys_code`, ownership, and administrator
+authorization remain additional gates.
 
 Sys bootstrap uses the dedicated `sys-bootstrap` Plan operation rather than a lifecycle install.
 Interactive or profile selection resolves to an exact ordered item list before planning. The pure
@@ -185,7 +187,10 @@ comparison to produce both the existing field-difference rows and `pending` `sys
 Built-in drivers return typed resource/backup effects and typed user-modification conflicts; the
 adapter never classifies reusable results by parsing `detail` or raw errors. No-op upgrade does not
 rewrite the receipt merely to refresh metadata. Bootstrap execution, profile enable/disable, and
-composed-profile sync remain outside the structured managed-resource result.
+composed-profile sync remain outside the structured managed-resource result. Explicit profile
+mutation has its own `sys-profile-enable` or `sys-profile-disable` security Plan: it binds live
+detection for enable, the run manifest, desired enabled set, generated profile files, and shell
+configuration state before writing either the profile or receipt.
 
 Managed Sys presentation also flows through the CLI reporter. Item ownership is rendered before
 the interaction adapter requests administrator authorization, preserving prompt context without
@@ -216,7 +221,10 @@ strategies:
    of materializing during status/update checks and `shine upgrade`.
 3. `auto = false` makes status local-only and excludes the file from upgrade.
    `shine app refresh <category> [source]` explicitly refreshes only
-   manifest-owned generated files, with an optional `--force` for user changes.
+   manifest-owned generated files, with an optional `--force` for user changes. Refresh reviews an
+   `app-refresh` Plan that binds manifest ownership, live destination state, generator inputs, and
+   potential post-upgrade hooks. Embedded generator Plans also bind the runtime-script
+   materialization path before generator execution.
 4. An existing managed destination is the last-known-good snapshot when a
    generator fails; a first-time enabled generator failure is fatal.
 5. Only `generator.env` values are injected. External preset or overlay
@@ -237,13 +245,13 @@ counted and skipped without logging credentials.
 
 ## App artifact build (`shine app artifact apply <app-id>`)
 
-`apps/build.rs::handle_build` is fully separate from install/upgrade — it never runs
-automatically; see [ADR 0009](../decisions/0009-app-artifact-build-explicit-command.md). Given an
-app preset's `[artifact].script`:
+Artifact execution is fully separate from install/upgrade — it never runs automatically; see
+[ADR 0009](../decisions/0009-app-artifact-build-explicit-command.md). The CLI reviews a specialized
+`app-artifact-apply` Plan, then Core re-plans and validates approval before the following executor
+flow for an app preset's `[artifact].script`:
 
-1. Resolves the category the same way `app info`/`app install` do
-   (`metadata::load_active_categories`), force-extracting embedded assets first when not in
-   external-presets mode (the same `extract_prefix` call `app install` makes).
+1. Resolves the category from the immutable Preset snapshot and materializes the embedded category
+   cache only after approval when embedded mode is active.
 2. Resolves the script's location: an overlay's `app/<name>/<script>` wins when that exact script
    exists; otherwise the source (built-in or external) script is used. This lets an overlay keep
    local policy files while inheriting a generic built-in artifact.
@@ -251,11 +259,11 @@ app preset's `[artifact].script`:
    `SHINE_STATE_DIR` (`<shine_dir>/state/app/<name>`), and `SHINE_CACHE_DIR` (the OS cache dir via
    the `directories` crate — `<os-cache>/shine/app/<name>`, the same crate/pattern
    `env/workspace.rs::cache_path` already uses for its own per-project cache).
-4. Injects the active `[env]` table into the child **as stored** (`EnvConfig::as_map` — no
-   decryption, same as the `template` transform), so a script can read user-configured values such
-   as `SURGE_PROFILE`; `_SECRET` keys pass through as ciphertext and no build ever triggers a
-   secret-decryption prompt. The `SHINE_APP_*` contract vars are set *after* the `[env]` values, so
-   they win on any name collision.
+4. Injects only `[artifact].env` mappings whose sources are listed by the category's
+   `[permissions].environment`, using the current stored values without decryption, plus fixed
+   `SHINE_APP_*` contract variables. The fixed variables win on collisions. Planning fingerprints
+   plain values by hash and requires opaque versions for secret-classified names; neither enters
+   Plan serialization.
 5. Runs the script with `current_dir` set to the resolved app directory and inherited stdio (not
    captured like `post_upgrade` hooks), so build output streams live; a nonzero exit becomes a
    real `Result::Err` instead of being swallowed.
@@ -274,11 +282,11 @@ patchable include. Subscription nodes are not added to `[Proxy]`;
 `policy-path`.
 
 **Teardown (`shine app artifact remove <app-id>`, ADR 0012).** An `[artifact].teardown` script reverses
-`build`, sharing the *identical* resolution and env contract above (steps 1–4). It has two entry
-points: `handle_unbuild` (explicit, ungated, errors propagate — symmetric to `build`) and
-`run_teardown_for_uninstall`, called best-effort from `apps/uninstall.rs` *before* the file-removal
-loop (implicit, so gated by `allow_app_hooks` for external presets and non-fatal, and a no-op under
-`--dry-run`). Surge ships a symmetric built-in Bun `unbuild.ts`; other app
+`build`, sharing the *identical* resolution and env contract above (steps 1–4). Explicit removal
+reviews an `app-artifact-remove` Plan and propagates failure. Uninstall includes available teardown
+in its lifecycle Plan, runs it best-effort before the file-removal loop, and safely skips blocked
+external teardown without stopping owned-file removal. Surge ships a symmetric built-in Bun
+`unbuild.ts`; other app
 presets may still keep artifact-specific reversal logic in an overlay.
 
 **Lifecycle command hooks (`apps/hooks.rs`).** `post_install` (fired by `install`, including
@@ -286,7 +294,7 @@ presets may still keep artifact-specific reversal logic in an overlay.
 `post_upgrade` (fired by `upgrade`) share one runner, `run_app_hooks(config, get_category, changed,
 HookPhase)` — run once per *changed* category, gated by `allow_app_hooks` for external presets,
 failures non-fatal. These are plain argv commands with only the inherited parent env — distinct from
-the richer `SHINE_APP_*` + `[env]` artifact contract used by `build`/`teardown`.
+the explicit `[artifact].env` + fixed `SHINE_APP_*` artifact contract.
 
 ## Shell install / uninstall
 

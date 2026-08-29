@@ -1,46 +1,53 @@
 //! CLI adapter for Core-owned App artifact and teardown execution.
 
-use super::metadata;
 use crate::config::Config;
-use anyhow::{Context, Result, bail};
-use shine_core::runtime::{AppArtifactAction, AppArtifactRequest, RuntimeEvent, RuntimeObserver};
+use anyhow::Result;
+use shine_core::runtime::{
+    AppArtifactAction, AppArtifactPlanRequest, PlanningInputVersions, RuntimeEvent, RuntimeObserver,
+};
 
 pub async fn handle_build(config: &Config, app_id: &str) -> Result<()> {
-    run_explicit(config, app_id, AppArtifactAction::Apply).await
+    handle_build_approved(config, app_id, true).await
 }
 
 pub async fn handle_unbuild(config: &Config, app_id: &str) -> Result<()> {
-    run_explicit(config, app_id, AppArtifactAction::Remove).await
+    handle_unbuild_approved(config, app_id, true).await
 }
 
-async fn run_explicit(config: &Config, app_id: &str, action: AppArtifactAction) -> Result<()> {
-    let categories = metadata::load_active_categories(config, Some(app_id)).await?;
-    let category = categories
-        .iter()
-        .find(|category| category.name == app_id)
-        .with_context(|| format!("app preset category not found: {app_id}"))?;
-    let artifact = category
-        .artifact
-        .clone()
-        .with_context(|| format!("app '{app_id}' does not define an artifact script"))?;
-    if action == AppArtifactAction::Remove && artifact.teardown.is_none() {
-        bail!("app '{app_id}' does not define an artifact teardown script");
-    }
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    if let Ok(env) = crate::env::EnvConfig::load_or_init(config).await {
-        runtime.context_mut_for_cli().env = env.as_map().clone();
-    }
+pub async fn handle_build_approved(config: &Config, app_id: &str, yes: bool) -> Result<()> {
+    run_explicit(config, app_id, AppArtifactAction::Apply, yes).await
+}
+
+pub async fn handle_unbuild_approved(config: &Config, app_id: &str, yes: bool) -> Result<()> {
+    run_explicit(config, app_id, AppArtifactAction::Remove, yes).await
+}
+
+async fn run_explicit(
+    config: &Config,
+    app_id: &str,
+    action: AppArtifactAction,
+    yes: bool,
+) -> Result<()> {
+    let plan_request = AppArtifactPlanRequest {
+        category: app_id.to_string(),
+        action,
+        input_versions: PlanningInputVersions::default(),
+    };
+    let reviewed = crate::lifecycle_plan::review_plans(
+        config,
+        [crate::lifecycle_plan::LifecyclePlanRequest::app_artifact(
+            plan_request.clone(),
+            config,
+        )],
+        yes,
+    )
+    .await?
+    .into_iter()
+    .next()
+    .expect("one reviewed App artifact Plan");
+    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
     runtime
-        .run_app_artifact(
-            AppArtifactRequest {
-                category: app_id.to_string(),
-                artifact,
-                action,
-                implicit: false,
-                dry_run: false,
-            },
-            &mut ExplicitObserver,
-        )
+        .run_app_artifact_approved(plan_request, &reviewed.approval, &mut ExplicitObserver)
         .await?;
     Ok(())
 }

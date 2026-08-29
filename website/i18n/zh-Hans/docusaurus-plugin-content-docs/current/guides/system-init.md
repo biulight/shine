@@ -85,8 +85,9 @@ shine sys profile enable mise
 ```
 
 这些命令只修改 Shine 自己生成的 profile 内容。disable 不卸载软件；enable 会先执行 item 声明的
-检测，缺失时提示先 bootstrap。`shine upgrade` 不再隐式修改或重新组合 profile 启用状态；需要
-变更该状态时请使用这些显式 profile 命令。
+检测，缺失时提示先 bootstrap。执行变更前会显示并重新校验绑定快照的安全 Plan；自动化调用
+必须添加 `--yes`，`--dry-run` 仍是独立预览。`shine upgrade` 不再隐式修改或重新组合 profile
+启用状态；需要变更该状态时请使用这些显式 profile 命令。
 
 `shine update` 和 `shine upgrade` 仍只处理 Shine 管理的配置和受管系统资源，不会升级这些
 第三方软件。

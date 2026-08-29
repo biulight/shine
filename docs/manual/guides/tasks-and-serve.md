@@ -55,9 +55,11 @@ shine app artifact apply surge
 ```
 
 `app artifact apply` is explicit. `shine app install`, `shine update`, and `shine upgrade` do not
-implicitly run artifact scripts. A script failure fails the command and its output is shown directly.
+implicitly run artifact scripts. It displays a security Plan; non-interactive callers must add
+`--yes`. A script failure fails the command and its output is shown directly.
 
-Artifact scripts receive values from the current `[env]` table and Shine-provided path variables:
+Artifact scripts receive configured `[artifact].env` sources only, plus Shine-provided path
+variables:
 
 | Variable | Purpose |
 | --- | --- |
@@ -70,8 +72,9 @@ Artifact scripts receive values from the current `[env]` table and Shine-provide
 | `SHINE_CACHE_DIR` | Current application cache directory |
 | `SHINE_STATE_DIR` | Current application state directory |
 
-`[env]` values are passed as stored. `_SECRET` entries are not decrypted automatically and do not
-trigger GPG, age, or Touch ID prompts.
+Each environment source must also appear in `[permissions].environment`; missing optional sources
+are omitted. Values are passed as stored. Secret-classified inputs are Plan-bound by an opaque
+version but are not decrypted automatically and do not trigger GPG, age, or Touch ID prompts.
 
 ## Start the local HTTP service
 

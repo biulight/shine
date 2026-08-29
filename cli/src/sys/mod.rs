@@ -28,7 +28,10 @@ pub use managed::{
 pub(crate) use managed::{
     handle_upgrade_managed_target_with_result_approved, handle_upgrade_managed_with_result_prepared,
 };
-pub use profile_commands::{handle_profile_disable, handle_profile_enable};
+pub use profile_commands::{
+    handle_profile_disable, handle_profile_disable_approved, handle_profile_enable,
+    handle_profile_enable_approved,
+};
 
 const SYS_TEMPLATE: &str = r#"# System bootstrap preset metadata for shine (schema v2).
 version = 2

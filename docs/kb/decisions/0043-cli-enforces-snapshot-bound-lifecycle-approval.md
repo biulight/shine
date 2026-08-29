@@ -34,10 +34,11 @@ executor cannot ask to expand it later. Administrator authorization remains a se
 after Plan approval. The aggregate command no longer synchronizes the composed Sys profile outside
 the managed Sys Plan; explicit `sys profile enable/disable` remains unchanged.
 
-Artifact apply/remove, App refresh, and explicit Sys profile operations are excluded until they
-have dedicated operation contracts. Sys bootstrap joins through the specialized contract in
-[ADR 0044](0044-sys-bootstrap-uses-dedicated-security-plan.md). App uninstall with artifact
-teardown remains blocked instead of executing an unplanned teardown.
+Artifact apply/remove, App refresh, and explicit Sys profile operations were excluded from this
+slice until [ADR 0045](0045-specialized-app-and-profile-security-plans.md) added their dedicated
+operation contracts. Sys bootstrap joins through the specialized contract in
+[ADR 0044](0044-sys-bootstrap-uses-dedicated-security-plan.md). ADR 0045 also made available App
+teardown reviewable during uninstall.
 
 ## Consequences
 

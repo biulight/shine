@@ -134,7 +134,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
 }
 
 impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
-    pub async fn set_sys_profile_state(
+    pub(crate) async fn set_sys_profile_state(
         &self,
         request: SysProfileStateRequest,
     ) -> Result<SysProfileStateReport> {

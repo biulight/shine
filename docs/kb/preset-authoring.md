@@ -208,6 +208,7 @@ An app category can expose explicit artifact commands:
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
+env = ["PROFILE_PATH", "API_TOKEN"]
 ```
 
 - `runtime` is `native` by default. Native executes the file directly and relies on its shebang;
@@ -215,17 +216,21 @@ runtime = "bun"
 - `script` runs only through `shine app artifact apply <app-id>` unless a preset explicitly invokes
   that command from a lifecycle hook.
 - `teardown` runs through `shine app artifact remove <app-id>` and best-effort before app uninstall.
-- Explicit artifact commands are ungated and propagate nonzero exit. Implicit uninstall teardown
-  for external presets is permission-gated and non-fatal.
-- Scripts receive the fixed `SHINE_APP_*` contract plus the active `[env]` table as stored. Secret
-  ciphertext is not decrypted.
+- Explicit artifact commands require a reviewed security Plan and propagate nonzero exit. Implicit
+  uninstall teardown is included in the lifecycle Plan, remains non-fatal, and is safely skipped
+  when external code is not allowed.
+- `env` is an explicit source or `SOURCE=TARGET` allowlist. Scripts receive only that allowlist plus
+  the fixed `SHINE_APP_*` contract; every source must also appear in the category's
+  `[permissions].environment`. Plain values are Plan-bound by hash; secret-classified names require
+  opaque versions and are not decrypted by artifact execution.
 - An overlay script wins only when that exact artifact path exists; otherwise the active base
   preset script remains available.
 - Bun artifacts and teardown use the same locked external dependency convention. Package metadata
   in an overlay does not affect an artifact inherited from the embedded category.
 
 See [ADR 0009](decisions/0009-app-artifact-build-explicit-command.md),
-[ADR 0012](decisions/0012-app-lifecycle-post-install-and-teardown.md), and the
+[ADR 0012](decisions/0012-app-lifecycle-post-install-and-teardown.md),
+[ADR 0045](decisions/0045-specialized-app-and-profile-security-plans.md), and the
 [app artifact data flow](architecture/data-flows.md#app-artifact-build-shine-app-artifact-apply-app-id).
 
 ### App verification

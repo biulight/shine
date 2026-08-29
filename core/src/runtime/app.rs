@@ -64,6 +64,7 @@ pub struct AppArtifact {
     pub script: String,
     pub teardown: Option<String>,
     pub runtime: ArtifactRuntime,
+    pub env: Vec<EnvVarSpec>,
 }
 
 #[derive(Debug, Clone)]
@@ -761,7 +762,7 @@ where
 
     /// Explicitly regenerate installed generated files from the captured
     /// snapshot, then reconcile their receipts and post-upgrade hooks.
-    pub async fn refresh_app_generators(
+    pub(crate) async fn refresh_app_generators(
         &self,
         request: AppRefreshRequest,
         observer: &mut impl RuntimeObserver,
@@ -2066,7 +2067,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 false,
             )
             .await?;
-        let mut env = self.app_contract_env(&request.category, &prepared.category_root);
+        let mut env = BTreeMap::new();
         for spec in &request.generator.env {
             let value = self.context.env.get(&spec.source).ok_or_else(|| {
                 anyhow::anyhow!(
@@ -2077,6 +2078,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             })?;
             env.insert(spec.target.clone(), value.clone());
         }
+        env.extend(self.fixed_app_contract_env(&request.category, &prepared.category_root));
         let output = self
             .host
             .run(ProcessRequest {
@@ -2246,7 +2248,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         report
     }
 
-    pub async fn run_app_artifact(
+    pub(crate) async fn run_app_artifact(
         &self,
         request: AppArtifactRequest,
         observer: &mut impl RuntimeObserver,
@@ -2319,7 +2321,11 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 program: prepared.program,
                 args: prepared.args,
                 cwd: Some(prepared.category_root.clone()),
-                env: self.app_contract_env(&request.category, &prepared.category_root),
+                env: self.app_artifact_env(
+                    &request.category,
+                    &prepared.category_root,
+                    &request.artifact.env,
+                ),
                 io: if request.implicit {
                     ProcessIo::Captured
                 } else {
@@ -2490,8 +2496,24 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         }
     }
 
-    fn app_contract_env(&self, category: &str, app_dir: &Path) -> BTreeMap<String, String> {
-        let mut env = self.context.env.clone();
+    fn app_artifact_env(
+        &self,
+        category: &str,
+        app_dir: &Path,
+        specs: &[EnvVarSpec],
+    ) -> BTreeMap<String, String> {
+        let mut env = BTreeMap::new();
+        for spec in specs {
+            if let Some(value) = self.context.env.get(&spec.source) {
+                env.insert(spec.target.clone(), value.clone());
+            }
+        }
+        env.extend(self.fixed_app_contract_env(category, app_dir));
+        env
+    }
+
+    fn fixed_app_contract_env(&self, category: &str, app_dir: &Path) -> BTreeMap<String, String> {
+        let mut env = BTreeMap::new();
         let source_dir = self.context.presets_dir.join("app").join(category);
         let cache_dir = self
             .context
@@ -2757,6 +2779,24 @@ mod lifecycle_tests {
         ) -> Result<Vec<String>> {
             Ok(defaults.to_vec())
         }
+    }
+
+    #[test]
+    fn artifact_env_allowlist_cannot_override_fixed_contract_values() {
+        let mut runtime = runtime();
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("USER_VALUE".to_string(), "override".to_string());
+        let env = runtime.app_artifact_env(
+            "demo",
+            Path::new("/preset/app/demo"),
+            &[EnvVarSpec {
+                source: "USER_VALUE".to_string(),
+                target: "SHINE_APP_ID".to_string(),
+            }],
+        );
+        assert_eq!(env.get("SHINE_APP_ID").map(String::as_str), Some("demo"));
     }
 
     #[tokio::test]

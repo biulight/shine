@@ -26,6 +26,8 @@ struct ArtifactToml {
     script: String,
     teardown: Option<String>,
     runtime: Option<ArtifactRuntimeToml>,
+    #[serde(default)]
+    env: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -480,10 +482,13 @@ fn artifact(value: Option<ArtifactToml>, context: &str) -> Result<Option<AppArti
     {
         require_bun_extension(teardown, context)?;
     }
+    let env = crate::env::parse_env_specs(&value.env)
+        .with_context(|| format!("{context}: invalid artifact.env"))?;
     Ok(Some(AppArtifact {
         script: value.script,
         teardown: value.teardown,
         runtime,
+        env,
     }))
 }
 

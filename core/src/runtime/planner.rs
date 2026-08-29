@@ -6,7 +6,8 @@
 
 use super::app::{desired_app_hash, installed_app_hash, installed_json_hash};
 use super::{
-    AppCategory, AppFile, AppLifecycleReport, AppLifecycleRequest, AppUninstallLifecycleRequest,
+    AppArtifactAction, AppArtifactRequest, AppCategory, AppFile, AppLifecycleReport,
+    AppLifecycleRequest, AppRefreshRequest, AppUninstallLifecycleRequest,
     AppUpgradeLifecycleReport, AppUpgradeRequest, ArtifactRuntime, CoreRuntime, ExternalShellMode,
     FileKind, FileSystemHost, FileSystemObservationHost, LinkRuntime, PrivilegedFileSystemHost,
     ProcessHost, RuntimeInteraction, RuntimeObserver, ShellFile, ShellLifecycleReport,
@@ -15,8 +16,9 @@ use super::{
     SplitDnsObservationHost, SplitDnsRequest, SysBootstrapBatchReport, SysBootstrapBatchRequest,
     SysDetection, SysDetectionProbe, SysDriverKind, SysInstall, SysItem, SysItemMode,
     SysManagedAction, SysManagedReport, SysManagedRequest, SysManifest, SysPackageProvider,
-    SysRunEntry, SysRunManifest, SystemReceipt, command_path_for_name, link_is_current_with_host,
-    parse_shell_lifecycle_target, split_dns_receipt,
+    SysProfileStateReport, SysProfileStateRequest, SysRunEntry, SysRunManifest, SystemReceipt,
+    command_path_for_name, link_is_current_with_host, parse_shell_lifecycle_target,
+    split_dns_receipt,
 };
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppEntry, AppManifest};
@@ -100,6 +102,28 @@ pub struct SysBootstrapPlanRequest {
     pub sys_shell: String,
     pub force_profile: bool,
     pub input_versions: PlanningInputVersions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppRefreshPlanRequest {
+    pub category: String,
+    pub file: Option<PathBuf>,
+    pub force: bool,
+    pub input_versions: PlanningInputVersions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppArtifactPlanRequest {
+    pub category: String,
+    pub action: AppArtifactAction,
+    pub input_versions: PlanningInputVersions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SysProfilePlanRequest {
+    pub os_id: String,
+    pub item_id: String,
+    pub enabled: bool,
 }
 
 /// Presentation-only App upgrade settings which do not affect the reviewed
@@ -438,7 +462,15 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         state,
                         permissions,
                     )?;
-                    add_generator_permissions(permissions, &category, generator);
+                    add_generator_permissions(
+                        self,
+                        permissions,
+                        &category,
+                        generator,
+                        state,
+                        steps,
+                    )
+                    .await?;
                     let blocked = app_code_blocked(self, &category, &generator.script);
                     steps.push(
                         PlanStepV1::new(
@@ -671,22 +703,54 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             else {
                 continue;
             };
-            if category
-                .artifact
-                .as_ref()
-                .is_some_and(|artifact| artifact.teardown.is_some())
-            {
-                permissions
-                    .uncomputable
-                    .insert("app_artifact_planning_out_of_scope".to_string());
-                steps.push(
-                    PlanStepV1::new(
-                        format!("app/{category_name}"),
-                        Some("artifact:teardown"),
-                        PlanActionV1::Blocked,
+            if let Some((artifact, teardown)) = category.artifact.as_ref().and_then(|artifact| {
+                artifact
+                    .teardown
+                    .as_deref()
+                    .map(|teardown| (artifact, teardown))
+            }) {
+                let blocked = app_code_blocked(self, &category, Path::new(teardown));
+                if blocked {
+                    steps.push(
+                        PlanStepV1::new(
+                            format!("app/{category_name}"),
+                            Some("artifact:teardown"),
+                            PlanActionV1::Preserve,
+                        )
+                        .with_diagnostic_code("app_artifact_teardown_skipped"),
+                    );
+                } else {
+                    permissions.declaration(
+                        category.permissions.as_ref(),
+                        "app_artifact_permission_declaration_missing",
+                    );
+                    capture_app_artifact_inputs(
+                        self.context(),
+                        &request.input_versions,
+                        category.permissions.as_ref(),
+                        artifact,
+                        state,
+                        permissions,
+                    )?;
+                    add_app_artifact_permissions(
+                        self,
+                        &category,
+                        teardown,
+                        artifact.runtime,
+                        state,
+                        permissions,
+                        steps,
                     )
-                    .with_diagnostic_code("app_artifact_planning_out_of_scope"),
-                );
+                    .await?;
+                    steps.push(
+                        PlanStepV1::new(
+                            format!("app/{category_name}"),
+                            Some("artifact:teardown"),
+                            PlanActionV1::Execute,
+                        )
+                        .with_diagnostic_code("app_artifact_execution"),
+                    );
+                }
             }
         }
         let entries = manifest.entries.iter().filter(|entry| {
@@ -813,6 +877,261 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
 }
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    pub async fn plan_app_refresh(&self, request: AppRefreshPlanRequest) -> Result<PlanV1> {
+        let category = self
+            .app_categories(Some(&request.category))?
+            .into_iter()
+            .next()
+            .with_context(|| format!("app preset category not found: {}", request.category))?;
+        let candidates = select_refresh_files(&category, request.file.as_deref())?;
+        let (manifest, manifest_bytes) =
+            load_app_manifest(self.host(), &self.context().shine_dir).await?;
+        let mut selected = Vec::new();
+        for file in candidates {
+            let destination = self.app_destination(&category, &file)?;
+            let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
+                if request.file.is_some() {
+                    bail!(
+                        "app '{}' generated file is not installed: {}",
+                        request.category,
+                        file.source_rel.display()
+                    );
+                }
+                continue;
+            };
+            selected.push((file, destination, entry));
+        }
+        if selected.is_empty() {
+            bail!(
+                "app '{}' has no installed generated files; run `shine install app/{}` first",
+                request.category,
+                request.category
+            );
+        }
+
+        let mut state = StateCapture::new("app-refresh", PlanOperationV1::AppRefresh)?;
+        capture_context(&mut state, self.context())?;
+        state.public("category", &request.category)?;
+        state.public(
+            "file",
+            request
+                .file
+                .as_deref()
+                .map(logical_path)
+                .unwrap_or_else(|| "all".to_string()),
+        )?;
+        state.public("force", request.force.to_string())?;
+        state.public(
+            "allow-app-hooks",
+            self.context().allow_app_hooks.to_string(),
+        )?;
+        capture_manifest_selection(
+            &mut state,
+            "manifest:app-refresh",
+            manifest_bytes.is_some(),
+            manifest.schema_version,
+            &selected
+                .iter()
+                .map(|(_, _, entry)| entry)
+                .collect::<Vec<_>>(),
+        )?;
+
+        let mut permissions = PermissionAccumulator::default();
+        permissions.declaration(
+            category.permissions.as_ref(),
+            "app_refresh_permission_declaration_missing",
+        );
+        let mut steps = Vec::new();
+        for (file, destination, entry) in &selected {
+            let generator = file
+                .generator
+                .as_ref()
+                .expect("selected generated App file");
+            let resource = file.source_rel.display().to_string();
+            capture_path_state(
+                self.host(),
+                &mut state,
+                format!("resource:app/{}/{}", request.category, resource),
+                destination,
+            )
+            .await?;
+            add_app_typed_permissions(
+                self.context(),
+                &mut permissions,
+                file,
+                destination,
+                LifecycleOperation::Update,
+            );
+            capture_generator_inputs(
+                self.context(),
+                &request.input_versions,
+                category.permissions.as_ref(),
+                generator,
+                &mut state,
+                &mut permissions,
+            )?;
+            add_generator_permissions(
+                self,
+                &mut permissions,
+                &category,
+                generator,
+                &mut state,
+                &mut steps,
+            )
+            .await?;
+
+            let missing_input = self
+                .context()
+                .env
+                .get(&generator.when_env)
+                .is_none_or(|value| value.trim().is_empty());
+            let external_code_blocked = app_code_blocked(self, &category, &generator.script);
+            let blocked = missing_input || external_code_blocked;
+            let mut execution = PlanStepV1::new(
+                format!("app/{}", request.category),
+                Some(format!("generator:{resource}")),
+                if blocked {
+                    PlanActionV1::Blocked
+                } else {
+                    PlanActionV1::Execute
+                },
+            );
+            if missing_input {
+                execution = execution.with_diagnostic_code("app_generator_required_env_missing");
+            }
+            if external_code_blocked {
+                execution = execution.with_diagnostic_code("app_external_code_not_allowed");
+            }
+            if !blocked {
+                execution = execution.with_diagnostic_code("app_opaque_generator_output");
+            }
+            steps.push(execution);
+            if blocked {
+                continue;
+            }
+
+            let current = read_optional(self.host(), destination).await?;
+            let user_modified = current.as_deref().is_some_and(|bytes| {
+                installed_app_hash(file, bytes)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|hash| hash != entry.content_hash)
+            });
+            let action = if user_modified && !request.force {
+                PlanActionV1::Preserve
+            } else {
+                PlanActionV1::Update
+            };
+            let mut step =
+                PlanStepV1::new(format!("app/{}", request.category), Some(resource), action)
+                    .with_diagnostic_code("app_opaque_generator_output");
+            if user_modified {
+                step = step.with_diagnostic_code(if request.force {
+                    "app_user_modification_override"
+                } else {
+                    "app_user_modified"
+                });
+            }
+            steps.push(step);
+        }
+        add_shine_receipt_permission(
+            self.context(),
+            &mut permissions,
+            "app-manifest.toml",
+            LifecycleOperation::Update,
+        );
+        plan_app_hooks(
+            self,
+            &category,
+            &category.post_upgrade,
+            &request.input_versions,
+            &mut state,
+            &mut permissions,
+            &mut steps,
+        )?;
+        finish_specialized_plan(self, PlanOperationV1::AppRefresh, state, permissions, steps)
+    }
+
+    pub async fn plan_app_artifact(&self, request: AppArtifactPlanRequest) -> Result<PlanV1> {
+        let category = self
+            .app_categories(Some(&request.category))?
+            .into_iter()
+            .next()
+            .with_context(|| format!("app preset category not found: {}", request.category))?;
+        let artifact = category.artifact.as_ref().with_context(|| {
+            format!(
+                "app '{}' does not define an artifact script",
+                request.category
+            )
+        })?;
+        let (script, operation, resource) = match request.action {
+            AppArtifactAction::Apply => (
+                artifact.script.as_str(),
+                PlanOperationV1::AppArtifactApply,
+                "artifact:apply",
+            ),
+            AppArtifactAction::Remove => (
+                artifact.teardown.as_deref().with_context(|| {
+                    format!(
+                        "app '{}' does not define an artifact teardown script",
+                        request.category
+                    )
+                })?,
+                PlanOperationV1::AppArtifactRemove,
+                "artifact:teardown",
+            ),
+        };
+        let mut state = StateCapture::new("app-artifact", operation)?;
+        capture_context(&mut state, self.context())?;
+        state.public("category", &request.category)?;
+        state.public("script", script.replace('\\', "/"))?;
+        state.public(
+            "allow-app-hooks",
+            self.context().allow_app_hooks.to_string(),
+        )?;
+        let mut permissions = PermissionAccumulator::default();
+        permissions.declaration(
+            category.permissions.as_ref(),
+            "app_artifact_permission_declaration_missing",
+        );
+        let mut steps = Vec::new();
+        capture_app_artifact_inputs(
+            self.context(),
+            &request.input_versions,
+            category.permissions.as_ref(),
+            artifact,
+            &mut state,
+            &mut permissions,
+        )?;
+        add_app_artifact_permissions(
+            self,
+            &category,
+            script,
+            artifact.runtime,
+            &mut state,
+            &mut permissions,
+            &mut steps,
+        )
+        .await?;
+        let blocked = app_code_blocked(self, &category, Path::new(script));
+        let mut step = PlanStepV1::new(
+            format!("app/{}", request.category),
+            Some(resource),
+            if blocked {
+                PlanActionV1::Blocked
+            } else {
+                PlanActionV1::Execute
+            },
+        );
+        step = step.with_diagnostic_code(if blocked {
+            "app_external_code_not_allowed"
+        } else {
+            "app_artifact_execution"
+        });
+        steps.push(step);
+        finish_specialized_plan(self, operation, state, permissions, steps)
+    }
+
     pub async fn plan_shells(&self, request: ShellPlanRequest) -> Result<PlanV1> {
         validate_shell_request(&request)?;
         let selection = request
@@ -1404,6 +1723,148 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
 }
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    pub async fn plan_sys_profile(&self, request: SysProfilePlanRequest) -> Result<PlanV1> {
+        validate_sys_profile_request(&request)?;
+        let loaded = self.load_sys_preset(&request.os_id).await?;
+        let item = loaded
+            .manifest
+            .items
+            .iter()
+            .find(|item| item.id == request.item_id)
+            .with_context(|| {
+                format!(
+                    "unknown sys item `{}` for {}",
+                    request.item_id, request.os_id
+                )
+            })?;
+        if item.mode != SysItemMode::Init {
+            bail!(
+                "managed sys item `{}` has no bootstrap shell integration",
+                request.item_id
+            );
+        }
+        if item.shell.is_empty() {
+            bail!(
+                "sys item `{}` declares no shell integration",
+                request.item_id
+            );
+        }
+        let operation = if request.enabled {
+            PlanOperationV1::SysProfileEnable
+        } else {
+            PlanOperationV1::SysProfileDisable
+        };
+        let mut state = StateCapture::new("sys-profile", operation)?;
+        capture_context(&mut state, self.context())?;
+        state.public("os-id", &request.os_id)?;
+        state.public("item-id", &request.item_id)?;
+        state.public("enabled", request.enabled.to_string())?;
+        state.public("allow-sys-code", self.context().allow_sys_code.to_string())?;
+        let (manifest, manifest_bytes) =
+            load_sys_manifest(self.host(), &self.context().shine_dir).await?;
+        let existing = manifest.entries.iter().find(|entry| {
+            entry.os_id == request.os_id && entry.item_id == request.item_id && !entry.managed
+        });
+        capture_manifest_selection(
+            &mut state,
+            "manifest:sys-profile",
+            manifest_bytes.is_some(),
+            manifest.schema_version,
+            &existing,
+        )?;
+
+        let mut permissions = PermissionAccumulator::default();
+        let detected = if request.enabled {
+            let detection = item
+                .detect
+                .as_ref()
+                .with_context(|| format!("sys item `{}` has no standard detection", item.id))?;
+            observe_sys_detection(
+                self,
+                detection,
+                &mut state,
+                &format!("sys/{}", item.id),
+                &mut permissions,
+            )
+            .await?
+        } else {
+            true
+        };
+
+        let mut enabled = manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.os_id == request.os_id && !entry.managed && entry.profile_enabled)
+            .map(|entry| entry.item_id.clone())
+            .collect::<BTreeSet<_>>();
+        if request.enabled {
+            enabled.insert(request.item_id.clone());
+        } else {
+            enabled.remove(&request.item_id);
+        }
+        for enabled_item in loaded
+            .manifest
+            .items
+            .iter()
+            .filter(|candidate| enabled.contains(candidate.id.as_str()))
+        {
+            permissions.declaration(
+                enabled_item.permissions.as_ref(),
+                "sys_profile_permission_declaration_missing",
+            );
+        }
+        add_shine_write_permission(
+            self.context(),
+            &mut permissions,
+            &self.context().shine_dir.join("sys-manifest.toml"),
+        );
+        let sys_shell: &'static str = self.context().shell.into();
+        capture_sys_profile_state(
+            self,
+            &request.os_id,
+            sys_shell,
+            &mut state,
+            &mut permissions,
+        )
+        .await?;
+        let external_code_blocked =
+            sys_profile_code_blocked_for_enabled(self, &request.os_id, &loaded.manifest, &enabled);
+        let state_changes = existing.is_none_or(|entry| entry.profile_enabled != request.enabled);
+        let mut state_step = PlanStepV1::new(
+            format!("sys/{}", request.item_id),
+            Some("profile-state"),
+            if request.enabled && !detected {
+                PlanActionV1::Blocked
+            } else if state_changes {
+                PlanActionV1::Update
+            } else {
+                PlanActionV1::None
+            },
+        );
+        if request.enabled && !detected {
+            state_step = state_step.with_diagnostic_code("sys_profile_item_not_detected");
+        }
+        let mut profile_step = PlanStepV1::new(
+            "sys/profile",
+            Some(sys_shell),
+            if external_code_blocked {
+                PlanActionV1::Blocked
+            } else {
+                PlanActionV1::Update
+            },
+        );
+        if external_code_blocked {
+            profile_step = profile_step.with_diagnostic_code("sys_external_code_not_allowed");
+        }
+        finish_specialized_plan(
+            self,
+            operation,
+            state,
+            permissions,
+            vec![state_step, profile_step],
+        )
+    }
+
     pub async fn plan_sys_bootstrap(&self, request: SysBootstrapPlanRequest) -> Result<PlanV1> {
         validate_sys_bootstrap_request(&request)?;
         let loaded = self.load_sys_preset(&request.os_id).await?;
@@ -1664,6 +2125,57 @@ where
         )
         .await
     }
+
+    pub async fn refresh_app_generators_approved(
+        &self,
+        request: AppRefreshPlanRequest,
+        approval: &PlanApprovalV1,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        approval.validate(&self.plan_app_refresh(request.clone()).await?)?;
+        self.refresh_app_generators(
+            AppRefreshRequest {
+                category: request.category,
+                file: request.file,
+                force: request.force,
+            },
+            observer,
+            interaction,
+        )
+        .await
+    }
+
+    pub async fn run_app_artifact_approved(
+        &self,
+        request: AppArtifactPlanRequest,
+        approval: &PlanApprovalV1,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<crate::lifecycle::LifecycleOutcomeV1> {
+        approval.validate(&self.plan_app_artifact(request.clone()).await?)?;
+        let category = self
+            .app_categories(Some(&request.category))?
+            .into_iter()
+            .next()
+            .with_context(|| format!("app preset category not found: {}", request.category))?;
+        let artifact = category.artifact.with_context(|| {
+            format!(
+                "app '{}' does not define an artifact script",
+                request.category
+            )
+        })?;
+        self.run_app_artifact(
+            AppArtifactRequest {
+                category: request.category,
+                artifact,
+                action: request.action,
+                implicit: false,
+                dry_run: false,
+            },
+            observer,
+        )
+        .await
+    }
 }
 
 impl<H: FileSystemHost> CoreRuntime<H> {
@@ -1785,6 +2297,31 @@ impl<H> CoreRuntime<H>
 where
     H: FileSystemHost + ProcessHost,
 {
+    pub async fn preview_sys_profile(
+        &self,
+        request: SysProfileStateRequest,
+    ) -> Result<SysProfileStateReport> {
+        if !request.dry_run {
+            bail!("Sys profile mutation requires snapshot-bound approval");
+        }
+        self.set_sys_profile_state(request).await
+    }
+
+    pub async fn set_sys_profile_approved(
+        &self,
+        request: SysProfilePlanRequest,
+        approval: &PlanApprovalV1,
+    ) -> Result<SysProfileStateReport> {
+        approval.validate(&self.plan_sys_profile(request.clone()).await?)?;
+        self.set_sys_profile_state(SysProfileStateRequest {
+            os_id: request.os_id,
+            item_id: request.item_id,
+            enabled: request.enabled,
+            dry_run: false,
+        })
+        .await
+    }
+
     pub async fn preview_sys_bootstrap(
         &self,
         request: SysBootstrapBatchRequest,
@@ -1823,9 +2360,203 @@ where
     }
 }
 
+fn select_refresh_files(category: &AppCategory, selector: Option<&Path>) -> Result<Vec<AppFile>> {
+    let candidates = if let Some(selector) = selector {
+        let file = category
+            .files
+            .iter()
+            .find(|file| file.source_rel == selector)
+            .with_context(|| {
+                format!(
+                    "app '{}' file not found: {}",
+                    category.name,
+                    selector.display()
+                )
+            })?;
+        if file.generator.is_none() {
+            bail!(
+                "app '{}' file is not generated: {}",
+                category.name,
+                selector.display()
+            );
+        }
+        vec![file.clone()]
+    } else {
+        category
+            .files
+            .iter()
+            .filter(|file| file.generator.is_some())
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    if candidates.is_empty() {
+        bail!("app '{}' has no generated files", category.name);
+    }
+    Ok(candidates)
+}
+
+fn plan_app_hooks<H>(
+    runtime: &CoreRuntime<H>,
+    category: &AppCategory,
+    hooks: &[super::AppHook],
+    input_versions: &PlanningInputVersions,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+    steps: &mut Vec<PlanStepV1>,
+) -> Result<()> {
+    for (index, hook) in hooks.iter().enumerate() {
+        capture_app_hook_inputs(
+            runtime.context(),
+            input_versions,
+            category.permissions.as_ref(),
+            hook,
+            state,
+            permissions,
+        )?;
+        permissions.require(PermissionV1::Command {
+            program: hook.command.clone(),
+        });
+        let blocked =
+            app_category_external(runtime, category) && !runtime.context().allow_app_hooks;
+        steps.push(
+            PlanStepV1::new(
+                format!("app/{}", category.name),
+                Some(format!("hook:{index}")),
+                if blocked {
+                    PlanActionV1::Blocked
+                } else {
+                    PlanActionV1::Execute
+                },
+            )
+            .with_diagnostic_code(if blocked {
+                "app_external_code_not_allowed"
+            } else {
+                "app_hook_execution"
+            }),
+        );
+    }
+    Ok(())
+}
+
+async fn add_app_artifact_permissions<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    category: &AppCategory,
+    script: &str,
+    runtime_kind: ArtifactRuntime,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+    steps: &mut Vec<PlanStepV1>,
+) -> Result<()> {
+    permissions.require(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Execute,
+        path: format!("preset:{}", script.replace('\\', "/")),
+    });
+    if runtime_kind == ArtifactRuntime::Bun {
+        permissions.require(PermissionV1::Command {
+            program: "bun".to_string(),
+        });
+    }
+    let logical = format!("app/{}/{script}", category.name);
+    let script_file = runtime
+        .presets()
+        .file(&logical)
+        .with_context(|| format!("app script is missing: {logical}"))?;
+    if script_file.origin.physical_path.is_none() {
+        let cache_root = runtime
+            .context()
+            .presets_dir
+            .join("app")
+            .join(&category.name);
+        capture_tree_state(
+            runtime.host(),
+            state,
+            "artifact:preset-cache".to_string(),
+            &cache_root,
+        )
+        .await?;
+        add_shine_write_permission(runtime.context(), permissions, &cache_root);
+        steps.push(PlanStepV1::new(
+            format!("app/{}", category.name),
+            Some("artifact:preset-cache"),
+            PlanActionV1::Update,
+        ));
+    }
+    for (label, directory) in [
+        (
+            "http-dir",
+            runtime
+                .context()
+                .shine_dir
+                .join("http")
+                .join("app")
+                .join(&category.name),
+        ),
+        (
+            "cache-dir",
+            runtime
+                .context()
+                .cache_dir
+                .join("shine")
+                .join("app")
+                .join(&category.name),
+        ),
+        (
+            "state-dir",
+            runtime
+                .context()
+                .shine_dir
+                .join("state")
+                .join("app")
+                .join(&category.name),
+        ),
+    ] {
+        let exists = path_exists(runtime.host(), &directory).await?;
+        capture_path_state(
+            runtime.host(),
+            state,
+            format!("artifact:{label}"),
+            &directory,
+        )
+        .await?;
+        permissions.implicit(PermissionV1::Filesystem {
+            access: FilesystemAccessV1::Write,
+            path: review_path(runtime.context(), &directory),
+        });
+        if !exists {
+            steps.push(PlanStepV1::new(
+                format!("app/{}", category.name),
+                Some(format!("artifact:{label}")),
+                PlanActionV1::Create,
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn finish_plan<H>(
     runtime: &CoreRuntime<H>,
     operation: LifecycleOperation,
+    state: StateCapture,
+    permissions: PermissionAccumulator,
+    steps: Vec<PlanStepV1>,
+) -> Result<PlanV1> {
+    let (required, declared, uncomputable) = permissions.finish();
+    Ok(PlanV1::new(
+        operation,
+        PlanInputsV1 {
+            preset: runtime.presets().digest_v1()?,
+            state: state.finish(),
+        },
+        steps,
+        required,
+        &declared,
+        uncomputable,
+    ))
+}
+
+fn finish_specialized_plan<H>(
+    runtime: &CoreRuntime<H>,
+    operation: PlanOperationV1,
     state: StateCapture,
     permissions: PermissionAccumulator,
     steps: Vec<PlanStepV1>,
@@ -1853,6 +2584,22 @@ fn validate_sys_bootstrap_request(request: &SysBootstrapPlanRequest) -> Result<(
     }
     if request.sys_shell.is_empty() {
         bail!("Sys bootstrap shell identity must not be empty");
+    }
+    Ok(())
+}
+
+fn validate_sys_profile_request(request: &SysProfilePlanRequest) -> Result<()> {
+    if request.os_id.is_empty()
+        || request.os_id.contains(['/', '\\'])
+        || request.os_id.contains("..")
+    {
+        bail!("invalid Sys profile os id");
+    }
+    if request.item_id.is_empty()
+        || request.item_id.contains(['/', '\\'])
+        || request.item_id.contains("..")
+    {
+        bail!("invalid Sys profile item id");
     }
     Ok(())
 }
@@ -2100,6 +2847,23 @@ fn sys_profile_code_blocked<H>(
     selected: &[&SysItem],
     run_manifest: &SysRunManifest,
 ) -> bool {
+    let enabled = run_manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.os_id == os_id && !entry.managed && entry.profile_enabled)
+        .map(|entry| entry.item_id.as_str())
+        .chain(selected.iter().map(|item| item.id.as_str()))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>();
+    sys_profile_code_blocked_for_enabled(runtime, os_id, manifest, &enabled)
+}
+
+fn sys_profile_code_blocked_for_enabled<H>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    manifest: &SysManifest,
+    enabled: &BTreeSet<String>,
+) -> bool {
     if runtime.context().allow_sys_code {
         return false;
     }
@@ -2115,15 +2879,8 @@ fn sys_profile_code_blocked<H>(
     if external_base {
         return true;
     }
-    let enabled = run_manifest
-        .entries
-        .iter()
-        .filter(|entry| entry.os_id == os_id && !entry.managed && entry.profile_enabled)
-        .map(|entry| entry.item_id.as_str())
-        .chain(selected.iter().map(|item| item.id.as_str()))
-        .collect::<BTreeSet<_>>();
     let executable = manifest.items.iter().any(|item| {
-        enabled.contains(item.id.as_str())
+        enabled.contains(&item.id)
             && item.shell.iter().any(|integration| {
                 !integration.eval_argv.is_empty()
                     || integration.source.is_some()
@@ -2526,6 +3283,37 @@ fn capture_generator_inputs(
     Ok(())
 }
 
+fn capture_app_artifact_inputs(
+    context: &super::RuntimeContext,
+    versions: &PlanningInputVersions,
+    declaration: Option<&PermissionDeclarationV1>,
+    artifact: &super::AppArtifact,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    let sensitivity = declaration_sensitivity(declaration);
+    for spec in &artifact.env {
+        let declared_sensitivity = sensitivity.get(&spec.source).copied();
+        if context.env.contains_key(&spec.source) {
+            capture_env_identity(
+                context,
+                versions,
+                &spec.source,
+                declared_sensitivity,
+                state,
+                permissions,
+            )?;
+        } else {
+            permissions.require(PermissionV1::Environment {
+                name: spec.source.clone(),
+                sensitivity: declared_sensitivity.unwrap_or(EnvironmentSensitivityV1::Plain),
+            });
+            state.public(format!("env:{}", spec.source), "missing")?;
+        }
+    }
+    Ok(())
+}
+
 fn capture_declared_env_inputs(
     context: &super::RuntimeContext,
     versions: &PlanningInputVersions,
@@ -2669,11 +3457,14 @@ fn declaration_sensitivity(
         .collect()
 }
 
-fn add_generator_permissions(
+async fn add_generator_permissions<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
     permissions: &mut PermissionAccumulator,
     category: &AppCategory,
     generator: &super::AppGenerator,
-) {
+    state: &mut StateCapture,
+    steps: &mut Vec<PlanStepV1>,
+) -> Result<()> {
     permissions.require(PermissionV1::Filesystem {
         access: FilesystemAccessV1::Execute,
         path: format!("preset:{}", generator.script.display()),
@@ -2683,7 +3474,45 @@ fn add_generator_permissions(
             program: "bun".to_string(),
         });
     }
-    let _ = category;
+    let logical = format!("app/{}/{}", category.name, generator.script.display());
+    let script = runtime
+        .presets()
+        .file(&logical)
+        .with_context(|| format!("app generator script is missing: {logical}"))?;
+    if script.origin.physical_path.is_none() {
+        let file_name = generator
+            .script
+            .file_name()
+            .context("app generator script has no file name")?;
+        let path = runtime
+            .context()
+            .shine_dir
+            .join("runtime/app")
+            .join(&category.name)
+            .join(file_name);
+        let exists = path_exists(runtime.host(), &path).await?;
+        capture_path_state(
+            runtime.host(),
+            state,
+            format!("generator-runtime:{logical}"),
+            &path,
+        )
+        .await?;
+        add_shine_write_permission(runtime.context(), permissions, &path);
+        steps.push(
+            PlanStepV1::new(
+                format!("app/{}", category.name),
+                Some(format!("generator-runtime:{}", generator.script.display())),
+                if exists {
+                    PlanActionV1::Update
+                } else {
+                    PlanActionV1::Create
+                },
+            )
+            .with_diagnostic_code("app_generator_runtime_materialization"),
+        );
+    }
+    Ok(())
 }
 
 fn app_category_external<H>(runtime: &CoreRuntime<H>, category: &AppCategory) -> bool {
@@ -3580,6 +4409,259 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
             .await
             .unwrap_err();
         assert!(error.to_string().contains("Plan"));
+        assert!(
+            !runtime.host().operations().iter().any(|operation| matches!(
+                operation,
+                super::super::HostOperation::Write(_)
+                    | super::super::HostOperation::Remove(_)
+                    | super::super::HostOperation::Run { .. }
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn app_refresh_plan_is_payload_free_and_rejects_changed_destination() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                br#"dest = '~/.config/demo'
+[permissions]
+schema_version = 1
+filesystem = [{ access = ['execute'], base = 'preset', path = 'gen.ts' }]
+commands = ['bun']
+environment = [{ name = 'SOURCE', sensitivity = 'plain' }]
+[[files]]
+source = 'generated.txt'
+generator = { script = 'gen.ts', runtime = 'bun', env = ['SOURCE'], when_env = 'SOURCE', auto = false }
+"#
+                .to_vec(),
+            )
+            .file("app/demo/generated.txt", b"fallback".to_vec())
+            .file("app/demo/gen.ts", b"process.stdout.write('generated')".to_vec())
+            .build();
+        let mut runtime = runtime(snapshot);
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("SOURCE".to_string(), "sensitive-source-value".to_string());
+        let destination = runtime
+            .context()
+            .home_dir
+            .join(".config/demo/generated.txt");
+        runtime.host().put_file(&destination, b"installed".to_vec());
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&AppManifest {
+                schema_version: APP_MANIFEST_SCHEMA_VERSION,
+                entries: vec![AppEntry {
+                    source: "app/demo/generated.txt".to_string(),
+                    destination: destination.clone(),
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"installed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = AppRefreshPlanRequest {
+            category: "demo".to_string(),
+            file: None,
+            force: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_app_refresh(request.clone()).await.unwrap();
+        assert_eq!(plan.operation, PlanOperationV1::AppRefresh);
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Execute
+                && step.resource.as_deref() == Some("generator:generated.txt")
+        }));
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Create
+                && step.resource.as_deref() == Some("generator-runtime:gen.ts")
+        }));
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: "shine:runtime/app/demo/gen.ts".to_string(),
+                })
+        );
+        assert!(
+            !serde_json::to_string(&plan)
+                .unwrap()
+                .contains("sensitive-source-value")
+        );
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(&destination, b"changed".to_vec());
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .refresh_app_generators_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan changed"));
+        assert!(
+            !runtime
+                .host()
+                .operations()
+                .iter()
+                .any(|operation| matches!(operation, super::super::HostOperation::Run { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn app_artifact_plan_scopes_secrets_and_rejects_changed_runtime_state() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                br#"dest = '~/.config/demo'
+[artifact]
+script = 'build.ts'
+teardown = 'unbuild.ts'
+runtime = 'bun'
+env = ['TOKEN']
+[permissions]
+schema_version = 1
+filesystem = [
+  { access = ['execute'], base = 'preset', path = 'build.ts' },
+  { access = ['execute'], base = 'preset', path = 'unbuild.ts' },
+]
+commands = ['bun']
+environment = [{ name = 'TOKEN', sensitivity = 'secret' }]
+[[files]]
+source = 'config.toml'
+"#
+                .to_vec(),
+            )
+            .file("app/demo/config.toml", b"config".to_vec())
+            .file("app/demo/build.ts", b"process.exit(0)".to_vec())
+            .file("app/demo/unbuild.ts", b"process.exit(0)".to_vec())
+            .build();
+        let mut runtime = runtime(snapshot);
+        let optional = runtime
+            .plan_app_artifact(AppArtifactPlanRequest {
+                category: "demo".to_string(),
+                action: AppArtifactAction::Apply,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(optional.is_ready());
+        runtime
+            .context_mut_for_cli()
+            .env
+            .insert("TOKEN".to_string(), "top-secret-value".to_string());
+        let mut versions = PlanningInputVersions::default();
+        versions.insert_secret_version("TOKEN", OpaqueSecretVersion::new("vault-revision-9"));
+        let request = AppArtifactPlanRequest {
+            category: "demo".to_string(),
+            action: AppArtifactAction::Apply,
+            input_versions: versions,
+        };
+
+        let plan = runtime.plan_app_artifact(request.clone()).await.unwrap();
+        assert_eq!(plan.operation, PlanOperationV1::AppArtifactApply);
+        assert!(plan.is_ready());
+        let encoded = serde_json::to_string(&plan).unwrap();
+        assert!(!encoded.contains("top-secret-value"));
+        assert!(!encoded.contains("vault-revision-9"));
+        let remove = runtime
+            .plan_app_artifact(AppArtifactPlanRequest {
+                action: AppArtifactAction::Remove,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(remove.operation, PlanOperationV1::AppArtifactRemove);
+        assert!(remove.is_ready());
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("state/app/demo/changed"),
+            b"changed".to_vec(),
+        );
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .run_app_artifact_approved(request, &approval, &mut observer)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan changed"));
+        assert!(
+            !runtime
+                .host()
+                .operations()
+                .iter()
+                .any(|operation| matches!(operation, super::super::HostOperation::Run { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn sys_profile_plan_is_observation_only_and_rejects_changed_shell_state() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "sys/test/shine.toml",
+                br#"version = 2
+[[items]]
+id = 'tool'
+label = 'Tool'
+permissions = { schema_version = 1 }
+detect = { kind = 'path', path = '$HOME/.tool-present' }
+install = { kind = 'package', provider = 'homebrew', package = 'tool' }
+[[items.shell]]
+shells = ['zsh']
+phase = 'post'
+path = '$HOME/.tool/bin'
+"#
+                .to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+        runtime.host().put_file(
+            runtime.context().home_dir.join(".tool-present"),
+            b"present".to_vec(),
+        );
+        let request = SysProfilePlanRequest {
+            os_id: "test".to_string(),
+            item_id: "tool".to_string(),
+            enabled: true,
+        };
+
+        let plan = runtime.plan_sys_profile(request.clone()).await.unwrap();
+        assert_eq!(plan.operation, PlanOperationV1::SysProfileEnable);
+        assert!(plan.is_ready());
+        let disable = runtime
+            .plan_sys_profile(SysProfilePlanRequest {
+                enabled: false,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
+        assert_eq!(disable.operation, PlanOperationV1::SysProfileDisable);
+        assert!(disable.is_ready());
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .iter()
+                .all(|operation| matches!(operation, super::super::HostOperation::Read(_)))
+        );
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(
+            runtime.context().home_dir.join(".zshrc"),
+            b"user change".to_vec(),
+        );
+        let error = runtime
+            .set_sys_profile_approved(request, &approval)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan changed"));
         assert!(
             !runtime.host().operations().iter().any(|operation| matches!(
                 operation,

@@ -13,7 +13,7 @@ mod report;
 mod uninstall;
 mod upgrade;
 
-pub use build::{handle_build, handle_unbuild};
+pub use build::{handle_build, handle_build_approved, handle_unbuild, handle_unbuild_approved};
 #[doc(hidden)]
 pub use info::handle_list_with_presets_note;
 pub use info::{handle_info, handle_list};
@@ -22,7 +22,7 @@ pub use metadata::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
     load_active_categories, load_embedded_categories, load_installed_categories,
 };
-pub use refresh::handle_refresh;
+pub use refresh::{handle_refresh, handle_refresh_approved};
 pub use uninstall::{handle_uninstall, handle_uninstall_approved};
 #[cfg(test)]
 pub(crate) use upgrade::handle_upgrade_installed_target_with_result;

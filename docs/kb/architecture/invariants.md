@@ -7,16 +7,18 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **A security Plan is not dry-run and approval is snapshot-bound.** `PlanV1` contains only ordered
   semantic steps, safe diagnostic codes, resolved permissions, and digests of exact source/state
-  observations. App, Shell, managed Sys, and Sys bootstrap planners accept only observation host traits; they
-  cannot write/remove, execute generator/hook/artifact/bootstrap code, request privilege, or apply
+  observations. App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile
+  planners accept only observation host traits; they cannot write/remove, execute
+  generator/hook/artifact/bootstrap/profile code, request privilege, or apply
   split-DNS state. Plans cannot carry content, env values, secret plaintext, raw argv, raw errors,
-  or private source paths. Protected App, Shell, managed Sys, and Sys bootstrap mutation must enter through an
-  approved Core method that regenerates the Plan from fresh captured inputs and matches both its
+  or private source paths. Every supported App, Shell, managed Sys, Sys bootstrap, App
+  refresh/artifact, and Sys profile mutation must enter through an approved Core method that
+  regenerates the Plan from fresh captured inputs and matches both its
   fingerprint and exact required permission set before the first mutation; missing or uncomputable
-  permissions fail closed. CLI `--yes` skips only the default-No prompt. Dry-run, artifact, refresh,
-  and explicit Sys profile operations remain separate contracts. Sys bootstrap uses the dedicated
-  `sys-bootstrap` Plan operation and must not be described as a lifecycle Plan or
-  `LifecycleResultV1` operation.
+  permissions fail closed. CLI `--yes` skips only the default-No prompt. Dry-run remains a separate
+  preview contract. Specialized operations use `sys-bootstrap`, `app-refresh`,
+  `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
+  lifecycle Plans or `LifecycleResultV1` operations.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, and each file's embedded, external, or
   overlay origin. It must not include physical source roots: relocating unchanged source is not a
@@ -37,10 +39,19 @@ bugs. Check this list before changing the modules named in each entry.
 - **Opaque Preset code is described conservatively, never sampled during planning.** A generator
   or lifecycle hook contributes known command/environment/administrator requirements plus an
   `execute` step and potential mutation step when its lifecycle trigger applies. Existing external-
-  code gates may still block it. If the original Preset disappeared, supported manifests/receipts
-  may drive owned-resource removal, but missing teardown code is never reconstructed or executed.
+  code gates may still block it. Embedded generator execution also declares and binds its runtime
+  script materialization under the Shine directory. If the original Preset disappeared, supported
+  manifests/receipts may drive owned-resource removal, but missing teardown code is never
+  reconstructed or executed.
   User modification, occupied destinations, foreign launchers, and managed Sys ownership conflicts
   remain `preserve`/`blocked`; force must produce a distinct step or diagnostic and fingerprint.
+
+- **App executable environment is explicit.** Generators receive only fixed `SHINE_APP_*` contract
+  variables plus their `generator.env` mappings. Artifacts receive only the fixed contract plus
+  their `[artifact].env` mappings, whose sources must be declared by the category's
+  `[permissions].environment`. They never inherit the full active `[env]` table. Plain values are
+  fingerprinted by hash and secret values require opaque versions; neither value form is serialized
+  into the Plan.
 
 - **Host observation is explicit and domain execution receives captured inputs.** Filesystem and
   split-DNS observation ports are separate from mutation ports, which inherit them; planner type

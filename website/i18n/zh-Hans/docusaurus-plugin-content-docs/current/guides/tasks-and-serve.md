@@ -47,9 +47,11 @@ shine task delete logs
 shine app artifact apply surge
 ```
 
-`app artifact apply` 是显式操作；`shine app install`、`shine update` 和 `shine upgrade` 不会自动运行 artifact 脚本。脚本失败时命令会失败，脚本输出会直接显示在终端。
+`app artifact apply` 是显式操作；`shine app install`、`shine update` 和 `shine upgrade` 不会自动
+运行 artifact 脚本。执行前会显示安全 Plan，非交互调用必须添加 `--yes`。脚本失败时命令会失败，
+脚本输出会直接显示在终端。
 
-构建脚本会收到当前 `[env]` 表中的值，以及一组由 Shine 设置的路径变量：
+构建脚本只会收到 `[artifact].env` 中已配置的 source，以及一组由 Shine 设置的路径变量：
 
 | 变量 | 作用 |
 | --- | --- |
@@ -62,7 +64,9 @@ shine app artifact apply surge
 | `SHINE_CACHE_DIR` | 当前 app 的缓存目录 |
 | `SHINE_STATE_DIR` | 当前 app 的状态目录 |
 
-`[env]` 值会按存储内容传入，不会自动解密 `_SECRET` 项，也不会触发 GPG、age 或 Touch ID 提示。
+每个环境 source 还必须出现在 `[permissions].environment`；未配置的可选 source 会被省略。值按
+存储内容传入；secret 分类输入通过 opaque version 绑定到 Plan，但不会自动解密，也不会触发
+GPG、age 或 Touch ID 提示。
 
 ## 启动本地 HTTP 服务
 
