@@ -163,7 +163,7 @@ pub fn backup_path(dest: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use crate::install::AppInstallStrategy;
-    use crate::runtime::{HostOperation, InMemoryHost};
+    use crate::runtime::{FileSystemObservationHost, HostOperation, InMemoryHost};
 
     fn entry(destination: &str, bytes: &[u8]) -> AppEntry {
         AppEntry {

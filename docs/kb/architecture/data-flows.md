@@ -4,18 +4,34 @@ End-to-end flows that span multiple modules and are not visible in any single fi
 ownership and the per-command routing table, see [`module-map.md`](module-map.md) — this file only
 records the cross-module sequences and their gotchas.
 
-## Security Plan contract foundation
+## Pure security Plan assessment
 
-`shine-core::plan` defines a Phase 3 contract separate from current lifecycle execution. A future
-pure planner will consume one immutable `PresetSnapshot`, captured runtime inputs, manifests,
-receipts, and live resource observations. It will emit ordered semantic steps plus a required
-permission set; missing declarations, uncomputable permissions, or a blocked step make the Plan
-non-ready. Planning cannot invoke host mutation or Preset code, and its output carries no content,
-env values, secret plaintext, or raw command arguments.
+`shine-core::plan` defines a Phase 3 contract separate from current lifecycle execution.
+`runtime::planner` consumes one immutable `PresetSnapshot`, a validated App/Shell/managed Sys
+request, captured runtime inputs, manifests, receipts, and live resource observations. It emits
+ordered semantic steps plus a required permission set; missing declarations, uncomputable
+permissions, or a blocked step make the Plan non-ready. Planning cannot invoke host mutation or
+Preset code, and its output carries no content, env values, secret plaintext, raw errors, or raw
+command arguments.
 
 The effective Preset snapshot hashes sorted logical paths, bytes, and trust layers without hashing
-its physical checkout root. State planners will hash every observation that affects steps or
-permissions using the same framed SHA-256 builder, with only opaque secret handles or versions.
+its physical checkout root. Target selection from immutable request/Preset input occurs before
+host-state reads. Filesystem and split-DNS observation traits expose manifests, receipts, live
+resources, launchers, and system state without exposing write/process/privileged/apply methods.
+Planners hash every outcome-affecting observation using the same framed SHA-256 builder. Plain env
+values contribute hashes; secrets contribute only caller-supplied opaque handles or versions.
+
+```text
+validated target + immutable Preset snapshot
+    → observation-only manifest/receipt/live-state capture
+    → ownership and lifecycle assessment
+    → merge typed effects + explicit target permissions
+    → ordered payload-free PlanV1 + state/Preset digests
+```
+
+Generator and hook triggers are modeled as conservative `execute` plus potential resource steps;
+the code is never run during planning and existing external-code gates remain blockers. A supported
+receipt can drive uninstall after source disappearance, but cannot recreate missing teardown code.
 Frontend review creates approval for one exact ready Plan. The eventual apply flow is deliberately:
 
 ```text
@@ -23,16 +39,17 @@ capture current source/state → regenerate Plan → match approved fingerprint 
     → execute existing Core lifecycle → return LifecycleResultV1
 ```
 
-The contract foundation does not yet route CLI commands through this flow. Existing dry-run/status
+The planners do not yet route CLI commands through this flow. Existing dry-run/status
 remain compatibility paths, `allow_app_hooks` and `allow_sys_code` remain active, and no code may
-describe those paths as a security Plan before pure planners and apply enforcement land.
+describe those paths as an enforced security Plan before apply enforcement lands.
 
 Permission declaration schema v1 is parsed from the same immutable snapshot: one App category
 table, one table per Shell command/platform variant, and one table per Sys item. Static validation
 checks version, placement, structured paths, payload-free identities, and duplicates without
 executing Preset code. Typed metadata continues to describe Core-bounded effects; explicit tables
-record additional capabilities. Missing tables warn but do not change runtime execution. A future
-pure planner will combine both sources into the required/declared resolution used by `PlanV1`.
+record additional capabilities. Missing tables warn but do not change current runtime execution.
+Pure planners combine both sources into the required/declared resolution used by `PlanV1`; missing
+or uncomputable capabilities make that Plan non-ready.
 
 ## Shell install and uninstall
 

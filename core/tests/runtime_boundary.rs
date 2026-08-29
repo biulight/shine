@@ -150,6 +150,29 @@ fn core_domain_sources_do_not_bypass_captured_hosts() {
     }
 }
 
+#[test]
+fn lifecycle_planner_source_has_no_mutation_host_capability() {
+    let core_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let planner = std::fs::read_to_string(core_root.join("src/runtime/planner.rs")).unwrap();
+
+    for forbidden in [
+        "impl<H: FileSystemHost>",
+        "ProcessHost",
+        "PrivilegedFileSystemHost",
+        ".write_atomic(",
+        ".remove_file(",
+        ".remove_dir_all(",
+        ".run_process(",
+        ".apply_split_dns(",
+        ".remove_split_dns(",
+    ] {
+        assert!(
+            !planner.contains(forbidden),
+            "pure lifecycle planner gained mutation capability `{forbidden}`"
+        );
+    }
+}
+
 #[tokio::test]
 async fn core_only_harness_uses_explicit_inputs_and_virtual_state() {
     let host = InMemoryHost::new();

@@ -1372,7 +1372,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         }
         Ok(specs)
     }
+}
 
+impl<H> CoreRuntime<H> {
     pub fn desired_shell_source_path(&self, category: &str, source_rel: &Path) -> PathBuf {
         let logical = format!("shell/{category}/{}", shell_logical_path(source_rel));
         self.presets()
@@ -1455,7 +1457,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             }
         }
     }
+}
 
+impl<H: FileSystemHost> CoreRuntime<H> {
     pub async fn effective_shell_transforms(
         &self,
         file: &ShellFile,
@@ -1888,7 +1892,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         }
         Ok(())
     }
+}
 
+impl<H> CoreRuntime<H> {
     pub fn shell_categories(&self, filter: Option<&str>) -> Result<Vec<ShellCategory>> {
         let prefix = "shell/";
         let names = self
@@ -2020,7 +2026,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             uses_metadata: metadata.is_some(),
         })
     }
+}
 
+impl<H: FileSystemHost> CoreRuntime<H> {
     pub async fn render_shell_templates(
         &self,
         scripts: &[ShellScriptTemplate],
@@ -2386,7 +2394,8 @@ fn canonical_target(entry: &ShellManifestEntry) -> String {
 mod tests {
     use super::*;
     use crate::runtime::{
-        InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost, RuntimeContext, RuntimePlatform,
+        FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost,
+        RuntimeContext, RuntimePlatform,
     };
 
     #[tokio::test]

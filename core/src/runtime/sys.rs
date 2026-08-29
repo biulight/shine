@@ -1649,7 +1649,8 @@ pub(crate) async fn save_manifest_with_host(
 mod tests {
     use super::*;
     use crate::runtime::{
-        InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost, RuntimeContext, RuntimePlatform,
+        FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost,
+        RuntimeContext, RuntimePlatform,
     };
 
     #[tokio::test]

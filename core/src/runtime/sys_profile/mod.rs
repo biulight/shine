@@ -1041,7 +1041,8 @@ fn sys_profile_merge_path(
 mod tests {
     use super::*;
     use crate::runtime::{
-        InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext, RuntimePlatform,
+        FileSystemObservationHost, InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext,
+        RuntimePlatform,
     };
     use std::collections::BTreeSet;
     use tokio::fs;

@@ -1788,7 +1788,7 @@ fn app_upgrade_file_report(
     }
 }
 
-fn desired_app_hash(file: &AppFile, content: &[u8]) -> Result<u64> {
+pub(crate) fn desired_app_hash(file: &AppFile, content: &[u8]) -> Result<u64> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(hash_content(content)),
         AppInstallStrategy::JsonMerge { managed_keys } => Ok(hash_content(&serialize_json_object(
@@ -1797,7 +1797,7 @@ fn desired_app_hash(file: &AppFile, content: &[u8]) -> Result<u64> {
     }
 }
 
-fn installed_app_hash(file: &AppFile, content: &[u8]) -> Result<Option<u64>> {
+pub(crate) fn installed_app_hash(file: &AppFile, content: &[u8]) -> Result<Option<u64>> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(Some(hash_content(content))),
         AppInstallStrategy::JsonMerge { managed_keys } => {
@@ -2698,8 +2698,8 @@ async fn save_manifest(
 mod lifecycle_tests {
     use super::*;
     use crate::runtime::{
-        HostOperation, InMemoryHost, NullObserver, PresetSnapshot, PresetSourceKind,
-        RuntimeContext, RuntimePlatform,
+        FileSystemObservationHost, HostOperation, InMemoryHost, NullObserver, PresetSnapshot,
+        PresetSourceKind, RuntimeContext, RuntimePlatform,
     };
     use std::future::Future;
     use std::path::Path;

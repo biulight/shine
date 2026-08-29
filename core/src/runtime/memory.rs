@@ -1,6 +1,7 @@
 use super::host::{
-    FileKind, FileMetadata, FileSystemHost, HostError, HostOperation, PrivilegedFileSystemHost,
-    ProcessHost, ProcessOutput, ProcessRequest, SplitDnsHost, SplitDnsRequest, SplitDnsState,
+    FileKind, FileMetadata, FileSystemHost, FileSystemObservationHost, HostError, HostOperation,
+    PrivilegedFileSystemHost, ProcessHost, ProcessOutput, ProcessRequest, SplitDnsHost,
+    SplitDnsObservationHost, SplitDnsRequest, SplitDnsState,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
@@ -76,7 +77,7 @@ fn insert_parent_dirs(nodes: &mut BTreeMap<PathBuf, MemoryNode>, path: &Path) {
     }
 }
 
-impl FileSystemHost for InMemoryHost {
+impl FileSystemObservationHost for InMemoryHost {
     fn canonicalize<'a>(
         &'a self,
         path: &'a Path,
@@ -111,6 +112,68 @@ impl FileSystemHost for InMemoryHost {
         })
     }
 
+    fn metadata<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<FileMetadata, HostError>> + Send + 'a>> {
+        Box::pin(async move {
+            let state = self.state.lock().expect("in-memory host lock");
+            match state.nodes.get(path) {
+                Some(MemoryNode::Directory) => Ok(FileMetadata {
+                    kind: FileKind::Directory,
+                    len: 0,
+                    unix_mode: None,
+                }),
+                Some(MemoryNode::File(bytes)) => Ok(FileMetadata {
+                    kind: FileKind::File,
+                    len: bytes.len() as u64,
+                    unix_mode: state.modes.get(path).copied(),
+                }),
+                Some(MemoryNode::Symlink(target)) => Ok(FileMetadata {
+                    kind: FileKind::Symlink,
+                    len: target.as_os_str().len() as u64,
+                    unix_mode: None,
+                }),
+                None => Err(not_found(path)),
+            }
+        })
+    }
+
+    fn read_dir<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<PathBuf>, HostError>> + Send + 'a>> {
+        Box::pin(async move {
+            let state = self.state.lock().expect("in-memory host lock");
+            if !matches!(state.nodes.get(path), Some(MemoryNode::Directory)) {
+                return Err(not_found(path));
+            }
+            let mut entries = state
+                .nodes
+                .keys()
+                .filter(|candidate| candidate.parent() == Some(path))
+                .cloned()
+                .collect::<Vec<_>>();
+            entries.sort();
+            Ok(entries)
+        })
+    }
+
+    fn read_link<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
+        Box::pin(async move {
+            let state = self.state.lock().expect("in-memory host lock");
+            match state.nodes.get(path) {
+                Some(MemoryNode::Symlink(target)) => Ok(target.clone()),
+                _ => Err(not_found(path)),
+            }
+        })
+    }
+}
+
+impl FileSystemHost for InMemoryHost {
     fn write_atomic<'a>(
         &'a self,
         path: &'a Path,
@@ -231,33 +294,6 @@ impl FileSystemHost for InMemoryHost {
         })
     }
 
-    fn metadata<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<FileMetadata, HostError>> + Send + 'a>> {
-        Box::pin(async move {
-            let state = self.state.lock().expect("in-memory host lock");
-            match state.nodes.get(path) {
-                Some(MemoryNode::Directory) => Ok(FileMetadata {
-                    kind: FileKind::Directory,
-                    len: 0,
-                    unix_mode: None,
-                }),
-                Some(MemoryNode::File(bytes)) => Ok(FileMetadata {
-                    kind: FileKind::File,
-                    len: bytes.len() as u64,
-                    unix_mode: state.modes.get(path).copied(),
-                }),
-                Some(MemoryNode::Symlink(target)) => Ok(FileMetadata {
-                    kind: FileKind::Symlink,
-                    len: target.as_os_str().len() as u64,
-                    unix_mode: None,
-                }),
-                None => Err(not_found(path)),
-            }
-        })
-    }
-
     fn rename<'a>(
         &'a self,
         from: &'a Path,
@@ -309,26 +345,6 @@ impl FileSystemHost for InMemoryHost {
         })
     }
 
-    fn read_dir<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<PathBuf>, HostError>> + Send + 'a>> {
-        Box::pin(async move {
-            let state = self.state.lock().expect("in-memory host lock");
-            if !matches!(state.nodes.get(path), Some(MemoryNode::Directory)) {
-                return Err(not_found(path));
-            }
-            let mut entries = state
-                .nodes
-                .keys()
-                .filter(|candidate| candidate.parent() == Some(path))
-                .cloned()
-                .collect::<Vec<_>>();
-            entries.sort();
-            Ok(entries)
-        })
-    }
-
     fn symlink<'a>(
         &'a self,
         target: &'a Path,
@@ -346,19 +362,6 @@ impl FileSystemHost for InMemoryHost {
                 target: target.to_path_buf(),
             });
             Ok(())
-        })
-    }
-
-    fn read_link<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
-        Box::pin(async move {
-            let state = self.state.lock().expect("in-memory host lock");
-            match state.nodes.get(path) {
-                Some(MemoryNode::Symlink(target)) => Ok(target.clone()),
-                _ => Err(not_found(path)),
-            }
         })
     }
 }
@@ -433,7 +436,7 @@ impl ProcessHost for InMemoryHost {
     }
 }
 
-impl SplitDnsHost for InMemoryHost {
+impl SplitDnsObservationHost for InMemoryHost {
     fn inspect_split_dns<'a>(
         &'a self,
         request: &'a SplitDnsRequest,
@@ -452,7 +455,9 @@ impl SplitDnsHost for InMemoryHost {
             })
         })
     }
+}
 
+impl SplitDnsHost for InMemoryHost {
     fn apply_split_dns<'a>(
         &'a self,
         request: &'a SplitDnsRequest,

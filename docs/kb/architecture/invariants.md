@@ -7,24 +7,40 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **A security Plan is not dry-run and approval is snapshot-bound.** `PlanV1` contains only ordered
   semantic steps, safe diagnostic codes, resolved permissions, and digests of exact source/state
-  observations. Planning must not write through a host, execute generator/hook/artifact/bootstrap
-  code, or carry content, env values, secret plaintext, or raw argv. A future apply path must
+  observations. App, Shell, and managed Sys planners accept only observation host traits; they
+  cannot write/remove, execute generator/hook/artifact/bootstrap code, request privilege, or apply
+  split-DNS state. Plans cannot carry content, env values, secret plaintext, raw argv, raw errors,
+  or private source paths. A future apply path must
   regenerate the Plan from fresh captured inputs and match both its fingerprint and exact required
   permission set before the first mutation; missing or uncomputable permissions fail closed.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, and each file's embedded, external, or
   overlay origin. It must not include physical source roots: relocating unchanged source is not a
   semantic change, while changing an effective layer is. State observations use the same framed
-  SHA-256 contract and represent secrets only by opaque handles or versions, never plaintext.
+  SHA-256 contract. Labels use canonical targets and logical resources; request flags, relevant
+  manifests/receipts, live fingerprints, platform/mode, and outcome-affecting input identities are
+  all bound. Plain environment values contribute only a hash, while secrets require opaque handles
+  or versions and never contribute plaintext.
 - **A Preset permission declaration is not a grant.** App categories, Shell commands, and Sys items
   may declare schema-v1 capability identities, but those declarations do not bypass
   `allow_app_hooks`, `allow_sys_code`, administrator authorization, ownership checks, or future
   Plan approval. Filesystem declarations use logical bases and never embed a physical Preset
   checkout path; command entries contain no argv and environment entries contain names and
-  sensitivity only. Missing declarations are a static compatibility warning until the enforcement
-  migration explicitly changes that policy.
+  sensitivity only. Pure planners merge explicit declarations with Core-bounded typed metadata and
+  receipt ownership. A missing declaration or uncomputable requirement blocks a Plan even though
+  missing declarations remain a static compatibility warning for current, unenforced execution.
 
-- **Host observation is explicit and domain execution receives captured inputs.** A shared runtime
+- **Opaque Preset code is described conservatively, never sampled during planning.** A generator
+  or lifecycle hook contributes known command/environment/administrator requirements plus an
+  `execute` step and potential mutation step when its lifecycle trigger applies. Existing external-
+  code gates may still block it. If the original Preset disappeared, supported manifests/receipts
+  may drive owned-resource removal, but missing teardown code is never reconstructed or executed.
+  User modification, occupied destinations, foreign launchers, and managed Sys ownership conflicts
+  remain `preserve`/`blocked`; force must produce a distinct step or diagnostic and fingerprint.
+
+- **Host observation is explicit and domain execution receives captured inputs.** Filesystem and
+  split-DNS observation ports are separate from mutation ports, which inherit them; planner type
+  bounds remain observation-only. A shared runtime
   bootstrap discovers external/overlay directories and constructs snapshots through the selected
   filesystem host, so CLI, UI, tests, and future host adapters reuse one implementation. Runtime
   contexts carry home, Shine roots, platform, environment, and the resulting immutable snapshot;

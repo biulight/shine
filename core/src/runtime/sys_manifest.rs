@@ -102,7 +102,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
     pub async fn inspect_sys_run_manifest(&self) -> Result<super::SysRunManifest> {
         super::sys::load_manifest_with_host(self.host(), &self.context().shine_dir).await
     }
+}
 
+impl<H> CoreRuntime<H> {
     pub async fn load_sys_preset(&self, os_id: &str) -> Result<LoadedSysPreset> {
         if os_id.contains(['/', '\\']) || os_id.contains("..") {
             bail!("invalid os id: {os_id:?}");
@@ -126,7 +128,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             .unwrap_or_else(|| self.context().presets_dir.join("sys").join(os_id));
         Ok(LoadedSysPreset { manifest, root })
     }
+}
 
+impl<H: FileSystemHost> CoreRuntime<H> {
     /// Materialize one captured Sys category for process execution.
     ///
     /// Inspection, preview and profile composition must not call this method.
@@ -474,8 +478,8 @@ fn config_string(config: &toml::Table, key: &str) -> Result<String> {
 mod tests {
     use super::*;
     use crate::runtime::{
-        HostOperation, InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext,
-        RuntimePlatform,
+        FileSystemObservationHost, HostOperation, InMemoryHost, PresetSnapshot, PresetSourceKind,
+        RuntimeContext, RuntimePlatform,
     };
 
     #[tokio::test]

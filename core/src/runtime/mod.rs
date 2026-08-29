@@ -1,7 +1,7 @@
 //! Workspace-internal, frontend-neutral runtime seams.
 //!
 //! These APIs are public only so the `shine-cli` package can consume them.
-//! They are not a stable third-party API in Roadmap Phase 2.
+//! They are not a stable third-party API in Roadmap Phases 2 and 3.
 
 mod app;
 mod app_metadata;
@@ -10,6 +10,7 @@ mod host;
 mod inspection;
 mod launcher;
 mod memory;
+mod planner;
 mod preset;
 mod profile;
 mod shell;
@@ -24,10 +25,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub use host::{
-    FileKind, FileMetadata, FileSystemHost, HostError, HostOperation, NullObserver,
-    PrivilegedFileSystemHost, PrivilegedOperationGuard, ProcessHost, ProcessIo, ProcessOutput,
-    ProcessRequest, RealHost, RuntimeEvent, RuntimeInteraction, RuntimeObserver, SplitDnsHost,
-    SplitDnsRequest, SplitDnsState,
+    FileKind, FileMetadata, FileSystemHost, FileSystemObservationHost, HostError, HostOperation,
+    NullObserver, PrivilegedFileSystemHost, PrivilegedOperationGuard, ProcessHost, ProcessIo,
+    ProcessOutput, ProcessRequest, RealHost, RuntimeEvent, RuntimeInteraction, RuntimeObserver,
+    SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SplitDnsState,
 };
 pub use inspection::{
     AppFileInspection, DomainInspectionReport, InspectionChange, InspectionFileStatus,
@@ -39,6 +40,10 @@ pub use launcher::{
     unlink_managed_command_with_host,
 };
 pub use memory::InMemoryHost;
+pub use planner::{
+    AppPlanRequest, OpaqueSecretVersion, PlanningInputVersions, ShellPlanRequest,
+    SysManagedPlanRequest,
+};
 pub use preset::{
     PresetFile, PresetFileOrigin, PresetSnapshot, PresetSourceKind, PresetValidationIssue,
     PresetValidationReport,

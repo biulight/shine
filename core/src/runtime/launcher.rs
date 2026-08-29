@@ -1,4 +1,6 @@
-use crate::runtime::{BunDependencyMode, FileKind, FileSystemHost, LinkRuntime};
+use crate::runtime::{
+    BunDependencyMode, FileKind, FileSystemHost, FileSystemObservationHost, LinkRuntime,
+};
 #[cfg(test)]
 use anyhow::Context;
 use anyhow::Result;
@@ -180,7 +182,7 @@ async fn host_create_link(
 }
 
 async fn host_launcher_status(
-    host: &impl FileSystemHost,
+    host: &impl FileSystemObservationHost,
     link_path: &Path,
     source: &Path,
     runtime: LinkRuntime,
@@ -381,7 +383,7 @@ pub async fn link_executables_with_host(
 }
 
 pub async fn link_is_current_with_host(
-    host: &impl FileSystemHost,
+    host: &impl FileSystemObservationHost,
     link_path: &Path,
     source: &Path,
     runtime: LinkRuntime,
@@ -534,6 +536,7 @@ pub async fn unlink_managed(
 /// of `managed_roots`. This is the command-scoped counterpart to
 /// [`unlink_managed`]; foreign files and links are reported as skipped.
 #[cfg(test)]
+#[expect(dead_code, reason = "retained as a no-host launcher regression helper")]
 pub async fn unlink_managed_command(
     bin_dir: &Path,
     command: &OsStr,
@@ -747,6 +750,7 @@ pub async fn link_executables_with_names(
 /// Status surfaces use the same current-ness rules as install/upgrade so an existing command
 /// from an older source or runtime is reported as an available update.
 #[cfg(test)]
+#[expect(dead_code, reason = "retained as a no-host launcher regression helper")]
 pub async fn link_is_current(
     link_path: &Path,
     source: &Path,

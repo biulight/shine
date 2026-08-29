@@ -48,7 +48,9 @@ impl HostError {
     }
 }
 
-pub trait FileSystemHost {
+/// Observation-only filesystem capability used by security planning and
+/// read-oriented runtime paths.
+pub trait FileSystemObservationHost {
     fn canonicalize<'a>(
         &'a self,
         path: &'a Path,
@@ -59,6 +61,25 @@ pub trait FileSystemHost {
         path: &'a Path,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>, HostError>> + Send + 'a>>;
 
+    fn metadata<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<FileMetadata, HostError>> + Send + 'a>>;
+
+    fn read_dir<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<PathBuf>, HostError>> + Send + 'a>>;
+
+    fn read_link<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>>;
+}
+
+/// Filesystem mutation capability. Security planners deliberately bind only
+/// [`FileSystemObservationHost`].
+pub trait FileSystemHost: FileSystemObservationHost {
     fn write_atomic<'a>(
         &'a self,
         path: &'a Path,
@@ -103,26 +124,11 @@ pub trait FileSystemHost {
         to: &'a Path,
     ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>>;
 
-    fn metadata<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<FileMetadata, HostError>> + Send + 'a>>;
-
-    fn read_dir<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<PathBuf>, HostError>> + Send + 'a>>;
-
     fn symlink<'a>(
         &'a self,
         target: &'a Path,
         link: &'a Path,
     ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>>;
-
-    fn read_link<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>>;
 }
 
 /// Minimal privileged filesystem primitives. Core performs ownership,
@@ -205,12 +211,14 @@ pub struct SplitDnsState {
 /// Platform resource port used by the Core split-DNS driver. Core owns
 /// normalization, receipt and conflict decisions; the host owns only the
 /// platform-specific observation and mutation primitive.
-pub trait SplitDnsHost {
+pub trait SplitDnsObservationHost {
     fn inspect_split_dns<'a>(
         &'a self,
         request: &'a SplitDnsRequest,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<SplitDnsState>> + Send + 'a>>;
+}
 
+pub trait SplitDnsHost: SplitDnsObservationHost {
     fn apply_split_dns<'a>(
         &'a self,
         request: &'a SplitDnsRequest,
@@ -310,7 +318,7 @@ pub trait RuntimeInteraction {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RealHost;
 
-impl FileSystemHost for RealHost {
+impl FileSystemObservationHost for RealHost {
     fn canonicalize<'a>(
         &'a self,
         path: &'a Path,
@@ -325,6 +333,60 @@ impl FileSystemHost for RealHost {
         Box::pin(async move { tokio::fs::read(path).await.map_err(HostError::io) })
     }
 
+    fn metadata<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<FileMetadata, HostError>> + Send + 'a>> {
+        Box::pin(async move {
+            let metadata = tokio::fs::symlink_metadata(path)
+                .await
+                .map_err(HostError::io)?;
+            let kind = if metadata.file_type().is_symlink() {
+                FileKind::Symlink
+            } else if metadata.is_dir() {
+                FileKind::Directory
+            } else {
+                FileKind::File
+            };
+            #[cfg(unix)]
+            let unix_mode = {
+                use std::os::unix::fs::PermissionsExt;
+                Some(metadata.permissions().mode())
+            };
+            #[cfg(windows)]
+            let unix_mode = None;
+            Ok(FileMetadata {
+                kind,
+                len: metadata.len(),
+                unix_mode,
+            })
+        })
+    }
+
+    fn read_dir<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<PathBuf>, HostError>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut entries = tokio::fs::read_dir(path).await.map_err(HostError::io)?;
+            let mut paths = Vec::new();
+            while let Some(entry) = entries.next_entry().await.map_err(HostError::io)? {
+                paths.push(entry.path());
+            }
+            paths.sort();
+            Ok(paths)
+        })
+    }
+
+    fn read_link<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
+        Box::pin(async move { tokio::fs::read_link(path).await.map_err(HostError::io) })
+    }
+}
+
+impl FileSystemHost for RealHost {
     fn set_mode<'a>(
         &'a self,
         path: &'a Path,
@@ -428,51 +490,6 @@ impl FileSystemHost for RealHost {
         Box::pin(async move { tokio::fs::rename(from, to).await.map_err(HostError::io) })
     }
 
-    fn metadata<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<FileMetadata, HostError>> + Send + 'a>> {
-        Box::pin(async move {
-            let metadata = tokio::fs::symlink_metadata(path)
-                .await
-                .map_err(HostError::io)?;
-            let kind = if metadata.file_type().is_symlink() {
-                FileKind::Symlink
-            } else if metadata.is_dir() {
-                FileKind::Directory
-            } else {
-                FileKind::File
-            };
-            #[cfg(unix)]
-            let unix_mode = {
-                use std::os::unix::fs::PermissionsExt;
-                Some(metadata.permissions().mode())
-            };
-            #[cfg(windows)]
-            let unix_mode = None;
-            Ok(FileMetadata {
-                kind,
-                len: metadata.len(),
-                unix_mode,
-            })
-        })
-    }
-
-    fn read_dir<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<PathBuf>, HostError>> + Send + 'a>> {
-        Box::pin(async move {
-            let mut entries = tokio::fs::read_dir(path).await.map_err(HostError::io)?;
-            let mut paths = Vec::new();
-            while let Some(entry) = entries.next_entry().await.map_err(HostError::io)? {
-                paths.push(entry.path());
-            }
-            paths.sort();
-            Ok(paths)
-        })
-    }
-
     fn symlink<'a>(
         &'a self,
         target: &'a Path,
@@ -492,13 +509,6 @@ impl FileSystemHost for RealHost {
                     .map_err(HostError::io)
             }
         })
-    }
-
-    fn read_link<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
-        Box::pin(async move { tokio::fs::read_link(path).await.map_err(HostError::io) })
     }
 }
 
@@ -612,7 +622,7 @@ fn enforce_output_limit(
     Ok(output)
 }
 
-impl SplitDnsHost for RealHost {
+impl SplitDnsObservationHost for RealHost {
     fn inspect_split_dns<'a>(
         &'a self,
         request: &'a SplitDnsRequest,
@@ -633,7 +643,9 @@ impl SplitDnsHost for RealHost {
             }
         })
     }
+}
 
+impl SplitDnsHost for RealHost {
     fn apply_split_dns<'a>(
         &'a self,
         request: &'a SplitDnsRequest,
