@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::plan::{SnapshotDigestError, SnapshotDigestV1};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresetSourceKind {
     Embedded,
@@ -76,6 +78,23 @@ impl PresetSnapshot {
 
     pub fn is_overlay(&self, path: &str) -> bool {
         self.overlay.contains_key(path)
+    }
+
+    /// Bind the effective logical preset tree and trust layer without binding
+    /// its machine-local checkout path.
+    pub fn digest_v1(&self) -> Result<SnapshotDigestV1, SnapshotDigestError> {
+        let mut builder = SnapshotDigestV1::builder("preset");
+        builder.add_observation("source-kind", source_kind_name(self.source_kind))?;
+        for (path, bytes) in &self.files {
+            let origin = self
+                .origin(path)
+                .map_or(self.source_kind, |origin| origin.source_kind);
+            let mut framed = Vec::with_capacity(bytes.len() + 16);
+            append_digest_frame(&mut framed, source_kind_name(origin));
+            append_digest_frame(&mut framed, bytes);
+            builder.add_observation(format!("file:{path}"), framed)?;
+        }
+        Ok(builder.finish())
     }
 
     pub fn validate(&self) -> PresetValidationReport {
@@ -198,6 +217,19 @@ fn normalize_logical_path(path: String) -> String {
     path.replace('\\', "/")
 }
 
+fn source_kind_name(source_kind: PresetSourceKind) -> &'static [u8] {
+    match source_kind {
+        PresetSourceKind::Embedded => b"embedded",
+        PresetSourceKind::External => b"external",
+        PresetSourceKind::Overlay => b"overlay",
+    }
+}
+
+fn append_digest_frame(output: &mut Vec<u8>, bytes: &[u8]) {
+    output.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    output.extend_from_slice(bytes);
+}
+
 fn category_root(root: &Path, logical_path: &str) -> Option<PathBuf> {
     let mut components = logical_path.split('/');
     let kind = components.next()?;
@@ -217,5 +249,47 @@ mod tests {
         let report = snapshot.validate();
         assert!(!report.valid);
         assert_eq!(report.issues[0].code, "invalid_preset_path");
+    }
+
+    #[test]
+    fn digest_binds_effective_content_and_layer_but_not_physical_root() {
+        let first = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root(PathBuf::from("first-root"))
+            .file("app/demo/shine.toml", b"metadata".to_vec())
+            .file("app/demo/config.toml", b"content".to_vec())
+            .build();
+        let relocated = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root(PathBuf::from("other-root"))
+            .file("app/demo/shine.toml", b"metadata".to_vec())
+            .file("app/demo/config.toml", b"content".to_vec())
+            .build();
+        let changed_content = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("app/demo/shine.toml", b"changed".to_vec())
+            .file("app/demo/config.toml", b"content".to_vec())
+            .build();
+        let overlay = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("app/demo/shine.toml", b"metadata".to_vec())
+            .file("app/demo/config.toml", b"base".to_vec())
+            .overlay_file("app/demo/config.toml", b"content".to_vec())
+            .build();
+
+        assert_eq!(first.digest_v1().unwrap(), relocated.digest_v1().unwrap());
+        assert_ne!(
+            first.digest_v1().unwrap(),
+            changed_content.digest_v1().unwrap()
+        );
+        assert_ne!(first.digest_v1().unwrap(), overlay.digest_v1().unwrap());
+    }
+
+    #[test]
+    fn digest_binds_logical_path_without_host_path_parsing() {
+        let first = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("app/demo/config.toml", b"content".to_vec())
+            .build();
+        let renamed = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("app/demo/renamed.toml", b"content".to_vec())
+            .build();
+
+        assert_ne!(first.digest_v1().unwrap(), renamed.digest_v1().unwrap());
     }
 }

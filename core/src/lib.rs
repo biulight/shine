@@ -4,6 +4,7 @@ pub mod install;
 pub mod lifecycle;
 pub mod migration;
 pub mod persist;
+pub mod plan;
 #[doc(hidden)]
 pub mod runtime;
 pub mod sentinel;

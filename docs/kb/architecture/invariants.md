@@ -5,6 +5,18 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
+- **A security Plan is not dry-run and approval is snapshot-bound.** `PlanV1` contains only ordered
+  semantic steps, safe diagnostic codes, resolved permissions, and digests of exact source/state
+  observations. Planning must not write through a host, execute generator/hook/artifact/bootstrap
+  code, or carry content, env values, secret plaintext, or raw argv. A future apply path must
+  regenerate the Plan from fresh captured inputs and match both its fingerprint and exact required
+  permission set before the first mutation; missing or uncomputable permissions fail closed.
+- **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
+  digest binds sorted effective logical paths, exact bytes, and each file's embedded, external, or
+  overlay origin. It must not include physical source roots: relocating unchanged source is not a
+  semantic change, while changing an effective layer is. State observations use the same framed
+  SHA-256 contract and represent secrets only by opaque handles or versions, never plaintext.
+
 - **Host observation is explicit and domain execution receives captured inputs.** A shared runtime
   bootstrap discovers external/overlay directories and constructs snapshots through the selected
   filesystem host, so CLI, UI, tests, and future host adapters reuse one implementation. Runtime

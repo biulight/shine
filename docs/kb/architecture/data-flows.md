@@ -4,6 +4,29 @@ End-to-end flows that span multiple modules and are not visible in any single fi
 ownership and the per-command routing table, see [`module-map.md`](module-map.md) — this file only
 records the cross-module sequences and their gotchas.
 
+## Security Plan contract foundation
+
+`shine-core::plan` defines a Phase 3 contract separate from current lifecycle execution. A future
+pure planner will consume one immutable `PresetSnapshot`, captured runtime inputs, manifests,
+receipts, and live resource observations. It will emit ordered semantic steps plus a required
+permission set; missing declarations, uncomputable permissions, or a blocked step make the Plan
+non-ready. Planning cannot invoke host mutation or Preset code, and its output carries no content,
+env values, secret plaintext, or raw command arguments.
+
+The effective Preset snapshot hashes sorted logical paths, bytes, and trust layers without hashing
+its physical checkout root. State planners will hash every observation that affects steps or
+permissions using the same framed SHA-256 builder, with only opaque secret handles or versions.
+Frontend review creates approval for one exact ready Plan. The eventual apply flow is deliberately:
+
+```text
+capture current source/state → regenerate Plan → match approved fingerprint + permissions
+    → execute existing Core lifecycle → return LifecycleResultV1
+```
+
+The contract foundation does not yet route CLI commands through this flow. Existing dry-run/status
+remain compatibility paths, `allow_app_hooks` and `allow_sys_code` remain active, and no code may
+describe those paths as a security Plan before pure planners and apply enforcement land.
+
 ## Shell install and uninstall
 
 Shell lifecycle targets are either a category (`utils`) or one command in a category
