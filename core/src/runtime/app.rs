@@ -2704,6 +2704,8 @@ mod lifecycle_tests {
     use std::pin::Pin;
 
     fn runtime() -> CoreRuntime<InMemoryHost> {
+        let home_dir = std::env::temp_dir().join("shine-core-app-lifecycle");
+        let shine_dir = home_dir.join(".shine");
         let presets = PresetSnapshot::builder(PresetSourceKind::External)
             .file(
                 "app/demo/shine.toml",
@@ -2712,10 +2714,10 @@ mod lifecycle_tests {
             .file("app/demo/config", b"one".to_vec())
             .build();
         let mut context = RuntimeContext::isolated(
-            PathBuf::from("/home/test"),
-            PathBuf::from("/home/test/.shine"),
-            PathBuf::from("/home/test/.shine/presets"),
-            PathBuf::from("/home/test/.shine/bin"),
+            home_dir,
+            shine_dir.clone(),
+            shine_dir.join("presets"),
+            shine_dir.join("bin"),
             RuntimePlatform::Linux,
         );
         context.is_external_presets = true;
@@ -2772,6 +2774,7 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn app_executor_roundtrip_and_target_isolation_use_in_memory_host() {
         let runtime = runtime();
+        let home_dir = runtime.context().home_dir.clone();
         let mut observer = NullObserver;
         let mut interaction = Interaction;
         let installed = runtime
@@ -2803,7 +2806,7 @@ mod lifecycle_tests {
 
         runtime
             .host()
-            .put_file("/home/test/other", b"other".to_vec());
+            .put_file(home_dir.join("other"), b"other".to_vec());
         let removed = runtime
             .uninstall_apps(
                 AppUninstallLifecycleRequest {
@@ -2821,16 +2824,12 @@ mod lifecycle_tests {
         assert!(
             runtime
                 .host()
-                .read(Path::new("/home/test/.config/demo/config"))
+                .read(&home_dir.join(".config/demo/config"))
                 .await
                 .is_err()
         );
         assert_eq!(
-            runtime
-                .host()
-                .read(Path::new("/home/test/other"))
-                .await
-                .unwrap(),
+            runtime.host().read(&home_dir.join("other")).await.unwrap(),
             b"other"
         );
     }

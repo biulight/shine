@@ -2382,11 +2382,14 @@ mod tests {
     #[tokio::test]
     async fn in_memory_shell_lifecycle_covers_cache_launcher_profile_and_receipt() {
         let host = InMemoryHost::new();
+        let home_dir = std::env::temp_dir().join("shine-core-shell-lifecycle");
+        let shine_dir = home_dir.join(".shine");
+        let bin_dir = shine_dir.join("bin");
         let context = RuntimeContext::isolated(
-            PathBuf::from("/virtual/home"),
-            PathBuf::from("/virtual/home/.shine"),
-            PathBuf::from("/virtual/home/.shine/presets"),
-            PathBuf::from("/virtual/home/.shine/bin"),
+            home_dir,
+            shine_dir.clone(),
+            shine_dir.join("presets"),
+            bin_dir.clone(),
             RuntimePlatform::Linux,
         );
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
@@ -2398,6 +2401,7 @@ mod tests {
             .file("shell/tools/tool.sh", b"#!/bin/sh\necho tool\n".to_vec())
             .build();
         let runtime = CoreRuntime::new(host.clone(), context, snapshot);
+        let launcher_path = command_path_for_name(&bin_dir, std::ffi::OsStr::new("tool"));
 
         let installed = runtime
             .install_shells(ShellLifecycleRequest {
@@ -2409,13 +2413,9 @@ mod tests {
             .unwrap();
         assert_eq!(installed.source_commands, vec!["tool"]);
         assert_eq!(installed.links.created.len(), 1);
+        assert!(host.metadata(&launcher_path).await.is_ok());
         assert!(
-            host.metadata(Path::new("/virtual/home/.shine/bin/tool"))
-                .await
-                .is_ok()
-        );
-        assert!(
-            host.read(Path::new("/virtual/home/.shine/shell-manifest.toml"))
+            host.read(&shine_dir.join("shell-manifest.toml"))
                 .await
                 .unwrap()
                 .starts_with(b"schema_version = 1")
@@ -2434,11 +2434,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(removed.links.removed.len(), 1);
-        assert!(
-            host.metadata(Path::new("/virtual/home/.shine/bin/tool"))
-                .await
-                .is_err()
-        );
+        assert!(host.metadata(&launcher_path).await.is_err());
     }
 
     #[tokio::test]

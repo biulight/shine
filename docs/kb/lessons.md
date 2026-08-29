@@ -3,6 +3,21 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-29 — In-memory runtime tests still need host-native captured paths
+
+- **Symptom**: the full Windows `shine-core` suite failed three in-memory App, Shell, and Sys
+  lifecycle tests that passed on Unix hosts.
+- **Root cause**: `InMemoryHost` abstracts filesystem I/O, but captured `PathBuf` values, native
+  shell defaults, and Shell launcher names still follow the compiled host. The tests used
+  Unix-rooted homes, inherited the Windows PowerShell default while simulating Zsh, and assumed a
+  suffix-free launcher.
+- **Fix**: derive isolated homes from the host-native temporary directory and resolve the expected
+  launcher through the same platform helper as production code; explicitly select Zsh in the Sys
+  test whose requested behavior is Zsh profile composition.
+- **Rule**: in-memory host tests must use host-native absolute paths for captured runtime context
+  and shared platform helpers for host-specific artifact names. Tests that simulate a target shell
+  or platform must set it explicitly instead of inheriting the compiled host's default.
+
 ## 2026-08-29 — Cross-platform validation must not use host-native path parsing
 
 - **Symptom**: Windows CI rejected every built-in App preset destination and reported a missing-file

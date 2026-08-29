@@ -1049,13 +1049,16 @@ mod tests {
     #[tokio::test]
     async fn in_memory_profile_composition_updates_loaders_and_shell_blocks_through_host() {
         let host = InMemoryHost::new();
-        let context = RuntimeContext::isolated(
-            PathBuf::from("/virtual/home"),
-            PathBuf::from("/virtual/home/.shine"),
-            PathBuf::from("/virtual/home/.shine/presets"),
-            PathBuf::from("/virtual/home/.shine/bin"),
+        let home_dir = std::env::temp_dir().join("shine-core-sys-profile");
+        let shine_dir = home_dir.join(".shine");
+        let mut context = RuntimeContext::isolated(
+            home_dir.clone(),
+            shine_dir.clone(),
+            shine_dir.join("presets"),
+            shine_dir.join("bin"),
             RuntimePlatform::Linux,
         );
+        context.shell = ShellType::Zsh;
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
                 "sys/ubuntu/shine.toml",
@@ -1079,13 +1082,12 @@ mod tests {
             .unwrap();
         assert_eq!(first.status, SysItemStatus::Updated);
         assert_eq!(
-            host.read(Path::new("/virtual/home/.shine/profile/ubuntu-sys.pre.sh"))
+            host.read(&shine_dir.join("profile/ubuntu-sys.pre.sh"))
                 .await
                 .unwrap(),
             b"export SHINE_PRE=1\n"
         );
-        let zshrc =
-            String::from_utf8(host.read(Path::new("/virtual/home/.zshrc")).await.unwrap()).unwrap();
+        let zshrc = String::from_utf8(host.read(&home_dir.join(".zshrc")).await.unwrap()).unwrap();
         assert!(zshrc.contains("shine ubuntu sys pre"));
         assert!(zshrc.contains("shine ubuntu sys post"));
 
