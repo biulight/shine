@@ -1,3 +1,4 @@
+use crate::runtime::FileSystemHost;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -70,10 +71,13 @@ pub fn hash_content(bytes: &[u8]) -> u64 {
 }
 
 impl AppManifest {
-    pub async fn load(shine_dir: &Path) -> Result<Self> {
-        let mut manifest: Self =
-            crate::persist::load_toml_or_default(&shine_dir.join(MANIFEST_FILE), "app manifest")
-                .await?;
+    pub async fn load(host: &impl FileSystemHost, shine_dir: &Path) -> Result<Self> {
+        let path = shine_dir.join(MANIFEST_FILE);
+        let mut manifest: Self = match host.read(&path).await {
+            Ok(bytes) => toml::from_slice(&bytes)?,
+            Err(error) if error.is_not_found() => Self::default(),
+            Err(error) => return Err(error.into_anyhow("failed to read app manifest")),
+        };
         match manifest.schema_version {
             0 => manifest.schema_version = APP_MANIFEST_SCHEMA_VERSION,
             APP_MANIFEST_SCHEMA_VERSION => {}
@@ -84,14 +88,17 @@ impl AppManifest {
         Ok(manifest)
     }
 
-    pub async fn save(&self, shine_dir: &Path) -> Result<()> {
+    pub async fn save(&self, host: &impl FileSystemHost, shine_dir: &Path) -> Result<()> {
         if self.schema_version != APP_MANIFEST_SCHEMA_VERSION {
             bail!(
                 "cannot write app manifest schema version {}; expected {APP_MANIFEST_SCHEMA_VERSION}",
                 self.schema_version
             );
         }
-        crate::persist::save_toml_atomic(self, &shine_dir.join(MANIFEST_FILE), "app manifest").await
+        let bytes = toml::to_string_pretty(self)?;
+        host.write_atomic(&shine_dir.join(MANIFEST_FILE), bytes.as_bytes())
+            .await
+            .map_err(|error| error.into_anyhow("failed to write app manifest"))
     }
 
     pub fn upsert(&mut self, entry: AppEntry) {
@@ -147,7 +154,9 @@ mod tests {
     #[tokio::test]
     async fn load_returns_empty_when_missing() {
         let dir = make_temp_dir().await;
-        let manifest = AppManifest::load(&dir).await.unwrap();
+        let manifest = AppManifest::load(&crate::runtime::RealHost, &dir)
+            .await
+            .unwrap();
         assert!(manifest.entries.is_empty());
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -157,9 +166,14 @@ mod tests {
         let dir = make_temp_dir().await;
         let mut manifest = AppManifest::default();
         manifest.upsert(sample_entry("/tmp/foo.toml"));
-        manifest.save(&dir).await.unwrap();
+        manifest
+            .save(&crate::runtime::RealHost, &dir)
+            .await
+            .unwrap();
 
-        let loaded = AppManifest::load(&dir).await.unwrap();
+        let loaded = AppManifest::load(&crate::runtime::RealHost, &dir)
+            .await
+            .unwrap();
         assert_eq!(loaded.schema_version, APP_MANIFEST_SCHEMA_VERSION);
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(
@@ -183,11 +197,16 @@ content_hash = 7
         .await
         .unwrap();
 
-        let manifest = AppManifest::load(&dir).await.unwrap();
+        let manifest = AppManifest::load(&crate::runtime::RealHost, &dir)
+            .await
+            .unwrap();
         assert_eq!(manifest.schema_version, APP_MANIFEST_SCHEMA_VERSION);
         let after_read = fs::read_to_string(dir.join(MANIFEST_FILE)).await.unwrap();
         assert!(!after_read.contains("schema_version"));
-        manifest.save(&dir).await.unwrap();
+        manifest
+            .save(&crate::runtime::RealHost, &dir)
+            .await
+            .unwrap();
 
         let written = fs::read_to_string(dir.join(MANIFEST_FILE)).await.unwrap();
         assert!(written.contains("schema_version = 1"));
@@ -201,7 +220,9 @@ content_hash = 7
             .await
             .unwrap();
 
-        let error = AppManifest::load(&dir).await.unwrap_err();
+        let error = AppManifest::load(&crate::runtime::RealHost, &dir)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("newer than this Shine supports"));
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -212,9 +233,14 @@ content_hash = 7
         let mut manifest = AppManifest::default();
         manifest.upsert(sample_entry("/tmp/a.toml"));
         manifest.upsert(sample_entry("/tmp/b.toml"));
-        manifest.save(&dir).await.unwrap();
+        manifest
+            .save(&crate::runtime::RealHost, &dir)
+            .await
+            .unwrap();
 
-        let loaded = AppManifest::load(&dir).await.unwrap();
+        let loaded = AppManifest::load(&crate::runtime::RealHost, &dir)
+            .await
+            .unwrap();
         assert_eq!(loaded.entries.len(), 2);
         fs::remove_dir_all(&dir).await.unwrap();
     }

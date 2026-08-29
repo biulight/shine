@@ -70,7 +70,8 @@ pub struct AppRow {
 
 /// Build shell preset rows.  Does not include the PATH sentinel line.
 pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
-    let inspections = crate::core_runtime::from_config(config)?
+    let inspections = crate::core_runtime::from_config(config)
+        .await?
         .inspect_shells()
         .await?;
     Ok(inspections
@@ -106,7 +107,7 @@ pub(crate) async fn build_app_rows_with_lifecycle(
     config: &Config,
     categories: &[AppCategory],
 ) -> Result<(Vec<AppRow>, LifecycleResultV1)> {
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     if let Ok(env) = EnvConfig::load_or_init(config).await {
         runtime.context_mut_for_cli().env = env.as_map().clone();
     }
@@ -1327,7 +1328,7 @@ mod tests {
             }],
             ..ShellManifest::default()
         }
-        .save(&config)
+        .save(&utils::runtime::RealHost, &config)
         .await
         .unwrap();
 

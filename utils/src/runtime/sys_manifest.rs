@@ -4,7 +4,7 @@ use super::{
 };
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 pub fn parse_sys_manifest(content: &str) -> Result<SysManifest> {
     let manifest: SysManifest = toml::from_str(content)?;
@@ -111,28 +111,80 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         let content = std::str::from_utf8(bytes).context("sys manifest must be UTF-8")?;
         let manifest =
             parse_sys_manifest(content).with_context(|| format!("parsing {manifest_path}"))?;
-        let origin_root = self
+        // This path is presentation-only until an executing path explicitly
+        // materializes the immutable snapshot. Domain reads continue to use
+        // snapshot bytes and never reopen this ambient directory.
+        let root = self
             .presets()
             .origin(&manifest_path)
-            .and_then(|origin| origin.category_root.clone());
-        let root = if let Some(root) = origin_root {
-            root
-        } else {
-            let root = self.context().presets_dir.join("sys").join(os_id);
-            for (logical, bytes) in self
-                .presets()
-                .files()
-                .iter()
-                .filter(|(path, _)| path.starts_with(&prefix))
-            {
-                self.host()
-                    .write_atomic(&self.context().presets_dir.join(logical), bytes)
-                    .await
-                    .map_err(|error| error.into_anyhow("materializing Sys preset snapshot"))?;
-            }
-            root
-        };
+            .and_then(|origin| origin.category_root.clone())
+            .unwrap_or_else(|| self.context().presets_dir.join("sys").join(os_id));
         Ok(LoadedSysPreset { manifest, root })
+    }
+
+    /// Materialize one captured Sys category for process execution.
+    ///
+    /// Inspection, preview and profile composition must not call this method.
+    /// A directory swap removes stale files while ensuring executors never
+    /// observe a partially written category.
+    pub(crate) async fn materialize_sys_preset(&self, os_id: &str) -> Result<PathBuf> {
+        if os_id.contains(['/', '\\']) || os_id.contains("..") {
+            bail!("invalid os id: {os_id:?}");
+        }
+        let prefix = format!("sys/{os_id}/");
+        let parent = self.context().shine_dir.join("runtime").join("sys");
+        let root = parent.join(os_id);
+        let nonce = uuid::Uuid::new_v4();
+        let staging = parent.join(format!(".{os_id}.staging-{nonce}"));
+        let backup = parent.join(format!(".{os_id}.backup-{nonce}"));
+        self.host()
+            .create_dir_all(&staging)
+            .await
+            .map_err(|error| error.into_anyhow("creating Sys preset staging directory"))?;
+        for (logical, bytes) in self
+            .presets()
+            .files()
+            .iter()
+            .filter(|(path, _)| path.starts_with(&prefix))
+        {
+            let relative = logical
+                .strip_prefix(&prefix)
+                .expect("filtered Sys snapshot path");
+            if let Err(error) = self
+                .host()
+                .write_atomic(&staging.join(relative), bytes)
+                .await
+            {
+                let _ = self.host().remove_dir_all(&staging).await;
+                return Err(error.into_anyhow("staging Sys preset snapshot"));
+            }
+        }
+
+        let had_previous = match self.host().metadata(&root).await {
+            Ok(_) => {
+                self.host()
+                    .rename(&root, &backup)
+                    .await
+                    .map_err(|error| error.into_anyhow("backing up prior Sys preset snapshot"))?;
+                true
+            }
+            Err(error) if error.is_not_found() => false,
+            Err(error) => return Err(error.into_anyhow("inspecting prior Sys preset snapshot")),
+        };
+        if let Err(error) = self.host().rename(&staging, &root).await {
+            if had_previous {
+                let _ = self.host().rename(&backup, &root).await;
+            }
+            let _ = self.host().remove_dir_all(&staging).await;
+            return Err(error.into_anyhow("installing Sys preset snapshot"));
+        }
+        if had_previous {
+            self.host()
+                .remove_dir_all(&backup)
+                .await
+                .map_err(|error| error.into_anyhow("removing prior Sys preset snapshot"))?;
+        }
+        Ok(root)
     }
 }
 
@@ -411,4 +463,76 @@ fn config_string(config: &toml::Table, key: &str) -> Result<String> {
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
         .with_context(|| format!("driver config requires non-empty `{key}`"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{
+        HostOperation, InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext,
+        RuntimePlatform,
+    };
+
+    #[tokio::test]
+    async fn external_sys_preset_load_is_read_only_and_execution_materializes_snapshot() {
+        let host = InMemoryHost::new();
+        let context = RuntimeContext::isolated(
+            "/virtual/home".into(),
+            "/virtual/home/.shine".into(),
+            "/ambient/presets".into(),
+            "/virtual/home/.shine/bin".into(),
+            RuntimePlatform::Linux,
+        );
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .base_root("/ambient/presets")
+            .file(
+                "sys/test/shine.toml",
+                b"version = 2\n[[items]]\nid = \"demo\"\nlabel = \"Demo\"\ndetect = { kind = \"path\", path = \"~/demo\" }\ninstall = { kind = \"script\", path = \"install.sh\" }\n"
+                    .to_vec(),
+            )
+            .file("sys/test/install.sh", b"echo captured\n".to_vec())
+            .build();
+        let runtime = CoreRuntime::new(host.clone(), context, snapshot);
+
+        let loaded = runtime.load_sys_preset("test").await.unwrap();
+
+        assert_eq!(loaded.root, Path::new("/ambient/presets/sys/test"));
+        assert!(
+            !host.operations().iter().any(|operation| matches!(
+                operation,
+                HostOperation::Write(_)
+                    | HostOperation::CreateDirectory(_)
+                    | HostOperation::Remove(_)
+                    | HostOperation::RemoveDirectory(_)
+            )),
+            "loading a Sys preset must remain read-only"
+        );
+        assert!(
+            host.read(Path::new(
+                "/virtual/home/.shine/runtime/sys/test/install.sh"
+            ))
+            .await
+            .is_err()
+        );
+        host.put_file(
+            "/virtual/home/.shine/runtime/sys/test/stale.sh",
+            b"stale".to_vec(),
+        );
+
+        let execution_root = runtime.materialize_sys_preset("test").await.unwrap();
+        assert_eq!(
+            execution_root,
+            Path::new("/virtual/home/.shine/runtime/sys/test")
+        );
+        assert_eq!(
+            host.read(&execution_root.join("install.sh")).await.unwrap(),
+            b"echo captured\n"
+        );
+        assert!(host.read(&execution_root.join("stale.sh")).await.is_err());
+        assert!(
+            host.read(Path::new("/ambient/presets/sys/test/install.sh"))
+                .await
+                .is_err()
+        );
+    }
 }

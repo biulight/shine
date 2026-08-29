@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-29 — A host boundary must remove ambient compatibility entry points
+
+- **Symptom**: the Phase 2 migration routed normal CLI commands through `CoreRuntime`, but Sys
+  preflight and preset validation could still observe the real filesystem, while public legacy
+  launcher and manifest methods could mutate state without a host.
+- **Root cause**: boundary tests checked that selected CLI files were deleted or mentioned Core,
+  but did not reject no-host public APIs or direct `Path`/`std::fs` calls inside Core-owned flows.
+- **Fix**: require hosts for validation and manifest persistence, capture cwd explicitly, move
+  external/overlay discovery into shared host-backed runtime bootstrap, materialize Sys inputs only
+  for authorized execution, hide test-only launcher helpers, and add behavioral boundary tests.
+- **Rule**: dependency inversion does not forbid Core infrastructure from observing a real host. It
+  requires shared bootstrap and resource operations to observe through explicit ports, while domain
+  execution consumes captured inputs and exposes no ambient or no-host compatibility entry point.
+
 ## 2026-08-28 — Native-shell integration tests must assert native syntax
 
 - **Symptom**: the Windows Rust test job rejected the profile written by `shell completion install`

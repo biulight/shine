@@ -26,7 +26,7 @@ async fn run_explicit(config: &Config, app_id: &str, action: AppArtifactAction) 
     if action == AppArtifactAction::Remove && artifact.teardown.is_none() {
         bail!("app '{app_id}' does not define an artifact teardown script");
     }
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     if let Ok(env) = crate::env::EnvConfig::load_or_init(config).await {
         runtime.context_mut_for_cli().env = env.as_map().clone();
     }

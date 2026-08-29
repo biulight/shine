@@ -23,7 +23,7 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
     } else {
         Some(detect_os_id().await?)
     };
-    let runtime = crate::core_runtime::from_config(config)?;
+    let runtime = crate::core_runtime::from_config(config).await?;
     let mut presets = runtime.available_sys_manifests()?;
     if !all {
         presets.retain(|(os_id, _)| Some(os_id.as_str()) == current_os.as_deref());
@@ -86,7 +86,7 @@ pub async fn handle_list(config: &Config, all: bool) -> Result<()> {
 pub async fn handle_info(config: &Config, item_id: &str) -> Result<()> {
     crate::config::print_presets_note(config);
     let os_id = detect_os_id().await?;
-    let runtime = crate::core_runtime::from_config(config)?;
+    let runtime = crate::core_runtime::from_config(config).await?;
     let presets = runtime.available_sys_manifests()?;
     let manifest = presets
         .iter()
@@ -253,7 +253,8 @@ fn package_provider_name(provider: SysPackageProvider) -> &'static str {
 
 pub async fn handle_status(config: &Config) -> Result<()> {
     let os_id = detect_os_id().await?;
-    let manifest = crate::core_runtime::from_config(config)?
+    let manifest = crate::core_runtime::from_config(config)
+        .await?
         .inspect_sys_run_manifest()
         .await?;
     let entries: Vec<&SysRunEntry> = manifest
@@ -342,7 +343,7 @@ async fn handle_init_for_os(
         Vec::new()
     };
 
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     runtime.context_mut_for_cli().proxy_env = proxy_env
         .iter()
         .map(|(key, value)| ((*key).to_string(), value.clone()))
@@ -628,7 +629,9 @@ package = "tool"
     #[tokio::test]
     async fn sys_run_manifest_load_returns_empty_when_missing() {
         let dir = make_temp_dir().await;
-        let manifest = SysRunManifest::load(&dir).await.unwrap();
+        let manifest = SysRunManifest::load(&utils::runtime::RealHost, &dir)
+            .await
+            .unwrap();
         assert!(manifest.entries.is_empty());
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -657,9 +660,14 @@ managed = true
         let dir = make_temp_dir().await;
         let mut manifest = SysRunManifest::default();
         manifest.upsert(sample_sys_run_entry("macos", "rust", "Rust"));
-        manifest.save(&dir).await.unwrap();
+        manifest
+            .save(&utils::runtime::RealHost, &dir)
+            .await
+            .unwrap();
 
-        let loaded = SysRunManifest::load(&dir).await.unwrap();
+        let loaded = SysRunManifest::load(&utils::runtime::RealHost, &dir)
+            .await
+            .unwrap();
         assert_eq!(loaded, manifest);
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -2112,7 +2120,9 @@ esac
 
         let calls = fs::read_to_string(&calls).await.unwrap();
         assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "second"]);
-        let sys_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        let sys_manifest = SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert_eq!(sys_manifest.entries.len(), 2);
         assert!(sys_manifest.entries.iter().any(|entry| {
             entry.os_id == "fakeos"
@@ -2229,7 +2239,9 @@ esac
         assert!(err.to_string().contains("sys bootstrap failed"));
         let calls = fs::read_to_string(&calls).await.unwrap();
         assert_eq!(calls.lines().collect::<Vec<_>>(), ["first", "fails"]);
-        let sys_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        let sys_manifest = SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert_eq!(sys_manifest.entries.len(), 1);
         assert_eq!(sys_manifest.entries[0].item_id, "first");
         assert_eq!(sys_manifest.entries[0].status, SysItemStatus::Installed);

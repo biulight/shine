@@ -77,7 +77,7 @@ async fn handle_upgrade_installed_target_with_reporter(
     verbose: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(AppUpgradeReport, LifecycleResultV1)> {
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await?;
     runtime.context_mut_for_cli().env = env.as_map().clone();
     let prompt_stale = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();

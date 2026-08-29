@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -48,6 +49,11 @@ impl HostError {
 }
 
 pub trait FileSystemHost {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>>;
+
     fn read<'a>(
         &'a self,
         path: &'a Path,
@@ -121,7 +127,14 @@ pub trait FileSystemHost {
 
 /// Minimal privileged filesystem primitives. Core performs ownership,
 /// backup/conflict and receipt decisions before invoking these operations.
+pub type PrivilegedOperationGuard = Box<dyn Send>;
+
 pub trait PrivilegedFileSystemHost {
+    /// Serializes the complete ownership-check/backup/mutation transaction.
+    fn acquire_privileged_operation<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<PrivilegedOperationGuard>> + Send + 'a>>;
+
     fn write_privileged<'a>(
         &'a self,
         path: &'a Path,
@@ -211,6 +224,7 @@ pub trait SplitDnsHost {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostOperation {
+    AcquirePrivilegedOperation,
     Read(PathBuf),
     Write(PathBuf),
     CreateDirectory(PathBuf),
@@ -297,6 +311,13 @@ pub trait RuntimeInteraction {
 pub struct RealHost;
 
 impl FileSystemHost for RealHost {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
+        Box::pin(async move { tokio::fs::canonicalize(path).await.map_err(HostError::io) })
+    }
+
     fn read<'a>(
         &'a self,
         path: &'a Path,
@@ -537,6 +558,12 @@ impl ProcessHost for RealHost {
 }
 
 impl PrivilegedFileSystemHost for RealHost {
+    fn acquire_privileged_operation<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<PrivilegedOperationGuard>> + Send + 'a>> {
+        Box::pin(acquire_admin_operation_lock())
+    }
+
     fn write_privileged<'a>(
         &'a self,
         path: &'a Path,
@@ -612,6 +639,7 @@ impl SplitDnsHost for RealHost {
         request: &'a SplitDnsRequest,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
+            let _guard = acquire_admin_operation_lock().await?;
             if request.os_id == "windows" {
                 apply_windows_split_dns(request).await?;
             } else {
@@ -629,6 +657,7 @@ impl SplitDnsHost for RealHost {
         request: &'a SplitDnsRequest,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
+            let _guard = acquire_admin_operation_lock().await?;
             if request.os_id == "windows" {
                 remove_windows_split_dns(request).await?;
             } else {
@@ -639,6 +668,36 @@ impl SplitDnsHost for RealHost {
             }
             Ok(())
         })
+    }
+}
+
+struct AdminOperationLock {
+    path: PathBuf,
+}
+
+impl Drop for AdminOperationLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir(&self.path);
+    }
+}
+
+async fn acquire_admin_operation_lock() -> anyhow::Result<PrivilegedOperationGuard> {
+    let path = std::env::temp_dir().join("shine-admin.lock");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        match tokio::fs::create_dir(&path).await {
+            Ok(()) => return Ok(Box::new(AdminOperationLock { path })),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = tokio::fs::remove_dir(&path).await;
+                    continue;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => {
+                return Err(error).context("failed to acquire admin operation lock");
+            }
+        }
     }
 }
 

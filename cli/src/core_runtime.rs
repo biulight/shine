@@ -1,53 +1,43 @@
-//! Distribution adapter for the frontend-neutral Core runtime.
+//! CLI assembly adapter for the frontend-neutral Core runtime.
 //!
-//! `rust-embed` and CLI configuration stay in this crate. Every preset byte
-//! and ambient path used by domain logic is captured before `CoreRuntime` is
-//! constructed.
+//! `rust-embed` and CLI configuration stay in this crate. Shared bootstrap
+//! discovers external/overlay trees through the host port; every input used by
+//! domain logic is captured before `CoreRuntime` is constructed.
 
 use crate::config::Config;
 use anyhow::{Context, Result};
 use directories::BaseDirs;
-use std::path::Path;
 use utils::runtime::{
-    CoreRuntime, PresetSnapshot, PresetSourceKind, RealHost, RuntimeContext, RuntimePlatform,
+    CoreRuntime, PresetSnapshotRequest, PresetSnapshotSource, RealHost, RuntimeContext,
+    RuntimePlatform, capture_embedded_preset_snapshot, capture_preset_snapshot,
 };
 
-pub(crate) fn from_config(config: &Config) -> Result<CoreRuntime<RealHost>> {
-    from_config_with_preset_mode(config, config.is_external_presets)
+pub(crate) async fn from_config(config: &Config) -> Result<CoreRuntime<RealHost>> {
+    from_config_with_preset_mode(config, config.is_external_presets).await
 }
 
-pub(crate) fn from_installed_presets(config: &Config) -> Result<CoreRuntime<RealHost>> {
-    from_config_with_preset_mode(config, true)
+pub(crate) async fn from_installed_presets(config: &Config) -> Result<CoreRuntime<RealHost>> {
+    from_config_with_preset_mode(config, true).await
 }
 
-fn from_config_with_preset_mode(
+async fn from_config_with_preset_mode(
     config: &Config,
     is_external_presets: bool,
 ) -> Result<CoreRuntime<RealHost>> {
     let bases = BaseDirs::new().context("resolving platform runtime directories")?;
-    let mut builder = if is_external_presets {
-        let mut builder = PresetSnapshot::builder(PresetSourceKind::External)
-            .base_root(config.presets_dir().to_path_buf());
-        for (logical, bytes) in collect_tree(config.presets_dir())? {
-            builder = builder.file(logical, bytes);
-        }
-        builder
+    let source = if is_external_presets {
+        PresetSnapshotSource::External(config.presets_dir().to_path_buf())
     } else {
-        let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
-        for logical in crate::presets::embedded_asset_paths("") {
-            if let Some(bytes) = crate::presets::read_embedded_asset_bytes(&logical) {
-                builder = builder.file(logical, bytes);
-            }
-        }
-        builder
+        PresetSnapshotSource::Embedded(embedded_preset_files())
     };
-    if let Some(overlay) = config.active_presets_overlay_dir() {
-        builder = builder.overlay_root(overlay.to_path_buf());
-        for (logical, bytes) in collect_tree(overlay)? {
-            builder = builder.overlay_file(logical, bytes);
-        }
-    }
-    let snapshot = builder.build();
+    let snapshot = capture_preset_snapshot(
+        &RealHost,
+        PresetSnapshotRequest {
+            source,
+            overlay_root: config.active_presets_overlay_dir().map(ToOwned::to_owned),
+        },
+    )
+    .await?;
     let context = RuntimeContext {
         home_dir: config.home_dir.clone(),
         shine_dir: config.shine_dir().to_path_buf(),
@@ -56,7 +46,7 @@ fn from_config_with_preset_mode(
         cache_dir: bases.cache_dir().to_path_buf(),
         data_dir: bases.data_dir().to_path_buf(),
         app_default_dest_root: config.app_default_dest_root(),
-        overlay_dir: config.active_presets_overlay_dir().map(Path::to_path_buf),
+        overlay_dir: config.active_presets_overlay_dir().map(ToOwned::to_owned),
         platform: RuntimePlatform::current(),
         shell: config.shell_type,
         shell_config_paths: crate::shells::shell_config_paths_for_core(
@@ -87,12 +77,7 @@ pub(crate) fn from_embedded_presets() -> CoreRuntime<RealHost> {
 pub(crate) fn from_embedded_presets_for_platform(
     platform: RuntimePlatform,
 ) -> CoreRuntime<RealHost> {
-    let mut builder = PresetSnapshot::builder(PresetSourceKind::Embedded);
-    for logical in crate::presets::embedded_asset_paths("") {
-        if let Some(bytes) = crate::presets::read_embedded_asset_bytes(&logical) {
-            builder = builder.file(logical, bytes);
-        }
-    }
+    let snapshot = capture_embedded_preset_snapshot(embedded_preset_files());
     let root = std::path::PathBuf::from(".shine-core-embedded");
     let context = RuntimeContext::isolated(
         root.join("home"),
@@ -101,7 +86,7 @@ pub(crate) fn from_embedded_presets_for_platform(
         root.join("home/.shine/bin"),
         platform,
     );
-    CoreRuntime::new(RealHost, context, builder.build())
+    CoreRuntime::new(RealHost, context, snapshot)
 }
 
 fn systemd_resolved_stub_active() -> bool {
@@ -117,48 +102,13 @@ fn systemd_resolved_stub_active() -> bool {
         .unwrap_or(true)
 }
 
-fn collect_tree(root: &Path) -> Result<Vec<(String, Vec<u8>)>> {
-    if !root.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut stack = vec![root.to_path_buf()];
-    let mut files = Vec::new();
-    while let Some(directory) = stack.pop() {
-        let entries = std::fs::read_dir(&directory)
-            .with_context(|| format!("reading preset directory {}", directory.display()))?;
-        for entry in entries {
-            let entry = entry?;
-            let path = entry.path();
-            let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                if entry.file_name() != "node_modules" {
-                    stack.push(path);
-                }
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let relative = path
-                .strip_prefix(root)
-                .context("preset file escaped its snapshot root")?;
-            let logical = logical_path(relative);
-            files.push((
-                logical,
-                std::fs::read(&path)
-                    .with_context(|| format!("reading preset file {}", path.display()))?,
-            ));
-        }
-    }
-    files.sort_by(|left, right| left.0.cmp(&right.0));
-    Ok(files)
-}
-
-fn logical_path(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
+fn embedded_preset_files() -> Vec<(String, Vec<u8>)> {
+    crate::presets::embedded_asset_paths("")
+        .into_iter()
+        .filter_map(|logical| {
+            crate::presets::read_embedded_asset_bytes(&logical).map(|bytes| (logical, bytes))
+        })
+        .collect()
 }
 
 fn proxy_env(
@@ -174,12 +124,12 @@ fn proxy_env(
 mod tests {
     use super::*;
 
-    #[test]
-    fn adapter_captures_embedded_presets_without_exposing_rust_embed_to_core() {
+    #[tokio::test]
+    async fn adapter_captures_embedded_presets_without_exposing_rust_embed_to_core() {
         let root =
             std::env::temp_dir().join(format!("shine-core-adapter-{}", uuid::Uuid::new_v4()));
         let config = Config::new_for_test(&root);
-        let runtime = from_config(&config).unwrap();
+        let runtime = from_config(&config).await.unwrap();
         assert!(runtime.presets().get("app/ghostty/shine.toml").is_some());
         assert_eq!(runtime.context().home_dir, root);
     }

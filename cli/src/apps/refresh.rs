@@ -18,7 +18,7 @@ pub async fn handle_refresh(
     force: bool,
 ) -> Result<()> {
     crate::config::print_presets_note(config);
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await?;
     runtime.context_mut_for_cli().env = env.as_map().clone();
 
@@ -222,7 +222,9 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
             .unwrap();
         let cat = &categories[0];
         let file = &cat.files[0];
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let entry = manifest.find_by_dest(&dest).unwrap();
         assert_eq!(
             app_entry_status(&config, cat, file, entry, &config.env).await,

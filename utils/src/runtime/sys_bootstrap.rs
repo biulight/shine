@@ -245,6 +245,10 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         interaction: &mut impl RuntimeInteraction,
         observer: &mut impl RuntimeObserver,
     ) -> Result<SysBootstrapReport> {
+        // Keep this public single-item entry point independently safe even
+        // when a frontend does not call the batch coordinator first.
+        let _run_manifest =
+            super::sys::load_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let loaded = self.load_sys_preset(&request.os_id).await?;
         let item = loaded
             .manifest
@@ -298,11 +302,14 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                     .await?
             }
             SysInstall::Script { path, .. } => {
-                let script = loaded.root.join(path);
+                // Materialization is an execution effect: inspection, preview,
+                // preflight and denied authorization remain read-only.
+                let execution_root = self.materialize_sys_preset(&request.os_id).await?;
+                let script = execution_root.join(path);
                 self.run_sys_script(
                     &request.os_id,
                     &script,
-                    &loaded.root,
+                    &execution_root,
                     &request.sys_shell,
                     item,
                     requires_admin,
@@ -376,7 +383,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                     script.display()
                 );
             }
-            if self.presets().get(&logical).is_none() && !script.is_file() {
+            if self.presets().get(&logical).is_none() {
                 bail!(
                     "sys item `{}` install script is missing: {}",
                     item.id,

@@ -44,6 +44,11 @@ Core receives all external capabilities through ports:
 - typed interaction requests for confirmation and administrator authorization;
 - typed, non-serializable observer events for progressive frontend presentation.
 
+A shared runtime bootstrap uses the filesystem host to discover external/overlay directories and
+build the immutable snapshot. CLI and UI supply distribution-owned embedded bytes and resolved
+frontend settings; they do not implement their own directory walker. App/Shell/Sys domain logic
+never reads ambient filesystem, cwd, or environment state.
+
 Events may carry private paths and human diagnostics needed by the CLI, but they never enter
 `LifecycleResultV1`. The CLI maps them to its existing stdout/stderr text and prompt order.
 
@@ -63,13 +68,18 @@ Events may carry private paths and human diagnostics needed by the CLI, but they
 
 The slices landed in dependency order and each retained the CLI characterization suite. App,
 Shell, managed Sys, bootstrap/profile, preset validation, and App/Shell inspection now enter
-through `CoreRuntime`; the remaining CLI modules are routing, interaction, embedded-snapshot, and
-terminal-rendering adapters. SSH secret-broker inspection remains intentionally outside this work.
+through `CoreRuntime`; the remaining CLI modules are routing, interaction, embedded-byte supply,
+runtime assembly, and terminal-rendering adapters. SSH secret-broker inspection remains
+intentionally outside this work.
 
 ## Acceptance
 
 - A Rust harness depending only on `shine-core` can validate presets, inspect installed state, and
   assess an operation against an immutable input snapshot.
+- Shared preset discovery and snapshot construction receive a filesystem host; validation also
+  receives captured cwd. App, Shell, and Sys manifest I/O requires a filesystem host. Sys
+  inspection, preview, and preflight consume snapshot bytes without writing; executable content is
+  atomically materialized only after execution is authorized.
 - In-memory App, Shell, and Sys tests cover lifecycle round trips, targeted isolation, conflicts,
   backup/receipt behavior, and denied authorization without real host access.
 - The CLI does not write App, Shell, or Sys manifests or corresponding resources directly.

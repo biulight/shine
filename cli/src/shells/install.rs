@@ -84,7 +84,8 @@ async fn handle_install_with_reporter(
     }
     let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
     let category_filter = selection.map(|target| target.category);
-    let core_report = crate::core_runtime::from_config(config)?
+    let core_report = crate::core_runtime::from_config(config)
+        .await?
         .install_shells(utils::runtime::ShellLifecycleRequest {
             target: target.map(str::to_string),
             dry_run: false,
@@ -175,7 +176,8 @@ async fn handle_install_dry_run_with_reporter(
     for line in crate::config::presets_note_lines(config) {
         reporter.emit(PresentationEvent::stdout(line));
     }
-    let core_report = crate::core_runtime::from_config(config)?
+    let core_report = crate::core_runtime::from_config(config)
+        .await?
         .install_shells(utils::runtime::ShellLifecycleRequest {
             target: target.map(str::to_string),
             dry_run: true,
@@ -241,7 +243,8 @@ async fn handle_upgrade_installed_target_with_reporter(
     verbose: bool,
     reporter: &mut dyn LifecycleReporter,
 ) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
-    let core = crate::core_runtime::from_config(config)?
+    let core = crate::core_runtime::from_config(config)
+        .await?
         .upgrade_shells(utils::runtime::ShellUpgradeRequest {
             category: category_filter.map(str::to_string),
         })
@@ -448,7 +451,8 @@ pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<L
 }
 
 pub async fn handle_completion_install(config: &Config) -> Result<()> {
-    let completion = crate::core_runtime::from_config(config)?
+    let completion = crate::core_runtime::from_config(config)
+        .await?
         .install_shell_completion(false)
         .await?;
     let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
@@ -588,9 +592,10 @@ mod tests {
         assert!(selected.exists());
         assert!(!sibling.exists());
 
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+                .await
+                .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_some());
         assert!(manifest.find("shell/utils/shine-theme-sync").is_none());
 
@@ -623,9 +628,10 @@ mod tests {
             .await
             .unwrap();
 
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+                .await
+                .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_some());
         assert!(manifest.find("shell/utils/shine-theme-sync").is_some());
 
@@ -687,7 +693,8 @@ mod tests {
             config.bin_dir(),
             std::ffi::OsStr::new("shine-theme-sync"),
         );
-        crate::bin_links::unlink_managed_command(
+        utils::runtime::unlink_managed_command_with_host(
+            &utils::runtime::RealHost,
             config.bin_dir(),
             std::ffi::OsStr::new("shine-env-export"),
             &[config.presets_dir().join("shell/utils")],
@@ -1218,6 +1225,7 @@ mod tests {
         handle_install(&config, Some("proxy"), false).await.unwrap();
 
         let commands = crate::core_runtime::from_config(&config)
+            .await
             .unwrap()
             .installed_shell_source_commands(Some("proxy"))
             .await
@@ -1482,6 +1490,7 @@ mod tests {
         assert!(launcher_content.contains("bun"));
 
         let source_commands = crate::core_runtime::from_config(&config)
+            .await
             .unwrap()
             .installed_shell_source_commands(None)
             .await
@@ -1738,9 +1747,10 @@ mod tests {
                 .join("custom/node_modules")
                 .exists()
         );
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+                .await
+                .unwrap();
         let entry = manifest.find("shell/custom/mytool").unwrap();
         assert_eq!(entry.bun_dependencies.as_deref(), Some("locked"));
         assert!(entry.dependency_hash.is_some());
@@ -1959,7 +1969,7 @@ mod tests {
             config.installed_shell_dir().join("custom/tool.sh")
         );
         assert!(
-            crate::shells::deployment::ShellManifest::load(&config)
+            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
                 .await
                 .unwrap()
                 .find("shell/custom/mytool")
@@ -2000,9 +2010,10 @@ mod tests {
                 .unwrap(),
             source
         );
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&utils::runtime::RealHost, &config)
+                .await
+                .unwrap();
         assert_eq!(
             manifest.find("shell/custom/mytool").unwrap().mode,
             crate::config::ExternalShellMode::Live

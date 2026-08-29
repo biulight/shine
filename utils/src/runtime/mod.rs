@@ -5,9 +5,10 @@
 
 mod app;
 mod app_metadata;
+mod bootstrap;
 mod host;
 mod inspection;
-pub mod launcher;
+mod launcher;
 mod memory;
 mod preset;
 mod profile;
@@ -24,9 +25,9 @@ use std::path::{Path, PathBuf};
 
 pub use host::{
     FileKind, FileMetadata, FileSystemHost, HostError, HostOperation, NullObserver,
-    PrivilegedFileSystemHost, ProcessHost, ProcessIo, ProcessOutput, ProcessRequest, RealHost,
-    RuntimeEvent, RuntimeInteraction, RuntimeObserver, SplitDnsHost, SplitDnsRequest,
-    SplitDnsState,
+    PrivilegedFileSystemHost, PrivilegedOperationGuard, ProcessHost, ProcessIo, ProcessOutput,
+    ProcessRequest, RealHost, RuntimeEvent, RuntimeInteraction, RuntimeObserver, SplitDnsHost,
+    SplitDnsRequest, SplitDnsState,
 };
 pub use inspection::{
     AppFileInspection, DomainInspectionReport, InspectionChange, InspectionFileStatus,
@@ -34,8 +35,7 @@ pub use inspection::{
 };
 pub use launcher::{
     LinkConflict, LinkConflictKind, LinkReport, LinkSpec, UnlinkReport, command_path_for_name,
-    link_executables_with_host, link_executables_with_names, link_is_current,
-    link_is_current_with_host, link_stem, unlink_managed, unlink_managed_command,
+    link_executables_with_host, link_is_current_with_host, link_stem,
     unlink_managed_command_with_host,
 };
 pub use memory::InMemoryHost;
@@ -275,6 +275,10 @@ pub use app::{
     AppGeneratorRequest, AppHook, AppHookPhase, AppHookReport, AppHookRequest, AppLifecycleReport,
     AppLifecycleRequest, AppListMode, AppRefreshRequest, AppUninstallLifecycleRequest,
     AppUpgradeLifecycleReport, AppUpgradeRequest, ArtifactRuntime,
+};
+pub use bootstrap::{
+    PresetSnapshotRequest, PresetSnapshotSource, capture_embedded_preset_snapshot,
+    capture_preset_snapshot,
 };
 
 #[cfg(test)]

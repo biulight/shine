@@ -26,8 +26,15 @@ privileged mutations, and platform resources. Real and in-memory hosts implement
 Inputs such as home, cwd, environment, and preset contents are captured before execution rather
 than read from ambient globals by domain logic.
 
-Embedded assets remain distribution-specific. The CLI supplies them through an immutable preset
-provider; Core owns source selection, overlay semantics, validation, and lifecycle decisions.
+External directory discovery and base/overlay snapshot construction belong to a shared runtime
+bootstrap service, not to a CLI- or UI-specific adapter and not to App/Shell/Sys domain logic. The
+bootstrap observes its selected filesystem only through the host port: production injects the real
+host, while tests, sandboxes, and future frontends may inject another host. Domain execution then
+consumes the frozen context and snapshot without reopening ambient preset paths.
+
+Embedded assets remain distribution-specific. A distribution frontend supplies their bytes to the
+shared bootstrap; Core owns source selection, overlay semantics, validation, and lifecycle
+decisions.
 
 Frontend communication uses typed interaction requests and typed, non-serializable observer
 events. The CLI owns dialoguer, styling, stream selection, and final wording. Observer data is a
@@ -44,6 +51,7 @@ source/state snapshot for approval and do not derive permissions.
 
 - The dependency direction becomes mechanically enforceable as `shine-cli -> shine-core`.
 - Complete lifecycle chains can run against an in-memory host without touching the real machine.
+- CLI and UI reuse one host-backed external preset discovery and snapshot implementation.
 - CLI output remains compatible while Core stays independent of terminal libraries.
 - Domain-specific models remain distinct; no generic action IR is introduced early.
 - Moving a domain requires moving its manifests and resource decisions with it, not wrapping the

@@ -1,6 +1,8 @@
+mod admin_fs;
 pub mod apps;
 pub mod bin_links;
-pub mod bun_runtime;
+#[cfg(test)]
+mod bun_runtime;
 pub mod colors;
 pub mod commands;
 pub mod completion;
@@ -11,7 +13,7 @@ pub mod git_pull;
 pub mod home;
 pub mod info;
 pub mod init;
-pub mod install_core;
+pub(crate) mod install_core;
 pub mod list;
 pub mod output;
 pub mod path_display;

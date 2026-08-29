@@ -4,7 +4,7 @@ use crate::config::{self, Config};
 #[cfg(unix)]
 use crate::privilege;
 use crate::update_check::{self, ReleaseChannel, UpdateStatus};
-use crate::{apps, colors, env, info, install_core, list, output, platform, shells, sys, version};
+use crate::{apps, colors, env, info, list, output, platform, shells, sys, version};
 
 pub async fn handle_update(
     config: &Config,
@@ -608,9 +608,8 @@ fn install_binary_atomically(src: &std::path::Path, dest: &std::path::Path) -> R
 
 /// Installs the binary, auto-elevating via `sudo` on Unix if the plain copy
 /// fails because the destination isn't user-writable (e.g. `/usr/local/bin`
-/// owned by root). Mirrors the auto-elevation already used for privileged
-/// app-config writes in `apps/file_ops.rs::install_bytes_admin`, so the user
-/// is prompted once instead of being told to manually re-run with `sudo`.
+/// owned by root). The CLI-owned administrator adapter serializes this with
+/// other privileged Shine writes so parallel installs cannot race.
 async fn install_binary_with_elevation(
     src: &std::path::Path,
     dest: &std::path::Path,
@@ -622,7 +621,7 @@ async fn install_binary_with_elevation(
                 && has_io_error_kind(&e, std::io::ErrorKind::PermissionDenied)
                 && !std::env::var("USER").is_ok_and(|user| user == "root") =>
         {
-            let _lock = install_core::file_ops::admin_lock().await?;
+            let _lock = crate::admin_fs::admin_lock().await?;
             install_binary_privileged(src, dest).await
         }
         Err(e) => Err(e),
@@ -645,7 +644,7 @@ async fn install_binary_privileged(src: &std::path::Path, dest: &std::path::Path
         .map(|m| m.permissions().mode())
         .unwrap_or(0o755);
 
-    let status = install_core::file_ops::sudo_command()
+    let status = crate::admin_fs::sudo_command()
         .arg("mkdir")
         .arg("-p")
         .arg(parent)
@@ -656,7 +655,7 @@ async fn install_binary_privileged(src: &std::path::Path, dest: &std::path::Path
         anyhow::bail!("administrator permission was not granted");
     }
 
-    let status = install_core::file_ops::sudo_command()
+    let status = crate::admin_fs::sudo_command()
         .args(["install", "-m", &format!("{mode:o}"), "--"])
         .arg(src)
         .arg(dest)

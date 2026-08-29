@@ -1,8 +1,8 @@
 //! Core-owned static preset discovery and validation contract.
 
 use super::{
-    CoreRuntime, InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext, RuntimePlatform,
-    SysDriverKind, SysInstall,
+    CoreRuntime, FileKind, FileSystemHost, InMemoryHost, PresetSnapshot, PresetSourceKind,
+    RuntimeContext, RuntimePlatform, SysDriverKind, SysInstall,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -59,21 +59,26 @@ struct CategoryPath {
     root: PathBuf,
 }
 
-pub async fn validate_preset_path(path: &Path) -> PresetValidationReportV1 {
-    let display_path = absolute_path(path);
-    let canonical = match std::fs::canonicalize(path) {
+pub async fn validate_preset_path(
+    host: &impl FileSystemHost,
+    cwd: &Path,
+    path: &Path,
+) -> PresetValidationReportV1 {
+    let display_path = absolute_path(cwd, path);
+    let canonical = match host.canonicalize(&display_path).await {
         Ok(path) => path,
         Err(error) => {
             return input_error(
                 display_path.clone(),
                 format!(
-                    "cannot resolve preset path {}: {error}",
-                    display_path.display()
+                    "cannot resolve preset path {}: {:#}",
+                    display_path.display(),
+                    error.into_anyhow("canonicalizing preset path")
                 ),
             );
         }
     };
-    let categories = match discover_categories(&canonical) {
+    let categories = match discover_categories(host, &canonical).await {
         Ok(categories) if !categories.is_empty() => categories,
         Ok(_) => {
             return input_error(
@@ -84,7 +89,7 @@ pub async fn validate_preset_path(path: &Path) -> PresetValidationReportV1 {
         Err(diagnostic) => return finish(canonical, vec![diagnostic], Vec::new()),
     };
     let repository_root = common_repository_root(&categories);
-    let snapshot = match snapshot_tree(&repository_root) {
+    let snapshot = match snapshot_tree(host, &repository_root).await {
         Ok(snapshot) => snapshot,
         Err(diagnostic) => return finish(canonical, vec![diagnostic], Vec::new()),
     };
@@ -97,7 +102,9 @@ pub async fn validate_preset_path(path: &Path) -> PresetValidationReportV1 {
         } else {
             None
         };
-        let mut has_metadata = category.root.join("shine.toml").is_file();
+        let mut has_metadata = snapshot
+            .get(&format!("{}/{}/shine.toml", category.kind, category.name))
+            .is_some();
         for platform in RuntimePlatform::ALL {
             if diagnostic.is_some() {
                 break;
@@ -352,8 +359,22 @@ fn error_diagnostic(kind: &str, root: &Path, message: String) -> PresetDiagnosti
     }
 }
 
-fn discover_categories(path: &Path) -> Result<Vec<CategoryPath>, PresetDiagnostic> {
-    if path.is_file() {
+async fn discover_categories(
+    host: &impl FileSystemHost,
+    path: &Path,
+) -> Result<Vec<CategoryPath>, PresetDiagnostic> {
+    let metadata = host.metadata(path).await.map_err(|error_value| {
+        error(
+            "invalid_input",
+            format!(
+                "cannot inspect {}: {:#}",
+                path.display(),
+                error_value.into_anyhow("inspecting preset path")
+            ),
+            path,
+        )
+    })?;
+    if metadata.kind == FileKind::File {
         if path.file_name().and_then(|name| name.to_str()) != Some("shine.toml") {
             return Err(error(
                 "invalid_input",
@@ -365,7 +386,7 @@ fn discover_categories(path: &Path) -> Result<Vec<CategoryPath>, PresetDiagnosti
             path.parent().expect("canonical file parent"),
         )?]);
     }
-    if !path.is_dir() {
+    if metadata.kind != FileKind::Directory {
         return Err(error(
             "invalid_input",
             "preset path must be a directory or shine.toml",
@@ -383,33 +404,53 @@ fn discover_categories(path: &Path) -> Result<Vec<CategoryPath>, PresetDiagnosti
     let mut categories = Vec::new();
     for kind in ["app", "shell", "sys"] {
         let kind_root = path.join(kind);
-        if !kind_root.is_dir() {
+        let Ok(metadata) = host.metadata(&kind_root).await else {
+            continue;
+        };
+        if metadata.kind != FileKind::Directory {
             continue;
         }
-        let entries = std::fs::read_dir(&kind_root).map_err(|error_value| {
+        let entries = host.read_dir(&kind_root).await.map_err(|error_value| {
             error(
                 "read_failed",
-                format!("cannot read {}: {error_value}", kind_root.display()),
+                format!(
+                    "cannot read {}: {:#}",
+                    kind_root.display(),
+                    error_value.into_anyhow("reading preset category directory")
+                ),
                 &kind_root,
             )
         })?;
         for entry in entries {
-            let entry = entry
-                .map_err(|error_value| error("read_failed", error_value.to_string(), &kind_root))?;
-            if !entry
-                .file_type()
-                .map_err(|error_value| {
-                    error("read_failed", error_value.to_string(), &entry.path())
-                })?
-                .is_dir()
-            {
+            let entry_metadata = host.metadata(&entry).await.map_err(|error_value| {
+                error(
+                    "read_failed",
+                    format!(
+                        "{:#}",
+                        error_value.into_anyhow("inspecting preset category")
+                    ),
+                    &entry,
+                )
+            })?;
+            if entry_metadata.kind != FileKind::Directory {
                 continue;
             }
             categories.push(CategoryPath {
                 kind,
-                name: entry.file_name().to_string_lossy().to_string(),
-                root: std::fs::canonicalize(entry.path()).map_err(|error_value| {
-                    error("read_failed", error_value.to_string(), &kind_root)
+                name: entry
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+                root: host.canonicalize(&entry).await.map_err(|error_value| {
+                    error(
+                        "read_failed",
+                        format!(
+                            "{:#}",
+                            error_value.into_anyhow("canonicalizing preset category")
+                        ),
+                        &kind_root,
+                    )
                 })?,
             });
         }
@@ -456,33 +497,49 @@ fn category_from_root(root: &Path) -> Result<CategoryPath, PresetDiagnostic> {
     })
 }
 
-fn snapshot_tree(root: &Path) -> Result<PresetSnapshot, PresetDiagnostic> {
+async fn snapshot_tree(
+    host: &impl FileSystemHost,
+    root: &Path,
+) -> Result<PresetSnapshot, PresetDiagnostic> {
     let mut builder =
         PresetSnapshot::builder(PresetSourceKind::External).base_root(root.to_path_buf());
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
-        for entry in std::fs::read_dir(&directory)
-            .map_err(|error_value| error("read_failed", error_value.to_string(), &directory))?
-        {
-            let entry = entry
-                .map_err(|error_value| error("read_failed", error_value.to_string(), &directory))?;
-            let kind = entry.file_type().map_err(|error_value| {
-                error("read_failed", error_value.to_string(), &entry.path())
+        for entry in host.read_dir(&directory).await.map_err(|error_value| {
+            error(
+                "read_failed",
+                format!("{:#}", error_value.into_anyhow("reading preset snapshot")),
+                &directory,
+            )
+        })? {
+            let kind = host.metadata(&entry).await.map_err(|error_value| {
+                error(
+                    "read_failed",
+                    format!(
+                        "{:#}",
+                        error_value.into_anyhow("inspecting preset snapshot entry")
+                    ),
+                    &entry,
+                )
             })?;
-            if kind.is_dir() {
-                if entry.file_name() != "node_modules" {
-                    pending.push(entry.path());
+            if kind.kind == FileKind::Directory {
+                if entry.file_name().is_none_or(|name| name != "node_modules") {
+                    pending.push(entry);
                 }
-            } else if kind.is_file() {
+            } else if kind.kind == FileKind::File {
                 let relative = entry
-                    .path()
                     .strip_prefix(root)
-                    .map_err(|error_value| {
-                        error("read_failed", error_value.to_string(), &entry.path())
-                    })?
+                    .map_err(|error_value| error("read_failed", error_value.to_string(), &entry))?
                     .to_path_buf();
-                let bytes = std::fs::read(entry.path()).map_err(|error_value| {
-                    error("read_failed", error_value.to_string(), &entry.path())
+                let bytes = host.read(&entry).await.map_err(|error_value| {
+                    error(
+                        "read_failed",
+                        format!(
+                            "{:#}",
+                            error_value.into_anyhow("reading preset snapshot file")
+                        ),
+                        &entry,
+                    )
                 })?;
                 builder = builder.file(logical_path(&relative), bytes);
             }
@@ -507,13 +564,11 @@ fn logical_path(path: &Path) -> String {
         .join("/")
 }
 
-fn absolute_path(path: &Path) -> PathBuf {
+fn absolute_path(cwd: &Path, path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
     } else {
-        std::env::current_dir()
-            .map(|current| current.join(path))
-            .unwrap_or_else(|_| path.to_path_buf())
+        cwd.join(path)
     }
 }
 

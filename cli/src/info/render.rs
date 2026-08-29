@@ -557,7 +557,7 @@ mod tests {
             .await
             .unwrap();
         let config = Config::new_for_test(&dir);
-        let mut runtime = crate::core_runtime::from_config(&config).unwrap();
+        let mut runtime = crate::core_runtime::from_config(&config).await.unwrap();
         runtime.context_mut_for_cli().env = crate::env::EnvConfig::load_or_init(&config)
             .await
             .unwrap()

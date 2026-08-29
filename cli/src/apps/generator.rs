@@ -18,7 +18,7 @@ pub(super) async fn generate(
     if !env.contains_key(&generator.when_env) {
         return Ok(None);
     }
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     runtime.context_mut_for_cli().env = env.clone();
     let mut observer = GeneratorObserver {
         category: &category.name,

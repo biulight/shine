@@ -2315,37 +2315,19 @@ impl Default for ShellManifest {
 }
 
 impl ShellManifest {
-    pub async fn load(shine_dir: &(impl AsRef<Path> + ?Sized)) -> Result<Self> {
-        let shine_dir = shine_dir.as_ref();
-        let mut manifest: Self = crate::persist::load_toml_or_default(
-            &shine_dir.join(SHELL_MANIFEST_FILE),
-            "shell manifest",
-        )
-        .await?;
-        match manifest.schema_version {
-            0 => manifest.schema_version = SHELL_MANIFEST_SCHEMA_VERSION,
-            SHELL_MANIFEST_SCHEMA_VERSION => {}
-            version => bail!(
-                "shell manifest schema version {version} is newer than this Shine supports ({SHELL_MANIFEST_SCHEMA_VERSION})"
-            ),
-        }
-        Ok(manifest)
+    pub async fn load(
+        host: &impl FileSystemHost,
+        shine_dir: &(impl AsRef<Path> + ?Sized),
+    ) -> Result<Self> {
+        load_shell_manifest_with_host(host, shine_dir.as_ref()).await
     }
 
-    pub async fn save(&self, shine_dir: &(impl AsRef<Path> + ?Sized)) -> Result<()> {
-        let shine_dir = shine_dir.as_ref();
-        if self.schema_version != SHELL_MANIFEST_SCHEMA_VERSION {
-            bail!(
-                "cannot write shell manifest schema version {}; expected {SHELL_MANIFEST_SCHEMA_VERSION}",
-                self.schema_version
-            );
-        }
-        crate::persist::save_toml_atomic(
-            self,
-            &shine_dir.join(SHELL_MANIFEST_FILE),
-            "shell manifest",
-        )
-        .await
+    pub async fn save(
+        &self,
+        host: &impl FileSystemHost,
+        shine_dir: &(impl AsRef<Path> + ?Sized),
+    ) -> Result<()> {
+        save_shell_manifest_with_host(host, shine_dir.as_ref(), self).await
     }
 
     pub fn find(&self, target: &str) -> Option<&ShellManifestEntry> {
@@ -2394,7 +2376,7 @@ fn canonical_target(entry: &ShellManifestEntry) -> String {
 mod tests {
     use super::*;
     use crate::runtime::{
-        InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext, RuntimePlatform,
+        InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost, RuntimeContext, RuntimePlatform,
     };
 
     #[tokio::test]
@@ -2467,7 +2449,7 @@ mod tests {
         let path = root.join(SHELL_MANIFEST_FILE);
         tokio::fs::write(&path, "entries = []\n").await.unwrap();
 
-        let legacy = ShellManifest::load(&root).await.unwrap();
+        let legacy = ShellManifest::load(&RealHost, &root).await.unwrap();
         assert_eq!(legacy.schema_version, SHELL_MANIFEST_SCHEMA_VERSION);
         assert!(
             !tokio::fs::read_to_string(&path)
@@ -2475,7 +2457,7 @@ mod tests {
                 .unwrap()
                 .contains("schema_version")
         );
-        legacy.save(&root).await.unwrap();
+        legacy.save(&RealHost, &root).await.unwrap();
         assert!(
             tokio::fs::read_to_string(&path)
                 .await
@@ -2487,7 +2469,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            ShellManifest::load(&root)
+            ShellManifest::load(&RealHost, &root)
                 .await
                 .unwrap_err()
                 .to_string()

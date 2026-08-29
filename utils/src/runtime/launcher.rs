@@ -1,5 +1,7 @@
 use crate::runtime::{BunDependencyMode, FileKind, FileSystemHost, LinkRuntime};
-use anyhow::{Context, Result};
+#[cfg(test)]
+use anyhow::Context;
+use anyhow::Result;
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -458,6 +460,7 @@ pub async fn unlink_managed_command_with_host(
 /// Non-symlinks and symlinks pointing outside `managed_root` are untouched.
 /// Missing `bin_dir` is treated as a no-op (returns empty report).
 /// When `dry_run` is true, nothing is removed.
+#[cfg(test)]
 pub async fn unlink_managed(
     bin_dir: &Path,
     managed_root: &Path,
@@ -530,6 +533,7 @@ pub async fn unlink_managed(
 /// Remove one command entry only when it is owned by Shine and points below one
 /// of `managed_roots`. This is the command-scoped counterpart to
 /// [`unlink_managed`]; foreign files and links are reported as skipped.
+#[cfg(test)]
 pub async fn unlink_managed_command(
     bin_dir: &Path,
     command: &OsStr,
@@ -595,6 +599,7 @@ pub async fn link_executables(
     link_executables_with_names(bin_dir, &specs, overwrite).await
 }
 
+#[cfg(test)]
 pub async fn link_executables_with_names(
     bin_dir: &Path,
     specs: &[LinkSpec],
@@ -741,6 +746,7 @@ pub async fn link_executables_with_names(
 ///
 /// Status surfaces use the same current-ness rules as install/upgrade so an existing command
 /// from an older source or runtime is reported as an available update.
+#[cfg(test)]
 pub async fn link_is_current(
     link_path: &Path,
     source: &Path,
@@ -796,6 +802,7 @@ pub fn link_stem(path: &Path) -> std::ffi::OsString {
     }
 }
 
+#[cfg(test)]
 fn is_executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -813,6 +820,7 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
+#[cfg(test)]
 fn is_linkable_source(path: &Path) -> bool {
     is_executable(path) || has_linkable_script_extension(path)
 }
@@ -853,6 +861,7 @@ fn launcher_command_name(link_path: &Path) -> String {
 /// Read a launcher/shim's recorded `# shine-target:` path, or `None` if the file
 /// is not a shine-managed launcher (missing marker) or is unreadable. Any read
 /// error yields `None` so a user file is never mistaken for a managed launcher.
+#[cfg(test)]
 async fn launcher_target(path: &Path) -> Result<Option<PathBuf>> {
     let content = match tokio::fs::read_to_string(path).await {
         Ok(content) => content,
@@ -872,6 +881,7 @@ fn shim_target_from_content(content: &str) -> Option<PathBuf> {
     })
 }
 
+#[cfg(test)]
 async fn create_link(
     source: &Path,
     link_path: &Path,
@@ -916,6 +926,7 @@ async fn create_link(
     }
 }
 
+#[cfg(test)]
 async fn remove_link(link_path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -933,6 +944,7 @@ async fn remove_link(link_path: &Path) -> Result<()> {
 /// launcher for `source` under `runtime`. Native runtime on Unix has no managed
 /// regular-file form (its links are symlinks), so any regular file is `NotManaged`
 /// (a user-file conflict).
+#[cfg(test)]
 async fn launcher_status(
     link_path: &Path,
     source: &Path,
@@ -1108,6 +1120,7 @@ fn live_config_dir(rendered_source: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
+#[cfg(test)]
 async fn write_unix_live_launcher(
     source: &Path,
     link_path: &Path,
@@ -1129,6 +1142,7 @@ async fn write_unix_live_launcher(
 }
 
 #[cfg(unix)]
+#[cfg(test)]
 async fn unix_live_launcher_status(
     link_path: &Path,
     source: &Path,
@@ -1161,6 +1175,7 @@ async fn unix_live_launcher_status(
 }
 
 #[cfg(unix)]
+#[cfg(test)]
 async fn write_unix_bun_launcher(
     source: &Path,
     link_path: &Path,
@@ -1187,6 +1202,7 @@ async fn write_unix_bun_launcher(
 }
 
 #[cfg(unix)]
+#[cfg(test)]
 async fn unix_launcher_status(
     link_path: &Path,
     source: &Path,
@@ -1217,7 +1233,7 @@ async fn unix_launcher_status(
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(all(test, not(unix)))]
 async fn create_windows_shims(
     source: &Path,
     ps1_path: &Path,
@@ -1384,7 +1400,7 @@ fn strip_windows_verbatim_prefix(value: &str) -> String {
         .unwrap_or_else(|| value.to_string())
 }
 
-#[cfg(not(unix))]
+#[cfg(all(test, not(unix)))]
 async fn windows_shim_status(
     link_path: &Path,
     source: &Path,
@@ -1430,7 +1446,7 @@ fn windows_path_key(path: &Path) -> String {
         .to_ascii_lowercase()
 }
 
-#[cfg(not(unix))]
+#[cfg(all(test, not(unix)))]
 async fn remove_windows_shims(ps1_path: &Path) -> Result<()> {
     let cmd_path = ps1_path.with_extension("cmd");
     match tokio::fs::remove_file(ps1_path).await {

@@ -5,10 +5,15 @@ bugs. Check this list before changing the modules named in each entry.
 
 ## Install / uninstall safety
 
-- **Core runtime domain logic receives captured inputs, never ambient user state.** Runtime
-  contexts carry home, Shine roots, platform, environment, and an immutable preset snapshot.
-  In-memory lifecycle tests must not fall back to the real HOME, process, network, or administrator
-  state. Distribution-only embedded assets enter through the frontend snapshot adapter.
+- **Host observation is explicit and domain execution receives captured inputs.** A shared runtime
+  bootstrap discovers external/overlay directories and constructs snapshots through the selected
+  filesystem host, so CLI, UI, tests, and future host adapters reuse one implementation. Runtime
+  contexts carry home, Shine roots, platform, environment, and the resulting immutable snapshot;
+  App/Shell/Sys domain logic never rediscovers them from ambient globals. Distribution-only
+  embedded bytes enter from the frontend. Validation additionally receives captured cwd, manifest
+  persistence always requires a filesystem host, and Sys inspection/preflight stays read-only;
+  only authorized script execution atomically materializes the category below the Shine runtime
+  root. Core never reopens an external preset tree through `Path` helpers.
 - **A host abstraction does not weaken ownership checks.** Real and in-memory managed-file paths
   share the same content hash, backup suffix, receipt, user-modification preservation, and
   manifest-version gates. Adding a new host operation must retain those checks rather than treating
@@ -71,13 +76,14 @@ bugs. Check this list before changing the modules named in each entry.
   Uninstall routes to the sudo removal path based on the stored flag, not by re-checking the
   path. Dropping it during (de)serialization silently breaks privileged uninstall (commit
   `70ee910`).
-- **Privileged filesystem mutations must hold the cross-process admin lock**
-  (`install_core/file_ops.rs::admin_lock`, `$TMPDIR/shine-admin.lock`). In-process mutexes are not
-  enough: nextest runs each test in its own OS process, and real concurrent shine invocations
-  exist too (commit `fbd9c55`).
-- **No code path should ask the user to manually type `sudo` on Unix.** Every Unix privileged
-  write auto-elevates through `privilege::ensure_admin` + `install_core/file_ops.rs::sudo_command`
-  (app-config installs, `self_install.rs`'s binary copy via `install_binary_with_elevation`).
+- **Privileged filesystem transactions must hold the host-provided cross-process admin lock** for
+  their complete ownership-check, backup, mutation, and rollback sequence
+  (`PrivilegedFileSystemHost::acquire_privileged_operation`, `$TMPDIR/shine-admin.lock`). Locking
+  individual writes is insufficient because another process could race between backup and replace.
+  Self-install uses the same host lock (commit `fbd9c55`).
+- **No code path should ask the user to manually type `sudo` on Unix.** Frontend interaction
+  authorizes through `privilege::ensure_admin`; the real privileged host performs non-interactive
+  mutations with the cached authorization. Self-install uses its CLI-only command adapter.
   Windows has no `sudo` equivalent, so its privileged paths still surface a manual
   "rerun elevated" hint instead.
 

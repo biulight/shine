@@ -49,7 +49,7 @@ async fn handle_install_with_reporter(
         reporter.emit(PresentationEvent::stdout(report::dry_run_header_text()));
     }
 
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await?;
     runtime.context_mut_for_cli().env = env.as_map().clone();
     let categories = runtime.app_categories(category)?;
@@ -286,7 +286,9 @@ mod tests {
         );
 
         // At least the manifest should have entries
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             !manifest.entries.is_empty(),
             "manifest should have entries after install"
@@ -318,7 +320,9 @@ mod tests {
         let serialized = serde_json::to_string(&uninstall_result).unwrap();
         assert!(!serialized.contains(&dir.display().to_string()));
 
-        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest_after.entries.is_empty(),
             "manifest should be empty after uninstall"
@@ -539,11 +543,15 @@ mod tests {
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
         handle_install(&config, None, false, false).await.unwrap();
-        let manifest_first = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_first = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let count_first = manifest_first.entries.len();
 
         handle_install(&config, None, false, false).await.unwrap();
-        let manifest_second = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_second = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
 
         assert_eq!(
             manifest_second.entries.len(),
@@ -780,7 +788,9 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             })
         );
 
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.entries.is_empty(),
             "docker-desktop uninstall should clear manifest entries"

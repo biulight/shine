@@ -21,7 +21,8 @@ pub async fn handle_validate(path: &Path, format: PresetValidationFormat) -> Res
 }
 
 pub async fn validate_path(path: &Path) -> PresetValidationReportV1 {
-    utils::runtime::validate_preset_path(path).await
+    let cwd = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
+    utils::runtime::validate_preset_path(&utils::runtime::RealHost, &cwd, path).await
 }
 
 #[cfg(test)]

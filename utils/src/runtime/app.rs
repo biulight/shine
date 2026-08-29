@@ -1818,6 +1818,7 @@ where
     if dry_run {
         return Ok(InstallOutcome::DryRun);
     }
+    let _guard = host.acquire_privileged_operation().await?;
     let hash = hash_content(content);
     let exists = match host.metadata(destination).await {
         Ok(_) => true,
@@ -1864,6 +1865,7 @@ where
     if dry_run {
         return Ok(UninstallOutcome::DryRun);
     }
+    let _guard = host.acquire_privileged_operation().await?;
     let current = match host.read(&entry.destination).await {
         Ok(bytes) => bytes,
         Err(error) if error.is_not_found() => return Ok(UninstallOutcome::NotFound),
@@ -2694,8 +2696,8 @@ async fn save_manifest(
 mod lifecycle_tests {
     use super::*;
     use crate::runtime::{
-        InMemoryHost, NullObserver, PresetSnapshot, PresetSourceKind, RuntimeContext,
-        RuntimePlatform,
+        HostOperation, InMemoryHost, NullObserver, PresetSnapshot, PresetSourceKind,
+        RuntimeContext, RuntimePlatform,
     };
     use std::future::Future;
     use std::path::Path;
@@ -2739,6 +2741,32 @@ mod lifecycle_tests {
         ) -> Result<Vec<String>> {
             Ok(defaults.to_vec())
         }
+    }
+
+    #[tokio::test]
+    async fn privileged_app_transaction_acquires_host_lock_before_mutation() {
+        let host = InMemoryHost::new();
+        install_privileged_bytes(
+            &host,
+            b"managed",
+            Path::new("/etc/demo"),
+            false,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+
+        let operations = host.operations();
+        let lock = operations
+            .iter()
+            .position(|operation| matches!(operation, HostOperation::AcquirePrivilegedOperation))
+            .unwrap();
+        let write = operations
+            .iter()
+            .position(|operation| matches!(operation, HostOperation::Write(path) if path == Path::new("/etc/demo")))
+            .unwrap();
+        assert!(lock < write);
     }
 
     #[tokio::test]

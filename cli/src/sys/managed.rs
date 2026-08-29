@@ -203,7 +203,8 @@ pub(crate) async fn installed_managed(config: &Config) -> Result<Vec<SysInstalle
 }
 
 async fn installed_managed_for_os(config: &Config, os_id: &str) -> Result<Vec<SysInstalledRow>> {
-    crate::core_runtime::from_config(config)?
+    crate::core_runtime::from_config(config)
+        .await?
         .installed_managed_sys(os_id)
         .await
 }
@@ -212,7 +213,7 @@ async fn managed_updates_for_os_with_result(
     config: &Config,
     os_id: &str,
 ) -> Result<(Vec<SysUpdateRow>, LifecycleResultV1)> {
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await?;
     runtime.context_mut_for_cli().env = env.as_map().clone();
     let (_, updates, lifecycle) = runtime.inspect_managed_sys(os_id).await?;
@@ -318,7 +319,7 @@ async fn run_managed_for_os_with_reporter(
         (SysAction::Apply, ManagedOutputMode::Upgrade { .. }) => LifecycleOperation::Upgrade,
         (SysAction::Apply, ManagedOutputMode::Explicit) => LifecycleOperation::Install,
     };
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await?;
     runtime.context_mut_for_cli().env = env.as_map().clone();
     let mut observer = ManagedObserver {
@@ -526,13 +527,14 @@ target = {:?}
         .unwrap();
         assert_eq!(second_install.updated, 1);
         assert_eq!(second_lifecycle.summary().changed, 1);
-        let second_manifest_before = SysRunManifest::load(config.shine_dir())
-            .await
-            .unwrap()
-            .entries
-            .into_iter()
-            .find(|entry| entry.item_id == "second")
-            .unwrap();
+        let second_manifest_before =
+            SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .into_iter()
+                .find(|entry| entry.item_id == "second")
+                .unwrap();
 
         fs::write(os_dir.join("first.txt"), "first v2")
             .await
@@ -573,7 +575,10 @@ target = {:?}
             fs::read_to_string(&second_destination).await.unwrap(),
             "second v1"
         );
-        let manifest_after_upgrade = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_after_upgrade =
+            SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap();
         assert_eq!(
             manifest_after_upgrade
                 .entries
@@ -621,7 +626,9 @@ target = {:?}
             fs::read_to_string(&second_destination).await.unwrap(),
             "second v1"
         );
-        let final_manifest = SysRunManifest::load(config.shine_dir()).await.unwrap();
+        let final_manifest = SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert_eq!(final_manifest.entries.len(), 1);
         assert_eq!(final_manifest.entries[0], second_manifest_before);
 
@@ -872,7 +879,7 @@ target = {:?}
         );
         assert!(!destination.exists());
         assert!(
-            SysRunManifest::load(config.shine_dir())
+            SysRunManifest::load(&utils::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries

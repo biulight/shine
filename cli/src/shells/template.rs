@@ -21,7 +21,7 @@ pub(super) async fn apply_template_to_scripts(
     config: &Config,
     script_pairs: &[ScriptTemplate],
 ) -> Result<TemplateRenderReport> {
-    let mut runtime = core_runtime::from_config(config)?;
+    let mut runtime = core_runtime::from_config(config).await?;
     runtime.context_mut_for_cli().env = EnvConfig::load_or_init(config).await?.as_map().clone();
     let scripts = script_pairs
         .iter()

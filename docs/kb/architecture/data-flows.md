@@ -37,8 +37,10 @@ quiet/verbose sections, conflicts, profile hints, and stdout/stderr routing.
 `CoreRuntime` owns the complete App lifecycle from an immutable preset snapshot: metadata and
 destination resolution, one-pass assessment, generators, transforms, Copy/JSON merge, relocation,
 ownership, hooks, artifacts, embedded cache, manifest persistence, and Contract v1 mapping. The
-CLI captures config plus `rust-embed` bytes, submits the request, and renders typed events/reports.
-There is no prepared-file or CLI fallback executor.
+CLI supplies resolved config plus `rust-embed` bytes. Shared runtime bootstrap discovers any
+external/overlay tree through `FileSystemHost`, constructs the immutable snapshot, and submits the
+request; the CLI renders typed events/reports. There is no frontend-specific directory walker,
+prepared-file path, or CLI fallback executor.
 
 The Core flow is:
 
@@ -274,6 +276,12 @@ Every executable sys manifest declares `version = 2`. Each init item has both `[
 provider argv or one per-item script, limits runtime/output, detects again, and produces the
 canonical `sys/<item>` outcome. A v1 or unknown manifest version fails before detection, elevation,
 installer execution, or profile writes.
+
+Inspection, preview, preflight, and profile composition read the immutable Sys snapshot without
+materializing it. Script existence is proven by the logical snapshot entry. After authorization,
+script execution atomically replaces `<shine_dir>/runtime/sys/<os-id>/` with the captured category
+and runs that staged copy; neither external-source paths nor `Path::is_file` can reopen ambient
+preset state after shared bootstrap capture.
 
 Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`.
 `utils/src/runtime/sys_profile/compose.rs` combines base pre/post content with all enabled item

@@ -35,7 +35,7 @@ pub(super) struct ShellInfoFile {
 }
 
 pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile>> {
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await.ok();
     if let Some(env) = env {
         runtime.context_mut_for_cli().env = env.as_map().clone();
@@ -60,7 +60,7 @@ pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile
 }
 
 pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfoFile>> {
-    let mut runtime = crate::core_runtime::from_config(config)?;
+    let mut runtime = crate::core_runtime::from_config(config).await?;
     if let Ok(env) = EnvConfig::load_or_init(config).await {
         runtime.context_mut_for_cli().env = env.as_map().clone();
     }

@@ -77,6 +77,20 @@ fn insert_parent_dirs(nodes: &mut BTreeMap<PathBuf, MemoryNode>, path: &Path) {
 }
 
 impl FileSystemHost for InMemoryHost {
+    fn canonicalize<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<PathBuf, HostError>> + Send + 'a>> {
+        Box::pin(async move {
+            let state = self.state.lock().expect("in-memory host lock");
+            if state.nodes.contains_key(path) {
+                Ok(path.to_path_buf())
+            } else {
+                Err(not_found(path))
+            }
+        })
+    }
+
     fn read<'a>(
         &'a self,
         path: &'a Path,
@@ -350,6 +364,20 @@ impl FileSystemHost for InMemoryHost {
 }
 
 impl PrivilegedFileSystemHost for InMemoryHost {
+    fn acquire_privileged_operation<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<super::PrivilegedOperationGuard>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.state
+                .lock()
+                .expect("in-memory host lock")
+                .operations
+                .push(HostOperation::AcquirePrivilegedOperation);
+            Ok(Box::new(()) as super::PrivilegedOperationGuard)
+        })
+    }
+
     fn write_privileged<'a>(
         &'a self,
         path: &'a Path,

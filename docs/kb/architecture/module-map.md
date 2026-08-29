@@ -16,14 +16,15 @@ Update this file when modules move, split, merge, or take on a different respons
 | `utils/` | Reusable `shine-core` package with no CLI/Tauri dependency |
 | `utils/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
 | `utils/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
+| `utils/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
 | `utils/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
 | `utils/src/runtime/shell.rs` | Complete Shell assessment/install/upgrade/uninstall/live render, launcher, cache, profile, and manifest orchestration |
 | `utils/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS orchestration, and run-manifest persistence |
 | `utils/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
 | `utils/src/runtime/sys_profile/` | Sys profile composition, three-way reconciliation, phase sentinels, BOM and CRLF behavior |
-| `utils/src/runtime/validation.rs` | Preset discovery, V1 diagnostics, and App/Shell/Sys schema validation |
+| `utils/src/runtime/validation.rs` | Host-backed preset discovery from a captured cwd, V1 diagnostics, and App/Shell/Sys schema validation |
 | `utils/src/runtime/inspection.rs` | Typed App/Shell inspection status and structural change vocabulary |
-| `utils/src/install/` | Core-owned transforms, EOL handling, App manifest, and host-neutral managed-file operations |
+| `utils/src/install/` | Core-owned transforms, EOL handling, host-required App manifest persistence, and host-neutral managed-file operations |
 | `utils/src/persist.rs` | Core-owned atomic persistence and versioned TOML helpers |
 | `presets/` | Embedded shell, app, and OS bootstrap assets |
 | `skills/shine-preset-author/` | Portable AI workflow and kind-specific preset author references |
@@ -48,6 +49,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/colors.rs` | Terminal color helpers |
 | `cli/src/output.rs` | Shared command output mode and rendering support |
 | `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
+| `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap |
 | `cli/src/platform.rs` | Platform classification shared across command domains |
 | `cli/src/privilege.rs` | Cross-platform administrator/elevation orchestration |
 | `cli/src/proc.rs` | Small domain-neutral subprocess helpers |
@@ -96,7 +98,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/apps/annotation.rs` | Legacy `shine-dest:` annotation parsing |
 | `cli/src/apps/refresh.rs` | Core explicit-generator-refresh adapter |
 | `cli/src/apps/build.rs` | Core artifact apply/remove adapter |
-| `cli/src/install_core/file_ops.rs` | Copy, backup, restore, privileged filesystem operations |
+| `cli/src/install_core/file_ops.rs` | Test-only compatibility coverage for Core host-backed copy, backup, and restore primitives |
 | `cli/src/install_core/manifest.rs` | Compatibility re-export of Core-owned `app-manifest.toml` types |
 | `utils/src/install/` | App manifest, file ownership primitives, `jsonc-to-json`/`template`, and EOL helpers |
 

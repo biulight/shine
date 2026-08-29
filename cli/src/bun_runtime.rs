@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::path::Path;
-use tokio::process::Command;
 
 const PACKAGE_JSON: &str = "package.json";
 const LOCK_FILE: &str = "bun.lock";
@@ -58,12 +57,6 @@ pub fn resolve(category_root: &Path, allow_external_dependencies: bool) -> Resul
         dependency_mode: BunDependencyMode::Locked,
         dependency_hash: Some(crate::install_core::hash_content(&bytes)),
     })
-}
-
-pub fn command(script: &Path, spec: BunRuntimeSpec) -> Command {
-    let mut command = Command::new("bun");
-    command.arg(spec.dependency_mode.install_arg()).arg(script);
-    command
 }
 
 #[cfg(test)]

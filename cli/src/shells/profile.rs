@@ -89,7 +89,8 @@ pub(super) async fn append_path_to_shell_config(
     source_commands: &[String],
 ) -> Result<ShellConfigUpdate> {
     let paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
-    crate::core_runtime::from_config(config)?
+    crate::core_runtime::from_config(config)
+        .await?
         .install_shell_profile(&paths, force, source_commands)
         .await
 }
@@ -97,7 +98,8 @@ pub(super) async fn append_path_to_shell_config(
 #[cfg(test)]
 pub(super) async fn remove_path_from_shell_config(config: &Config) -> Result<()> {
     let paths = get_shell_config_paths(&config.shell_type, &config.home_dir)?;
-    let removed = crate::core_runtime::from_config(config)?
+    let removed = crate::core_runtime::from_config(config)
+        .await?
         .remove_shell_config_blocks(&paths)
         .await?;
     for path in removed {

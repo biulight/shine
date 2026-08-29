@@ -9,7 +9,8 @@ use super::AppListMode;
 pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
     crate::config::print_presets_note(config);
     let mut observer = utils::runtime::NullObserver;
-    let inspections = crate::core_runtime::from_config(config)?
+    let inspections = crate::core_runtime::from_config(config)
+        .await?
         .inspect_apps(&mut observer)
         .await?;
     let selected = inspections

@@ -35,14 +35,18 @@ pub async fn load_installed_categories(
     config: &Config,
     filter: Option<&str>,
 ) -> Result<Vec<ShellCategory>> {
-    crate::core_runtime::from_installed_presets(config)?.shell_categories(filter)
+    crate::core_runtime::from_installed_presets(config)
+        .await?
+        .shell_categories(filter)
 }
 
 pub async fn load_active_categories(
     config: &Config,
     filter: Option<&str>,
 ) -> Result<Vec<ShellCategory>> {
-    crate::core_runtime::from_config(config)?.shell_categories(filter)
+    crate::core_runtime::from_config(config)
+        .await?
+        .shell_categories(filter)
 }
 
 #[cfg(test)]

@@ -380,7 +380,7 @@ mod tests {
 
         assert!(!destination.exists());
         assert!(
-            AppManifest::load(config.shine_dir())
+            AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -615,7 +615,9 @@ mod tests {
             .unwrap();
         let dest = dir.join(".config/sample/daemon.json");
         let before = fs::read(&dest).await.unwrap();
-        let manifest_before = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_before = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let hash_before = manifest_before.entries[0].content_hash;
 
         write_external_sample_app(
@@ -631,7 +633,9 @@ mod tests {
         assert_eq!(report.updated, 1, "changed source should update");
         assert_eq!(report.skipped, 0);
         assert_ne!(fs::read(&dest).await.unwrap(), before);
-        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert_ne!(manifest_after.entries[0].content_hash, hash_before);
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
@@ -754,13 +758,14 @@ mod tests {
             .unwrap();
         let other_destination = dir.join(".config/other/config.json");
         let other_before = fs::read(&other_destination).await.unwrap();
-        let other_manifest_before = AppManifest::load(config.shine_dir())
-            .await
-            .unwrap()
-            .entries
-            .into_iter()
-            .find(|entry| entry.source == "app/other/config.json")
-            .unwrap();
+        let other_manifest_before =
+            AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .into_iter()
+                .find(|entry| entry.source == "app/other/config.json")
+                .unwrap();
 
         let categories = metadata::load_active_categories(&config, None)
             .await
@@ -805,7 +810,7 @@ mod tests {
                 && outcome.status == utils::lifecycle::LifecycleStatus::Changed
         }));
         assert_eq!(fs::read(&other_destination).await.unwrap(), other_before);
-        let other_manifest_after = AppManifest::load(config.shine_dir())
+        let other_manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
             .await
             .unwrap()
             .entries
@@ -852,7 +857,7 @@ mod tests {
         );
         assert!(other_destination.exists());
         assert!(
-            AppManifest::load(config.shine_dir())
+            AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -1060,7 +1065,9 @@ mod tests {
             b"background = \n",
             "new file should be transformed before install"
         );
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&new_dest).is_some(),
             "new app file should be tracked in manifest"
@@ -1110,7 +1117,9 @@ mod tests {
             "existing managed file and unmanaged new file should be skipped"
         );
         assert_eq!(fs::read(&new_dest).await.unwrap(), b"user-owned\n");
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&new_dest).is_none(),
             "unmanaged destination should not be added to manifest"
@@ -1150,7 +1159,9 @@ mod tests {
         assert_eq!(report.updated, 1, "stale cleanup should count as a change");
         assert_eq!(report.skipped, 0);
         assert!(!dest.exists(), "unmodified stale file should be removed");
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&dest).is_none(),
             "stale manifest entry should be removed"
@@ -1190,7 +1201,9 @@ mod tests {
 
         assert_eq!(report.updated, 1, "manifest cleanup should count as change");
         assert_eq!(report.skipped, 0);
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&dest).is_none(),
             "missing stale destination should be removed from manifest"
@@ -1230,7 +1243,9 @@ mod tests {
         assert_eq!(report.updated, 0);
         assert_eq!(report.skipped, 1);
         assert!(dest.exists(), "stale file should be left in place");
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&dest).is_some(),
             "stale manifest entry should remain without prune"
@@ -1272,7 +1287,9 @@ mod tests {
         assert_eq!(report.skipped, 1);
         assert_eq!(report.user_modified, 1);
         assert_eq!(fs::read(&dest).await.unwrap(), b"{\"user\":true}\n");
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.find_by_dest(&dest).is_some(),
             "user-modified stale entry should remain tracked"
@@ -1329,7 +1346,9 @@ mod tests {
             fs::read(&dest).await.unwrap(),
             b"{\n  \"proxy\": \"new\"\n}\n"
         );
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let entry = manifest.find_by_dest(&dest).unwrap();
         assert_eq!(entry.source, "app/sample/daemon-renamed.jsonc");
 

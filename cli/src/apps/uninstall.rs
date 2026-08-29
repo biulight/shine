@@ -44,7 +44,7 @@ async fn handle_uninstall_with_reporter(
     if dry_run {
         reporter.emit(PresentationEvent::stdout(report::dry_run_header_text()));
     }
-    let runtime = crate::core_runtime::from_config(config)?;
+    let runtime = crate::core_runtime::from_config(config).await?;
     let mut observer = UninstallObserver { reporter };
     let mut interaction = crate::presentation::TerminalInteraction;
     let core_report = runtime
@@ -240,7 +240,9 @@ mod tests {
 
         handle_install(&config, None, false, false).await.unwrap();
 
-        let manifest_before = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_before = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let count_before = manifest_before.entries.len();
 
         let result = handle_uninstall_with_result(&config, None, false, false, true)
@@ -278,7 +280,9 @@ mod tests {
                 })
         );
 
-        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert_eq!(
             manifest_after.entries.len(),
             count_before,
@@ -325,7 +329,9 @@ mod tests {
                 .contains(&LifecycleEffect::UserModificationOverridden)
         );
 
-        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest_after.entries.is_empty(),
             "force uninstall should remove manifest entry"
@@ -355,7 +361,9 @@ mod tests {
 
         // Install all categories
         handle_install(&config, None, false, false).await.unwrap();
-        let manifest_all = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_all = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let total = manifest_all.entries.len();
         assert!(total > 0, "need at least one installed entry");
 
@@ -389,7 +397,9 @@ mod tests {
                 .all(|outcome| outcome.target == format!("app/{first_category}"))
         );
 
-        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_after = AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert_eq!(
             manifest_after.entries.len(),
             total - category_count,
@@ -433,7 +443,10 @@ mod tests {
             }],
             ..AppManifest::default()
         };
-        manifest.save(config.shine_dir()).await.unwrap();
+        manifest
+            .save(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
 
         let result = handle_uninstall_with_result(&config, None, false, false, false)
             .await
@@ -446,7 +459,7 @@ mod tests {
         );
         assert_eq!(fs::read(&destination).await.unwrap(), b"user change\n");
         assert_eq!(
-            AppManifest::load(config.shine_dir())
+            AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -474,7 +487,10 @@ mod tests {
             }],
             ..AppManifest::default()
         };
-        manifest.save(config.shine_dir()).await.unwrap();
+        manifest
+            .save(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
 
         let result = handle_uninstall_with_result(&config, None, false, false, false)
             .await
@@ -486,7 +502,7 @@ mod tests {
             vec![LifecycleEffect::ReceiptRemoved]
         );
         assert!(
-            AppManifest::load(config.shine_dir())
+            AppManifest::load(&utils::runtime::RealHost, config.shine_dir())
                 .await
                 .unwrap()
                 .entries
@@ -516,7 +532,10 @@ mod tests {
             }],
             ..AppManifest::default()
         };
-        manifest.save(config.shine_dir()).await.unwrap();
+        manifest
+            .save(&utils::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
 
         let category = handle_uninstall_with_result(&config, Some("git"), false, true, false)
             .await

@@ -16,7 +16,8 @@ pub(super) async fn sync_composed_profile(
     config: &Config,
 ) -> Result<Option<utils::runtime::SysItemOutcome>> {
     let os_id = detect_os_id().await?;
-    crate::core_runtime::from_config(config)?
+    crate::core_runtime::from_config(config)
+        .await?
         .sync_composed_sys_profile(&os_id)
         .await
         .map(Some)
@@ -31,7 +32,8 @@ async fn handle_profile_state(
     crate::config::print_presets_note(config);
     let os_id = detect_os_id().await?;
     let sys_shell: &'static str = config.shell_type.into();
-    let report = crate::core_runtime::from_config(config)?
+    let report = crate::core_runtime::from_config(config)
+        .await?
         .set_sys_profile_state(utils::runtime::SysProfileStateRequest {
             os_id,
             item_id: item_id.to_string(),

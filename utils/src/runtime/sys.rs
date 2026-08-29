@@ -1265,6 +1265,7 @@ where
     if !privileged {
         return install_bytes_with_host(host, content, destination, is_managed, false, true).await;
     }
+    let _guard = host.acquire_privileged_operation().await?;
     let hash = hash_content(content);
     let exists = match host.metadata(destination).await {
         Ok(_) => true,
@@ -1310,6 +1311,7 @@ where
     if !privileged {
         return uninstall_entry_with_host(host, entry, false, false).await;
     }
+    let _guard = host.acquire_privileged_operation().await?;
     let current = match host.read(&entry.destination).await {
         Ok(bytes) => bytes,
         Err(error) if error.is_not_found() => return Ok(UninstallOutcome::NotFound),
@@ -1381,31 +1383,12 @@ fn default_profile_enabled() -> bool {
 }
 
 impl SysRunManifest {
-    pub async fn load(shine_dir: &Path) -> Result<Self> {
-        let mut manifest: Self = crate::persist::load_toml_or_default(
-            &shine_dir.join(SYS_MANIFEST_FILE),
-            "sys manifest",
-        )
-        .await?;
-        match manifest.schema_version {
-            0 => manifest.schema_version = SYS_MANIFEST_SCHEMA_VERSION,
-            SYS_MANIFEST_SCHEMA_VERSION => {}
-            version => bail!(
-                "sys manifest schema version {version} is newer than this Shine supports ({SYS_MANIFEST_SCHEMA_VERSION})"
-            ),
-        }
-        Ok(manifest)
+    pub async fn load(host: &impl FileSystemHost, shine_dir: &Path) -> Result<Self> {
+        load_manifest_with_host(host, shine_dir).await
     }
 
-    pub async fn save(&self, shine_dir: &Path) -> Result<()> {
-        if self.schema_version != SYS_MANIFEST_SCHEMA_VERSION {
-            bail!(
-                "cannot write sys manifest schema version {}; expected {SYS_MANIFEST_SCHEMA_VERSION}",
-                self.schema_version
-            );
-        }
-        crate::persist::save_toml_atomic(self, &shine_dir.join(SYS_MANIFEST_FILE), "sys manifest")
-            .await
+    pub async fn save(&self, host: &impl FileSystemHost, shine_dir: &Path) -> Result<()> {
+        save_manifest_with_host(host, shine_dir, self).await
     }
 
     pub fn upsert(&mut self, entry: SysRunEntry) {
@@ -1666,7 +1649,7 @@ pub(crate) async fn save_manifest_with_host(
 mod tests {
     use super::*;
     use crate::runtime::{
-        InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext, RuntimePlatform,
+        InMemoryHost, PresetSnapshot, PresetSourceKind, RealHost, RuntimeContext, RuntimePlatform,
     };
 
     #[tokio::test]
@@ -1676,9 +1659,9 @@ mod tests {
         tokio::fs::create_dir_all(&root).await.unwrap();
         let path = root.join(SYS_MANIFEST_FILE);
         tokio::fs::write(&path, "entries = []\n").await.unwrap();
-        let legacy = SysRunManifest::load(&root).await.unwrap();
+        let legacy = SysRunManifest::load(&RealHost, &root).await.unwrap();
         assert_eq!(legacy.schema_version, SYS_MANIFEST_SCHEMA_VERSION);
-        legacy.save(&root).await.unwrap();
+        legacy.save(&RealHost, &root).await.unwrap();
 
         let receipt = SystemReceipt::ManagedFile(ManagedFileReceipt {
             version: RECEIPT_VERSION,
