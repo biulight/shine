@@ -12,18 +12,20 @@ use super::{
     ProcessHost, RuntimeInteraction, RuntimeObserver, ShellFile, ShellLifecycleReport,
     ShellLifecycleRequest, ShellManifest, ShellManifestEntry, ShellUninstallReport,
     ShellUninstallRequest, ShellUpgradeLifecycleReport, ShellUpgradeRequest, SplitDnsHost,
-    SplitDnsObservationHost, SplitDnsRequest, SysDriverKind, SysItem, SysItemMode,
-    SysManagedAction, SysManagedReport, SysManagedRequest, SysRunEntry, SysRunManifest,
-    SystemReceipt, command_path_for_name, link_is_current_with_host, parse_shell_lifecycle_target,
-    split_dns_receipt,
+    SplitDnsObservationHost, SplitDnsRequest, SysBootstrapBatchReport, SysBootstrapBatchRequest,
+    SysDetection, SysDetectionProbe, SysDriverKind, SysInstall, SysItem, SysItemMode,
+    SysManagedAction, SysManagedReport, SysManagedRequest, SysManifest, SysPackageProvider,
+    SysRunEntry, SysRunManifest, SystemReceipt, command_path_for_name, link_is_current_with_host,
+    parse_shell_lifecycle_target, split_dns_receipt,
 };
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppEntry, AppManifest};
 use crate::lifecycle::LifecycleOperation;
 use crate::permission::{PermissionDeclarationV1, PermissionPathBaseV1};
 use crate::plan::{
-    EnvironmentSensitivityV1, FilesystemAccessV1, PermissionSetV1, PermissionV1, PlanActionV1,
-    PlanApprovalV1, PlanInputsV1, PlanStepV1, PlanV1, SnapshotDigestBuilderV1, SnapshotDigestV1,
+    EnvironmentSensitivityV1, FilesystemAccessV1, NetworkScopeV1, PermissionSetV1, PermissionV1,
+    PlanActionV1, PlanApprovalV1, PlanInputsV1, PlanOperationV1, PlanStepV1, PlanV1,
+    SnapshotDigestBuilderV1, SnapshotDigestV1,
 };
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
@@ -91,6 +93,15 @@ pub struct SysManagedPlanRequest {
     pub input_versions: PlanningInputVersions,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SysBootstrapPlanRequest {
+    pub os_id: String,
+    pub item_ids: Vec<String>,
+    pub sys_shell: String,
+    pub force_profile: bool,
+    pub input_versions: PlanningInputVersions,
+}
+
 /// Presentation-only App upgrade settings which do not affect the reviewed
 /// operation. Stale removal is intentionally controlled only by
 /// [`AppPlanRequest::prune_stale`].
@@ -105,7 +116,8 @@ struct StateCapture {
 }
 
 impl StateCapture {
-    fn new(domain: &str, operation: LifecycleOperation) -> Result<Self> {
+    fn new(domain: &str, operation: impl Into<PlanOperationV1>) -> Result<Self> {
+        let operation = operation.into();
         let mut builder = SnapshotDigestV1::builder(format!("state:{domain}"));
         builder.add_observation("operation", operation_name(operation))?;
         Ok(Self {
@@ -1391,6 +1403,168 @@ impl<H: FileSystemObservationHost + SplitDnsObservationHost> CoreRuntime<H> {
     }
 }
 
+impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    pub async fn plan_sys_bootstrap(&self, request: SysBootstrapPlanRequest) -> Result<PlanV1> {
+        validate_sys_bootstrap_request(&request)?;
+        let loaded = self.load_sys_preset(&request.os_id).await?;
+        let mut selected = Vec::with_capacity(request.item_ids.len());
+        let mut seen = BTreeSet::new();
+        for item_id in &request.item_ids {
+            if !seen.insert(item_id.as_str()) {
+                bail!("duplicate sys bootstrap item `{item_id}`");
+            }
+            let item = loaded
+                .manifest
+                .items
+                .iter()
+                .find(|item| item.id == *item_id)
+                .with_context(|| format!("unknown sys bootstrap item `{item_id}`"))?;
+            if item.mode != SysItemMode::Init {
+                bail!("`{item_id}` is a managed system resource; use `shine sys apply {item_id}`");
+            }
+            selected.push(item);
+        }
+
+        let mut state = StateCapture::new("sys-bootstrap", PlanOperationV1::SysBootstrap)?;
+        capture_context(&mut state, self.context())?;
+        state.public("os-id", &request.os_id)?;
+        state.public("items", serde_json::to_vec(&request.item_ids)?)?;
+        state.public("sys-shell", &request.sys_shell)?;
+        state.public("force-profile", request.force_profile.to_string())?;
+        state.public("allow-sys-code", self.context().allow_sys_code.to_string())?;
+        state.public(
+            "path-env",
+            self.context()
+                .path_env
+                .as_deref()
+                .map(|value| sha256_hex(value.as_bytes()))
+                .unwrap_or_else(|| "missing".to_string()),
+        )?;
+        capture_proxy_env(self.context(), &mut state)?;
+
+        let (run_manifest, manifest_bytes) =
+            load_sys_manifest(self.host(), &self.context().shine_dir).await?;
+        capture_manifest_selection(
+            &mut state,
+            "manifest:sys-bootstrap",
+            manifest_bytes.is_some(),
+            run_manifest.schema_version,
+            &run_manifest
+                .entries
+                .iter()
+                .filter(|entry| {
+                    entry.os_id == request.os_id && seen.contains(entry.item_id.as_str())
+                })
+                .collect::<Vec<_>>(),
+        )?;
+
+        let mut permissions = PermissionAccumulator::default();
+        let mut steps = Vec::new();
+        for item in &selected {
+            permissions.declaration(
+                item.permissions.as_ref(),
+                "sys_bootstrap_permission_declaration_missing",
+            );
+            capture_sys_env(
+                self.context(),
+                &request.input_versions,
+                item,
+                &mut state,
+                &mut permissions,
+            )?;
+            let present = observe_sys_detection(
+                self,
+                item.detect
+                    .as_ref()
+                    .with_context(|| format!("sys item `{}` has no standard detection", item.id))?,
+                &mut state,
+                &format!("sys/{}", item.id),
+                &mut permissions,
+            )
+            .await?;
+            let install = item
+                .install
+                .as_ref()
+                .with_context(|| format!("sys item `{}` has no standard installer", item.id))?;
+            add_sys_bootstrap_install_permissions(
+                self,
+                &request.os_id,
+                item,
+                install,
+                &mut permissions,
+            )?;
+
+            let missing_env = item.required_env.iter().any(|name| {
+                self.context()
+                    .env
+                    .get(name)
+                    .is_none_or(|value| value.trim().is_empty())
+            });
+            let external_code_blocked = sys_bootstrap_code_blocked(self, &request.os_id, item);
+            let action = if missing_env || external_code_blocked {
+                PlanActionV1::Blocked
+            } else if present {
+                PlanActionV1::Update
+            } else {
+                PlanActionV1::Execute
+            };
+            let mut step = PlanStepV1::new(format!("sys/{}", item.id), Some("bootstrap"), action);
+            if missing_env {
+                step = step.with_diagnostic_code("sys_bootstrap_required_env_missing");
+            }
+            if external_code_blocked {
+                step = step.with_diagnostic_code("sys_external_code_not_allowed");
+            }
+            steps.push(step);
+        }
+
+        if !selected.is_empty() {
+            add_shine_write_permission(
+                self.context(),
+                &mut permissions,
+                &self.context().shine_dir.join("sys-manifest.toml"),
+            );
+            capture_sys_profile_state(
+                self,
+                &request.os_id,
+                &request.sys_shell,
+                &mut state,
+                &mut permissions,
+            )
+            .await?;
+            let mut profile = PlanStepV1::new(
+                "sys/profile",
+                Some(request.sys_shell.clone()),
+                PlanActionV1::Update,
+            );
+            if sys_profile_code_blocked(
+                self,
+                &request.os_id,
+                &loaded.manifest,
+                &selected,
+                &run_manifest,
+            ) {
+                profile = profile.with_diagnostic_code("sys_external_code_not_allowed");
+                profile.action = PlanActionV1::Blocked;
+            }
+            steps.push(profile);
+        }
+
+        let (required, declared, uncomputable) = permissions.finish();
+        Ok(PlanV1::new(
+            PlanOperationV1::SysBootstrap,
+            PlanInputsV1 {
+                preset: self.presets().digest_v1()?,
+                state: state.finish(),
+            },
+            steps,
+            required,
+            &declared,
+            uncomputable,
+        ))
+    }
+}
+
 impl<H> CoreRuntime<H>
 where
     H: FileSystemHost + PrivilegedFileSystemHost + ProcessHost,
@@ -1607,6 +1781,48 @@ where
     }
 }
 
+impl<H> CoreRuntime<H>
+where
+    H: FileSystemHost + ProcessHost,
+{
+    pub async fn preview_sys_bootstrap(
+        &self,
+        request: SysBootstrapBatchRequest,
+        interaction: &mut impl RuntimeInteraction,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<SysBootstrapBatchReport> {
+        if !request.dry_run {
+            bail!("Sys bootstrap mutation requires snapshot-bound approval");
+        }
+        self.run_sys_bootstrap_batch(request, interaction, observer)
+            .await
+    }
+
+    pub async fn run_sys_bootstrap_approved(
+        &self,
+        request: SysBootstrapPlanRequest,
+        approval: &PlanApprovalV1,
+        interaction: &mut impl RuntimeInteraction,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<SysBootstrapBatchReport> {
+        approval.validate(&self.plan_sys_bootstrap(request.clone()).await?)?;
+        self.run_sys_bootstrap_batch(
+            SysBootstrapBatchRequest {
+                os_id: request.os_id,
+                requested: request.item_ids,
+                preset: None,
+                interactive: false,
+                sys_shell: request.sys_shell,
+                dry_run: false,
+                force_profile: request.force_profile,
+            },
+            interaction,
+            observer,
+        )
+        .await
+    }
+}
+
 fn finish_plan<H>(
     runtime: &CoreRuntime<H>,
     operation: LifecycleOperation,
@@ -1626,6 +1842,339 @@ fn finish_plan<H>(
         &declared,
         uncomputable,
     ))
+}
+
+fn validate_sys_bootstrap_request(request: &SysBootstrapPlanRequest) -> Result<()> {
+    if request.os_id.is_empty()
+        || request.os_id.contains(['/', '\\'])
+        || request.os_id.contains("..")
+    {
+        bail!("invalid Sys bootstrap os id");
+    }
+    if request.sys_shell.is_empty() {
+        bail!("Sys bootstrap shell identity must not be empty");
+    }
+    Ok(())
+}
+
+fn capture_proxy_env(context: &super::RuntimeContext, state: &mut StateCapture) -> Result<()> {
+    for (name, value) in &context.proxy_env {
+        state.public(
+            format!("proxy-env:{name}"),
+            format!("plain:{}", sha256_hex(value.as_bytes())),
+        )?;
+    }
+    Ok(())
+}
+
+async fn observe_sys_detection<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    detection: &SysDetection,
+    state: &mut StateCapture,
+    target: &str,
+    permissions: &mut PermissionAccumulator,
+) -> Result<bool> {
+    match detection {
+        SysDetection::Command {
+            command,
+            version_args,
+        } => {
+            if !version_args.is_empty() {
+                permissions.implicit(PermissionV1::Command {
+                    program: command.clone(),
+                });
+            }
+            observe_command_presence(runtime, command, state, target).await
+        }
+        SysDetection::Path { path } => {
+            let resolved = captured_sys_path(path, &runtime.context().home_dir)?;
+            observe_presence(
+                runtime.host(),
+                state,
+                format!("detection:{target}:path"),
+                &resolved,
+            )
+            .await
+        }
+        SysDetection::Any { probes } => {
+            let mut present = false;
+            for (index, probe) in probes.iter().enumerate() {
+                let found = match probe {
+                    SysDetectionProbe::Command { command } => {
+                        observe_command_presence(
+                            runtime,
+                            command,
+                            state,
+                            &format!("{target}:probe:{index}"),
+                        )
+                        .await?
+                    }
+                    SysDetectionProbe::Path { path } => {
+                        let resolved = captured_sys_path(path, &runtime.context().home_dir)?;
+                        observe_presence(
+                            runtime.host(),
+                            state,
+                            format!("detection:{target}:probe:{index}:path"),
+                            &resolved,
+                        )
+                        .await?
+                    }
+                };
+                present |= found;
+            }
+            Ok(present)
+        }
+    }
+}
+
+async fn observe_command_presence<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    command: &str,
+    state: &mut StateCapture,
+    target: &str,
+) -> Result<bool> {
+    let mut present = false;
+    for (index, candidate) in command_candidates(runtime.context(), command)
+        .into_iter()
+        .enumerate()
+    {
+        let metadata = match runtime.host().metadata(&candidate).await {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.is_not_found() => None,
+            Err(error) => return Err(error.into_anyhow("observing Sys detection command")),
+        };
+        let value = metadata.as_ref().map_or_else(
+            || "missing".to_string(),
+            |metadata| {
+                format!(
+                    "{:?}:{}:{}",
+                    metadata.kind,
+                    metadata.len,
+                    metadata.unix_mode.unwrap_or_default()
+                )
+            },
+        );
+        state.public(format!("detection:{target}:candidate:{index}"), value)?;
+        present |= metadata.is_some_and(|metadata| {
+            metadata.kind == FileKind::File
+                && (runtime.context().platform == super::RuntimePlatform::Windows
+                    || metadata.unix_mode.is_none_or(|mode| mode & 0o111 != 0))
+        });
+    }
+    Ok(present)
+}
+
+fn command_candidates(context: &super::RuntimeContext, command: &str) -> Vec<PathBuf> {
+    let mut directories = context
+        .path_env
+        .as_deref()
+        .map(std::env::split_paths)
+        .map(Iterator::collect::<Vec<_>>)
+        .unwrap_or_default();
+    directories.extend([
+        context.home_dir.join(".local/bin"),
+        context.home_dir.join(".cargo/bin"),
+        context.home_dir.join(".bun/bin"),
+        context.home_dir.join(".local/share/pnpm"),
+        context
+            .home_dir
+            .join("AppData/Local/Microsoft/WinGet/Links"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+    ]);
+    directories
+        .into_iter()
+        .flat_map(|directory| {
+            if context.platform == super::RuntimePlatform::Windows {
+                vec![
+                    directory.join(command),
+                    directory.join(format!("{command}.exe")),
+                    directory.join(format!("{command}.cmd")),
+                    directory.join(format!("{command}.bat")),
+                    directory.join(format!("{command}.ps1")),
+                ]
+            } else {
+                vec![directory.join(command)]
+            }
+        })
+        .collect()
+}
+
+async fn observe_presence(
+    host: &impl FileSystemObservationHost,
+    state: &mut StateCapture,
+    label: String,
+    path: &Path,
+) -> Result<bool> {
+    match host.metadata(path).await {
+        Ok(metadata) => {
+            state.public(
+                label,
+                format!(
+                    "{:?}:{}:{}",
+                    metadata.kind,
+                    metadata.len,
+                    metadata.unix_mode.unwrap_or_default()
+                ),
+            )?;
+            Ok(true)
+        }
+        Err(error) if error.is_not_found() => {
+            state.public(label, "missing")?;
+            Ok(false)
+        }
+        Err(error) => Err(error.into_anyhow("observing Sys detection path")),
+    }
+}
+
+fn add_sys_bootstrap_install_permissions<H>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    item: &SysItem,
+    install: &SysInstall,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    match install {
+        SysInstall::Package { provider, .. } => {
+            let program = match provider {
+                SysPackageProvider::Homebrew | SysPackageProvider::HomebrewCask => "brew",
+                SysPackageProvider::Apt => "apt-get",
+                SysPackageProvider::Winget => "winget",
+            };
+            permissions.implicit(PermissionV1::Command {
+                program: program.to_string(),
+            });
+            permissions.implicit(PermissionV1::Network {
+                scope: NetworkScopeV1::Any,
+            });
+        }
+        SysInstall::Script { path, .. } => {
+            permissions.require(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Execute,
+                path: format!("preset:{}", path.replace('\\', "/")),
+            });
+            permissions.implicit(PermissionV1::Command {
+                program: match os_id {
+                    "windows" => "powershell.exe",
+                    "macos" => "zsh",
+                    _ => "bash",
+                }
+                .to_string(),
+            });
+            add_shine_write_permission(
+                runtime.context(),
+                permissions,
+                &runtime.context().shine_dir.join("runtime/sys").join(os_id),
+            );
+        }
+    }
+    if super::sys_install_requires_admin(os_id, install, item)? {
+        permissions.implicit(PermissionV1::Administrator);
+    }
+    for name in runtime.context().proxy_env.keys() {
+        permissions.implicit(PermissionV1::Environment {
+            name: name.clone(),
+            sensitivity: EnvironmentSensitivityV1::Plain,
+        });
+    }
+    Ok(())
+}
+
+fn sys_bootstrap_code_blocked<H>(runtime: &CoreRuntime<H>, os_id: &str, item: &SysItem) -> bool {
+    let Some(SysInstall::Script { path, .. }) = &item.install else {
+        return false;
+    };
+    let logical = format!("sys/{os_id}/{}", path.replace('\\', "/"));
+    runtime
+        .presets()
+        .origin(&logical)
+        .is_some_and(|origin| origin.source_kind != super::PresetSourceKind::Embedded)
+        && !runtime.context().allow_sys_code
+}
+
+fn sys_profile_code_blocked<H>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    manifest: &SysManifest,
+    selected: &[&SysItem],
+    run_manifest: &SysRunManifest,
+) -> bool {
+    if runtime.context().allow_sys_code {
+        return false;
+    }
+    let ext = if os_id == "windows" { "ps1" } else { "sh" };
+    let external_base = ["pre", "post"].into_iter().any(|phase| {
+        let logical = format!("sys/{os_id}/profile/base.{phase}.{ext}");
+        runtime.presets().get(&logical).is_some()
+            && runtime
+                .presets()
+                .origin(&logical)
+                .is_some_and(|origin| origin.source_kind != super::PresetSourceKind::Embedded)
+    });
+    if external_base {
+        return true;
+    }
+    let enabled = run_manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.os_id == os_id && !entry.managed && entry.profile_enabled)
+        .map(|entry| entry.item_id.as_str())
+        .chain(selected.iter().map(|item| item.id.as_str()))
+        .collect::<BTreeSet<_>>();
+    let executable = manifest.items.iter().any(|item| {
+        enabled.contains(item.id.as_str())
+            && item.shell.iter().any(|integration| {
+                !integration.eval_argv.is_empty()
+                    || integration.source.is_some()
+                    || integration.fragment.is_some()
+            })
+    });
+    executable && (runtime.context().is_external_presets || runtime.context().overlay_dir.is_some())
+}
+
+async fn capture_sys_profile_state<H: FileSystemObservationHost>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    sys_shell: &str,
+    state: &mut StateCapture,
+    permissions: &mut PermissionAccumulator,
+) -> Result<()> {
+    let ext = if os_id == "windows" { "ps1" } else { "sh" };
+    for phase in ["pre", "post"] {
+        let path = runtime
+            .context()
+            .home_dir
+            .join(".shine/profile")
+            .join(format!("{os_id}.{phase}.{ext}"));
+        capture_path_state(runtime.host(), state, format!("profile:{phase}"), &path).await?;
+        add_shine_write_permission(runtime.context(), permissions, &path);
+    }
+    for (index, path) in runtime.context().shell_config_paths.iter().enumerate() {
+        capture_path_state(
+            runtime.host(),
+            state,
+            format!("shell-profile:{sys_shell}:{index}"),
+            path,
+        )
+        .await?;
+        add_shine_write_permission(runtime.context(), permissions, path);
+    }
+    permissions.implicit(PermissionV1::Command {
+        program: "git".to_string(),
+    });
+    Ok(())
+}
+
+fn add_shine_write_permission(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    path: &Path,
+) {
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Write,
+        path: review_path(context, path),
+    });
 }
 
 fn validate_app_request(request: &AppPlanRequest) -> Result<()> {
@@ -2486,13 +3035,8 @@ fn logical_path(path: &Path) -> String {
         .join("/")
 }
 
-fn operation_name(operation: LifecycleOperation) -> &'static str {
-    match operation {
-        LifecycleOperation::Install => "install",
-        LifecycleOperation::Update => "update",
-        LifecycleOperation::Upgrade => "upgrade",
-        LifecycleOperation::Uninstall => "uninstall",
-    }
+fn operation_name(operation: PlanOperationV1) -> &'static str {
+    operation.as_str()
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -2615,6 +3159,128 @@ mod tests {
             ),
             inner,
         )
+    }
+
+    fn bootstrap_snapshot(source: PresetSourceKind, with_permissions: bool) -> PresetSnapshot {
+        let permissions = if with_permissions {
+            "permissions = { schema_version = 1 }"
+        } else {
+            ""
+        };
+        PresetSnapshot::builder(source)
+            .file(
+                "sys/test/shine.toml",
+                format!(
+                    r#"version = 2
+[[items]]
+id = 'tool'
+label = 'Tool'
+{permissions}
+detect = {{ kind = 'path', path = '$HOME/.tool-present' }}
+install = {{ kind = 'package', provider = 'homebrew', package = 'tool' }}
+"#
+                )
+                .into_bytes(),
+            )
+            .build()
+    }
+
+    fn bootstrap_request() -> SysBootstrapPlanRequest {
+        SysBootstrapPlanRequest {
+            os_id: "test".to_string(),
+            item_ids: vec!["tool".to_string()],
+            sys_shell: "zsh".to_string(),
+            force_profile: false,
+            input_versions: PlanningInputVersions::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn sys_bootstrap_plan_is_observation_only_and_snapshot_bound() {
+        let (runtime, host) =
+            observation_runtime(bootstrap_snapshot(PresetSourceKind::Embedded, true));
+        let missing = runtime
+            .plan_sys_bootstrap(bootstrap_request())
+            .await
+            .unwrap();
+        assert_eq!(missing.operation, PlanOperationV1::SysBootstrap);
+        assert!(missing.is_ready());
+        assert!(
+            missing
+                .steps
+                .iter()
+                .any(|step| { step.target == "sys/tool" && step.action == PlanActionV1::Execute })
+        );
+        assert!(
+            missing
+                .permissions
+                .required
+                .contains(&PermissionV1::Command {
+                    program: "brew".to_string(),
+                })
+        );
+        assert!(
+            host.operations()
+                .iter()
+                .all(|operation| matches!(operation, super::super::HostOperation::Read(_)))
+        );
+
+        host.put_file(
+            runtime.context().home_dir.join(".tool-present"),
+            b"present".to_vec(),
+        );
+        let present = runtime
+            .plan_sys_bootstrap(bootstrap_request())
+            .await
+            .unwrap();
+        assert!(
+            present
+                .steps
+                .iter()
+                .any(|step| { step.target == "sys/tool" && step.action == PlanActionV1::Update })
+        );
+        assert_ne!(missing.inputs.state, present.inputs.state);
+    }
+
+    #[tokio::test]
+    async fn sys_bootstrap_missing_permission_declaration_fails_closed() {
+        let runtime = runtime(bootstrap_snapshot(PresetSourceKind::External, false));
+        let plan = runtime
+            .plan_sys_bootstrap(bootstrap_request())
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(
+            plan.permissions
+                .uncomputable_codes
+                .contains("sys_bootstrap_permission_declaration_missing")
+        );
+    }
+
+    #[tokio::test]
+    async fn sys_bootstrap_approved_execution_rejects_changed_detection_state() {
+        let runtime = runtime(bootstrap_snapshot(PresetSourceKind::Embedded, true));
+        let request = bootstrap_request();
+        let plan = runtime.plan_sys_bootstrap(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(
+            runtime.context().home_dir.join(".tool-present"),
+            b"present".to_vec(),
+        );
+        let mut interaction = Interaction;
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .run_sys_bootstrap_approved(request, &approval, &mut interaction, &mut observer)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan changed"));
+        assert!(
+            !runtime
+                .host()
+                .operations()
+                .iter()
+                .any(|operation| matches!(operation, super::super::HostOperation::Run { .. }))
+        );
     }
 
     #[tokio::test]

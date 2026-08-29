@@ -7,15 +7,16 @@ bugs. Check this list before changing the modules named in each entry.
 
 - **A security Plan is not dry-run and approval is snapshot-bound.** `PlanV1` contains only ordered
   semantic steps, safe diagnostic codes, resolved permissions, and digests of exact source/state
-  observations. App, Shell, and managed Sys planners accept only observation host traits; they
+  observations. App, Shell, managed Sys, and Sys bootstrap planners accept only observation host traits; they
   cannot write/remove, execute generator/hook/artifact/bootstrap code, request privilege, or apply
   split-DNS state. Plans cannot carry content, env values, secret plaintext, raw argv, raw errors,
-  or private source paths. Protected App, Shell, and managed Sys mutation must enter through an
+  or private source paths. Protected App, Shell, managed Sys, and Sys bootstrap mutation must enter through an
   approved Core method that regenerates the Plan from fresh captured inputs and matches both its
   fingerprint and exact required permission set before the first mutation; missing or uncomputable
   permissions fail closed. CLI `--yes` skips only the default-No prompt. Dry-run, artifact, refresh,
-  bootstrap, and explicit Sys profile operations are separate contracts and must not be described
-  as approved lifecycle Plans.
+  and explicit Sys profile operations remain separate contracts. Sys bootstrap uses the dedicated
+  `sys-bootstrap` Plan operation and must not be described as a lifecycle Plan or
+  `LifecycleResultV1` operation.
 - **Preset snapshot identity excludes checkout location but includes the trust layer.** The v1
   digest binds sorted effective logical paths, exact bytes, and each file's embedded, external, or
   overlay origin. It must not include physical source roots: relocating unchanged source is not a

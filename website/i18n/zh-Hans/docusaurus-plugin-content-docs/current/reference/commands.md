@@ -125,14 +125,14 @@ shine completions <bash|zsh|powershell>
 shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
-shine sys bootstrap [ITEM]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
+shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes]
 shine sys profile enable <ITEM> [--dry-run]
 shine sys profile disable <ITEM> [--dry-run]
 shine sys apply [ITEM] [--dry-run] [--yes]
 shine sys uninstall <ITEM> [--dry-run] [--yes]
 ```
 
-位置参数 item 与 `--preset` 互斥。`sys bootstrap` 只确保选中的软件存在，并启用其声明的 shell 集成；重复运行不会升级软件。`sys profile enable/disable` 只修改 Shine 自己管理的集成内容。第三方软件升级请使用其包管理器或上游工具；独立受管系统项可通过 `shine upgrade sys/<ITEM>` 收敛到当前预设状态。
+位置参数 item、重复的 `--item` 与 `--preset` 三者互斥。执行变更前，`sys bootstrap` 会展示绑定输入快照的安全 Plan，并以默认否请求确认。非交互环境使用 `--yes`；它仍会展示并重新验证 Plan，且不能与 `--dry-run` 同时使用。Bootstrap 只确保选中的软件存在，并启用其声明的 shell 集成；重复运行不会升级软件。`sys profile enable/disable` 只修改 Shine 自己管理的集成内容。第三方软件升级请使用其包管理器或上游工具；独立受管系统项可通过 `shine upgrade sys/<ITEM>` 收敛到当前预设状态。
 
 ## 预设来源与定制
 

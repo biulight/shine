@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-30 — Planner boundary tests must distinguish assessment from approval gates
+
+- **Symptom**: the Core boundary suite rejected `runtime/planner.rs` for mentioning mutation host
+  traits even though every Plan assessment compiled and ran with an observation-only host.
+- **Root cause**: the source-level test scanned the whole module, which intentionally contains both
+  pure planner implementations and approved execution gates that call already-owned executors.
+- **Fix**: assert the observation-only planner bounds and reject raw mutation calls, while runtime
+  tests instantiate App, Shell, managed Sys, and bootstrap planners with observation-only hosts.
+- **Rule**: capability-boundary tests should verify the bound and calls of the assessment seam, not
+  ban a capability name from a module that also owns the post-approval gate.
+
 ## 2026-08-30 — Executor-side choices expanded reviewed lifecycle work
 
 - **Symptom**: a reviewed App upgrade could still ask to remove stale files, and aggregate upgrade

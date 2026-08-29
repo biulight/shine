@@ -311,29 +311,46 @@ pub async fn handle_init(
     dry_run: bool,
     force_profile: bool,
     proxy: bool,
+    yes: bool,
 ) -> Result<()> {
     let os_id = detect_os_id().await?;
     handle_init_for_os(
         config,
         &os_id,
-        requested,
-        preset,
-        dry_run,
-        force_profile,
-        proxy,
+        BootstrapCliOptions {
+            requested,
+            preset,
+            dry_run,
+            force_profile,
+            proxy,
+            yes,
+        },
     )
     .await
+}
+
+struct BootstrapCliOptions<'a> {
+    requested: &'a [String],
+    preset: Option<&'a str>,
+    dry_run: bool,
+    force_profile: bool,
+    proxy: bool,
+    yes: bool,
 }
 
 async fn handle_init_for_os(
     config: &Config,
     os_id: &str,
-    requested: &[String],
-    preset: Option<&str>,
-    dry_run: bool,
-    force_profile: bool,
-    proxy: bool,
+    options: BootstrapCliOptions<'_>,
 ) -> Result<()> {
+    let BootstrapCliOptions {
+        requested,
+        preset,
+        dry_run,
+        force_profile,
+        proxy,
+        yes,
+    } = options;
     crate::config::print_presets_note(config);
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let sys_shell: &'static str = config.shell_type.into();
@@ -342,36 +359,31 @@ async fn handle_init_for_os(
     } else {
         Vec::new()
     };
-
-    let mut runtime = crate::core_runtime::from_config(config).await?;
-    runtime.context_mut_for_cli().proxy_env = proxy_env
+    let proxy_env_map = proxy_env
         .iter()
         .map(|(key, value)| ((*key).to_string(), value.clone()))
-        .collect();
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    let mut runtime = crate::core_runtime::from_config(config).await?;
+    runtime.context_mut_for_cli().proxy_env = proxy_env_map.clone();
     let mut interaction = crate::presentation::TerminalInteraction;
     let mut observer = BatchBootstrapObserver::default();
-    let batch = runtime
-        .run_sys_bootstrap_batch(
-            shine_core::runtime::SysBootstrapBatchRequest {
-                os_id: os_id.to_string(),
-                requested: requested.to_vec(),
-                preset: preset.map(str::to_string),
-                interactive,
-                sys_shell: sys_shell.to_string(),
-                dry_run,
-                force_profile,
-            },
-            &mut interaction,
-            &mut observer,
-        )
-        .await;
-    let report = if dry_run {
-        batch?
-    } else {
-        batch.map_err(bootstrap_preflight_error)?
-    };
-
     if dry_run {
+        let report = runtime
+            .preview_sys_bootstrap(
+                shine_core::runtime::SysBootstrapBatchRequest {
+                    os_id: os_id.to_string(),
+                    requested: requested.to_vec(),
+                    preset: preset.map(str::to_string),
+                    interactive,
+                    sys_shell: sys_shell.to_string(),
+                    dry_run: true,
+                    force_profile,
+                },
+                &mut interaction,
+                &mut observer,
+            )
+            .await?;
         print_dry_run(
             os_id,
             &report.loaded,
@@ -383,17 +395,57 @@ async fn handle_init_for_os(
         .await?;
         return Ok(());
     }
-    if report.selection.item_ids.is_empty() {
+
+    let selection = runtime
+        .resolve_sys_bootstrap_selection(
+            os_id,
+            requested,
+            preset,
+            interactive,
+            &mut interaction,
+            &mut observer,
+        )
+        .await?;
+    if selection.item_ids.is_empty() {
         println!(
             "{}",
             colors::dim(&format!(
                 "No sys bootstrap items selected for {} ({}).",
                 os_id,
-                report.selection.source.describe()
+                selection.source.describe()
             ))
         );
         return Ok(());
     }
+    let plan_request = shine_core::runtime::SysBootstrapPlanRequest {
+        os_id: os_id.to_string(),
+        item_ids: selection.item_ids,
+        sys_shell: sys_shell.to_string(),
+        force_profile,
+        input_versions: shine_core::runtime::PlanningInputVersions::default(),
+    };
+    let reviewed = crate::lifecycle_plan::review_plans(
+        config,
+        [crate::lifecycle_plan::LifecyclePlanRequest::sys_bootstrap(
+            plan_request.clone(),
+            config,
+            proxy_env_map,
+        )],
+        yes,
+    )
+    .await?
+    .into_iter()
+    .next()
+    .context("missing reviewed Sys bootstrap Plan")?;
+    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    let report = runtime
+        .run_sys_bootstrap_approved(
+            plan_request,
+            &reviewed.approval,
+            &mut interaction,
+            &mut observer,
+        )
+        .await?;
     println!();
     print_sys_summary(&report.outcomes);
     if report
@@ -462,11 +514,6 @@ impl shine_core::runtime::RuntimeObserver for BatchBootstrapObserver {
             _ => {}
         }
     }
-}
-
-fn bootstrap_preflight_error(error: anyhow::Error) -> anyhow::Error {
-    let no_changes = colors::dim_stderr("No system changes were made.");
-    anyhow::anyhow!("{error}\n\n{no_changes}")
 }
 
 // Legacy dispatcher tests are intentionally retained as historical fixtures but

@@ -8,7 +8,7 @@ use shine_core::plan::{
 };
 use shine_core::runtime::{
     AppPlanRequest, CoreRuntime, OpaqueSecretVersion, PlanningInputVersions, RealHost,
-    ShellPlanRequest, SysManagedPlanRequest,
+    ShellPlanRequest, SysBootstrapPlanRequest, SysManagedPlanRequest,
 };
 use std::io::IsTerminal;
 
@@ -17,6 +17,10 @@ pub(crate) enum LifecyclePlanRequest {
     App(AppPlanRequest),
     Shell(ShellPlanRequest),
     Sys(SysManagedPlanRequest),
+    SysBootstrap {
+        request: SysBootstrapPlanRequest,
+        proxy_env: std::collections::BTreeMap<String, String>,
+    },
 }
 
 impl LifecyclePlanRequest {
@@ -35,11 +39,30 @@ impl LifecyclePlanRequest {
         Self::Sys(request)
     }
 
+    pub(crate) fn sys_bootstrap(
+        mut request: SysBootstrapPlanRequest,
+        config: &Config,
+        proxy_env: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        request.input_versions = planning_input_versions(config);
+        Self::SysBootstrap {
+            request,
+            proxy_env: proxy_env.into_iter().collect(),
+        }
+    }
+
+    fn configure_runtime(&self, runtime: &mut CoreRuntime<RealHost>) {
+        if let Self::SysBootstrap { proxy_env, .. } = self {
+            runtime.context_mut_for_cli().proxy_env = proxy_env.clone();
+        }
+    }
+
     async fn generate(&self, runtime: &CoreRuntime<RealHost>) -> Result<PlanV1> {
         match self {
             Self::App(request) => runtime.plan_apps(request.clone()).await,
             Self::Shell(request) => runtime.plan_shells(request.clone()).await,
             Self::Sys(request) => runtime.plan_managed_sys(request.clone()).await,
+            Self::SysBootstrap { request, .. } => runtime.plan_sys_bootstrap(request.clone()).await,
         }
     }
 }
@@ -62,11 +85,12 @@ pub(crate) async fn review_plans(
     yes: bool,
 ) -> Result<Vec<ReviewedLifecyclePlan>> {
     let config_digest = active_config_digest(config).await?;
-    let runtime = runtime_with_env(config).await?;
+    let mut runtime = runtime_with_env(config).await?;
     let mut planned = Vec::new();
     let mut needs_confirmation = false;
     let mut blocked = false;
     for request in requests {
+        request.configure_runtime(&mut runtime);
         let plan = request.generate(&runtime).await?;
         for line in render_plan_lines(&plan, &config_digest)? {
             println!("{line}");
@@ -119,7 +143,8 @@ pub(crate) async fn prepare_runtime(
     if active_config_digest(config).await? != reviewed.config_digest {
         bail!("active configuration changed after lifecycle Plan review; no changes were made");
     }
-    let runtime = runtime_with_env(config).await?;
+    let mut runtime = runtime_with_env(config).await?;
+    reviewed.request.configure_runtime(&mut runtime);
     let current = reviewed.request.generate(&runtime).await?;
     reviewed.approval.validate(&current)?;
     Ok(runtime)
@@ -169,7 +194,7 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 fn render_plan_lines(plan: &PlanV1, config_digest: &str) -> Result<Vec<String>> {
-    let mut lines = vec![format!("Security Plan · {:?}", plan.operation)];
+    let mut lines = vec![format!("Security Plan · {}", plan.operation.as_str())];
     lines.push(format!(
         "  Preset snapshot  {}",
         plan.inputs.preset.as_hex()

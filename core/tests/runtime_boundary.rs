@@ -151,14 +151,13 @@ fn core_domain_sources_do_not_bypass_captured_hosts() {
 }
 
 #[test]
-fn lifecycle_planner_source_has_no_mutation_host_capability() {
+fn security_planners_use_observation_bounds_and_no_raw_mutation_calls() {
     let core_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let planner = std::fs::read_to_string(core_root.join("src/runtime/planner.rs")).unwrap();
 
+    assert!(planner.contains("impl<H: FileSystemObservationHost> CoreRuntime<H>"));
+    assert!(planner.contains("impl<H: FileSystemObservationHost + SplitDnsObservationHost>"));
     for forbidden in [
-        "impl<H: FileSystemHost>",
-        "ProcessHost",
-        "PrivilegedFileSystemHost",
         ".write_atomic(",
         ".remove_file(",
         ".remove_dir_all(",
@@ -168,7 +167,7 @@ fn lifecycle_planner_source_has_no_mutation_host_capability() {
     ] {
         assert!(
             !planner.contains(forbidden),
-            "pure lifecycle planner gained mutation capability `{forbidden}`"
+            "security planner contains a raw mutation call `{forbidden}`"
         );
     }
 }

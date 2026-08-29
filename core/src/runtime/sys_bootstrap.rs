@@ -55,7 +55,7 @@ struct ExecutionResult {
 }
 
 impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
-    pub async fn run_sys_bootstrap_batch(
+    pub(crate) async fn run_sys_bootstrap_batch(
         &self,
         request: SysBootstrapBatchRequest,
         interaction: &mut impl RuntimeInteraction,
@@ -239,7 +239,7 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         ))
     }
 
-    pub async fn run_sys_bootstrap(
+    async fn run_sys_bootstrap(
         &self,
         request: SysBootstrapRequest,
         interaction: &mut impl RuntimeInteraction,
@@ -645,6 +645,28 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             output,
             format!("sys item `{}` install script failed", item.id),
             item.requires_admin && os_id == "windows",
+        )
+    }
+}
+
+impl<H> CoreRuntime<H> {
+    pub async fn resolve_sys_bootstrap_selection(
+        &self,
+        os_id: &str,
+        requested: &[String],
+        preset: Option<&str>,
+        interactive: bool,
+        interaction: &mut impl RuntimeInteraction,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<ResolvedSelection> {
+        let loaded = self.load_sys_preset(os_id).await?;
+        resolve_selection(
+            &loaded.manifest,
+            requested,
+            preset,
+            interactive,
+            interaction,
+            observer,
         )
     }
 }

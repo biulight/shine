@@ -42,7 +42,7 @@ pub use launcher::{
 pub use memory::InMemoryHost;
 pub use planner::{
     AppApprovedUpgradeOptions, AppPlanRequest, OpaqueSecretVersion, PlanningInputVersions,
-    ShellPlanRequest, SysManagedPlanRequest,
+    ShellPlanRequest, SysBootstrapPlanRequest, SysManagedPlanRequest,
 };
 pub use preset::{
     PresetFile, PresetFileOrigin, PresetSnapshot, PresetSourceKind, PresetValidationIssue,

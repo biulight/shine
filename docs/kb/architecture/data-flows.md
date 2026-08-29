@@ -7,8 +7,9 @@ records the cross-module sequences and their gotchas.
 ## Pure security Plan assessment
 
 `shine-core::plan` defines the Phase 3 approval contract used by protected lifecycle execution.
-`runtime::planner` consumes one immutable `PresetSnapshot`, a validated App/Shell/managed Sys
-request, captured runtime inputs, manifests, receipts, and live resource observations. It emits
+`runtime::planner` consumes one immutable `PresetSnapshot`, a validated App/Shell/managed Sys or
+exact Sys bootstrap request, captured runtime inputs, manifests, receipts, and live resource
+observations. It emits
 ordered semantic steps plus a required permission set; missing declarations, uncomputable
 permissions, or a blocked step make the Plan non-ready. Planning cannot invoke host mutation or
 Preset code, and its output carries no content, env values, secret plaintext, raw errors, or raw
@@ -39,11 +40,19 @@ capture current source/state → regenerate Plan → match approved fingerprint 
     → execute existing Core lifecycle → return LifecycleResultV1
 ```
 
-App, Shell, and managed Sys install/upgrade/uninstall route through this flow. Untargeted
+App, Shell, managed Sys install/upgrade/uninstall, and exact Sys bootstrap route through this flow. Untargeted
 `shine upgrade` renders the three final Plans together, confirms once, and prevalidates all three
 before protected mutation starts. `upgrade --pull` pulls and reloads first. Existing dry-run/status
 remain separate preview/inspection paths, and `allow_app_hooks`, `allow_sys_code`, ownership, and
 administrator authorization remain additional gates.
+
+Sys bootstrap uses the dedicated `sys-bootstrap` Plan operation rather than a lifecycle install.
+Interactive or profile selection resolves to an exact ordered item list before planning. The pure
+planner observes command/path presence without executing detection, binds run-manifest,
+environment/proxy and profile state, and derives package-provider, script, administrator and
+profile permissions. Approved execution re-plans before any detection command, installer,
+materialization, profile write, or receipt mutation. Its existing domain report remains separate
+from `LifecycleResultV1`.
 
 Permission declaration schema v1 is parsed from the same immutable snapshot: one App category
 table, one table per Shell command/platform variant, and one table per Sys item. Static validation

@@ -12,6 +12,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Added snapshot-bound lifecycle Plan review and one-shot approval for App, Shell, and managed Sys
   install, upgrade, and uninstall. Protected commands now support `--yes` for automation while
   still rendering and revalidating the complete Plan before mutation.
+- Added a dedicated snapshot-bound `sys-bootstrap` Plan, repeated `sys bootstrap --item <ITEM>`
+  selection, and approval revalidation before detection, package/script execution, profile writes,
+  or receipt mutation.
 - Added App lifecycle-hook `env` declarations so Plan fingerprints bind plain input hashes and
   opaque secret revisions without serializing environment values.
 - Added versioned, target-local Preset permission declarations with strict static validation and
@@ -23,6 +26,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Protected mutation from external Presets now fails closed when a required permission declaration
   is missing or cannot be computed; non-interactive use must pass `--yes`, which conflicts with
   `--dry-run` where preview is available.
+- Mutating `sys bootstrap` now requires default-No Plan approval in a terminal or explicit `--yes`
+  for non-interactive use. Its existing `--dry-run` remains a separate preview.
 - Untargeted `shine upgrade` no longer synchronizes the Sys shell profile implicitly. Use
   `shine sys profile enable/disable` to change that explicit state.
 

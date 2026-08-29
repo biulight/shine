@@ -29,6 +29,7 @@ shine sys bootstrap --dry-run
 shine sys bootstrap
 shine sys bootstrap mise
 shine sys bootstrap rust mise
+shine sys bootstrap --item rust --item mise --yes
 shine sys bootstrap --preset recommended
 shine sys bootstrap --preset minimal
 shine sys bootstrap --proxy --dry-run
@@ -36,9 +37,12 @@ shine sys bootstrap --proxy --dry-run
 
 - 在交互式终端中，`shine sys bootstrap` 会打开多选界面。
 - 位置参数 item ID 只引导这些项目，保留输入顺序，并忽略重复项。
+- 重复使用 `--item` 是供脚本与 setup orchestrator 使用的等价显式写法。
 - 指定 `--preset` 时直接应用命名 profile。
-- 位置参数与 `--preset` 不能组合；受管资源使用 `sys apply`，而不是 `sys bootstrap`。
+- 位置参数、重复的 `--item` 与 `--preset` 不能组合；受管资源使用 `sys apply`，而不是 `sys bootstrap`。
 - 非交互环境没有指定 profile 时使用预设的默认 profile。
+
+完成选择后，实际变更会先展示绑定输入快照的安全 Plan，其中包含语义步骤、权限和输入指纹。交互确认默认为否；自动化必须传入 `--yes`。该参数只跳过提示，Plan 仍会展示并用最新输入重新验证。`--dry-run` 是更早阶段的 provider/脚本预览，不能与 `--yes` 同时使用。
 
 Ubuntu 还提供 `minimal` profile，适合生产服务器：仅安装 Neovim、fzf、bat、eza 和 zoxide，不包含 shell 历史同步、提示符、Node.js 工具链或 Homebrew。运行前仍应先执行 `shine sys bootstrap --preset minimal --dry-run` 复核当前版本的实际步骤。
 

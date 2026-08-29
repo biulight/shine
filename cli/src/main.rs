@@ -524,18 +524,26 @@ async fn run(cli: Cli) -> Result<()> {
             SysCommands::Status => Box::pin(sys::handle_status(&config)).await,
             SysCommands::Bootstrap {
                 items,
+                exact_items,
                 preset,
                 dry_run,
                 force_profile,
                 proxy,
+                yes,
             } => {
+                let requested = if exact_items.is_empty() {
+                    items
+                } else {
+                    exact_items
+                };
                 Box::pin(sys::handle_init(
                     &config,
-                    &items,
+                    &requested,
                     preset.as_deref(),
                     dry_run,
                     force_profile,
                     proxy,
+                    yes,
                 ))
                 .await
             }
@@ -2068,7 +2076,8 @@ mod tests {
                     preset: None,
                     dry_run: false,
                     force_profile: false,
-                    proxy: false
+                    proxy: false,
+                    ..
                 }
             } if items.is_empty()
         ));
@@ -2082,7 +2091,8 @@ mod tests {
                     preset: None,
                     dry_run: true,
                     force_profile: false,
-                    proxy: false
+                    proxy: false,
+                    ..
                 }
             } if items.is_empty()
         ));
@@ -2097,7 +2107,8 @@ mod tests {
                     preset: Some(ref preset),
                     dry_run: false,
                     force_profile: false,
-                    proxy: false
+                    proxy: false,
+                    ..
                 }
             } if items.is_empty() && preset == "recommended"
         ));
@@ -2111,7 +2122,8 @@ mod tests {
                     preset: None,
                     dry_run: false,
                     force_profile: true,
-                    proxy: false
+                    proxy: false,
+                    ..
                 }
             } if items.is_empty()
         ));
@@ -2125,7 +2137,8 @@ mod tests {
                     preset: None,
                     dry_run: false,
                     force_profile: false,
-                    proxy: true
+                    proxy: true,
+                    ..
                 }
             } if items.is_empty()
         ));
@@ -2147,7 +2160,8 @@ mod tests {
                     preset: Some(ref preset),
                     dry_run: true,
                     force_profile: false,
-                    proxy: false
+                    proxy: false,
+                    ..
                 }
             } if items.is_empty() && preset == "recommended"
         ));
@@ -2164,6 +2178,29 @@ mod tests {
             } if items == ["rust", "mise"]
         ));
 
+        let cli = Cli::try_parse_from([
+            "shine",
+            "sys",
+            "bootstrap",
+            "--item",
+            "rust",
+            "--item",
+            "mise",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Sys {
+                command: SysCommands::Bootstrap {
+                    items,
+                    exact_items,
+                    yes: true,
+                    ..
+                }
+            } if items.is_empty() && exact_items == ["rust", "mise"]
+        ));
+
         assert!(
             Cli::try_parse_from([
                 "shine",
@@ -2175,6 +2212,10 @@ mod tests {
             ])
             .is_err()
         );
+        assert!(
+            Cli::try_parse_from(["shine", "sys", "bootstrap", "rust", "--item", "mise",]).is_err()
+        );
+        assert!(Cli::try_parse_from(["shine", "sys", "bootstrap", "--dry-run", "--yes",]).is_err());
     }
 
     #[test]

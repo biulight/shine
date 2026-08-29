@@ -140,16 +140,19 @@ shine completions <bash|zsh|powershell>
 shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
-shine sys bootstrap [ITEM]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
+shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes]
 shine sys profile enable <ITEM> [--dry-run]
 shine sys profile disable <ITEM> [--dry-run]
 shine sys apply [ITEM] [--dry-run] [--yes]
 shine sys uninstall <ITEM> [--dry-run] [--yes]
 ```
 
-Positional items and `--preset` are mutually exclusive. `sys bootstrap` ensures only the selected
-software is present and enables its declared shell integration; rerunning it never upgrades the
-software. `sys profile enable/disable` changes only Shine-owned integration content. Use the
+Positional items, repeated `--item`, and `--preset` are mutually exclusive. Before mutation,
+`sys bootstrap` renders a snapshot-bound security Plan and asks for default-No approval. Use
+`--yes` for non-interactive approval; it still renders and revalidates the Plan and conflicts with
+`--dry-run`. Bootstrap ensures only the selected software is present and enables its declared
+shell integration; rerunning it never upgrades the software. `sys profile enable/disable` changes
+only Shine-owned integration content. Use the
 software's own package manager or upstream tool for upgrades; `shine upgrade sys/<ITEM>` converges
 an independent managed item.
 

@@ -20,7 +20,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
 | `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, process, privileged, and system mutation ports |
-| `core/src/runtime/planner.rs` | Pure App, Shell, and managed Sys Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
+| `core/src/runtime/planner.rs` | Pure App, Shell, managed Sys, and Sys bootstrap Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
 | `core/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
 | `core/src/runtime/shell.rs` | Complete Shell assessment/install/upgrade/uninstall/live render, launcher, cache, profile, and manifest orchestration |
 | `core/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS orchestration, and run-manifest persistence |
@@ -128,7 +128,7 @@ logic.
 
 | Path | Responsibility |
 |---|---|
-| `cli/src/sys/commands.rs` | Sys list/info/status rendering and Core bootstrap batch adapter |
+| `cli/src/sys/commands.rs` | Sys list/info/status rendering, exact bootstrap selection, and approved Core bootstrap Plan adapter |
 | `cli/src/sys/detect.rs` | OS and Linux distribution detection |
 | `cli/src/sys/managed.rs` | Managed-resource apply/update/remove/upgrade and structured result adapters |
 | `cli/src/sys/model.rs` | Compatibility re-exports of Core Sys models |

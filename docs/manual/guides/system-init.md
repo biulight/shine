@@ -35,6 +35,7 @@ any authorization or password prompt that follows is attributable to the active 
 shine sys bootstrap
 shine sys bootstrap mise
 shine sys bootstrap rust mise
+shine sys bootstrap --item rust --item mise --yes
 shine sys bootstrap --preset recommended
 shine sys bootstrap --preset minimal
 shine sys bootstrap --proxy --dry-run
@@ -42,10 +43,16 @@ shine sys bootstrap --proxy --dry-run
 
 - In an interactive terminal, `shine sys bootstrap` opens a multi-select interface.
 - Positional item IDs bootstrap only those items, preserving their order and ignoring duplicates.
+- Repeated `--item` is the explicit equivalent for scripts and setup orchestrators.
 - `--preset` applies the named profile directly.
-- Positional items and `--preset` cannot be combined. Managed resources use `sys apply`, not
+- Positional items, repeated `--item`, and `--preset` cannot be combined. Managed resources use `sys apply`, not
   `sys bootstrap`.
 - In a non-interactive environment without an explicit profile, Shine uses the configured default.
+
+After selection, a mutating run displays a snapshot-bound security Plan containing semantic steps,
+permissions, and input fingerprints. Interactive approval defaults to No. Automation must pass
+`--yes`; this skips only the prompt, while Plan rendering and fresh validation remain mandatory.
+`--dry-run` is an earlier provider/script preview and cannot be combined with `--yes`.
 
 Ubuntu includes a `minimal` profile for production servers. It installs only Neovim, fzf, bat, eza,
 and zoxide, without shell-history synchronization, a prompt, the Node.js toolchain, or Homebrew.

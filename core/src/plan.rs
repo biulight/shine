@@ -284,10 +284,43 @@ impl SnapshotDigestBuilderV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlanOperationV1 {
+    Install,
+    Update,
+    Upgrade,
+    Uninstall,
+    SysBootstrap,
+}
+
+impl PlanOperationV1 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Update => "update",
+            Self::Upgrade => "upgrade",
+            Self::Uninstall => "uninstall",
+            Self::SysBootstrap => "sys-bootstrap",
+        }
+    }
+}
+
+impl From<LifecycleOperation> for PlanOperationV1 {
+    fn from(operation: LifecycleOperation) -> Self {
+        match operation {
+            LifecycleOperation::Install => Self::Install,
+            LifecycleOperation::Update => Self::Update,
+            LifecycleOperation::Upgrade => Self::Upgrade,
+            LifecycleOperation::Uninstall => Self::Uninstall,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PlanV1 {
     pub schema_version: u32,
-    pub operation: LifecycleOperation,
+    pub operation: PlanOperationV1,
     pub inputs: PlanInputsV1,
     pub steps: Vec<PlanStepV1>,
     pub permissions: PermissionResolutionV1,
@@ -295,7 +328,7 @@ pub struct PlanV1 {
 
 impl PlanV1 {
     pub fn new(
-        operation: LifecycleOperation,
+        operation: impl Into<PlanOperationV1>,
         inputs: PlanInputsV1,
         steps: Vec<PlanStepV1>,
         required_permissions: PermissionSetV1,
@@ -304,7 +337,7 @@ impl PlanV1 {
     ) -> Self {
         Self {
             schema_version: PLAN_SCHEMA_VERSION,
-            operation,
+            operation: operation.into(),
             inputs,
             steps,
             permissions: PermissionResolutionV1::resolve(
@@ -653,6 +686,26 @@ mod tests {
             assert!(!plan_json.contains(private));
             assert!(!approval_toml.contains(private));
         }
+    }
+
+    #[test]
+    fn specialized_operation_spelling_is_stable() {
+        let plan = PlanV1::new(
+            PlanOperationV1::SysBootstrap,
+            PlanInputsV1 {
+                preset: digest("preset", "sys/demo/shine.toml", b"preset"),
+                state: digest("state", "sys/demo", b"state"),
+            },
+            Vec::new(),
+            PermissionSetV1::default(),
+            &PermissionSetV1::default(),
+            std::iter::empty::<String>(),
+        );
+        assert!(
+            serde_json::to_string(&plan)
+                .unwrap()
+                .contains("\"operation\":\"sys-bootstrap\"")
+        );
     }
 
     #[test]
