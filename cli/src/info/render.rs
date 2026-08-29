@@ -552,10 +552,6 @@ mod tests {
     async fn embedded_shell_diff_ignores_stale_extracted_source() {
         let dir = std::env::temp_dir().join(format!("shine-info-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
-        let stale_source = dir.join("set_proxy.sh");
-        tokio::fs::write(&stale_source, b"#!/bin/bash\necho stale\n")
-            .await
-            .unwrap();
         let config = Config::new_for_test(&dir);
         let mut runtime = crate::core_runtime::from_config(&config).await.unwrap();
         runtime.context_mut_for_cli().env = crate::env::EnvConfig::load_or_init(&config)
@@ -563,18 +559,33 @@ mod tests {
             .unwrap()
             .as_map()
             .clone();
-        let expected = runtime
+        let selected_source = runtime
             .inspect_shells()
             .await
             .unwrap()
             .into_iter()
             .find(|item| item.category.name == "proxy" && item.file.command_name == "setproxy")
-            .and_then(|item| item.desired_content)
+            .map(|item| item.source_path)
             .expect("embedded proxy source should exist");
-        let expected = String::from_utf8(expected).unwrap();
+        tokio::fs::create_dir_all(selected_source.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&selected_source, b"stale extracted source\n")
+            .await
+            .unwrap();
 
-        assert!(!expected.contains("echo stale"));
-        assert!(expected.contains("PROXY_NO_PROXY=\"localhost,127.0.0.1,::1\""));
+        let item = runtime
+            .inspect_shells()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|item| item.category.name == "proxy" && item.file.command_name == "setproxy")
+            .expect("embedded proxy source should exist");
+        assert_eq!(item.source_path, selected_source);
+        let expected = String::from_utf8(item.desired_content.unwrap()).unwrap();
+
+        assert!(!expected.contains("stale extracted source"));
+        assert!(expected.contains("localhost,127.0.0.1,::1"));
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();
     }

@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-29 — Platform-selected preset tests must follow the selected source
+
+- **Symptom**: the Windows Rust test job failed while checking that Shell info rendered expected
+  content from the embedded proxy preset instead of a stale extracted source.
+- **Root cause**: after inspection moved to `CoreRuntime`, the test selected the native Shell preset
+  at runtime but still wrote `set_proxy.sh` and asserted its Unix assignment syntax; Windows
+  correctly selected `set_proxy.ps1` and rendered PowerShell syntax.
+- **Fix**: discover the selected source path from runtime inspection, seed the stale file there,
+  and assert the cross-platform rendered proxy value rather than one shell's assignment syntax.
+- **Rule**: when production metadata selects a platform variant, tests must seed and inspect that
+  selected variant and assert shared semantics unless syntax itself is the behavior under test.
+
 ## 2026-08-29 — A host boundary must remove ambient compatibility entry points
 
 - **Symptom**: the Phase 2 migration routed normal CLI commands through `CoreRuntime`, but Sys
