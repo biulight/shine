@@ -89,6 +89,12 @@ until receipt removal is durable. Recovery restores it while the exact old recei
 removes it after both receipt removal and the journal's matching commit state are durable, and only
 while its kind, mode, and bytes are unchanged. If receipt removal is durable but that journal state
 is missing, recovery conservatively recreates the old receipt and restores the unchanged file.
+When that static Copy has a fixed persistent backup, uninstall journals both moves: the managed
+file goes to `.shine.rollback`, then `.shine.bak` returns to the destination. Before receipt commit,
+recovery accepts only the exact three-path states produced before, between, or after those moves;
+it returns the restored user file to `.shine.bak` when necessary, then restores the managed file and
+old receipt. After receipt commit, recovery keeps the unchanged user file at the destination and
+removes only unchanged managed rollback material. The modes and bytes of both files are bound.
 A rollback file may contain prior managed configuration and should be treated as sensitive. If any
 guarded path changed after interruption, recovery returns nonzero and preserves the paths plus the
 journal; replacing a regular file with a symlink or directory also counts as a change. Do not edit

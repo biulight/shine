@@ -48,8 +48,9 @@ including after a receipt-save/marker-write interruption, cannot authorize clean
 recovery reconstructs the exact payload-free old receipt and rolls the file back. Other receipt or
 path combinations block and preserve rollback material.
 
-Forced, backup-restoring, administrator, JSON merge, relocation, stale-prune and upgrade-internal
-removals remain on their existing executors until narrower action contracts land.
+At adoption, forced, backup-restoring, administrator, JSON merge, relocation, stale-prune and
+upgrade-internal removals remained on their existing executors. [ADR 0053](0053-transactional-app-backup-restoring-remove.md)
+later adds the narrower persistent-backup contract; the other cases remain outside this action.
 
 ## Consequences
 
@@ -59,5 +60,6 @@ removals remain on their existing executors until narrower action contracts land
   it removes only unchanged transaction rollback material.
 - The predictable rollback path may temporarily contain sensitive managed configuration and is
   guarded by kind, mode, hash and ownership checks.
-- The first uninstall slice intentionally does not cover persistent user backup restoration,
-  explicit force semantics or privileged mutations.
+- This first uninstall action intentionally does not cover persistent user backup restoration,
+  explicit force semantics or privileged mutations; ADR 0053 adds a separate action for the first
+  case without weakening this action's proof.

@@ -94,7 +94,7 @@ content on failure. Artifact apply/remove explicitly runs an external integratio
 preset; ordinary installation and upgrade do not implicitly apply it.
 
 If a supported App creation, in-place static Copy update, or ordinary removal of an unchanged
-static Copy without a persistent backup is interrupted after its operation journal is written,
+static Copy is interrupted after its operation journal is written,
 later mutating App commands that require a security Plan stop with recovery guidance instead of
 changing that state implicitly. Read-only inspection does not recover or discard the journal. Run `shine app recover`
 to inspect a separate recovery Plan. It preserves files that have changed since the interruption;
@@ -107,6 +107,11 @@ journaled prior fingerprint and mode. For ordinary supported removal, the old re
 recovery to restore unchanged rollback material; once receipt removal and its journal commit state
 are durable, recovery removes only that unchanged material. Receipt absence without the matching
 journal state instead recreates the old receipt and restores the unchanged file.
+For a backup-restoring removal, Shine first moves the managed file to `.shine.rollback` and then
+moves `.shine.bak` to the destination. Recovery before receipt commit reverses only an exact safe
+state of those three paths, restoring both the managed destination and persistent backup. Recovery
+after commit keeps the exact restored user destination and removes only unchanged managed rollback
+material. Both file modes and hashes must still match the journal.
 Treat interrupted rollback material as sensitive managed configuration. Recovery
 defaults to No and requires `--yes` when no interactive terminal is available. A missing or invalid
 journal, unsupported action, or changed destination/backup/rollback path returns nonzero without

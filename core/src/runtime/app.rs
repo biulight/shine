@@ -807,8 +807,14 @@ where
                         action_ir,
                     )
                     .await?;
+                let outcome = execution
+                    .backup
+                    .clone()
+                    .map_or(UninstallOutcome::Removed, |backup| {
+                        UninstallOutcome::RestoredBackup { backup }
+                    });
                 journal_execution = Some(execution);
-                Ok(UninstallOutcome::Removed)
+                Ok(outcome)
             } else {
                 self.uninstall_app_entry(&entry, request.dry_run, request.force)
                     .await

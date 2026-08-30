@@ -1,14 +1,16 @@
 # Declarative Action and Recovery PRD
 
-> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a, and
-> 4C.2b-1 are
+> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
+> 4C.2b-1, and 4C.2b-2 are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned, unprivileged static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
 > upgrade also journal in-place replacement of an unchanged, receipt-owned, unprivileged static
 > Copy and retain its previous bytes only as same-directory transaction rollback material. Ordinary
 > uninstall uses the same material for an unchanged, receipt-owned, unprivileged static Copy with
-> no persistent backup until receipt removal and its journal commit marker are durable.
+> no persistent backup until receipt removal and its journal commit marker are durable. The next
+> removal slice also journals restoration of an unchanged fixed persistent backup, binding both
+> files by mode and hash across the two renames and the same receipt boundary.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -46,8 +48,8 @@ prepared journal → rename original to fixed backup → atomic managed write �
        └──────────── explicit recovery restores only an exact safe state ────────────┘
 ```
 
-Backup-restoring/forced managed remove, JSON merge, administrator paths, Shell/Sys actions, and
-automatic resume remain later slices.
+Forced managed remove, JSON merge, administrator paths, Shell/Sys actions, and automatic resume
+remain later slices.
 
 ## Goals
 
@@ -94,6 +96,9 @@ are:
 - `RemoveManagedFile`: an unchanged receipt-owned static Copy destination with no persistent backup,
   its fixed transaction rollback path, prior mode and original hash. It is valid only for an
   ordinary unprivileged uninstall with an absent rollback path.
+- `RemoveManagedFileWithBackup`: the same managed destination and transaction rollback identity,
+  plus the canonical persistent backup and both files' prior modes and hashes. It is valid only for
+  an ordinary unprivileged uninstall whose unchanged regular backup will be restored.
 
 The classification-only escape hatch is:
 
@@ -132,7 +137,12 @@ while the exact old receipt remains, recovery restores unchanged rollback materi
 claims the source, destination or rollback path and the journal durably records `receipt-committed`,
 recovery removes only unchanged rollback material. Receipt absence without that marker makes
 recovery reconstruct the old payload-free receipt and roll back the unchanged file.
-Backup restoration, force and administrator removal require later action kinds.
+Backup-restoring removal first moves the managed destination to transaction rollback material, then
+moves the persistent backup to the destination. Before receipt commit, recovery accepts only exact
+`managed/original/missing`, `missing/original/managed`, or `original/missing/managed`
+destination/backup/rollback states and recreates a missing old receipt before restoring both paths.
+After `receipt-committed`, it keeps the exact user original at the destination and removes only
+unchanged managed rollback material. Force and administrator removal require later action kinds.
 
 ### Recovery
 
@@ -164,6 +174,12 @@ Managed update uses the same three safe path states with `.shine.rollback` holdi
 managed bytes and the previous receipt still durable. If the replacement receipt is durable,
 recovery removes only an unchanged rollback file and the journal; a missing rollback permits
 journal cleanup. Any changed rollback path, destination, or receipt blocks and preserves all state.
+
+Backup-restoring removal uses three paths. Before receipt commit, recovery either keeps the exact
+managed destination plus exact persistent backup, restores managed rollback while leaving the
+backup in place, or moves an exact restored user destination back to `.shine.bak` before restoring
+the exact managed rollback. After receipt commit it keeps the user destination and removes only
+unchanged managed rollback material. Any changed path, mode, hash, or receipt blocks all mutation.
 
 The approved recovery Plan is regenerated again while holding the operation lock immediately
 before the first mutation.
@@ -221,10 +237,17 @@ before the first mutation.
 - Treat receipt absence without the positive marker as uncommitted: reconstruct the exact old
   receipt and roll back unchanged transaction state.
 
-### Slice 4C.2b-2 — Extended managed uninstall
+### Slice 4C.2b-2 — Backup-restoring managed uninstall (implemented)
 
 - Support persistent user backup restoration with before/after fingerprints and post-operation
   modification protection.
+- Move managed and user-original bytes through canonical transaction/persistent paths without
+  serializing either payload.
+- Recover before, between, and after both renames, plus both sides of receipt commit; block any
+  changed path, mode, hash, or receipt.
+
+### Slice 4C.2b-3 — Forced and privileged managed uninstall
+
 - Give forced removal of user-modified content a distinct reviewed action contract.
 - Add administrator locking and rollback tests before privileged actions join the IR.
 
@@ -252,4 +275,5 @@ The Roadmap Phase 4 gate remains stricter than Slice 4A:
 
 Slice 4A is internal and adds no public commands or behavior. Slice 4B.5 releases the explicit
 recovery command and guidance. Slice 4C.1 expands recovery to fixed backups and blocks an occupied
-backup rather than replacing it, so both public manual locales remain aligned.
+backup rather than replacing it. Slices 4C.2b-1 and 4C.2b-2 expand the same recovery guidance to
+receipt removal and fixed-backup restoration, so both public manual locales remain aligned.

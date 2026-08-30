@@ -171,9 +171,9 @@ executor: an unprivileged static Copy whose manifest receipt is absent and whose
 either absent or an unowned regular file with an absent fixed backup path. Approved install and
 upgrade also route an unchanged receipt-owned, in-place, unprivileged static Copy replacement
 through the executor. Ordinary uninstall also routes an unchanged, receipt-owned, unprivileged
-static Copy with no persistent backup through the executor. JSON merge, generators, relocation,
-force, backup-restoring remove and administrator writes retain their existing executors until their
-rollback contracts land:
+static Copy through the executor, including restoration of an unchanged canonical persistent
+backup. JSON merge, generators, relocation, force and administrator writes retain their existing
+executors until their rollback contracts land:
 
 ```text
 approved PlanV1
@@ -184,13 +184,15 @@ approved PlanV1
     or UpdateManagedFile; destination + rollback + previous receipt/mode + before/after hashes,
        no bytes
     or RemoveManagedFile; destination + rollback + previous receipt/mode/hash, no bytes
+    or RemoveManagedFileWithBackup; destination + persistent backup + rollback + both
+       modes/hashes + previous receipt fields, no bytes
   → validate action permissions are included in the approval
   → acquire host cross-process operation lock
   → refuse an existing app-operation-journal.toml
   → atomically persist prepared journal with original PlanApprovalV1
   → atomically create the absent destination, rename original to persistent backup then create,
     rename previous managed bytes to `.shine.rollback` then replace and restore their mode,
-    or rename an uninstall destination to `.shine.rollback`
+    or rename an uninstall destination to `.shine.rollback`, then move `.shine.bak` to destination
   → atomically persist applied action state
   → App lifecycle atomically persists the matching manifest receipt state
     (owned receipt for create/update; safe receipt absence for remove)
@@ -211,6 +213,9 @@ read versioned journal + App manifest + destination + optional persistent/transa
   → managed-update: use the same safe states with `.shine.rollback` and the previous receipt
   → managed-remove: exact old receipt restores unchanged rollback; receipt-committed plus safe
     receipt absence removes it; bare receipt absence restores the old receipt and file
+  → backup-restoring managed-remove: before receipt commit, restore only exact
+    managed/original/missing, missing/original/managed, or original/missing/managed path states;
+    after commit keep the exact user destination and remove only unchanged managed rollback
   → any changed destination, backup, rollback material, or receipt => blocked/preserved
   → `shine app recover` renders explicit destination + operation-journal steps
   → default-No approval, or `--yes` for non-interactive recovery
@@ -223,10 +228,11 @@ read versioned journal + App manifest + destination + optional persistent/transa
 The journal contains Action IR identities, paths, hashes, modes, state and the original approval,
 never managed/original content or secret plaintext. See
 [ADR 0048](../decisions/0048-separate-action-ir-and-explicit-recovery.md),
-[ADR 0050](../decisions/0050-backup-aware-app-creation-recovery.md), and
+[ADR 0050](../decisions/0050-backup-aware-app-creation-recovery.md),
 [ADR 0051](../decisions/0051-transactional-app-managed-file-update.md),
 [ADR 0052](../decisions/0052-transactional-app-managed-file-remove.md), and
-`docs/declarative-action-recovery-prd.md` before extending it to backup-restoring/forced uninstall,
+[ADR 0053](../decisions/0053-transactional-app-backup-restoring-remove.md), and
+`docs/declarative-action-recovery-prd.md` before extending it to forced uninstall,
 JSON merge, administrator or opaque actions.
 
 Ordinary App install/upgrade/uninstall/refresh/artifact mutation never recovers implicitly. When

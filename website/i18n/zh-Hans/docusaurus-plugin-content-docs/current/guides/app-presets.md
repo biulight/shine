@@ -75,6 +75,11 @@ material 和 stale journal。普通卸载一个未修改、没有 persistent bac
 文件；只有 receipt 移除和 journal 中对应的 commit 状态都已持久化，才会移除 rollback material，
 而且仅在其类型、mode 和内容均未变化时执行。receipt 消失但缺少该 journal 状态时属于歧义状态，
 恢复会采用保守 rollback：重建旧 receipt，并还原未修改的文件。
+如果该静态 Copy 还带有固定 persistent backup，卸载会把两次移动都纳入 journal：先将受管文件移到
+`.shine.rollback`，再把 `.shine.bak` 还原到 destination。receipt commit 前，恢复只接受这两次移动
+之前、之间或之后产生的精确三路径状态；必要时先把已经还原的用户文件移回 `.shine.bak`，再恢复受管
+文件与旧 receipt。receipt commit 后，恢复保留 destination 中未修改的用户文件，只清理未修改的受管
+rollback material。两个文件的 mode 与内容 fingerprint 都必须匹配。
 rollback 文件可能包含之前的受管配置，应按敏感内容处理。如果任一受保护
 路径在中断后被修改，恢复命令返回非零，并保留这些路径和 journal 等待显式处理。把 regular file
 替换为 symlink 或目录也视为修改。不要手动编辑或删除 journal 或 rollback material。

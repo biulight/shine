@@ -31,6 +31,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Journaled ordinary removal of unchanged, receipt-owned, unprivileged static Copy App files
   without persistent backups. Interrupted uninstall restores only unchanged rollback material
   while the original receipt remains, or removes it after receipt removal is durable.
+- Journaled ordinary static Copy removal when the receipt owns a fixed persistent backup. Uninstall
+  restores the user file through two fingerprint-bound moves; interrupted recovery restores both
+  pre-uninstall paths before receipt commit or keeps the restored user file after commit.
 
 ### Breaking changes
 

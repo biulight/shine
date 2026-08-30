@@ -185,6 +185,15 @@ bugs. Check this list before changing the modules named in each entry.
   source, destination or rollback path. Any
   occupied destination, changed path, receipt conflict, backup, administrator, JSON merge or force
   case stays outside this action and must not inherit its rollback proof.
+- **A backup-restoring App removal binds both file identities across two moves.** The applicable
+  unprivileged static Copy receipt must own the canonical `.shine.bak`, and the managed destination,
+  persistent backup, and canonical `.shine.rollback` must be unchanged regular-file/missing states
+  matching the Action IR's two modes and hashes. Before receipt commit, recovery accepts only exact
+  managed/original/missing, missing/original/managed, or original/missing/managed
+  destination/backup/rollback states; it reconstructs a missing exact old receipt before returning
+  the user file to backup and managed rollback to destination. After `receipt-committed`, recovery
+  keeps the exact restored user destination and removes only unchanged managed rollback material.
+  Any changed kind, mode, hash, receipt, or claimed path blocks and preserves all three paths.
 - **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
   first action mutation, update action state atomically, persist the matching domain receipt, and
   only then commit by removing the journal. An existing or unsupported-version journal blocks a new

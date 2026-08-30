@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-31 — Backup restoration needs permissions for both rename endpoints
+
+- **Symptom**: an App uninstall Plan described removing the managed destination but did not include
+  writing that destination from `.shine.bak` or removing the backup path, even though the legacy
+  executor performed both effects.
+- **Root cause**: receipt-driven uninstall permissions modeled every Copy entry as a one-path
+  deletion and treated backup restoration as an implementation detail rather than a reviewed
+  mutation.
+- **Fix**: capture the persistent backup in the Plan state and require destination write plus backup
+  removal permissions; the transactional backup-restoring action derives the same effects directly.
+- **Rule**: a rename or move changes both endpoint states. Security planning must bind the source
+  observation and declare source removal plus destination write, even when the user-visible outcome
+  is described as “restore.”
+
 ## 2026-08-30 — Cleanup-only recovery still needs a mutating Plan step
 
 - **Symptom**: recovering an interrupted App operation after its matching receipt was already

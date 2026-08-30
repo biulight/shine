@@ -98,6 +98,16 @@ impl AppOperationJournalV1 {
                 } if managed_file_rollback_path(destination) != *rollback => {
                     bail!("App operation journal contains a non-canonical rollback path");
                 }
+                ActionKindV1::RemoveManagedFileWithBackup {
+                    destination,
+                    backup,
+                    rollback,
+                    ..
+                } if crate::install::backup_path(destination) != *backup
+                    || managed_file_rollback_path(destination) != *rollback =>
+                {
+                    bail!("App operation journal contains a non-canonical backup or rollback path");
+                }
                 _ => {}
             }
         }
@@ -116,7 +126,7 @@ impl AppOperationJournalV1 {
             .zip(&self.action_ir.actions)
             .any(|(journal, action)| {
                 journal.state == JournalActionStateV1::ReceiptCommitted
-                    && !matches!(action.kind, ActionKindV1::RemoveManagedFile { .. })
+                    && !is_app_removal_action(&action.kind)
             })
         {
             bail!("only an App removal action may commit through receipt absence");
@@ -208,8 +218,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
 
         for action in &journal.action_ir.actions {
             let action_state = journal.action_state(&action.action_id)?;
-            let receipt_conflict = if matches!(action.kind, ActionKindV1::RemoveManagedFile { .. })
-            {
+            let receipt_conflict = if is_app_removal_action(&action.kind) {
                 removal_receipt_conflict(
                     &manifest,
                     action,
@@ -512,6 +521,141 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             RemoveRecoveryAssessment::Blocked => {
                                 blocked = true;
                                 (PlanActionV1::Blocked, "app_recovery_removal_state_changed")
+                            }
+                        }
+                    };
+                    steps.push(
+                        PlanStepV1::new(&action.target, Some(&action.resource), plan_action)
+                            .with_diagnostic_code(code),
+                    );
+                }
+                ActionKindV1::RemoveManagedFileWithBackup {
+                    destination,
+                    backup,
+                    rollback,
+                    managed_mode,
+                    managed_hash,
+                    backup_mode,
+                    backup_hash,
+                    ..
+                } => {
+                    let current = observe_recovery_file(self.host(), destination).await?;
+                    let backup_current = observe_recovery_file(self.host(), backup).await?;
+                    let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                    state.add_observation(
+                        format!("destination:{}", action.action_id),
+                        current.identity(),
+                    )?;
+                    state.add_observation(
+                        format!("backup:{}", action.action_id),
+                        backup_current.identity(),
+                    )?;
+                    state.add_observation(
+                        format!("rollback:{}", action.action_id),
+                        rollback_current.identity(),
+                    )?;
+                    let committed = action_state == JournalActionStateV1::ReceiptCommitted;
+                    let previous_receipt_present = matching_previous_app_receipt(&manifest, action);
+                    let (plan_action, code) = if committed {
+                        match assess_committed_backup_remove_recovery(
+                            &current,
+                            &backup_current,
+                            &rollback_current,
+                            *managed_hash,
+                            *managed_mode,
+                            *backup_hash,
+                            *backup_mode,
+                        ) {
+                            CommittedBackupRemoveRecoveryAssessment::Complete => (
+                                PlanActionV1::None,
+                                "app_recovery_backup_removal_already_committed",
+                            ),
+                            CommittedBackupRemoveRecoveryAssessment::RemoveRollback => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                (
+                                    PlanActionV1::Remove,
+                                    "app_recovery_remove_committed_backup_removal_rollback",
+                                )
+                            }
+                            CommittedBackupRemoveRecoveryAssessment::Blocked => {
+                                blocked = true;
+                                (
+                                    PlanActionV1::Blocked,
+                                    "app_recovery_backup_removal_state_changed",
+                                )
+                            }
+                        }
+                    } else {
+                        if !previous_receipt_present {
+                            required.insert(PermissionV1::Filesystem {
+                                access: FilesystemAccessV1::Write,
+                                path: review_path(
+                                    self.context(),
+                                    &self.context().shine_dir.join("app-manifest.toml"),
+                                ),
+                            });
+                        }
+                        match assess_backup_remove_recovery(
+                            &current,
+                            &backup_current,
+                            &rollback_current,
+                            *managed_hash,
+                            *managed_mode,
+                            *backup_hash,
+                            *backup_mode,
+                        ) {
+                            BackupRemoveRecoveryAssessment::NotStarted
+                                if previous_receipt_present =>
+                            {
+                                (
+                                    PlanActionV1::None,
+                                    "app_recovery_backup_removal_not_started",
+                                )
+                            }
+                            BackupRemoveRecoveryAssessment::NotStarted => (
+                                PlanActionV1::Update,
+                                "app_recovery_restore_backup_removal_receipt",
+                            ),
+                            BackupRemoveRecoveryAssessment::RestoreManaged => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Write,
+                                    path: review_path(self.context(), destination),
+                                });
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                (
+                                    PlanActionV1::Update,
+                                    "app_recovery_restore_backup_removal_managed_file",
+                                )
+                            }
+                            BackupRemoveRecoveryAssessment::RestoreManagedAndBackup => {
+                                for (access, path) in [
+                                    (FilesystemAccessV1::Remove, destination.as_path()),
+                                    (FilesystemAccessV1::Write, destination.as_path()),
+                                    (FilesystemAccessV1::Write, backup.as_path()),
+                                    (FilesystemAccessV1::Remove, rollback.as_path()),
+                                ] {
+                                    required.insert(PermissionV1::Filesystem {
+                                        access,
+                                        path: review_path(self.context(), path),
+                                    });
+                                }
+                                (
+                                    PlanActionV1::Update,
+                                    "app_recovery_restore_backup_removal_file_and_backup",
+                                )
+                            }
+                            BackupRemoveRecoveryAssessment::Blocked => {
+                                blocked = true;
+                                (
+                                    PlanActionV1::Blocked,
+                                    "app_recovery_backup_removal_state_changed",
+                                )
                             }
                         }
                     };
@@ -869,7 +1013,7 @@ where
         }) {
             bail!("App managed-file removal was not described by the approved security Plan");
         }
-        let (destination, rollback, original_mode, original_hash) = match (
+        let (destination, rollback, original_mode, original_hash, backup) = match (
             &action.kind,
             &action.rollback,
         ) {
@@ -887,6 +1031,26 @@ where
                 rollback.clone(),
                 *original_mode,
                 *original_hash,
+                None,
+            ),
+            (
+                ActionKindV1::RemoveManagedFileWithBackup {
+                    destination,
+                    backup,
+                    rollback,
+                    managed_mode,
+                    managed_hash,
+                    backup_mode,
+                    backup_hash,
+                    ..
+                },
+                RollbackSupportV1::RestorePreviousWithBackupIfUnchanged,
+            ) => (
+                destination.clone(),
+                rollback.clone(),
+                *managed_mode,
+                *managed_hash,
+                Some((backup.clone(), *backup_mode, *backup_hash)),
             ),
             _ => bail!(
                 "the App managed-file removal slice accepts only safely reversible declarative file removal"
@@ -930,6 +1094,26 @@ where
         {
             bail!("managed-file rollback path must be absent before removal");
         }
+        if let Some((backup_path, backup_mode, backup_hash)) = &backup {
+            if crate::install::backup_path(&destination) != *backup_path {
+                bail!("backup-restoring managed-file removal requires the fixed backup path");
+            }
+            let metadata = self.host().metadata(backup_path).await.map_err(|error| {
+                error.into_anyhow("failed to inspect managed App persistent backup")
+            })?;
+            if metadata.kind != FileKind::File {
+                bail!("backup-restoring managed-file removal requires a regular backup");
+            }
+            if metadata.unix_mode != *backup_mode {
+                bail!("managed App persistent backup mode changed after Plan approval");
+            }
+            let bytes = read_optional(self.host(), backup_path)
+                .await?
+                .context("backup-restoring managed-file removal requires an existing backup")?;
+            if hash_content(&bytes) != *backup_hash {
+                bail!("managed App persistent backup changed after Plan approval");
+            }
+        }
 
         let mut journal = AppOperationJournalV1::new(action_ir, approval.clone());
         save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
@@ -937,12 +1121,18 @@ where
             .rename(&destination, &rollback)
             .await
             .map_err(|error| error.into_anyhow("failed to stage removed managed App file"))?;
+        if let Some((backup_path, _, _)) = &backup {
+            self.host()
+                .rename(backup_path, &destination)
+                .await
+                .map_err(|error| error.into_anyhow("failed to restore managed App backup"))?;
+        }
         journal.mark_applied(&action_id)?;
         save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
 
         Ok(AppOperationExecutionV1 {
             operation_id: journal.action_ir.operation_id,
-            backup: None,
+            backup: backup.map(|(path, _, _)| path),
         })
     }
 
@@ -968,7 +1158,7 @@ where
         let (manifest, _) =
             load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
         if journal.action_ir.actions.iter().any(|action| {
-            if matches!(action.kind, ActionKindV1::RemoveManagedFile { .. }) {
+            if is_app_removal_action(&action.kind) {
                 !removed_app_receipt_committed(&manifest, action)
             } else {
                 !matching_app_receipt(&manifest, action)
@@ -982,8 +1172,7 @@ where
             .iter()
             .zip(&journal.actions)
             .filter(|(action, state)| {
-                matches!(action.kind, ActionKindV1::RemoveManagedFile { .. })
-                    && state.state == JournalActionStateV1::Applied
+                is_app_removal_action(&action.kind) && state.state == JournalActionStateV1::Applied
             })
             .map(|(action, _)| action.action_id.clone())
             .collect::<Vec<_>>();
@@ -1051,6 +1240,40 @@ where
                     }
                 }
             }
+            if let ActionKindV1::RemoveManagedFileWithBackup {
+                destination,
+                backup,
+                rollback,
+                managed_mode,
+                managed_hash,
+                backup_mode,
+                backup_hash,
+                ..
+            } = &action.kind
+            {
+                let assessment = assess_committed_backup_remove_recovery(
+                    &observe_recovery_file(self.host(), destination).await?,
+                    &observe_recovery_file(self.host(), backup).await?,
+                    &observe_recovery_file(self.host(), rollback).await?,
+                    *managed_hash,
+                    *managed_mode,
+                    *backup_hash,
+                    *backup_mode,
+                );
+                match assessment {
+                    CommittedBackupRemoveRecoveryAssessment::Complete => {}
+                    CommittedBackupRemoveRecoveryAssessment::RemoveRollback => {
+                        self.host().remove_file(rollback).await.map_err(|error| {
+                            error.into_anyhow(
+                                "failed to remove backup-restoring App removal rollback material",
+                            )
+                        })?;
+                    }
+                    CommittedBackupRemoveRecoveryAssessment::Blocked => bail!(
+                        "backup-restoring App removal state changed before commit; operation journal preserved"
+                    ),
+                }
+            }
         }
         remove_app_operation_journal(self.host(), &self.context().shine_dir).await
     }
@@ -1076,7 +1299,9 @@ where
             if matching_app_receipt(&manifest, action)
                 && !matches!(
                     action.kind,
-                    ActionKindV1::UpdateManagedFile { .. } | ActionKindV1::RemoveManagedFile { .. }
+                    ActionKindV1::UpdateManagedFile { .. }
+                        | ActionKindV1::RemoveManagedFile { .. }
+                        | ActionKindV1::RemoveManagedFileWithBackup { .. }
                 )
             {
                 continue;
@@ -1268,6 +1493,92 @@ where
                         RemoveRecoveryAssessment::Blocked => unreachable!("checked above"),
                     }
                 }
+                ActionKindV1::RemoveManagedFileWithBackup {
+                    destination,
+                    backup,
+                    rollback,
+                    managed_mode,
+                    managed_hash,
+                    backup_mode,
+                    backup_hash,
+                    ..
+                } => {
+                    let current = observe_recovery_file(self.host(), destination).await?;
+                    let backup_current = observe_recovery_file(self.host(), backup).await?;
+                    let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                    if action_state == JournalActionStateV1::ReceiptCommitted {
+                        match assess_committed_backup_remove_recovery(
+                            &current,
+                            &backup_current,
+                            &rollback_current,
+                            *managed_hash,
+                            *managed_mode,
+                            *backup_hash,
+                            *backup_mode,
+                        ) {
+                            CommittedBackupRemoveRecoveryAssessment::Complete => {}
+                            CommittedBackupRemoveRecoveryAssessment::RemoveRollback => {
+                                self.host().remove_file(rollback).await.map_err(|error| {
+                                    error.into_anyhow(
+                                        "failed to remove committed backup-restoring App removal rollback material",
+                                    )
+                                })?;
+                            }
+                            CommittedBackupRemoveRecoveryAssessment::Blocked => bail!(
+                                "backup-restoring App removal state changed after receipt commit; recovery preserved it"
+                            ),
+                        }
+                        continue;
+                    }
+                    let assessment = assess_backup_remove_recovery(
+                        &current,
+                        &backup_current,
+                        &rollback_current,
+                        *managed_hash,
+                        *managed_mode,
+                        *backup_hash,
+                        *backup_mode,
+                    );
+                    if assessment == BackupRemoveRecoveryAssessment::Blocked {
+                        bail!(
+                            "managed App destination, backup, or removal rollback material changed after the interrupted uninstall; recovery preserved all paths"
+                        );
+                    }
+                    if !matching_previous_app_receipt(&manifest, action) {
+                        manifest.upsert(previous_removed_app_receipt(action)?);
+                        manifest
+                            .save(self.host(), &self.context().shine_dir)
+                            .await?;
+                    }
+                    match assessment {
+                        BackupRemoveRecoveryAssessment::NotStarted => {}
+                        BackupRemoveRecoveryAssessment::RestoreManaged => {
+                            self.host()
+                                .rename(rollback, destination)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow("failed to restore removed managed App file")
+                                })?;
+                        }
+                        BackupRemoveRecoveryAssessment::RestoreManagedAndBackup => {
+                            self.host()
+                                .rename(destination, backup)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow(
+                                        "failed to return restored user file to its App backup path",
+                                    )
+                                })?;
+                            self.host()
+                                .rename(rollback, destination)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow("failed to restore removed managed App file")
+                                })?;
+                        }
+                        BackupRemoveRecoveryAssessment::Blocked => unreachable!("checked above"),
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     bail!("opaque App actions cannot be rolled back automatically");
                 }
@@ -1346,6 +1657,7 @@ fn matching_app_receipt(
                     && !entry.requires_admin
             }
             ActionKindV1::RemoveManagedFile { .. } => false,
+            ActionKindV1::RemoveManagedFileWithBackup { .. } => false,
             ActionKindV1::OpaqueExecution { .. } => false,
         })
 }
@@ -1367,6 +1679,13 @@ fn matching_previous_app_receipt(
             uses_env,
             ..
         } => (destination, None, original_hash, Some(*uses_env)),
+        ActionKindV1::RemoveManagedFileWithBackup {
+            destination,
+            backup,
+            managed_hash,
+            uses_env,
+            ..
+        } => (destination, Some(backup), managed_hash, Some(*uses_env)),
         _ => return false,
     };
     let source = action_source_identity(action);
@@ -1383,19 +1702,26 @@ fn matching_previous_app_receipt(
 fn previous_removed_app_receipt(
     action: &crate::action::DeclarativeActionV1,
 ) -> Result<crate::install::AppEntry> {
-    let ActionKindV1::RemoveManagedFile {
-        destination,
-        original_hash,
-        uses_env,
-        ..
-    } = &action.kind
-    else {
-        bail!("only a managed-file removal has a restorable previous receipt");
+    let (destination, backup, original_hash, uses_env) = match &action.kind {
+        ActionKindV1::RemoveManagedFile {
+            destination,
+            original_hash,
+            uses_env,
+            ..
+        } => (destination, None, original_hash, uses_env),
+        ActionKindV1::RemoveManagedFileWithBackup {
+            destination,
+            backup,
+            managed_hash,
+            uses_env,
+            ..
+        } => (destination, Some(backup.clone()), managed_hash, uses_env),
+        _ => bail!("only a managed-file removal has a restorable previous receipt"),
     };
     Ok(crate::install::AppEntry {
         source: action_source_identity(action),
         destination: destination.clone(),
-        backup: None,
+        backup,
         content_hash: *original_hash,
         install_strategy: AppInstallStrategy::Copy,
         uses_env: *uses_env,
@@ -1407,18 +1733,25 @@ fn removed_app_receipt_committed(
     manifest: &AppManifest,
     action: &crate::action::DeclarativeActionV1,
 ) -> bool {
-    let ActionKindV1::RemoveManagedFile {
-        destination,
-        rollback,
-        ..
-    } = &action.kind
-    else {
-        return false;
+    let (destination, backup, rollback) = match &action.kind {
+        ActionKindV1::RemoveManagedFile {
+            destination,
+            rollback,
+            ..
+        } => (destination, None, rollback),
+        ActionKindV1::RemoveManagedFileWithBackup {
+            destination,
+            backup,
+            rollback,
+            ..
+        } => (destination, Some(backup), rollback),
+        _ => return false,
     };
     let source = action_source_identity(action);
     manifest.find_by_source(&source).is_none()
         && manifest.find_by_dest(destination).is_none()
         && manifest.find_by_dest(rollback).is_none()
+        && backup.is_none_or(|backup| manifest.find_by_dest(backup).is_none())
 }
 
 fn removal_receipt_conflict(
@@ -1426,8 +1759,10 @@ fn removal_receipt_conflict(
     action: &crate::action::DeclarativeActionV1,
     receipt_committed: bool,
 ) -> bool {
-    let ActionKindV1::RemoveManagedFile { rollback, .. } = &action.kind else {
-        return true;
+    let rollback = match &action.kind {
+        ActionKindV1::RemoveManagedFile { rollback, .. }
+        | ActionKindV1::RemoveManagedFileWithBackup { rollback, .. } => rollback,
+        _ => return true,
     };
     if receipt_committed {
         return !removed_app_receipt_committed(manifest, action);
@@ -1468,9 +1803,17 @@ fn conflicting_app_receipt(
             manifest.find_by_dest(destination).is_some() || manifest.find_by_dest(backup).is_some()
         }
         ActionKindV1::UpdateManagedFile { .. } => false,
-        ActionKindV1::RemoveManagedFile { .. } => true,
+        ActionKindV1::RemoveManagedFile { .. }
+        | ActionKindV1::RemoveManagedFileWithBackup { .. } => true,
         ActionKindV1::OpaqueExecution { .. } => false,
     }
+}
+
+fn is_app_removal_action(kind: &ActionKindV1) -> bool {
+    matches!(
+        kind,
+        ActionKindV1::RemoveManagedFile { .. } | ActionKindV1::RemoveManagedFileWithBackup { .. }
+    )
 }
 
 fn action_source_identity(action: &crate::action::DeclarativeActionV1) -> String {
@@ -1492,6 +1835,21 @@ enum BackupRecoveryAssessment {
 enum RemoveRecoveryAssessment {
     NotStarted,
     Restore,
+    Blocked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BackupRemoveRecoveryAssessment {
+    NotStarted,
+    RestoreManaged,
+    RestoreManagedAndBackup,
+    Blocked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommittedBackupRemoveRecoveryAssessment {
+    Complete,
+    RemoveRollback,
     Blocked,
 }
 
@@ -1584,6 +1942,85 @@ fn assess_remove_recovery(
             RemoveRecoveryAssessment::Restore
         }
         _ => RemoveRecoveryAssessment::Blocked,
+    }
+}
+
+fn assess_backup_remove_recovery(
+    destination: &RecoveryFileObservation,
+    backup: &RecoveryFileObservation,
+    rollback: &RecoveryFileObservation,
+    managed_hash: u64,
+    managed_mode: Option<u32>,
+    backup_hash: u64,
+    backup_mode: Option<u32>,
+) -> BackupRemoveRecoveryAssessment {
+    match (destination, backup, rollback) {
+        (
+            RecoveryFileObservation::Regular(managed, current_managed_mode),
+            RecoveryFileObservation::Regular(original, current_backup_mode),
+            RecoveryFileObservation::Missing,
+        ) if hash_content(managed) == managed_hash
+            && recovery_mode_matches(*current_managed_mode, managed_mode)
+            && hash_content(original) == backup_hash
+            && recovery_mode_matches(*current_backup_mode, backup_mode) =>
+        {
+            BackupRemoveRecoveryAssessment::NotStarted
+        }
+        (
+            RecoveryFileObservation::Missing,
+            RecoveryFileObservation::Regular(original, current_backup_mode),
+            RecoveryFileObservation::Regular(managed, current_managed_mode),
+        ) if hash_content(managed) == managed_hash
+            && recovery_mode_matches(*current_managed_mode, managed_mode)
+            && hash_content(original) == backup_hash
+            && recovery_mode_matches(*current_backup_mode, backup_mode) =>
+        {
+            BackupRemoveRecoveryAssessment::RestoreManaged
+        }
+        (
+            RecoveryFileObservation::Regular(original, current_backup_mode),
+            RecoveryFileObservation::Missing,
+            RecoveryFileObservation::Regular(managed, current_managed_mode),
+        ) if hash_content(managed) == managed_hash
+            && recovery_mode_matches(*current_managed_mode, managed_mode)
+            && hash_content(original) == backup_hash
+            && recovery_mode_matches(*current_backup_mode, backup_mode) =>
+        {
+            BackupRemoveRecoveryAssessment::RestoreManagedAndBackup
+        }
+        _ => BackupRemoveRecoveryAssessment::Blocked,
+    }
+}
+
+fn assess_committed_backup_remove_recovery(
+    destination: &RecoveryFileObservation,
+    backup: &RecoveryFileObservation,
+    rollback: &RecoveryFileObservation,
+    managed_hash: u64,
+    managed_mode: Option<u32>,
+    backup_hash: u64,
+    backup_mode: Option<u32>,
+) -> CommittedBackupRemoveRecoveryAssessment {
+    let destination_restored = matches!(
+        destination,
+        RecoveryFileObservation::Regular(original, current_mode)
+            if hash_content(original) == backup_hash
+                && recovery_mode_matches(*current_mode, backup_mode)
+    );
+    if !destination_restored || !matches!(backup, RecoveryFileObservation::Missing) {
+        return CommittedBackupRemoveRecoveryAssessment::Blocked;
+    }
+    match rollback {
+        RecoveryFileObservation::Missing => CommittedBackupRemoveRecoveryAssessment::Complete,
+        RecoveryFileObservation::Regular(managed, current_mode)
+            if hash_content(managed) == managed_hash
+                && recovery_mode_matches(*current_mode, managed_mode) =>
+        {
+            CommittedBackupRemoveRecoveryAssessment::RemoveRollback
+        }
+        RecoveryFileObservation::Regular(_, _) | RecoveryFileObservation::Other(_) => {
+            CommittedBackupRemoveRecoveryAssessment::Blocked
+        }
     }
 }
 
@@ -1721,7 +2158,10 @@ fn logical_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{DeclarativeActionV1, ManagedFileRemoveSpecV1, ManagedFileUpdateSpecV1};
+    use crate::action::{
+        DeclarativeActionV1, ManagedFileRemoveSpecV1, ManagedFileRemoveWithBackupSpecV1,
+        ManagedFileUpdateSpecV1,
+    };
     use crate::install::AppEntry;
     use crate::plan::PlanStepV1;
     use crate::runtime::{InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimePlatform};
@@ -1810,6 +2250,31 @@ mod tests {
                     destination: runtime.context().home_dir.join(".config/demo/config"),
                     original_mode: Some(0o100644),
                     original_hash: hash_content(original),
+                    uses_env: false,
+                },
+            )],
+        )
+    }
+
+    fn backup_remove_action_ir(
+        runtime: &CoreRuntime<InMemoryHost>,
+        managed: &[u8],
+        original: &[u8],
+    ) -> ActionIrV1 {
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        ActionIrV1::new(
+            "operation-remove-with-backup",
+            vec![DeclarativeActionV1::remove_managed_file_with_backup(
+                "action-remove-with-backup",
+                "app/demo",
+                "config",
+                ManagedFileRemoveWithBackupSpecV1 {
+                    destination: destination.clone(),
+                    backup: crate::install::backup_path(&destination),
+                    managed_mode: Some(0o100644),
+                    managed_hash: hash_content(managed),
+                    backup_mode: Some(0o100644),
+                    backup_hash: hash_content(original),
                     uses_env: false,
                 },
             )],
@@ -2789,6 +3254,295 @@ mod tests {
         assert!(recovered.rolled_back_actions.is_empty());
         assert!(runtime.host().read(&destination).await.is_err());
         assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn backup_restoring_removal_commits_only_after_receipt_removal() {
+        let runtime = runtime();
+        let managed = b"managed";
+        let original = b"user-original";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let backup = crate::install::backup_path(&destination);
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, managed.to_vec());
+        runtime.host().put_file(&backup, original.to_vec());
+        save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
+        let ir = backup_remove_action_ir(&runtime, managed, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+
+        let execution = runtime
+            .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+            .await
+            .unwrap();
+        assert_eq!(execution.backup.as_ref(), Some(&backup));
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+        assert!(runtime.host().read(&backup).await.is_err());
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), managed);
+        assert!(
+            runtime
+                .commit_app_managed_file_operation(&execution.operation_id)
+                .await
+                .is_err()
+        );
+
+        remove_matching_receipt(&runtime).await;
+        runtime
+            .commit_app_managed_file_operation(&execution.operation_id)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+        assert!(runtime.host().read(&backup).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn interruption_between_removal_renames_restores_managed_file() {
+        let runtime = runtime();
+        let managed = b"managed";
+        let original = b"user-original";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let backup = crate::install::backup_path(&destination);
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, managed.to_vec());
+        runtime.host().put_file(&backup, original.to_vec());
+        save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
+        runtime.host().fail_rename_after(&backup, &destination, 0);
+        let ir = backup_remove_action_ir(&runtime, managed, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        assert!(
+            runtime
+                .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+                .await
+                .is_err()
+        );
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), managed);
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_restore_backup_removal_managed_file".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), managed);
+        assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn interruption_after_backup_restoration_recreates_pre_uninstall_state() {
+        let runtime = runtime();
+        let managed = b"managed";
+        let original = b"user-original";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let backup = crate::install::backup_path(&destination);
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, managed.to_vec());
+        runtime.host().put_file(&backup, original.to_vec());
+        save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        let ir = backup_remove_action_ir(&runtime, managed, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        assert!(
+            runtime
+                .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+                .await
+                .is_err()
+        );
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+        assert!(runtime.host().read(&backup).await.is_err());
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), managed);
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), managed);
+        assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn backup_removal_receipt_gap_restores_file_backup_and_receipt() {
+        let runtime = runtime();
+        let managed = b"managed";
+        let original = b"user-original";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let backup = crate::install::backup_path(&destination);
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, managed.to_vec());
+        runtime.host().put_file(&backup, original.to_vec());
+        save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
+        let ir = backup_remove_action_ir(&runtime, managed, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        runtime
+            .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+            .await
+            .unwrap();
+        remove_matching_receipt(&runtime).await;
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_restore_backup_removal_file_and_backup".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), managed);
+        assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let (manifest, _) =
+            load_app_manifest_receipts(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap();
+        assert!(matching_previous_app_receipt(
+            &manifest,
+            &backup_remove_action_ir(&runtime, managed, original).actions[0]
+        ));
+    }
+
+    #[tokio::test]
+    async fn committed_backup_removal_recovery_keeps_user_file_and_cleans_rollback() {
+        let runtime = runtime();
+        let managed = b"managed";
+        let original = b"user-original";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let backup = crate::install::backup_path(&destination);
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, managed.to_vec());
+        runtime.host().put_file(&backup, original.to_vec());
+        save_matching_receipt_with_backup(&runtime, managed, Some(backup.clone())).await;
+        let ir = backup_remove_action_ir(&runtime, managed, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        runtime
+            .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+            .await
+            .unwrap();
+        remove_matching_receipt(&runtime).await;
+        let (mut journal, _) =
+            load_app_operation_journal(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .unwrap();
+        journal
+            .mark_receipt_committed("action-remove-with-backup")
+            .unwrap();
+        save_app_operation_journal(runtime.host(), &runtime.context().shine_dir, &journal)
+            .await
+            .unwrap();
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_remove_committed_backup_removal_rollback".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+        assert!(runtime.host().read(&backup).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn backup_removal_recovery_blocks_changed_restored_user_file() {
+        let runtime = runtime();
+        let managed = b"managed";
+        let original = b"user-original";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let backup = crate::install::backup_path(&destination);
+        runtime.host().put_file(&destination, managed.to_vec());
+        runtime.host().put_file(&backup, original.to_vec());
+        save_matching_receipt_with_backup(&runtime, managed, Some(backup)).await;
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        let ir = backup_remove_action_ir(&runtime, managed, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        let _ = runtime
+            .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+            .await;
+        runtime
+            .host()
+            .put_file(&destination, b"user-changed-after-restore".to_vec());
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(!recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_backup_removal_state_changed".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-changed-after-restore"
+        );
+    }
+
+    #[tokio::test]
+    async fn backup_removal_recovery_blocks_a_restored_user_file_mode_change() {
+        let runtime = runtime();
+        let managed = b"managed";
+        let original = b"user-original";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let backup = crate::install::backup_path(&destination);
+        runtime.host().put_file(&destination, managed.to_vec());
+        runtime.host().put_file(&backup, original.to_vec());
+        save_matching_receipt_with_backup(&runtime, managed, Some(backup)).await;
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        let ir = backup_remove_action_ir(&runtime, managed, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        let _ = runtime
+            .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+            .await;
+        runtime
+            .host()
+            .set_mode(&destination, 0o100600)
+            .await
+            .unwrap();
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(!recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_backup_removal_state_changed".to_string())
+        }));
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
     }
 
     #[tokio::test]
