@@ -103,6 +103,22 @@ impl ActionIrV1 {
                         });
                     }
                 }
+                ActionKindV1::RemoveManagedFile {
+                    destination,
+                    rollback,
+                    ..
+                } => {
+                    for (access, path) in [
+                        (FilesystemAccessV1::Remove, destination.as_path()),
+                        (FilesystemAccessV1::Write, rollback.as_path()),
+                        (FilesystemAccessV1::Remove, rollback.as_path()),
+                    ] {
+                        required.insert(PermissionV1::Filesystem {
+                            access,
+                            path: path_identity(path),
+                        });
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
                 }
@@ -191,6 +207,28 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn remove_managed_file(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ManagedFileRemoveSpecV1,
+    ) -> Self {
+        let rollback = managed_file_rollback_path(&spec.destination);
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::RemoveManagedFile {
+                destination: spec.destination,
+                rollback,
+                original_mode: spec.original_mode,
+                original_hash: spec.original_hash,
+                uses_env: spec.uses_env,
+            },
+            rollback: RollbackSupportV1::RestorePreviousIfUnchanged,
+        }
+    }
+
     fn validate(&self) -> Result<(), ActionIrError> {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
@@ -248,6 +286,22 @@ impl DeclarativeActionV1 {
                     .to_string(),
             )),
             (
+                ActionKindV1::RemoveManagedFile {
+                    destination,
+                    rollback,
+                    ..
+                },
+                RollbackSupportV1::RestorePreviousIfUnchanged,
+            ) if !destination.as_os_str().is_empty()
+                && *rollback == managed_file_rollback_path(destination) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::RemoveManagedFile { .. }, _) => Err(ActionIrError::Invalid(
+                "managed-file removal requires its canonical rollback path and restore-previous-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
                 ActionKindV1::OpaqueExecution { capability, .. },
                 RollbackSupportV1::Unsupported { reason_code },
             ) => {
@@ -268,6 +322,14 @@ pub struct ManagedFileUpdateSpecV1 {
     pub original_mode: Option<u32>,
     pub original_hash: u64,
     pub desired_hash: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedFileRemoveSpecV1 {
+    pub destination: PathBuf,
+    pub original_mode: Option<u32>,
+    pub original_hash: u64,
+    pub uses_env: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -292,6 +354,15 @@ pub enum ActionKindV1 {
         original_mode: Option<u32>,
         original_hash: u64,
         desired_hash: u64,
+    },
+    RemoveManagedFile {
+        destination: PathBuf,
+        rollback: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_mode: Option<u32>,
+        original_hash: u64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        uses_env: bool,
     },
     OpaqueExecution {
         capability: String,
@@ -477,6 +548,42 @@ mod tests {
             value.permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
         for (access, path) in [
             (FilesystemAccessV1::Write, destination.clone()),
+            (FilesystemAccessV1::Remove, destination),
+            (FilesystemAccessV1::Write, rollback.clone()),
+            (FilesystemAccessV1::Remove, rollback),
+        ] {
+            assert!(requirements.required.contains(&PermissionV1::Filesystem {
+                access,
+                path: format!("absolute:{}", path.display()),
+            }));
+        }
+    }
+
+    #[test]
+    fn managed_remove_is_payload_free_and_derives_transaction_path_effects() {
+        let destination = PathBuf::from("/home/test/.config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        let value = ActionIrV1::new(
+            "operation-remove",
+            vec![DeclarativeActionV1::remove_managed_file(
+                "action-remove",
+                "app/demo",
+                "config",
+                ManagedFileRemoveSpecV1 {
+                    destination: destination.clone(),
+                    original_mode: Some(0o100600),
+                    original_hash: hash_content(b"private-managed"),
+                    uses_env: true,
+                },
+            )],
+        );
+        value.validate().unwrap();
+        let encoded = toml::to_string(&value).unwrap();
+        assert!(!encoded.contains("private-managed"));
+
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
+        for (access, path) in [
             (FilesystemAccessV1::Remove, destination),
             (FilesystemAccessV1::Write, rollback.clone()),
             (FilesystemAccessV1::Remove, rollback),

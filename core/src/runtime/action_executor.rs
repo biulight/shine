@@ -91,6 +91,13 @@ impl AppOperationJournalV1 {
                 } if managed_file_rollback_path(destination) != *rollback => {
                     bail!("App operation journal contains a non-canonical rollback path");
                 }
+                ActionKindV1::RemoveManagedFile {
+                    destination,
+                    rollback,
+                    ..
+                } if managed_file_rollback_path(destination) != *rollback => {
+                    bail!("App operation journal contains a non-canonical rollback path");
+                }
                 _ => {}
             }
         }
@@ -103,6 +110,17 @@ impl AppOperationJournalV1 {
         {
             bail!("App operation journal action state does not match its action IR");
         }
+        if self
+            .actions
+            .iter()
+            .zip(&self.action_ir.actions)
+            .any(|(journal, action)| {
+                journal.state == JournalActionStateV1::ReceiptCommitted
+                    && !matches!(action.kind, ActionKindV1::RemoveManagedFile { .. })
+            })
+        {
+            bail!("only an App removal action may commit through receipt absence");
+        }
         Ok(())
     }
 
@@ -114,6 +132,27 @@ impl AppOperationJournalV1 {
             .with_context(|| format!("App operation journal action not found: {action_id}"))?;
         action.state = JournalActionStateV1::Applied;
         Ok(())
+    }
+
+    fn mark_receipt_committed(&mut self, action_id: &str) -> Result<()> {
+        let action = self
+            .actions
+            .iter_mut()
+            .find(|action| action.action_id == action_id)
+            .with_context(|| format!("App operation journal action not found: {action_id}"))?;
+        if action.state != JournalActionStateV1::Applied {
+            bail!("App operation journal receipt cannot commit before action apply");
+        }
+        action.state = JournalActionStateV1::ReceiptCommitted;
+        Ok(())
+    }
+
+    fn action_state(&self, action_id: &str) -> Result<JournalActionStateV1> {
+        self.actions
+            .iter()
+            .find(|action| action.action_id == action_id)
+            .map(|action| action.state)
+            .with_context(|| format!("App operation journal action not found: {action_id}"))
     }
 }
 
@@ -129,6 +168,7 @@ struct JournalActionV1 {
 enum JournalActionStateV1 {
     Prepared,
     Applied,
+    ReceiptCommitted,
 }
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
@@ -167,7 +207,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         }]);
 
         for action in &journal.action_ir.actions {
-            if conflicting_app_receipt(&manifest, action) {
+            let action_state = journal.action_state(&action.action_id)?;
+            let receipt_conflict = if matches!(action.kind, ActionKindV1::RemoveManagedFile { .. })
+            {
+                removal_receipt_conflict(
+                    &manifest,
+                    action,
+                    action_state == JournalActionStateV1::ReceiptCommitted,
+                )
+            } else {
+                conflicting_app_receipt(&manifest, action)
+            };
+            if receipt_conflict {
                 blocked = true;
                 steps.push(
                     PlanStepV1::new(
@@ -365,6 +416,102 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             BackupRecoveryAssessment::Blocked => {
                                 blocked = true;
                                 (PlanActionV1::Blocked, "app_recovery_rollback_state_changed")
+                            }
+                        }
+                    };
+                    steps.push(
+                        PlanStepV1::new(&action.target, Some(&action.resource), plan_action)
+                            .with_diagnostic_code(code),
+                    );
+                }
+                ActionKindV1::RemoveManagedFile {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    ..
+                } => {
+                    let current = observe_recovery_file(self.host(), destination).await?;
+                    let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                    state.add_observation(
+                        format!("destination:{}", action.action_id),
+                        current.identity(),
+                    )?;
+                    state.add_observation(
+                        format!("rollback:{}", action.action_id),
+                        rollback_current.identity(),
+                    )?;
+                    let committed = action_state == JournalActionStateV1::ReceiptCommitted;
+                    let previous_receipt_present = matching_previous_app_receipt(&manifest, action);
+                    let (plan_action, code) = if committed {
+                        match (&current, &rollback_current) {
+                            (
+                                RecoveryFileObservation::Missing,
+                                RecoveryFileObservation::Missing,
+                            ) => (PlanActionV1::None, "app_recovery_removal_already_committed"),
+                            (
+                                RecoveryFileObservation::Missing,
+                                RecoveryFileObservation::Regular(bytes, mode),
+                            ) if hash_content(bytes) == *original_hash
+                                && recovery_mode_matches(*mode, *original_mode) =>
+                            {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                (
+                                    PlanActionV1::Remove,
+                                    "app_recovery_remove_committed_removal_rollback",
+                                )
+                            }
+                            _ => {
+                                blocked = true;
+                                (PlanActionV1::Blocked, "app_recovery_removal_state_changed")
+                            }
+                        }
+                    } else {
+                        if !previous_receipt_present {
+                            required.insert(PermissionV1::Filesystem {
+                                access: FilesystemAccessV1::Write,
+                                path: review_path(
+                                    self.context(),
+                                    &self.context().shine_dir.join("app-manifest.toml"),
+                                ),
+                            });
+                        }
+                        match assess_remove_recovery(
+                            &current,
+                            &rollback_current,
+                            *original_hash,
+                            *original_mode,
+                        ) {
+                            RemoveRecoveryAssessment::NotStarted if previous_receipt_present => {
+                                (PlanActionV1::None, "app_recovery_removal_not_started")
+                            }
+                            RemoveRecoveryAssessment::NotStarted => {
+                                (PlanActionV1::Update, "app_recovery_restore_removed_receipt")
+                            }
+                            RemoveRecoveryAssessment::Restore => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Write,
+                                    path: review_path(self.context(), destination),
+                                });
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                (
+                                    PlanActionV1::Update,
+                                    if previous_receipt_present {
+                                        "app_recovery_restore_removed_managed_file"
+                                    } else {
+                                        "app_recovery_restore_removed_file_and_receipt"
+                                    },
+                                )
+                            }
+                            RemoveRecoveryAssessment::Blocked => {
+                                blocked = true;
+                                (PlanActionV1::Blocked, "app_recovery_removal_state_changed")
                             }
                         }
                     };
@@ -689,32 +836,162 @@ where
         })
     }
 
+    /// Stage one unchanged, receipt-owned, unprivileged static Copy at a
+    /// same-directory transaction path until receipt removal is durable.
+    pub async fn execute_app_managed_file_removal_approved(
+        &self,
+        plan: &PlanV1,
+        approval: &PlanApprovalV1,
+        action_ir: ActionIrV1,
+    ) -> Result<AppOperationExecutionV1> {
+        approval.validate(plan)?;
+        if plan.operation != PlanOperationV1::Uninstall {
+            bail!("App managed-file removal requires an uninstall Plan");
+        }
+        action_ir.validate()?;
+        let requirements =
+            action_ir.permission_requirements(|path| review_path(self.context(), path));
+        if !requirements.uncomputable_codes.is_empty() {
+            bail!("action permissions are not fully computable");
+        }
+        for permission in requirements.required.iter() {
+            if !approval.approved_permissions.contains(permission) {
+                bail!("action permission was not included in the approved security Plan");
+            }
+        }
+        let [action] = action_ir.actions.as_slice() else {
+            bail!("the App managed-file removal slice accepts exactly one action");
+        };
+        if !plan.steps.iter().any(|step| {
+            step.target == action.target
+                && step.resource.as_deref() == Some(action.resource.as_str())
+                && step.action == PlanActionV1::Remove
+        }) {
+            bail!("App managed-file removal was not described by the approved security Plan");
+        }
+        let (destination, rollback, original_mode, original_hash) = match (
+            &action.kind,
+            &action.rollback,
+        ) {
+            (
+                ActionKindV1::RemoveManagedFile {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    ..
+                },
+                RollbackSupportV1::RestorePreviousIfUnchanged,
+            ) => (
+                destination.clone(),
+                rollback.clone(),
+                *original_mode,
+                *original_hash,
+            ),
+            _ => bail!(
+                "the App managed-file removal slice accepts only safely reversible declarative file removal"
+            ),
+        };
+        let action_id = action.action_id.clone();
+
+        let _guard = self.host().acquire_privileged_operation().await?;
+        if load_app_operation_journal(self.host(), &self.context().shine_dir)
+            .await?
+            .is_some()
+        {
+            bail!("an interrupted App operation must be recovered before starting another one");
+        }
+        let (manifest, _) =
+            load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
+        if !matching_previous_app_receipt(&manifest, action) {
+            bail!("managed-file removal requires its exact App receipt");
+        }
+        if managed_file_rollback_path(&destination) != rollback {
+            bail!("managed-file removal requires its canonical rollback path");
+        }
+        let metadata = self
+            .host()
+            .metadata(&destination)
+            .await
+            .map_err(|error| error.into_anyhow("failed to inspect managed App destination"))?;
+        if metadata.kind != FileKind::File {
+            bail!("managed-file removal requires a regular destination");
+        }
+        if metadata.unix_mode != original_mode {
+            bail!("managed App destination mode changed after Plan approval");
+        }
+        let original = read_optional(self.host(), &destination)
+            .await?
+            .context("managed-file removal requires an existing destination")?;
+        if hash_content(&original) != original_hash {
+            bail!("managed App destination changed after Plan approval");
+        }
+        if path_exists(self.host(), &rollback).await? || manifest.find_by_dest(&rollback).is_some()
+        {
+            bail!("managed-file rollback path must be absent before removal");
+        }
+
+        let mut journal = AppOperationJournalV1::new(action_ir, approval.clone());
+        save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
+        self.host()
+            .rename(&destination, &rollback)
+            .await
+            .map_err(|error| error.into_anyhow("failed to stage removed managed App file"))?;
+        journal.mark_applied(&action_id)?;
+        save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
+
+        Ok(AppOperationExecutionV1 {
+            operation_id: journal.action_ir.operation_id,
+            backup: None,
+        })
+    }
+
     /// Clear a completed journal only after the caller has durably persisted
-    /// the App receipt that owns the created file.
+    /// the matching App receipt state: ownership for create/update, or safe
+    /// receipt absence for remove.
     pub async fn commit_app_managed_file_operation(&self, operation_id: &str) -> Result<()> {
         let _guard = self.host().acquire_privileged_operation().await?;
-        let (journal, _) = load_app_operation_journal(self.host(), &self.context().shine_dir)
+        let (mut journal, _) = load_app_operation_journal(self.host(), &self.context().shine_dir)
             .await?
             .context("no App operation journal is available to commit")?;
         if journal.action_ir.operation_id != operation_id {
             bail!("App operation journal identity changed before commit");
         }
-        if journal
-            .actions
-            .iter()
-            .any(|action| action.state != JournalActionStateV1::Applied)
-        {
+        if journal.actions.iter().any(|action| {
+            !matches!(
+                action.state,
+                JournalActionStateV1::Applied | JournalActionStateV1::ReceiptCommitted
+            )
+        }) {
             bail!("App operation journal cannot commit before every action is applied");
         }
         let (manifest, _) =
             load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
-        if journal
+        if journal.action_ir.actions.iter().any(|action| {
+            if matches!(action.kind, ActionKindV1::RemoveManagedFile { .. }) {
+                !removed_app_receipt_committed(&manifest, action)
+            } else {
+                !matching_app_receipt(&manifest, action)
+            }
+        }) {
+            bail!("App operation journal cannot commit before its matching manifest receipt state");
+        }
+        let removal_actions_to_commit = journal
             .action_ir
             .actions
             .iter()
-            .any(|action| !matching_app_receipt(&manifest, action))
-        {
-            bail!("App operation journal cannot commit before its matching manifest receipt");
+            .zip(&journal.actions)
+            .filter(|(action, state)| {
+                matches!(action.kind, ActionKindV1::RemoveManagedFile { .. })
+                    && state.state == JournalActionStateV1::Applied
+            })
+            .map(|(action, _)| action.action_id.clone())
+            .collect::<Vec<_>>();
+        if !removal_actions_to_commit.is_empty() {
+            for action_id in removal_actions_to_commit {
+                journal.mark_receipt_committed(&action_id)?;
+            }
+            save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
         }
         for action in &journal.action_ir.actions {
             if let ActionKindV1::UpdateManagedFile {
@@ -741,6 +1018,39 @@ where
                     }
                 }
             }
+            if let ActionKindV1::RemoveManagedFile {
+                destination,
+                rollback,
+                original_mode,
+                original_hash,
+                ..
+            } = &action.kind
+            {
+                if !matches!(
+                    observe_recovery_file(self.host(), destination).await?,
+                    RecoveryFileObservation::Missing
+                ) {
+                    bail!(
+                        "App removal destination changed before commit; operation journal preserved"
+                    );
+                }
+                match observe_recovery_file(self.host(), rollback).await? {
+                    RecoveryFileObservation::Missing => {}
+                    RecoveryFileObservation::Regular(bytes, mode)
+                        if hash_content(&bytes) == *original_hash
+                            && recovery_mode_matches(mode, *original_mode) =>
+                    {
+                        self.host().remove_file(rollback).await.map_err(|error| {
+                            error.into_anyhow("failed to remove App removal rollback material")
+                        })?;
+                    }
+                    RecoveryFileObservation::Regular(_, _) | RecoveryFileObservation::Other(_) => {
+                        bail!(
+                            "App removal rollback material changed before commit; operation journal preserved"
+                        );
+                    }
+                }
+            }
         }
         remove_app_operation_journal(self.host(), &self.context().shine_dir).await
     }
@@ -758,12 +1068,16 @@ where
         let (journal, _) = load_app_operation_journal(self.host(), &self.context().shine_dir)
             .await?
             .context("no interrupted App operation is available for recovery")?;
-        let (manifest, _) =
+        let (mut manifest, _) =
             load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
         let mut rolled_back_actions = Vec::new();
         for action in journal.action_ir.actions.iter().rev() {
+            let action_state = journal.action_state(&action.action_id)?;
             if matching_app_receipt(&manifest, action)
-                && !matches!(action.kind, ActionKindV1::UpdateManagedFile { .. })
+                && !matches!(
+                    action.kind,
+                    ActionKindV1::UpdateManagedFile { .. } | ActionKindV1::RemoveManagedFile { .. }
+                )
             {
                 continue;
             }
@@ -889,6 +1203,71 @@ where
                         ),
                     }
                 }
+                ActionKindV1::RemoveManagedFile {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    ..
+                } => {
+                    if action_state == JournalActionStateV1::ReceiptCommitted {
+                        let current = observe_recovery_file(self.host(), destination).await?;
+                        let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                        match (&current, &rollback_current) {
+                            (
+                                RecoveryFileObservation::Missing,
+                                RecoveryFileObservation::Missing,
+                            ) => {}
+                            (
+                                RecoveryFileObservation::Missing,
+                                RecoveryFileObservation::Regular(bytes, mode),
+                            ) if hash_content(bytes) == *original_hash
+                                && recovery_mode_matches(*mode, *original_mode) =>
+                            {
+                                self.host().remove_file(rollback).await.map_err(|error| {
+                                    error.into_anyhow(
+                                        "failed to remove committed App removal rollback material",
+                                    )
+                                })?;
+                            }
+                            _ => bail!(
+                                "managed App removal state changed after receipt commit; recovery preserved it"
+                            ),
+                        }
+                        continue;
+                    }
+                    let current = observe_recovery_file(self.host(), destination).await?;
+                    let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                    let assessment = assess_remove_recovery(
+                        &current,
+                        &rollback_current,
+                        *original_hash,
+                        *original_mode,
+                    );
+                    if assessment == RemoveRecoveryAssessment::Blocked {
+                        bail!(
+                            "managed App destination or removal rollback material changed after the interrupted uninstall; recovery preserved both"
+                        );
+                    }
+                    if !matching_previous_app_receipt(&manifest, action) {
+                        manifest.upsert(previous_removed_app_receipt(action)?);
+                        manifest
+                            .save(self.host(), &self.context().shine_dir)
+                            .await?;
+                    }
+                    match assessment {
+                        RemoveRecoveryAssessment::NotStarted => {}
+                        RemoveRecoveryAssessment::Restore => {
+                            self.host()
+                                .rename(rollback, destination)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow("failed to restore removed managed App file")
+                                })?;
+                        }
+                        RemoveRecoveryAssessment::Blocked => unreachable!("checked above"),
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     bail!("opaque App actions cannot be rolled back automatically");
                 }
@@ -966,6 +1345,7 @@ fn matching_app_receipt(
                     && entry.install_strategy == AppInstallStrategy::Copy
                     && !entry.requires_admin
             }
+            ActionKindV1::RemoveManagedFile { .. } => false,
             ActionKindV1::OpaqueExecution { .. } => false,
         })
 }
@@ -974,23 +1354,87 @@ fn matching_previous_app_receipt(
     manifest: &AppManifest,
     action: &crate::action::DeclarativeActionV1,
 ) -> bool {
-    let ActionKindV1::UpdateManagedFile {
+    let (destination, previous_backup, original_hash, uses_env) = match &action.kind {
+        ActionKindV1::UpdateManagedFile {
+            destination,
+            previous_backup,
+            original_hash,
+            ..
+        } => (destination, previous_backup.as_ref(), original_hash, None),
+        ActionKindV1::RemoveManagedFile {
+            destination,
+            original_hash,
+            uses_env,
+            ..
+        } => (destination, None, original_hash, Some(*uses_env)),
+        _ => return false,
+    };
+    let source = action_source_identity(action);
+    manifest.find_by_source(&source).is_some_and(|entry| {
+        entry.destination == *destination
+            && entry.content_hash == *original_hash
+            && entry.backup.as_ref() == previous_backup
+            && entry.install_strategy == AppInstallStrategy::Copy
+            && !entry.requires_admin
+            && uses_env.is_none_or(|uses_env| entry.uses_env == uses_env)
+    })
+}
+
+fn previous_removed_app_receipt(
+    action: &crate::action::DeclarativeActionV1,
+) -> Result<crate::install::AppEntry> {
+    let ActionKindV1::RemoveManagedFile {
         destination,
-        previous_backup,
         original_hash,
+        uses_env,
+        ..
+    } = &action.kind
+    else {
+        bail!("only a managed-file removal has a restorable previous receipt");
+    };
+    Ok(crate::install::AppEntry {
+        source: action_source_identity(action),
+        destination: destination.clone(),
+        backup: None,
+        content_hash: *original_hash,
+        install_strategy: AppInstallStrategy::Copy,
+        uses_env: *uses_env,
+        requires_admin: false,
+    })
+}
+
+fn removed_app_receipt_committed(
+    manifest: &AppManifest,
+    action: &crate::action::DeclarativeActionV1,
+) -> bool {
+    let ActionKindV1::RemoveManagedFile {
+        destination,
+        rollback,
         ..
     } = &action.kind
     else {
         return false;
     };
     let source = action_source_identity(action);
-    manifest.find_by_source(&source).is_some_and(|entry| {
-        entry.destination == *destination
-            && entry.content_hash == *original_hash
-            && entry.backup == *previous_backup
-            && entry.install_strategy == AppInstallStrategy::Copy
-            && !entry.requires_admin
-    })
+    manifest.find_by_source(&source).is_none()
+        && manifest.find_by_dest(destination).is_none()
+        && manifest.find_by_dest(rollback).is_none()
+}
+
+fn removal_receipt_conflict(
+    manifest: &AppManifest,
+    action: &crate::action::DeclarativeActionV1,
+    receipt_committed: bool,
+) -> bool {
+    let ActionKindV1::RemoveManagedFile { rollback, .. } = &action.kind else {
+        return true;
+    };
+    if receipt_committed {
+        return !removed_app_receipt_committed(manifest, action);
+    }
+    !(matching_previous_app_receipt(manifest, action)
+        || removed_app_receipt_committed(manifest, action))
+        || manifest.find_by_dest(rollback).is_some()
 }
 
 fn conflicting_app_receipt(
@@ -1024,6 +1468,7 @@ fn conflicting_app_receipt(
             manifest.find_by_dest(destination).is_some() || manifest.find_by_dest(backup).is_some()
         }
         ActionKindV1::UpdateManagedFile { .. } => false,
+        ActionKindV1::RemoveManagedFile { .. } => true,
         ActionKindV1::OpaqueExecution { .. } => false,
     }
 }
@@ -1040,6 +1485,13 @@ fn action_source_identity(action: &crate::action::DeclarativeActionV1) -> String
 enum BackupRecoveryAssessment {
     NotStarted,
     Restore { remove_destination: bool },
+    Blocked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RemoveRecoveryAssessment {
+    NotStarted,
+    Restore,
     Blocked,
 }
 
@@ -1109,6 +1561,29 @@ fn assess_update_recovery(
             }
         }
         _ => BackupRecoveryAssessment::Blocked,
+    }
+}
+
+fn assess_remove_recovery(
+    destination: &RecoveryFileObservation,
+    rollback: &RecoveryFileObservation,
+    original_hash: u64,
+    original_mode: Option<u32>,
+) -> RemoveRecoveryAssessment {
+    match (destination, rollback) {
+        (RecoveryFileObservation::Regular(current, mode), RecoveryFileObservation::Missing)
+            if hash_content(current) == original_hash
+                && recovery_mode_matches(*mode, original_mode) =>
+        {
+            RemoveRecoveryAssessment::NotStarted
+        }
+        (RecoveryFileObservation::Missing, RecoveryFileObservation::Regular(current, mode))
+            if hash_content(current) == original_hash
+                && recovery_mode_matches(*mode, original_mode) =>
+        {
+            RemoveRecoveryAssessment::Restore
+        }
+        _ => RemoveRecoveryAssessment::Blocked,
     }
 }
 
@@ -1246,7 +1721,7 @@ fn logical_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{DeclarativeActionV1, ManagedFileUpdateSpecV1};
+    use crate::action::{DeclarativeActionV1, ManagedFileRemoveSpecV1, ManagedFileUpdateSpecV1};
     use crate::install::AppEntry;
     use crate::plan::PlanStepV1;
     use crate::runtime::{InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimePlatform};
@@ -1324,6 +1799,23 @@ mod tests {
         )
     }
 
+    fn remove_action_ir(runtime: &CoreRuntime<InMemoryHost>, original: &[u8]) -> ActionIrV1 {
+        ActionIrV1::new(
+            "operation-remove",
+            vec![DeclarativeActionV1::remove_managed_file(
+                "action-remove",
+                "app/demo",
+                "config",
+                ManagedFileRemoveSpecV1 {
+                    destination: runtime.context().home_dir.join(".config/demo/config"),
+                    original_mode: Some(0o100644),
+                    original_hash: hash_content(original),
+                    uses_env: false,
+                },
+            )],
+        )
+    }
+
     fn approved_install_plan(
         runtime: &CoreRuntime<InMemoryHost>,
         ir: &ActionIrV1,
@@ -1376,6 +1868,32 @@ mod tests {
         (plan, approval)
     }
 
+    fn approved_remove_plan(
+        runtime: &CoreRuntime<InMemoryHost>,
+        ir: &ActionIrV1,
+    ) -> (PlanV1, PlanApprovalV1) {
+        let required = ir
+            .permission_requirements(|path| review_path(runtime.context(), path))
+            .required;
+        let plan = PlanV1::new(
+            PlanOperationV1::Uninstall,
+            PlanInputsV1 {
+                preset: runtime.presets().digest_v1().unwrap(),
+                state: SnapshotDigestV1::builder("test-remove-state").finish(),
+            },
+            vec![PlanStepV1::new(
+                "app/demo",
+                Some("config"),
+                PlanActionV1::Remove,
+            )],
+            required.clone(),
+            &required,
+            std::iter::empty::<String>(),
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        (plan, approval)
+    }
+
     async fn save_matching_receipt(runtime: &CoreRuntime<InMemoryHost>, content: &[u8]) {
         save_matching_receipt_with_backup(runtime, content, None).await;
     }
@@ -1396,6 +1914,16 @@ mod tests {
                 uses_env: false,
                 requires_admin: false,
             }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    }
+
+    async fn remove_matching_receipt(runtime: &CoreRuntime<InMemoryHost>) {
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: Vec::new(),
         }
         .save(runtime.host(), &runtime.context().shine_dir)
         .await
@@ -2095,5 +2623,205 @@ mod tests {
         assert!(recovered.rolled_back_actions.is_empty());
         assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
         assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn managed_removal_retains_previous_bytes_until_receipt_removal_commit() {
+        let runtime = runtime();
+        let original = b"previous-managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_matching_receipt(&runtime, original).await;
+        let ir = remove_action_ir(&runtime, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+
+        let execution = runtime
+            .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), original);
+        let journal = String::from_utf8(
+            runtime
+                .host()
+                .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!journal.contains("previous-managed"));
+
+        remove_matching_receipt(&runtime).await;
+        runtime
+            .commit_app_managed_file_operation(&execution.operation_id)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_managed_removal_restores_file_while_receipt_remains() {
+        let runtime = runtime();
+        let original = b"previous-managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_matching_receipt(&runtime, original).await;
+        let ir = remove_action_ir(&runtime, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        assert!(
+            runtime
+                .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+                .await
+                .is_err()
+        );
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), original);
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_restore_removed_managed_file".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        let recovered = runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(recovered.rolled_back_actions, vec!["action-remove"]);
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn removal_receipt_absence_without_marker_rolls_back_file_and_receipt() {
+        let runtime = runtime();
+        let original = b"previous-managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_matching_receipt(&runtime, original).await;
+        let ir = remove_action_ir(&runtime, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        runtime
+            .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+            .await
+            .unwrap();
+        remove_matching_receipt(&runtime).await;
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_restore_removed_file_and_receipt".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let (manifest, _) =
+            load_app_manifest_receipts(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap();
+        assert!(matching_previous_app_receipt(
+            &manifest,
+            &remove_action_ir(&runtime, original).actions[0]
+        ));
+    }
+
+    #[tokio::test]
+    async fn removal_receipt_commit_marker_allows_rollback_cleanup() {
+        let runtime = runtime();
+        let original = b"previous-managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_matching_receipt(&runtime, original).await;
+        let ir = remove_action_ir(&runtime, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        runtime
+            .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+            .await
+            .unwrap();
+        remove_matching_receipt(&runtime).await;
+
+        let (mut journal, _) =
+            load_app_operation_journal(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .unwrap();
+        journal.mark_receipt_committed("action-remove").unwrap();
+        save_app_operation_journal(runtime.host(), &runtime.context().shine_dir, &journal)
+            .await
+            .unwrap();
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_remove_committed_removal_rollback".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        let recovered = runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(recovered.rolled_back_actions.is_empty());
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn managed_removal_recovery_blocks_changed_rollback_material() {
+        let runtime = runtime();
+        let original = b"previous-managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_matching_receipt(&runtime, original).await;
+        let ir = remove_action_ir(&runtime, original);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        let _ = runtime
+            .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+            .await;
+        runtime.host().put_file(&rollback, b"user-change".to_vec());
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(!recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_removal_state_changed".to_string())
+        }));
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"user-change"
+        );
     }
 }

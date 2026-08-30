@@ -83,11 +83,16 @@ a receipt-owned static Copy is replaced in place, Shine temporarily moves the pr
 to the same-directory `<name>.shine.rollback` path. Before the replacement receipt is durable,
 recovery restores it only while the destination and rollback file still match the previous/desired
 fingerprints. After the replacement receipt is durable, recovery preserves the destination and
-removes only unchanged rollback material plus the stale journal. A rollback file may contain prior
-managed configuration and should be treated as sensitive. If any guarded path changed after
-interruption, recovery returns nonzero and preserves the paths plus the journal; replacing a regular
-file with a symlink or directory also counts as a change. Do not edit or delete the journal or
-rollback material manually.
+removes only unchanged rollback material plus the stale journal. An ordinary uninstall of an
+unchanged static Copy without a persistent backup also moves the managed file to this rollback path
+until receipt removal is durable. Recovery restores it while the exact old receipt remains, or
+removes it after both receipt removal and the journal's matching commit state are durable, and only
+while its kind, mode, and bytes are unchanged. If receipt removal is durable but that journal state
+is missing, recovery conservatively recreates the old receipt and restores the unchanged file.
+A rollback file may contain prior managed configuration and should be treated as sensitive. If any
+guarded path changed after interruption, recovery returns nonzero and preserves the paths plus the
+journal; replacing a regular file with a symlink or directory also counts as a change. Do not edit
+or delete the journal or rollback material manually.
 
 ## Configuration transforms
 

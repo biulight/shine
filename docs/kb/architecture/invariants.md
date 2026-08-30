@@ -174,6 +174,17 @@ bugs. Check this list before changing the modules named in each entry.
   durable, recovery restores only the exact original/missing, missing/original, or desired/original
   state; after it is durable, commit/recovery removes only unchanged rollback material. Any changed
   kind, bytes, mode-bound input, receipt, destination or rollback path blocks and preserves state.
+- **An ordinary managed App removal commits through receipt absence.** The Phase 4 removal slice
+  applies only to an unchanged, receipt-owned, unprivileged static Copy with no persistent backup
+  and no force. It moves the destination to the canonical same-directory rollback path before
+  removing the receipt. While the exact old receipt remains, recovery restores only an unchanged
+  regular rollback file with the recorded mode and hash. After receipt removal, the journal must
+  durably enter `receipt-committed` before commit/recovery removes unchanged rollback material; bare
+  receipt absence cannot authorize cleanup and instead makes explicit recovery reconstruct the exact
+  old receipt before restoring unchanged bytes. No conflicting manifest receipt may claim the action
+  source, destination or rollback path. Any
+  occupied destination, changed path, receipt conflict, backup, administrator, JSON merge or force
+  case stays outside this action and must not inherit its rollback proof.
 - **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
   first action mutation, update action state atomically, persist the matching domain receipt, and
   only then commit by removing the journal. An existing or unsupported-version journal blocks a new

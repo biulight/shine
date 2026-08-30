@@ -28,8 +28,10 @@
   recovery Plan；真实 App install 已将“目标缺失或可安全备份、非管理员、静态 Copy”接入
   create/receipt/commit 链路，`shine app recover` 能显式、重新批准地移除未提交创建或恢复未修改的
   固定 backup；原地、receipt-owned、非管理员静态 Copy update 也使用同目录 transaction rollback
-  material，并能在旧/新 receipt 边界安全恢复。Uninstall、JSON merge、管理员路径与其他
-  action/domain 尚未迁移，也不代表 Phase 4 exit criteria 已满足。
+  material，并能在旧/新 receipt 边界安全恢复。无 persistent backup、未修改、非管理员静态 Copy 的
+  普通 uninstall 也已使用 transaction rollback material，并在旧 receipt/receipt 缺失边界安全恢复。
+  Backup restore、force、JSON merge、管理员路径与其他 action/domain 尚未迁移，也不代表 Phase 4
+  exit criteria 已满足。
 
 ## Guiding Principles
 

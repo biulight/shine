@@ -93,22 +93,25 @@ retains its existing preview format and is not an approved Plan.
 content on failure. Artifact apply/remove explicitly runs an external integration declared by the
 preset; ordinary installation and upgrade do not implicitly apply it.
 
-If a supported App creation or in-place static Copy update is interrupted after its operation
-journal is written, later mutating App
-commands that require a security Plan stop with recovery guidance instead of changing that state
-implicitly. Read-only inspection does not recover or discard the journal. Run `shine app recover`
+If a supported App creation, in-place static Copy update, or ordinary removal of an unchanged
+static Copy without a persistent backup is interrupted after its operation journal is written,
+later mutating App commands that require a security Plan stop with recovery guidance instead of
+changing that state implicitly. Read-only inspection does not recover or discard the journal. Run `shine app recover`
 to inspect a separate recovery Plan. It preserves files that have changed since the interruption;
 for a backup-aware creation it restores the fixed backup only while both destination and backup
 still match the journaled original/desired fingerprints. When the ownership receipt is already
 durable it keeps the managed destination and persistent backup and clears only stale transaction
 state. An in-place managed update temporarily moves the prior managed file to
 `<name>.shine.rollback`; recovery restores or removes that file only while it still matches the
-journaled prior fingerprint. Treat interrupted rollback material as sensitive managed
-configuration. Recovery
+journaled prior fingerprint and mode. For ordinary supported removal, the old receipt causes
+recovery to restore unchanged rollback material; once receipt removal and its journal commit state
+are durable, recovery removes only that unchanged material. Receipt absence without the matching
+journal state instead recreates the old receipt and restores the unchanged file.
+Treat interrupted rollback material as sensitive managed configuration. Recovery
 defaults to No and requires `--yes` when no interactive terminal is available. A missing or invalid
 journal, unsupported action, or changed destination/backup/rollback path returns nonzero without
-mutation. An existing fixed backup or update rollback path blocks the corresponding supported Plan
-instead of being replaced.
+mutation. An existing fixed backup or update/removal rollback path blocks the corresponding
+supported Plan instead of being replaced.
 
 ## Status, updates, and completions
 

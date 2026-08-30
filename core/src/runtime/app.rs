@@ -266,6 +266,12 @@ struct ApprovedAppInstall<'a> {
     action_irs: Vec<ActionIrV1>,
 }
 
+struct ApprovedAppUninstall<'a> {
+    plan: &'a PlanV1,
+    approval: &'a PlanApprovalV1,
+    action_irs: Vec<ActionIrV1>,
+}
+
 fn generator_inspection_status(diagnostic: Option<&'static str>) -> InspectionFileStatus {
     match diagnostic {
         Some("app_generator_trust_required") => InspectionFileStatus::GeneratorTrustRequired,
@@ -631,6 +637,39 @@ where
         observer: &mut impl RuntimeObserver,
         interaction: &mut impl RuntimeInteraction,
     ) -> Result<AppLifecycleReport> {
+        self.uninstall_apps_inner(request, None, observer, interaction)
+            .await
+    }
+
+    pub(crate) async fn uninstall_apps_with_approved_actions(
+        &self,
+        request: AppUninstallLifecycleRequest,
+        plan: &PlanV1,
+        approval: &PlanApprovalV1,
+        action_irs: Vec<ActionIrV1>,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        self.uninstall_apps_inner(
+            request,
+            Some(ApprovedAppUninstall {
+                plan,
+                approval,
+                action_irs,
+            }),
+            observer,
+            interaction,
+        )
+        .await
+    }
+
+    async fn uninstall_apps_inner(
+        &self,
+        request: AppUninstallLifecycleRequest,
+        mut approved: Option<ApprovedAppUninstall<'_>>,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
         let mut manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
         let target_destinations = if let Some(target) = &request.target {
             self.app_categories(Some(target))?
@@ -750,9 +789,30 @@ where
                 });
                 continue;
             }
-            let outcome = self
-                .uninstall_app_entry(&entry, request.dry_run, request.force)
-                .await;
+            let target = format!("app/{category}");
+            let resource = source.display().to_string();
+            let action_index = approved.as_ref().and_then(|approved| {
+                approved.action_irs.iter().position(|ir| {
+                    matches!(ir.actions.as_slice(), [action] if action.target == target && action.resource == resource)
+                })
+            });
+            let mut journal_execution = None;
+            let outcome = if let Some(index) = action_index {
+                let approved = approved.as_mut().expect("approved App uninstall actions");
+                let action_ir = approved.action_irs.remove(index);
+                let execution = self
+                    .execute_app_managed_file_removal_approved(
+                        approved.plan,
+                        approved.approval,
+                        action_ir,
+                    )
+                    .await?;
+                journal_execution = Some(execution);
+                Ok(UninstallOutcome::Removed)
+            } else {
+                self.uninstall_app_entry(&entry, request.dry_run, request.force)
+                    .await
+            };
             let (status, effects, remove_receipt, error, action) = match outcome {
                 Ok(UninstallOutcome::Removed) => (
                     LifecycleStatus::Changed,
@@ -830,6 +890,11 @@ where
             };
             if remove_receipt {
                 manifest.remove_by_dest(&entry.destination);
+                if let Some(execution) = journal_execution {
+                    save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
+                    self.commit_app_managed_file_operation(&execution.operation_id)
+                        .await?;
+                }
             }
             let mut lifecycle = LifecycleOutcomeV1::new(
                 format!("app/{category}"),

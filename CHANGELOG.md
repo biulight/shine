@@ -28,6 +28,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   overwriting destination or backup files changed after the interruption.
 - Journaled receipt-owned, unprivileged static Copy updates during App install and upgrade, using
   same-directory transaction rollback material that is restored or removed only while unchanged.
+- Journaled ordinary removal of unchanged, receipt-owned, unprivileged static Copy App files
+  without persistent backups. Interrupted uninstall restores only unchanged rollback material
+  while the original receipt remains, or removes it after receipt removal is durable.
 
 ### Breaking changes
 

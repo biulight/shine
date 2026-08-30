@@ -70,7 +70,12 @@ shine app recover --yes
 原地替换 receipt-owned 静态 Copy 时，Shine 会把上一个受管文件临时移动到同目录的
 `<name>.shine.rollback`。在 replacement receipt 持久化前，只有 destination 与 rollback 文件仍匹配
 前一个/目标 fingerprint 时才会恢复；receipt 持久化后则保留 destination，只移除未修改的 rollback
-material 和 stale journal。rollback 文件可能包含之前的受管配置，应按敏感内容处理。如果任一受保护
+material 和 stale journal。普通卸载一个未修改、没有 persistent backup 的静态 Copy 时，也会先把受管
+文件移动到该 rollback 路径，直到 receipt 移除持久化完成。精确的旧 receipt 仍存在时，恢复会还原该
+文件；只有 receipt 移除和 journal 中对应的 commit 状态都已持久化，才会移除 rollback material，
+而且仅在其类型、mode 和内容均未变化时执行。receipt 消失但缺少该 journal 状态时属于歧义状态，
+恢复会采用保守 rollback：重建旧 receipt，并还原未修改的文件。
+rollback 文件可能包含之前的受管配置，应按敏感内容处理。如果任一受保护
 路径在中断后被修改，恢复命令返回非零，并保留这些路径和 journal 等待显式处理。把 regular file
 替换为 symlink 或目录也视为修改。不要手动编辑或删除 journal 或 rollback material。
 

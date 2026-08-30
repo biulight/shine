@@ -16,10 +16,13 @@ The Roadmap Phase 4 foundation keeps executable `ActionIrV1` separate from the s
 Approved App install routes unprivileged static Copy files with absent destinations or
 backup-eligible unowned regular-file destinations through the action executor. Approved install and
 upgrade also route unchanged, receipt-owned in-place static Copy replacement through
-same-directory transaction rollback material. Each journal remains until its matching manifest
-receipt is durable; a fresh `app-recovery` Plan is required before removing or restoring unchanged
-transaction state. Managed remove, JSON merge, generators, administrator writes, relocation, and
-other domains retain their existing executors until narrower rollback contracts land.
+same-directory transaction rollback material. Ordinary removal of an unchanged, receipt-owned,
+unprivileged static Copy without a persistent backup uses the same transaction path until receipt
+absence and its positive journal commit marker are durable. Each journal remains until its matching
+manifest receipt state is durable; a
+fresh `app-recovery` Plan is required before removing or restoring unchanged transaction state.
+Backup-restoring/forced removal, JSON merge, generators, administrator writes, relocation, and other
+domains retain their existing executors until narrower rollback contracts land.
 
 Runtime APIs are workspace-internal and hidden from normal documentation. The versioned lifecycle
 result and security Plan contracts retain their documented compatibility guarantees. Protected

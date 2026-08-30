@@ -1,11 +1,14 @@
 # Declarative Action and Recovery PRD
 
-> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, and 4C.2a are
+> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a, and
+> 4C.2b-1 are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned, unprivileged static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
 > upgrade also journal in-place replacement of an unchanged, receipt-owned, unprivileged static
-> Copy and retain its previous bytes only as same-directory transaction rollback material.
+> Copy and retain its previous bytes only as same-directory transaction rollback material. Ordinary
+> uninstall uses the same material for an unchanged, receipt-owned, unprivileged static Copy with
+> no persistent backup until receipt removal and its journal commit marker are durable.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -43,8 +46,8 @@ prepared journal → rename original to fixed backup → atomic managed write �
        └──────────── explicit recovery restores only an exact safe state ────────────┘
 ```
 
-Managed remove, JSON merge, administrator paths, Shell/Sys actions, and automatic resume remain
-later slices.
+Backup-restoring/forced managed remove, JSON merge, administrator paths, Shell/Sys actions, and
+automatic resume remain later slices.
 
 ## Goals
 
@@ -88,6 +91,9 @@ are:
 - `UpdateManagedFile`: an unchanged receipt-owned static Copy destination, its fixed transaction
   rollback path, previous persistent backup identity, prior mode and original/desired hashes. It is
   valid only for an in-place, unprivileged update with an absent rollback path.
+- `RemoveManagedFile`: an unchanged receipt-owned static Copy destination with no persistent backup,
+  its fixed transaction rollback path, prior mode and original hash. It is valid only for an
+  ordinary unprivileged uninstall with an absent rollback path.
 
 The classification-only escape hatch is:
 
@@ -105,7 +111,8 @@ The initial journal lives at `<shine_dir>/app-operation-journal.toml` and contai
 - schema version;
 - full payload-free Action IR;
 - original Plan approval fingerprint and exact permission set;
-- ordered per-action `prepared` or `applied` state.
+- ordered per-action `prepared` or `applied` state, plus `receipt-committed` only for removal after
+  safe receipt absence is durable.
 
 The journal is written atomically before file creation and again after it. It remains active until
 the App lifecycle has durably saved the matching App receipt, then an explicit commit re-reads that
@@ -119,6 +126,13 @@ same-directory `<name>.shine.rollback` transaction path. The action binds its pa
 backup identity, prior mode and before/after hashes, but not either byte payload. The rollback path
 must be absent before planning and execution, is removed only after the replacement receipt is
 durable, and is preserved if its kind or content changes.
+
+Ordinary managed removal uses the same transaction path but commits through safe receipt absence:
+while the exact old receipt remains, recovery restores unchanged rollback material; after no receipt
+claims the source, destination or rollback path and the journal durably records `receipt-committed`,
+recovery removes only unchanged rollback material. Receipt absence without that marker makes
+recovery reconstruct the old payload-free receipt and roll back the unchanged file.
+Backup restoration, force and administrator removal require later action kinds.
 
 ### Recovery
 
@@ -197,12 +211,21 @@ before the first mutation.
 - Recover before rename, after rename, after replacement write, and after replacement receipt;
   block any changed destination, rollback material, or receipt.
 
-### Slice 4C.2b — Managed uninstall
+### Slice 4C.2b-1 — Ordinary managed uninstall (implemented)
 
 - Reuse separate transaction-owned rollback material for managed remove without persisting secret
   plaintext casually.
-- Support remove with before/after fingerprints and post-operation modification protection,
-  including the persistent user backup restoration state machine.
+- Bind the exact old receipt, destination kind/hash/mode and absent rollback path.
+- Restore unchanged rollback material while the old receipt remains; after receipt removal is
+  durable, record a positive journal commit marker before removing unchanged rollback material.
+- Treat receipt absence without the positive marker as uncommitted: reconstruct the exact old
+  receipt and roll back unchanged transaction state.
+
+### Slice 4C.2b-2 — Extended managed uninstall
+
+- Support persistent user backup restoration with before/after fingerprints and post-operation
+  modification protection.
+- Give forced removal of user-modified content a distinct reviewed action contract.
 - Add administrator locking and rollback tests before privileged actions join the IR.
 
 ### Slice 4D — Other domains and opaque inventory
