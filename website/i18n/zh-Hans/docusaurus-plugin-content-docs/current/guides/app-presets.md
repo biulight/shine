@@ -65,9 +65,24 @@ Plan，不能绕过缺失权限、被阻塞的 teardown 或外部代码 gate。u
 
 App 预设可以为 `[[files]]` 声明 generator，把命令的 UTF-8 stdout 作为该受管文件的预期内容。生成结果仍经过正常的变换、hash、manifest、用户修改保护和卸载流程，不应由脚本绕过 Shine 直接改写目标文件。
 
-生成器可分为自动和手动两类。两者都不会在只读的 `list`、`info` 或 `update` 中运行；无法在不执行
-代码的情况下计算动态预期内容时，已安装的自动生成结果会显示 `refresh required`。自动生成器可在
-获批的安装或升级中运行；`auto = false` 的手动生成器只在安装或显式 refresh 中运行：
+生成器可分为自动和手动两类。普通 `list`、`info` 和 `update` 都不会运行它们；无法在不执行代码的
+情况下计算动态预期内容时，info/update 会醒目显示 `generator not evaluated`，不会声称已安装文件
+是最新状态。使用 `--run-generators` 可以显式执行所选 generator、在内存中应用 transform，并检查
+状态或最终 diff，而不会写入目标文件或 manifest：
+
+```bash
+shine app info surge --run-generators
+shine info app/surge --run-generators --diff
+shine update app/surge --run-generators --diff
+shine update --run-generators
+```
+
+全局形式会评估所有已安装 App 类别；定向形式只评估选中的 App。由于该参数已经表达明确意图，自动
+generator 和 `auto = false` 的手动 generator 都会参与。外部或 overlay generator 仍需要匹配的
+scoped trust。单项失败不会阻止其余 generator 继续评估，但命令会在报告不完整结果后返回非零状态。
+
+自动 generator 也可以在获批的安装或升级中运行；`auto = false` 的手动 generator 可在安装、显式
+评估或显式 refresh 中运行：
 
 ```bash
 shine app refresh <CATEGORY>

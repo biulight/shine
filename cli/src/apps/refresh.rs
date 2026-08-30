@@ -310,13 +310,77 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         let rows = crate::status::build_app_rows(&config, &categories)
             .await
             .unwrap();
-        assert_eq!(rows[0].file_status, FileStatus::RefreshRequired);
+        assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
         assert_eq!(
             fs::read_to_string(config.presets_dir().join("app/sample/first.runs"))
                 .await
                 .unwrap(),
             "x",
             "read-only status must not execute an automatic generator"
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_generator_evaluation_materializes_desired_content_before_install() {
+        let root = crate::test_support::make_temp_dir("shine-generator-preview").await;
+        let config = write_fixture(&root, false).await;
+        let mut runtime = crate::core_runtime::from_config(&config).await.unwrap();
+        runtime.context_mut_for_cli().env = config.env.clone();
+        let inspections = runtime
+            .inspect_apps_with_options(
+                shine_core::runtime::AppInspectionOptions {
+                    run_generators: true,
+                    categories: vec!["sample".to_string()],
+                },
+                &mut shine_core::runtime::NullObserver,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            inspections[0].desired_content.as_deref(),
+            Some(b"first-v1\n".as_slice())
+        );
+        assert!(!root.join("dest/first.txt").exists());
+        assert_eq!(
+            fs::read_to_string(config.presets_dir().join("app/sample/first.runs"))
+                .await
+                .unwrap(),
+            "x"
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_generator_evaluation_updates_status_without_writing_destination() {
+        let root = crate::test_support::make_temp_dir("shine-generator-evaluation").await;
+        let config = write_fixture(&root, false).await;
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
+        handle_install(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+        let app_dir = config.presets_dir().join("app/sample");
+        let destination = root.join("dest/first.txt");
+        fs::write(app_dir.join("first.payload"), b"first-v2\n")
+            .await
+            .unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
+
+        let categories = metadata::load_active_categories(&config, Some("sample"))
+            .await
+            .unwrap();
+        let (rows, _, _) =
+            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, true)
+                .await
+                .unwrap();
+        assert_eq!(rows[0].file_status, FileStatus::UpdateAvail);
+        assert_eq!(fs::read(&destination).await.unwrap(), b"first-v1\n");
+        assert_eq!(
+            fs::read_to_string(app_dir.join("first.runs"))
+                .await
+                .unwrap(),
+            "xx",
+            "explicit evaluation must execute the selected generator exactly once"
         );
         fs::remove_dir_all(root).await.unwrap();
     }

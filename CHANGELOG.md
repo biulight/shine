@@ -39,8 +39,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   `shine sys profile enable/disable` to change that explicit state.
 - Retired `allow_app_hooks` and `allow_sys_code`. They are ignored, removed on the next config save,
   and never converted into broad trust. Enroll reviewed external targets with `shine trust grant`.
-- Read-only App list/info/update no longer executes automatic generators. Dynamic generated files
-  report `refresh required`; use `shine app refresh` or an approved upgrade to execute them.
+- App list/info/update no longer executes generators by default. `app info`, top-level `info`, and
+  targeted/global `update` accept `--run-generators` to evaluate automatic or manual generator
+  output in memory without writing destinations or manifests. Default output warns when generated
+  content was not evaluated; evaluation failures and missing external-code trust remain explicit.
 
 ## [1.8.0] — 2026-08-28
 

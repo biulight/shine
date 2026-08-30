@@ -145,7 +145,11 @@ async fn run(cli: Cli) -> Result<()> {
         } => handle_uninstall_shim_approved(&config, &target, force, purge, dry_run, yes).await,
         Commands::App { command } => match command {
             AppCommands::List => Box::pin(apps::handle_list(&config)).await,
-            AppCommands::Info { category } => Box::pin(apps::handle_info(&config, &category)).await,
+            AppCommands::Info {
+                category,
+                run_generators,
+                diff,
+            } => Box::pin(apps::handle_info(&config, &category, run_generators, diff)).await,
             AppCommands::Install {
                 category,
                 dry_run,
@@ -212,6 +216,7 @@ async fn run(cli: Cli) -> Result<()> {
                     cmd.diff,
                     cmd.verbose,
                     cmd.refresh_release,
+                    cmd.run_generators,
                 )
                 .await
             } else {
@@ -221,6 +226,7 @@ async fn run(cli: Cli) -> Result<()> {
                     cmd.diff,
                     cmd.verbose,
                     cmd.refresh_release,
+                    cmd.run_generators,
                 )
                 .await
             }
@@ -281,11 +287,22 @@ async fn run(cli: Cli) -> Result<()> {
             target,
             diff,
             verbose,
+            run_generators,
         } => {
             if let Some(item) = system_info_item(&target, diff, verbose)? {
+                if run_generators {
+                    anyhow::bail!("--run-generators requires an App target");
+                }
                 Box::pin(sys::handle_info(&config, item)).await
             } else {
-                Box::pin(info::handle_info(&config, &target, diff, verbose)).await
+                Box::pin(info::handle_info(
+                    &config,
+                    &target,
+                    diff,
+                    verbose,
+                    run_generators,
+                ))
+                .await
             }
         }
         Commands::Self_ { command } => match command {
@@ -1005,7 +1022,8 @@ mod tests {
                 pull: false,
                 diff: false,
                 verbose: false,
-                refresh_release: false
+                refresh_release: false,
+                run_generators: false
             })
         ));
 
@@ -1017,7 +1035,8 @@ mod tests {
                 pull: false,
                 diff: false,
                 verbose: true,
-                refresh_release: false
+                refresh_release: false,
+                run_generators: false
             })
         ));
 
@@ -1029,7 +1048,8 @@ mod tests {
                 pull: false,
                 diff: false,
                 verbose: false,
-                refresh_release: true
+                refresh_release: true,
+                run_generators: false
             })
         ));
 
@@ -1049,7 +1069,8 @@ mod tests {
                 pull: true,
                 diff: false,
                 verbose: false,
-                refresh_release: false
+                refresh_release: false,
+                run_generators: false
             })
         ));
 
@@ -1061,7 +1082,8 @@ mod tests {
                 pull: false,
                 diff: false,
                 verbose: false,
-                refresh_release: false
+                refresh_release: false,
+                run_generators: false
             }) if target == "proxy/setproxy"
         ));
 
@@ -1073,7 +1095,8 @@ mod tests {
                 pull: false,
                 diff: true,
                 verbose: false,
-                refresh_release: false
+                refresh_release: false,
+                run_generators: false
             })
         ));
 
@@ -1086,7 +1109,8 @@ mod tests {
                 pull: true,
                 diff: true,
                 verbose: false,
-                refresh_release: false
+                refresh_release: false,
+                run_generators: false
             }) if target == "proxy/setproxy"
         ));
 
@@ -1099,7 +1123,8 @@ mod tests {
                 pull: false,
                 diff: false,
                 verbose: true,
-                refresh_release: false
+                refresh_release: false,
+                run_generators: false
             }) if target == "utils/shine-theme-sync"
         ));
         assert!(
@@ -1107,6 +1132,15 @@ mod tests {
                 .is_err()
         );
         assert!(Cli::try_parse_from(["shine", "update", "--refresh"]).is_err());
+
+        let cli = Cli::try_parse_from(["shine", "update", "--run-generators"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Update(UpdateCommand {
+                run_generators: true,
+                ..
+            })
+        ));
 
         let cli = Cli::try_parse_from(["shine", "upgrade"]).unwrap();
         assert!(matches!(
@@ -1929,8 +1963,19 @@ mod tests {
             Commands::Info {
                 target,
                 diff: false,
-                verbose: false
+                verbose: false,
+                run_generators: false
             } if target == "setproxy"
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "info", "app/surge", "--run-generators"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Info {
+                target,
+                run_generators: true,
+                ..
+            } if target == "app/surge"
         ));
 
         let cli = Cli::try_parse_from(["shine", "info", "setproxy", "--diff"]).unwrap();
@@ -1939,7 +1984,8 @@ mod tests {
             Commands::Info {
                 target,
                 diff: true,
-                verbose: false
+                verbose: false,
+                run_generators: false
             } if target == "setproxy"
         ));
 
@@ -1949,7 +1995,8 @@ mod tests {
             Commands::Info {
                 target,
                 diff: false,
-                verbose: true
+                verbose: true,
+                run_generators: false
             } if target == "setproxy"
         ));
 
@@ -1960,7 +2007,8 @@ mod tests {
             Commands::Info {
                 target,
                 diff: true,
-                verbose: true
+                verbose: true,
+                run_generators: false
             } if target == "setproxy"
         ));
     }

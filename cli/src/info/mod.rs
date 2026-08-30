@@ -5,8 +5,17 @@ mod resolve;
 use crate::config::Config;
 use crate::status::FileStatus;
 use crate::{apps, colors, path_display, shells};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use resolve::InfoRef;
+
+pub(crate) async fn print_app_inspection_diff(
+    config: &Config,
+    inspection: &shine_core::runtime::AppFileInspection,
+) -> Result<()> {
+    let item = collect::app_info_file_from_inspection(inspection.clone())
+        .context("App inspection destination is unavailable")?;
+    render::print_app_expected_diff(config, &item).await
+}
 
 pub(crate) struct UpdateDiffs {
     app_files: Vec<collect::AppInfoFile>,
@@ -14,9 +23,19 @@ pub(crate) struct UpdateDiffs {
 }
 
 impl UpdateDiffs {
-    pub(crate) async fn collect(config: &Config) -> Result<Self> {
+    pub(crate) async fn collect(config: &Config, run_generators: bool) -> Result<Self> {
         Ok(Self {
-            app_files: collect::collect_app_files(config).await?,
+            app_files: collect::collect_app_files(config, run_generators, Vec::new()).await?,
+            shell_files: collect::collect_shell_files(config).await?,
+        })
+    }
+
+    pub(crate) async fn collect_with_app_inspections(
+        config: &Config,
+        inspections: Vec<shine_core::runtime::AppFileInspection>,
+    ) -> Result<Self> {
+        Ok(Self {
+            app_files: collect::app_info_files_from_inspections(inspections),
             shell_files: collect::collect_shell_files(config).await?,
         })
     }
@@ -57,9 +76,83 @@ fn app_file_label(file: &collect::AppInfoFile) -> String {
         .unwrap_or_else(|| format!("{}/{}", file.category.name, file.file.source_rel.display()))
 }
 
-pub async fn handle_update_target(config: &Config, target: &str) -> Result<()> {
+fn app_categories_for_refs(refs: &[InfoRef]) -> Vec<String> {
+    refs.iter()
+        .filter_map(|item| match item {
+            InfoRef::AppCategory(category) | InfoRef::AppFile { category, .. } => {
+                Some(category.clone())
+            }
+            InfoRef::ShellCategory(_) | InfoRef::ShellFile { .. } => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn print_generator_notice(
+    files: &[collect::AppInfoFile],
+    categories: &[String],
+    run_generators: bool,
+) -> bool {
+    let relevant = files
+        .iter()
+        .filter(|file| categories.is_empty() || categories.contains(&file.category.name))
+        .collect::<Vec<_>>();
+    let not_evaluated = relevant
+        .iter()
+        .any(|file| file.assessment_diagnostic == Some("app_generator_not_evaluated"));
+    let failures = relevant
+        .iter()
+        .filter(|file| {
+            matches!(
+                file.assessment_diagnostic,
+                Some("app_generator_evaluation_failed" | "app_generator_trust_required")
+            )
+        })
+        .collect::<Vec<_>>();
+
+    if !run_generators && not_evaluated {
+        println!();
+        println!(
+            "{}",
+            colors::yellow("! Generated configuration was not evaluated.")
+        );
+        println!(
+            "{}",
+            colors::dim(
+                "  Update status may be incomplete. Re-run with `--run-generators` to evaluate generator output."
+            )
+        );
+    }
+    for file in &failures {
+        println!();
+        let reason = if file.assessment_diagnostic == Some("app_generator_trust_required") {
+            "generator trust required"
+        } else {
+            "generator evaluation failed"
+        };
+        println!(
+            "{}",
+            colors::yellow(&format!(
+                "! {}/{}: {reason}",
+                file.category.name,
+                file.file.source_rel.display()
+            ))
+        );
+        if let Some(error) = &file.assessment_error {
+            println!("{}", colors::dim(&format!("  {error}")));
+        }
+    }
+    !failures.is_empty()
+}
+
+pub async fn handle_update_target(
+    config: &Config,
+    target: &str,
+    run_generators: bool,
+) -> Result<()> {
     crate::config::print_presets_note(config);
-    let diffs = UpdateDiffs::collect(config).await?;
+    let mut diffs = UpdateDiffs::collect(config, false).await?;
 
     if diffs.app_files.is_empty() && diffs.shell_files.is_empty() {
         bail!("nothing installed yet. Run `shine shell install` or `shine app install`.");
@@ -67,6 +160,14 @@ pub async fn handle_update_target(config: &Config, target: &str) -> Result<()> {
 
     let candidates = resolve::build_candidates(&diffs.app_files, &diffs.shell_files);
     let refs = resolve::resolve_target(target, &candidates)?;
+    if run_generators {
+        let categories = app_categories_for_refs(&refs);
+        if categories.is_empty() {
+            bail!("--run-generators requires an App target");
+        }
+        diffs.app_files = collect::collect_app_files(config, true, categories).await?;
+    }
+    let generator_categories = app_categories_for_refs(&refs);
     let mut printed = false;
 
     for item in refs {
@@ -128,13 +229,23 @@ pub async fn handle_update_target(config: &Config, target: &str) -> Result<()> {
         }
     }
 
-    if !printed {
+    let generator_failed =
+        print_generator_notice(&diffs.app_files, &generator_categories, run_generators);
+    let generator_incomplete = diffs.app_files.iter().any(|file| {
+        generator_categories.contains(&file.category.name)
+            && file.assessment_diagnostic == Some("app_generator_not_evaluated")
+    });
+
+    if !printed && !generator_incomplete {
         println!(
             "{}",
             colors::dim(&format!("No update available for {target}."))
         );
     }
 
+    if generator_failed {
+        bail!("one or more App generators could not be evaluated");
+    }
     Ok(())
 }
 
@@ -168,21 +279,38 @@ fn print_app_update_row(config: &Config, file: &collect::AppInfoFile) {
     );
 }
 
-pub async fn handle_info(config: &Config, target: &str, diff: bool, verbose: bool) -> Result<()> {
-    let app_files = collect::collect_app_files(config).await?;
+pub async fn handle_info(
+    config: &Config,
+    target: &str,
+    diff: bool,
+    verbose: bool,
+    run_generators: bool,
+) -> Result<()> {
+    let mut app_files = collect::collect_app_files(config, false, Vec::new()).await?;
     let shell_files = collect::collect_shell_files(config).await?;
 
     let candidates = resolve::build_candidates(&app_files, &shell_files);
     let refs = match resolve::resolve_target(target, &candidates) {
         Ok(refs) => refs,
         Err(installed_error) => {
-            if diff || verbose {
-                return Err(installed_error
-                    .context("--diff and --verbose require an installed app or shell target"));
+            if verbose || (diff && !run_generators) {
+                return Err(installed_error.context(
+                    "--verbose requires an installed target; --diff for an available App also requires --run-generators",
+                ));
             }
-            return handle_available_info(config, target, installed_error).await;
+            return handle_available_info(config, target, installed_error, run_generators, diff)
+                .await;
         }
     };
+
+    if run_generators {
+        let categories = app_categories_for_refs(&refs);
+        if categories.is_empty() {
+            bail!("--run-generators requires an App target");
+        }
+        app_files = collect::collect_app_files(config, true, categories).await?;
+    }
+    let generator_categories = app_categories_for_refs(&refs);
 
     crate::config::print_presets_note(config);
 
@@ -238,6 +366,12 @@ pub async fn handle_info(config: &Config, target: &str, diff: bool, verbose: boo
         }
     }
 
+    let generator_failed =
+        print_generator_notice(&app_files, &generator_categories, run_generators);
+    if generator_failed {
+        bail!("one or more App generators could not be evaluated");
+    }
+
     Ok(())
 }
 
@@ -245,6 +379,8 @@ async fn handle_available_info(
     config: &Config,
     target: &str,
     installed_error: anyhow::Error,
+    run_generators: bool,
+    diff: bool,
 ) -> Result<()> {
     let target = target.trim();
     if let Some(rest) = target.strip_prefix("app/") {
@@ -252,11 +388,14 @@ async fn handle_available_info(
         if category.is_empty() || rest.contains('/') {
             return Err(installed_error);
         }
-        return Box::pin(apps::handle_info(config, category)).await;
+        return Box::pin(apps::handle_info(config, category, run_generators, diff)).await;
     }
     if let Some(rest) = target.strip_prefix("shell/") {
         if rest.is_empty() {
             return Err(installed_error);
+        }
+        if run_generators {
+            bail!("--run-generators requires an App target");
         }
         return Box::pin(shells::handle_info(config, rest)).await;
     }
@@ -275,7 +414,8 @@ async fn handle_available_info(
     });
 
     match (app_matches, shell_matches) {
-        (true, false) => Box::pin(apps::handle_info(config, target)).await,
+        (true, false) => Box::pin(apps::handle_info(config, target, run_generators, diff)).await,
+        (false, true) if run_generators => bail!("--run-generators requires an App target"),
         (false, true) => Box::pin(shells::handle_info(config, target)).await,
         (true, true) => {
             bail!("ambiguous available target `{target}`; use `app/{target}` or `shell/{target}`")

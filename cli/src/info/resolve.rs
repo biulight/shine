@@ -297,6 +297,8 @@ mod tests {
             desired_content: None,
             current_content: None,
             changes: Vec::new(),
+            assessment_error: None,
+            assessment_diagnostic: None,
         }
     }
 

@@ -66,7 +66,7 @@ shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-man
 shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes]
 
 shine app list
-shine app info <CATEGORY>
+shine app info <CATEGORY> [--run-generators] [--diff]
 shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
 shine app refresh <CATEGORY> [FILE] [--force] [--yes]
 shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
@@ -96,8 +96,8 @@ preset; ordinary installation and upgrade do not implicitly apply it.
 
 ```text
 shine list [--available [<app|shell|sys>]]
-shine info <TARGET> [--diff] [--verbose]
-shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release]
+shine info <TARGET> [--diff] [--verbose] [--run-generators]
+shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
 shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
 shine trust inspect <app/CATEGORY|sys/ITEM>
@@ -110,6 +110,15 @@ shine completions <bash|zsh|powershell>
 
 Trust enrollment derives its scope from the current immutable Preset snapshot. `--yes` confirms
 the rendered enrollment non-interactively; it does not approve later lifecycle Plans.
+
+App generators are never executed by default during `app info`, top-level `info`, or `update`.
+When generated desired content cannot be determined statically, these commands display a prominent
+not-evaluated warning instead of claiming that the installed file is current. Pass
+`--run-generators` to explicitly execute automatic and manual generators, apply transforms in
+memory, and calculate status or `--diff` output without writing destinations or manifests. Global
+`update --run-generators` evaluates every installed App category; targeted info/update evaluates
+only the selected App. External generators still require a matching `shine trust grant`, and
+evaluation failures are reported after the remaining selected generators run.
 
 - `update --refresh-release` bypasses the 24-hour cache. By default, `update` groups targets under
   the same Homebrew-style sections as `shine list`: interactive terminals use horizontal columns,

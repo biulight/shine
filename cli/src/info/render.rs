@@ -146,6 +146,12 @@ pub(super) async fn print_app_update_diff(config: &Config, item: &AppInfoFile) -
     Ok(())
 }
 
+pub(crate) async fn print_app_expected_diff(config: &Config, item: &AppInfoFile) -> Result<()> {
+    let diff_output = app_diff_output(config, item).await?;
+    print_block("Diff", &app_current_path(item), &diff_output);
+    Ok(())
+}
+
 pub(super) async fn print_shell_update_diff(config: &Config, item: &ShellInfoFile) -> Result<()> {
     print_update_changes(config, &item.changes);
     if UpdateChange::includes_content(&item.changes) {
@@ -280,7 +286,9 @@ fn status_parts(status: FileStatus) -> (&'static str, &'static str) {
         FileStatus::Missing => ("destination missing", "!"),
         FileStatus::UserModified => ("user modified", "~"),
         FileStatus::UpdateAvail => ("update available", "↑"),
-        FileStatus::RefreshRequired => ("refresh required", "↻"),
+        FileStatus::GeneratorNotEvaluated => ("generator not evaluated", "!"),
+        FileStatus::GeneratorEvaluationFailed => ("generator evaluation failed", "!"),
+        FileStatus::GeneratorTrustRequired => ("generator trust required", "!"),
         FileStatus::Partial => ("partial install", "~"),
         FileStatus::UpToDate => ("up-to-date", "✓"),
         FileStatus::NotInstalled => ("not installed", "✗"),
@@ -314,18 +322,6 @@ fn colored_shell_status(status: &str) -> String {
 }
 
 async fn app_diff_output(_config: &Config, item: &AppInfoFile) -> Result<String> {
-    if item
-        .file
-        .generator
-        .as_ref()
-        .is_some_and(|generator| !generator.auto)
-    {
-        return Ok(
-            "Expected content is an explicitly refreshed generator snapshot; \
-             run `shine app refresh` to materialize it without polling during info.\n"
-                .to_string(),
-        );
-    }
     let expected = match &item.desired_content {
         Some(bytes) => bytes,
         None => {
@@ -334,14 +330,9 @@ async fn app_diff_output(_config: &Config, item: &AppInfoFile) -> Result<String>
     };
 
     let current_path = app_current_path(item);
-    let current = match &item.current_content {
+    let current: &[u8] = match &item.current_content {
         Some(bytes) => bytes,
-        None => {
-            return Ok(format!(
-                "Current file is missing: {}.\n",
-                current_path.display()
-            ));
-        }
+        None => &[],
     };
 
     Ok(render_diff_or_note(

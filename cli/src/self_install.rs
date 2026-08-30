@@ -16,17 +16,18 @@ pub async fn handle_update(
     diff: bool,
     verbose: bool,
     refresh_release: bool,
+    run_generators: bool,
 ) -> Result<()> {
     if let Some(target) = target {
-        return info::handle_update_target(config, target).await;
+        return info::handle_update_target(config, target, run_generators).await;
     }
 
     let mut printed_update = if verbose {
-        Box::pin(list::handle_status_list(config, diff)).await?;
+        Box::pin(list::handle_status_list(config, diff, run_generators)).await?;
         println!();
         true
     } else {
-        Box::pin(list::handle_update_list(config, diff)).await?
+        Box::pin(list::handle_update_list(config, diff, run_generators)).await?
     };
 
     let current = version::semver();

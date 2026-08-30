@@ -81,9 +81,11 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 FileStatus::NotInstalled => ("✗", "✗"),
                 FileStatus::UpdateAvail => ("↑", "↑"),
                 FileStatus::Missing => ("!", "!"),
-                FileStatus::Partial | FileStatus::UserModified | FileStatus::RefreshRequired => {
-                    ("~", "~")
-                }
+                FileStatus::Partial
+                | FileStatus::UserModified
+                | FileStatus::GeneratorNotEvaluated
+                | FileStatus::GeneratorEvaluationFailed
+                | FileStatus::GeneratorTrustRequired => ("~", "~"),
                 FileStatus::UpToDate => ("✓", "✓"),
             };
             ShellRow {
@@ -109,6 +111,20 @@ pub(crate) async fn build_app_rows_with_lifecycle(
     config: &Config,
     categories: &[AppCategory],
 ) -> Result<(Vec<AppRow>, LifecycleResultV1)> {
+    build_app_rows_with_lifecycle_options(config, categories, false)
+        .await
+        .map(|(rows, lifecycle, _)| (rows, lifecycle))
+}
+
+pub(crate) async fn build_app_rows_with_lifecycle_options(
+    config: &Config,
+    categories: &[AppCategory],
+    run_generators: bool,
+) -> Result<(
+    Vec<AppRow>,
+    LifecycleResultV1,
+    Vec<shine_core::runtime::AppFileInspection>,
+)> {
     let mut runtime = crate::core_runtime::from_config(config).await?;
     if let Ok(env) = EnvConfig::load_or_init(config).await {
         runtime.context_mut_for_cli().env = env.as_map().clone();
@@ -118,7 +134,16 @@ pub(crate) async fn build_app_rows_with_lifecycle(
         .map(|category| category.name.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     let inspections = runtime
-        .inspect_apps(&mut shine_core::runtime::NullObserver)
+        .inspect_apps_with_options(
+            shine_core::runtime::AppInspectionOptions {
+                run_generators,
+                categories: categories
+                    .iter()
+                    .map(|category| category.name.clone())
+                    .collect(),
+            },
+            &mut shine_core::runtime::NullObserver,
+        )
         .await?
         .into_iter()
         .filter(|file| selected.contains(file.category.name.as_str()))
@@ -164,9 +189,17 @@ pub(crate) async fn build_app_rows_with_lifecycle(
                             effects,
                         ))
                     }
-                    FileStatus::RefreshRequired => Some(
+                    FileStatus::GeneratorNotEvaluated => Some(
                         LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Pending, [])
-                            .with_diagnostic_code("app_generator_refresh_required"),
+                            .with_diagnostic_code("app_generator_not_evaluated"),
+                    ),
+                    FileStatus::GeneratorEvaluationFailed => Some(
+                        LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Failed, [])
+                            .with_diagnostic_code("app_generator_evaluation_failed"),
+                    ),
+                    FileStatus::GeneratorTrustRequired => Some(
+                        LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Failed, [])
+                            .with_diagnostic_code("app_generator_trust_required"),
                     ),
                     FileStatus::Missing => Some(LifecycleOutcomeV1::new(
                         target,
@@ -225,7 +258,9 @@ pub(crate) async fn build_app_rows_with_lifecycle(
                     status,
                     FileStatus::UpToDate
                         | FileStatus::UpdateAvail
-                        | FileStatus::RefreshRequired
+                        | FileStatus::GeneratorNotEvaluated
+                        | FileStatus::GeneratorEvaluationFailed
+                        | FileStatus::GeneratorTrustRequired
                         | FileStatus::UserModified
                 )
             });
@@ -275,7 +310,7 @@ pub(crate) async fn build_app_rows_with_lifecycle(
             });
         }
     }
-    Ok((rows, lifecycle))
+    Ok((rows, lifecycle, inspections))
 }
 
 fn app_status_presentation(status: FileStatus) -> (&'static str, &'static str) {
@@ -283,7 +318,9 @@ fn app_status_presentation(status: FileStatus) -> (&'static str, &'static str) {
         FileStatus::Missing => ("!", "destination missing"),
         FileStatus::UserModified => ("~", "user modified"),
         FileStatus::UpdateAvail => ("↑", "update available"),
-        FileStatus::RefreshRequired => ("↻", "refresh required"),
+        FileStatus::GeneratorNotEvaluated => ("!", "generator not evaluated"),
+        FileStatus::GeneratorEvaluationFailed => ("!", "generator evaluation failed"),
+        FileStatus::GeneratorTrustRequired => ("!", "generator trust required"),
         FileStatus::UpToDate => ("✓", "up-to-date"),
         FileStatus::NotInstalled | FileStatus::Partial => ("✗", "not installed"),
     }
@@ -338,9 +375,17 @@ fn app_update_outcome(
                 effects,
             ))
         }
-        FileStatus::RefreshRequired => Some(
+        FileStatus::GeneratorNotEvaluated => Some(
             LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Pending, [])
-                .with_diagnostic_code("app_generator_refresh_required"),
+                .with_diagnostic_code("app_generator_not_evaluated"),
+        ),
+        FileStatus::GeneratorEvaluationFailed => Some(
+            LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Failed, [])
+                .with_diagnostic_code("app_generator_evaluation_failed"),
+        ),
+        FileStatus::GeneratorTrustRequired => Some(
+            LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Failed, [])
+                .with_diagnostic_code("app_generator_trust_required"),
         ),
         FileStatus::Missing => Some(LifecycleOutcomeV1::new(
             target,

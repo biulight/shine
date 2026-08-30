@@ -308,7 +308,9 @@ mod tests {
         let config = Config::new_for_test(&dir);
 
         for error in [
-            info::handle_info(&config, "surge").await.unwrap_err(),
+            info::handle_info(&config, "surge", false, false)
+                .await
+                .unwrap_err(),
             build::handle_build(&config, "surge").await.unwrap_err(),
             refresh::handle_refresh(&config, "surge", None, false)
                 .await

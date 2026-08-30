@@ -86,9 +86,11 @@ bugs. Check this list before changing the modules named in each entry.
   modification remains a typed preservation conflict while the CLI keeps its existing failure exit.
 - **App update presentation and reusable results share one Core assessment pass.** `AppRow` and
   `LifecycleOutcomeV1` must derive from the same per-file assessment; do not rebuild rows to obtain
-  the structured result. Read-oriented assessment never executes generators and reports
-  `app_generator_refresh_required` when dynamic desired content needs explicit execution. Typed
-  inspection paths remain non-serializable and must not enter the lifecycle result.
+  the structured result. Default read-oriented assessment never executes generators and reports
+  `app_generator_not_evaluated` when dynamic desired content needs explicit execution.
+  `--run-generators` is a separate opt-in assessment mode: it may execute selected generators once
+  to derive in-memory desired content but must not write destinations/manifests or run hooks and
+  artifacts. Typed inspection paths remain non-serializable and must not enter the lifecycle result.
 - **Managed-file update details are field labels, not payloads.** The read-only comparison may
   report that destination or content changed, but must not copy the destination, desired bytes, or
   environment values into structured lifecycle outcomes. Ownership and user-modification checks
@@ -182,7 +184,8 @@ bugs. Check this list before changing the modules named in each entry.
   runs commands after upgrades, while an automatic file generator may run during an approved
   install/upgrade and supply effective source bytes. Embedded code may run implicitly, but external
   preset or overlay code requires a grant matching canonical target, capability, code digest,
-  trust layer, and exact permission set. Read-oriented checks never execute it.
+  trust layer, and exact permission set. Read-oriented checks execute it only through the explicit
+  `--run-generators` mode; ordinary inspection remains process-free.
 - **Bun package installation is source-scoped and explicit.** Embedded scripts and external scripts
   without a locked declaration run with `--no-install`. Only an effective external/overlay script
   whose own physical category contains both `package.json` and `bun.lock` may run with
@@ -196,10 +199,10 @@ bugs. Check this list before changing the modules named in each entry.
   Read-only status paths must never execute sys code. Project config and Presets cannot authorize
   their own executable content.
 - **Manual generators never run from implicit status or upgrade paths.**
-  `generator.auto = false` leaves `list`/`info`/`update` local-only and
-  causes upgrade to preserve the manifest snapshot. Only install (including `--replace-managed`) or
-  `shine app refresh` may run it; refresh must target manifest-owned files and
-  preserve user modifications unless `--force` is explicit.
+  `generator.auto = false` leaves ordinary `list`/`info`/`update` local-only and causes upgrade to
+  preserve the manifest snapshot. Install, `shine app refresh`, or explicit
+  `info`/`update --run-generators` evaluation may run it. Evaluation never writes; refresh must
+  target manifest-owned files and preserve user modifications unless `--force` is explicit.
 - **Generator failures never destroy the last-known-good managed file.** Status
   and upgrade warn and retain an existing manifest-owned destination. An enabled
   generator with no successful installed snapshot fails rather than installing

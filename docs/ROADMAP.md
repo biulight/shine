@@ -21,8 +21,9 @@
 - Phase 3 已完成：所有 mutation 均使用 snapshot-bound security Plan；外部 App/Sys 代码使用绑定
   target、capability、code digest、trust layer 与 permission set 的 scoped trust grant。
 - `shine preset validate` 与 skill-first AI authoring 已存在，应继续作为 schema 和静态验证权威。
-- Read-oriented App status/update 不运行 generator；动态生成内容通过显式 refresh 或已批准 mutation
-  执行。GPG/age portable secrets 和 machine-local env 已存在。
+- Read-oriented App status/update 默认不运行 generator；开发者可通过 `--run-generators` 显式执行并
+  在内存中检查最终内容，写入仍只发生在显式 refresh 或已批准 mutation。GPG/age portable
+  secrets 和 machine-local env 已存在。
 
 ## Guiding Principles
 
@@ -83,7 +84,8 @@ permissions；所有 mutation 都经过可审查、绑定输入 snapshot 的 Pla
 - Apply 只接受同一 source/state snapshot 的 Plan；权限扩大必须重新确认。
 - 现有 coarse grants 有兼容迁移，升级不能静默扩大授权。
 
-安全 Plan 与 read-oriented status/update 均不运行 generator、hook、artifact 或 bootstrap script。
+安全 Plan 不运行 generator、hook、artifact 或 bootstrap script；read-oriented status/update 仅在
+显式 `--run-generators` 时执行 generator，且不得写入目标或 manifest。
 
 ## Phase 4 — Declarative Actions and Recovery
 

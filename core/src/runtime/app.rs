@@ -120,6 +120,15 @@ pub struct AppGeneratorRequest {
     pub explicit: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct AppInspectionOptions {
+    /// Execute generators while deriving desired content. This is an explicit
+    /// code-execution mode, not part of ordinary read-only inspection.
+    pub run_generators: bool,
+    /// Restrict inspection to these App categories when non-empty.
+    pub categories: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AppArtifactAction {
     Apply,
@@ -238,6 +247,23 @@ struct AssessedAppFile {
     destination: PathBuf,
     content: Option<Vec<u8>>,
     generator_error: Option<String>,
+    generator_diagnostic: Option<&'static str>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AppAssessmentOptions {
+    dry_run: bool,
+    run_generators: bool,
+    explicit_generators: bool,
+    preserve_generator_errors: bool,
+}
+
+fn generator_inspection_status(diagnostic: Option<&'static str>) -> InspectionFileStatus {
+    match diagnostic {
+        Some("app_generator_trust_required") => InspectionFileStatus::GeneratorTrustRequired,
+        Some("app_generator_evaluation_failed") => InspectionFileStatus::GeneratorEvaluationFailed,
+        _ => InspectionFileStatus::GeneratorNotEvaluated,
+    }
 }
 
 impl AppLifecycleReport {
@@ -305,9 +331,12 @@ where
         let assessed = self
             .assess_app_files(
                 &categories,
-                request.dry_run,
-                true,
-                true,
+                AppAssessmentOptions {
+                    dry_run: request.dry_run,
+                    run_generators: true,
+                    explicit_generators: true,
+                    preserve_generator_errors: false,
+                },
                 &manifest,
                 observer,
             )
@@ -1041,7 +1070,15 @@ where
         }
         validate_app_destinations(self, &categories)?;
         let mut assessments = self
-            .assess_app_files(&categories, false, true, false, &manifest, observer)
+            .assess_app_files(
+                &categories,
+                AppAssessmentOptions {
+                    run_generators: true,
+                    ..AppAssessmentOptions::default()
+                },
+                &manifest,
+                observer,
+            )
             .await?
             .into_iter()
             .map(|assessment| {
@@ -1477,10 +1514,34 @@ where
         &self,
         observer: &mut impl RuntimeObserver,
     ) -> Result<Vec<AppFileInspection>> {
-        let categories = self.app_categories(None)?;
+        self.inspect_apps_with_options(AppInspectionOptions::default(), observer)
+            .await
+    }
+
+    pub async fn inspect_apps_with_options(
+        &self,
+        options: AppInspectionOptions,
+        observer: &mut impl RuntimeObserver,
+    ) -> Result<Vec<AppFileInspection>> {
+        let selected = options.categories.iter().collect::<BTreeSet<_>>();
+        let categories = self
+            .app_categories(None)?
+            .into_iter()
+            .filter(|category| selected.is_empty() || selected.contains(&category.name))
+            .collect::<Vec<_>>();
         let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
         let assessments = self
-            .assess_app_files(&categories, false, false, false, &manifest, observer)
+            .assess_app_files(
+                &categories,
+                AppAssessmentOptions {
+                    run_generators: options.run_generators,
+                    explicit_generators: options.run_generators,
+                    preserve_generator_errors: true,
+                    ..AppAssessmentOptions::default()
+                },
+                &manifest,
+                observer,
+            )
             .await?;
         let installed_categories = manifest
             .entries
@@ -1524,15 +1585,8 @@ where
                     Some(Some(hash)) if hash != entry.content_hash => {
                         InspectionFileStatus::UserModified
                     }
-                    Some(Some(_)) if manual_generator => InspectionFileStatus::UpToDate,
-                    Some(Some(_))
-                        if assessment.generator_error.as_deref()
-                            == Some("app_generator_refresh_required") =>
-                    {
-                        InspectionFileStatus::RefreshRequired
-                    }
-                    Some(Some(_)) if assessment.generator_error.is_some() => {
-                        InspectionFileStatus::UpToDate
+                    Some(Some(_)) if assessment.generator_diagnostic.is_some() => {
+                        generator_inspection_status(assessment.generator_diagnostic)
                     }
                     Some(Some(_)) => {
                         let desired = assessment
@@ -1549,7 +1603,9 @@ where
                     }
                 }
             } else if let Some(entry) = source_entry.as_ref() {
-                if manual_generator {
+                if assessment.generator_diagnostic.is_some() {
+                    generator_inspection_status(assessment.generator_diagnostic)
+                } else if manual_generator && !options.run_generators {
                     let current_hash = current_content
                         .as_deref()
                         .map(|bytes| installed_app_hash(&assessment.file, bytes))
@@ -1579,7 +1635,11 @@ where
                     InspectionFileStatus::UpdateAvail
                 }
             } else if installed_categories.contains(&assessment.category.name)
-                && !manual_generator
+                && assessment.generator_diagnostic.is_some()
+            {
+                generator_inspection_status(assessment.generator_diagnostic)
+            } else if installed_categories.contains(&assessment.category.name)
+                && (!manual_generator || options.run_generators)
                 && assessment.content.is_some()
             {
                 changes.push(InspectionChange::NewFile {
@@ -1600,6 +1660,7 @@ where
                 current_content,
                 changes,
                 assessment_error: assessment.generator_error,
+                assessment_diagnostic: assessment.generator_diagnostic,
             });
         }
         Ok(files)
@@ -1608,9 +1669,7 @@ where
     async fn assess_app_files(
         &self,
         categories: &[AppCategory],
-        dry_run: bool,
-        run_generators: bool,
-        explicit_generators: bool,
+        options: AppAssessmentOptions,
         manifest: &AppManifest,
         observer: &mut impl RuntimeObserver,
     ) -> Result<Vec<AssessedAppFile>> {
@@ -1618,28 +1677,43 @@ where
         for category in categories {
             for file in &category.files {
                 let destination = self.app_destination(category, file)?;
-                let raw = if !run_generators && file.generator.is_some() {
+                let raw = if !options.run_generators && file.generator.is_some() {
                     assessed.push(AssessedAppFile {
                         category: category.clone(),
                         file: file.clone(),
                         destination,
                         content: None,
-                        generator_error: Some("app_generator_refresh_required".to_string()),
+                        generator_error: None,
+                        generator_diagnostic: Some("app_generator_not_evaluated"),
                     });
                     continue;
-                } else if dry_run || file.generator.is_none() {
+                } else if options.dry_run || file.generator.is_none() {
                     Some(
                         self.app_source_bytes(category.name.as_str(), file)?
                             .to_vec(),
                     )
                 } else {
+                    if options.preserve_generator_errors
+                        && let Err(error) =
+                            self.ensure_app_code_allowed(&category.name, "generator")
+                    {
+                        assessed.push(AssessedAppFile {
+                            category: category.clone(),
+                            file: file.clone(),
+                            destination,
+                            content: None,
+                            generator_error: Some(format!("{error:#}")),
+                            generator_diagnostic: Some("app_generator_trust_required"),
+                        });
+                        continue;
+                    }
                     match self
                         .run_app_generator(
                             AppGeneratorRequest {
                                 category: category.name.clone(),
                                 source: file.source_rel.display().to_string(),
                                 generator: file.generator.clone().expect("checked generator"),
-                                explicit: explicit_generators,
+                                explicit: options.explicit_generators,
                             },
                             observer,
                         )
@@ -1648,8 +1722,9 @@ where
                         Ok(Some(bytes)) => Some(bytes),
                         Ok(None) => Some(self.app_source_bytes(&category.name, file)?.to_vec()),
                         Err(error)
-                            if manifest.find_by_dest(&destination).is_some()
-                                && self.host.metadata(&destination).await.is_ok() =>
+                            if options.preserve_generator_errors
+                                || (manifest.find_by_dest(&destination).is_some()
+                                    && self.host.metadata(&destination).await.is_ok()) =>
                         {
                             assessed.push(AssessedAppFile {
                                 category: category.clone(),
@@ -1657,6 +1732,7 @@ where
                                 destination,
                                 content: None,
                                 generator_error: Some(format!("{error:#}")),
+                                generator_diagnostic: Some("app_generator_evaluation_failed"),
                             });
                             continue;
                         }
@@ -1681,6 +1757,7 @@ where
                     destination,
                     content,
                     generator_error: None,
+                    generator_diagnostic: None,
                 });
             }
         }

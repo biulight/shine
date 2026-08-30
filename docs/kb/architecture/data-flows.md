@@ -232,15 +232,17 @@ An app `[[files]]` entry may declare
 `generator = { script, runtime, env, when_env, auto }`. The static `source` remains a
 safe fallback and stable manifest identity. When `when_env` exists in the active `[env]` table, an
 approved install, upgrade, or explicit refresh may run the generator and use its UTF-8 stdout as
-the effective source before normal transforms and install strategies. Read-oriented inspection
-never runs it:
+the effective source before normal transforms and install strategies. Ordinary read-oriented
+inspection never runs it; explicit evaluation may:
 
 1. `shine app install` always materializes first, then reuses the normal
    manifest hash and atomic file installer.
 2. `auto` defaults to true; automatic generators may materialize during an approved
-   `shine upgrade`. Status/update reports `app_generator_refresh_required` when dynamic desired
-   output cannot be known without execution.
-3. `auto = false` makes status local-only and excludes the file from upgrade.
+   `shine upgrade`. Ordinary status/update reports `app_generator_not_evaluated` when dynamic
+   output cannot be known without execution. `info`/`update --run-generators` executes selected
+   generators once, applies transforms in memory, and computes status/diffs without writing.
+3. `auto = false` makes implicit status local-only and excludes the file from upgrade, but explicit
+   `--run-generators` evaluation includes it.
    `shine app refresh <category> [source]` explicitly refreshes only
    manifest-owned generated files, with an optional `--force` for user changes. Refresh reviews an
    `app-refresh` Plan that binds manifest ownership, live destination state, generator inputs, and
@@ -254,6 +256,8 @@ never runs it:
 6. A Bun generator is resolved against the physical category that supplied its effective script.
    Embedded temporary scripts use `--no-install`; an external/overlay script uses
    `--install=fallback` only with a valid `package.json` + `bun.lock` pair in that category.
+7. External evaluation still requires snapshot-scoped trust. Per-file evaluation failures continue
+   through the remaining selection and cause a nonzero command result after all statuses render.
 
 The Surge generator downloads the Base64 URI list in
 `SURGE_SUBSCRIPTION_URL`, converts supported SS/VMess nodes, and writes bare

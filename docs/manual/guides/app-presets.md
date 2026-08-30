@@ -77,11 +77,27 @@ managed content. Generated results still pass through normal transforms, hashing
 user-modification protection, and uninstall. A script must not bypass Shine and write the destination
 directly.
 
-Generators can be automatic or manual. Neither kind runs during read-only `list`, `info`, or
-`update`: installed automatic output is shown as `refresh required` when Shine cannot determine its
-dynamic desired content without execution. Automatic generators may run during an approved install
-or upgrade. A manual generator with `auto = false` runs only during installation or explicit
-refresh:
+Generators can be automatic or manual. Neither kind runs during ordinary `list`, `info`, or
+`update`. When Shine cannot determine dynamic desired content without execution, info/update shows
+a prominent `generator not evaluated` warning and does not claim that the installed file is
+current. Use `--run-generators` to execute the selected generators explicitly, apply transforms in
+memory, and inspect status or a final diff without writing destinations or manifests:
+
+```bash
+shine app info surge --run-generators
+shine info app/surge --run-generators --diff
+shine update app/surge --run-generators --diff
+shine update --run-generators
+```
+
+The global form evaluates generators for every installed App category; the targeted forms evaluate
+only the selected App. Both automatic and `auto = false` manual generators participate because the
+flag is explicit. External or overlay generators still require matching scoped trust. Generator
+failures do not stop evaluation of the remaining selection, but the command returns nonzero after
+reporting incomplete results.
+
+Automatic generators may also run during an approved install or upgrade. A manual generator with
+`auto = false` runs during installation, explicit evaluation, or explicit refresh:
 
 ```bash
 shine app refresh <CATEGORY>

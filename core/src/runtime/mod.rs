@@ -278,9 +278,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
 pub use app::{
     AppArtifact, AppArtifactAction, AppArtifactRequest, AppCacheRequest, AppCategory,
     AppDestinationRoot, AppFile, AppFileAction, AppFileLifecycleReport, AppGenerator,
-    AppGeneratorRequest, AppHook, AppHookPhase, AppHookReport, AppHookRequest, AppLifecycleReport,
-    AppLifecycleRequest, AppListMode, AppRefreshRequest, AppUninstallLifecycleRequest,
-    AppUpgradeLifecycleReport, AppUpgradeRequest, ArtifactRuntime,
+    AppGeneratorRequest, AppHook, AppHookPhase, AppHookReport, AppHookRequest,
+    AppInspectionOptions, AppLifecycleReport, AppLifecycleRequest, AppListMode, AppRefreshRequest,
+    AppUninstallLifecycleRequest, AppUpgradeLifecycleReport, AppUpgradeRequest, ArtifactRuntime,
 };
 pub use bootstrap::{
     PresetSnapshotRequest, PresetSnapshotSource, capture_embedded_preset_snapshot,

@@ -9,6 +9,12 @@ pub enum AppCommands {
         /// Category to inspect (e.g. vim, starship)
         #[arg(value_name = "CATEGORY")]
         category: String,
+        /// Explicitly execute generators to evaluate final transformed content
+        #[arg(long)]
+        run_generators: bool,
+        /// Print a unified diff against installed content (or an empty file before install)
+        #[arg(long)]
+        diff: bool,
     },
     /// Install app preset files for all or a specific category
     Install {

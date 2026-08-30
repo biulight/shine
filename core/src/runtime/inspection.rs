@@ -7,7 +7,9 @@ pub enum InspectionFileStatus {
     NotInstalled,
     UpToDate,
     UpdateAvail,
-    RefreshRequired,
+    GeneratorNotEvaluated,
+    GeneratorEvaluationFailed,
+    GeneratorTrustRequired,
     Partial,
     UserModified,
     Missing,
@@ -60,6 +62,7 @@ pub struct AppFileInspection {
     pub current_content: Option<Vec<u8>>,
     pub changes: Vec<InspectionChange>,
     pub assessment_error: Option<String>,
+    pub assessment_diagnostic: Option<&'static str>,
 }
 
 #[derive(Clone, Debug)]

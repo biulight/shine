@@ -8,15 +8,17 @@ use shine_core::runtime::NullObserver;
 use std::path::PathBuf;
 
 #[derive(Clone)]
-pub(super) struct AppInfoFile {
-    pub(super) category: AppCategory,
-    pub(super) file: AppFile,
-    pub(super) destination: PathBuf,
-    pub(super) status: FileStatus,
-    pub(super) manifest_entry: Option<crate::install_core::AppEntry>,
-    pub(super) desired_content: Option<Vec<u8>>,
-    pub(super) current_content: Option<Vec<u8>>,
-    pub(super) changes: Vec<UpdateChange>,
+pub(crate) struct AppInfoFile {
+    pub(crate) category: AppCategory,
+    pub(crate) file: AppFile,
+    pub(crate) destination: PathBuf,
+    pub(crate) status: FileStatus,
+    pub(crate) manifest_entry: Option<crate::install_core::AppEntry>,
+    pub(crate) desired_content: Option<Vec<u8>>,
+    pub(crate) current_content: Option<Vec<u8>>,
+    pub(crate) changes: Vec<UpdateChange>,
+    pub(crate) assessment_error: Option<String>,
+    pub(crate) assessment_diagnostic: Option<&'static str>,
 }
 
 #[derive(Clone)]
@@ -34,29 +36,53 @@ pub(super) struct ShellInfoFile {
     pub(super) changes: Vec<UpdateChange>,
 }
 
-pub(super) async fn collect_app_files(config: &Config) -> Result<Vec<AppInfoFile>> {
+pub(super) async fn collect_app_files(
+    config: &Config,
+    run_generators: bool,
+    categories: Vec<String>,
+) -> Result<Vec<AppInfoFile>> {
     let mut runtime = crate::core_runtime::from_config(config).await?;
     let env = EnvConfig::load_or_init(config).await.ok();
     if let Some(env) = env {
         runtime.context_mut_for_cli().env = env.as_map().clone();
     }
-    let inspections = runtime.inspect_apps(&mut NullObserver).await?;
-    Ok(inspections
+    let inspections = runtime
+        .inspect_apps_with_options(
+            shine_core::runtime::AppInspectionOptions {
+                run_generators,
+                categories,
+            },
+            &mut NullObserver,
+        )
+        .await?;
+    Ok(app_info_files_from_inspections(inspections))
+}
+
+pub(super) fn app_info_files_from_inspections(
+    inspections: Vec<shine_core::runtime::AppFileInspection>,
+) -> Vec<AppInfoFile> {
+    inspections
         .into_iter()
         .filter(|file| file.status != FileStatus::NotInstalled)
-        .filter_map(|file| {
-            Some(AppInfoFile {
-                category: file.category,
-                file: file.file,
-                destination: file.destination?,
-                status: file.status,
-                manifest_entry: file.manifest_entry,
-                desired_content: file.desired_content,
-                current_content: file.current_content,
-                changes: file.changes,
-            })
-        })
-        .collect())
+        .filter_map(app_info_file_from_inspection)
+        .collect()
+}
+
+pub(crate) fn app_info_file_from_inspection(
+    file: shine_core::runtime::AppFileInspection,
+) -> Option<AppInfoFile> {
+    Some(AppInfoFile {
+        category: file.category,
+        file: file.file,
+        destination: file.destination?,
+        status: file.status,
+        manifest_entry: file.manifest_entry,
+        desired_content: file.desired_content,
+        current_content: file.current_content,
+        changes: file.changes,
+        assessment_error: file.assessment_error,
+        assessment_diagnostic: file.assessment_diagnostic,
+    })
 }
 
 pub(super) async fn collect_shell_files(config: &Config) -> Result<Vec<ShellInfoFile>> {
@@ -100,7 +126,7 @@ mod tests {
         let config = Config::new_for_test(&dir);
         tokio::fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        let files = collect_app_files(&config).await.unwrap();
+        let files = collect_app_files(&config, false, Vec::new()).await.unwrap();
         assert!(files.iter().all(|file| file.category.name != "docker"));
 
         tokio::fs::remove_dir_all(&dir).await.unwrap();

@@ -98,6 +98,9 @@ pub enum Commands {
         /// Also print the installed or rendered file content
         #[arg(long)]
         verbose: bool,
+        /// Explicitly execute App generators while evaluating installed content
+        #[arg(long)]
+        run_generators: bool,
     },
     /// Manage preset sources, overlays, exports, and Git synchronization
     Preset {
@@ -311,6 +314,9 @@ pub struct UpdateCommand {
     /// Show installed entries that are already current or need attention (targeted checks are already detailed)
     #[arg(long)]
     pub verbose: bool,
+    /// Explicitly execute App generators while checking update status
+    #[arg(long)]
+    pub run_generators: bool,
     /// Bypass the 24-hour version cache and check GitHub now
     #[arg(long, conflicts_with = "target")]
     pub refresh_release: bool,

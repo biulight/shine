@@ -6,12 +6,23 @@ use anyhow::Result;
 
 use super::AppListMode;
 
-pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
+pub async fn handle_info(
+    config: &Config,
+    category: &str,
+    run_generators: bool,
+    diff: bool,
+) -> Result<()> {
     crate::config::print_presets_note(config);
     let mut observer = shine_core::runtime::NullObserver;
     let inspections = crate::core_runtime::from_config(config)
         .await?
-        .inspect_apps(&mut observer)
+        .inspect_apps_with_options(
+            shine_core::runtime::AppInspectionOptions {
+                run_generators,
+                categories: vec![category.to_string()],
+            },
+            &mut observer,
+        )
         .await?;
     let selected = inspections
         .iter()
@@ -49,7 +60,7 @@ pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
 
     let mut any_installed = false;
 
-    for inspection in selected {
+    for inspection in &selected {
         let file = &inspection.file;
         let source_name = file.source_rel.display().to_string();
         let padding = " ".repeat(col_width.saturating_sub(source_name.len()));
@@ -70,6 +81,18 @@ pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
                         }
                         shine_core::runtime::InspectionFileStatus::Missing => {
                             format!("  {}", colors::yellow("installed, missing on disk"))
+                        }
+                        shine_core::runtime::InspectionFileStatus::UpdateAvail => {
+                            format!("  {}", colors::yellow("installed, update available"))
+                        }
+                        shine_core::runtime::InspectionFileStatus::GeneratorNotEvaluated => {
+                            format!("  {}", colors::yellow("generator not evaluated"))
+                        }
+                        shine_core::runtime::InspectionFileStatus::GeneratorEvaluationFailed => {
+                            format!("  {}", colors::yellow("generator evaluation failed"))
+                        }
+                        shine_core::runtime::InspectionFileStatus::GeneratorTrustRequired => {
+                            format!("  {}", colors::yellow("generator trust required"))
                         }
                         _ => format!("  {}", colors::green("installed, up to date")),
                     }
@@ -93,6 +116,50 @@ pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
             .unwrap_or_default();
 
         println!("  {source_name}{padding}  {dest_str}{file_desc}");
+        if diff {
+            crate::info::print_app_inspection_diff(config, inspection).await?;
+        }
+    }
+
+    if !run_generators && cat.files.iter().any(|file| file.generator.is_some()) {
+        println!();
+        println!(
+            "{}",
+            colors::yellow("! Generated configuration was not evaluated.")
+        );
+        println!(
+            "{}",
+            colors::dim(
+                "  Status may be incomplete. Re-run with `--run-generators` to evaluate generator output."
+            )
+        );
+    }
+    let generator_failures = selected
+        .iter()
+        .filter(|inspection| {
+            matches!(
+                inspection.assessment_diagnostic,
+                Some("app_generator_evaluation_failed" | "app_generator_trust_required")
+            )
+        })
+        .collect::<Vec<_>>();
+    for inspection in &generator_failures {
+        println!();
+        let reason = if inspection.assessment_diagnostic == Some("app_generator_trust_required") {
+            "generator trust required"
+        } else {
+            "generator evaluation failed"
+        };
+        println!(
+            "{}",
+            colors::yellow(&format!(
+                "! {}: {reason}",
+                inspection.file.source_rel.display()
+            ))
+        );
+        if let Some(error) = &inspection.assessment_error {
+            println!("{}", colors::dim(&format!("  {error}")));
+        }
     }
 
     println!();
@@ -112,6 +179,9 @@ pub async fn handle_info(config: &Config, category: &str) -> Result<()> {
         );
     }
 
+    if !generator_failures.is_empty() {
+        anyhow::bail!("one or more App generators could not be evaluated");
+    }
     Ok(())
 }
 

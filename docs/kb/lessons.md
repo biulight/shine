@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-30 — Generator evaluation must be explicit without inventing a preview lifecycle
+
+- **Symptom**: making all App inspection process-free prevented developers from checking final
+  transformed generator output before installation, while re-enabling implicit execution would
+  restore surprising network and process effects.
+- **Root cause**: generator evaluation and configuration mutation were treated as the only two
+  choices even though evaluation can execute code while retaining no-write semantics.
+- **Fix**: add `--run-generators` to App info and targeted/global update; ordinary inspection warns
+  that dynamic output was not evaluated, while opt-in evaluation runs each selected generator once
+  and keeps results in memory.
+- **Rule**: code execution and state mutation are separate dimensions. An inspection flag may
+  authorize explicit code execution, but it must preserve trust gates, avoid writes/hooks/artifacts,
+  continue across per-file failures, and never make the default inspection path active.
+
 ## 2026-08-30 — Durable code trust must not reuse declarations or one-shot approval
 
 - **Symptom**: global `allow_app_hooks` and `allow_sys_code` booleans trusted unrelated targets and

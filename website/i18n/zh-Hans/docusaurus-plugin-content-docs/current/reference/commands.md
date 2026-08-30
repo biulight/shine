@@ -61,7 +61,7 @@ shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-man
 shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes]
 
 shine app list
-shine app info <CATEGORY>
+shine app info <CATEGORY> [--run-generators] [--diff]
 shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
 shine app refresh <CATEGORY> [FILE] [--force] [--yes]
 shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
@@ -85,8 +85,8 @@ shine app artifact remove <APP_ID> [--yes]
 
 ```text
 shine list [--available [<app|shell|sys>]]
-shine info <TARGET> [--diff] [--verbose]
-shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release]
+shine info <TARGET> [--diff] [--verbose] [--run-generators]
+shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
 shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
 shine trust inspect <app/CATEGORY|sys/ITEM>
@@ -99,6 +99,13 @@ shine completions <bash|zsh|powershell>
 
 Trust enrollment 从当前不可变 Preset snapshot 推导范围。`--yes` 只用于非交互确认当前展示的
 enrollment，不会批准之后的 lifecycle Plan。
+
+`app info`、顶层 `info` 和 `update` 默认都不执行 App generator。无法静态确定动态预期内容时，
+这些命令会醒目提示 generator 尚未评估，不会把已安装文件误报为最新。传入
+`--run-generators` 后，Shine 会显式执行自动和手动 generator，在内存中应用 transform 并计算
+状态或 `--diff`，但不会写入目标文件或 manifest。全局 `update --run-generators` 会评估所有
+已安装 App 类别，定向 info/update 只评估选中的 App。外部 generator 仍需匹配当前代码与权限的
+`shine trust grant`；某项评估失败时，其余 generator 仍会继续，最后统一报告不完整结果。
 
 - `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
   Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示

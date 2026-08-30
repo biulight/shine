@@ -2,7 +2,8 @@
 
 > **Status:** Roadmap Phase 3 is complete. Snapshot-bound Plans cover every current mutation,
 > external App/Sys code uses target-local snapshot-scoped trust grants, and read-oriented App
-> status no longer executes generators. This document is internal and does not define a public JSON
+> status executes generators only through explicit `--run-generators` opt-in. This document is
+> internal and does not define a public JSON
 > Plan schema.
 
 ## Summary
