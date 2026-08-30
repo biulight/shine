@@ -97,6 +97,29 @@ impl PresetSnapshot {
         Ok(builder.finish())
     }
 
+    /// Bind selected logical code inputs and their effective trust layers.
+    /// Physical checkout locations are intentionally excluded.
+    pub fn code_digest_v1<'a>(
+        &self,
+        paths: impl IntoIterator<Item = &'a str>,
+    ) -> Result<SnapshotDigestV1, SnapshotDigestError> {
+        let mut builder = SnapshotDigestV1::builder("external-code");
+        let paths = paths.into_iter().collect::<BTreeSet<_>>();
+        for path in paths {
+            let Some(bytes) = self.get(path) else {
+                continue;
+            };
+            let origin = self
+                .origin(path)
+                .map_or(self.source_kind, |origin| origin.source_kind);
+            let mut framed = Vec::with_capacity(bytes.len() + 16);
+            append_digest_frame(&mut framed, source_kind_name(origin));
+            append_digest_frame(&mut framed, bytes);
+            builder.add_observation(format!("file:{path}"), framed)?;
+        }
+        Ok(builder.finish())
+    }
+
     pub fn validate(&self) -> PresetValidationReport {
         let mut categories = BTreeSet::new();
         let mut issues = Vec::new();
@@ -279,6 +302,23 @@ mod tests {
             changed_content.digest_v1().unwrap()
         );
         assert_ne!(first.digest_v1().unwrap(), overlay.digest_v1().unwrap());
+    }
+
+    #[test]
+    fn code_digest_binds_selected_content_and_effective_layer() {
+        let embedded = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file("app/demo/shine.toml", b"metadata".to_vec())
+            .file("app/demo/run.sh", b"echo ok".to_vec())
+            .build();
+        let external = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("app/demo/shine.toml", b"metadata".to_vec())
+            .file("app/demo/run.sh", b"echo ok".to_vec())
+            .build();
+        let paths = ["app/demo/shine.toml", "app/demo/run.sh"];
+        assert_ne!(
+            embedded.code_digest_v1(paths).unwrap(),
+            external.code_digest_v1(paths).unwrap()
+        );
     }
 
     #[test]

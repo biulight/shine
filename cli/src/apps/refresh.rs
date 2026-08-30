@@ -147,7 +147,6 @@ mod tests {
     async fn write_fixture(root: &Path, two_files: bool) -> Config {
         let mut config = Config::new_for_test(root);
         config.is_external_presets = true;
-        config.allow_app_hooks = true;
         config
             .env
             .insert("SOURCE_URL".to_string(), "https://example.test".to_string());
@@ -202,6 +201,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
                 .unwrap();
             write_generator(&app_dir.join("second.sh"), "second").await;
         }
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
         config
     }
 
@@ -275,6 +275,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         );
         assert_eq!(fs::read(&dest).await.unwrap(), b"first-v1\n");
 
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
         handle_refresh(&config, "sample", Some("first.txt"), false)
             .await
             .unwrap();
@@ -284,6 +285,38 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
                 .await
                 .unwrap(),
             "xx"
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn automatic_generator_status_reports_refresh_without_execution() {
+        let root = crate::test_support::make_temp_dir("shine-refresh-status").await;
+        let config = write_fixture(&root, false).await;
+        let metadata_path = config.presets_dir().join("app/sample/shine.toml");
+        let metadata = fs::read_to_string(&metadata_path)
+            .await
+            .unwrap()
+            .replace("auto = false", "auto = true");
+        fs::write(&metadata_path, metadata).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
+        handle_install(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+
+        let categories = metadata::load_active_categories(&config, Some("sample"))
+            .await
+            .unwrap();
+        let rows = crate::status::build_app_rows(&config, &categories)
+            .await
+            .unwrap();
+        assert_eq!(rows[0].file_status, FileStatus::RefreshRequired);
+        assert_eq!(
+            fs::read_to_string(config.presets_dir().join("app/sample/first.runs"))
+                .await
+                .unwrap(),
+            "x",
+            "read-only status must not execute an automatic generator"
         );
         fs::remove_dir_all(root).await.unwrap();
     }
@@ -305,6 +338,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
             .await
             .unwrap();
         fs::write(&first_dest, b"user edit\n").await.unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         assert!(
             handle_refresh(&config, "sample", Some("first.txt"), false)
@@ -343,6 +377,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         fs::write(app_dir.join("second.payload"), b"second-v2\n")
             .await
             .unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         assert!(
             handle_refresh(&config, "sample", None, false)

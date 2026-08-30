@@ -111,7 +111,7 @@ async fn render_integration(
         || integration.fragment.is_some();
     if executable
         && (config.is_external_presets || config.active_presets_overlay_dir().is_some())
-        && !config.allow_sys_code
+        && !config.external_code_trusted
     {
         return Err(external_profile_code_error(config, item_id, integration));
     }
@@ -373,12 +373,11 @@ mod tests {
         let overlay = dir.join("overlay");
         let config = SysProfileRuntimeConfig {
             home_dir: dir.clone(),
-            shine_dir: dir.clone(),
             presets_dir: dir.join("presets"),
             overlay_dir: Some(overlay.clone()),
             shell_type: crate::runtime::ShellType::Zsh,
             is_external_presets: false,
-            allow_sys_code: false,
+            external_code_trusted: false,
             snapshot: crate::runtime::PresetSnapshot::builder(
                 crate::runtime::PresetSourceKind::Embedded,
             )
@@ -400,10 +399,7 @@ mod tests {
             "executable sys profile code for `atuin` (`eval`) is blocked because a preset overlay is active"
         ));
         assert!(message.contains(&format!("Preset overlay: {}", overlay.display())));
-        assert!(message.contains(&format!(
-            "Set allow_sys_code = true in {}",
-            dir.join("config.toml").display()
-        )));
+        assert!(message.contains("shine trust grant sys/<item>"));
         assert!(message.contains("Keep external sys code blocked:"));
     }
 }

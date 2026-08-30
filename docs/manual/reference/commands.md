@@ -45,6 +45,7 @@ compatibility aliases.
 | `shine upgrade [TARGET] [--yes]` | Apply all or selected app, shell, and managed-system updates |
 | `shine preset <SUBCOMMAND>` | Manage sources, overlays, exports, and Git synchronization |
 | `shine state migrate [--dry-run]` | Migrate and clean legacy runtime state |
+| `shine trust <SUBCOMMAND>` | Inspect, grant, list, or revoke target-scoped external-code trust |
 | `shine self <SUBCOMMAND>` | Install or upgrade the Shine binary |
 | `shine serve <SUBCOMMAND>` | Publish resources under `~/.shine/http/` through a local HTTP service |
 | `shine env <SUBCOMMAND>` | Manage preset variables, workspace environments, proxies, and secrets |
@@ -99,9 +100,16 @@ shine info <TARGET> [--diff] [--verbose]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release]
 shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
+shine trust inspect <app/CATEGORY|sys/ITEM>
+shine trust grant <app/CATEGORY|sys/ITEM> [--yes]
+shine trust list
+shine trust revoke <app/CATEGORY|sys/ITEM>
 shine completions install
 shine completions <bash|zsh|powershell>
 ```
+
+Trust enrollment derives its scope from the current immutable Preset snapshot. `--yes` confirms
+the rendered enrollment non-interactively; it does not approve later lifecycle Plans.
 
 - `update --refresh-release` bypasses the 24-hour cache. By default, `update` groups targets under
   the same Homebrew-style sections as `shine list`: interactive terminals use horizontal columns,

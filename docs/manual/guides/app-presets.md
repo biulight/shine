@@ -77,9 +77,11 @@ managed content. Generated results still pass through normal transforms, hashing
 user-modification protection, and uninstall. A script must not bypass Shine and write the destination
 directly.
 
-Generators can be automatic or manual. Automatic generators may participate in installation,
-read-only status checks, and upgrades. A manual generator with `auto = false` never runs during
-`list`, `info`, `update`, or `upgrade`; refresh its already-installed file explicitly:
+Generators can be automatic or manual. Neither kind runs during read-only `list`, `info`, or
+`update`: installed automatic output is shown as `refresh required` when Shine cannot determine its
+dynamic desired content without execution. Automatic generators may run during an approved install
+or upgrade. A manual generator with `auto = false` runs only during installation or explicit
+refresh:
 
 ```bash
 shine app refresh <CATEGORY>
@@ -93,13 +95,13 @@ regardless of their `auto` setting. Refresh displays and revalidates a security 
 must add `--yes`.
 
 Generators supplied by external presets or overlays are executable code and require
-`allow_app_hooks = true`. Shine passes only explicitly declared environment values and fixed
+`shine trust grant app/<CATEGORY>` after review. Shine passes only explicitly declared environment values and fixed
 `SHINE_APP_*` path variables and limits runtime and output size. Run only presets you have reviewed
 and trust.
 
 The category's `[permissions]` table separately declares review identities for generator, hook,
 and artifact commands, network scopes, and environment-name sensitivity. It is statically
-validated but does not enable external code or replace `allow_app_hooks`; never put a URL token,
+validated but does not enable or trust external code; never put a URL token,
 environment value, command arguments, or ciphertext in the declaration.
 
 ### Surge URI subscriptions
@@ -228,7 +230,8 @@ remove or change it when the server requires a proxy. Private domains that rely 
 also require mihomo `dns.nameserver-policy` configuration.
 
 This artifact uses Bun, which must be installed on the machine. Preset hooks rerun the build after
-`merge.yaml` or a managed local reference list changes; external presets require `allow_app_hooks`. Optional
+`merge.yaml` or a managed local reference list changes; external presets require a current
+target-scoped trust grant. Optional
 `CLASH_CONTROLLER_URL` and `CLASH_CONTROLLER_TOKEN` values can request an immediate refresh. Without
 the URL, only that immediate refresh is skipped; providers still update on their own intervals. The
 artifact refreshes every name declared by the effective `merge.yaml` `rule-providers` mapping, so
@@ -267,10 +270,11 @@ environment = [
 commands = ["my-reloader"]
 ```
 
-Hooks and generators in external presets require explicit permission:
+Hooks and generators in external presets require target-scoped trust:
 
-```toml
-allow_app_hooks = true
+```bash
+shine trust inspect app/<CATEGORY>
+shine trust grant app/<CATEGORY>
 ```
 
 Hooks hide stdout by default. When a preset sets `show_output = true`, successful output is shown

@@ -256,7 +256,7 @@ impl RuntimeObserver for InstallObserver<'_> {
                         })
                         .collect::<Vec<_>>()
                         .join(" && ");
-                    self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: post-install hook skipped (set allow_app_hooks = true to allow external app hooks; manual: {sequence})", report::symbol("!"))));
+                    self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: post-install hook skipped (run `shine trust grant app/{category}` after review; manual: {sequence})", report::symbol("!"))));
                 } else {
                     self.reporter.emit(PresentationEvent::stderr(format!(
                         "  {} {category}: post-install hook failed: {detail}",
@@ -655,8 +655,8 @@ source = \"file.conf\"\n",
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        config.allow_app_hooks = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "app/hooktest").await;
 
         // First install writes the file → post_install fires.
         handle_install(&config, Some("hooktest"), false, false)

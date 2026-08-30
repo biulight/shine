@@ -18,11 +18,11 @@
 
 - Phase 1、Phase 2 的 lifecycle contract 与 Core extraction 已完成；App、Shell、Sys 的领域执行、
   manifest/receipt 和 host ports 由 `shine-core` 持有，CLI 保留参数、交互和展示。
-- Phase 3 已覆盖 App、Shell、managed Sys lifecycle、Sys bootstrap、App refresh/artifact 与显式
-  Sys profile mutation 的 snapshot-bound security Plan；coarse grant 迁移仍未完成。
+- Phase 3 已完成：所有 mutation 均使用 snapshot-bound security Plan；外部 App/Sys 代码使用绑定
+  target、capability、code digest、trust layer 与 permission set 的 scoped trust grant。
 - `shine preset validate` 与 skill-first AI authoring 已存在，应继续作为 schema 和静态验证权威。
-- External code 仍使用 `allow_app_hooks` / `allow_sys_code` 粗粒度 gates；GPG/age portable secrets
-  和 machine-local env 已存在。
+- Read-oriented App status/update 不运行 generator；动态生成内容通过显式 refresh 或已批准 mutation
+  执行。GPG/age portable secrets 和 machine-local env 已存在。
 
 ## Guiding Principles
 
@@ -83,8 +83,7 @@ permissions；所有 mutation 都经过可审查、绑定输入 snapshot 的 Pla
 - Apply 只接受同一 source/state snapshot 的 Plan；权限扩大必须重新确认。
 - 现有 coarse grants 有兼容迁移，升级不能静默扩大授权。
 
-现有 auto generator 在 read-oriented status/update 中执行的行为，需要独立 ADR 决定兼容迁移；最终
-安全 Plan 不运行 generator、hook、artifact 或 bootstrap script。
+安全 Plan 与 read-oriented status/update 均不运行 generator、hook、artifact 或 bootstrap script。
 
 ## Phase 4 — Declarative Actions and Recovery
 

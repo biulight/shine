@@ -244,7 +244,7 @@ impl shine_core::runtime::RuntimeObserver for UninstallObserver<'_> {
                 .and_then(|value| value.strip_prefix("app/"))
                 .unwrap_or("app");
             if code == "app_artifact_permission_required" {
-                self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: artifact teardown skipped (set allow_app_hooks = true to allow external app hooks; manual: shine app artifact remove {category})", report::symbol("!"))));
+                self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: artifact teardown skipped (run `shine trust grant app/{category}` after review; manual: shine app artifact remove {category})", report::symbol("!"))));
             } else {
                 self.reporter.emit(PresentationEvent::stderr(format!(
                     "  {} {category}: artifact teardown failed: {detail}",

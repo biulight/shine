@@ -29,6 +29,7 @@ use crate::plan::{
     PlanActionV1, PlanApprovalV1, PlanInputsV1, PlanOperationV1, PlanStepV1, PlanV1,
     SnapshotDigestBuilderV1, SnapshotDigestV1,
 };
+use crate::trust::TrustCapabilityV1;
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -471,7 +472,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         steps,
                     )
                     .await?;
-                    let blocked = app_code_blocked(self, &category, &generator.script);
+                    let blocked = app_code_blocked(self, &category, &generator.script)?;
                     steps.push(
                         PlanStepV1::new(
                             &target,
@@ -573,7 +574,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         program: hook.command.clone(),
                     });
                     let blocked =
-                        app_category_external(self, &category) && !self.context().allow_app_hooks;
+                        !self.app_capability_trusted(&category, TrustCapabilityV1::AppHook)?;
                     steps.push(
                         PlanStepV1::new(
                             format!("app/{}", category.name),
@@ -709,7 +710,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     .as_deref()
                     .map(|teardown| (artifact, teardown))
             }) {
-                let blocked = app_code_blocked(self, &category, Path::new(teardown));
+                let blocked = app_code_blocked(self, &category, Path::new(teardown))?;
                 if blocked {
                     steps.push(
                         PlanStepV1::new(
@@ -921,10 +922,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .unwrap_or_else(|| "all".to_string()),
         )?;
         state.public("force", request.force.to_string())?;
-        state.public(
-            "allow-app-hooks",
-            self.context().allow_app_hooks.to_string(),
-        )?;
         capture_manifest_selection(
             &mut state,
             "manifest:app-refresh",
@@ -985,7 +982,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .env
                 .get(&generator.when_env)
                 .is_none_or(|value| value.trim().is_empty());
-            let external_code_blocked = app_code_blocked(self, &category, &generator.script);
+            let external_code_blocked = app_code_blocked(self, &category, &generator.script)?;
             let blocked = missing_input || external_code_blocked;
             let mut execution = PlanStepV1::new(
                 format!("app/{}", request.category),
@@ -1085,10 +1082,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         capture_context(&mut state, self.context())?;
         state.public("category", &request.category)?;
         state.public("script", script.replace('\\', "/"))?;
-        state.public(
-            "allow-app-hooks",
-            self.context().allow_app_hooks.to_string(),
-        )?;
         let mut permissions = PermissionAccumulator::default();
         permissions.declaration(
             category.permissions.as_ref(),
@@ -1113,7 +1106,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             &mut steps,
         )
         .await?;
-        let blocked = app_code_blocked(self, &category, Path::new(script));
+        let blocked = app_code_blocked(self, &category, Path::new(script))?;
         let mut step = PlanStepV1::new(
             format!("app/{}", request.category),
             Some(resource),
@@ -1759,7 +1752,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         state.public("os-id", &request.os_id)?;
         state.public("item-id", &request.item_id)?;
         state.public("enabled", request.enabled.to_string())?;
-        state.public("allow-sys-code", self.context().allow_sys_code.to_string())?;
         let (manifest, manifest_bytes) =
             load_sys_manifest(self.host(), &self.context().shine_dir).await?;
         let existing = manifest.entries.iter().find(|entry| {
@@ -1828,7 +1820,12 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         )
         .await?;
         let external_code_blocked =
-            sys_profile_code_blocked_for_enabled(self, &request.os_id, &loaded.manifest, &enabled);
+            sys_profile_code_blocked_for_enabled(self, &request.os_id, &loaded.manifest, &enabled)?
+                || !self.sys_capability_trusted(
+                    &request.os_id,
+                    item,
+                    TrustCapabilityV1::SysProfileCode,
+                )?;
         let state_changes = existing.is_none_or(|entry| entry.profile_enabled != request.enabled);
         let mut state_step = PlanStepV1::new(
             format!("sys/{}", request.item_id),
@@ -1892,7 +1889,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         state.public("items", serde_json::to_vec(&request.item_ids)?)?;
         state.public("sys-shell", &request.sys_shell)?;
         state.public("force-profile", request.force_profile.to_string())?;
-        state.public("allow-sys-code", self.context().allow_sys_code.to_string())?;
         state.public(
             "path-env",
             self.context()
@@ -1961,7 +1957,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     .get(name)
                     .is_none_or(|value| value.trim().is_empty())
             });
-            let external_code_blocked = sys_bootstrap_code_blocked(self, &request.os_id, item);
+            let external_code_blocked = sys_bootstrap_code_blocked(self, &request.os_id, item)?;
             let action = if missing_env || external_code_blocked {
                 PlanActionV1::Blocked
             } else if present {
@@ -2004,7 +2000,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 &loaded.manifest,
                 &selected,
                 &run_manifest,
-            ) {
+            )? {
                 profile = profile.with_diagnostic_code("sys_external_code_not_allowed");
                 profile.action = PlanActionV1::Blocked;
             }
@@ -2416,8 +2412,7 @@ fn plan_app_hooks<H>(
         permissions.require(PermissionV1::Command {
             program: hook.command.clone(),
         });
-        let blocked =
-            app_category_external(runtime, category) && !runtime.context().allow_app_hooks;
+        let blocked = !runtime.app_capability_trusted(category, TrustCapabilityV1::AppHook)?;
         steps.push(
             PlanStepV1::new(
                 format!("app/{}", category.name),
@@ -2828,16 +2823,23 @@ fn add_sys_bootstrap_install_permissions<H>(
     Ok(())
 }
 
-fn sys_bootstrap_code_blocked<H>(runtime: &CoreRuntime<H>, os_id: &str, item: &SysItem) -> bool {
+fn sys_bootstrap_code_blocked<H>(
+    runtime: &CoreRuntime<H>,
+    os_id: &str,
+    item: &SysItem,
+) -> Result<bool> {
     let Some(SysInstall::Script { path, .. }) = &item.install else {
-        return false;
+        return Ok(false);
     };
     let logical = format!("sys/{os_id}/{}", path.replace('\\', "/"));
-    runtime
+    if !runtime
         .presets()
         .origin(&logical)
         .is_some_and(|origin| origin.source_kind != super::PresetSourceKind::Embedded)
-        && !runtime.context().allow_sys_code
+    {
+        return Ok(false);
+    }
+    Ok(!runtime.sys_capability_trusted(os_id, item, TrustCapabilityV1::SysBootstrapScript)?)
 }
 
 fn sys_profile_code_blocked<H>(
@@ -2846,7 +2848,7 @@ fn sys_profile_code_blocked<H>(
     manifest: &SysManifest,
     selected: &[&SysItem],
     run_manifest: &SysRunManifest,
-) -> bool {
+) -> Result<bool> {
     let enabled = run_manifest
         .entries
         .iter()
@@ -2863,31 +2865,17 @@ fn sys_profile_code_blocked_for_enabled<H>(
     os_id: &str,
     manifest: &SysManifest,
     enabled: &BTreeSet<String>,
-) -> bool {
-    if runtime.context().allow_sys_code {
-        return false;
+) -> Result<bool> {
+    for item in manifest
+        .items
+        .iter()
+        .filter(|item| enabled.contains(&item.id))
+    {
+        if !runtime.sys_capability_trusted(os_id, item, TrustCapabilityV1::SysProfileCode)? {
+            return Ok(true);
+        }
     }
-    let ext = if os_id == "windows" { "ps1" } else { "sh" };
-    let external_base = ["pre", "post"].into_iter().any(|phase| {
-        let logical = format!("sys/{os_id}/profile/base.{phase}.{ext}");
-        runtime.presets().get(&logical).is_some()
-            && runtime
-                .presets()
-                .origin(&logical)
-                .is_some_and(|origin| origin.source_kind != super::PresetSourceKind::Embedded)
-    });
-    if external_base {
-        return true;
-    }
-    let executable = manifest.items.iter().any(|item| {
-        enabled.contains(&item.id)
-            && item.shell.iter().any(|integration| {
-                !integration.eval_argv.is_empty()
-                    || integration.source.is_some()
-                    || integration.fragment.is_some()
-            })
-    });
-    executable && (runtime.context().is_external_presets || runtime.context().overlay_dir.is_some())
+    Ok(false)
 }
 
 async fn capture_sys_profile_state<H: FileSystemObservationHost>(
@@ -2989,6 +2977,10 @@ fn capture_context(state: &mut StateCapture, context: &super::RuntimeContext) ->
     state.public(
         "shine",
         sha256_hex(context.shine_dir.as_os_str().as_encoded_bytes()),
+    )?;
+    state.public(
+        "trust-grants",
+        sha256_hex(&serde_json::to_vec(&context.trust_grants)?),
     )?;
     Ok(())
 }
@@ -3515,21 +3507,28 @@ async fn add_generator_permissions<H: FileSystemObservationHost>(
     Ok(())
 }
 
-fn app_category_external<H>(runtime: &CoreRuntime<H>, category: &AppCategory) -> bool {
-    let metadata = format!("app/{}/shine.toml", category.name);
-    runtime
-        .presets()
-        .origin(&metadata)
-        .is_some_and(|origin| origin.source_kind != super::PresetSourceKind::Embedded)
-}
-
-fn app_code_blocked<H>(runtime: &CoreRuntime<H>, category: &AppCategory, script: &Path) -> bool {
+fn app_code_blocked<H>(
+    runtime: &CoreRuntime<H>,
+    category: &AppCategory,
+    script: &Path,
+) -> Result<bool> {
     let logical = format!("app/{}/{}", category.name, script.display());
-    runtime
+    if !runtime
         .presets()
         .origin(&logical)
         .is_some_and(|origin| origin.source_kind != super::PresetSourceKind::Embedded)
-        && !runtime.context().allow_app_hooks
+    {
+        return Ok(false);
+    }
+    let script = script.to_string_lossy();
+    let capability = if category.artifact.as_ref().is_some_and(|artifact| {
+        artifact.script == script || artifact.teardown.as_deref() == Some(script.as_ref())
+    }) {
+        TrustCapabilityV1::AppArtifact
+    } else {
+        TrustCapabilityV1::AppGenerator
+    };
+    Ok(!runtime.app_capability_trusted(category, capability)?)
 }
 
 async fn launcher_is_managed(

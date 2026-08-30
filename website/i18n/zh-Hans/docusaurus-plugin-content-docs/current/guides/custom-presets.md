@@ -76,9 +76,9 @@ Filesystem base 只接受 `home`、`shine`、`data-dir`、`preset` 或 `absolute
 Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。普通 destination、launcher、
 receipt 和固定 package provider 已由现有强类型 metadata 约束，不需要重复描述其内部机制。
 
-权限声明不是授权，也不能证明 opaque script 已完整披露行为。外部 App 代码仍需
-`allow_app_hooks = true`；外部 Sys 代码仍需全局 `allow_sys_code = true`。这些粗粒度 gate 和
-管理员授权仍是声明权限与 Plan 审阅之后的额外检查，不能替代其中任何一项。
+权限声明不是授权，也不能证明 opaque script 已完整披露行为。外部可执行代码还要求用户审阅后运行
+`shine trust grant <TARGET>`。Grant 会绑定当前代码身份与准确的权限声明，不能替代管理员授权或每次
+mutation 的安全 Plan。
 
 ## 从来源文件夹到已安装能力
 
@@ -377,11 +377,10 @@ Shell integration 必须且只能声明 `path`、`env`、`eval`、`source`、`al
 `profile/<item>.sh`。phase、可选 priority、manifest 顺序和声明顺序共同决定稳定的组合顺序。
 命名 `[profiles.*]` 表只选择 bootstrap items，不定义 shell 内容，也不会禁用选择之外的集成。
 
-外部 sys 安装脚本和可执行 profile 内容（`eval`、`source`、fragment 与 base 文件）要求用户先审查
-来源并在全局配置中设置 `allow_sys_code = true`；项目配置不能授权自身。如果可执行 sys 代码在
-bootstrap 预检阶段被拦截，错误会指出可用的代码类型和路径、当前每一层外部 preset 来源以及全局
-配置路径，并分别给出“授予权限”和“继续阻止外部代码”两种操作；此时尚未运行任何安装器。静态
-detection、package metadata、PATH、env 和 aliases 无需该授权。使用
+外部 sys 安装脚本和可执行 profile 内容（`eval`、`source`、fragment 与 base 文件）要求用户审阅
+当前 snapshot 后运行 `shine trust grant sys/<ITEM>`；项目配置和 Preset 不能自行授权。代码、来源层或
+权限变化后 grant 会失效。bootstrap 预检因缺少信任而停止时尚未运行任何安装器。静态 detection、
+package metadata、PATH、env 和 aliases 无需 grant。使用
 `shine sys list`、`shine sys info <ITEM>` 和
 `shine sys bootstrap <ITEM> --dry-run` 完成验证。
 
@@ -402,6 +401,6 @@ env = ["PROFILE_PATH", "API_TOKEN"]
 `SOURCE=TARGET` alias；每个 source 及其敏感度还必须在类别
 `[permissions].environment` 中声明。allowlist 中未配置的可选值会被省略；固定 app 路径变量会
 另外加入。若希望安装或升级实际改动
-文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设仍需用户设置
-`allow_app_hooks = true`。hook 中调用 `shine app artifact apply` 时属于非交互子进程，必须带
+文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设需用户审阅后运行
+`shine trust grant app/<CATEGORY>`。hook 中调用 `shine app artifact apply` 时属于非交互子进程，必须带
 `--yes`；嵌套命令仍会显示并重新校验自己的安全 Plan。

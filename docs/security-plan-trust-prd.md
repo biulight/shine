@@ -1,9 +1,9 @@
 # Shine Security Plan and Trust Model PRD
 
-> **Status:** Roadmap Phase 3 contract foundation, permission declarations, pure planners, and CLI
-> approval enforcement now cover every current App, Shell, managed Sys, Sys bootstrap, App
-> refresh/artifact, and explicit Sys profile mutation. Coarse-grant migration remains a future
-> slice. This document is internal and does not define a public JSON Plan schema.
+> **Status:** Roadmap Phase 3 is complete. Snapshot-bound Plans cover every current mutation,
+> external App/Sys code uses target-local snapshot-scoped trust grants, and read-oriented App
+> status no longer executes generators. This document is internal and does not define a public JSON
+> Plan schema.
 
 ## Summary
 
@@ -33,11 +33,10 @@ pure planning and fresh validation boundary.
    requires a new review.
 6. Keep planning free of host mutation, Preset code execution, and secret plaintext.
 
-## Non-goals of the delivered enforcement slices
+## Non-goals
 
 - No standalone CLI `plan` command or JSON output.
 - No Declarative Action IR, journal, rollback, or recovery; those remain Roadmap Phase 4.
-- No change to `allow_app_hooks`, `allow_sys_code`, or current external-code behavior.
 
 ## Contract v1
 
@@ -110,8 +109,8 @@ inputs and validate that result before the first mutation; approval is never a r
    dedicated operation identity, approval validation, and only then provider/script/profile work.
 6. **Complete — remaining operation coverage:** App artifact/refresh and explicit Sys profile
    contracts, including narrowed environment capabilities for generator/artifact processes.
-7. **Trust migration:** move `allow_app_hooks` and `allow_sys_code` users to scoped declarations
-   without silently expanding permissions; separately decide auto-generator status compatibility.
+7. **Complete — trust migration:** replace coarse booleans with target-local grants bound to current
+   code and exact permissions; read-only App status reports refresh-required without execution.
 
 Each slice must preserve existing ownership, manifest, user-modification, external-code, and secret
 handling invariants until its replacement is complete.

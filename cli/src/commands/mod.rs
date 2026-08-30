@@ -10,6 +10,7 @@ mod state;
 mod sys;
 mod task;
 mod theme;
+mod trust;
 
 pub use app::*;
 pub use cli::*;
@@ -23,3 +24,4 @@ pub use state::*;
 pub use sys::*;
 pub use task::*;
 pub use theme::*;
+pub use trust::*;

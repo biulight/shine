@@ -86,9 +86,9 @@ never values or ciphertext. Existing typed metadata already bounds ordinary dest
 launchers, receipts, and fixed package providers, so do not repeat those mechanics.
 
 A declaration is not an authorization grant and does not prove opaque script behavior complete.
-External App code still requires `allow_app_hooks = true`; external Sys code still requires the
-global `allow_sys_code = true`. These coarse gates and administrator authorization remain
-additional checks after the declared permissions and reviewed Plan; they do not replace either.
+External executable code additionally requires a target-scoped `shine trust grant <TARGET>` after
+review. The grant binds the current code identity and exact declared permission set; it does not
+replace administrator authorization or the per-mutation security Plan.
 
 ## From source folders to installed capabilities
 
@@ -444,12 +444,11 @@ stable composition. Named `[profiles.*]` tables select bootstrap items; they do 
 content or disable integrations outside the selection.
 
 External sys install scripts and executable profile content (`eval`, `source`, fragments, and base
-files) require the user to review the source and set `allow_sys_code = true` in the global config;
-the project config cannot authorize itself. If executable sys code is blocked during bootstrap
-preflight, the error identifies the code kind and path when available, each active external preset
-layer, and the global config path. It presents separate actions to grant permission or keep external
-code blocked; no installer has run yet. Static detection, package metadata, PATH, env, and aliases
-remain available without that opt-in. Validate with
+files) require the user to review the active snapshot and run `shine trust grant sys/<ITEM>`; the
+project config and Preset cannot authorize themselves. The grant is invalidated by changed code,
+source layer, or permissions. If trust is missing during bootstrap preflight, no installer has run
+yet. Static detection, package metadata, PATH, env, and aliases remain available without a grant.
+Validate with
 `shine sys list`, `shine sys info <ITEM>`, and `shine sys bootstrap <ITEM> --dry-run`.
 
 ## Application artifact runtimes
@@ -470,6 +469,6 @@ artifact and supports `SOURCE=TARGET` aliases; declare each source and sensitivi
 category's `[permissions].environment`. Listed sources are forwarded only when configured; missing
 optional values are omitted. Fixed application path variables are added separately. To
 run an artifact automatically after installation or upgrade actually changes files, declare
-`post_install` or `post_upgrade`; external presets still require the user to set
-`allow_app_hooks = true`. A hook that invokes `shine app artifact apply` runs non-interactively and
+`post_install` or `post_upgrade`; external presets require `shine trust grant app/<CATEGORY>` after
+review. A hook that invokes `shine app artifact apply` runs non-interactively and
 must include `--yes`; the nested command still renders and freshly validates its security Plan.

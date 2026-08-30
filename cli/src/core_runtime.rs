@@ -55,8 +55,7 @@ async fn from_config_with_preset_mode(
         )?,
         external_shell_mode: config.external_shell_mode,
         is_external_presets,
-        allow_app_hooks: config.allow_app_hooks,
-        allow_sys_code: config.allow_sys_code,
+        trust_grants: crate::trust::load_store(config).await?.grants,
         linux_split_dns_ready: systemd_resolved_stub_active(),
         running_as_admin: cfg!(windows) || std::env::var("USER").is_ok_and(|user| user == "root"),
         captured_unix_time: std::time::SystemTime::now()

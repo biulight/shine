@@ -280,6 +280,7 @@ fn status_parts(status: FileStatus) -> (&'static str, &'static str) {
         FileStatus::Missing => ("destination missing", "!"),
         FileStatus::UserModified => ("user modified", "~"),
         FileStatus::UpdateAvail => ("update available", "↑"),
+        FileStatus::RefreshRequired => ("refresh required", "↻"),
         FileStatus::Partial => ("partial install", "~"),
         FileStatus::UpToDate => ("up-to-date", "✓"),
         FileStatus::NotInstalled => ("not installed", "✗"),

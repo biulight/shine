@@ -2148,7 +2148,7 @@ items = ["touch-file"]
             .await
             .unwrap_err();
 
-        assert!(error.to_string().contains("allow_sys_code = true"));
+        assert!(error.to_string().contains("scoped external-code trust"));
         assert!(!sentinel.exists(), "script must not have been executed");
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -2207,7 +2207,6 @@ esac
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        config.allow_sys_code = true;
 
         handle_init_for_os(&config, "fakeos", &[], None, false, false, false)
             .await
@@ -2325,7 +2324,6 @@ esac
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        config.allow_sys_code = true;
 
         let err = handle_init_for_os(&config, "fakeos", &[], None, false, false, false)
             .await

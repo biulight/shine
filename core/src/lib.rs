@@ -9,3 +9,4 @@ pub mod plan;
 #[doc(hidden)]
 pub mod runtime;
 pub mod sentinel;
+pub mod trust;

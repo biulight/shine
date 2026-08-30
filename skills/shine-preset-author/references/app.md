@@ -29,7 +29,7 @@ capabilities, or filesystem effects of hooks, generators, and artifacts.
 Environment entries contain only a name and `plain`/`secret` sensitivity.
 Filesystem entries use `access`, a structured `base` (`home`, `shine`,
 `data-dir`, `preset`, or `absolute`), and a normalized path. A declaration does
-not enable external code: `allow_app_hooks` remains a separate user opt-in.
+not enable external code: the user must separately review and grant target-scoped trust.
 
 ## Optional behavior
 

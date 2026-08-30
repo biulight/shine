@@ -81,7 +81,9 @@ pub async fn build_shell_rows(config: &Config) -> Result<Vec<ShellRow>> {
                 FileStatus::NotInstalled => ("✗", "✗"),
                 FileStatus::UpdateAvail => ("↑", "↑"),
                 FileStatus::Missing => ("!", "!"),
-                FileStatus::Partial | FileStatus::UserModified => ("~", "~"),
+                FileStatus::Partial | FileStatus::UserModified | FileStatus::RefreshRequired => {
+                    ("~", "~")
+                }
                 FileStatus::UpToDate => ("✓", "✓"),
             };
             ShellRow {
@@ -162,6 +164,10 @@ pub(crate) async fn build_app_rows_with_lifecycle(
                             effects,
                         ))
                     }
+                    FileStatus::RefreshRequired => Some(
+                        LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Pending, [])
+                            .with_diagnostic_code("app_generator_refresh_required"),
+                    ),
                     FileStatus::Missing => Some(LifecycleOutcomeV1::new(
                         target,
                         resource,
@@ -217,7 +223,10 @@ pub(crate) async fn build_app_rows_with_lifecycle(
             let has_installed = statuses.iter().any(|status| {
                 matches!(
                     status,
-                    FileStatus::UpToDate | FileStatus::UpdateAvail | FileStatus::UserModified
+                    FileStatus::UpToDate
+                        | FileStatus::UpdateAvail
+                        | FileStatus::RefreshRequired
+                        | FileStatus::UserModified
                 )
             });
             let has_not_installed = statuses.contains(&FileStatus::NotInstalled);
@@ -274,6 +283,7 @@ fn app_status_presentation(status: FileStatus) -> (&'static str, &'static str) {
         FileStatus::Missing => ("!", "destination missing"),
         FileStatus::UserModified => ("~", "user modified"),
         FileStatus::UpdateAvail => ("↑", "update available"),
+        FileStatus::RefreshRequired => ("↻", "refresh required"),
         FileStatus::UpToDate => ("✓", "up-to-date"),
         FileStatus::NotInstalled | FileStatus::Partial => ("✗", "not installed"),
     }
@@ -328,6 +338,10 @@ fn app_update_outcome(
                 effects,
             ))
         }
+        FileStatus::RefreshRequired => Some(
+            LifecycleOutcomeV1::new(target, resource, LifecycleStatus::Pending, [])
+                .with_diagnostic_code("app_generator_refresh_required"),
+        ),
         FileStatus::Missing => Some(LifecycleOutcomeV1::new(
             target,
             resource,

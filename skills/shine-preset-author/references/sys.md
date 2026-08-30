@@ -33,9 +33,8 @@ Managed items use `mode = "managed"` and a supported driver; they do not declare
 bootstrap detect/install/shell fields. A `managed-file` driver requires an
 in-category `config.source` and an absolute destination after expansion.
 
-Permission declarations do not replace `allow_sys_code`; external or overlay
-scripts and executable profile content remain blocked without that global
-user opt-in.
+Permission declarations do not grant trust; external or overlay scripts and executable profile
+content remain blocked until the user grants the current canonical target-scoped code snapshot.
 
 Use static validation for every sys category. Run bootstrap dry-run only when
 the category id matches the current host, and never run a real bootstrap from

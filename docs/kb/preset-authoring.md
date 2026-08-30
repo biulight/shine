@@ -9,7 +9,7 @@ the bilingual manual; design rationale belongs in ADRs; behavioral safety rules 
 1. Prefer `shine.toml` metadata over legacy source annotations for new presets.
 2. Keep commands, identifiers, and platform constraints explicit in metadata.
 3. Treat external preset and overlay code as untrusted unless the corresponding config permission
-   (`allow_app_hooks` or `allow_sys_code`) is explicitly enabled.
+   has a matching target-scoped trust grant.
 4. Keep generated output deterministic. Never print credentials, source URLs containing secrets, or
    raw subscription records in diagnostics.
 5. `cli/build.rs` must retain `cargo:rerun-if-changed=presets`; a normal Cargo rebuild then
@@ -160,7 +160,7 @@ tables. Both run direct argv commands only when the category actually changed:
 - `post_install` runs after an install that writes at least one file, including
   `--replace-managed`.
 - `post_upgrade` runs after an upgrade that writes or installs at least one file.
-- External preset/overlay hooks require `allow_app_hooks = true`.
+- External preset/overlay hooks require `shine trust grant app/<category>` after review.
 - Hooks inherit only the parent environment. They do not receive `[env]` values or `SHINE_APP_*`.
 - `show_output = true` prints successful stdout; otherwise success is quiet.
 
@@ -184,12 +184,13 @@ generator = {
 - A static `source` remains mandatory as fallback and stable manifest identity.
 - When enabled, UTF-8 stdout becomes the effective source before normal transforms and install
   strategies.
-- `auto` defaults to true. Automatic generators may run during status/update and upgrade.
+- `auto` defaults to true. Automatic generators may run during approved install/upgrade, but never
+  during read-only status/update.
 - `auto = false` keeps implicit status local-only and preserves the installed snapshot during
   upgrade. Install still generates; `shine app refresh <category> [source] [--force]` is the
   explicit refresh path.
 - Only declared `generator.env` values are injected; `_SECRET` values are not decrypted.
-- External preset/overlay generators require `allow_app_hooks = true` and are deadline/output
+- External preset/overlay generators require target-scoped trust and are deadline/output
   limited.
 - Failure preserves an existing managed destination as last-known-good. A first-time enabled
   generator failure is fatal.
@@ -288,7 +289,8 @@ items = ["neovim"]
 - Named `[profiles.*]` tables select items only. Successful items are activation-additive; explicit
   `sys profile disable` is the removal path.
 - Do not add a platform-wide dispatcher or a parallel status/update protocol.
-- External or overlay install scripts and executable profile code require `allow_sys_code = true`;
+- External or overlay install scripts and executable profile code require
+  `shine trust grant sys/<item>`;
   static detection/provider metadata and declarative PATH/env/aliases remain inspectable.
 
 Verify with:

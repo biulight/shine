@@ -31,8 +31,8 @@ validated target + immutable Preset snapshot
 ```
 
 Generator, hook, artifact, bootstrap, and profile-code triggers are modeled as conservative
-`execute` plus potential resource steps; the code is never run during planning and existing
-external-code gates remain blockers. A supported receipt can drive uninstall after source
+`execute` plus potential resource steps; the code is never run during planning and missing or stale
+target-scoped trust remains a blocker. A supported receipt can drive uninstall after source
 disappearance, but cannot recreate missing teardown code.
 CLI review creates approval for one exact ready Plan. Apply deliberately follows:
 
@@ -45,8 +45,8 @@ App, Shell, managed Sys install/upgrade/uninstall, exact Sys bootstrap, App refr
 Sys profile enable/disable route through this flow. Untargeted `shine upgrade` renders the three
 final lifecycle Plans together, confirms once, and prevalidates all three before protected mutation
 starts. `upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate
-preview/inspection paths, and `allow_app_hooks`, `allow_sys_code`, ownership, and administrator
-authorization remain additional gates.
+preview/inspection paths. Scoped external-code trust, ownership, and administrator authorization
+remain additional gates.
 
 Sys bootstrap uses the dedicated `sys-bootstrap` Plan operation rather than a lifecycle install.
 Interactive or profile selection resolves to an exact ordered item list before planning. The pure
@@ -63,6 +63,26 @@ executing Preset code. Typed metadata continues to describe Core-bounded effects
 record additional capabilities. Pure planners combine both sources into the required/declared
 resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
 protected execution fails closed.
+
+## Scoped external-code trust
+
+`core::runtime::trust` derives requirements only from the immutable logical Preset snapshot. Each
+requirement binds a canonical App/Sys target, capability kind, digest of the relevant code inputs
+and effective trust layers, and the exact target permission set. `core::trust::evaluate_trust`
+matches that requirement against versioned grants without consulting project configuration.
+
+```text
+immutable code inputs + trust layers + declared permissions
+    → TrustRequirementV1
+    → exact match against global owner-only trust.toml
+    → trusted or stable missing/stale decision
+    → decision bound into Plan state → separate one-shot Plan approval
+```
+
+The CLI loads `~/.shine/trust.toml` before constructing `RuntimeContext`. `shine trust grant`
+derives and renders the current requirement, confirms with default No, then atomically stores only
+the reviewed identities. Code, layer, or permission changes do not match. Legacy coarse booleans
+are diagnostic-only and never create grants.
 
 ## Shell install and uninstall
 
@@ -210,15 +230,16 @@ managed sys resources keep their structured receipt differences instead.
 
 An app `[[files]]` entry may declare
 `generator = { script, runtime, env, when_env, auto }`. The static `source` remains a
-safe fallback and stable manifest identity. When `when_env` exists in the active
-`[env]` table, `apps::materialize_file_content` runs the generator and uses its
-UTF-8 stdout as the effective source before normal transforms and install
-strategies:
+safe fallback and stable manifest identity. When `when_env` exists in the active `[env]` table, an
+approved install, upgrade, or explicit refresh may run the generator and use its UTF-8 stdout as
+the effective source before normal transforms and install strategies. Read-oriented inspection
+never runs it:
 
 1. `shine app install` always materializes first, then reuses the normal
    manifest hash and atomic file installer.
-2. `auto` defaults to true; automatic generators retain the existing behavior
-   of materializing during status/update checks and `shine upgrade`.
+2. `auto` defaults to true; automatic generators may materialize during an approved
+   `shine upgrade`. Status/update reports `app_generator_refresh_required` when dynamic desired
+   output cannot be known without execution.
 3. `auto = false` makes status local-only and excludes the file from upgrade.
    `shine app refresh <category> [source]` explicitly refreshes only
    manifest-owned generated files, with an optional `--force` for user changes. Refresh reviews an
@@ -227,8 +248,8 @@ strategies:
    materialization path before generator execution.
 4. An existing managed destination is the last-known-good snapshot when a
    generator fails; a first-time enabled generator failure is fatal.
-5. Only `generator.env` values are injected. External preset or overlay
-   generator code requires `allow_app_hooks = true`. Execution is deadline- and
+5. Only `generator.env` values are injected. External preset or overlay generator code requires a
+   matching `app/<category>` scoped trust grant. Execution is deadline- and
    output-size-limited.
 6. A Bun generator is resolved against the physical category that supplied its effective script.
    Embedded temporary scripts use `--no-install`; an external/overlay script uses
@@ -292,8 +313,8 @@ presets may still keep artifact-specific reversal logic in an overlay.
 **Lifecycle command hooks (`apps/hooks.rs`).** `post_install` (fired by `install`, including
 `--replace-managed`) and
 `post_upgrade` (fired by `upgrade`) share one runner, `run_app_hooks(config, get_category, changed,
-HookPhase)` — run once per *changed* category, gated by `allow_app_hooks` for external presets,
-failures non-fatal. These are plain argv commands with only the inherited parent env — distinct from
+HookPhase)` — run once per *changed* category, gated by target-scoped trust for external presets,
+failures non-fatal. These are plain argv commands with only their declared env allowlist — distinct from
 the explicit `[artifact].env` + fixed `SHINE_APP_*` artifact contract.
 
 ## Shell install / uninstall

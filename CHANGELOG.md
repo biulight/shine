@@ -20,8 +20,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Added App lifecycle-hook `env` declarations so Plan fingerprints bind plain input hashes and
   opaque secret revisions without serializing environment values.
 - Added versioned, target-local Preset permission declarations with strict static validation and
-  migrated every built-in App, Shell, and Sys target. Existing external-code grants remain
-  additional execution gates.
+  migrated every built-in App, Shell, and Sys target.
+- Added `shine trust inspect/grant/list/revoke` and owner-only, target-scoped external-code grants
+  bound to the current code digest, trust layer, capability, and exact permission set.
 
 ### Breaking changes
 
@@ -36,6 +37,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   instead of the full active `[env]` table.
 - Untargeted `shine upgrade` no longer synchronizes the Sys shell profile implicitly. Use
   `shine sys profile enable/disable` to change that explicit state.
+- Retired `allow_app_hooks` and `allow_sys_code`. They are ignored, removed on the next config save,
+  and never converted into broad trust. Enroll reviewed external targets with `shine trust grant`.
+- Read-only App list/info/update no longer executes automatic generators. Dynamic generated files
+  report `refresh required`; use `shine app refresh` or an approved upgrade to execute them.
 
 ## [1.8.0] — 2026-08-28
 

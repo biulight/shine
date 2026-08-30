@@ -148,6 +148,7 @@ More diagnostic cases: [`operations/troubleshooting.md`](docs/kb/operations/trou
 | Shell deployment and launcher activation | `cli/src/shells/`, `cli/src/bin_links.rs` |
 | System bootstrap and managed resources | `cli/src/sys/` |
 | Config discovery, layering, and save | `cli/src/config/` |
+| External-code trust contracts and global grant store | `core/src/trust.rs`, `core/src/runtime/trust.rs`, `cli/src/trust.rs` |
 | Env, secrets, workspaces, and proxy injection | `cli/src/env/`, `cli/src/secret/` |
 | SSH wrapper, transfer, and secret broker | `cli/src/ssh/` |
 | Preset source/overlay operations | `cli/src/presets.rs`, `cli/src/preset_commands.rs`, `cli/src/git_pull.rs` |

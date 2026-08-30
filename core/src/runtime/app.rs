@@ -12,6 +12,7 @@ use crate::runtime::{
     PrivilegedFileSystemHost, ProcessHost, ProcessIo, ProcessRequest, RuntimeEvent,
     RuntimeInteraction, RuntimeObserver,
 };
+use crate::trust::TrustCapabilityV1;
 use anyhow::{Context, Result, bail};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::{BTreeMap, BTreeSet};
@@ -302,7 +303,14 @@ where
         }
 
         let assessed = self
-            .assess_app_files(&categories, request.dry_run, true, &manifest, observer)
+            .assess_app_files(
+                &categories,
+                request.dry_run,
+                true,
+                true,
+                &manifest,
+                observer,
+            )
             .await?;
         let admin_count = assessed
             .iter()
@@ -1033,7 +1041,7 @@ where
         }
         validate_app_destinations(self, &categories)?;
         let mut assessments = self
-            .assess_app_files(&categories, false, false, &manifest, observer)
+            .assess_app_files(&categories, false, true, false, &manifest, observer)
             .await?
             .into_iter()
             .map(|assessment| {
@@ -1472,7 +1480,7 @@ where
         let categories = self.app_categories(None)?;
         let manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
         let assessments = self
-            .assess_app_files(&categories, false, false, &manifest, observer)
+            .assess_app_files(&categories, false, false, false, &manifest, observer)
             .await?;
         let installed_categories = manifest
             .entries
@@ -1516,7 +1524,14 @@ where
                     Some(Some(hash)) if hash != entry.content_hash => {
                         InspectionFileStatus::UserModified
                     }
-                    Some(Some(_)) if manual_generator || assessment.generator_error.is_some() => {
+                    Some(Some(_)) if manual_generator => InspectionFileStatus::UpToDate,
+                    Some(Some(_))
+                        if assessment.generator_error.as_deref()
+                            == Some("app_generator_refresh_required") =>
+                    {
+                        InspectionFileStatus::RefreshRequired
+                    }
+                    Some(Some(_)) if assessment.generator_error.is_some() => {
                         InspectionFileStatus::UpToDate
                     }
                     Some(Some(_)) => {
@@ -1594,6 +1609,7 @@ where
         &self,
         categories: &[AppCategory],
         dry_run: bool,
+        run_generators: bool,
         explicit_generators: bool,
         manifest: &AppManifest,
         observer: &mut impl RuntimeObserver,
@@ -1602,7 +1618,16 @@ where
         for category in categories {
             for file in &category.files {
                 let destination = self.app_destination(category, file)?;
-                let raw = if dry_run || file.generator.is_none() {
+                let raw = if !run_generators && file.generator.is_some() {
+                    assessed.push(AssessedAppFile {
+                        category: category.clone(),
+                        file: file.clone(),
+                        destination,
+                        content: None,
+                        generator_error: Some("app_generator_refresh_required".to_string()),
+                    });
+                    continue;
+                } else if dry_run || file.generator.is_none() {
                     Some(
                         self.app_source_bytes(category.name.as_str(), file)?
                             .to_vec(),
@@ -2289,6 +2314,9 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             )
             .with_diagnostic_code("app_artifact_permission_required"));
         }
+        if !request.implicit {
+            self.ensure_app_code_allowed(&request.category, resource)?;
+        }
         let logical = format!("app/{}/{script}", request.category);
         let prepared = self
             .prepare_app_script(&request.category, &logical, request.artifact.runtime, true)
@@ -2382,14 +2410,23 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
     }
 
     fn ensure_app_code_allowed(&self, category: &str, capability: &str) -> Result<()> {
-        if (self.context.is_external_presets
-            || self.presets.files().keys().any(|path| {
-                path.starts_with(&format!("app/{category}/")) && self.presets.is_overlay(path)
-            }))
-            && !self.context.allow_app_hooks
-        {
+        let category = self
+            .app_categories(Some(category))?
+            .into_iter()
+            .next()
+            .with_context(|| format!("app preset category not found: {category}"))?;
+        let trust_capability = if capability.starts_with("hook:") {
+            TrustCapabilityV1::AppHook
+        } else if capability.starts_with("artifact:") {
+            TrustCapabilityV1::AppArtifact
+        } else {
+            TrustCapabilityV1::AppGenerator
+        };
+        if !self.app_capability_trusted(&category, trust_capability)? {
             bail!(
-                "app '{category}' {capability} requires allow_app_hooks = true for external preset code"
+                "app '{}' {capability} requires scoped external-code trust; run `shine trust grant app/{}` after reviewing the active code and permissions",
+                category.name,
+                category.name,
             );
         }
         Ok(())

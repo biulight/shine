@@ -162,8 +162,8 @@ The App adapter now also covers upgrade branches, preset-cache extraction/remova
 and `post_upgrade`, best-effort uninstall teardown, and category/global purge. Hook and teardown
 failures remain non-fatal; only the existing fatal generator class changes the aggregate upgrade
 exit behavior. Read-only App update derives its rows and `pending`/`unchanged`/`conflict` outcomes
-from the same per-file assessment, so an automatic generator is never evaluated twice merely to
-produce the reusable result.
+from the same per-file assessment. Read-oriented assessment does not execute generators and emits
+the stable refresh-required diagnostic when dynamic desired content requires explicit execution.
 
 The Shell adapter emits one outcome per selected or installed command. Read-only update derives
 `pending` from the existing typed `ShellRow`/`UpdateChange` assessment, while foreign launcher

@@ -19,6 +19,7 @@ mod sys_bootstrap;
 mod sys_manifest;
 mod sys_model;
 mod sys_profile;
+mod trust;
 mod validation;
 
 use std::collections::BTreeMap;
@@ -82,6 +83,7 @@ pub use sys_model::{
     SysProfilePhase, SysShellIntegration, SysShellKind, SysUpdateRow, SysUpgradeReport,
 };
 pub use sys_profile::{SysProfileStateReport, SysProfileStateRequest};
+pub use trust::ExternalCodeRequirementReport;
 pub use validation::{
     PRESET_VALIDATION_SCHEMA_VERSION, PresetCategoryValidation, PresetDiagnostic,
     PresetDiagnosticSeverity, PresetValidationReportV1, PresetValidationSummary,
@@ -105,8 +107,7 @@ pub struct RuntimeContext {
     pub shell_config_paths: Vec<PathBuf>,
     pub external_shell_mode: ExternalShellMode,
     pub is_external_presets: bool,
-    pub allow_app_hooks: bool,
-    pub allow_sys_code: bool,
+    pub trust_grants: Vec<crate::trust::TrustGrantV1>,
     pub linux_split_dns_ready: bool,
     pub running_as_admin: bool,
     pub captured_unix_time: u64,
@@ -139,8 +140,7 @@ impl RuntimeContext {
             shell_config_paths: vec![home_dir.join(".zshrc")],
             external_shell_mode: ExternalShellMode::Snapshot,
             is_external_presets: false,
-            allow_app_hooks: false,
-            allow_sys_code: false,
+            trust_grants: Vec::new(),
             linux_split_dns_ready: true,
             running_as_admin: false,
             captured_unix_time: 0,

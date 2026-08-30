@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use super::{
     AppCommands, EnvCommands, LocalCommands, PresetCommands, SelfCommands, ServeCommands,
     ShellCommands, StateCommands, SysCommands, TaskCommands, TaskRunCommand, ThemeCommands,
+    TrustCommands,
 };
 
 /// Give personal automation a reviewable lifecycle
@@ -13,7 +14,7 @@ use super::{
 #[command(name = "shine")]
 #[command(version = version::display(), about, long_about = None)]
 #[command(
-    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>[/<command>], or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, state, self, serve, completions, theme, and local are advanced tools."
+    after_help = "QUICK START:\n  shine list --available\n  shine info app/starship\n  shine install app/starship\n  shine update && shine upgrade\n\nTARGETS:\n  Use app/<category>, shell/<category>[/<command>], or sys/<item>. A bare app/shell category is accepted when unique.\n\nNAMESPACES:\n  app, shell, and sys expose resource-specific operations; preset, trust, state, self, serve, completions, theme, and local are advanced tools."
 )]
 pub struct Cli {
     #[arg(long, global = true)]
@@ -208,6 +209,11 @@ pub enum Commands {
     Task {
         #[command(subcommand)]
         command: TaskCommands,
+    },
+    /// Review and manage target-scoped trust for external Preset code
+    Trust {
+        #[command(subcommand)]
+        command: TrustCommands,
     },
     /// Run a saved task (alias for `shine task run`)
     Run(TaskRunCommand),

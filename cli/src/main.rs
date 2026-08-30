@@ -12,6 +12,7 @@ use commands::{
     EnvProxySubcommand, EnvSecretSubcommand, EnvWorkspaceSubcommand, LocalCommands,
     OverlayCommands, PresetCommands, PresetTemplateKind, ResourceKind, SelfCommands, ServeCommands,
     ShellCommands, StateCommands, SysCommands, SysProfileCommands, TaskCommands, ThemeCommands,
+    TrustCommands,
 };
 #[cfg(test)]
 use commands::{
@@ -99,6 +100,12 @@ async fn run(cli: Cli) -> Result<()> {
 
     let config = Box::pin(Config::load_or_init()).await?;
 
+    if config.legacy_allow_app_hooks || config.legacy_allow_sys_code {
+        eprintln!(
+            "Warning: allow_app_hooks/allow_sys_code are retired and ignored; review current external code with `shine trust inspect <TARGET>` and enroll it with `shine trust grant <TARGET>`."
+        );
+    }
+
     if let Commands::ShellRender { target } = &cli.command {
         return shells::handle_render_live(&config, target).await;
     }
@@ -116,6 +123,14 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Completions { .. } => unreachable!(),
         Commands::State { .. } => unreachable!(),
         Commands::Theme { .. } => unreachable!(),
+        Commands::Trust { command } => match command {
+            TrustCommands::List => cli::trust::handle_list(&config).await,
+            TrustCommands::Inspect { target } => cli::trust::handle_inspect(&config, &target).await,
+            TrustCommands::Grant { target, yes } => {
+                cli::trust::handle_grant(&config, &target, yes).await
+            }
+            TrustCommands::Revoke { target } => cli::trust::handle_revoke(&config, &target).await,
+        },
         Commands::Install {
             target,
             replace_managed,

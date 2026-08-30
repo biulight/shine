@@ -8,6 +8,7 @@ use crate::runtime::{
     ProcessRequest, SYS_PROFILE_PHASES, ShellType, SysItemMode, SysItemOutcome, SysItemStatus,
     SysProfilePhase, SysRunEntry,
 };
+use crate::trust::TrustCapabilityV1;
 
 mod blocks;
 mod compose;
@@ -18,22 +19,17 @@ use compose::ComposedSysProfiles;
 #[derive(Clone)]
 struct SysProfileRuntimeConfig {
     home_dir: PathBuf,
-    shine_dir: PathBuf,
     presets_dir: PathBuf,
     overlay_dir: Option<PathBuf>,
     shell_type: ShellType,
     is_external_presets: bool,
-    allow_sys_code: bool,
+    external_code_trusted: bool,
     snapshot: PresetSnapshot,
 }
 
 impl SysProfileRuntimeConfig {
     fn active_presets_overlay_dir(&self) -> Option<&Path> {
         self.overlay_dir.as_deref()
-    }
-
-    fn global_config_path(&self) -> PathBuf {
-        self.shine_dir.join("config.toml")
     }
 
     fn preset_path(&self, relative: &Path) -> PathBuf {
@@ -64,15 +60,14 @@ pub struct SysProfileStateReport {
 }
 
 impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
-    fn sys_profile_config(&self) -> SysProfileRuntimeConfig {
+    fn sys_profile_config(&self, external_code_trusted: bool) -> SysProfileRuntimeConfig {
         SysProfileRuntimeConfig {
             home_dir: self.context().home_dir.clone(),
-            shine_dir: self.context().shine_dir.clone(),
             presets_dir: self.context().presets_dir.clone(),
             overlay_dir: self.context().overlay_dir.clone(),
             shell_type: self.context().shell,
             is_external_presets: self.context().is_external_presets,
-            allow_sys_code: self.context().allow_sys_code,
+            external_code_trusted,
             snapshot: self.presets().clone(),
         }
     }
@@ -85,7 +80,8 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         sys_shell: &str,
         force_profile: bool,
     ) -> Result<SysItemOutcome> {
-        let config = self.sys_profile_config();
+        let config =
+            self.sys_profile_config(self.sys_profile_code_trusted(os_id, loaded, enabled_items)?);
         let templates =
             compose::compose_sys_profiles(&config, os_id, loaded, enabled_items, sys_shell).await?;
         install_sys_profile_loader_with_templates(
@@ -116,7 +112,8 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         enabled_items: &std::collections::BTreeSet<String>,
         sys_shell: &str,
     ) -> Result<()> {
-        let config = self.sys_profile_config();
+        let config =
+            self.sys_profile_config(self.sys_profile_code_trusted(os_id, loaded, enabled_items)?);
         compose::compose_sys_profiles(&config, os_id, loaded, enabled_items, sys_shell)
             .await
             .map(|_| ())
@@ -130,6 +127,25 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         let shell: &'static str = self.context().shell.into();
         self.install_composed_sys_profile(os_id, &loaded, &enabled, shell, false)
             .await
+    }
+
+    fn sys_profile_code_trusted(
+        &self,
+        os_id: &str,
+        loaded: &LoadedSysPreset,
+        enabled_items: &std::collections::BTreeSet<String>,
+    ) -> Result<bool> {
+        for item in loaded
+            .manifest
+            .items
+            .iter()
+            .filter(|item| enabled_items.contains(&item.id))
+        {
+            if !self.sys_capability_trusted(os_id, item, TrustCapabilityV1::SysProfileCode)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
 
@@ -159,6 +175,13 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
         if item.shell.is_empty() {
             bail!(
                 "sys item `{}` declares no shell integration",
+                request.item_id
+            );
+        }
+        if !self.sys_capability_trusted(&request.os_id, item, TrustCapabilityV1::SysProfileCode)? {
+            bail!(
+                "sys item `{}` profile code requires scoped external-code trust; run `shine trust grant sys/{}` after review",
+                request.item_id,
                 request.item_id
             );
         }
@@ -214,7 +237,7 @@ fn require_external_code_permission(
     let overlay_code = config
         .active_presets_overlay_dir()
         .is_some_and(|overlay| path.starts_with(overlay));
-    if (config.is_external_presets || overlay_code) && !config.allow_sys_code {
+    if (config.is_external_presets || overlay_code) && !config.external_code_trusted {
         return Err(external_code_permission_error(
             config,
             &format!("executable sys {label}"),
@@ -256,8 +279,7 @@ fn external_code_permission_error(
         source_details.push_str(&format!("Code path:      {}\n", path.display()));
     }
     anyhow::anyhow!(
-        "{capability} is blocked because {reason}.\n\n{source_details}After reviewing the active preset sources, choose one:\n\n  Allow external sys code:\n    Set allow_sys_code = true in {}\n\n  Keep external sys code blocked:\n    {remediation}.",
-        config.global_config_path().display()
+        "{capability} is blocked because {reason}.\n\n{source_details}After reviewing the active preset sources, choose one:\n\n  Trust this target's current external code:\n    Run `shine trust grant sys/<item>`\n\n  Keep external sys code blocked:\n    {remediation}."
     )
 }
 

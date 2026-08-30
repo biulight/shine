@@ -356,7 +356,7 @@ pub async fn handle_status_list(config: &Config, diff: bool) -> Result<()> {
             match row.file_status {
                 FileStatus::Missing => missing += 1,
                 FileStatus::UserModified | FileStatus::Partial => user_modified += 1,
-                FileStatus::UpdateAvail => update_available += 1,
+                FileStatus::UpdateAvail | FileStatus::RefreshRequired => update_available += 1,
                 FileStatus::UpToDate => up_to_date += 1,
                 FileStatus::NotInstalled => {}
             }
@@ -578,6 +578,7 @@ fn app_category_statuses(rows: &[&AppRow]) -> Vec<AppLifecycleStatus> {
                 FileStatus::UserModified => ("~", "user modified"),
                 FileStatus::Partial => ("~", "partial install"),
                 FileStatus::UpdateAvail => ("↑", "update available"),
+                FileStatus::RefreshRequired => ("↻", "refresh required"),
                 FileStatus::UpToDate => ("✓", "up-to-date"),
                 FileStatus::NotInstalled => unreachable!(),
             };

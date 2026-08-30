@@ -28,9 +28,9 @@ bugs. Check this list before changing the modules named in each entry.
   all bound. Plain environment values contribute only a hash, while secrets require opaque handles
   or versions and never contribute plaintext.
 - **A Preset permission declaration is not a grant.** App categories, Shell commands, and Sys items
-  may declare schema-v1 capability identities, but those declarations do not bypass
-  `allow_app_hooks`, `allow_sys_code`, administrator authorization, ownership checks, or future
-  Plan approval. Filesystem declarations use logical bases and never embed a physical Preset
+  may declare schema-v1 capability identities, but those declarations do not create scoped
+  external-code trust or bypass administrator authorization, ownership checks, or Plan approval.
+  Filesystem declarations use logical bases and never embed a physical Preset
   checkout path; command entries contain no argv and environment entries contain names and
   sensitivity only. Pure planners merge explicit declarations with Core-bounded typed metadata and
   receipt ownership. A missing declaration or uncomputable requirement blocks protected mutation;
@@ -85,10 +85,10 @@ bugs. Check this list before changing the modules named in each entry.
   effects without changing their established non-fatal exit semantics; managed Sys user
   modification remains a typed preservation conflict while the CLI keeps its existing failure exit.
 - **App update presentation and reusable results share one Core assessment pass.** `AppRow` and
-  `LifecycleOutcomeV1` must derive from the same per-file `AppFileAssessment`; do not rebuild rows
-  to obtain the structured result. Automatic generators may execute during the established status
-  path, so evaluating the file twice can duplicate external code execution and observe inconsistent
-  snapshots. Typed inspection paths remain non-serializable and must not enter the lifecycle result.
+  `LifecycleOutcomeV1` must derive from the same per-file assessment; do not rebuild rows to obtain
+  the structured result. Read-oriented assessment never executes generators and reports
+  `app_generator_refresh_required` when dynamic desired content needs explicit execution. Typed
+  inspection paths remain non-serializable and must not enter the lifecycle result.
 - **Managed-file update details are field labels, not payloads.** The read-only comparison may
   report that destination or content changed, but must not copy the destination, desired bytes, or
   environment values into structured lifecycle outcomes. Ownership and user-modification checks
@@ -178,25 +178,23 @@ bugs. Check this list before changing the modules named in each entry.
 - **Config discovery priority is fixed**: `SHINE_CONFIG_DIR` > `SHINE_PRESETS` > `presets_dir`
   key > `~/.shine/` default. Code and
   [`data-flows.md`](data-flows.md#config-discovery) must agree.
-- **External app preset hooks and generators are opt-in only.** `post_upgrade`
-  runs commands after upgrades, while an automatic file generator may run
-  during install/update/upgrade and supply effective source bytes. Embedded code may
-  run implicitly, but external preset or overlay code must be gated by
-  `allow_app_hooks = true`; otherwise a user-controlled presets checkout would
-  gain command execution during ordinary read-oriented update checks.
+- **External app preset hooks and generators require scoped trust.** `post_upgrade`
+  runs commands after upgrades, while an automatic file generator may run during an approved
+  install/upgrade and supply effective source bytes. Embedded code may run implicitly, but external
+  preset or overlay code requires a grant matching canonical target, capability, code digest,
+  trust layer, and exact permission set. Read-oriented checks never execute it.
 - **Bun package installation is source-scoped and explicit.** Embedded scripts and external scripts
   without a locked declaration run with `--no-install`. Only an effective external/overlay script
   whose own physical category contains both `package.json` and `bun.lock` may run with
   `--install=fallback`; one file without the other and any `trustedDependencies` field are errors.
   Overlay package metadata never changes an inherited embedded script. Shine never runs
   `bun install`, owns `node_modules`, or cleans Bun's global cache/virtual store, and dependency
-  download never bypasses `allow_app_hooks`. See ADR 0031.
-- **External sys executable code is separately opt-in.** Static detection/provider metadata and
+  download never bypasses scoped trust. See ADR 0031 and ADR 0046.
+- **External sys executable code requires target-local scoped trust.** Static detection/provider metadata and
   declarative PATH/env/aliases are safe to inspect, but external or overlay bootstrap/managed scripts,
-  guarded eval/source, fragments, and base profile code require `allow_sys_code = true`. Read-only
-  status paths must never execute sys code, and update-check scripts require the same permission.
-  This permission is global-only: a project
-  config must never be able to authorize its own executable preset content.
+  guarded eval/source, fragments, and base profile code require a matching `sys/<item>` grant.
+  Read-only status paths must never execute sys code. Project config and Presets cannot authorize
+  their own executable content.
 - **Manual generators never run from implicit status or upgrade paths.**
   `generator.auto = false` leaves `list`/`info`/`update` local-only and
   causes upgrade to preserve the manifest snapshot. Only install (including `--replace-managed`) or

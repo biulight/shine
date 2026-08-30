@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-30 — Durable code trust must not reuse declarations or one-shot approval
+
+- **Symptom**: global `allow_app_hooks` and `allow_sys_code` booleans trusted unrelated targets and
+  future external code changes, while read-oriented App status could execute an automatic generator.
+- **Root cause**: author-declared capabilities, durable user trust, and per-mutation Plan approval
+  were represented by two coarse gates instead of three separate contracts.
+- **Fix**: add target-local grants bound to capability, logical code digest, trust layer, and exact
+  permission set; keep Plan approval one-shot; stop generator execution during inspection.
+- **Rule**: a Preset declaration is an author claim, a trust grant acknowledges one exact opaque
+  code identity, and a Plan approval authorizes one exact mutation. None may substitute for another.
+
 ## 2026-08-30 — Platform-only external Preset fixtures must satisfy enforced Plan declarations
 
 - **Symptom**: Windows CI failed the Docker Desktop JSON merge roundtrip before mutation with

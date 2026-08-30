@@ -912,8 +912,8 @@ mod tests {
         .await;
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        config.allow_app_hooks = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         handle_install(&config, Some("sample"), false, false)
             .await
@@ -929,6 +929,7 @@ mod tests {
             &marker,
         )
         .await;
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         let mut sep = crate::output::SectionSeparator::new();
         let (report, lifecycle) =
@@ -971,8 +972,8 @@ mod tests {
         .await;
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        config.allow_app_hooks = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         handle_install(&config, Some("sample"), false, false)
             .await
@@ -1032,7 +1033,7 @@ mod tests {
         assert!(error.to_string().contains("Plan is blocked"));
         assert!(
             !marker.exists(),
-            "external hook must be skipped unless allow_app_hooks is enabled"
+            "external hook must be skipped without a matching scoped trust grant"
         );
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.

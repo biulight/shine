@@ -41,6 +41,7 @@ shine upgrade app/starship
 | `shine upgrade [TARGET] [--yes]` | 应用全部或指定 app、shell、受管 sys 更新 |
 | `shine preset <SUBCOMMAND>` | 管理预设来源、overlay、导出和 Git 同步 |
 | `shine state migrate [--dry-run]` | 迁移并清理旧版 Shine 运行时状态 |
+| `shine trust <SUBCOMMAND>` | 查看、授予、列出或撤销 target-scoped 外部代码信任 |
 | `shine self <SUBCOMMAND>` | 安装或升级 Shine 程序 |
 | `shine serve <SUBCOMMAND>` | 通过本地 HTTP 服务发布 `~/.shine/http/` 下的资源 |
 | `shine env <SUBCOMMAND>` | 管理预设变量、workspace 环境、代理与密钥 |
@@ -88,9 +89,16 @@ shine info <TARGET> [--diff] [--verbose]
 shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release]
 shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
+shine trust inspect <app/CATEGORY|sys/ITEM>
+shine trust grant <app/CATEGORY|sys/ITEM> [--yes]
+shine trust list
+shine trust revoke <app/CATEGORY|sys/ITEM>
 shine completions install
 shine completions <bash|zsh|powershell>
 ```
+
+Trust enrollment 从当前不可变 Preset snapshot 推导范围。`--yes` 只用于非交互确认当前展示的
+enrollment，不会批准之后的 lifecycle Plan。
 
 - `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
   Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示

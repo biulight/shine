@@ -18,14 +18,14 @@ profile 写入之前被拒绝。现有 `~/.shine/sys-manifest.toml` 执行记录
 item 自己的 `profile/<item>.*` fragment。base profile 文件只能包含平台公共内容。移除 status/update
 wire protocol 输出与更新检查 dispatcher；第三方软件更新应使用其包管理器或上游工具。
 
-外部安装脚本、base profile 文件、fragment、`eval` 和 `source` 仍受全局
-`allow_sys_code = true` 保护；静态 detection、provider metadata、PATH、环境变量和 aliases 不需要
-该授权。可从 `shine preset copy sys/<os>` 开始，并通过以下命令验证：
+外部安装脚本、base profile 文件、fragment、`eval` 和 `source` 需要当前 target-scoped
+`shine trust grant sys/<ITEM>`；静态 detection、provider metadata、PATH、环境变量和 aliases 不需要
+grant。可从 `shine preset copy sys/<os>` 开始，并通过以下命令验证：
 
 每个 `[[items]]` target 还要携带权限 schema v1。固定 provider 与 managed target 已由强类型
 metadata 约束；item script 应保守声明 Preset 内的 executable path，以及经源码审查确认的 command、
-network、administrator、environment 和 system identity。该声明会参与静态校验，但不能替代
-`allow_sys_code`，也不能让 opaque code 自动变得可静态证明。
+network、administrator、environment 和 system identity。该声明会参与静态校验，但不会授予信任，
+也不能让 opaque code 自动变得可静态证明。
 
 ```bash
 shine sys list

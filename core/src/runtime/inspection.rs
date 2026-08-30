@@ -7,6 +7,7 @@ pub enum InspectionFileStatus {
     NotInstalled,
     UpToDate,
     UpdateAvail,
+    RefreshRequired,
     Partial,
     UserModified,
     Missing,

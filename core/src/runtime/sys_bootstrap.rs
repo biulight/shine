@@ -4,6 +4,7 @@ use super::{
     SysDetectionProbe, SysInstall, SysItem, SysItemMode, SysItemOutcome, SysItemStatus,
     SysManifest, SysPackageProvider, SysRunEntry, SystemReceipt,
 };
+use crate::trust::TrustCapabilityV1;
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -375,11 +376,11 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
                 root.file_name().unwrap_or_default().to_string_lossy(),
                 path.replace('\\', "/")
             );
-            let external =
-                self.context().is_external_presets || self.presets().is_overlay(&logical);
-            if external && !self.context().allow_sys_code {
+            let os_id = root.file_name().unwrap_or_default().to_string_lossy();
+            if !self.sys_capability_trusted(&os_id, item, TrustCapabilityV1::SysBootstrapScript)? {
                 bail!(
-                    "executable sys install script is blocked because external preset code is active; set allow_sys_code = true after reviewing the source: {}",
+                    "executable sys install script requires scoped external-code trust; run `shine trust grant sys/{}` after reviewing {}",
+                    item.id,
                     script.display()
                 );
             }
@@ -405,17 +406,16 @@ impl<H: FileSystemHost + ProcessHost> CoreRuntime<H> {
             } => package_preview(os_id, *provider, package),
             SysInstall::Script { path, .. } => {
                 let script = safe_sys_path(root, path)?;
-                let external = self.context().is_external_presets
-                    || self
-                        .context()
-                        .overlay_dir
-                        .as_ref()
-                        .is_some_and(|root| script.starts_with(root));
+                let trusted = self.sys_capability_trusted(
+                    os_id,
+                    item,
+                    TrustCapabilityV1::SysBootstrapScript,
+                )?;
                 Ok(format!(
                     "{}{}",
                     script.display(),
-                    if external && !self.context().allow_sys_code {
-                        " (requires allow_sys_code = true)"
+                    if !trusted {
+                        " (requires scoped external-code trust)"
                     } else {
                         ""
                     }
