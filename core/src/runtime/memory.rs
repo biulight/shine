@@ -22,6 +22,8 @@ struct MemoryState {
     modes: BTreeMap<PathBuf, u32>,
     operations: Vec<HostOperation>,
     process_outputs: VecDeque<anyhow::Result<ProcessOutput>>,
+    #[cfg(test)]
+    write_failures: BTreeMap<PathBuf, usize>,
 }
 
 #[derive(Clone, Default)]
@@ -56,6 +58,15 @@ impl InMemoryHost {
             .expect("in-memory host lock")
             .operations
             .clone()
+    }
+
+    #[cfg(test)]
+    pub fn fail_write_after(&self, path: impl Into<PathBuf>, successful_writes: usize) {
+        self.state
+            .lock()
+            .expect("in-memory host lock")
+            .write_failures
+            .insert(path.into(), successful_writes);
     }
 }
 
@@ -181,6 +192,17 @@ impl FileSystemHost for InMemoryHost {
     ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
         Box::pin(async move {
             let mut state = self.state.lock().expect("in-memory host lock");
+            #[cfg(test)]
+            if let Some(remaining) = state.write_failures.get_mut(path) {
+                if *remaining == 0 {
+                    state.write_failures.remove(path);
+                    return Err(HostError::new(
+                        std::io::ErrorKind::Other,
+                        anyhow::anyhow!("injected in-memory write failure: {}", path.display()),
+                    ));
+                }
+                *remaining -= 1;
+            }
             insert_parent_dirs(&mut state.nodes, path);
             state
                 .nodes

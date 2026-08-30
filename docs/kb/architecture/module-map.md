@@ -16,12 +16,14 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/` | Reusable `shine-core` package with no CLI/Tauri dependency |
 | `core/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
 | `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
+| `core/src/action.rs` | Versioned executable Action IR, typed permission derivation, opaque provenance, and rollback classification |
 | `core/src/permission.rs` | Versioned target-local Preset permission declarations, normalization, and payload-free identity validation |
 | `core/src/trust.rs` | Versioned target-local external-code trust grants, exact matching, and stale-scope decisions |
 | `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
 | `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, process, privileged, and system mutation ports |
 | `core/src/runtime/planner.rs` | Pure App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
+| `core/src/runtime/action_executor.rs` | Phase 4 App managed-file create journal, receipt-gated commit, explicit recovery Plan, and unchanged-content rollback foundation |
 | `core/src/runtime/trust.rs` | Derivation of App/Sys external-code requirements from immutable logical code inputs and declared permissions |
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence and `shine trust` workflows |
 | `core/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |

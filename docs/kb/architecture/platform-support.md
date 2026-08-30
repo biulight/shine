@@ -1,6 +1,6 @@
 # Platform Support Assessment
 
-Last assessed: 2026-08-27
+Last assessed: 2026-08-30
 
 This document records the current implementation coverage and the remaining gaps across macOS,
 Ubuntu, and Windows. It is an implementation reference, not a public compatibility promise. Verify
@@ -21,12 +21,13 @@ The overall maturity remains uneven:
 | --- | --- | --- | --- |
 | macOS | Highest | Broadest built-in sys preset, Homebrew/Cask integration, zsh profile, launchd service install, Secure Enclave/Touch ID, native split DNS | Managed system profile targets zsh; some tty behavior requires real-terminal verification |
 | Ubuntu | High | Rich server/developer bootstrap, bash and zsh profiles, minimal server profile, systemd user service, systemd-resolved safety checks | More installer logic lives in per-item scripts; no built-in Rust bootstrap |
-| Windows | Medium-high core, lower advanced coverage | PowerShell shims and profiles, WinGet, Windows path and line-ending handling, NRPT split DNS, Windows OpenSSH environment wrapper, persistent HTTP task | No Windows-remote transfer or secret broker, no terminal OSC theme detection, thinner editor bootstrap, and no native Windows test job in normal CI |
+| Windows | Medium-high core, lower advanced coverage | PowerShell shims and profiles, WinGet, Windows path and line-ending handling, NRPT split DNS, Windows OpenSSH environment wrapper, persistent HTTP task, native Rust CI | No Windows-remote transfer or secret broker, no terminal OSC theme detection, and thinner editor bootstrap |
 
-The highest-priority remaining engineering gap is:
+The highest-priority remaining cross-platform engineering gap is:
 
-1. Normal CI runs the Rust test suite only on Ubuntu. macOS and Windows release jobs prove that the
-   binaries compile, but do not execute platform-specific tests.
+1. Native unit tests now run on Ubuntu, macOS, and Windows, but executable Sys scripts, package
+   providers, services, DNS, terminals, and SSH still need more real-OS smoke coverage than the
+   in-memory and platform-gated suites can provide.
 
 ## Capability matrix
 
@@ -104,25 +105,24 @@ Shell file filters share the same vocabulary, and host-independent validation ch
 effective OS branches plus every explicitly declared destination. The built-in Surge category now
 has only a macOS destination and is absent from runtime App candidates on Linux and Windows.
 
-### P1: CI does not execute native macOS or Windows tests
+### Closed 2026-08-30: CI executes native macOS and Windows Rust tests
 
-The reusable test workflow runs only on `ubuntu-latest`. Preview and release asset packaging builds
-on macOS and Windows runners, which catches compile and linker failures, but does not compile or run
-the platform-gated test modules as test targets. Normal pull-request CI does not invoke the package
-matrix either.
+The reusable test workflow now runs `cargo nextest run --all-features` on Ubuntu x86_64, macOS
+arm64, and Windows x86_64. Platform-gated modules therefore compile and execute on their owning OS
+during normal CI; release packaging remains responsible for the additional asset targets.
 
-This leaves the highest-risk platform-specific paths under-tested at merge time: Windows shims,
-PowerShell profile rewriting, BOM and CRLF preservation, Windows path normalization, atomic
-replacement semantics, NRPT convergence, Windows OpenSSH wrappers, and macOS tty behavior.
+The matrix closes the previous compile-only gap, but it is not a substitute for smoke tests against
+external package managers, administrator facilities, real terminals, service managers, DNS, or
+remote SSH peers.
 
-Acceptance criteria:
+The closed matrix criteria are:
 
 - Pull requests run native Rust tests on Ubuntu, macOS, and Windows x86_64.
 - Platform-specific tests compile and execute on their owning OS.
 - Release cross-builds remain responsible for the additional aarch64 asset targets.
-- At least one Windows smoke test exercises managed shim creation/removal and both PowerShell
-  profile paths.
-- Real-terminal-only macOS behavior remains documented when it cannot be made deterministic in CI.
+
+Windows managed shim/profile tests now execute on Windows. Real-terminal-only macOS behavior and
+external-system smoke coverage remain documented follow-ups rather than matrix blockers.
 
 ### Persistent HTTP service integration
 
@@ -167,18 +167,19 @@ Add items only when their detection, installation ownership, profile integration
 and non-upgrade semantics can be tested. Do not force identical profile membership merely to make
 the counts match.
 
-## Implementation sequence
+## Remaining implementation sequence
 
-1. Add native macOS and Windows test jobs to pull-request CI before expanding more platform-specific
-   behavior.
-2. Add Ubuntu and Windows persistent service integrations if stable local HTTP resources are a
-   supported workflow on those platforms.
-3. Decide the target scope for Windows remote SSH, then either document the intentional boundary or
+Native macOS/Windows Rust jobs and Ubuntu/Windows persistent service integrations are complete.
+The remaining order is:
+
+1. Decide the target scope for Windows remote SSH, then either document the intentional boundary or
    design a secure Windows transfer/broker transport.
-4. Fill remaining high-value sys preset gaps, starting with a decision on Windows AstroNvim and a
+2. Add real-OS integration coverage for the highest-risk Ubuntu scripts and provider/service/DNS
+   boundaries without putting credentials or broad machine mutation into ordinary unit CI.
+3. Fill remaining high-value sys preset gaps, starting with a decision on Windows AstroNvim and a
    server-oriented Windows profile, with platform smoke tests.
-5. Reassess Windows terminal theme detection after the higher-impact correctness and CI gaps are
-   closed.
+4. Reassess Windows terminal theme detection after the higher-impact correctness and integration
+   gaps are closed.
 
 ## Cross-platform definition of done
 
@@ -220,7 +221,7 @@ For a change that claims support on one or more of these platforms:
 
 ## Assessment verification record
 
-At the 2026-08-27 assessment point, `cargo test --target-dir target` passed 937 tests on an
-aarch64 macOS host. Ubuntu and Windows behavior in this document was assessed from implementation,
-presets, tests, workflows, and existing platform lessons; no end-to-end bootstrap was run on an
-Ubuntu or Windows machine during this assessment.
+The 2026-08-30 assessment verified the checked-in native Ubuntu/macOS/Windows nextest matrix and
+the three persistent-service implementations from repository code and workflows. No new end-to-end
+bootstrap, package-provider, DNS, terminal, service-manager, or remote-SSH smoke run was performed
+as part of this documentation refresh.

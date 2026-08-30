@@ -292,6 +292,7 @@ pub enum PlanOperationV1 {
     Upgrade,
     Uninstall,
     AppRefresh,
+    AppRecovery,
     AppArtifactApply,
     AppArtifactRemove,
     SysBootstrap,
@@ -307,6 +308,7 @@ impl PlanOperationV1 {
             Self::Upgrade => "upgrade",
             Self::Uninstall => "uninstall",
             Self::AppRefresh => "app-refresh",
+            Self::AppRecovery => "app-recovery",
             Self::AppArtifactApply => "app-artifact-apply",
             Self::AppArtifactRemove => "app-artifact-remove",
             Self::SysBootstrap => "sys-bootstrap",
@@ -702,6 +704,7 @@ mod tests {
     fn specialized_operation_spelling_is_stable() {
         for (operation, spelling) in [
             (PlanOperationV1::AppRefresh, "app-refresh"),
+            (PlanOperationV1::AppRecovery, "app-recovery"),
             (PlanOperationV1::AppArtifactApply, "app-artifact-apply"),
             (PlanOperationV1::AppArtifactRemove, "app-artifact-remove"),
             (PlanOperationV1::SysBootstrap, "sys-bootstrap"),

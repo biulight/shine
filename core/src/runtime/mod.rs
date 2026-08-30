@@ -1,8 +1,9 @@
 //! Workspace-internal, frontend-neutral runtime seams.
 //!
 //! These APIs are public only so the `shine-cli` package can consume them.
-//! They are not a stable third-party API in Roadmap Phases 2 and 3.
+//! They are not a stable third-party API during the Roadmap Core/runtime phases.
 
+mod action_executor;
 mod app;
 mod app_metadata;
 mod bootstrap;
@@ -25,6 +26,9 @@ mod validation;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub use action_executor::{
+    APP_OPERATION_JOURNAL_FILE, AppOperationExecutionV1, AppRecoveryReportV1,
+};
 pub use host::{
     FileKind, FileMetadata, FileSystemHost, FileSystemObservationHost, HostError, HostOperation,
     NullObserver, PrivilegedFileSystemHost, PrivilegedOperationGuard, ProcessHost, ProcessIo,

@@ -164,6 +164,41 @@ Reverse of install, driven entirely by the manifest — never by re-scanning pre
 3. Restore `<name>.shine.bak` if one exists.
 4. Remove the manifest entry.
 
+## Declarative App action and recovery foundation
+
+The first Roadmap Phase 4 slice is a Core-only harness and does not yet replace released App
+lifecycle execution:
+
+```text
+approved PlanV1
+  → ActionIrV1(CreateManagedFile; destination + desired hash, no bytes)
+  → validate action permissions are included in the approval
+  → acquire host cross-process operation lock
+  → refuse an existing app-operation-journal.toml
+  → atomically persist prepared journal with original PlanApprovalV1
+  → atomically create the previously absent destination
+  → atomically persist applied action state
+  → caller persists matching App manifest receipt
+  → explicit commit removes the journal
+```
+
+If execution is interrupted, recovery is separate from ordinary lifecycle planning:
+
+```text
+read versioned journal + destination
+  → build app-recovery Plan bound to exact journal bytes and destination hash
+  → changed destination => blocked/preserved
+  → approve recovery Plan
+  → acquire operation lock
+  → regenerate and revalidate the same recovery Plan
+  → remove only transaction-created bytes that still match desired hash
+  → remove journal
+```
+
+The journal contains Action IR identities, hashes, state and the original approval, never managed
+content or secret plaintext. See ADR 0048 and `docs/declarative-action-recovery-prd.md` before
+extending it to update, uninstall, administrator or opaque actions.
+
 ## App update (`shine update`)
 
 App update loads active categories, the App manifest, and effective env once, then derives each

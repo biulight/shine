@@ -12,6 +12,11 @@ Preset permission declarations, and snapshot-scoped external-code trust grants. 
 managed Sys lifecycle, exact Sys bootstrap, App refresh/artifact, and explicit Sys profile requests
 from immutable Presets plus observation-only filesystem and split-DNS ports.
 
+The Roadmap Phase 4 foundation keeps executable `ActionIrV1` separate from the security Plan. Its
+first Core-only slice journals creation of a previously absent App managed file, keeps the journal
+until receipt commit, and requires a fresh `app-recovery` Plan before removing unchanged
+transaction-created bytes. Existing CLI lifecycle paths do not use this action executor yet.
+
 Runtime APIs are workspace-internal and hidden from normal documentation. The versioned lifecycle
 result and security Plan contracts retain their documented compatibility guarantees. Protected
 App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile CLI mutations review

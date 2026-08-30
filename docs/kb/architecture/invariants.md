@@ -139,6 +139,31 @@ bugs. Check this list before changing the modules named in each entry.
   Windows has no `sudo` equivalent, so its privileged paths still surface a manual
   "rerun elevated" hint instead.
 
+## Declarative actions and recovery
+
+- **The executable Action IR is not the security Plan.** `PlanV1` remains a payload-free review and
+  approval contract. `ActionIrV1` is created for execution only after planning and may carry resolved
+  effect paths and content hashes, but never managed bytes, environment values, secret plaintext, or
+  raw argv. Do not embed the Action IR in `PlanV1` or reinterpret semantic Plan steps as executable
+  instructions.
+- **Recovery is an explicit, freshly approved operation.** Ordinary planning, status, install,
+  upgrade, and uninstall must not mutate an interrupted journal implicitly. `app-recovery` binds the
+  exact journal bytes and current destination observation, validates its approval again under the
+  host-provided cross-process operation lock, and only then mutates recovery state.
+- **A transaction-created file is rollback-owned only while unchanged.** The v1 App creation slice
+  may remove a destination only when its bytes still match the Action IR's desired hash. Missing is
+  safe journal cleanup; any other content is a blocking user modification and both destination and
+  journal remain for explicit resolution.
+- **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
+  first action mutation, update action state atomically, persist the matching domain receipt, and
+  only then commit by removing the journal. An existing or unsupported-version journal blocks a new
+  operation; it is never overwritten, upgraded, or discarded best-effort.
+- **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
+  generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
+  privilege, permission and unsupported-rollback classification until a narrower typed action
+  replaces them. Keep `executable-preset-inventory.md` current when built-in executable capability
+  changes.
+
 ## Shell profile editing
 
 - **Sentinel blocks are the only thing shine writes to user shell configs**

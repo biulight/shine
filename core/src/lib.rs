@@ -1,3 +1,4 @@
+pub mod action;
 pub mod env;
 pub mod init_template;
 pub mod install;
