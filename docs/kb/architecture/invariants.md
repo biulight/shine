@@ -157,6 +157,14 @@ bugs. Check this list before changing the modules named in each entry.
   may remove a destination only when its bytes still match the Action IR's desired hash. Missing is
   safe journal cleanup; any other content is a blocking user modification and both destination and
   journal remain for explicit resolution.
+- **A transaction-created App backup is restorable only while both regular-file paths match.**
+  Backup-aware v1 creation binds the fixed `.shine.bak` path plus original and desired hashes, and
+  starts only from an unowned regular file when that backup path is absent. Recovery may restore
+  only from `(missing, original)` or `(desired, original)` destination/backup state;
+  `(original, missing)` means mutation never started. Every other combination blocks and preserves
+  destination, backup, and journal. The journal never stores either byte payload, a matching durable
+  receipt commits ownership of both paths, and any non-matching receipt that claims the source or
+  either path blocks recovery.
 - **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
   first action mutation, update action state atomically, persist the matching domain receipt, and
   only then commit by removing the journal. An existing or unsupported-version journal blocks a new

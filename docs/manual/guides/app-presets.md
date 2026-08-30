@@ -57,8 +57,10 @@ teardown, or external-code gates. App stale files are removed during upgrade onl
 `--prune-stale` was part of the reviewed command.
 
 By default, files modified after installation are preserved and reported as user-modified. A safe
-uninstall restores any backup created during installation. `--purge` also removes the category's
-preset directory; uninstalling every category also removes the manifest.
+uninstall restores any backup created during installation. Before a supported journaled static Copy
+replaces an unowned regular-file destination, Shine requires its fixed `<name>.shine.bak` path to be
+absent; an existing backup blocks the Plan and both files are preserved. `--purge` also removes the
+category's preset directory; uninstalling every category also removes the manifest.
 
 ## Recover an interrupted installation
 
@@ -73,10 +75,14 @@ shine app recover
 shine app recover --yes
 ```
 
-Recovery removes a transaction-created file only when it is still byte-for-byte the content Shine
-wrote. If a matching manifest receipt is already durable, it preserves the managed file and clears
-only the stale journal. If the file changed after interruption, recovery returns nonzero and keeps
-both the file and journal for explicit resolution. Do not edit or delete the journal manually.
+For an originally absent destination, recovery removes a transaction-created file only when it is
+still byte-for-byte the content Shine wrote. For backup-aware creation, it restores the fixed backup
+only when the backup still matches the original bytes and the destination is missing or still
+matches the managed bytes; if the backup move never started, it keeps the original destination. If
+a matching manifest receipt is already durable, recovery preserves the managed destination and its
+backup and clears only the stale journal. If either path changed after interruption, recovery
+returns nonzero and keeps both paths plus the journal for explicit resolution; replacing a regular
+file with a symlink or directory also counts as a change. Do not edit or delete the journal manually.
 
 ## Configuration transforms
 

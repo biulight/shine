@@ -13,10 +13,11 @@ managed Sys lifecycle, exact Sys bootstrap, App refresh/artifact, and explicit S
 from immutable Presets plus observation-only filesystem and split-DNS ports.
 
 The Roadmap Phase 4 foundation keeps executable `ActionIrV1` separate from the security Plan.
-Approved App install routes previously absent, unprivileged static Copy files through the action
-executor, keeps each journal until its matching manifest receipt is durable, and requires a fresh
-`app-recovery` Plan before removing unchanged transaction-created bytes. Updates, occupied
-destinations, JSON merge, generators, administrator writes, and other domains retain their existing
+Approved App install routes unprivileged static Copy files with absent destinations or
+backup-eligible unowned regular-file destinations through the action executor, keeps each journal
+until its matching manifest receipt is durable, and requires a fresh `app-recovery` Plan before
+removing unchanged transaction-created bytes or restoring an unchanged fixed backup. Managed
+updates, JSON merge, generators, administrator writes, and other domains retain their existing
 executors until narrower rollback contracts land.
 
 Runtime APIs are workspace-internal and hidden from normal documentation. The versioned lifecycle

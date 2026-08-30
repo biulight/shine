@@ -49,7 +49,7 @@ install、upgrade、uninstall、generator refresh 和 artifact apply/remove 会�
 Plan，不能绕过缺失权限、被阻塞的 teardown 或外部代码 gate。upgrade 仅在审阅命令包含
 `--prune-stale` 时移除 App stale 文件。
 
-默认情况下，安装后被用户修改过的文件会保留并标记为用户修改。若安装时创建过备份，安全卸载会恢复原文件。`--purge` 还会删除相应预设目录；卸载全部类别时也会删除 manifest。
+默认情况下，安装后被用户修改过的文件会保留并标记为用户修改。若安装时创建过备份，安全卸载会恢复原文件。在受支持、已 journal 的静态 Copy 替换不受管 regular-file destination 前，Shine 要求固定的 `<name>.shine.bak` 路径不存在；已有 backup 会阻塞 Plan，并保留两个文件。`--purge` 还会删除相应预设目录；卸载全部类别时也会删除 manifest。
 
 ## 恢复中断的安装
 
@@ -64,9 +64,12 @@ shine app recover
 shine app recover --yes
 ```
 
-只有 transaction-created 文件仍与 Shine 写入的内容逐字节相同时，恢复才会将其删除。如果匹配的
-manifest receipt 已经持久化，Shine 会保留受管文件，只清理 stale journal。如果文件在中断后被
-修改，恢复命令返回非零，并保留文件和 journal 等待显式处理。不要手动编辑或删除 journal。
+对于原本不存在的 destination，只有 transaction-created 文件仍与 Shine 写入的内容逐字节相同，
+恢复才会将其删除。对于 backup-aware creation，只有 backup 仍匹配原始内容，且 destination 缺失或
+仍匹配受管内容时，恢复才会还原固定 backup；若 backup move 尚未开始，则保留原始 destination。
+如果匹配的 manifest receipt 已经持久化，Shine 会保留受管 destination 与 backup，只清理 stale
+journal。如果任一路径在中断后被修改，恢复命令返回非零，并保留两个路径和 journal 等待显式处理。
+把 regular file 替换为 symlink 或目录也视为修改。不要手动编辑或删除 journal。
 
 ## 配置变换
 

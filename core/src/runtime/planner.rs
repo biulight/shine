@@ -395,6 +395,49 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 );
 
                 let destination_exists = path_exists(self.host(), &destination).await?;
+                let backup_action_candidate = request.operation == LifecycleOperation::Install
+                    && entry.is_none()
+                    && direct.is_none()
+                    && destination_exists
+                    && file.generator.is_none()
+                    && file.install_strategy == crate::install::AppInstallStrategy::Copy
+                    && !file.requires_admin;
+                let backup = if backup_action_candidate {
+                    let metadata = self.host().metadata(&destination).await.map_err(|error| {
+                        error.into_anyhow("observing backup-aware App destination")
+                    })?;
+                    if metadata.kind != FileKind::File {
+                        steps.push(
+                            PlanStepV1::new(
+                                &target,
+                                Some(file.source_rel.display().to_string()),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code("app_backup_source_not_regular"),
+                        );
+                        continue;
+                    }
+                    Some(crate::install::backup_path(&destination))
+                } else {
+                    None
+                };
+                if let Some(backup) = &backup {
+                    capture_path_state(self.host(), state, format!("backup:{source}"), backup)
+                        .await?;
+                    if manifest.find_by_dest(backup).is_some()
+                        || path_exists(self.host(), backup).await?
+                    {
+                        steps.push(
+                            PlanStepV1::new(
+                                &target,
+                                Some(file.source_rel.display().to_string()),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code("app_backup_occupied"),
+                        );
+                        continue;
+                    }
+                }
                 let stale_destination_released =
                     if request.operation == LifecycleOperation::Upgrade && request.prune_stale {
                         if let Some(entry) = direct.filter(|entry| {
@@ -572,11 +615,18 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 category_changes |= matches!(action, PlanActionV1::Create | PlanActionV1::Update);
                 if request.operation == LifecycleOperation::Install
                     && action == PlanActionV1::Create
-                    && !destination_exists
                     && file.install_strategy == crate::install::AppInstallStrategy::Copy
                     && !file.requires_admin
                 {
                     add_app_journal_permissions(self.context(), permissions);
+                    if let Some(backup) = &backup {
+                        add_app_backup_creation_permissions(
+                            self.context(),
+                            permissions,
+                            &destination,
+                            backup,
+                        );
+                    }
                 }
                 steps.push(step);
             }
@@ -2276,7 +2326,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 let destination = self.app_destination(&category, file)?;
                 if manifest.find_by_source(&source).is_some()
                     || manifest.find_by_dest(&destination).is_some()
-                    || path_exists(self.host(), &destination).await?
                 {
                     continue;
                 }
@@ -2295,15 +2344,36 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     &self.context().env,
                 )?;
                 let action_identity = format!("{target}/{resource}");
-                actions.push(ActionIrV1::new(
-                    format!("app-install:{fingerprint}:{action_identity}"),
-                    vec![DeclarativeActionV1::create_managed_file(
+                let desired_hash = crate::install::hash_content(&desired);
+                let action = match read_optional(self.host(), &destination).await? {
+                    None => DeclarativeActionV1::create_managed_file(
                         format!("create:{action_identity}"),
                         target,
                         resource,
                         destination,
-                        crate::install::hash_content(&desired),
-                    )],
+                        desired_hash,
+                    ),
+                    Some(original) => {
+                        let backup = crate::install::backup_path(&destination);
+                        if manifest.find_by_dest(&backup).is_some()
+                            || path_exists(self.host(), &backup).await?
+                        {
+                            bail!("App backup path changed after Plan approval");
+                        }
+                        DeclarativeActionV1::create_managed_file_with_backup(
+                            format!("create-with-backup:{action_identity}"),
+                            target,
+                            resource,
+                            destination,
+                            backup,
+                            crate::install::hash_content(&original),
+                            desired_hash,
+                        )
+                    }
+                };
+                actions.push(ActionIrV1::new(
+                    format!("app-install:{fingerprint}:{action_identity}"),
+                    vec![action],
                 ));
             }
         }
@@ -3399,6 +3469,22 @@ fn add_app_journal_permissions(
     permissions.implicit(PermissionV1::Filesystem {
         access: FilesystemAccessV1::Remove,
         path,
+    });
+}
+
+fn add_app_backup_creation_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    destination: &Path,
+    backup: &Path,
+) {
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Remove,
+        path: review_path(context, destination),
+    });
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Write,
+        path: review_path(context, backup),
     });
 }
 
@@ -4669,6 +4755,214 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
     }
 
     #[tokio::test]
+    async fn approved_app_install_journals_backup_creation_and_commits_both_paths() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        for permission in [
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Remove,
+                path: "home:.config/demo/config.toml".to_string(),
+            },
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: "home:.config/demo/config.toml.shine.bak".to_string(),
+            },
+        ] {
+            assert!(plan.permissions.required.contains(&permission));
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_install_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions[0].actions[0].kind,
+            crate::action::ActionKindV1::CreateManagedFileWithBackup { .. }
+        ));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let entry = manifest
+            .find_by_source("app/demo/config.toml")
+            .expect("backup-aware receipt");
+        assert_eq!(entry.backup.as_ref(), Some(&backup));
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"desired");
+        assert_eq!(
+            runtime.host().read(&backup).await.unwrap(),
+            b"user-original"
+        );
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn app_install_blocks_instead_of_replacing_an_existing_backup() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        runtime.host().put_file(&backup, b"older-backup".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_backup_occupied".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+        assert_eq!(runtime.host().read(&backup).await.unwrap(), b"older-backup");
+    }
+
+    #[tokio::test]
+    async fn backup_aware_install_blocks_a_non_regular_destination() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let target = runtime.context().home_dir.join("user-config.toml");
+        runtime.host().put_file(&target, b"user-original".to_vec());
+        runtime.host().symlink(&target, &destination).await.unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_backup_source_not_regular".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_backup_install_rejects_a_backup_created_after_review() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().put_file(&backup, b"late-backup".to_vec());
+
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan"));
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+        assert_eq!(runtime.host().read(&backup).await.unwrap(), b"late-backup");
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn app_install_receipt_failure_leaves_journal_for_explicit_recovery() {
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
@@ -4725,6 +5019,61 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
                 .contains(&"app_recovery_required".to_string())
                 && step.action == PlanActionV1::Blocked
         }));
+    }
+
+    #[tokio::test]
+    async fn backup_install_receipt_failure_recovers_the_original_file() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+                .await
+                .is_err()
+        );
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"desired");
+        assert_eq!(
+            runtime.host().read(&backup).await.unwrap(),
+            b"user-original"
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+        assert!(runtime.host().read(&backup).await.is_err());
     }
 
     #[tokio::test]

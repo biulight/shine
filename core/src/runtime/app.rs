@@ -466,9 +466,16 @@ where
                         content,
                     )
                     .await?;
+                let backup = execution.backup.clone();
                 journal_execution = Some(execution);
-                Ok(InstallOutcome::Installed {
-                    hash: hash_content(content),
+                Ok(match backup {
+                    Some(backup) => InstallOutcome::BackedUpAndInstalled {
+                        backup,
+                        hash: hash_content(content),
+                    },
+                    None => InstallOutcome::Installed {
+                        hash: hash_content(content),
+                    },
                 })
             } else {
                 self.install_app_content(
@@ -513,6 +520,11 @@ where
                 Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
                     if !request.dry_run {
                         manifest.upsert(app_entry(&assessment, hash, Some(backup.clone())));
+                        if let Some(execution) = journal_execution {
+                            save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
+                            self.commit_app_managed_file_operation(&execution.operation_id)
+                                .await?;
+                        }
                     }
                     changed.insert(assessment.category.name.clone());
                     (

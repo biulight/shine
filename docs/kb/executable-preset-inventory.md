@@ -26,8 +26,8 @@ Classification vocabulary:
 | `app/surge` | manual Bun `generate-subscription.ts` generator | opaque generator | user | embedded | last-known-good managed file preserved; execution itself not reversible |
 
 All other built-in App file copy/transform/JSON-merge effects are Core-typed rather than executable
-Preset code. Phase 4 starts with absent-destination managed-file creation; update, merge, backup and
-remove actions remain to migrate.
+Preset code. Phase 4 now covers absent-destination and backup-aware unowned regular-file static Copy
+creation; managed update, merge and remove actions remain to migrate.
 
 ## Shell commands
 
@@ -61,10 +61,11 @@ the target ran but does not own third-party package uninstall or version rollbac
 ## Phase 4 migration order
 
 1. App absent-destination managed file create and explicit recovery (implemented).
-2. App backup-aware create, managed update, JSON merge and remove.
-3. Shell snapshot files, launchers and profile blocks.
-4. Managed Sys files/profile blocks and split DNS.
-5. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
+2. App backup-aware unowned regular-file static Copy create and restore (implemented).
+3. App managed update, JSON merge and remove.
+4. Shell snapshot files, launchers and profile blocks.
+5. Managed Sys files/profile blocks and split DNS.
+6. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
    opaque escape hatches unless a narrower typed action replaces them.
 
 Any new built-in executable capability must enter this inventory in the same change.

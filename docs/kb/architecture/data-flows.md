@@ -166,21 +166,23 @@ Reverse of install, driven entirely by the manifest — never by re-scanning pre
 
 ## Declarative App action and recovery
 
-Approved App install now routes a deliberately narrow creation case through the Roadmap Phase 4
-executor: a static Copy file whose unprivileged destination and manifest receipt are both absent.
-Updates, occupied destinations, JSON merge, generators and administrator writes retain their
-existing executors until their rollback contracts land:
+Approved App install now routes two deliberately narrow creation cases through the Roadmap Phase 4
+executor: an unprivileged static Copy whose manifest receipt is absent and whose destination is
+either absent or an unowned regular file with an absent fixed backup path. Managed updates, JSON
+merge, generators and administrator writes retain their existing executors until their rollback
+contracts land:
 
 ```text
 approved PlanV1
   → include App journal write/remove infrastructure permissions
   → regenerate and validate the exact Plan after approval
   → ActionIrV1(CreateManagedFile; destination + desired hash, no bytes)
+    or CreateManagedFileWithBackup; destination + backup + original/desired hashes, no bytes
   → validate action permissions are included in the approval
   → acquire host cross-process operation lock
   → refuse an existing app-operation-journal.toml
   → atomically persist prepared journal with original PlanApprovalV1
-  → atomically create the previously absent destination
+  → atomically create the absent destination, or rename original to backup then create destination
   → atomically persist applied action state
   → App lifecycle atomically persists the matching manifest receipt
   → commit re-reads and matches that receipt
@@ -190,21 +192,26 @@ approved PlanV1
 If execution is interrupted, recovery is separate from ordinary lifecycle planning:
 
 ```text
-read versioned journal + App manifest + destination
-  → matching durable receipt => preserve manifest-owned destination; clean journal only
-  → otherwise build app-recovery Plan bound to exact journal, manifest, and destination bytes
-  → changed destination => blocked/preserved
+read versioned journal + App manifest + destination + optional fixed backup
+  → matching durable receipt => preserve manifest-owned destination/backup; clean journal only
+  → otherwise build app-recovery Plan bound to exact journal, manifest, and current path bytes
+  → absent-create: remove only unchanged desired bytes
+  → backup-create: restore only original/missing, missing/original, or desired/original safe state
+  → any changed destination or backup => blocked/preserved
   → `shine app recover` renders explicit destination + operation-journal steps
   → default-No approval, or `--yes` for non-interactive recovery
   → acquire operation lock
   → regenerate and revalidate the same recovery Plan
-  → remove only transaction-created bytes that still match desired hash
+  → remove only unchanged transaction-created bytes or restore the unchanged transaction backup
   → remove journal
 ```
 
-The journal contains Action IR identities, hashes, state and the original approval, never managed
-content or secret plaintext. See ADR 0048 and `docs/declarative-action-recovery-prd.md` before
-extending it to update, uninstall, administrator or opaque actions.
+The journal contains Action IR identities, paths, hashes, state and the original approval, never
+managed/original content or secret plaintext. See
+[ADR 0048](../decisions/0048-separate-action-ir-and-explicit-recovery.md),
+[ADR 0050](../decisions/0050-backup-aware-app-creation-recovery.md), and
+`docs/declarative-action-recovery-prd.md` before extending it to update, uninstall, administrator or
+opaque actions.
 
 Ordinary App install/upgrade/uninstall/refresh/artifact mutation never recovers implicitly. When
 their planner observes the journal, the blocked Plan directs the user to `shine app recover`.

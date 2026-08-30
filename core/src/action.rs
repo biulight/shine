@@ -68,6 +68,24 @@ impl ActionIrV1 {
                         path: path_identity(destination),
                     });
                 }
+                ActionKindV1::CreateManagedFileWithBackup {
+                    destination,
+                    backup,
+                    ..
+                } => {
+                    required.insert(PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Write,
+                        path: path_identity(destination),
+                    });
+                    required.insert(PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Remove,
+                        path: path_identity(destination),
+                    });
+                    required.insert(PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Write,
+                        path: path_identity(backup),
+                    });
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
                 }
@@ -110,6 +128,29 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn create_managed_file_with_backup(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        destination: PathBuf,
+        backup: PathBuf,
+        original_hash: u64,
+        desired_hash: u64,
+    ) -> Self {
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::CreateManagedFileWithBackup {
+                destination,
+                backup,
+                original_hash,
+                desired_hash,
+            },
+            rollback: RollbackSupportV1::RestoreBackupIfUnchanged,
+        }
+    }
+
     fn validate(&self) -> Result<(), ActionIrError> {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
@@ -129,6 +170,25 @@ impl DeclarativeActionV1 {
             (ActionKindV1::CreateManagedFile { .. }, _) => Err(ActionIrError::Invalid(
                 "managed-file creation must use remove-created-if-unchanged rollback".to_string(),
             )),
+            (
+                ActionKindV1::CreateManagedFileWithBackup {
+                    destination,
+                    backup,
+                    ..
+                },
+                RollbackSupportV1::RestoreBackupIfUnchanged,
+            ) if !destination.as_os_str().is_empty()
+                && !backup.as_os_str().is_empty()
+                && destination != backup =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::CreateManagedFileWithBackup { .. }, _) => Err(
+                ActionIrError::Invalid(
+                    "backup-aware managed-file creation requires distinct non-empty paths and restore-backup-if-unchanged rollback"
+                        .to_string(),
+                ),
+            ),
             (
                 ActionKindV1::OpaqueExecution { capability, .. },
                 RollbackSupportV1::Unsupported { reason_code },
@@ -150,6 +210,12 @@ pub enum ActionKindV1 {
         destination: PathBuf,
         desired_hash: u64,
     },
+    CreateManagedFileWithBackup {
+        destination: PathBuf,
+        backup: PathBuf,
+        original_hash: u64,
+        desired_hash: u64,
+    },
     OpaqueExecution {
         capability: String,
         provenance: ActionProvenanceV1,
@@ -169,6 +235,7 @@ pub enum ActionProvenanceV1 {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum RollbackSupportV1 {
     RemoveCreatedIfUnchanged,
+    RestoreBackupIfUnchanged,
     Unsupported { reason_code: String },
 }
 
@@ -247,6 +314,48 @@ mod tests {
             access: FilesystemAccessV1::Write,
             path: "absolute:/home/test/.config/demo/config".to_string(),
         }));
+    }
+
+    #[test]
+    fn backup_creation_is_payload_free_and_derives_both_path_effects() {
+        let destination = PathBuf::from("/home/test/.config/demo/config");
+        let backup = PathBuf::from("/home/test/.config/demo/config.shine.bak");
+        let value = ActionIrV1::new(
+            "operation-backup",
+            vec![DeclarativeActionV1::create_managed_file_with_backup(
+                "action-backup",
+                "app/demo",
+                "config",
+                destination.clone(),
+                backup.clone(),
+                hash_content(b"private-original"),
+                hash_content(b"private-managed"),
+            )],
+        );
+        value.validate().unwrap();
+        let encoded = toml::to_string(&value).unwrap();
+        assert!(!encoded.contains("private-original"));
+        assert!(!encoded.contains("private-managed"));
+
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
+        assert!(requirements.uncomputable_codes.is_empty());
+        for permission in [
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: format!("absolute:{}", destination.display()),
+            },
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Remove,
+                path: format!("absolute:{}", destination.display()),
+            },
+            PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: format!("absolute:{}", backup.display()),
+            },
+        ] {
+            assert!(requirements.required.contains(&permission));
+        }
     }
 
     #[test]

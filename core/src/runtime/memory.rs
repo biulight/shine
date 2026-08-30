@@ -24,6 +24,8 @@ struct MemoryState {
     process_outputs: VecDeque<anyhow::Result<ProcessOutput>>,
     #[cfg(test)]
     write_failures: BTreeMap<PathBuf, usize>,
+    #[cfg(test)]
+    rename_failures: BTreeMap<(PathBuf, PathBuf), usize>,
 }
 
 #[derive(Clone, Default)]
@@ -67,6 +69,20 @@ impl InMemoryHost {
             .expect("in-memory host lock")
             .write_failures
             .insert(path.into(), successful_writes);
+    }
+
+    #[cfg(test)]
+    pub fn fail_rename_after(
+        &self,
+        from: impl Into<PathBuf>,
+        to: impl Into<PathBuf>,
+        successful_renames: usize,
+    ) {
+        self.state
+            .lock()
+            .expect("in-memory host lock")
+            .rename_failures
+            .insert((from.into(), to.into()), successful_renames);
     }
 }
 
@@ -323,6 +339,26 @@ impl FileSystemHost for InMemoryHost {
     ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
         Box::pin(async move {
             let mut state = self.state.lock().expect("in-memory host lock");
+            #[cfg(test)]
+            if let Some(remaining) = state
+                .rename_failures
+                .get_mut(&(from.to_path_buf(), to.to_path_buf()))
+            {
+                if *remaining == 0 {
+                    state
+                        .rename_failures
+                        .remove(&(from.to_path_buf(), to.to_path_buf()));
+                    return Err(HostError::new(
+                        std::io::ErrorKind::Other,
+                        anyhow::anyhow!(
+                            "injected in-memory rename failure: {} -> {}",
+                            from.display(),
+                            to.display()
+                        ),
+                    ));
+                }
+                *remaining -= 1;
+            }
             let Some(node) = state.nodes.remove(from) else {
                 return Err(not_found(from));
             };

@@ -1,8 +1,9 @@
 # Declarative Action and Recovery PRD
 
-> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, and 4B.5 are implemented:
-> approved App install uses the managed-file creation IR for absent, unprivileged static Copy
-> destinations, and the explicit CLI recovery path is available.
+> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, and 4C.1 are
+> implemented: approved App install uses managed-file creation IR for absent or backup-eligible
+> unowned, unprivileged static Copy destinations, and the explicit CLI recovery path can remove an
+> unchanged transaction-created file or restore an unchanged fixed backup.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -30,9 +31,18 @@ clear journal                     explicit AppRecovery Plan
                       no receipt → remove only if unchanged
 ```
 
-It intentionally supports only creation at an absent, unprivileged App destination. App updates,
-backup restoration, JSON merge, administrator paths, Shell/Sys actions, and automatic resume remain
-later slices.
+Slice 4C.1 extends the same property to an occupied but unowned destination without storing its
+bytes in the journal:
+
+```text
+prepared journal → rename original to fixed backup → atomic managed write → applied journal
+       ↓                         ↓                              ↓
+ original + no backup      missing + original backup      desired + original backup
+       └──────────── explicit recovery restores only an exact safe state ────────────┘
+```
+
+Managed update/remove, JSON merge, administrator paths, Shell/Sys actions, and automatic resume
+remain later slices.
 
 ## Goals
 
@@ -42,7 +52,8 @@ later slices.
    durable.
 4. Bind each journal to the exact original `PlanApprovalV1` for audit and later resume decisions.
 5. Require a fresh, snapshot-bound recovery Plan before rollback.
-6. Roll back a transaction-created file only while its bytes still match the recorded desired hash.
+6. Roll back a transaction-created file only while its bytes still match the recorded desired hash,
+   and restore a transaction-created backup only while both paths match the recorded safe state.
 7. Reject future journal/action schemas before any recovery mutation.
 8. Exercise apply, interrupted write, recovery, and post-interruption user modification entirely
    against the in-memory host.
@@ -64,10 +75,14 @@ Preset/state snapshots, and resolves permissions. It never embeds `ActionIrV1` o
 
 ### Action IR v1
 
-`ActionIrV1` contains an operation identity and ordered typed actions. The first executable kind is:
+`ActionIrV1` contains an operation identity and ordered typed actions. Its executable creation kinds
+are:
 
 - `CreateManagedFile`: canonical target/resource identity, resolved destination and desired content
   hash. The managed bytes are supplied separately after Plan approval and must match the hash.
+- `CreateManagedFileWithBackup`: the same identity plus the fixed backup path and original content
+  hash. It is valid only for an unowned regular-file, unprivileged static Copy destination with an
+  absent backup.
 
 The classification-only escape hatch is:
 
@@ -97,9 +112,9 @@ and recovery. The integrated App lifecycle preserves that serialization boundary
 ### Recovery
 
 Recovery is an explicit specialized `app-recovery` Plan. Planning hashes the exact journal bytes,
-App manifest, and current destination observation. It requests removal permission for the journal
-and, only when no matching receipt exists and the transaction-created destination still matches its
-desired hash, removal permission for that destination.
+App manifest, and current destination/backup observations. It requests removal permission for the
+journal and only the destination/backup write or removal permissions needed by the exact safe
+rollback state.
 
 Recovery outcomes are deliberately narrow:
 
@@ -111,8 +126,17 @@ Recovery outcomes are deliberately narrow:
 | No | Present with another hash | blocked | preserve destination and journal |
 | No | Opaque action | blocked | no automatic recovery |
 
+Backup-aware creation adds this exact matrix when no matching receipt exists:
+
+| Current destination | Current backup | Recovery Plan | Apply |
+|---|---|---|---|
+| Original hash | Missing | cleanup only | preserve destination; remove journal |
+| Missing | Original hash | ready | rename backup to destination; remove journal |
+| Desired hash | Original hash | ready | remove destination; rename backup back; remove journal |
+| Any other combination or non-regular path | Any other combination or non-regular path | blocked | preserve both paths and journal |
+
 The approved recovery Plan is regenerated again while holding the operation lock immediately
-before the first removal.
+before the first mutation.
 
 ## Delivery sequence
 
@@ -141,10 +165,17 @@ before the first removal.
   actions, and unsupported schemas.
 - Keep the recovery command available independently of the background release check.
 
-### Slice 4C — Managed update and uninstall
+### Slice 4C.1 — Backup-aware creation (implemented)
 
-- Introduce transaction-owned rollback material without persisting secret plaintext casually.
-- Support backup-aware creation over an unowned destination.
+- Bind the fixed backup path and original/desired fingerprints without storing either payload.
+- Block a pre-existing backup before approval and revalidate both paths under the operation lock.
+- Recover interruptions before rename, after rename, after managed write, and after durable receipt.
+- Preserve destination, backup, and journal if either path changes after interruption.
+
+### Slice 4C.2 — Managed update and uninstall
+
+- Introduce separate transaction-owned rollback material without persisting secret plaintext
+  casually.
 - Support managed update/remove with before/after fingerprints and post-operation modification
   protection.
 - Add administrator locking and rollback tests before privileged actions join the IR.
@@ -172,4 +203,5 @@ The Roadmap Phase 4 gate remains stricter than Slice 4A:
 ## Documentation impact
 
 Slice 4A is internal and adds no public commands or behavior. Slice 4B.5 releases the explicit
-recovery command and guidance, so the English and Simplified Chinese manuals are updated together.
+recovery command and guidance. Slice 4C.1 expands recovery to fixed backups and blocks an occupied
+backup rather than replacing it, so both public manual locales remain aligned.
