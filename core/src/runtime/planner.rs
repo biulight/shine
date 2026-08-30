@@ -20,6 +20,7 @@ use super::{
     command_path_for_name, link_is_current_with_host, parse_shell_lifecycle_target,
     split_dns_receipt,
 };
+use crate::action::{ActionIrV1, DeclarativeActionV1};
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppEntry, AppManifest};
 use crate::lifecycle::LifecycleOperation;
@@ -247,6 +248,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             request.prune_stale,
         )?;
         capture_context(&mut state, self.context())?;
+        let interrupted_operation =
+            if let Some(journal_bytes) = self.app_operation_journal_bytes().await? {
+                state.bytes("journal:app-operation", Some(&journal_bytes))?;
+                true
+            } else {
+                false
+            };
         let (manifest, manifest_bytes) =
             load_app_manifest(self.host(), &self.context().shine_dir).await?;
         capture_manifest_selection(
@@ -267,6 +275,22 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         )?;
         let mut permissions = PermissionAccumulator::default();
         let mut steps = Vec::new();
+
+        if interrupted_operation {
+            steps.push(
+                PlanStepV1::new(
+                    request
+                        .target
+                        .as_ref()
+                        .map(|category| format!("app/{category}"))
+                        .unwrap_or_else(|| "app".to_string()),
+                    Some("operation-journal"),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code("app_recovery_required"),
+            );
+            return finish_plan(self, request.operation, state, permissions, steps);
+        }
 
         if request.operation == LifecycleOperation::Uninstall {
             self.plan_app_uninstall(
@@ -546,6 +570,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     step = step.with_diagnostic_code("app_destination_occupation_override");
                 }
                 category_changes |= matches!(action, PlanActionV1::Create | PlanActionV1::Update);
+                if request.operation == LifecycleOperation::Install
+                    && action == PlanActionV1::Create
+                    && !destination_exists
+                    && file.install_strategy == crate::install::AppInstallStrategy::Copy
+                    && !file.requires_admin
+                {
+                    add_app_journal_permissions(self.context(), permissions);
+                }
                 steps.push(step);
             }
 
@@ -933,6 +965,24 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .collect::<Vec<_>>(),
         )?;
 
+        if let Some(journal_bytes) = self.app_operation_journal_bytes().await? {
+            state.bytes("journal:app-operation", Some(&journal_bytes))?;
+            return finish_specialized_plan(
+                self,
+                PlanOperationV1::AppRefresh,
+                state,
+                PermissionAccumulator::default(),
+                vec![
+                    PlanStepV1::new(
+                        format!("app/{}", request.category),
+                        Some("operation-journal"),
+                        PlanActionV1::Blocked,
+                    )
+                    .with_diagnostic_code("app_recovery_required"),
+                ],
+            );
+        }
+
         let mut permissions = PermissionAccumulator::default();
         permissions.declaration(
             category.permissions.as_ref(),
@@ -1082,6 +1132,23 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         capture_context(&mut state, self.context())?;
         state.public("category", &request.category)?;
         state.public("script", script.replace('\\', "/"))?;
+        if let Some(journal_bytes) = self.app_operation_journal_bytes().await? {
+            state.bytes("journal:app-operation", Some(&journal_bytes))?;
+            return finish_specialized_plan(
+                self,
+                operation,
+                state,
+                PermissionAccumulator::default(),
+                vec![
+                    PlanStepV1::new(
+                        format!("app/{}", request.category),
+                        Some("operation-journal"),
+                        PlanActionV1::Blocked,
+                    )
+                    .with_diagnostic_code("app_recovery_required"),
+                ],
+            );
+        }
         let mut permissions = PermissionAccumulator::default();
         permissions.declaration(
             category.permissions.as_ref(),
@@ -2060,13 +2127,20 @@ where
         if request.operation != LifecycleOperation::Install {
             bail!("approved App install requires an install Plan");
         }
-        approval.validate(&self.plan_apps(request.clone()).await?)?;
-        self.install_apps(
+        let plan = self.plan_apps(request.clone()).await?;
+        approval.validate(&plan)?;
+        let action_irs = self
+            .approved_app_install_action_irs(&request, &plan, approval)
+            .await?;
+        self.install_apps_with_approved_actions(
             AppLifecycleRequest {
                 target: request.target,
                 dry_run: false,
                 force: request.force,
             },
+            &plan,
+            approval,
+            action_irs,
             observer,
             interaction,
         )
@@ -2171,6 +2245,69 @@ where
             observer,
         )
         .await
+    }
+}
+
+impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    /// Emit the exact creation actions only after the corresponding install
+    /// Plan has been freshly regenerated and approved. Managed bytes remain
+    /// outside the Action IR and are checked again by the executor.
+    async fn approved_app_install_action_irs(
+        &self,
+        request: &AppPlanRequest,
+        plan: &PlanV1,
+        approval: &PlanApprovalV1,
+    ) -> Result<Vec<ActionIrV1>> {
+        approval.validate(plan)?;
+        let fingerprint = plan.fingerprint()?.as_hex();
+        let categories = self.app_categories(request.target.as_deref())?;
+        let (manifest, _) = load_app_manifest(self.host(), &self.context().shine_dir).await?;
+        let mut actions = Vec::new();
+
+        for category in categories {
+            for file in &category.files {
+                if file.generator.is_some()
+                    || file.requires_admin
+                    || file.install_strategy != crate::install::AppInstallStrategy::Copy
+                {
+                    continue;
+                }
+                let source = logical_app_source(&category, file);
+                let destination = self.app_destination(&category, file)?;
+                if manifest.find_by_source(&source).is_some()
+                    || manifest.find_by_dest(&destination).is_some()
+                    || path_exists(self.host(), &destination).await?
+                {
+                    continue;
+                }
+                let resource = file.source_rel.display().to_string();
+                let target = format!("app/{}", category.name);
+                if !plan.steps.iter().any(|step| {
+                    step.target == target
+                        && step.resource.as_deref() == Some(resource.as_str())
+                        && step.action == PlanActionV1::Create
+                }) {
+                    continue;
+                }
+                let desired = crate::install::transforms::apply(
+                    &file.transforms,
+                    self.app_source_bytes(&category.name, file)?,
+                    &self.context().env,
+                )?;
+                let action_identity = format!("{target}/{resource}");
+                actions.push(ActionIrV1::new(
+                    format!("app-install:{fingerprint}:{action_identity}"),
+                    vec![DeclarativeActionV1::create_managed_file(
+                        format!("create:{action_identity}"),
+                        target,
+                        resource,
+                        destination,
+                        crate::install::hash_content(&desired),
+                    )],
+                ));
+            }
+        }
+        Ok(actions)
     }
 }
 
@@ -3247,6 +3384,24 @@ fn add_shine_receipt_permission(
     });
 }
 
+fn add_app_journal_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+) {
+    let path = review_path(
+        context,
+        &context.shine_dir.join(super::APP_OPERATION_JOURNAL_FILE),
+    );
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Write,
+        path: path.clone(),
+    });
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Remove,
+        path,
+    });
+}
+
 fn capture_generator_inputs(
     context: &super::RuntimeContext,
     versions: &PlanningInputVersions,
@@ -4139,6 +4294,16 @@ install = {{ kind = 'package', provider = 'homebrew', package = 'tool' }}
                 .iter()
                 .any(|step| step.action == PlanActionV1::Create)
         );
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: "shine:app-operation-journal.toml".to_string(),
+                    })
+            );
+        }
         let encoded = serde_json::to_string(&plan).unwrap();
         assert!(!encoded.contains("secret-looking-content"));
         assert!(!host.operations().iter().any(|operation| matches!(
@@ -4416,6 +4581,150 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
                     | super::super::HostOperation::Run { .. }
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn approved_app_install_journals_create_and_commits_only_after_receipt_write() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file(
+                "app/demo/config.toml",
+                b"secret-managed-bytes".to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_install_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert_eq!(actions.len(), 1);
+        let encoded = toml::to_string(&actions[0]).unwrap();
+        assert!(
+            encoded.contains(&crate::install::hash_content(b"secret-managed-bytes").to_string())
+        );
+        assert!(!encoded.contains("secret-managed-bytes"));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::APP_OPERATION_JOURNAL_FILE);
+        let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/config.toml")
+                .map(|entry| entry.content_hash),
+            Some(crate::install::hash_content(b"secret-managed-bytes"))
+        );
+        assert!(runtime.host().read(&journal).await.is_err());
+
+        let operations = runtime.host().operations();
+        let journal_writes = operations
+            .iter()
+            .enumerate()
+            .filter_map(|(index, operation)| {
+                matches!(operation, super::super::HostOperation::Write(path) if path == &journal)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let destination_write = operations
+            .iter()
+            .position(|operation| matches!(operation, super::super::HostOperation::Write(path) if path == &destination))
+            .unwrap();
+        let receipt_write = operations
+            .iter()
+            .position(|operation| matches!(operation, super::super::HostOperation::Write(path) if path == &manifest_path))
+            .unwrap();
+        let journal_commit = operations
+            .iter()
+            .position(|operation| matches!(operation, super::super::HostOperation::Remove(path) if path == &journal))
+            .unwrap();
+        assert_eq!(journal_writes.len(), 2);
+        assert!(journal_writes[0] < destination_write);
+        assert!(destination_write < journal_writes[1]);
+        assert!(journal_writes[1] < receipt_write);
+        assert!(receipt_write < journal_commit);
+    }
+
+    #[tokio::test]
+    async fn app_install_receipt_failure_leaves_journal_for_explicit_recovery() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"desired".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let manifest_path = runtime.context().shine_dir.join("app-manifest.toml");
+        runtime.host().fail_write_after(&manifest_path, 0);
+
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .install_apps_approved(request.clone(), &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("failed to write app manifest"));
+        assert!(
+            runtime
+                .host()
+                .read(&runtime.context().home_dir.join(".config/demo/config.toml"))
+                .await
+                .is_ok()
+        );
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_ok()
+        );
+        assert!(runtime.host().read(&manifest_path).await.is_err());
+
+        let blocked = runtime.plan_apps(request).await.unwrap();
+        assert!(!blocked.is_ready());
+        assert!(blocked.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_required".to_string())
+                && step.action == PlanActionV1::Blocked
+        }));
     }
 
     #[tokio::test]

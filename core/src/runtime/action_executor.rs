@@ -3,7 +3,8 @@ use super::{
     RuntimeContext,
 };
 use crate::action::{ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, RollbackSupportV1};
-use crate::install::hash_content;
+use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
+use crate::install::{AppInstallStrategy, AppManifest, hash_content};
 use crate::plan::{
     FilesystemAccessV1, PLAN_APPROVAL_SCHEMA_VERSION, PermissionSetV1, PermissionV1, PlanActionV1,
     PlanApprovalV1, PlanInputsV1, PlanOperationV1, PlanStepV1, PlanV1, SnapshotDigestV1,
@@ -108,6 +109,14 @@ enum JournalActionStateV1 {
 }
 
 impl<H: FileSystemObservationHost> CoreRuntime<H> {
+    pub(crate) async fn app_operation_journal_bytes(&self) -> Result<Option<Vec<u8>>> {
+        Ok(
+            load_app_operation_journal(self.host(), &self.context().shine_dir)
+                .await?
+                .map(|(_, bytes)| bytes),
+        )
+    }
+
     /// Plan an explicit rollback of an interrupted App managed-file action.
     /// Recovery is never an implicit side effect of ordinary planning.
     pub async fn plan_app_operation_recovery(&self) -> Result<PlanV1> {
@@ -115,9 +124,15 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             load_app_operation_journal(self.host(), &self.context().shine_dir)
                 .await?
                 .context("no interrupted App operation is available for recovery")?;
+        let (manifest, manifest_bytes) =
+            load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
         let mut state = SnapshotDigestV1::builder("state:app-recovery");
         state.add_observation("operation", PlanOperationV1::AppRecovery.as_str())?;
         state.add_observation("journal", &journal_bytes)?;
+        state.add_observation(
+            "app-manifest",
+            manifest_bytes.as_deref().unwrap_or(b"missing"),
+        )?;
         let mut steps = Vec::new();
         let mut required = PermissionSetV1::new([PermissionV1::Filesystem {
             access: FilesystemAccessV1::Remove,
@@ -141,6 +156,17 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             .map(|bytes| format!("present:{}", hash_content(bytes)))
                             .unwrap_or_else(|| "missing".to_string()),
                     )?;
+                    if matching_app_receipt(&manifest, action) {
+                        steps.push(
+                            PlanStepV1::new(
+                                &action.target,
+                                Some(&action.resource),
+                                PlanActionV1::None,
+                            )
+                            .with_diagnostic_code("app_recovery_receipt_already_committed"),
+                        );
+                        continue;
+                    }
                     let (plan_action, code) = match current.as_deref() {
                         None => (PlanActionV1::None, "app_recovery_resource_absent"),
                         Some(bytes) if hash_content(bytes) == *desired_hash => {
@@ -280,6 +306,16 @@ where
         {
             bail!("App operation journal cannot commit before every action is applied");
         }
+        let (manifest, _) =
+            load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
+        if journal
+            .action_ir
+            .actions
+            .iter()
+            .any(|action| !matching_app_receipt(&manifest, action))
+        {
+            bail!("App operation journal cannot commit before its matching manifest receipt");
+        }
         remove_app_operation_journal(self.host(), &self.context().shine_dir).await
     }
 
@@ -295,8 +331,13 @@ where
         let (journal, _) = load_app_operation_journal(self.host(), &self.context().shine_dir)
             .await?
             .context("no interrupted App operation is available for recovery")?;
+        let (manifest, _) =
+            load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
         let mut rolled_back_actions = Vec::new();
         for action in journal.action_ir.actions.iter().rev() {
+            if matching_app_receipt(&manifest, action) {
+                continue;
+            }
             let ActionKindV1::CreateManagedFile {
                 destination,
                 desired_hash,
@@ -326,6 +367,52 @@ where
             rolled_back_actions,
         })
     }
+}
+
+async fn load_app_manifest_receipts(
+    host: &impl FileSystemObservationHost,
+    shine_dir: &Path,
+) -> Result<(AppManifest, Option<Vec<u8>>)> {
+    let bytes = read_optional(host, &shine_dir.join("app-manifest.toml")).await?;
+    let mut manifest: AppManifest = bytes
+        .as_deref()
+        .map(toml::from_slice)
+        .transpose()
+        .context("failed to parse app manifest")?
+        .unwrap_or_default();
+    match manifest.schema_version {
+        0 => manifest.schema_version = APP_MANIFEST_SCHEMA_VERSION,
+        APP_MANIFEST_SCHEMA_VERSION => {}
+        version => bail!(
+            "app manifest schema version {version} is newer than this Shine supports ({APP_MANIFEST_SCHEMA_VERSION})"
+        ),
+    }
+    Ok((manifest, bytes))
+}
+
+fn matching_app_receipt(
+    manifest: &AppManifest,
+    action: &crate::action::DeclarativeActionV1,
+) -> bool {
+    let ActionKindV1::CreateManagedFile {
+        destination,
+        desired_hash,
+    } = &action.kind
+    else {
+        return false;
+    };
+    let source = format!(
+        "{}/{}",
+        action.target.trim_end_matches('/'),
+        action.resource.trim_start_matches('/')
+    );
+    manifest.find_by_source(&source).is_some_and(|entry| {
+        entry.destination == *destination
+            && entry.content_hash == *desired_hash
+            && entry.backup.is_none()
+            && entry.install_strategy == AppInstallStrategy::Copy
+            && !entry.requires_admin
+    })
 }
 
 async fn load_app_operation_journal(
@@ -411,6 +498,7 @@ fn logical_path(path: &Path) -> String {
 mod tests {
     use super::*;
     use crate::action::DeclarativeActionV1;
+    use crate::install::AppEntry;
     use crate::plan::PlanStepV1;
     use crate::runtime::{InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimePlatform};
     use std::path::PathBuf;
@@ -471,6 +559,24 @@ mod tests {
         (plan, approval)
     }
 
+    async fn save_matching_receipt(runtime: &CoreRuntime<InMemoryHost>, content: &[u8]) {
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config".to_string(),
+                destination: runtime.context().home_dir.join(".config/demo/config"),
+                backup: None,
+                content_hash: hash_content(content),
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn managed_file_creation_stays_journaled_until_receipt_commit() {
         let runtime = runtime();
@@ -491,6 +597,19 @@ mod tests {
                 .unwrap()
                 .contains("managed-content")
         );
+        let error = runtime
+            .commit_app_managed_file_operation(&execution.operation_id)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("matching manifest receipt"));
+        assert!(
+            runtime
+                .host()
+                .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
+                .await
+                .is_ok()
+        );
+        save_matching_receipt(&runtime, content).await;
         runtime
             .commit_app_managed_file_operation(&execution.operation_id)
             .await
@@ -542,6 +661,40 @@ mod tests {
                 .read(&runtime.context().home_dir.join(".config/demo/config"))
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_preserves_a_created_file_after_its_receipt_is_durable() {
+        let runtime = runtime();
+        let content = b"managed-content";
+        let ir = action_ir(&runtime, content);
+        let (plan, approval) = approved_install_plan(&runtime, &ir);
+        runtime
+            .execute_app_managed_file_creation_approved(&plan, &approval, ir, content)
+            .await
+            .unwrap();
+        save_matching_receipt(&runtime, content).await;
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_receipt_already_committed".to_string())
+                && step.action == PlanActionV1::None
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        let recovered = runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(recovered.rolled_back_actions.is_empty());
+        assert_eq!(
+            runtime
+                .host()
+                .read(&runtime.context().home_dir.join(".config/demo/config"))
+                .await
+                .unwrap(),
+            content
         );
     }
 

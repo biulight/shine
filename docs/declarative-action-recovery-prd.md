@@ -1,7 +1,7 @@
 # Declarative Action and Recovery PRD
 
-> **Status:** Roadmap Phase 4 foundation in progress. The first Core-only managed-file creation
-> slice is implemented; existing CLI lifecycle commands do not execute through the new IR yet.
+> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A and 4B are implemented: approved
+> App install uses the managed-file creation IR for absent, unprivileged static Copy destinations.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -21,11 +21,12 @@ ActionIrV1(CreateManagedFile; content hash, no bytes)
     ↓
 prepared journal → atomic file creation → applied journal
     ↓                                      ↓
-receipt commit                         crash / interruption
+durable receipt                       crash / interruption
     ↓                                      ↓
 clear journal                     explicit AppRecovery Plan
                                            ↓
-                              remove only if hash is unchanged
+                       receipt exists → clean journal only
+                      no receipt → remove only if unchanged
 ```
 
 It intentionally supports only creation at an absent, unprivileged App destination. App updates,
@@ -45,9 +46,9 @@ recovery UX remain later slices.
 8. Exercise apply, interrupted write, recovery, and post-interruption user modification entirely
    against the in-memory host.
 
-## Non-goals for the first slice
+## Non-goals for the current creation slice
 
-- No change to existing App/Shell/Sys CLI behavior or terminal output.
+- No new App/Shell/Sys command, prompt, or terminal output.
 - No implicit recovery during ordinary list, status, planning, install, upgrade, or uninstall.
 - No serialized managed content, pre-operation content, environment values, or secret plaintext.
 - No rollback of opaque code, package-manager operations, network effects, or administrator work.
@@ -87,27 +88,28 @@ The initial journal lives at `<shine_dir>/app-operation-journal.toml` and contai
 - ordered per-action `prepared` or `applied` state.
 
 The journal is written atomically before file creation and again after it. It remains active until
-the caller has durably saved the matching App receipt, then an explicit commit removes it. A new
-operation must refuse to replace an existing journal.
+the App lifecycle has durably saved the matching App receipt, then an explicit commit re-reads that
+receipt and removes the journal. A new operation must refuse to replace an existing journal.
 
-The first slice reuses the host-provided cross-process operation lock for journal start, commit, and
-recovery. Production App lifecycle wiring must preserve that serialization boundary.
+The creation slice reuses the host-provided cross-process operation lock for journal start, commit,
+and recovery. The integrated App lifecycle preserves that serialization boundary.
 
 ### Recovery
 
-Recovery is an explicit specialized `app-recovery` Plan. Planning hashes the exact journal bytes
-and current destination observation. It requests removal permission for the journal and, only when
-the transaction-created destination still matches its desired hash, removal permission for that
-destination.
+Recovery is an explicit specialized `app-recovery` Plan. Planning hashes the exact journal bytes,
+App manifest, and current destination observation. It requests removal permission for the journal
+and, only when no matching receipt exists and the transaction-created destination still matches its
+desired hash, removal permission for that destination.
 
 Recovery outcomes are deliberately narrow:
 
-| Current destination | Recovery Plan | Apply |
-|---|---|---|
-| Missing | cleanup only | remove journal |
-| Present with desired hash | ready | remove destination, then journal |
-| Present with another hash | blocked | preserve destination and journal |
-| Opaque action | blocked | no automatic recovery |
+| Matching receipt | Current destination | Recovery Plan | Apply |
+|---|---|---|---|
+| Yes | Any state | cleanup only | preserve destination; remove journal |
+| No | Missing | cleanup only | remove journal |
+| No | Present with desired hash | ready | remove destination, then journal |
+| No | Present with another hash | blocked | preserve destination and journal |
+| No | Opaque action | blocked | no automatic recovery |
 
 The approved recovery Plan is regenerated again while holding the operation lock immediately
 before the first removal.
@@ -123,10 +125,11 @@ before the first removal.
 - Injected interruption between destination creation and applied-journal persistence.
 - User-modification blocking test.
 
-### Slice 4B — App lifecycle integration
+### Slice 4B — App lifecycle integration (implemented)
 
 - Planner includes journal infrastructure effects and emits the exact Action IR after approval.
 - App install persists each receipt before journal commit.
+- Commit re-reads the matching receipt; receipt-write failure leaves the journal recoverable.
 - Existing output, hooks, manifests, backup semantics, and lifecycle results remain compatible.
 - Add CLI recovery presentation only after its default behavior and exit semantics have an accepted
   decision.

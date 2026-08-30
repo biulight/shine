@@ -164,13 +164,17 @@ Reverse of install, driven entirely by the manifest — never by re-scanning pre
 3. Restore `<name>.shine.bak` if one exists.
 4. Remove the manifest entry.
 
-## Declarative App action and recovery foundation
+## Declarative App action and recovery
 
-The first Roadmap Phase 4 slice is a Core-only harness and does not yet replace released App
-lifecycle execution:
+Approved App install now routes a deliberately narrow creation case through the Roadmap Phase 4
+executor: a static Copy file whose unprivileged destination and manifest receipt are both absent.
+Updates, occupied destinations, JSON merge, generators and administrator writes retain their
+existing executors until their rollback contracts land:
 
 ```text
 approved PlanV1
+  → include App journal write/remove infrastructure permissions
+  → regenerate and validate the exact Plan after approval
   → ActionIrV1(CreateManagedFile; destination + desired hash, no bytes)
   → validate action permissions are included in the approval
   → acquire host cross-process operation lock
@@ -178,15 +182,17 @@ approved PlanV1
   → atomically persist prepared journal with original PlanApprovalV1
   → atomically create the previously absent destination
   → atomically persist applied action state
-  → caller persists matching App manifest receipt
-  → explicit commit removes the journal
+  → App lifecycle atomically persists the matching manifest receipt
+  → commit re-reads and matches that receipt
+  → commit removes the journal
 ```
 
 If execution is interrupted, recovery is separate from ordinary lifecycle planning:
 
 ```text
-read versioned journal + destination
-  → build app-recovery Plan bound to exact journal bytes and destination hash
+read versioned journal + App manifest + destination
+  → matching durable receipt => preserve manifest-owned destination; clean journal only
+  → otherwise build app-recovery Plan bound to exact journal, manifest, and destination bytes
   → changed destination => blocked/preserved
   → approve recovery Plan
   → acquire operation lock

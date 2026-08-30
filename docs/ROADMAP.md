@@ -25,8 +25,8 @@
   在内存中检查最终内容，写入仍只发生在显式 refresh 或已批准 mutation。GPG/age portable
   secrets 和 machine-local env 已存在。
 - Phase 4 已开始：Core 已有独立于安全 Plan 的版本化 Action IR、App operation journal 与显式
-  recovery Plan 的首个 managed-file create/rollback 骨架；尚未接管现有 CLI lifecycle，也不代表
-  Phase 4 exit criteria 已满足。
+  recovery Plan；真实 App install 已将“目标缺失、非管理员、静态 Copy”接入 create/receipt/commit
+  链路，但 update、uninstall、其他 action/domain 尚未迁移，也不代表 Phase 4 exit criteria 已满足。
 
 ## Guiding Principles
 

@@ -157,7 +157,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
   first action mutation, update action state atomically, persist the matching domain receipt, and
   only then commit by removing the journal. An existing or unsupported-version journal blocks a new
-  operation; it is never overwritten, upgraded, or discarded best-effort.
+  operation; it is never overwritten, upgraded, or discarded best-effort. App journal commit must
+  re-read and match the durable manifest receipt. If interruption happens after that receipt is
+  durable, explicit recovery preserves the now manifest-owned resource and removes only the stale
+  journal.
 - **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
   generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
   privilege, permission and unsupported-rollback classification until a narrower typed action

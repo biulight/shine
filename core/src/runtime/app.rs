@@ -1,3 +1,4 @@
+use crate::action::ActionIrV1;
 use crate::env::EnvVarSpec;
 use crate::install::file_ops::{
     InstallOutcome, UninstallOutcome, install_bytes_with_host, uninstall_entry_with_host,
@@ -7,6 +8,7 @@ use crate::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
 };
 use crate::permission::PermissionDeclarationV1;
+use crate::plan::{PlanApprovalV1, PlanV1};
 use crate::runtime::{
     AppFileInspection, CoreRuntime, FileSystemHost, InspectionChange, InspectionFileStatus,
     PrivilegedFileSystemHost, ProcessHost, ProcessIo, ProcessRequest, RuntimeEvent,
@@ -258,6 +260,12 @@ struct AppAssessmentOptions {
     preserve_generator_errors: bool,
 }
 
+struct ApprovedAppInstall<'a> {
+    plan: &'a PlanV1,
+    approval: &'a PlanApprovalV1,
+    action_irs: Vec<ActionIrV1>,
+}
+
 fn generator_inspection_status(diagnostic: Option<&'static str>) -> InspectionFileStatus {
     match diagnostic {
         Some("app_generator_trust_required") => InspectionFileStatus::GeneratorTrustRequired,
@@ -286,6 +294,39 @@ where
     pub(crate) async fn install_apps(
         &self,
         request: AppLifecycleRequest,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        self.install_apps_inner(request, None, observer, interaction)
+            .await
+    }
+
+    pub(crate) async fn install_apps_with_approved_actions(
+        &self,
+        request: AppLifecycleRequest,
+        plan: &PlanV1,
+        approval: &PlanApprovalV1,
+        action_irs: Vec<ActionIrV1>,
+        observer: &mut impl RuntimeObserver,
+        interaction: &mut impl RuntimeInteraction,
+    ) -> Result<AppLifecycleReport> {
+        self.install_apps_inner(
+            request,
+            Some(ApprovedAppInstall {
+                plan,
+                approval,
+                action_irs,
+            }),
+            observer,
+            interaction,
+        )
+        .await
+    }
+
+    async fn install_apps_inner(
+        &self,
+        request: AppLifecycleRequest,
+        mut approved: Option<ApprovedAppInstall<'_>>,
         observer: &mut impl RuntimeObserver,
         interaction: &mut impl RuntimeInteraction,
     ) -> Result<AppLifecycleReport> {
@@ -407,8 +448,30 @@ where
                 .as_deref()
                 .context("App assessment did not contain install content")?;
             let previous = manifest.find_by_dest(&assessment.destination).cloned();
-            let outcome = self
-                .install_app_content(
+            let resource = source.display().to_string();
+            let action_index = approved.as_ref().and_then(|approved| {
+                approved.action_irs.iter().position(|ir| {
+                    matches!(ir.actions.as_slice(), [action] if action.target == target && action.resource == resource)
+                })
+            });
+            let mut journal_execution = None;
+            let outcome = if let Some(index) = action_index {
+                let approved = approved.as_mut().expect("approved App actions");
+                let action_ir = approved.action_irs.remove(index);
+                let execution = self
+                    .execute_app_managed_file_creation_approved(
+                        approved.plan,
+                        approved.approval,
+                        action_ir,
+                        content,
+                    )
+                    .await?;
+                journal_execution = Some(execution);
+                Ok(InstallOutcome::Installed {
+                    hash: hash_content(content),
+                })
+            } else {
+                self.install_app_content(
                     &assessment.file,
                     content,
                     &assessment.destination,
@@ -416,7 +479,8 @@ where
                     request.dry_run,
                     request.force,
                 )
-                .await;
+                .await
+            };
             let (status, effects, backup, error, action) = match outcome {
                 Ok(InstallOutcome::Installed { hash }) => {
                     if !request.dry_run {
@@ -425,6 +489,14 @@ where
                             hash,
                             previous.as_ref().and_then(|entry| entry.backup.clone()),
                         ));
+                        if let Some(execution) = journal_execution {
+                            // The matching ownership receipt must be durable
+                            // before the executor is allowed to clear the
+                            // operation journal.
+                            save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
+                            self.commit_app_managed_file_operation(&execution.operation_id)
+                                .await?;
+                        }
                     }
                     changed.insert(assessment.category.name.clone());
                     (
@@ -502,6 +574,11 @@ where
                 status,
                 action,
             });
+        }
+        if let Some(approved) = approved
+            && !approved.action_irs.is_empty()
+        {
+            bail!("approved App creation actions were not consumed by lifecycle execution");
         }
         if !request.dry_run {
             save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;

@@ -3,6 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-08-30
 - **Evidence**: `core/src/action.rs`, `core/src/runtime/action_executor.rs`,
+  `core/src/runtime/planner.rs`, `core/src/runtime/app.rs`,
   `docs/declarative-action-recovery-prd.md`
 
 ## Context
@@ -36,15 +37,21 @@ after apply and remains until the App receipt owner explicitly commits it. A pre
 blocks another operation instead of being overwritten. Journal start, commit and recovery use the
 host-provided cross-process operation lock.
 
-Recovery uses the specialized `app-recovery` Plan operation. Its state snapshot binds the exact
-journal bytes and destination observation, and its permission set includes every removal it may
-perform. Apply replans under the operation lock before mutation. A transaction-created file is
-removed only if it still matches the recorded desired hash; a missing file permits journal cleanup,
-while changed bytes or opaque actions block and preserve all state.
+Approved App install planners add the journal's write/remove infrastructure permissions only for
+eligible absent-destination creation. After exact approval validation, the planner emits a
+deterministic one-action IR bound to the Plan fingerprint, logical App resource, resolved
+destination, and desired hash. Real App install executes that IR, saves its matching manifest
+receipt immediately, and then asks the executor to commit. Commit re-reads the manifest and refuses
+to remove the journal unless the Copy receipt matches source, destination, hash, privilege, and
+backup state.
 
-The foundation API is not yet wired into released App lifecycle commands. Production wiring must
-first add journal infrastructure effects to ordinary App planning and persist the matching receipt
-before journal commit.
+Recovery uses the specialized `app-recovery` Plan operation. Its state snapshot binds the exact
+journal bytes, App manifest, and destination observation, and its permission set includes every
+removal it may perform. Apply replans under the operation lock before mutation. A transaction-created file is
+removed only if it still matches the recorded desired hash; a missing file permits journal cleanup,
+while changed bytes or opaque actions block and preserve all state. If the matching receipt was
+already durable before interruption, recovery treats ownership as committed, preserves the
+resource, and removes only the stale journal.
 
 ## Consequences
 
