@@ -134,6 +134,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             manifest_bytes.as_deref().unwrap_or(b"missing"),
         )?;
         let mut steps = Vec::new();
+        let mut blocked = false;
         let mut required = PermissionSetV1::new([PermissionV1::Filesystem {
             access: FilesystemAccessV1::Remove,
             path: review_path(
@@ -176,23 +177,46 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             });
                             (PlanActionV1::Remove, "app_recovery_remove_created_file")
                         }
-                        Some(_) => (PlanActionV1::Blocked, "app_recovery_user_modified"),
+                        Some(_) => {
+                            blocked = true;
+                            (PlanActionV1::Blocked, "app_recovery_user_modified")
+                        }
                     };
                     steps.push(
                         PlanStepV1::new(&action.target, Some(&action.resource), plan_action)
                             .with_diagnostic_code(code),
                     );
                 }
-                ActionKindV1::OpaqueExecution { .. } => steps.push(
-                    PlanStepV1::new(
-                        &action.target,
-                        Some(&action.resource),
-                        PlanActionV1::Blocked,
-                    )
-                    .with_diagnostic_code("app_recovery_opaque_action"),
-                ),
+                ActionKindV1::OpaqueExecution { .. } => {
+                    blocked = true;
+                    steps.push(
+                        PlanStepV1::new(
+                            &action.target,
+                            Some(&action.resource),
+                            PlanActionV1::Blocked,
+                        )
+                        .with_diagnostic_code("app_recovery_opaque_action"),
+                    );
+                }
             }
         }
+
+        steps.push(
+            PlanStepV1::new(
+                "app",
+                Some("operation-journal"),
+                if blocked {
+                    PlanActionV1::Preserve
+                } else {
+                    PlanActionV1::Remove
+                },
+            )
+            .with_diagnostic_code(if blocked {
+                "app_recovery_journal_preserved"
+            } else {
+                "app_recovery_clear_journal"
+            }),
+        );
 
         let preset = self.presets().digest_v1()?;
         Ok(PlanV1::new(
@@ -682,6 +706,14 @@ mod tests {
                 .contains(&"app_recovery_receipt_already_committed".to_string())
                 && step.action == PlanActionV1::None
         }));
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.target == "app"
+                && step.resource.as_deref() == Some("operation-journal")
+                && step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_clear_journal".to_string())
+        }));
         let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
         let recovered = runtime
             .recover_app_operation_approved(&recovery_approval)
@@ -717,6 +749,14 @@ mod tests {
             .put_file(&destination, b"user-change".to_vec());
         let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
         assert!(!recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.target == "app"
+                && step.resource.as_deref() == Some("operation-journal")
+                && step.action == PlanActionV1::Preserve
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_journal_preserved".to_string())
+        }));
         assert_eq!(
             PlanApprovalV1::for_reviewed_plan(&recovery_plan),
             Err(crate::plan::PlanApprovalError::PlanNotReady)

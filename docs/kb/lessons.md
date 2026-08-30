@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-30 — Cleanup-only recovery still needs a mutating Plan step
+
+- **Symptom**: recovering an interrupted App operation after its matching receipt was already
+  durable would remove the stale journal without asking for CLI Plan confirmation.
+- **Root cause**: the recovery Plan declared journal removal permission but represented only the
+  managed destination as a `None` step; CLI confirmation is intentionally derived from mutating
+  semantic steps rather than permissions alone.
+- **Fix**: add an explicit journal Remove step to every ready recovery Plan and a Preserve step to
+  blocked recovery, then expose the operation through the default-No `shine app recover` flow.
+- **Rule**: infrastructure cleanup is still a user-visible mutation. Every approved cleanup must
+  have a matching semantic Plan step; a permission entry by itself is not presentation or consent.
+
 ## 2026-08-30 — Generator evaluation must be explicit without inventing a preview lifecycle
 
 - **Symptom**: making all App inspection process-free prevented developers from checking final

@@ -180,6 +180,9 @@ async fn run(cli: Cli) -> Result<()> {
                 ))
                 .await
             }
+            AppCommands::Recover { yes } => {
+                Box::pin(apps::handle_recover_approved(&config, yes)).await
+            }
             AppCommands::Uninstall {
                 category,
                 force,
@@ -1238,6 +1241,7 @@ mod tests {
             vec!["shine", "upgrade", "--yes"],
             vec!["shine", "app", "install", "demo", "--yes"],
             vec!["shine", "app", "refresh", "demo", "--yes"],
+            vec!["shine", "app", "recover", "--yes"],
             vec!["shine", "app", "uninstall", "demo", "--yes"],
             vec!["shine", "app", "artifact", "apply", "demo", "--yes"],
             vec!["shine", "app", "artifact", "remove", "demo", "--yes"],
@@ -2123,6 +2127,25 @@ mod tests {
                     ..
                 }
             } if category == "surge" && file == "subscription-proxies.conf"
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_explicit_app_recovery() {
+        let cli = Cli::try_parse_from(["shine", "app", "recover"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Recover { yes: false }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "app", "recover", "--yes"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::App {
+                command: AppCommands::Recover { yes: true }
+            }
         ));
     }
 

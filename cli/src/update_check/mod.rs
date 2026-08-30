@@ -1,4 +1,4 @@
-use crate::commands::{Commands, TaskCommands};
+use crate::commands::{AppCommands, Commands, TaskCommands};
 use crate::{config::Config, version};
 use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueEnum;
@@ -125,23 +125,7 @@ pub async fn maybe_notify(config: &Config, command: &Commands) -> Result<()> {
     // Skip the background version check for update/self commands. `shine update`
     // and `shine self upgrade` do their own forced fetch below; `shine self install`
     // should remain available even when the current binary is version-gated.
-    let skip_background_update_check = matches!(
-        command,
-        Commands::Update(..)
-            | Commands::Preset { .. }
-            | Commands::State { .. }
-            | Commands::Self_ { .. }
-            | Commands::Serve { .. }
-            | Commands::Env { .. }
-            | Commands::Run(..)
-    ) || matches!(command, Commands::Upgrade(cmd) if cmd.pull)
-        || matches!(
-            command,
-            Commands::Task {
-                command: TaskCommands::Run(..)
-            }
-        );
-    if !skip_background_update_check {
+    if !skip_background_update_check(command) {
         match check_for_update(config).await {
             Ok(UpdateStatus::UpToDate) => {}
             Ok(UpdateStatus::UpdateAvailable { latest }) => {
@@ -162,6 +146,31 @@ pub async fn maybe_notify(config: &Config, command: &Commands) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn skip_background_update_check(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::Update(..)
+            | Commands::Preset { .. }
+            | Commands::State { .. }
+            | Commands::Self_ { .. }
+            | Commands::Serve { .. }
+            | Commands::Env { .. }
+            | Commands::Run(..)
+    ) || matches!(command, Commands::Upgrade(cmd) if cmd.pull)
+        || matches!(
+            command,
+            Commands::App {
+                command: AppCommands::Recover { .. }
+            }
+        )
+        || matches!(
+            command,
+            Commands::Task {
+                command: TaskCommands::Run(..)
+            }
+        )
 }
 
 fn compare_versions(current: &Version, latest: &Version) -> UpdateStatus {
@@ -338,6 +347,14 @@ mod tests {
 
     async fn make_temp_dir() -> PathBuf {
         crate::test_support::make_temp_dir("shine-update-check").await
+    }
+
+    #[test]
+    fn explicit_app_recovery_skips_background_update_gate() {
+        let command = Commands::App {
+            command: AppCommands::Recover { yes: false },
+        };
+        assert!(skip_background_update_check(&command));
     }
 
     #[test]

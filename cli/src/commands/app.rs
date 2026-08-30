@@ -46,6 +46,12 @@ pub enum AppCommands {
         #[arg(long)]
         yes: bool,
     },
+    /// Review and recover an interrupted app lifecycle operation
+    Recover {
+        /// Approve the displayed recovery Plan without prompting
+        #[arg(long)]
+        yes: bool,
+    },
     /// Uninstall installed app preset files and optionally restore backups
     Uninstall {
         /// Category to uninstall (e.g. vim, starship). Uninstalls all if omitted.

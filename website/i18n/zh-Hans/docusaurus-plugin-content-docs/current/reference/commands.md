@@ -64,6 +64,7 @@ shine app list
 shine app info <CATEGORY> [--run-generators] [--diff]
 shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
 shine app refresh <CATEGORY> [FILE] [--force] [--yes]
+shine app recover [--yes]
 shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
 shine app artifact apply <APP_ID> [--yes]
 shine app artifact remove <APP_ID> [--yes]
@@ -80,6 +81,13 @@ shine app artifact remove <APP_ID> [--yes]
 `--dry-run` 互斥；dry-run 保持原有预览格式，不是已批准 Plan。
 
 `app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。`app artifact apply/remove` 显式运行预设声明的外部集成脚本，Shine 不会把 apply 隐式作为普通安装或升级的一部分。
+
+如果 App 安装在 operation journal 写入后中断，之后需要安全 Plan 的 App mutation 命令会停止并
+提示恢复，不会隐式修改这段中断状态；只读检查也不会恢复或丢弃 journal。运行
+`shine app recover` 可以审阅独立的 recovery Plan。中断后被用户修改的文件会保留；ownership
+receipt 已持久化时，Shine 保留受管文件，只清理 stale journal。恢复确认默认是 No；没有交互
+终端时必须传入 `--yes`。journal 缺失或无效、action 不受支持，或目标文件已被用户修改时，命令
+返回非零且不执行 mutation。
 
 ## 状态、更新与补全
 

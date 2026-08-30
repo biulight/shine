@@ -69,6 +69,7 @@ shine app list
 shine app info <CATEGORY> [--run-generators] [--diff]
 shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
 shine app refresh <CATEGORY> [FILE] [--force] [--yes]
+shine app recover [--yes]
 shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
 shine app artifact apply <APP_ID> [--yes]
 shine app artifact remove <APP_ID> [--yes]
@@ -91,6 +92,15 @@ retains its existing preview format and is not an approved Plan.
 `app refresh` handles only generated files tracked by the manifest and preserves the last successful
 content on failure. Artifact apply/remove explicitly runs an external integration declared by the
 preset; ordinary installation and upgrade do not implicitly apply it.
+
+If an App installation is interrupted after its operation journal is written, later mutating App
+commands that require a security Plan stop with recovery guidance instead of changing that state
+implicitly. Read-only inspection does not recover or discard the journal. Run `shine app recover`
+to inspect a separate recovery Plan. It preserves files that have changed since the interruption;
+when the ownership receipt is already durable it keeps the managed file and clears only the stale
+journal. Recovery defaults to No and requires `--yes` when no interactive terminal is available. A
+missing or invalid journal, unsupported action, or user-modified file returns nonzero without
+mutation.
 
 ## Status, updates, and completions
 

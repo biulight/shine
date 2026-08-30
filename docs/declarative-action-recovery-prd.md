@@ -1,7 +1,8 @@
 # Declarative Action and Recovery PRD
 
-> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A and 4B are implemented: approved
-> App install uses the managed-file creation IR for absent, unprivileged static Copy destinations.
+> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, and 4B.5 are implemented:
+> approved App install uses the managed-file creation IR for absent, unprivileged static Copy
+> destinations, and the explicit CLI recovery path is available.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -30,8 +31,8 @@ clear journal                     explicit AppRecovery Plan
 ```
 
 It intentionally supports only creation at an absent, unprivileged App destination. App updates,
-backup restoration, JSON merge, administrator paths, Shell/Sys actions, automatic resume, and CLI
-recovery UX remain later slices.
+backup restoration, JSON merge, administrator paths, Shell/Sys actions, and automatic resume remain
+later slices.
 
 ## Goals
 
@@ -46,9 +47,8 @@ recovery UX remain later slices.
 8. Exercise apply, interrupted write, recovery, and post-interruption user modification entirely
    against the in-memory host.
 
-## Non-goals for the current creation slice
+## Non-goals for the Action IR creation slice
 
-- No new App/Shell/Sys command, prompt, or terminal output.
 - No implicit recovery during ordinary list, status, planning, install, upgrade, or uninstall.
 - No serialized managed content, pre-operation content, environment values, or secret plaintext.
 - No rollback of opaque code, package-manager operations, network effects, or administrator work.
@@ -131,8 +131,15 @@ before the first removal.
 - App install persists each receipt before journal commit.
 - Commit re-reads the matching receipt; receipt-write failure leaves the journal recoverable.
 - Existing output, hooks, manifests, backup semantics, and lifecycle results remain compatible.
-- Add CLI recovery presentation only after its default behavior and exit semantics have an accepted
-  decision.
+
+### Slice 4B.5 — Explicit CLI recovery (implemented)
+
+- Add `shine app recover [--yes]` after accepting its default behavior and exit semantics.
+- Render a recovery-specific Plan with an explicit journal Remove or Preserve step.
+- Keep ordinary App lifecycle operations blocked with actionable recovery guidance.
+- Return non-zero without mutation for missing/invalid journals, user modifications, opaque
+  actions, and unsupported schemas.
+- Keep the recovery command available independently of the background release check.
 
 ### Slice 4C — Managed update and uninstall
 
@@ -164,6 +171,5 @@ The Roadmap Phase 4 gate remains stricter than Slice 4A:
 
 ## Documentation impact
 
-Slice 4A is internal and adds no public commands or behavior, so the English and Simplified Chinese
-manuals remain unchanged. Any released recovery command, new diagnostic, or changed install flow
-must update both locales in the same change.
+Slice 4A is internal and adds no public commands or behavior. Slice 4B.5 releases the explicit
+recovery command and guidance, so the English and Simplified Chinese manuals are updated together.

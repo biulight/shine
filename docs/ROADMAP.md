@@ -26,7 +26,8 @@
   secrets 和 machine-local env 已存在。
 - Phase 4 已开始：Core 已有独立于安全 Plan 的版本化 Action IR、App operation journal 与显式
   recovery Plan；真实 App install 已将“目标缺失、非管理员、静态 Copy”接入 create/receipt/commit
-  链路，但 update、uninstall、其他 action/domain 尚未迁移，也不代表 Phase 4 exit criteria 已满足。
+  链路，`shine app recover` 提供显式、重新批准的 rollback/cleanup 入口，但 update、uninstall、
+  其他 action/domain 尚未迁移，也不代表 Phase 4 exit criteria 已满足。
 
 ## Guiding Principles
 

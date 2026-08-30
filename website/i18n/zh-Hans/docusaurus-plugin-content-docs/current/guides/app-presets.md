@@ -51,6 +51,23 @@ Plan，不能绕过缺失权限、被阻塞的 teardown 或外部代码 gate。u
 
 默认情况下，安装后被用户修改过的文件会保留并标记为用户修改。若安装时创建过备份，安全卸载会恢复原文件。`--purge` 还会删除相应预设目录；卸载全部类别时也会删除 manifest。
 
+## 恢复中断的安装
+
+在受支持的 App 文件 mutation 之前，Shine 会先写入 operation journal。如果进程在这之后中断，
+App install、upgrade、uninstall、refresh 和 artifact 等 mutation 命令会保持阻塞，避免静默
+丢弃恢复状态；只读 status/update 检查不会恢复或删除 journal。使用以下命令审阅并应用独立的
+recovery Plan：
+
+```bash
+shine app recover
+# 仅在已经审阅同一 Plan 的非交互环境中使用：
+shine app recover --yes
+```
+
+只有 transaction-created 文件仍与 Shine 写入的内容逐字节相同时，恢复才会将其删除。如果匹配的
+manifest receipt 已经持久化，Shine 会保留受管文件，只清理 stale journal。如果文件在中断后被
+修改，恢复命令返回非零，并保留文件和 journal 等待显式处理。不要手动编辑或删除 journal。
+
 ## 配置变换
 
 部分预设会在安装前处理源文件，例如：

@@ -60,6 +60,24 @@ By default, files modified after installation are preserved and reported as user
 uninstall restores any backup created during installation. `--purge` also removes the category's
 preset directory; uninstalling every category also removes the manifest.
 
+## Recover an interrupted installation
+
+Shine writes an operation journal before the supported App file mutation. If the process stops
+after that point, mutating App install, upgrade, uninstall, refresh, and artifact commands remain
+blocked so they cannot silently discard recovery state. Read-only status/update inspection does not
+recover or remove the journal. Review and apply the dedicated recovery Plan with:
+
+```bash
+shine app recover
+# Non-interactive only after reviewing the same Plan:
+shine app recover --yes
+```
+
+Recovery removes a transaction-created file only when it is still byte-for-byte the content Shine
+wrote. If a matching manifest receipt is already durable, it preserves the managed file and clears
+only the stale journal. If the file changed after interruption, recovery returns nonzero and keeps
+both the file and journal for explicit resolution. Do not edit or delete the journal manually.
+
 ## Configuration transforms
 
 Some presets process source files before installation:

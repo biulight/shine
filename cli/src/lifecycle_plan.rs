@@ -16,6 +16,7 @@ use std::io::IsTerminal;
 #[derive(Clone, Debug)]
 pub(crate) enum LifecyclePlanRequest {
     App(AppPlanRequest),
+    AppRecovery,
     AppRefresh(AppRefreshPlanRequest),
     AppArtifact(AppArtifactPlanRequest),
     Shell(ShellPlanRequest),
@@ -31,6 +32,10 @@ impl LifecyclePlanRequest {
     pub(crate) fn app(mut request: AppPlanRequest, config: &Config) -> Self {
         request.input_versions = planning_input_versions(config);
         Self::App(request)
+    }
+
+    pub(crate) fn app_recovery() -> Self {
+        Self::AppRecovery
     }
 
     pub(crate) fn shell(mut request: ShellPlanRequest, config: &Config) -> Self {
@@ -78,6 +83,7 @@ impl LifecyclePlanRequest {
     async fn generate(&self, runtime: &CoreRuntime<RealHost>) -> Result<PlanV1> {
         match self {
             Self::App(request) => runtime.plan_apps(request.clone()).await,
+            Self::AppRecovery => runtime.plan_app_operation_recovery().await,
             Self::AppRefresh(request) => runtime.plan_app_refresh(request.clone()).await,
             Self::AppArtifact(request) => runtime.plan_app_artifact(request.clone()).await,
             Self::Shell(request) => runtime.plan_shells(request.clone()).await,
@@ -110,6 +116,7 @@ pub(crate) async fn review_plans(
     let mut planned = Vec::new();
     let mut needs_confirmation = false;
     let mut blocked = false;
+    let mut blocked_diagnostics = std::collections::BTreeSet::new();
     for request in requests {
         request.configure_runtime(&mut runtime);
         let plan = request.generate(&runtime).await?;
@@ -117,6 +124,11 @@ pub(crate) async fn review_plans(
             println!("{line}");
         }
         blocked |= !plan.is_ready();
+        blocked_diagnostics.extend(
+            plan.steps
+                .iter()
+                .flat_map(|step| step.diagnostic_codes.iter().cloned()),
+        );
         needs_confirmation |= plan.steps.iter().any(|step| {
             matches!(
                 step.action,
@@ -130,7 +142,7 @@ pub(crate) async fn review_plans(
     }
 
     if blocked {
-        bail!("security Plan is blocked; no changes were made");
+        bail!(blocked_plan_message(&blocked_diagnostics));
     }
 
     if needs_confirmation && !yes {
@@ -155,6 +167,18 @@ pub(crate) async fn review_plans(
             })
         })
         .collect()
+}
+
+fn blocked_plan_message(diagnostics: &std::collections::BTreeSet<String>) -> &'static str {
+    if diagnostics.contains("app_recovery_required") {
+        "security Plan is blocked by an interrupted App operation; run `shine app recover` to review and resolve it"
+    } else if diagnostics.contains("app_recovery_user_modified") {
+        "App recovery is blocked because a managed file changed after the interrupted operation; the file and operation journal were preserved"
+    } else if diagnostics.contains("app_recovery_opaque_action") {
+        "App recovery is blocked because the interrupted operation contains an action that cannot be rolled back automatically; no changes were made"
+    } else {
+        "security Plan is blocked; no changes were made"
+    }
 }
 
 pub(crate) async fn prepare_runtime(
@@ -351,5 +375,19 @@ mod tests {
         assert!(rendered.contains("command demo"));
         assert!(rendered.contains("Config snapshot  missing"));
         assert!(rendered.contains("Fingerprint"));
+    }
+
+    #[test]
+    fn blocked_plan_messages_point_to_explicit_app_recovery() {
+        let recovery_required =
+            std::collections::BTreeSet::from(["app_recovery_required".to_string()]);
+        assert_eq!(
+            blocked_plan_message(&recovery_required),
+            "security Plan is blocked by an interrupted App operation; run `shine app recover` to review and resolve it"
+        );
+
+        let user_modified =
+            std::collections::BTreeSet::from(["app_recovery_user_modified".to_string()]);
+        assert!(blocked_plan_message(&user_modified).contains("operation journal were preserved"));
     }
 }

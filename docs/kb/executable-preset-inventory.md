@@ -60,7 +60,7 @@ the target ran but does not own third-party package uninstall or version rollbac
 
 ## Phase 4 migration order
 
-1. App absent-destination managed file create (foundation implemented, lifecycle wiring pending).
+1. App absent-destination managed file create and explicit recovery (implemented).
 2. App backup-aware create, managed update, JSON merge and remove.
 3. Shell snapshot files, launchers and profile blocks.
 4. Managed Sys files/profile blocks and split DNS.

@@ -23,6 +23,8 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   migrated every built-in App, Shell, and Sys target.
 - Added `shine trust inspect/grant/list/revoke` and owner-only, target-scoped external-code grants
   bound to the current code digest, trust layer, capability, and exact permission set.
+- Added `shine app recover` to review and safely clean up or roll back an interrupted journaled App
+  installation without overwriting files changed after the interruption.
 
 ### Breaking changes
 

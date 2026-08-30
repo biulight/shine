@@ -78,6 +78,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `info <TARGET>` | `cli/src/info/`; explicit system items delegate to `sys/` |
 | `app artifact apply/remove <app-id>` | `cli/src/apps/build.rs` |
 | `app refresh <app-id> [file]` | `cli/src/apps/refresh.rs` |
+| `app recover` | `cli/src/apps/recovery.rs` → Core explicit recovery Plan/apply |
 | `sys list/bootstrap/profile/...` | `cli/src/sys/` |
 | `theme sync` | `cli/src/theme/` |
 | `env ...` | `cli/src/env/` plus `cli/src/secret/` |
@@ -107,6 +108,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/apps/metadata.rs` | Compatibility re-exports of Core App metadata types |
 | `cli/src/apps/annotation.rs` | Legacy `shine-dest:` annotation parsing |
 | `cli/src/apps/refresh.rs` | Core explicit-generator-refresh adapter |
+| `cli/src/apps/recovery.rs` | Core explicit App operation recovery Plan/apply adapter |
 | `cli/src/apps/build.rs` | Core artifact apply/remove adapter |
 | `cli/src/install_core/file_ops.rs` | Test-only compatibility coverage for Core host-backed copy, backup, and restore primitives |
 | `cli/src/install_core/manifest.rs` | Compatibility re-export of Core-owned `app-manifest.toml` types |

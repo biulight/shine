@@ -8,6 +8,7 @@ mod install;
 #[cfg(test)]
 mod json_merge;
 mod metadata;
+mod recovery;
 mod refresh;
 mod report;
 mod uninstall;
@@ -22,6 +23,7 @@ pub use metadata::{
     AppCategory, AppDestinationRoot, AppFile, AppGenerator, AppHook, AppListMode,
     load_active_categories, load_embedded_categories, load_installed_categories,
 };
+pub use recovery::handle_recover_approved;
 pub use refresh::{handle_refresh, handle_refresh_approved};
 pub use uninstall::{handle_uninstall, handle_uninstall_approved};
 #[cfg(test)]

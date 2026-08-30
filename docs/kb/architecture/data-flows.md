@@ -194,7 +194,8 @@ read versioned journal + App manifest + destination
   → matching durable receipt => preserve manifest-owned destination; clean journal only
   → otherwise build app-recovery Plan bound to exact journal, manifest, and destination bytes
   → changed destination => blocked/preserved
-  → approve recovery Plan
+  → `shine app recover` renders explicit destination + operation-journal steps
+  → default-No approval, or `--yes` for non-interactive recovery
   → acquire operation lock
   → regenerate and revalidate the same recovery Plan
   → remove only transaction-created bytes that still match desired hash
@@ -204,6 +205,12 @@ read versioned journal + App manifest + destination
 The journal contains Action IR identities, hashes, state and the original approval, never managed
 content or secret plaintext. See ADR 0048 and `docs/declarative-action-recovery-prd.md` before
 extending it to update, uninstall, administrator or opaque actions.
+
+Ordinary App install/upgrade/uninstall/refresh/artifact mutation never recovers implicitly. When
+their planner observes the journal, the blocked Plan directs the user to `shine app recover`.
+Read-only status/update inspection does not remove the journal. Missing or invalid journals,
+unsupported schemas, opaque actions, and post-interruption user changes fail without mutation; the
+CLI reports only a safe rollback count and journal-cleanup outcome.
 
 ## App update (`shine update`)
 

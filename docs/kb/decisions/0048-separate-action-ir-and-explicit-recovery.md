@@ -63,4 +63,4 @@ resource, and removes only the stale journal.
   uninstall, administrator, package-manager, or cross-target transactions.
 - Journal files are ownership evidence comparable to manifests: future actions must validate schema,
   target scope, fingerprints and current bytes before mutation.
-- Released recovery UX and automatic resume remain separate decisions.
+- ADR 0049 defines the released explicit recovery UX; automatic resume remains a separate decision.

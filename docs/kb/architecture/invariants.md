@@ -149,7 +149,10 @@ bugs. Check this list before changing the modules named in each entry.
 - **Recovery is an explicit, freshly approved operation.** Ordinary planning, status, install,
   upgrade, and uninstall must not mutate an interrupted journal implicitly. `app-recovery` binds the
   exact journal bytes and current destination observation, validates its approval again under the
-  host-provided cross-process operation lock, and only then mutates recovery state.
+  host-provided cross-process operation lock, and only then mutates recovery state. The CLI exposes
+  this only as `shine app recover [--yes]`; a ready Plan must show journal removal and require
+  default-No approval, while blocked recovery preserves the journal. Background release gating must
+  not make this recovery entry point unavailable.
 - **A transaction-created file is rollback-owned only while unchanged.** The v1 App creation slice
   may remove a destination only when its bytes still match the Action IR's desired hash. Missing is
   safe journal cleanup; any other content is a blocking user modification and both destination and
