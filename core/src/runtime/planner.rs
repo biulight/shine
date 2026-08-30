@@ -20,7 +20,7 @@ use super::{
     command_path_for_name, link_is_current_with_host, parse_shell_lifecycle_target,
     split_dns_receipt,
 };
-use crate::action::{ActionIrV1, DeclarativeActionV1};
+use crate::action::{ActionIrV1, DeclarativeActionV1, ManagedFileUpdateSpecV1};
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppEntry, AppManifest};
 use crate::lifecycle::LifecycleOperation;
@@ -605,6 +605,56 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     }
                     Some(_) => PlanActionV1::Update,
                 };
+                let update_destination_regular = if action == PlanActionV1::Update
+                    && entry.is_some_and(|entry| entry.destination == destination)
+                {
+                    self.host()
+                        .metadata(&destination)
+                        .await
+                        .map_err(|error| {
+                            error.into_anyhow("observing managed App update destination")
+                        })?
+                        .kind
+                        == FileKind::File
+                } else {
+                    false
+                };
+                let update_action_candidate = action == PlanActionV1::Update
+                    && entry.is_some_and(|entry| entry.destination == destination)
+                    && current.as_deref().is_some_and(|bytes| {
+                        entry.is_some_and(|entry| {
+                            crate::install::hash_content(bytes) == entry.content_hash
+                        })
+                    })
+                    && file.install_strategy == crate::install::AppInstallStrategy::Copy
+                    && !file.requires_admin
+                    && file.generator.is_none()
+                    && update_destination_regular
+                    && !request.force;
+                let update_rollback = update_action_candidate
+                    .then(|| crate::action::managed_file_rollback_path(&destination));
+                if let Some(rollback) = &update_rollback {
+                    capture_path_state(
+                        self.host(),
+                        state,
+                        format!("update-rollback:{source}"),
+                        rollback,
+                    )
+                    .await?;
+                    if manifest.find_by_dest(rollback).is_some()
+                        || path_exists(self.host(), rollback).await?
+                    {
+                        steps.push(
+                            PlanStepV1::new(
+                                &target,
+                                Some(file.source_rel.display().to_string()),
+                                PlanActionV1::Blocked,
+                            )
+                            .with_diagnostic_code("app_update_rollback_occupied"),
+                        );
+                        continue;
+                    }
+                }
                 let mut step =
                     PlanStepV1::new(&target, Some(file.source_rel.display().to_string()), action);
                 if user_modified && request.force {
@@ -627,6 +677,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             backup,
                         );
                     }
+                } else if let Some(rollback) = &update_rollback {
+                    add_app_journal_permissions(self.context(), permissions);
+                    add_app_update_permissions(self.context(), permissions, &destination, rollback);
                 }
                 steps.push(step);
             }
@@ -2180,7 +2233,7 @@ where
         let plan = self.plan_apps(request.clone()).await?;
         approval.validate(&plan)?;
         let action_irs = self
-            .approved_app_install_action_irs(&request, &plan, approval)
+            .approved_app_file_action_irs(&request, &plan, approval)
             .await?;
         self.install_apps_with_approved_actions(
             AppLifecycleRequest {
@@ -2232,7 +2285,11 @@ where
         if request.operation != LifecycleOperation::Upgrade {
             bail!("approved App upgrade requires an upgrade Plan");
         }
-        approval.validate(&self.plan_apps(request.clone()).await?)?;
+        let plan = self.plan_apps(request.clone()).await?;
+        approval.validate(&plan)?;
+        let action_irs = self
+            .approved_app_file_action_irs(&request, &plan, approval)
+            .await?;
         self.upgrade_apps(
             AppUpgradeRequest {
                 category: request.target,
@@ -2240,6 +2297,9 @@ where
                 prompt_stale: false,
                 show_hook_success: options.show_hook_success,
             },
+            &plan,
+            approval,
+            action_irs,
             observer,
             interaction,
         )
@@ -2302,7 +2362,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
     /// Emit the exact creation actions only after the corresponding install
     /// Plan has been freshly regenerated and approved. Managed bytes remain
     /// outside the Action IR and are checked again by the executor.
-    async fn approved_app_install_action_irs(
+    async fn approved_app_file_action_irs(
         &self,
         request: &AppPlanRequest,
         plan: &PlanV1,
@@ -2310,6 +2370,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
     ) -> Result<Vec<ActionIrV1>> {
         approval.validate(plan)?;
         let fingerprint = plan.fingerprint()?.as_hex();
+        let operation = match request.operation {
+            LifecycleOperation::Install => "install",
+            LifecycleOperation::Upgrade => "upgrade",
+            _ => return Ok(Vec::new()),
+        };
         let categories = self.app_categories(request.target.as_deref())?;
         let (manifest, _) = load_app_manifest(self.host(), &self.context().shine_dir).await?;
         let mut actions = Vec::new();
@@ -2324,20 +2389,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 }
                 let source = logical_app_source(&category, file);
                 let destination = self.app_destination(&category, file)?;
-                if manifest.find_by_source(&source).is_some()
-                    || manifest.find_by_dest(&destination).is_some()
-                {
-                    continue;
-                }
                 let resource = file.source_rel.display().to_string();
                 let target = format!("app/{}", category.name);
-                if !plan.steps.iter().any(|step| {
-                    step.target == target
-                        && step.resource.as_deref() == Some(resource.as_str())
-                        && step.action == PlanActionV1::Create
-                }) {
-                    continue;
-                }
                 let desired = crate::install::transforms::apply(
                     &file.transforms,
                     self.app_source_bytes(&category.name, file)?,
@@ -2345,34 +2398,93 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 )?;
                 let action_identity = format!("{target}/{resource}");
                 let desired_hash = crate::install::hash_content(&desired);
-                let action = match read_optional(self.host(), &destination).await? {
-                    None => DeclarativeActionV1::create_managed_file(
-                        format!("create:{action_identity}"),
+                let direct = manifest.find_by_source(&source);
+                let action = if let Some(entry) = direct {
+                    if entry.destination != destination
+                        || entry.install_strategy != crate::install::AppInstallStrategy::Copy
+                        || entry.requires_admin
+                        || request.force
+                        || desired_hash == entry.content_hash
+                        || !plan.steps.iter().any(|step| {
+                            step.target == target
+                                && step.resource.as_deref() == Some(resource.as_str())
+                                && step.action == PlanActionV1::Update
+                        })
+                    {
+                        continue;
+                    }
+                    let Some(original) = read_optional(self.host(), &destination).await? else {
+                        continue;
+                    };
+                    if crate::install::hash_content(&original) != entry.content_hash {
+                        continue;
+                    }
+                    let original_mode =
+                        self.host().metadata(&destination).await.map_err(|error| {
+                            error.into_anyhow("observing managed App update mode")
+                        })?;
+                    if original_mode.kind != FileKind::File {
+                        continue;
+                    }
+                    let original_mode = original_mode.unix_mode;
+                    let rollback = crate::action::managed_file_rollback_path(&destination);
+                    if manifest.find_by_dest(&rollback).is_some()
+                        || path_exists(self.host(), &rollback).await?
+                    {
+                        bail!("App update rollback path changed after Plan approval");
+                    }
+                    DeclarativeActionV1::update_managed_file(
+                        format!("update:{action_identity}"),
                         target,
                         resource,
-                        destination,
-                        desired_hash,
-                    ),
-                    Some(original) => {
-                        let backup = crate::install::backup_path(&destination);
-                        if manifest.find_by_dest(&backup).is_some()
-                            || path_exists(self.host(), &backup).await?
-                        {
-                            bail!("App backup path changed after Plan approval");
-                        }
-                        DeclarativeActionV1::create_managed_file_with_backup(
-                            format!("create-with-backup:{action_identity}"),
+                        ManagedFileUpdateSpecV1 {
+                            destination,
+                            previous_backup: entry.backup.clone(),
+                            original_mode,
+                            original_hash: entry.content_hash,
+                            desired_hash,
+                        },
+                    )
+                } else {
+                    if request.operation != LifecycleOperation::Install
+                        || manifest.find_by_dest(&destination).is_some()
+                        || !plan.steps.iter().any(|step| {
+                            step.target == target
+                                && step.resource.as_deref() == Some(resource.as_str())
+                                && step.action == PlanActionV1::Create
+                        })
+                    {
+                        continue;
+                    }
+                    match read_optional(self.host(), &destination).await? {
+                        None => DeclarativeActionV1::create_managed_file(
+                            format!("create:{action_identity}"),
                             target,
                             resource,
                             destination,
-                            backup,
-                            crate::install::hash_content(&original),
                             desired_hash,
-                        )
+                        ),
+                        Some(original) => {
+                            let backup = crate::install::backup_path(&destination);
+                            if manifest.find_by_dest(&backup).is_some()
+                                || path_exists(self.host(), &backup).await?
+                            {
+                                bail!("App backup path changed after Plan approval");
+                            }
+                            DeclarativeActionV1::create_managed_file_with_backup(
+                                format!("create-with-backup:{action_identity}"),
+                                target,
+                                resource,
+                                destination,
+                                backup,
+                                crate::install::hash_content(&original),
+                                desired_hash,
+                            )
+                        }
                     }
                 };
                 actions.push(ActionIrV1::new(
-                    format!("app-install:{fingerprint}:{action_identity}"),
+                    format!("app-{operation}:{fingerprint}:{action_identity}"),
                     vec![action],
                 ));
             }
@@ -3486,6 +3598,24 @@ fn add_app_backup_creation_permissions(
         access: FilesystemAccessV1::Write,
         path: review_path(context, backup),
     });
+}
+
+fn add_app_update_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    destination: &Path,
+    rollback: &Path,
+) {
+    for (access, path) in [
+        (FilesystemAccessV1::Remove, destination),
+        (FilesystemAccessV1::Write, rollback),
+        (FilesystemAccessV1::Remove, rollback),
+    ] {
+        permissions.implicit(PermissionV1::Filesystem {
+            access,
+            path: review_path(context, path),
+        });
+    }
 }
 
 fn capture_generator_inputs(
@@ -4693,7 +4823,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
         let plan = runtime.plan_apps(request.clone()).await.unwrap();
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         let actions = runtime
-            .approved_app_install_action_irs(&request, &plan, &approval)
+            .approved_app_file_action_irs(&request, &plan, &approval)
             .await
             .unwrap();
         assert_eq!(actions.len(), 1);
@@ -4755,6 +4885,242 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
     }
 
     #[tokio::test]
+    async fn approved_app_upgrade_journals_static_in_place_managed_update() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"previous-managed".to_vec());
+        runtime
+            .host()
+            .set_mode(&destination, 0o100600)
+            .await
+            .unwrap();
+        let manifest = AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        };
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&manifest).unwrap().into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::UpdateManagedFile { .. }))
+        ));
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), &rollback),
+                    })
+            );
+        }
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.updated_categories, vec!["demo"]);
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"next-managed"
+        );
+        assert_eq!(
+            runtime
+                .host()
+                .metadata(&destination)
+                .await
+                .unwrap()
+                .unix_mode,
+            Some(0o100600)
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/config.toml")
+                .map(|entry| entry.content_hash),
+            Some(crate::install::hash_content(b"next-managed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn app_managed_update_blocks_an_occupied_transaction_rollback_path() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        runtime
+            .host()
+            .put_file(&destination, b"previous-managed".to_vec());
+        runtime.host().put_file(
+            crate::action::managed_file_rollback_path(&destination),
+            b"foreign".to_vec(),
+        );
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&AppManifest {
+                schema_version: APP_MANIFEST_SCHEMA_VERSION,
+                entries: vec![AppEntry {
+                    source: "app/demo/config.toml".to_string(),
+                    destination,
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"previous-managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: Some("demo".to_string()),
+                force: false,
+                purge: false,
+                prune_stale: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_update_rollback_occupied".to_string())
+        }));
+    }
+
+    #[tokio::test]
+    async fn approved_app_install_journals_an_existing_static_managed_update() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"previous-managed".to_vec());
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("app-manifest.toml"),
+            toml::to_string(&AppManifest {
+                schema_version: APP_MANIFEST_SCHEMA_VERSION,
+                entries: vec![AppEntry {
+                    source: "app/demo/config.toml".to_string(),
+                    destination: destination.clone(),
+                    backup: None,
+                    content_hash: crate::install::hash_content(b"previous-managed"),
+                    install_strategy: crate::install::AppInstallStrategy::Copy,
+                    uses_env: false,
+                    requires_admin: false,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert!(report.lifecycle.summary().changed > 0);
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"next-managed"
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn approved_app_install_journals_backup_creation_and_commits_both_paths() {
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
@@ -4793,7 +5159,7 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
         }
         let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
         let actions = runtime
-            .approved_app_install_action_irs(&request, &plan, &approval)
+            .approved_app_file_action_irs(&request, &plan, &approval)
             .await
             .unwrap();
         assert!(matches!(

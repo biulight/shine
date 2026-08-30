@@ -1,6 +1,6 @@
 # Built-in Executable Preset Inventory
 
-Last classified: 2026-08-30
+Last classified: 2026-08-31
 
 This inventory tracks the Roadmap Phase 4 requirement that every built-in executable Preset is
 either migrated to typed declarative actions or explicitly classified. It is not a public feature
@@ -27,7 +27,8 @@ Classification vocabulary:
 
 All other built-in App file copy/transform/JSON-merge effects are Core-typed rather than executable
 Preset code. Phase 4 now covers absent-destination and backup-aware unowned regular-file static Copy
-creation; managed update, merge and remove actions remain to migrate.
+creation plus unchanged receipt-owned, in-place static Copy update. Merge, remove, administrator,
+generator and relocation actions remain to migrate.
 
 ## Shell commands
 
@@ -62,10 +63,11 @@ the target ran but does not own third-party package uninstall or version rollbac
 
 1. App absent-destination managed file create and explicit recovery (implemented).
 2. App backup-aware unowned regular-file static Copy create and restore (implemented).
-3. App managed update, JSON merge and remove.
-4. Shell snapshot files, launchers and profile blocks.
-5. Managed Sys files/profile blocks and split DNS.
-6. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
+3. App receipt-owned in-place static Copy update (implemented).
+4. App JSON merge and remove.
+5. Shell snapshot files, launchers and profile blocks.
+6. Managed Sys files/profile blocks and split DNS.
+7. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
    opaque escape hatches unless a narrower typed action replaces them.
 
 Any new built-in executable capability must enter this inventory in the same change.

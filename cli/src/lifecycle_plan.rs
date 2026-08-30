@@ -176,6 +176,8 @@ fn blocked_plan_message(diagnostics: &std::collections::BTreeSet<String>) -> &'s
         "App recovery is blocked because a managed file changed after the interrupted operation; the file and operation journal were preserved"
     } else if diagnostics.contains("app_recovery_backup_state_changed") {
         "App recovery is blocked because the managed destination or its backup changed after the interrupted operation; both paths and the operation journal were preserved"
+    } else if diagnostics.contains("app_recovery_rollback_state_changed") {
+        "App recovery is blocked because the managed destination or update rollback material changed after the interrupted operation; both paths and the operation journal were preserved"
     } else if diagnostics.contains("app_recovery_receipt_conflict") {
         "App recovery is blocked because App ownership receipts conflict with the interrupted operation; managed paths and the operation journal were preserved"
     } else if diagnostics.contains("app_recovery_opaque_action") {
@@ -184,6 +186,8 @@ fn blocked_plan_message(diagnostics: &std::collections::BTreeSet<String>) -> &'s
         "security Plan is blocked because the fixed App backup path already exists; the destination and existing backup were preserved"
     } else if diagnostics.contains("app_backup_source_not_regular") {
         "security Plan is blocked because backup-aware App creation requires an unowned regular file; the destination was preserved"
+    } else if diagnostics.contains("app_update_rollback_occupied") {
+        "security Plan is blocked because the App update rollback path already exists; the destination and existing rollback material were preserved"
     } else {
         "security Plan is blocked; no changes were made"
     }
@@ -402,6 +406,10 @@ mod tests {
             std::collections::BTreeSet::from(["app_recovery_backup_state_changed".to_string()]);
         assert!(blocked_plan_message(&backup_changed).contains("both paths"));
 
+        let rollback_changed =
+            std::collections::BTreeSet::from(["app_recovery_rollback_state_changed".to_string()]);
+        assert!(blocked_plan_message(&rollback_changed).contains("rollback material"));
+
         let backup_occupied = std::collections::BTreeSet::from(["app_backup_occupied".to_string()]);
         assert!(blocked_plan_message(&backup_occupied).contains("already exists"));
 
@@ -412,5 +420,9 @@ mod tests {
         let backup_source =
             std::collections::BTreeSet::from(["app_backup_source_not_regular".to_string()]);
         assert!(blocked_plan_message(&backup_source).contains("regular file"));
+
+        let rollback_occupied =
+            std::collections::BTreeSet::from(["app_update_rollback_occupied".to_string()]);
+        assert!(blocked_plan_message(&rollback_occupied).contains("already exists"));
     }
 }

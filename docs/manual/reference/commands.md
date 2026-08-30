@@ -93,17 +93,22 @@ retains its existing preview format and is not an approved Plan.
 content on failure. Artifact apply/remove explicitly runs an external integration declared by the
 preset; ordinary installation and upgrade do not implicitly apply it.
 
-If an App installation is interrupted after its operation journal is written, later mutating App
+If a supported App creation or in-place static Copy update is interrupted after its operation
+journal is written, later mutating App
 commands that require a security Plan stop with recovery guidance instead of changing that state
 implicitly. Read-only inspection does not recover or discard the journal. Run `shine app recover`
 to inspect a separate recovery Plan. It preserves files that have changed since the interruption;
 for a backup-aware creation it restores the fixed backup only while both destination and backup
 still match the journaled original/desired fingerprints. When the ownership receipt is already
-durable it keeps the managed destination and backup and clears only the stale journal. Recovery
+durable it keeps the managed destination and persistent backup and clears only stale transaction
+state. An in-place managed update temporarily moves the prior managed file to
+`<name>.shine.rollback`; recovery restores or removes that file only while it still matches the
+journaled prior fingerprint. Treat interrupted rollback material as sensitive managed
+configuration. Recovery
 defaults to No and requires `--yes` when no interactive terminal is available. A missing or invalid
-journal, unsupported action, or changed destination/backup returns nonzero without mutation. An
-existing fixed backup also blocks a supported journaled static Copy install Plan instead of being
-replaced.
+journal, unsupported action, or changed destination/backup/rollback path returns nonzero without
+mutation. An existing fixed backup or update rollback path blocks the corresponding supported Plan
+instead of being replaced.
 
 ## Status, updates, and completions
 

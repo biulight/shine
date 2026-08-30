@@ -165,6 +165,15 @@ bugs. Check this list before changing the modules named in each entry.
   destination, backup, and journal. The journal never stores either byte payload, a matching durable
   receipt commits ownership of both paths, and any non-matching receipt that claims the source or
   either path blocks recovery.
+- **A managed App update moves, never serializes, its previous bytes.** The Phase 4 in-place update
+  slice applies only to an unchanged receipt-owned, unprivileged static Copy at the same
+  destination. Before replacement it journals, then renames the previous file to the canonical
+  same-directory `<name>.shine.rollback` path; that path must be absent and unclaimed. The Action IR
+  binds the previous App backup identity, prior mode and original/desired hashes but never either
+  byte payload. Apply restores the prior mode on the replacement. Before the replacement receipt is
+  durable, recovery restores only the exact original/missing, missing/original, or desired/original
+  state; after it is durable, commit/recovery removes only unchanged rollback material. Any changed
+  kind, bytes, mode-bound input, receipt, destination or rollback path blocks and preserves state.
 - **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
   first action mutation, update action state atomically, persist the matching domain receipt, and
   only then commit by removing the journal. An existing or unsupported-version journal blocks a new

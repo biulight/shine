@@ -23,7 +23,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, process, privileged, and system mutation ports |
 | `core/src/runtime/planner.rs` | Pure App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
-| `core/src/runtime/action_executor.rs` | Phase 4 absent/backup-aware App managed-file create journal, manifest-receipt-gated commit, explicit recovery Plan, and unchanged-content remove/backup restore |
+| `core/src/runtime/action_executor.rs` | Phase 4 App managed-file create/update journal, manifest-receipt-gated commit, same-directory update rollback material, explicit recovery Plan, and unchanged-content remove/restore |
 | `core/src/runtime/trust.rs` | Derivation of App/Sys external-code requirements from immutable logical code inputs and declared permissions |
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence and `shine trust` workflows |
 | `core/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |

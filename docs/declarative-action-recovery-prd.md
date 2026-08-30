@@ -1,9 +1,11 @@
 # Declarative Action and Recovery PRD
 
-> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, and 4C.1 are
+> **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, and 4C.2a are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned, unprivileged static Copy destinations, and the explicit CLI recovery path can remove an
-> unchanged transaction-created file or restore an unchanged fixed backup.
+> unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
+> upgrade also journal in-place replacement of an unchanged, receipt-owned, unprivileged static
+> Copy and retain its previous bytes only as same-directory transaction rollback material.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -41,8 +43,8 @@ prepared journal → rename original to fixed backup → atomic managed write �
        └──────────── explicit recovery restores only an exact safe state ────────────┘
 ```
 
-Managed update/remove, JSON merge, administrator paths, Shell/Sys actions, and automatic resume
-remain later slices.
+Managed remove, JSON merge, administrator paths, Shell/Sys actions, and automatic resume remain
+later slices.
 
 ## Goals
 
@@ -83,6 +85,9 @@ are:
 - `CreateManagedFileWithBackup`: the same identity plus the fixed backup path and original content
   hash. It is valid only for an unowned regular-file, unprivileged static Copy destination with an
   absent backup.
+- `UpdateManagedFile`: an unchanged receipt-owned static Copy destination, its fixed transaction
+  rollback path, previous persistent backup identity, prior mode and original/desired hashes. It is
+  valid only for an in-place, unprivileged update with an absent rollback path.
 
 The classification-only escape hatch is:
 
@@ -109,6 +114,12 @@ receipt and removes the journal. A new operation must refuse to replace an exist
 The creation slice reuses the host-provided cross-process operation lock for journal start, commit,
 and recovery. The integrated App lifecycle preserves that serialization boundary.
 
+For in-place managed update, the previous destination is renamed rather than copied to the fixed
+same-directory `<name>.shine.rollback` transaction path. The action binds its path, previous App
+backup identity, prior mode and before/after hashes, but not either byte payload. The rollback path
+must be absent before planning and execution, is removed only after the replacement receipt is
+durable, and is preserved if its kind or content changes.
+
 ### Recovery
 
 Recovery is an explicit specialized `app-recovery` Plan. Planning hashes the exact journal bytes,
@@ -134,6 +145,11 @@ Backup-aware creation adds this exact matrix when no matching receipt exists:
 | Missing | Original hash | ready | rename backup to destination; remove journal |
 | Desired hash | Original hash | ready | remove destination; rename backup back; remove journal |
 | Any other combination or non-regular path | Any other combination or non-regular path | blocked | preserve both paths and journal |
+
+Managed update uses the same three safe path states with `.shine.rollback` holding the previous
+managed bytes and the previous receipt still durable. If the replacement receipt is durable,
+recovery removes only an unchanged rollback file and the journal; a missing rollback permits
+journal cleanup. Any changed rollback path, destination, or receipt blocks and preserves all state.
 
 The approved recovery Plan is regenerated again while holding the operation lock immediately
 before the first mutation.
@@ -172,12 +188,21 @@ before the first mutation.
 - Recover interruptions before rename, after rename, after managed write, and after durable receipt.
 - Preserve destination, backup, and journal if either path changes after interruption.
 
-### Slice 4C.2 — Managed update and uninstall
+### Slice 4C.2a — Managed update (implemented)
 
-- Introduce separate transaction-owned rollback material without persisting secret plaintext
-  casually.
-- Support managed update/remove with before/after fingerprints and post-operation modification
-  protection.
+- Add a typed in-place static Copy update with previous/desired fingerprints and prior mode.
+- Move previous bytes to same-directory transaction rollback material without serializing them in
+  the Action IR or journal.
+- Integrate both approved install of an existing target and approved App upgrade.
+- Recover before rename, after rename, after replacement write, and after replacement receipt;
+  block any changed destination, rollback material, or receipt.
+
+### Slice 4C.2b — Managed uninstall
+
+- Reuse separate transaction-owned rollback material for managed remove without persisting secret
+  plaintext casually.
+- Support remove with before/after fingerprints and post-operation modification protection,
+  including the persistent user backup restoration state machine.
 - Add administrator locking and rollback tests before privileged actions join the IR.
 
 ### Slice 4D — Other domains and opaque inventory

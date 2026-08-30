@@ -2,7 +2,10 @@ use super::{
     CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, PrivilegedFileSystemHost,
     RuntimeContext,
 };
-use crate::action::{ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, RollbackSupportV1};
+use crate::action::{
+    ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, RollbackSupportV1,
+    managed_file_rollback_path,
+};
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppInstallStrategy, AppManifest, hash_content};
 use crate::plan::{
@@ -73,14 +76,22 @@ impl AppOperationJournalV1 {
             bail!("unsupported action IR in App operation journal");
         }
         for action in &self.action_ir.actions {
-            if let ActionKindV1::CreateManagedFileWithBackup {
-                destination,
-                backup,
-                ..
-            } = &action.kind
-                && crate::install::backup_path(destination) != *backup
-            {
-                bail!("App operation journal contains a non-canonical backup path");
+            match &action.kind {
+                ActionKindV1::CreateManagedFileWithBackup {
+                    destination,
+                    backup,
+                    ..
+                } if crate::install::backup_path(destination) != *backup => {
+                    bail!("App operation journal contains a non-canonical backup path");
+                }
+                ActionKindV1::UpdateManagedFile {
+                    destination,
+                    rollback,
+                    ..
+                } if managed_file_rollback_path(destination) != *rollback => {
+                    bail!("App operation journal contains a non-canonical rollback path");
+                }
+                _ => {}
             }
         }
         if self.actions.len() != self.action_ir.actions.len()
@@ -193,7 +204,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         RecoveryFileObservation::Missing => {
                             (PlanActionV1::None, "app_recovery_resource_absent")
                         }
-                        RecoveryFileObservation::Regular(bytes)
+                        RecoveryFileObservation::Regular(bytes, _)
                             if hash_content(bytes) == *desired_hash =>
                         {
                             required.insert(PermissionV1::Filesystem {
@@ -202,7 +213,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             });
                             (PlanActionV1::Remove, "app_recovery_remove_created_file")
                         }
-                        RecoveryFileObservation::Regular(_) | RecoveryFileObservation::Other(_) => {
+                        RecoveryFileObservation::Regular(_, _)
+                        | RecoveryFileObservation::Other(_) => {
                             blocked = true;
                             (PlanActionV1::Blocked, "app_recovery_user_modified")
                         }
@@ -270,6 +282,90 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         BackupRecoveryAssessment::Blocked => {
                             blocked = true;
                             (PlanActionV1::Blocked, "app_recovery_backup_state_changed")
+                        }
+                    };
+                    steps.push(
+                        PlanStepV1::new(&action.target, Some(&action.resource), plan_action)
+                            .with_diagnostic_code(code),
+                    );
+                }
+                ActionKindV1::UpdateManagedFile {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    desired_hash,
+                    ..
+                } => {
+                    let current = observe_recovery_file(self.host(), destination).await?;
+                    let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                    state.add_observation(
+                        format!("destination:{}", action.action_id),
+                        current.identity(),
+                    )?;
+                    state.add_observation(
+                        format!("rollback:{}", action.action_id),
+                        rollback_current.identity(),
+                    )?;
+                    let (plan_action, code) = if matching_app_receipt(&manifest, action) {
+                        match &rollback_current {
+                            RecoveryFileObservation::Missing => {
+                                (PlanActionV1::None, "app_recovery_receipt_already_committed")
+                            }
+                            RecoveryFileObservation::Regular(bytes, mode)
+                                if hash_content(bytes) == *original_hash
+                                    && recovery_mode_matches(*mode, *original_mode) =>
+                            {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                (
+                                    PlanActionV1::Remove,
+                                    "app_recovery_remove_committed_rollback",
+                                )
+                            }
+                            RecoveryFileObservation::Regular(_, _)
+                            | RecoveryFileObservation::Other(_) => {
+                                blocked = true;
+                                (PlanActionV1::Blocked, "app_recovery_rollback_state_changed")
+                            }
+                        }
+                    } else {
+                        match assess_update_recovery(
+                            &current,
+                            &rollback_current,
+                            *original_hash,
+                            *desired_hash,
+                            *original_mode,
+                        ) {
+                            BackupRecoveryAssessment::NotStarted => {
+                                (PlanActionV1::None, "app_recovery_update_not_started")
+                            }
+                            BackupRecoveryAssessment::Restore { remove_destination } => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Write,
+                                    path: review_path(self.context(), destination),
+                                });
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                if remove_destination {
+                                    required.insert(PermissionV1::Filesystem {
+                                        access: FilesystemAccessV1::Remove,
+                                        path: review_path(self.context(), destination),
+                                    });
+                                }
+                                (
+                                    PlanActionV1::Update,
+                                    "app_recovery_restore_previous_managed_file",
+                                )
+                            }
+                            BackupRecoveryAssessment::Blocked => {
+                                blocked = true;
+                                (PlanActionV1::Blocked, "app_recovery_rollback_state_changed")
+                            }
                         }
                     };
                     steps.push(
@@ -462,6 +558,137 @@ where
         })
     }
 
+    /// Replace one existing, unprivileged static Copy receipt while retaining
+    /// the previous managed bytes at a same-directory transaction path until
+    /// the new receipt is durable.
+    pub async fn execute_app_managed_file_update_approved(
+        &self,
+        plan: &PlanV1,
+        approval: &PlanApprovalV1,
+        action_ir: ActionIrV1,
+        content: &[u8],
+    ) -> Result<AppOperationExecutionV1> {
+        approval.validate(plan)?;
+        if !matches!(
+            plan.operation,
+            PlanOperationV1::Install | PlanOperationV1::Upgrade
+        ) {
+            bail!("App managed-file update requires an install or upgrade Plan");
+        }
+        action_ir.validate()?;
+        let requirements =
+            action_ir.permission_requirements(|path| review_path(self.context(), path));
+        if !requirements.uncomputable_codes.is_empty() {
+            bail!("action permissions are not fully computable");
+        }
+        for permission in requirements.required.iter() {
+            if !approval.approved_permissions.contains(permission) {
+                bail!("action permission was not included in the approved security Plan");
+            }
+        }
+        let [action] = action_ir.actions.as_slice() else {
+            bail!("the App managed-file update slice accepts exactly one action");
+        };
+        if !plan.steps.iter().any(|step| {
+            step.target == action.target
+                && step.resource.as_deref() == Some(action.resource.as_str())
+                && step.action == PlanActionV1::Update
+        }) {
+            bail!("App managed-file update was not described by the approved security Plan");
+        }
+        let (destination, rollback, previous_backup, original_mode, original_hash, desired_hash) =
+            match (&action.kind, &action.rollback) {
+                (
+                    ActionKindV1::UpdateManagedFile {
+                        destination,
+                        rollback,
+                        previous_backup,
+                        original_mode,
+                        original_hash,
+                        desired_hash,
+                    },
+                    RollbackSupportV1::RestorePreviousIfUnchanged,
+                ) => (
+                    destination.clone(),
+                    rollback.clone(),
+                    previous_backup.clone(),
+                    *original_mode,
+                    *original_hash,
+                    *desired_hash,
+                ),
+                _ => bail!(
+                    "the App managed-file update slice accepts only safely reversible declarative file replacement"
+                ),
+            };
+        if hash_content(content) != desired_hash {
+            bail!("managed-file content does not match the update action IR identity");
+        }
+        let action_id = action.action_id.clone();
+
+        let _guard = self.host().acquire_privileged_operation().await?;
+        if load_app_operation_journal(self.host(), &self.context().shine_dir)
+            .await?
+            .is_some()
+        {
+            bail!("an interrupted App operation must be recovered before starting another one");
+        }
+        let (manifest, _) =
+            load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
+        if !matching_previous_app_receipt(&manifest, action) {
+            bail!("managed-file update requires its exact previous App receipt");
+        }
+        if previous_backup.as_ref() == Some(&rollback)
+            || managed_file_rollback_path(&destination) != rollback
+        {
+            bail!("managed-file update requires a distinct canonical rollback path");
+        }
+        let metadata = self
+            .host()
+            .metadata(&destination)
+            .await
+            .map_err(|error| error.into_anyhow("failed to inspect managed App destination"))?;
+        if metadata.kind != FileKind::File {
+            bail!("managed-file update requires a regular destination");
+        }
+        if metadata.unix_mode != original_mode {
+            bail!("managed App destination mode changed after Plan approval");
+        }
+        let original = read_optional(self.host(), &destination)
+            .await?
+            .context("managed-file update requires an existing destination")?;
+        if hash_content(&original) != original_hash {
+            bail!("managed App destination changed after Plan approval");
+        }
+        if path_exists(self.host(), &rollback).await? || manifest.find_by_dest(&rollback).is_some()
+        {
+            bail!("managed-file rollback path must be absent before update");
+        }
+
+        let mut journal = AppOperationJournalV1::new(action_ir, approval.clone());
+        save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
+        self.host()
+            .rename(&destination, &rollback)
+            .await
+            .map_err(|error| error.into_anyhow("failed to stage previous managed App file"))?;
+        self.host()
+            .write_atomic(&destination, content)
+            .await
+            .map_err(|error| error.into_anyhow("failed to update managed App file"))?;
+        if let Some(mode) = original_mode {
+            self.host()
+                .set_mode(&destination, mode)
+                .await
+                .map_err(|error| error.into_anyhow("failed to preserve managed App file mode"))?;
+        }
+        journal.mark_applied(&action_id)?;
+        save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
+
+        Ok(AppOperationExecutionV1 {
+            operation_id: journal.action_ir.operation_id,
+            backup: previous_backup,
+        })
+    }
+
     /// Clear a completed journal only after the caller has durably persisted
     /// the App receipt that owns the created file.
     pub async fn commit_app_managed_file_operation(&self, operation_id: &str) -> Result<()> {
@@ -489,6 +716,32 @@ where
         {
             bail!("App operation journal cannot commit before its matching manifest receipt");
         }
+        for action in &journal.action_ir.actions {
+            if let ActionKindV1::UpdateManagedFile {
+                rollback,
+                original_mode,
+                original_hash,
+                ..
+            } = &action.kind
+            {
+                match observe_recovery_file(self.host(), rollback).await? {
+                    RecoveryFileObservation::Missing => {}
+                    RecoveryFileObservation::Regular(bytes, mode)
+                        if hash_content(&bytes) == *original_hash
+                            && recovery_mode_matches(mode, *original_mode) =>
+                    {
+                        self.host().remove_file(rollback).await.map_err(|error| {
+                            error.into_anyhow("failed to remove App update rollback material")
+                        })?;
+                    }
+                    RecoveryFileObservation::Regular(_, _) | RecoveryFileObservation::Other(_) => {
+                        bail!(
+                            "App update rollback material changed before commit; operation journal preserved"
+                        );
+                    }
+                }
+            }
+        }
         remove_app_operation_journal(self.host(), &self.context().shine_dir).await
     }
 
@@ -509,7 +762,9 @@ where
             load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
         let mut rolled_back_actions = Vec::new();
         for action in journal.action_ir.actions.iter().rev() {
-            if matching_app_receipt(&manifest, action) {
+            if matching_app_receipt(&manifest, action)
+                && !matches!(action.kind, ActionKindV1::UpdateManagedFile { .. })
+            {
                 continue;
             }
             match &action.kind {
@@ -518,7 +773,7 @@ where
                     desired_hash,
                 } => match observe_recovery_file(self.host(), destination).await? {
                     RecoveryFileObservation::Missing => {}
-                    RecoveryFileObservation::Regular(bytes)
+                    RecoveryFileObservation::Regular(bytes, _)
                         if hash_content(&bytes) == *desired_hash =>
                     {
                         self.host()
@@ -528,7 +783,7 @@ where
                                 error.into_anyhow("failed to roll back managed App file")
                             })?;
                     }
-                    RecoveryFileObservation::Regular(_) | RecoveryFileObservation::Other(_) => {
+                    RecoveryFileObservation::Regular(_, _) | RecoveryFileObservation::Other(_) => {
                         bail!(
                             "managed App file changed after the interrupted operation; recovery preserved it"
                         )
@@ -570,6 +825,67 @@ where
                         }
                         BackupRecoveryAssessment::Blocked => bail!(
                             "managed App destination or backup changed after the interrupted operation; recovery preserved both"
+                        ),
+                    }
+                }
+                ActionKindV1::UpdateManagedFile {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    desired_hash,
+                    ..
+                } => {
+                    if matching_app_receipt(&manifest, action) {
+                        match observe_recovery_file(self.host(), rollback).await? {
+                            RecoveryFileObservation::Missing => {}
+                            RecoveryFileObservation::Regular(bytes, mode)
+                                if hash_content(&bytes) == *original_hash
+                                    && recovery_mode_matches(mode, *original_mode) =>
+                            {
+                                self.host().remove_file(rollback).await.map_err(|error| {
+                                    error.into_anyhow(
+                                        "failed to remove committed App update rollback material",
+                                    )
+                                })?;
+                            }
+                            RecoveryFileObservation::Regular(_, _)
+                            | RecoveryFileObservation::Other(_) => bail!(
+                                "App update rollback material changed after receipt commit; recovery preserved it"
+                            ),
+                        }
+                        continue;
+                    }
+                    let current = observe_recovery_file(self.host(), destination).await?;
+                    let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                    match assess_update_recovery(
+                        &current,
+                        &rollback_current,
+                        *original_hash,
+                        *desired_hash,
+                        *original_mode,
+                    ) {
+                        BackupRecoveryAssessment::NotStarted => {}
+                        BackupRecoveryAssessment::Restore { remove_destination } => {
+                            if remove_destination {
+                                self.host()
+                                    .remove_file(destination)
+                                    .await
+                                    .map_err(|error| {
+                                        error.into_anyhow(
+                                            "failed to remove interrupted managed App update",
+                                        )
+                                    })?;
+                            }
+                            self.host()
+                                .rename(rollback, destination)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow("failed to restore previous managed App file")
+                                })?;
+                        }
+                        BackupRecoveryAssessment::Blocked => bail!(
+                            "managed App destination or rollback material changed after the interrupted update; recovery preserved both"
                         ),
                     }
                 }
@@ -638,8 +954,43 @@ fn matching_app_receipt(
                     && entry.install_strategy == AppInstallStrategy::Copy
                     && !entry.requires_admin
             }
+            ActionKindV1::UpdateManagedFile {
+                destination,
+                previous_backup,
+                desired_hash,
+                ..
+            } => {
+                entry.destination == *destination
+                    && entry.content_hash == *desired_hash
+                    && entry.backup == *previous_backup
+                    && entry.install_strategy == AppInstallStrategy::Copy
+                    && !entry.requires_admin
+            }
             ActionKindV1::OpaqueExecution { .. } => false,
         })
+}
+
+fn matching_previous_app_receipt(
+    manifest: &AppManifest,
+    action: &crate::action::DeclarativeActionV1,
+) -> bool {
+    let ActionKindV1::UpdateManagedFile {
+        destination,
+        previous_backup,
+        original_hash,
+        ..
+    } = &action.kind
+    else {
+        return false;
+    };
+    let source = action_source_identity(action);
+    manifest.find_by_source(&source).is_some_and(|entry| {
+        entry.destination == *destination
+            && entry.content_hash == *original_hash
+            && entry.backup == *previous_backup
+            && entry.install_strategy == AppInstallStrategy::Copy
+            && !entry.requires_admin
+    })
 }
 
 fn conflicting_app_receipt(
@@ -648,6 +999,14 @@ fn conflicting_app_receipt(
 ) -> bool {
     if matching_app_receipt(manifest, action) {
         return false;
+    }
+    if matches!(action.kind, ActionKindV1::UpdateManagedFile { .. }) {
+        if !matching_previous_app_receipt(manifest, action) {
+            return true;
+        }
+        if let ActionKindV1::UpdateManagedFile { rollback, .. } = &action.kind {
+            return manifest.find_by_dest(rollback).is_some();
+        }
     }
     let source = action_source_identity(action);
     if manifest.find_by_source(&source).is_some() {
@@ -664,6 +1023,7 @@ fn conflicting_app_receipt(
         } => {
             manifest.find_by_dest(destination).is_some() || manifest.find_by_dest(backup).is_some()
         }
+        ActionKindV1::UpdateManagedFile { .. } => false,
         ActionKindV1::OpaqueExecution { .. } => false,
     }
 }
@@ -690,20 +1050,59 @@ fn assess_backup_recovery(
     desired_hash: u64,
 ) -> BackupRecoveryAssessment {
     match (destination, backup) {
-        (RecoveryFileObservation::Regular(current), RecoveryFileObservation::Missing)
+        (RecoveryFileObservation::Regular(current, _), RecoveryFileObservation::Missing)
             if hash_content(current) == original_hash =>
         {
             BackupRecoveryAssessment::NotStarted
         }
-        (RecoveryFileObservation::Missing, RecoveryFileObservation::Regular(current))
+        (RecoveryFileObservation::Missing, RecoveryFileObservation::Regular(current, _))
             if hash_content(current) == original_hash =>
         {
             BackupRecoveryAssessment::Restore {
                 remove_destination: false,
             }
         }
-        (RecoveryFileObservation::Regular(current), RecoveryFileObservation::Regular(original))
-            if hash_content(current) == desired_hash && hash_content(original) == original_hash =>
+        (
+            RecoveryFileObservation::Regular(current, _),
+            RecoveryFileObservation::Regular(original, _),
+        ) if hash_content(current) == desired_hash && hash_content(original) == original_hash => {
+            BackupRecoveryAssessment::Restore {
+                remove_destination: true,
+            }
+        }
+        _ => BackupRecoveryAssessment::Blocked,
+    }
+}
+
+fn assess_update_recovery(
+    destination: &RecoveryFileObservation,
+    rollback: &RecoveryFileObservation,
+    original_hash: u64,
+    desired_hash: u64,
+    original_mode: Option<u32>,
+) -> BackupRecoveryAssessment {
+    match (destination, rollback) {
+        (RecoveryFileObservation::Regular(current, mode), RecoveryFileObservation::Missing)
+            if hash_content(current) == original_hash
+                && recovery_mode_matches(*mode, original_mode) =>
+        {
+            BackupRecoveryAssessment::NotStarted
+        }
+        (RecoveryFileObservation::Missing, RecoveryFileObservation::Regular(current, mode))
+            if hash_content(current) == original_hash
+                && recovery_mode_matches(*mode, original_mode) =>
+        {
+            BackupRecoveryAssessment::Restore {
+                remove_destination: false,
+            }
+        }
+        (
+            RecoveryFileObservation::Regular(current, current_mode),
+            RecoveryFileObservation::Regular(original, original_current_mode),
+        ) if hash_content(current) == desired_hash
+            && hash_content(original) == original_hash
+            && recovery_mode_matches(*current_mode, original_mode)
+            && recovery_mode_matches(*original_current_mode, original_mode) =>
         {
             BackupRecoveryAssessment::Restore {
                 remove_destination: true,
@@ -713,10 +1112,14 @@ fn assess_backup_recovery(
     }
 }
 
+fn recovery_mode_matches(current: Option<u32>, expected: Option<u32>) -> bool {
+    current == expected
+}
+
 #[derive(Debug)]
 enum RecoveryFileObservation {
     Missing,
-    Regular(Vec<u8>),
+    Regular(Vec<u8>, Option<u32>),
     Other(FileKind),
 }
 
@@ -724,7 +1127,9 @@ impl RecoveryFileObservation {
     fn identity(&self) -> String {
         match self {
             Self::Missing => "missing".to_string(),
-            Self::Regular(bytes) => format!("file:{}", hash_content(bytes)),
+            Self::Regular(bytes, mode) => {
+                format!("file:{}:mode:{mode:?}", hash_content(bytes))
+            }
             Self::Other(kind) => format!("other:{kind:?}"),
         }
     }
@@ -748,7 +1153,7 @@ async fn observe_recovery_file(
         .read(path)
         .await
         .map_err(|error| error.into_anyhow("failed to read App recovery resource"))?;
-    Ok(RecoveryFileObservation::Regular(bytes))
+    Ok(RecoveryFileObservation::Regular(bytes, metadata.unix_mode))
 }
 
 async fn load_app_operation_journal(
@@ -841,7 +1246,7 @@ fn logical_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::DeclarativeActionV1;
+    use crate::action::{DeclarativeActionV1, ManagedFileUpdateSpecV1};
     use crate::install::AppEntry;
     use crate::plan::PlanStepV1;
     use crate::runtime::{InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimePlatform};
@@ -897,6 +1302,28 @@ mod tests {
         )
     }
 
+    fn update_action_ir(
+        runtime: &CoreRuntime<InMemoryHost>,
+        original: &[u8],
+        content: &[u8],
+    ) -> ActionIrV1 {
+        ActionIrV1::new(
+            "operation-update",
+            vec![DeclarativeActionV1::update_managed_file(
+                "action-update",
+                "app/demo",
+                "config",
+                ManagedFileUpdateSpecV1 {
+                    destination: runtime.context().home_dir.join(".config/demo/config"),
+                    previous_backup: None,
+                    original_mode: Some(0o100644),
+                    original_hash: hash_content(original),
+                    desired_hash: hash_content(content),
+                },
+            )],
+        )
+    }
+
     fn approved_install_plan(
         runtime: &CoreRuntime<InMemoryHost>,
         ir: &ActionIrV1,
@@ -914,6 +1341,32 @@ mod tests {
                 "app/demo",
                 Some("config"),
                 PlanActionV1::Create,
+            )],
+            required.clone(),
+            &required,
+            std::iter::empty::<String>(),
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        (plan, approval)
+    }
+
+    fn approved_update_plan(
+        runtime: &CoreRuntime<InMemoryHost>,
+        ir: &ActionIrV1,
+    ) -> (PlanV1, PlanApprovalV1) {
+        let required = ir
+            .permission_requirements(|path| review_path(runtime.context(), path))
+            .required;
+        let plan = PlanV1::new(
+            PlanOperationV1::Upgrade,
+            PlanInputsV1 {
+                preset: runtime.presets().digest_v1().unwrap(),
+                state: SnapshotDigestV1::builder("test-update-state").finish(),
+            },
+            vec![PlanStepV1::new(
+                "app/demo",
+                Some("config"),
+                PlanActionV1::Update,
             )],
             required.clone(),
             &required,
@@ -1458,5 +1911,189 @@ mod tests {
                 .unwrap(),
             content
         );
+    }
+
+    #[tokio::test]
+    async fn managed_update_retains_previous_bytes_until_receipt_commit() {
+        let runtime = runtime();
+        let original = b"previous-managed";
+        let content = b"next-managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_matching_receipt(&runtime, original).await;
+        let ir = update_action_ir(&runtime, original, content);
+        let (plan, approval) = approved_update_plan(&runtime, &ir);
+
+        let execution = runtime
+            .execute_app_managed_file_update_approved(&plan, &approval, ir, content)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), original);
+        let journal = String::from_utf8(
+            runtime
+                .host()
+                .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!journal.contains("previous-managed"));
+        assert!(!journal.contains("next-managed"));
+
+        save_matching_receipt(&runtime, content).await;
+        runtime
+            .commit_app_managed_file_operation(&execution.operation_id)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(&runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_managed_update_restores_previous_receipt_bytes() {
+        let runtime = runtime();
+        let original = b"previous-managed";
+        let content = b"next-managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_matching_receipt(&runtime, original).await;
+        let ir = update_action_ir(&runtime, original, content);
+        let (plan, approval) = approved_update_plan(&runtime, &ir);
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        assert!(
+            runtime
+                .execute_app_managed_file_update_approved(&plan, &approval, ir, content)
+                .await
+                .is_err()
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_restore_previous_managed_file".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        let recovered = runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(recovered.rolled_back_actions, vec!["action-update"]);
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn managed_update_recovery_blocks_changed_rollback_material() {
+        let runtime = runtime();
+        let original = b"previous-managed";
+        let content = b"next-managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_matching_receipt(&runtime, original).await;
+        let ir = update_action_ir(&runtime, original, content);
+        let (plan, approval) = approved_update_plan(&runtime, &ir);
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        let _ = runtime
+            .execute_app_managed_file_update_approved(&plan, &approval, ir, content)
+            .await;
+        runtime.host().put_file(&rollback, b"user-change".to_vec());
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(!recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_rollback_state_changed".to_string())
+        }));
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"user-change"
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_update_recovery_blocks_a_rollback_mode_change() {
+        let runtime = runtime();
+        let original = b"previous-managed";
+        let content = b"next-managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_matching_receipt(&runtime, original).await;
+        let ir = update_action_ir(&runtime, original, content);
+        let (plan, approval) = approved_update_plan(&runtime, &ir);
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        let _ = runtime
+            .execute_app_managed_file_update_approved(&plan, &approval, ir, content)
+            .await;
+        runtime.host().set_mode(&rollback, 0o100600).await.unwrap();
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(!recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_rollback_state_changed".to_string())
+        }));
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn recovery_after_update_receipt_commit_cleans_only_rollback_material() {
+        let runtime = runtime();
+        let original = b"previous-managed";
+        let content = b"next-managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_matching_receipt(&runtime, original).await;
+        let ir = update_action_ir(&runtime, original, content);
+        let (plan, approval) = approved_update_plan(&runtime, &ir);
+        runtime
+            .execute_app_managed_file_update_approved(&plan, &approval, ir, content)
+            .await
+            .unwrap();
+        save_matching_receipt(&runtime, content).await;
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_remove_committed_rollback".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        let recovered = runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(recovered.rolled_back_actions.is_empty());
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
+        assert!(runtime.host().read(&rollback).await.is_err());
     }
 }

@@ -86,6 +86,23 @@ impl ActionIrV1 {
                         path: path_identity(backup),
                     });
                 }
+                ActionKindV1::UpdateManagedFile {
+                    destination,
+                    rollback,
+                    ..
+                } => {
+                    for (access, path) in [
+                        (FilesystemAccessV1::Write, destination.as_path()),
+                        (FilesystemAccessV1::Remove, destination.as_path()),
+                        (FilesystemAccessV1::Write, rollback.as_path()),
+                        (FilesystemAccessV1::Remove, rollback.as_path()),
+                    ] {
+                        required.insert(PermissionV1::Filesystem {
+                            access,
+                            path: path_identity(path),
+                        });
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
                 }
@@ -151,6 +168,29 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn update_managed_file(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ManagedFileUpdateSpecV1,
+    ) -> Self {
+        let rollback = managed_file_rollback_path(&spec.destination);
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::UpdateManagedFile {
+                destination: spec.destination,
+                rollback,
+                previous_backup: spec.previous_backup,
+                original_mode: spec.original_mode,
+                original_hash: spec.original_hash,
+                desired_hash: spec.desired_hash,
+            },
+            rollback: RollbackSupportV1::RestorePreviousIfUnchanged,
+        }
+    }
+
     fn validate(&self) -> Result<(), ActionIrError> {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
@@ -190,6 +230,24 @@ impl DeclarativeActionV1 {
                 ),
             ),
             (
+                ActionKindV1::UpdateManagedFile {
+                    destination,
+                    rollback,
+                    previous_backup,
+                    ..
+                },
+                RollbackSupportV1::RestorePreviousIfUnchanged,
+            ) if !destination.as_os_str().is_empty()
+                && *rollback == managed_file_rollback_path(destination)
+                && previous_backup.as_ref() != Some(rollback) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::UpdateManagedFile { .. }, _) => Err(ActionIrError::Invalid(
+                "managed-file update requires its canonical rollback path and restore-previous-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
                 ActionKindV1::OpaqueExecution { capability, .. },
                 RollbackSupportV1::Unsupported { reason_code },
             ) => {
@@ -203,6 +261,15 @@ impl DeclarativeActionV1 {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedFileUpdateSpecV1 {
+    pub destination: PathBuf,
+    pub previous_backup: Option<PathBuf>,
+    pub original_mode: Option<u32>,
+    pub original_hash: u64,
+    pub desired_hash: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ActionKindV1 {
@@ -213,6 +280,16 @@ pub enum ActionKindV1 {
     CreateManagedFileWithBackup {
         destination: PathBuf,
         backup: PathBuf,
+        original_hash: u64,
+        desired_hash: u64,
+    },
+    UpdateManagedFile {
+        destination: PathBuf,
+        rollback: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_backup: Option<PathBuf>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_mode: Option<u32>,
         original_hash: u64,
         desired_hash: u64,
     },
@@ -236,7 +313,19 @@ pub enum ActionProvenanceV1 {
 pub enum RollbackSupportV1 {
     RemoveCreatedIfUnchanged,
     RestoreBackupIfUnchanged,
+    RestorePreviousIfUnchanged,
     Unsupported { reason_code: String },
+}
+
+/// Same-directory, transaction-owned material used only while replacing an
+/// existing managed file. It is distinct from the persistent `.shine.bak`
+/// that preserves a pre-install user file.
+pub fn managed_file_rollback_path(destination: &Path) -> PathBuf {
+    let name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    destination.with_file_name(format!("{name}.shine.rollback"))
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -355,6 +444,47 @@ mod tests {
             },
         ] {
             assert!(requirements.required.contains(&permission));
+        }
+    }
+
+    #[test]
+    fn managed_update_is_payload_free_and_derives_transaction_path_effects() {
+        let destination = PathBuf::from("/home/test/.config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        let value = ActionIrV1::new(
+            "operation-update",
+            vec![DeclarativeActionV1::update_managed_file(
+                "action-update",
+                "app/demo",
+                "config",
+                ManagedFileUpdateSpecV1 {
+                    destination: destination.clone(),
+                    previous_backup: Some(PathBuf::from(
+                        "/home/test/.config/demo/config.shine.bak",
+                    )),
+                    original_mode: Some(0o100600),
+                    original_hash: hash_content(b"private-previous-managed"),
+                    desired_hash: hash_content(b"private-next-managed"),
+                },
+            )],
+        );
+        value.validate().unwrap();
+        let encoded = toml::to_string(&value).unwrap();
+        assert!(!encoded.contains("private-previous-managed"));
+        assert!(!encoded.contains("private-next-managed"));
+
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
+        for (access, path) in [
+            (FilesystemAccessV1::Write, destination.clone()),
+            (FilesystemAccessV1::Remove, destination),
+            (FilesystemAccessV1::Write, rollback.clone()),
+            (FilesystemAccessV1::Remove, rollback),
+        ] {
+            assert!(requirements.required.contains(&PermissionV1::Filesystem {
+                access,
+                path: format!("absolute:{}", path.display()),
+            }));
         }
     }
 

@@ -82,14 +82,18 @@ shine app artifact remove <APP_ID> [--yes]
 
 `app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。`app artifact apply/remove` 显式运行预设声明的外部集成脚本，Shine 不会把 apply 隐式作为普通安装或升级的一部分。
 
-如果 App 安装在 operation journal 写入后中断，之后需要安全 Plan 的 App mutation 命令会停止并
+如果受支持的 App creation 或原地静态 Copy update 在 operation journal 写入后中断，之后需要安全
+Plan 的 App mutation 命令会停止并
 提示恢复，不会隐式修改这段中断状态；只读检查也不会恢复或丢弃 journal。运行
 `shine app recover` 可以审阅独立的 recovery Plan。中断后被用户修改的文件会保留；对于
 backup-aware creation，只有 destination 与固定 backup 仍匹配 journal 绑定的原始/目标 fingerprint
-时才恢复 backup。ownership receipt 已持久化时，Shine 保留受管 destination 与 backup，只清理
-stale journal。恢复确认默认是 No；没有交互终端时必须传入 `--yes`。journal 缺失或无效、action
-不受支持，或 destination/backup 已被修改时，命令返回非零且不执行 mutation。已有固定 backup
-也会阻塞受支持、已 journal 的静态 Copy install Plan，不会被替换。
+时才恢复 backup。原地 managed update 会把前一个受管文件临时移动到
+`<name>.shine.rollback`；只有它仍匹配 journal 绑定的旧 fingerprint 时，恢复才会还原或移除它。
+中断后的 rollback material 可能包含敏感受管配置。ownership receipt 已持久化时，Shine 保留受管
+destination 与持久 backup，只清理 stale transaction state。恢复确认默认是 No；没有交互终端时
+必须传入 `--yes`。journal 缺失或无效、action 不受支持，或 destination/backup/rollback 已被修改时，
+命令返回非零且不执行 mutation。已有固定 backup 或 update rollback path 也会阻塞相应的受支持
+Plan，不会被替换。
 
 ## 状态、更新与补全
 

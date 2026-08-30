@@ -27,8 +27,9 @@
 - Phase 4 已开始：Core 已有独立于安全 Plan 的版本化 Action IR、App operation journal 与显式
   recovery Plan；真实 App install 已将“目标缺失或可安全备份、非管理员、静态 Copy”接入
   create/receipt/commit 链路，`shine app recover` 能显式、重新批准地移除未提交创建或恢复未修改的
-  固定 backup，但 managed update、uninstall、其他 action/domain 尚未迁移，也不代表 Phase 4 exit
-  criteria 已满足。
+  固定 backup；原地、receipt-owned、非管理员静态 Copy update 也使用同目录 transaction rollback
+  material，并能在旧/新 receipt 边界安全恢复。Uninstall、JSON merge、管理员路径与其他
+  action/domain 尚未迁移，也不代表 Phase 4 exit criteria 已满足。
 
 ## Guiding Principles
 

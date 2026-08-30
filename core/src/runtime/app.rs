@@ -458,15 +458,28 @@ where
             let outcome = if let Some(index) = action_index {
                 let approved = approved.as_mut().expect("approved App actions");
                 let action_ir = approved.action_irs.remove(index);
-                let execution = self
-                    .execute_app_managed_file_creation_approved(
+                let is_update = matches!(
+                    action_ir.actions.as_slice(),
+                    [action] if matches!(action.kind, crate::action::ActionKindV1::UpdateManagedFile { .. })
+                );
+                let execution = if is_update {
+                    self.execute_app_managed_file_update_approved(
                         approved.plan,
                         approved.approval,
                         action_ir,
                         content,
                     )
-                    .await?;
-                let backup = execution.backup.clone();
+                    .await?
+                } else {
+                    self.execute_app_managed_file_creation_approved(
+                        approved.plan,
+                        approved.approval,
+                        action_ir,
+                        content,
+                    )
+                    .await?
+                };
+                let backup = (!is_update).then(|| execution.backup.clone()).flatten();
                 journal_execution = Some(execution);
                 Ok(match backup {
                     Some(backup) => InstallOutcome::BackedUpAndInstalled {
@@ -1106,9 +1119,17 @@ where
     pub(crate) async fn upgrade_apps(
         &self,
         request: AppUpgradeRequest,
+        plan: &PlanV1,
+        approval: &PlanApprovalV1,
+        action_irs: Vec<ActionIrV1>,
         observer: &mut impl RuntimeObserver,
         interaction: &mut impl RuntimeInteraction,
     ) -> Result<AppUpgradeLifecycleReport> {
+        let mut approved = ApprovedAppInstall {
+            plan,
+            approval,
+            action_irs,
+        };
         let mut manifest = load_manifest(&self.host, &self.context.shine_dir).await?;
         let selected_entries = manifest
             .entries
@@ -1398,8 +1419,26 @@ where
                 ));
                 continue;
             }
-            let installed = self
-                .install_app_content(
+            let target = format!("app/{category_name}");
+            let resource = file_rel.to_string();
+            let action_index = approved.action_irs.iter().position(|ir| {
+                matches!(ir.actions.as_slice(), [action] if action.target == target && action.resource == resource)
+            });
+            let mut journal_execution = None;
+            let installed = if let Some(index) = action_index {
+                let action_ir = approved.action_irs.remove(index);
+                let execution = self
+                    .execute_app_managed_file_update_approved(
+                        approved.plan,
+                        approved.approval,
+                        action_ir,
+                        content,
+                    )
+                    .await?;
+                journal_execution = Some(execution);
+                Ok(InstallOutcome::Installed { hash: desired_hash })
+            } else {
+                self.install_app_content(
                     &assessment.file,
                     content,
                     &desired_destination,
@@ -1407,7 +1446,8 @@ where
                     false,
                     true,
                 )
-                .await;
+                .await
+            };
             let hash = match installed {
                 Ok(InstallOutcome::Installed { hash })
                 | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => hash,
@@ -1466,6 +1506,11 @@ where
                 }
             }
             manifest.upsert(app_entry(&assessment, hash, entry.backup.clone()));
+            if let Some(execution) = journal_execution {
+                save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
+                self.commit_app_managed_file_operation(&execution.operation_id)
+                    .await?;
+            }
             changed.insert(category_name.to_string());
             if let Some(hint) = &assessment.file.restart_hint {
                 report.restart_hints.insert(hint.clone());
@@ -1579,6 +1624,9 @@ where
                     ));
                 }
             }
+        }
+        if !approved.action_irs.is_empty() {
+            bail!("approved App update actions were not consumed by lifecycle execution");
         }
         save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
         let hooks = self
