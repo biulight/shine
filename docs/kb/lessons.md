@@ -3,6 +3,31 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-31 — A privileged transaction lock must outlive executor apply
+
+- **Symptom**: a privileged App removal could release the cross-process administrator lock after
+  staging filesystem changes, then save the manifest receipt and reacquire a new lock for journal
+  commit. Another process could enter between those two critical sections.
+- **Root cause**: the executor returned only operation metadata, so its local lock guard was dropped
+  at the apply function boundary even though the transaction remained journaled and uncommitted.
+- **Fix**: return a non-cloneable execution capability that owns the privileged guard, and require
+  that capability when committing after the lifecycle's durable manifest save.
+- **Rule**: when the caller owns part of a journaled transaction, the executor must transfer the
+  lock guard as an explicit capability; reacquiring by operation ID does not preserve one critical
+  section.
+
+## 2026-08-31 — Preserved privileged files must not trigger administrator authorization
+
+- **Symptom**: uninstalling an App with a user-modified administrator file could request elevation
+  even though the reviewed outcome preserved that file and changed only no privileged path.
+- **Root cause**: uninstall permission and authorization counts were derived from every selected
+  `requires_admin` receipt before the planner decided whether its step was `Remove` or `Preserve`.
+- **Fix**: add protected-path permissions only for an actual removal, then derive authorization
+  from the approved Plan's Administrator permission and mutating file steps.
+- **Rule**: privilege follows a reviewed protected mutation, not the static category of a selected
+  resource. Preserve, missing-resource receipt cleanup, and receipt-only recovery must not prompt
+  for administrator access.
+
 ## 2026-08-31 — Backup restoration needs permissions for both rename endpoints
 
 - **Symptom**: an App uninstall Plan described removing the managed destination but did not include

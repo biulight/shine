@@ -37,6 +37,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Journaled forced removal of user-modified, unprivileged static Copy App files. The modified file
   remains fingerprint-bound rollback material until receipt commit, and interrupted recovery also
   reverses an optional persistent-backup restoration without storing either file in the journal.
+- Extended journaled ordinary, backup-restoring, and forced static Copy removal to administrator
+  paths. Protected moves, cleanup, and recovery share the administrator lock and request elevation
+  only when the reviewed Plan will mutate a protected path.
 
 ### Breaking changes
 

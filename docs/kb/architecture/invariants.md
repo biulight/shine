@@ -175,18 +175,18 @@ bugs. Check this list before changing the modules named in each entry.
   state; after it is durable, commit/recovery removes only unchanged rollback material. Any changed
   kind, bytes, mode-bound input, receipt, destination or rollback path blocks and preserves state.
 - **An ordinary managed App removal commits through receipt absence.** The Phase 4 removal slice
-  applies only to an unchanged, receipt-owned, unprivileged static Copy with no persistent backup
-  and no force. It moves the destination to the canonical same-directory rollback path before
+  applies only to an unchanged, receipt-owned static Copy with no persistent backup and no force.
+  It moves the destination to the canonical same-directory rollback path before
   removing the receipt. While the exact old receipt remains, recovery restores only an unchanged
   regular rollback file with the recorded mode and hash. After receipt removal, the journal must
   durably enter `receipt-committed` before commit/recovery removes unchanged rollback material; bare
   receipt absence cannot authorize cleanup and instead makes explicit recovery reconstruct the exact
   old receipt before restoring unchanged bytes. No conflicting manifest receipt may claim the action
   source, destination or rollback path. Any
-  occupied destination, changed path, receipt conflict, backup, administrator, JSON merge or force
+  occupied destination, changed path, receipt conflict, backup, JSON merge or force
   case stays outside this action and must not inherit its rollback proof.
 - **A backup-restoring App removal binds both file identities across two moves.** The applicable
-  unprivileged static Copy receipt must own the canonical `.shine.bak`, and the managed destination,
+  static Copy receipt must own the canonical `.shine.bak`, and the managed destination,
   persistent backup, and canonical `.shine.rollback` must be unchanged regular-file/missing states
   matching the Action IR's two modes and hashes. Before receipt commit, recovery accepts only exact
   managed/original/missing, missing/original/managed, or original/missing/managed
@@ -195,7 +195,7 @@ bugs. Check this list before changing the modules named in each entry.
   keeps the exact restored user destination and removes only unchanged managed rollback material.
   Any changed kind, mode, hash, receipt, or claimed path blocks and preserves all three paths.
 - **A forced App removal binds the modified file separately from its receipt.** The applicable
-  Phase 4 action is limited to a receipt-owned, unprivileged static Copy regular file whose current
+  Phase 4 action is limited to a receipt-owned static Copy regular file whose current
   hash differs from the receipt hash. The Plan must carry the explicit user-modification override.
   The journal stores both hashes and the current mode, but never file bytes, before moving the
   modified destination to canonical same-directory rollback material and optionally restoring the
@@ -203,8 +203,16 @@ bugs. Check this list before changing the modules named in each entry.
   restores the exact modified destination plus optional backup; after `receipt-committed`, it keeps
   the completed uninstall state and removes only unchanged modified rollback material. Any changed
   kind, mode, hash, receipt, destination, backup, or rollback path blocks. Unchanged destinations
-  use the ordinary removal action even under `--force`; administrator and non-static-Copy paths do
-  not inherit this proof.
+  use the ordinary removal action even under `--force`; non-static-Copy paths do not inherit this
+  proof.
+- **Privileged App removal changes the mutation port, not the rollback proof.** The three static
+  Copy removal actions persist `requires_admin`, derive Administrator permission, and require the
+  exact old receipt to carry the same flag. Planning requests elevation only for an actual protected
+  path mutation. Apply, commit, and recovery hold the host-provided cross-process administrator
+  lock across revalidation and use privileged move/remove for destination, persistent backup, and
+  transaction rollback paths. A freshly reviewed recovery Plan requests Administrator only when
+  its exact safe state moves or removes one of those paths; receipt-only repair and journal cleanup
+  do not. CLI recovery obtains authorization after Plan approval and before mutation.
 - **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
   first action mutation, update action state atomically, persist the matching domain receipt, and
   only then commit by removing the journal. An existing or unsupported-version journal blocks a new

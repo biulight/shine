@@ -106,6 +106,7 @@ impl ActionIrV1 {
                 ActionKindV1::RemoveManagedFile {
                     destination,
                     rollback,
+                    requires_admin,
                     ..
                 } => {
                     for (access, path) in [
@@ -118,11 +119,15 @@ impl ActionIrV1 {
                             path: path_identity(path),
                         });
                     }
+                    if *requires_admin {
+                        required.insert(PermissionV1::Administrator);
+                    }
                 }
                 ActionKindV1::RemoveManagedFileWithBackup {
                     destination,
                     backup,
                     rollback,
+                    requires_admin,
                     ..
                 } => {
                     for (access, path) in [
@@ -137,11 +142,15 @@ impl ActionIrV1 {
                             path: path_identity(path),
                         });
                     }
+                    if *requires_admin {
+                        required.insert(PermissionV1::Administrator);
+                    }
                 }
                 ActionKindV1::ForceRemoveManagedFile {
                     destination,
                     persistent_backup,
                     rollback,
+                    requires_admin,
                     ..
                 } => {
                     for (access, path) in [
@@ -163,6 +172,9 @@ impl ActionIrV1 {
                             access: FilesystemAccessV1::Remove,
                             path: path_identity(&backup.path),
                         });
+                    }
+                    if *requires_admin {
+                        required.insert(PermissionV1::Administrator);
                     }
                 }
                 ActionKindV1::OpaqueExecution { .. } => {
@@ -270,6 +282,7 @@ impl DeclarativeActionV1 {
                 original_mode: spec.original_mode,
                 original_hash: spec.original_hash,
                 uses_env: spec.uses_env,
+                requires_admin: spec.requires_admin,
             },
             rollback: RollbackSupportV1::RestorePreviousIfUnchanged,
         }
@@ -295,6 +308,7 @@ impl DeclarativeActionV1 {
                 backup_mode: spec.backup_mode,
                 backup_hash: spec.backup_hash,
                 uses_env: spec.uses_env,
+                requires_admin: spec.requires_admin,
             },
             rollback: RollbackSupportV1::RestorePreviousWithBackupIfUnchanged,
         }
@@ -319,6 +333,7 @@ impl DeclarativeActionV1 {
                 current_mode: spec.current_mode,
                 current_hash: spec.current_hash,
                 uses_env: spec.uses_env,
+                requires_admin: spec.requires_admin,
             },
             rollback: RollbackSupportV1::RestoreForcedPreviousIfUnchanged,
         }
@@ -470,6 +485,7 @@ pub struct ManagedFileRemoveSpecV1 {
     pub original_mode: Option<u32>,
     pub original_hash: u64,
     pub uses_env: bool,
+    pub requires_admin: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -481,6 +497,7 @@ pub struct ManagedFileRemoveWithBackupSpecV1 {
     pub backup_mode: Option<u32>,
     pub backup_hash: u64,
     pub uses_env: bool,
+    pub requires_admin: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -500,6 +517,7 @@ pub struct ForcedManagedFileRemoveSpecV1 {
     pub current_mode: Option<u32>,
     pub current_hash: u64,
     pub uses_env: bool,
+    pub requires_admin: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -533,6 +551,8 @@ pub enum ActionKindV1 {
         original_hash: u64,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         uses_env: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        requires_admin: bool,
     },
     RemoveManagedFileWithBackup {
         destination: PathBuf,
@@ -546,6 +566,8 @@ pub enum ActionKindV1 {
         backup_hash: u64,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         uses_env: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        requires_admin: bool,
     },
     ForceRemoveManagedFile {
         destination: PathBuf,
@@ -558,6 +580,8 @@ pub enum ActionKindV1 {
         current_hash: u64,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         uses_env: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        requires_admin: bool,
     },
     OpaqueExecution {
         capability: String,
@@ -771,6 +795,7 @@ mod tests {
                     original_mode: Some(0o100600),
                     original_hash: hash_content(b"private-managed"),
                     uses_env: true,
+                    requires_admin: true,
                 },
             )],
         );
@@ -790,6 +815,7 @@ mod tests {
                 path: format!("absolute:{}", path.display()),
             }));
         }
+        assert!(requirements.required.contains(&PermissionV1::Administrator));
     }
 
     #[test]
@@ -811,6 +837,7 @@ mod tests {
                     backup_mode: Some(0o100640),
                     backup_hash: hash_content(b"private-user-original"),
                     uses_env: true,
+                    requires_admin: false,
                 },
             )],
         );
@@ -857,6 +884,7 @@ mod tests {
                     current_mode: Some(0o100600),
                     current_hash: hash_content(b"private-user-modification"),
                     uses_env: true,
+                    requires_admin: false,
                 },
             )],
         );

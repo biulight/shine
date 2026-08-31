@@ -917,7 +917,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 )
                 .await?;
             }
-            add_app_entry_permissions(self.context(), permissions, entry, request.operation);
             let current = read_optional(self.host(), &entry.destination).await?;
             let category_prefix = format!("app/{category}/");
             let active_file = if self
@@ -945,13 +944,14 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             } else {
                 PlanActionV1::Remove
             };
+            if action == PlanActionV1::Remove && current.is_some() {
+                add_app_entry_permissions(self.context(), permissions, entry, request.operation);
+            }
             let remove_rollback = if action == PlanActionV1::Remove
-                && !entry.requires_admin
                 && entry.install_strategy == crate::install::AppInstallStrategy::Copy
                 && active_file.as_ref().is_some_and(|file| {
                     file.generator.is_none()
                         && file.install_strategy == crate::install::AppInstallStrategy::Copy
-                        && !file.requires_admin
                 })
                 && current.as_deref().is_some_and(|bytes| {
                     crate::install::hash_content(bytes) == entry.content_hash || request.force
@@ -2618,12 +2618,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .into_iter()
                 .flat_map(|category| category.files)
                 .find(|file| logical_app_source_for(category, file) == entry.source);
-            if entry.requires_admin
-                || entry.install_strategy != crate::install::AppInstallStrategy::Copy
+            if entry.install_strategy != crate::install::AppInstallStrategy::Copy
                 || !active_file.as_ref().is_some_and(|file| {
                     file.generator.is_none()
                         && file.install_strategy == crate::install::AppInstallStrategy::Copy
-                        && !file.requires_admin
                 })
                 || !plan.steps.iter().any(|step| {
                     step.target == format!("app/{category}")
@@ -2695,6 +2693,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         current_mode: metadata.unix_mode,
                         current_hash,
                         uses_env: entry.uses_env,
+                        requires_admin: entry.requires_admin,
                     },
                 )
             } else if let Some((backup, backup_mode, backup_hash)) = backup_identity {
@@ -2710,6 +2709,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         backup_mode,
                         backup_hash,
                         uses_env: entry.uses_env,
+                        requires_admin: entry.requires_admin,
                     },
                 )
             } else {
@@ -2722,6 +2722,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         original_mode: metadata.unix_mode,
                         original_hash: entry.content_hash,
                         uses_env: entry.uses_env,
+                        requires_admin: entry.requires_admin,
                     },
                 )
             };
@@ -4500,8 +4501,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::runtime::{
-        FileMetadata, HostError, InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimeContext,
-        RuntimePlatform, SplitDnsState,
+        FileMetadata, HostError, HostOperation, InMemoryHost, PresetSnapshot, PresetSourceKind,
+        RuntimeContext, RuntimePlatform, SplitDnsState,
     };
     use std::future::Future;
     use std::pin::Pin;
@@ -4518,6 +4519,30 @@ mod tests {
             _item_count: usize,
         ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
             Box::pin(async { Ok(true) })
+        }
+
+        fn select_many(
+            &mut self,
+            _code: &'static str,
+            _choices: &[String],
+            defaults: &[String],
+        ) -> Result<Vec<String>> {
+            Ok(defaults.to_vec())
+        }
+    }
+
+    struct NoAdminInteraction;
+
+    impl RuntimeInteraction for NoAdminInteraction {
+        fn confirm(&mut self, _code: &'static str, default: bool) -> Result<bool> {
+            Ok(default)
+        }
+
+        fn authorize_admin<'a>(
+            &'a mut self,
+            _item_count: usize,
+        ) -> Pin<Box<dyn Future<Output = Result<bool>> + Send + 'a>> {
+            Box::pin(async { panic!("preserved App files must not request administrator access") })
         }
 
         fn select_many(
@@ -4601,6 +4626,16 @@ mod tests {
             .build()
     }
 
+    fn privileged_static_copy_app_snapshot() -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '/etc/demo'\n[permissions]\nschema_version = 1\nadministrator = true\n[[files]]\nsource = 'config.toml'\nrequires_admin = true\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"managed".to_vec())
+            .build()
+    }
+
     async fn seed_static_copy_app(
         runtime: &CoreRuntime<InMemoryHost>,
         current: &[u8],
@@ -4623,6 +4658,36 @@ mod tests {
                 install_strategy: crate::install::AppInstallStrategy::Copy,
                 uses_env: false,
                 requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        (destination, backup)
+    }
+
+    async fn seed_privileged_static_copy_app(
+        runtime: &CoreRuntime<InMemoryHost>,
+        current: &[u8],
+        backup_content: Option<&[u8]>,
+    ) -> (PathBuf, Option<PathBuf>) {
+        let destination = PathBuf::from("/etc/demo/config.toml");
+        runtime.host().put_file(&destination, current.to_vec());
+        let backup = backup_content.map(|content| {
+            let backup = crate::install::backup_path(&destination);
+            runtime.host().put_file(&backup, content.to_vec());
+            backup
+        });
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: backup.clone(),
+                content_hash: crate::install::hash_content(b"managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: true,
             }],
         }
         .save(runtime.host(), &runtime.context().shine_dir)
@@ -6701,6 +6766,170 @@ servers_env = 'PRIVATE_DNS_SERVERS'
             .await
             .unwrap();
         assert!(manifest.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn approved_privileged_app_uninstall_journals_static_copy_removal() {
+        let runtime = runtime(privileged_static_copy_app_snapshot());
+        let (destination, _) = seed_privileged_static_copy_app(&runtime, b"managed", None).await;
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(
+                ir.actions.as_slice(),
+                [action] if matches!(
+                    action.kind,
+                    crate::action::ActionKindV1::RemoveManagedFile {
+                        requires_admin: true,
+                        ..
+                    }
+                )
+            )
+        ));
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .uninstall_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(report.files[0].action, super::super::AppFileAction::Removed);
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let operations = runtime.host().operations();
+        assert!(operations.contains(&HostOperation::MovePrivileged {
+            from: destination,
+            to: rollback.clone(),
+        }));
+        assert!(operations.contains(&HostOperation::RemovePrivileged(rollback)));
+    }
+
+    #[tokio::test]
+    async fn preserved_privileged_app_file_does_not_request_admin() {
+        let runtime = runtime(privileged_static_copy_app_snapshot());
+        let (destination, _) =
+            seed_privileged_static_copy_app(&runtime, b"user-modified", None).await;
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Preserve
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_user_modified".to_string())
+        }));
+        assert!(
+            !plan
+                .permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .uninstall_apps_approved(request, &approval, &mut observer, &mut NoAdminInteraction)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.files[0].action,
+            super::super::AppFileAction::UserModified
+        );
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-modified"
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.entries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn approved_privileged_forced_app_uninstall_journals_backup_restoration() {
+        let runtime = runtime(privileged_static_copy_app_snapshot());
+        let (destination, backup) =
+            seed_privileged_static_copy_app(&runtime, b"user-modified", Some(b"user-original"))
+                .await;
+        let backup = backup.unwrap();
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: true,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            &actions[0].actions[0].kind,
+            crate::action::ActionKindV1::ForceRemoveManagedFile {
+                persistent_backup: Some(_),
+                requires_admin: true,
+                ..
+            }
+        ));
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .uninstall_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.files[0].action,
+            super::super::AppFileAction::ForceRestored
+        );
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"user-original"
+        );
+        assert!(runtime.host().read(&backup).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let operations = runtime.host().operations();
+        assert!(operations.contains(&HostOperation::MovePrivileged {
+            from: backup,
+            to: destination,
+        }));
+        assert!(operations.contains(&HostOperation::RemovePrivileged(rollback)));
     }
 
     #[tokio::test]

@@ -40,8 +40,9 @@ completed uninstall state and removes only rollback material whose mode and hash
 captured user-modified file.
 
 Any changed kind, mode, hash, receipt, destination, backup, or rollback path blocks and preserves
-all state. Administrator paths, JSON merge, generators, relocation, and stale-prune remain outside
-this action and keep their existing executors.
+all state. At adoption, administrator paths, JSON merge, generators, relocation, and stale-prune
+remain outside this action and keep their existing executors; [ADR 0055](0055-privileged-app-removal-reuses-typed-transaction.md)
+later adds privileged execution without changing these safe states.
 
 ## Consequences
 
@@ -51,4 +52,5 @@ this action and keep their existing executors.
   user-modified data and must be treated as sensitive.
 - Review and lifecycle results retain an explicit forced-removal signal rather than presenting the
   operation as an ordinary owned-file removal.
-- Administrator removal still needs a separate transaction and authorization design.
+- Administrator removal needs separate execution/authorization semantics; ADR 0055 supplies them
+  while reusing this transaction proof.

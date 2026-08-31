@@ -1,7 +1,7 @@
 # Declarative Action and Recovery PRD
 
 > **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
-> 4C.2b-1, 4C.2b-2, and 4C.2b-3a are
+> 4C.2b-1, 4C.2b-2, 4C.2b-3a, and 4C.2b-3b are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned, unprivileged static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
@@ -10,8 +10,9 @@
 > uninstall uses the same material for an unchanged, receipt-owned, unprivileged static Copy with
 > no persistent backup until receipt removal and its journal commit marker are durable. The next
 > removal path also journals restoration of an unchanged fixed persistent backup and forced
-> removal of a user-modified destination at the same unprivileged static Copy boundary. Both bind
-> every moved file by mode and hash across the same receipt boundary.
+> removal of a user-modified destination at the same static Copy boundary. Administrator removal
+> reuses the same actions with a persisted privilege flag, administrator permission, locked
+> privileged moves, and recovery authorization only when a protected path will change.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -49,7 +50,7 @@ prepared journal → rename original to fixed backup → atomic managed write �
        └──────────── explicit recovery restores only an exact safe state ────────────┘
 ```
 
-JSON merge, administrator paths, Shell/Sys actions, and automatic resume remain later slices.
+JSON merge, privileged install/update, Shell/Sys actions, and automatic resume remain later slices.
 
 ## Goals
 
@@ -69,7 +70,8 @@ JSON merge, administrator paths, Shell/Sys actions, and automatic resume remain 
 
 - No implicit recovery during ordinary list, status, planning, install, upgrade, or uninstall.
 - No serialized managed content, pre-operation content, environment values, or secret plaintext.
-- No rollback of opaque code, package-manager operations, network effects, or administrator work.
+- No rollback of opaque code, package-manager operations, network effects, or privileged work
+  outside the implemented App static Copy removal boundary.
 - No global transaction across targets or domains.
 - No promise that an internal Rust type is a stable third-party API.
 
@@ -95,13 +97,17 @@ are:
   valid only for an in-place, unprivileged update with an absent rollback path.
 - `RemoveManagedFile`: an unchanged receipt-owned static Copy destination with no persistent backup,
   its fixed transaction rollback path, prior mode and original hash. It is valid only for an
-  ordinary unprivileged uninstall with an absent rollback path.
+  ordinary uninstall with an absent rollback path.
 - `RemoveManagedFileWithBackup`: the same managed destination and transaction rollback identity,
   plus the canonical persistent backup and both files' prior modes and hashes. It is valid only for
-  an ordinary unprivileged uninstall whose unchanged regular backup will be restored.
-- `ForceRemoveManagedFile`: a user-modified, receipt-owned, unprivileged static Copy destination,
+  an ordinary uninstall whose unchanged regular backup will be restored.
+- `ForceRemoveManagedFile`: a user-modified, receipt-owned static Copy destination,
   its distinct receipt/current hashes and current mode, canonical rollback path, and optional
   canonical persistent backup identity. The Plan must explicitly review the modification override.
+
+Each removal action also binds the receipt's `requires_admin` value. When true, it derives
+Administrator permission and routes protected path changes through the privileged host while
+retaining the same safe-state proof.
 
 The classification-only escape hatch is:
 
@@ -148,7 +154,9 @@ After `receipt-committed`, it keeps the exact user original at the destination a
 unchanged managed rollback material. Forced removal uses the same path transitions but binds the
 different current user-modified hash separately from the receipt hash; before receipt commit it
 restores that modified file and reverses an optional backup restoration, while after commit it
-removes only exact modified rollback material. Administrator removal requires a later action kind.
+removes only exact modified rollback material. Administrator removal reuses these state machines:
+the host administrator lock covers revalidation through cleanup, and every protected move/remove
+uses the privileged mutation port.
 
 ### Recovery
 
@@ -258,9 +266,12 @@ before the first mutation.
 - Bind the old receipt separately from current modified mode/hash and optional persistent backup.
 - Recover both sides of receipt commit without serializing user-modified or backup payloads.
 
-### Slice 4C.2b-3b — Privileged managed uninstall
+### Slice 4C.2b-3b — Privileged managed uninstall (implemented)
 
-- Add administrator locking and rollback tests before privileged actions join the IR.
+- Bind persisted privilege identity and derive Administrator permission from removal actions.
+- Hold the administrator lock across exact receipt/path checks, journaled moves, receipt commit,
+  cleanup, and recovery.
+- Ask for recovery elevation only when the exact recovery Plan mutates a protected path.
 
 ### Slice 4D — Other domains and opaque inventory
 
@@ -288,4 +299,5 @@ Slice 4A is internal and adds no public commands or behavior. Slice 4B.5 release
 recovery command and guidance. Slice 4C.1 expands recovery to fixed backups and blocks an occupied
 backup rather than replacing it. Slices 4C.2b-1 and 4C.2b-2 expand the same recovery guidance to
 receipt removal and fixed-backup restoration. Slice 4C.2b-3a adds forced-removal rollback and the
-same documentation remains aligned across both public manual locales.
+same documentation remains aligned across both public manual locales. Slice 4C.2b-3b documents
+administrator-path authorization and recovery timing in both locales.

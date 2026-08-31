@@ -1,7 +1,8 @@
 //! Explicit CLI recovery for interrupted App action-journal operations.
 
 use crate::config::Config;
-use anyhow::Result;
+use anyhow::{Result, bail};
+use shine_core::plan::PermissionV1;
 
 pub async fn handle_recover_approved(config: &Config, yes: bool) -> Result<()> {
     let reviewed = crate::lifecycle_plan::review_plans(
@@ -13,6 +14,14 @@ pub async fn handle_recover_approved(config: &Config, yes: bool) -> Result<()> {
     .into_iter()
     .next()
     .expect("one reviewed App recovery Plan");
+    if reviewed
+        .approval
+        .approved_permissions
+        .contains(&PermissionV1::Administrator)
+        && !crate::privilege::ensure_admin(1).await?
+    {
+        bail!("administrator permission was not granted");
+    }
     let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
     let report = runtime
         .recover_app_operation_approved(&reviewed.approval)

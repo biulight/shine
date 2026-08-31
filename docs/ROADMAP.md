@@ -33,8 +33,10 @@
   若 receipt 还拥有固定 `.shine.bak`，同一事务会恢复用户原文件，并在任一 rename 或 receipt commit
   中断后按双路径 fingerprint 安全回滚。对同一非管理员静态 Copy 边界，`--force` 移除用户修改内容
   也已有独立 Action：修改后内容会先成为同目录、fingerprint-bound rollback material，并在 receipt
-  commit 前连同可选 persistent backup 一起安全反转。JSON merge、管理员路径与其他 action/domain
-  尚未迁移，也不代表 Phase 4 exit criteria 已满足。
+  commit 前连同可选 persistent backup 一起安全反转。管理员静态 Copy uninstall 复用这些 Action，
+  在完整检查/move/commit/recovery 期间持有 administrator lock 并使用 privileged path mutation；仅
+  receipt 修复不会请求提权。JSON merge 与其他 action/domain 尚未迁移，也不代表 Phase 4 exit
+  criteria 已满足。
 
 ## Guiding Principles
 

@@ -52,7 +52,8 @@ At adoption, forced, backup-restoring, administrator, JSON merge, relocation, st
 upgrade-internal removals remained on their existing executors. [ADR 0053](0053-transactional-app-backup-restoring-remove.md)
 later adds the narrower persistent-backup contract and
 [ADR 0054](0054-transactional-forced-app-managed-file-remove.md) adds a distinct forced-removal
-contract; the other cases remain outside this action.
+contract. [ADR 0055](0055-privileged-app-removal-reuses-typed-transaction.md) later routes this
+same action through the privileged host when its receipt requires administrator access.
 
 ## Consequences
 
@@ -64,4 +65,4 @@ contract; the other cases remain outside this action.
   guarded by kind, mode, hash and ownership checks.
 - This first uninstall action intentionally does not cover persistent user backup restoration,
   explicit force semantics or privileged mutations; ADRs 0053 and 0054 add separate actions for the
-  first two cases without weakening this action's proof.
+  first two cases, while ADR 0055 adds privileged execution without weakening this action's proof.

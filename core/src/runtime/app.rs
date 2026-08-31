@@ -8,7 +8,7 @@ use crate::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
 };
 use crate::permission::PermissionDeclarationV1;
-use crate::plan::{PlanApprovalV1, PlanV1};
+use crate::plan::{PermissionV1, PlanActionV1, PlanApprovalV1, PlanV1};
 use crate::runtime::{
     AppFileInspection, CoreRuntime, FileSystemHost, InspectionChange, InspectionFileStatus,
     PrivilegedFileSystemHost, ProcessHost, ProcessIo, ProcessRequest, RuntimeEvent,
@@ -520,8 +520,7 @@ where
                             // before the executor is allowed to clear the
                             // operation journal.
                             save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-                            self.commit_app_managed_file_operation(&execution.operation_id)
-                                .await?;
+                            self.commit_app_managed_file_operation(&execution).await?;
                         }
                     }
                     changed.insert(assessment.category.name.clone());
@@ -541,8 +540,7 @@ where
                         manifest.upsert(app_entry(&assessment, hash, Some(backup.clone())));
                         if let Some(execution) = journal_execution {
                             save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-                            self.commit_app_managed_file_operation(&execution.operation_id)
-                                .await?;
+                            self.commit_app_managed_file_operation(&execution).await?;
                         }
                     }
                     changed.insert(assessment.category.name.clone());
@@ -714,7 +712,35 @@ where
             return Ok(report);
         }
 
-        let admin_count = selected.iter().filter(|entry| entry.requires_admin).count();
+        let admin_count = if let Some(approved) = &approved {
+            if approved
+                .plan
+                .permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+            {
+                selected
+                    .iter()
+                    .filter(|entry| {
+                        if !entry.requires_admin {
+                            return false;
+                        }
+                        let Some((category, resource)) = app_source_parts(&entry.source) else {
+                            return false;
+                        };
+                        approved.plan.steps.iter().any(|step| {
+                            step.target == format!("app/{category}")
+                                && step.resource.as_deref() == Some(resource)
+                                && step.action == PlanActionV1::Remove
+                        })
+                    })
+                    .count()
+            } else {
+                0
+            }
+        } else {
+            selected.iter().filter(|entry| entry.requires_admin).count()
+        };
         let admin_authorized = request.dry_run
             || admin_count == 0
             || self.context.running_as_admin
@@ -898,8 +924,7 @@ where
                 manifest.remove_by_dest(&entry.destination);
                 if let Some(execution) = journal_execution {
                     save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-                    self.commit_app_managed_file_operation(&execution.operation_id)
-                        .await?;
+                    self.commit_app_managed_file_operation(&execution).await?;
                 }
             }
             let mut lifecycle = LifecycleOutcomeV1::new(
@@ -1579,8 +1604,7 @@ where
             manifest.upsert(app_entry(&assessment, hash, entry.backup.clone()));
             if let Some(execution) = journal_execution {
                 save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
-                self.commit_app_managed_file_operation(&execution.operation_id)
-                    .await?;
+                self.commit_app_managed_file_operation(&execution).await?;
             }
             changed.insert(category_name.to_string());
             if let Some(hint) = &assessment.file.restart_hint {

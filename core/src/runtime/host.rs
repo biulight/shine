@@ -233,6 +233,8 @@ pub trait SplitDnsHost: SplitDnsObservationHost {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostOperation {
     AcquirePrivilegedOperation,
+    MovePrivileged { from: PathBuf, to: PathBuf },
+    RemovePrivileged(PathBuf),
     Read(PathBuf),
     Write(PathBuf),
     CreateDirectory(PathBuf),

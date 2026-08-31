@@ -47,8 +47,8 @@ managed rollback material or an already missing rollback; recovery removes only 
 
 Any other kind, mode, hash, receipt, or path combination blocks and preserves all state.
 [ADR 0054](0054-transactional-forced-app-managed-file-remove.md) gives force a distinct action;
-administrator, JSON merge, relocation, stale-prune, and upgrade-internal removal remain outside
-this action.
+[ADR 0055](0055-privileged-app-removal-reuses-typed-transaction.md) adds privileged execution.
+JSON merge, relocation, stale-prune, and upgrade-internal removal remain outside this action.
 
 ## Consequences
 

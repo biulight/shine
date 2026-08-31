@@ -458,7 +458,16 @@ impl PrivilegedFileSystemHost for InMemoryHost {
         Box::pin(async move {
             self.rename(from, to)
                 .await
-                .map_err(|error| error.into_anyhow("privileged move"))
+                .map_err(|error| error.into_anyhow("privileged move"))?;
+            self.state
+                .lock()
+                .expect("in-memory host lock")
+                .operations
+                .push(HostOperation::MovePrivileged {
+                    from: from.to_path_buf(),
+                    to: to.to_path_buf(),
+                });
+            Ok(())
         })
     }
     fn remove_privileged<'a>(
@@ -466,11 +475,18 @@ impl PrivilegedFileSystemHost for InMemoryHost {
         path: &'a Path,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            match self.remove_file(path).await {
+            let removed = match self.remove_file(path).await {
                 Ok(()) => Ok(()),
                 Err(error) if error.is_not_found() => Ok(()),
                 Err(error) => Err(error.into_anyhow("privileged remove")),
-            }
+            };
+            removed?;
+            self.state
+                .lock()
+                .expect("in-memory host lock")
+                .operations
+                .push(HostOperation::RemovePrivileged(path.to_path_buf()));
+            Ok(())
         })
     }
 }

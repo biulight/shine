@@ -14,16 +14,32 @@ use crate::plan::{
 };
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 pub const APP_OPERATION_JOURNAL_FILE: &str = "app-operation-journal.toml";
 const APP_OPERATION_JOURNAL_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppOperationExecutionV1 {
     pub operation_id: String,
     pub backup: Option<PathBuf>,
     pub forced: bool,
+    privileged_operation: Option<super::PrivilegedOperationGuard>,
+}
+
+impl std::fmt::Debug for AppOperationExecutionV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AppOperationExecutionV1")
+            .field("operation_id", &self.operation_id)
+            .field("backup", &self.backup)
+            .field("forced", &self.forced)
+            .field(
+                "holds_privileged_operation",
+                &self.privileged_operation.is_some(),
+            )
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -451,6 +467,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     rollback,
                     original_mode,
                     original_hash,
+                    requires_admin,
                     ..
                 } => {
                     let current = observe_recovery_file(self.host(), destination).await?;
@@ -537,6 +554,15 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             }
                         }
                     };
+                    if *requires_admin
+                        && recovery_permissions_touch_paths(
+                            &required,
+                            self.context(),
+                            [destination.as_path(), rollback.as_path()],
+                        )
+                    {
+                        required.insert(PermissionV1::Administrator);
+                    }
                     steps.push(
                         PlanStepV1::new(&action.target, Some(&action.resource), plan_action)
                             .with_diagnostic_code(code),
@@ -550,6 +576,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     managed_hash,
                     backup_mode,
                     backup_hash,
+                    requires_admin,
                     ..
                 } => {
                     let current = observe_recovery_file(self.host(), destination).await?;
@@ -672,6 +699,15 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             }
                         }
                     };
+                    if *requires_admin
+                        && recovery_permissions_touch_paths(
+                            &required,
+                            self.context(),
+                            [destination.as_path(), backup.as_path(), rollback.as_path()],
+                        )
+                    {
+                        required.insert(PermissionV1::Administrator);
+                    }
                     steps.push(
                         PlanStepV1::new(&action.target, Some(&action.resource), plan_action)
                             .with_diagnostic_code(code),
@@ -683,6 +719,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     rollback,
                     current_mode,
                     current_hash,
+                    requires_admin,
                     ..
                 } => {
                     let current = observe_recovery_file(self.host(), destination).await?;
@@ -892,6 +929,19 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             }
                         }
                     };
+                    if *requires_admin {
+                        let mut privileged_paths = vec![destination.as_path(), rollback.as_path()];
+                        if let Some(backup) = persistent_backup {
+                            privileged_paths.push(backup.path.as_path());
+                        }
+                        if recovery_permissions_touch_paths(
+                            &required,
+                            self.context(),
+                            privileged_paths,
+                        ) {
+                            required.insert(PermissionV1::Administrator);
+                        }
+                    }
                     steps.push(
                         PlanStepV1::new(&action.target, Some(&action.resource), plan_action)
                             .with_diagnostic_code(code),
@@ -1080,6 +1130,7 @@ where
             operation_id: journal.action_ir.operation_id,
             backup,
             forced: false,
+            privileged_operation: None,
         })
     }
 
@@ -1212,6 +1263,7 @@ where
             operation_id: journal.action_ir.operation_id,
             backup: previous_backup,
             forced: false,
+            privileged_operation: None,
         })
     }
 
@@ -1252,74 +1304,78 @@ where
         }) {
             bail!("App managed-file removal was not described by the approved security Plan");
         }
-        let (destination, rollback, original_mode, original_hash, backup, forced) = match (
-            &action.kind,
-            &action.rollback,
-        ) {
-            (
-                ActionKindV1::RemoveManagedFile {
-                    destination,
-                    rollback,
-                    original_mode,
-                    original_hash,
-                    ..
-                },
-                RollbackSupportV1::RestorePreviousIfUnchanged,
-            ) => (
-                destination.clone(),
-                rollback.clone(),
-                *original_mode,
-                *original_hash,
-                None,
-                false,
-            ),
-            (
-                ActionKindV1::RemoveManagedFileWithBackup {
-                    destination,
-                    backup,
-                    rollback,
-                    managed_mode,
-                    managed_hash,
-                    backup_mode,
-                    backup_hash,
-                    ..
-                },
-                RollbackSupportV1::RestorePreviousWithBackupIfUnchanged,
-            ) => (
-                destination.clone(),
-                rollback.clone(),
-                *managed_mode,
-                *managed_hash,
-                Some((backup.clone(), *backup_mode, *backup_hash)),
-                false,
-            ),
-            (
-                ActionKindV1::ForceRemoveManagedFile {
-                    destination,
-                    persistent_backup,
-                    rollback,
-                    current_mode,
-                    current_hash,
-                    ..
-                },
-                RollbackSupportV1::RestoreForcedPreviousIfUnchanged,
-            ) => (
-                destination.clone(),
-                rollback.clone(),
-                *current_mode,
-                *current_hash,
-                persistent_backup
-                    .as_ref()
-                    .map(|backup| (backup.path.clone(), backup.mode, backup.hash)),
-                true,
-            ),
-            _ => bail!(
-                "the App managed-file removal slice accepts only safely reversible declarative file removal"
-            ),
-        };
+        let (destination, rollback, original_mode, original_hash, backup, forced, requires_admin) =
+            match (&action.kind, &action.rollback) {
+                (
+                    ActionKindV1::RemoveManagedFile {
+                        destination,
+                        rollback,
+                        original_mode,
+                        original_hash,
+                        requires_admin,
+                        ..
+                    },
+                    RollbackSupportV1::RestorePreviousIfUnchanged,
+                ) => (
+                    destination.clone(),
+                    rollback.clone(),
+                    *original_mode,
+                    *original_hash,
+                    None,
+                    false,
+                    *requires_admin,
+                ),
+                (
+                    ActionKindV1::RemoveManagedFileWithBackup {
+                        destination,
+                        backup,
+                        rollback,
+                        managed_mode,
+                        managed_hash,
+                        backup_mode,
+                        backup_hash,
+                        requires_admin,
+                        ..
+                    },
+                    RollbackSupportV1::RestorePreviousWithBackupIfUnchanged,
+                ) => (
+                    destination.clone(),
+                    rollback.clone(),
+                    *managed_mode,
+                    *managed_hash,
+                    Some((backup.clone(), *backup_mode, *backup_hash)),
+                    false,
+                    *requires_admin,
+                ),
+                (
+                    ActionKindV1::ForceRemoveManagedFile {
+                        destination,
+                        persistent_backup,
+                        rollback,
+                        current_mode,
+                        current_hash,
+                        requires_admin,
+                        ..
+                    },
+                    RollbackSupportV1::RestoreForcedPreviousIfUnchanged,
+                ) => (
+                    destination.clone(),
+                    rollback.clone(),
+                    *current_mode,
+                    *current_hash,
+                    persistent_backup
+                        .as_ref()
+                        .map(|backup| (backup.path.clone(), backup.mode, backup.hash)),
+                    true,
+                    *requires_admin,
+                ),
+                _ => bail!(
+                    "the App managed-file removal slice accepts only safely reversible declarative file removal"
+                ),
+            };
         let action_id = action.action_id.clone();
 
-        let _guard = self.host().acquire_privileged_operation().await?;
+        let operation_guard = self.host().acquire_privileged_operation().await?;
         if load_app_operation_journal(self.host(), &self.context().shine_dir)
             .await?
             .is_some()
@@ -1378,15 +1434,23 @@ where
 
         let mut journal = AppOperationJournalV1::new(action_ir, approval.clone());
         save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
-        self.host()
-            .rename(&destination, &rollback)
-            .await
-            .map_err(|error| error.into_anyhow("failed to stage removed managed App file"))?;
+        move_app_removal_path(
+            self.host(),
+            &destination,
+            &rollback,
+            requires_admin,
+            "failed to stage removed managed App file",
+        )
+        .await?;
         if let Some((backup_path, _, _)) = &backup {
-            self.host()
-                .rename(backup_path, &destination)
-                .await
-                .map_err(|error| error.into_anyhow("failed to restore managed App backup"))?;
+            move_app_removal_path(
+                self.host(),
+                backup_path,
+                &destination,
+                requires_admin,
+                "failed to restore managed App backup",
+            )
+            .await?;
         }
         journal.mark_applied(&action_id)?;
         save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
@@ -1395,18 +1459,26 @@ where
             operation_id: journal.action_ir.operation_id,
             backup: backup.map(|(path, _, _)| path),
             forced,
+            privileged_operation: requires_admin.then_some(operation_guard),
         })
     }
 
     /// Clear a completed journal only after the caller has durably persisted
     /// the matching App receipt state: ownership for create/update, or safe
     /// receipt absence for remove.
-    pub async fn commit_app_managed_file_operation(&self, operation_id: &str) -> Result<()> {
-        let _guard = self.host().acquire_privileged_operation().await?;
+    pub async fn commit_app_managed_file_operation(
+        &self,
+        execution: &AppOperationExecutionV1,
+    ) -> Result<()> {
+        let _guard = if execution.privileged_operation.is_some() {
+            None
+        } else {
+            Some(self.host().acquire_privileged_operation().await?)
+        };
         let (mut journal, _) = load_app_operation_journal(self.host(), &self.context().shine_dir)
             .await?
             .context("no App operation journal is available to commit")?;
-        if journal.action_ir.operation_id != operation_id {
+        if journal.action_ir.operation_id != execution.operation_id {
             bail!("App operation journal identity changed before commit");
         }
         if journal.actions.iter().any(|action| {
@@ -1474,6 +1546,7 @@ where
                 rollback,
                 original_mode,
                 original_hash,
+                requires_admin,
                 ..
             } = &action.kind
             {
@@ -1491,9 +1564,13 @@ where
                         if hash_content(&bytes) == *original_hash
                             && recovery_mode_matches(mode, *original_mode) =>
                     {
-                        self.host().remove_file(rollback).await.map_err(|error| {
-                            error.into_anyhow("failed to remove App removal rollback material")
-                        })?;
+                        remove_app_removal_path(
+                            self.host(),
+                            rollback,
+                            *requires_admin,
+                            "failed to remove App removal rollback material",
+                        )
+                        .await?;
                     }
                     RecoveryFileObservation::Regular(_, _) | RecoveryFileObservation::Other(_) => {
                         bail!(
@@ -1510,6 +1587,7 @@ where
                 managed_hash,
                 backup_mode,
                 backup_hash,
+                requires_admin,
                 ..
             } = &action.kind
             {
@@ -1525,11 +1603,13 @@ where
                 match assessment {
                     CommittedBackupRemoveRecoveryAssessment::Complete => {}
                     CommittedBackupRemoveRecoveryAssessment::RemoveRollback => {
-                        self.host().remove_file(rollback).await.map_err(|error| {
-                            error.into_anyhow(
-                                "failed to remove backup-restoring App removal rollback material",
-                            )
-                        })?;
+                        remove_app_removal_path(
+                            self.host(),
+                            rollback,
+                            *requires_admin,
+                            "failed to remove backup-restoring App removal rollback material",
+                        )
+                        .await?;
                     }
                     CommittedBackupRemoveRecoveryAssessment::Blocked => bail!(
                         "backup-restoring App removal state changed before commit; operation journal preserved"
@@ -1542,6 +1622,7 @@ where
                 rollback,
                 current_mode,
                 current_hash,
+                requires_admin,
                 ..
             } = &action.kind
             {
@@ -1560,11 +1641,13 @@ where
                     match assessment {
                         CommittedBackupRemoveRecoveryAssessment::Complete => {}
                         CommittedBackupRemoveRecoveryAssessment::RemoveRollback => {
-                            self.host().remove_file(rollback).await.map_err(|error| {
-                                error.into_anyhow(
-                                    "failed to remove forced App removal rollback material",
-                                )
-                            })?;
+                            remove_app_removal_path(
+                                self.host(),
+                                rollback,
+                                *requires_admin,
+                                "failed to remove forced App removal rollback material",
+                            )
+                            .await?;
                         }
                         CommittedBackupRemoveRecoveryAssessment::Blocked => bail!(
                             "forced App removal state changed before commit; operation journal preserved"
@@ -1582,11 +1665,13 @@ where
                             if hash_content(&bytes) == *current_hash
                                 && recovery_mode_matches(mode, *current_mode) =>
                         {
-                            self.host().remove_file(rollback).await.map_err(|error| {
-                                error.into_anyhow(
-                                    "failed to remove forced App removal rollback material",
-                                )
-                            })?;
+                            remove_app_removal_path(
+                                self.host(),
+                                rollback,
+                                *requires_admin,
+                                "failed to remove forced App removal rollback material",
+                            )
+                            .await?;
                         }
                         RecoveryFileObservation::Regular(_, _)
                         | RecoveryFileObservation::Other(_) => bail!(
@@ -1755,6 +1840,7 @@ where
                     rollback,
                     original_mode,
                     original_hash,
+                    requires_admin,
                     ..
                 } => {
                     if action_state == JournalActionStateV1::ReceiptCommitted {
@@ -1771,11 +1857,13 @@ where
                             ) if hash_content(bytes) == *original_hash
                                 && recovery_mode_matches(*mode, *original_mode) =>
                             {
-                                self.host().remove_file(rollback).await.map_err(|error| {
-                                    error.into_anyhow(
-                                        "failed to remove committed App removal rollback material",
-                                    )
-                                })?;
+                                remove_app_removal_path(
+                                    self.host(),
+                                    rollback,
+                                    *requires_admin,
+                                    "failed to remove committed App removal rollback material",
+                                )
+                                .await?;
                             }
                             _ => bail!(
                                 "managed App removal state changed after receipt commit; recovery preserved it"
@@ -1805,12 +1893,14 @@ where
                     match assessment {
                         RemoveRecoveryAssessment::NotStarted => {}
                         RemoveRecoveryAssessment::Restore => {
-                            self.host()
-                                .rename(rollback, destination)
-                                .await
-                                .map_err(|error| {
-                                    error.into_anyhow("failed to restore removed managed App file")
-                                })?;
+                            move_app_removal_path(
+                                self.host(),
+                                rollback,
+                                destination,
+                                *requires_admin,
+                                "failed to restore removed managed App file",
+                            )
+                            .await?;
                         }
                         RemoveRecoveryAssessment::Blocked => unreachable!("checked above"),
                     }
@@ -1823,6 +1913,7 @@ where
                     managed_hash,
                     backup_mode,
                     backup_hash,
+                    requires_admin,
                     ..
                 } => {
                     let current = observe_recovery_file(self.host(), destination).await?;
@@ -1840,11 +1931,13 @@ where
                         ) {
                             CommittedBackupRemoveRecoveryAssessment::Complete => {}
                             CommittedBackupRemoveRecoveryAssessment::RemoveRollback => {
-                                self.host().remove_file(rollback).await.map_err(|error| {
-                                    error.into_anyhow(
-                                        "failed to remove committed backup-restoring App removal rollback material",
-                                    )
-                                })?;
+                                remove_app_removal_path(
+                                    self.host(),
+                                    rollback,
+                                    *requires_admin,
+                                    "failed to remove committed backup-restoring App removal rollback material",
+                                )
+                                .await?;
                             }
                             CommittedBackupRemoveRecoveryAssessment::Blocked => bail!(
                                 "backup-restoring App removal state changed after receipt commit; recovery preserved it"
@@ -1875,28 +1968,32 @@ where
                     match assessment {
                         BackupRemoveRecoveryAssessment::NotStarted => {}
                         BackupRemoveRecoveryAssessment::RestoreManaged => {
-                            self.host()
-                                .rename(rollback, destination)
-                                .await
-                                .map_err(|error| {
-                                    error.into_anyhow("failed to restore removed managed App file")
-                                })?;
+                            move_app_removal_path(
+                                self.host(),
+                                rollback,
+                                destination,
+                                *requires_admin,
+                                "failed to restore removed managed App file",
+                            )
+                            .await?;
                         }
                         BackupRemoveRecoveryAssessment::RestoreManagedAndBackup => {
-                            self.host()
-                                .rename(destination, backup)
-                                .await
-                                .map_err(|error| {
-                                    error.into_anyhow(
-                                        "failed to return restored user file to its App backup path",
-                                    )
-                                })?;
-                            self.host()
-                                .rename(rollback, destination)
-                                .await
-                                .map_err(|error| {
-                                    error.into_anyhow("failed to restore removed managed App file")
-                                })?;
+                            move_app_removal_path(
+                                self.host(),
+                                destination,
+                                backup,
+                                *requires_admin,
+                                "failed to return restored user file to its App backup path",
+                            )
+                            .await?;
+                            move_app_removal_path(
+                                self.host(),
+                                rollback,
+                                destination,
+                                *requires_admin,
+                                "failed to restore removed managed App file",
+                            )
+                            .await?;
                         }
                         BackupRemoveRecoveryAssessment::Blocked => unreachable!("checked above"),
                     }
@@ -1907,6 +2004,7 @@ where
                     rollback,
                     current_mode,
                     current_hash,
+                    requires_admin,
                     ..
                 } => {
                     let current = observe_recovery_file(self.host(), destination).await?;
@@ -1926,11 +2024,13 @@ where
                             ) {
                                 CommittedBackupRemoveRecoveryAssessment::Complete => {}
                                 CommittedBackupRemoveRecoveryAssessment::RemoveRollback => {
-                                    self.host().remove_file(rollback).await.map_err(|error| {
-                                        error.into_anyhow(
-                                            "failed to remove committed forced App removal rollback material",
-                                        )
-                                    })?;
+                                    remove_app_removal_path(
+                                        self.host(),
+                                        rollback,
+                                        *requires_admin,
+                                        "failed to remove committed forced App removal rollback material",
+                                    )
+                                    .await?;
                                 }
                                 CommittedBackupRemoveRecoveryAssessment::Blocked => bail!(
                                     "forced App removal state changed after receipt commit; recovery preserved it"
@@ -1961,28 +2061,32 @@ where
                         match assessment {
                             BackupRemoveRecoveryAssessment::NotStarted => {}
                             BackupRemoveRecoveryAssessment::RestoreManaged => {
-                                self.host().rename(rollback, destination).await.map_err(
-                                    |error| {
-                                        error
-                                            .into_anyhow("failed to restore force-removed App file")
-                                    },
-                                )?;
+                                move_app_removal_path(
+                                    self.host(),
+                                    rollback,
+                                    destination,
+                                    *requires_admin,
+                                    "failed to restore force-removed App file",
+                                )
+                                .await?;
                             }
                             BackupRemoveRecoveryAssessment::RestoreManagedAndBackup => {
-                                self.host()
-                                    .rename(destination, &backup.path)
-                                    .await
-                                    .map_err(|error| {
-                                        error.into_anyhow(
-                                            "failed to return restored user file to its App backup path",
-                                        )
-                                    })?;
-                                self.host().rename(rollback, destination).await.map_err(
-                                    |error| {
-                                        error
-                                            .into_anyhow("failed to restore force-removed App file")
-                                    },
-                                )?;
+                                move_app_removal_path(
+                                    self.host(),
+                                    destination,
+                                    &backup.path,
+                                    *requires_admin,
+                                    "failed to return restored user file to its App backup path",
+                                )
+                                .await?;
+                                move_app_removal_path(
+                                    self.host(),
+                                    rollback,
+                                    destination,
+                                    *requires_admin,
+                                    "failed to restore force-removed App file",
+                                )
+                                .await?;
                             }
                             BackupRemoveRecoveryAssessment::Blocked => {
                                 unreachable!("checked above")
@@ -2001,11 +2105,13 @@ where
                                 ) if hash_content(bytes) == *current_hash
                                     && recovery_mode_matches(*mode, *current_mode) =>
                                 {
-                                    self.host().remove_file(rollback).await.map_err(|error| {
-                                        error.into_anyhow(
-                                            "failed to remove committed forced App removal rollback material",
-                                        )
-                                    })?;
+                                    remove_app_removal_path(
+                                        self.host(),
+                                        rollback,
+                                        *requires_admin,
+                                        "failed to remove committed forced App removal rollback material",
+                                    )
+                                    .await?;
                                 }
                                 _ => bail!(
                                     "forced App removal state changed after receipt commit; recovery preserved it"
@@ -2033,12 +2139,14 @@ where
                         match assessment {
                             RemoveRecoveryAssessment::NotStarted => {}
                             RemoveRecoveryAssessment::Restore => {
-                                self.host().rename(rollback, destination).await.map_err(
-                                    |error| {
-                                        error
-                                            .into_anyhow("failed to restore force-removed App file")
-                                    },
-                                )?;
+                                move_app_removal_path(
+                                    self.host(),
+                                    rollback,
+                                    destination,
+                                    *requires_admin,
+                                    "failed to restore force-removed App file",
+                                )
+                                .await?;
                             }
                             RemoveRecoveryAssessment::Blocked => unreachable!("checked above"),
                         }
@@ -2055,6 +2163,64 @@ where
             operation_id: journal.action_ir.operation_id,
             rolled_back_actions,
         })
+    }
+}
+
+fn recovery_permissions_touch_paths<'a>(
+    required: &PermissionSetV1,
+    context: &super::RuntimeContext,
+    paths: impl IntoIterator<Item = &'a Path>,
+) -> bool {
+    let paths = paths
+        .into_iter()
+        .map(|path| review_path(context, path))
+        .collect::<BTreeSet<_>>();
+    required.iter().any(|permission| {
+        matches!(
+            permission,
+            PermissionV1::Filesystem { path, .. } if paths.contains(path)
+        )
+    })
+}
+
+async fn move_app_removal_path<H>(
+    host: &H,
+    from: &Path,
+    to: &Path,
+    requires_admin: bool,
+    failure_context: &'static str,
+) -> Result<()>
+where
+    H: FileSystemHost + PrivilegedFileSystemHost,
+{
+    if requires_admin {
+        host.move_privileged(from, to)
+            .await
+            .with_context(|| failure_context)
+    } else {
+        host.rename(from, to)
+            .await
+            .map_err(|error| error.into_anyhow(failure_context))
+    }
+}
+
+async fn remove_app_removal_path<H>(
+    host: &H,
+    path: &Path,
+    requires_admin: bool,
+    failure_context: &'static str,
+) -> Result<()>
+where
+    H: FileSystemHost + PrivilegedFileSystemHost,
+{
+    if requires_admin {
+        host.remove_privileged(path)
+            .await
+            .with_context(|| failure_context)
+    } else {
+        host.remove_file(path)
+            .await
+            .map_err(|error| error.into_anyhow(failure_context))
     }
 }
 
@@ -2132,37 +2298,60 @@ fn matching_previous_app_receipt(
     manifest: &AppManifest,
     action: &crate::action::DeclarativeActionV1,
 ) -> bool {
-    let (destination, previous_backup, original_hash, uses_env) = match &action.kind {
+    let (destination, previous_backup, original_hash, uses_env, requires_admin) = match &action.kind
+    {
         ActionKindV1::UpdateManagedFile {
             destination,
             previous_backup,
             original_hash,
             ..
-        } => (destination, previous_backup.as_ref(), original_hash, None),
+        } => (
+            destination,
+            previous_backup.as_ref(),
+            original_hash,
+            None,
+            false,
+        ),
         ActionKindV1::RemoveManagedFile {
             destination,
             original_hash,
             uses_env,
+            requires_admin,
             ..
-        } => (destination, None, original_hash, Some(*uses_env)),
+        } => (
+            destination,
+            None,
+            original_hash,
+            Some(*uses_env),
+            *requires_admin,
+        ),
         ActionKindV1::RemoveManagedFileWithBackup {
             destination,
             backup,
             managed_hash,
             uses_env,
+            requires_admin,
             ..
-        } => (destination, Some(backup), managed_hash, Some(*uses_env)),
+        } => (
+            destination,
+            Some(backup),
+            managed_hash,
+            Some(*uses_env),
+            *requires_admin,
+        ),
         ActionKindV1::ForceRemoveManagedFile {
             destination,
             persistent_backup,
             receipt_hash,
             uses_env,
+            requires_admin,
             ..
         } => (
             destination,
             persistent_backup.as_ref().map(|backup| &backup.path),
             receipt_hash,
             Some(*uses_env),
+            *requires_admin,
         ),
         _ => return false,
     };
@@ -2172,7 +2361,7 @@ fn matching_previous_app_receipt(
             && entry.content_hash == *original_hash
             && entry.backup.as_ref() == previous_backup
             && entry.install_strategy == AppInstallStrategy::Copy
-            && !entry.requires_admin
+            && entry.requires_admin == requires_admin
             && uses_env.is_none_or(|uses_env| entry.uses_env == uses_env)
     })
 }
@@ -2180,31 +2369,41 @@ fn matching_previous_app_receipt(
 fn previous_removed_app_receipt(
     action: &crate::action::DeclarativeActionV1,
 ) -> Result<crate::install::AppEntry> {
-    let (destination, backup, original_hash, uses_env) = match &action.kind {
+    let (destination, backup, original_hash, uses_env, requires_admin) = match &action.kind {
         ActionKindV1::RemoveManagedFile {
             destination,
             original_hash,
             uses_env,
+            requires_admin,
             ..
-        } => (destination, None, original_hash, uses_env),
+        } => (destination, None, original_hash, uses_env, requires_admin),
         ActionKindV1::RemoveManagedFileWithBackup {
             destination,
             backup,
             managed_hash,
             uses_env,
+            requires_admin,
             ..
-        } => (destination, Some(backup.clone()), managed_hash, uses_env),
+        } => (
+            destination,
+            Some(backup.clone()),
+            managed_hash,
+            uses_env,
+            requires_admin,
+        ),
         ActionKindV1::ForceRemoveManagedFile {
             destination,
             persistent_backup,
             receipt_hash,
             uses_env,
+            requires_admin,
             ..
         } => (
             destination,
             persistent_backup.as_ref().map(|backup| backup.path.clone()),
             receipt_hash,
             uses_env,
+            requires_admin,
         ),
         _ => bail!("only a managed-file removal has a restorable previous receipt"),
     };
@@ -2215,7 +2414,7 @@ fn previous_removed_app_receipt(
         content_hash: *original_hash,
         install_strategy: AppInstallStrategy::Copy,
         uses_env: *uses_env,
-        requires_admin: false,
+        requires_admin: *requires_admin,
     })
 }
 
@@ -2668,7 +2867,9 @@ mod tests {
     };
     use crate::install::AppEntry;
     use crate::plan::PlanStepV1;
-    use crate::runtime::{InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimePlatform};
+    use crate::runtime::{
+        HostOperation, InMemoryHost, PresetSnapshot, PresetSourceKind, RuntimePlatform,
+    };
     use std::path::PathBuf;
 
     fn runtime() -> CoreRuntime<InMemoryHost> {
@@ -2755,6 +2956,7 @@ mod tests {
                     original_mode: Some(0o100644),
                     original_hash: hash_content(original),
                     uses_env: false,
+                    requires_admin: false,
                 },
             )],
         )
@@ -2780,6 +2982,7 @@ mod tests {
                     backup_mode: Some(0o100644),
                     backup_hash: hash_content(original),
                     uses_env: false,
+                    requires_admin: false,
                 },
             )],
         )
@@ -2810,9 +3013,24 @@ mod tests {
                     current_mode: Some(0o100644),
                     current_hash: hash_content(current),
                     uses_env: false,
+                    requires_admin: false,
                 },
             )],
         )
+    }
+
+    fn privileged_removal_ir(mut ir: ActionIrV1) -> ActionIrV1 {
+        for action in &mut ir.actions {
+            match &mut action.kind {
+                ActionKindV1::RemoveManagedFile { requires_admin, .. }
+                | ActionKindV1::RemoveManagedFileWithBackup { requires_admin, .. }
+                | ActionKindV1::ForceRemoveManagedFile { requires_admin, .. } => {
+                    *requires_admin = true;
+                }
+                _ => panic!("expected a managed-file removal action"),
+            }
+        }
+        ir
     }
 
     fn approved_install_plan(
@@ -2944,6 +3162,28 @@ mod tests {
         .unwrap();
     }
 
+    async fn save_matching_privileged_receipt(
+        runtime: &CoreRuntime<InMemoryHost>,
+        content: &[u8],
+        backup: Option<PathBuf>,
+    ) {
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config".to_string(),
+                destination: runtime.context().home_dir.join(".config/demo/config"),
+                backup,
+                content_hash: hash_content(content),
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: true,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    }
+
     async fn remove_matching_receipt(runtime: &CoreRuntime<InMemoryHost>) {
         AppManifest {
             schema_version: APP_MANIFEST_SCHEMA_VERSION,
@@ -2975,7 +3215,7 @@ mod tests {
                 .contains("managed-content")
         );
         let error = runtime
-            .commit_app_managed_file_operation(&execution.operation_id)
+            .commit_app_managed_file_operation(&execution)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("matching manifest receipt"));
@@ -2988,7 +3228,7 @@ mod tests {
         );
         save_matching_receipt(&runtime, content).await;
         runtime
-            .commit_app_managed_file_operation(&execution.operation_id)
+            .commit_app_managed_file_operation(&execution)
             .await
             .unwrap();
         assert!(
@@ -3174,14 +3414,14 @@ mod tests {
         assert_eq!(runtime.host().read(&backup).await.unwrap(), original);
         assert!(
             runtime
-                .commit_app_managed_file_operation(&execution.operation_id)
+                .commit_app_managed_file_operation(&execution)
                 .await
                 .is_err()
         );
 
         save_matching_receipt_with_backup(&runtime, content, Some(backup.clone())).await;
         runtime
-            .commit_app_managed_file_operation(&execution.operation_id)
+            .commit_app_managed_file_operation(&execution)
             .await
             .unwrap();
         assert!(
@@ -3496,7 +3736,7 @@ mod tests {
 
         save_matching_receipt(&runtime, content).await;
         runtime
-            .commit_app_managed_file_operation(&execution.operation_id)
+            .commit_app_managed_file_operation(&execution)
             .await
             .unwrap();
         assert!(runtime.host().read(&rollback).await.is_err());
@@ -3671,14 +3911,14 @@ mod tests {
         assert_eq!(runtime.host().read(&rollback).await.unwrap(), current);
         assert!(
             runtime
-                .commit_app_managed_file_operation(&execution.operation_id)
+                .commit_app_managed_file_operation(&execution)
                 .await
                 .is_err()
         );
 
         remove_matching_receipt(&runtime).await;
         runtime
-            .commit_app_managed_file_operation(&execution.operation_id)
+            .commit_app_managed_file_operation(&execution)
             .await
             .unwrap();
         assert!(runtime.host().read(&destination).await.is_err());
@@ -3882,7 +4122,7 @@ mod tests {
 
         remove_matching_receipt(&runtime).await;
         runtime
-            .commit_app_managed_file_operation(&execution.operation_id)
+            .commit_app_managed_file_operation(&execution)
             .await
             .unwrap();
         assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
@@ -3933,6 +4173,145 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interrupted_privileged_removal_requires_admin_and_uses_privileged_recovery_move() {
+        let runtime = runtime();
+        let managed = b"managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, managed.to_vec());
+        save_matching_privileged_receipt(&runtime, managed, None).await;
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        let ir = privileged_removal_ir(remove_action_ir(&runtime, managed));
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        assert!(
+            approval
+                .approved_permissions
+                .contains(&PermissionV1::Administrator)
+        );
+        assert!(
+            runtime
+                .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+                .await
+                .is_err()
+        );
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .contains(&HostOperation::MovePrivileged {
+                    from: destination.clone(),
+                    to: rollback.clone(),
+                })
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(
+            recovery_plan
+                .permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), managed);
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .contains(&HostOperation::MovePrivileged {
+                    from: rollback,
+                    to: destination,
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn privileged_removal_holds_one_admin_lock_through_receipt_commit() {
+        let runtime = runtime();
+        let managed = b"managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        runtime.host().put_file(&destination, managed.to_vec());
+        save_matching_privileged_receipt(&runtime, managed, None).await;
+        let ir = privileged_removal_ir(remove_action_ir(&runtime, managed));
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+
+        let execution = runtime
+            .execute_app_managed_file_removal_approved(&plan, &approval, ir)
+            .await
+            .unwrap();
+        assert!(execution.privileged_operation.is_some());
+        remove_matching_receipt(&runtime).await;
+        runtime
+            .commit_app_managed_file_operation(&execution)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            runtime
+                .host()
+                .operations()
+                .iter()
+                .filter(|operation| matches!(operation, HostOperation::AcquirePrivilegedOperation))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn privileged_removal_receipt_only_recovery_does_not_request_admin() {
+        let runtime = runtime();
+        let managed = b"managed";
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        runtime.host().put_file(&destination, managed.to_vec());
+        save_matching_privileged_receipt(&runtime, managed, None).await;
+        let ir = privileged_removal_ir(remove_action_ir(&runtime, managed));
+        let (_plan, approval) = approved_remove_plan(&runtime, &ir);
+        let journal = AppOperationJournalV1::new(ir, approval);
+        save_app_operation_journal(runtime.host(), &runtime.context().shine_dir, &journal)
+            .await
+            .unwrap();
+        remove_matching_receipt(&runtime).await;
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_recovery_restore_removed_receipt".to_string())
+        }));
+        assert!(
+            !recovery_plan
+                .permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), managed);
+        let (manifest, _) =
+            load_app_manifest_receipts(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap();
+        assert!(manifest.entries[0].requires_admin);
+        assert!(
+            !runtime.host().operations().iter().any(|operation| matches!(
+                operation,
+                HostOperation::MovePrivileged { .. } | HostOperation::RemovePrivileged(_)
+            ))
+        );
+    }
+
+    #[tokio::test]
     async fn managed_removal_retains_previous_bytes_until_receipt_removal_commit() {
         let runtime = runtime();
         let original = b"previous-managed";
@@ -3961,7 +4340,7 @@ mod tests {
 
         remove_matching_receipt(&runtime).await;
         runtime
-            .commit_app_managed_file_operation(&execution.operation_id)
+            .commit_app_managed_file_operation(&execution)
             .await
             .unwrap();
         assert!(runtime.host().read(&rollback).await.is_err());
@@ -4122,14 +4501,14 @@ mod tests {
         assert_eq!(runtime.host().read(&rollback).await.unwrap(), managed);
         assert!(
             runtime
-                .commit_app_managed_file_operation(&execution.operation_id)
+                .commit_app_managed_file_operation(&execution)
                 .await
                 .is_err()
         );
 
         remove_matching_receipt(&runtime).await;
         runtime
-            .commit_app_managed_file_operation(&execution.operation_id)
+            .commit_app_managed_file_operation(&execution)
             .await
             .unwrap();
         assert_eq!(runtime.host().read(&destination).await.unwrap(), original);
