@@ -30,8 +30,10 @@ fresh `app-recovery` Plan is required before removing or restoring unchanged tra
 JSON merge install/update/removal uses key-owned actions that preserve unrelated current values.
 Static Copy and JSON destination relocation each replace one source receipt through a typed
 two-destination transaction; JSON recovery restores/removes only the independently bound old/new
-managed-key sets. Generators and remaining shared Shell/Sys resources retain their existing
-executors and explicit rollback classifications until narrower contracts land.
+managed-key sets. Raw external Shell snapshot replacement now binds a category tree, deterministic
+stage/rollback directories, selected command receipt transitions, and positive commit evidence in
+the Shell journal. Generators and remaining cache/render/profile/Sys resources retain their
+existing executors and explicit rollback classifications until narrower contracts land.
 
 Runtime APIs are workspace-internal and hidden from normal documentation. The versioned lifecycle
 result and security Plan contracts retain their documented compatibility guarantees. Protected

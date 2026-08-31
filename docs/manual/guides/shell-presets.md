@@ -51,7 +51,7 @@ shine install shell/proxy --replace-managed
 `--replace-managed` overwrites the corresponding Shine-managed content. Inspect
 `shine info shell/proxy --diff` first so that intentional local changes are not mistaken for damage.
 
-## Recover an interrupted launcher transaction
+## Recover an interrupted Shell transaction
 
 On first install, Shine writes a transaction journal before creating the command launcher and
 clears it only after the command's manifest receipt is durable. If installation is interrupted in
@@ -59,6 +59,10 @@ that window, later mutating Shell commands stop instead of guessing whether the 
 Shine uses the same journal when install or upgrade replaces an unchanged, receipt-owned launcher:
 each old resource moves to a same-directory `.shine.rollback` path before its replacement is
 written, and that rollback material remains until the new receipt is durable.
+For an external preset in snapshot mode, Shine also journals creation or replacement of a shared
+category snapshot when the selected commands need no rendered output. The old category tree stays
+in a deterministic rollback directory until all selected command receipts and a separate commit
+marker are durable.
 Review and apply the dedicated recovery Plan:
 
 ```bash
@@ -71,8 +75,11 @@ that still exactly matches the interrupted creation. A changed launcher is prese
 recovery. For an interrupted update, recovery restores the previous launcher only while the
 replacement and rollback resources still match the recorded target, content hash, and mode. Once
 the new receipt is durable, recovery keeps the replacement and removes only unchanged rollback
-material. A changed replacement or rollback path blocks recovery and is preserved. Snapshot/render
-files may remain as Shine-managed cache, and launcher recovery never edits your shell profile.
+material. A changed replacement or rollback path blocks recovery and is preserved. For an eligible
+snapshot transaction, recovery before the commit marker restores the previous selected receipts and
+exact old category tree; afterward it keeps the desired tree and cleans only exact rollback. A
+changed stage, active tree, or rollback tree blocks recovery. Embedded cache and rendered files may
+still remain as Shine-managed material, and recovery never edits your shell profile.
 
 Uninstall uses this transaction only for an unchanged, receipt-owned launcher. It moves every
 platform launcher resource to same-directory rollback material before removing the receipt, then

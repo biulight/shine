@@ -1,8 +1,8 @@
 # Declarative Action and Recovery PRD
 
 > **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
-> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, 4C.3, 4C.4a, 4C.4b, and
-> 4C.4c are
+> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, 4C.3, 4C.4a, 4C.4b,
+> 4C.4c, and 4D.4a are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
@@ -24,6 +24,9 @@
 > JSON relocation now performs the same receipt replacement through a distinct key-owned action:
 > recovery removes/restores only the separate desired/previous key sets and preserves unrelated
 > current values at both destinations.
+> Raw external Shell snapshot selections now replace their category tree through one action with
+> deterministic stage/rollback directories, selected command receipt transitions, and positive
+> commit evidence shared with dependent launcher recovery.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -358,12 +361,28 @@ cleans only exact rollback material.
   only exact old rollback material. Block invalid JSON, changed managed keys, path/receipt
   conflicts, or changed rollback material.
 
+### Slice 4D.4a — Raw external Shell snapshot replacement (implemented)
+
+- Replace a changed external snapshot-mode category tree through one `ReplaceShellSnapshot` action
+  when the selected commands require no rendered output.
+- Bind sorted previous/desired regular-file identities, deterministic category sibling stage and
+  rollback directories, and every selected command's receipt transition without storing payloads.
+- Journal before staging and keep the exact old tree until the selected receipt set plus an explicit
+  commit marker are durable; auxiliary-file-only changes still require that marker.
+- Before commit, project previous snapshot receipts into recovery planning and execution before
+  assessing dependent launcher actions, then restore the exact old tree. After commit, preserve the
+  desired tree and remove only exact rollback material.
+- Block occupied transaction paths, extra/changed stage files, modified rollback or destination
+  trees, and conflicting receipts. Keep embedded cache, rendered output, snapshot uninstall, and
+  profile blocks for later slices.
+
 ### Slice 4D — Other domains and opaque inventory
 
 - Shell launcher/profile declarative actions. First-time launcher creation and explicit recovery are
   implemented as Slice 4D.1. Unchanged receipt-owned launcher update is implemented as Slice 4D.2;
   unchanged receipt-owned launcher removal with positive receipt-commit evidence is implemented as
-  Slice 4D.3. Shared snapshot/render state and profile sentinel blocks remain.
+  Slice 4D.3. Raw external snapshot replacement is implemented as Slice 4D.4a; embedded cache,
+  rendered output, snapshot uninstall, and profile sentinel blocks remain.
 - Managed Sys files and split-DNS typed actions.
 - Sys package/provider and executable code classification.
 - Migrate or explicitly classify every built-in executable Preset listed in
@@ -397,4 +416,5 @@ manifest write is durable but the positive removal commit marker is not. Slice 4
 same App removal recovery guidance to `upgrade --prune-stale` in both locales. Slice 4C.4b adds
 static Copy relocation recovery and old/new destination safety guidance to both locales. Slice
 4C.4c extends that guidance to key-owned JSON relocation and unrelated-value preservation at both
-destinations.
+destinations. Slice 4D.4a extends `shine shell recover` to raw external category snapshot creation
+and replacement, including selected-receipt restoration before dependent launcher rollback.

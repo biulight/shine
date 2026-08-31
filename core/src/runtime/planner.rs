@@ -8,6 +8,7 @@ use super::app::{
     desired_app_hash, installed_app_entry_hash, installed_app_hash, installed_json_hash,
 };
 use super::launcher::{prepare_launcher_resources, prepared_launcher_resource_is_exact};
+use super::shell::has_template_annotation;
 use super::shell::shell_link_spec_from_manifest_entry;
 use super::{
     AppArtifactAction, AppArtifactRequest, AppCategory, AppFile, AppLifecycleReport,
@@ -29,6 +30,7 @@ use crate::action::{
     ManagedFileRelocationBackupV1, ManagedFileRelocationSpecV1, ManagedFileRemoveSpecV1,
     ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1, ManagedJsonMergeSpecV1,
     ManagedJsonRelocationSpecV1, ManagedJsonRemoveSpecV1, managed_file_rollback_path,
+    shell_snapshot_rollback_path, shell_snapshot_stage_path,
 };
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppEntry, AppManifest};
@@ -2024,6 +2026,92 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             }
         } else {
             for category in selected_categories.unwrap_or_default() {
+                let untransformed_snapshot = self.context().is_external_presets
+                    && self.context().external_shell_mode == ExternalShellMode::Snapshot
+                    && category.files.iter().all(|file| {
+                        file.transforms.is_empty()
+                            && self
+                                .presets()
+                                .get(&format!(
+                                    "shell/{}/{}",
+                                    category.name,
+                                    logical_path(&file.source_rel)
+                                ))
+                                .is_none_or(|bytes| !has_template_annotation(bytes))
+                    });
+                if untransformed_snapshot {
+                    let prefix = format!("shell/{}/", category.name);
+                    let expected = self
+                        .presets()
+                        .files()
+                        .iter()
+                        .filter_map(|(logical, bytes)| {
+                            logical.strip_prefix(&prefix).map(|relative| {
+                                (PathBuf::from(relative), crate::install::hash_content(bytes))
+                            })
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    let destination = self
+                        .context()
+                        .shine_dir
+                        .join("installed/shell")
+                        .join(&category.name);
+                    if !shell_snapshot_tree_current(self.host(), &destination, &expected).await? {
+                        let stage = shell_snapshot_stage_path(&destination);
+                        let rollback = shell_snapshot_rollback_path(&destination);
+                        for (label, path) in [
+                            ("destination", &destination),
+                            ("stage", &stage),
+                            ("rollback", &rollback),
+                        ] {
+                            capture_tree_state(
+                                self.host(),
+                                &mut state,
+                                format!("shell-snapshot-{}:{label}", category.name),
+                                path,
+                            )
+                            .await?;
+                        }
+                        let transaction_path_occupied = path_exists(self.host(), &stage).await?
+                            || path_exists(self.host(), &rollback).await?;
+                        if !transaction_path_occupied {
+                            typed_launcher_transaction = true;
+                            for (access, path) in [
+                                (FilesystemAccessV1::Write, &destination),
+                                (FilesystemAccessV1::Remove, &destination),
+                                (FilesystemAccessV1::Write, &stage),
+                                (FilesystemAccessV1::Remove, &stage),
+                                (FilesystemAccessV1::Write, &rollback),
+                                (FilesystemAccessV1::Remove, &rollback),
+                            ] {
+                                permissions.implicit(PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), path),
+                                });
+                            }
+                        }
+                        steps.push(
+                            PlanStepV1::new(
+                                format!("shell/{}", category.name),
+                                Some("shared-snapshot"),
+                                if transaction_path_occupied {
+                                    PlanActionV1::Blocked
+                                } else if path_exists(self.host(), &destination).await? {
+                                    PlanActionV1::Update
+                                } else {
+                                    PlanActionV1::Create
+                                },
+                            )
+                            .with_diagnostic_code(
+                                if transaction_path_occupied {
+                                    "shell_snapshot_transaction_path_occupied"
+                                } else {
+                                    "shell_snapshot_replace_transaction"
+                                },
+                            ),
+                        );
+                    }
+                }
                 for file in &category.files {
                     let canonical = format!("shell/{}/{}", category.name, file.command_name);
                     let entry = manifest.find(&canonical);
@@ -4615,6 +4703,52 @@ async fn path_exists(host: &impl FileSystemObservationHost, path: &Path) -> Resu
         Err(error) if error.is_not_found() => Ok(false),
         Err(error) => Err(error.into_anyhow("observing planned resource")),
     }
+}
+
+async fn shell_snapshot_tree_current(
+    host: &impl FileSystemObservationHost,
+    root: &Path,
+    expected: &BTreeMap<PathBuf, u64>,
+) -> Result<bool> {
+    let metadata = match host.metadata(root).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.is_not_found() => return Ok(false),
+        Err(error) => return Err(error.into_anyhow("observing planned Shell snapshot")),
+    };
+    if metadata.kind != FileKind::Directory {
+        return Ok(false);
+    }
+    let mut actual = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let mut children = host
+            .read_dir(&directory)
+            .await
+            .map_err(|error| error.into_anyhow("observing planned Shell snapshot tree"))?;
+        children.sort();
+        for path in children {
+            let metadata = host
+                .metadata(&path)
+                .await
+                .map_err(|error| error.into_anyhow("observing planned Shell snapshot entry"))?;
+            match metadata.kind {
+                FileKind::Directory => pending.push(path),
+                FileKind::File => {
+                    let bytes = host.read(&path).await.map_err(|error| {
+                        error.into_anyhow("reading planned Shell snapshot entry")
+                    })?;
+                    actual.insert(
+                        path.strip_prefix(root)
+                            .context("planned Shell snapshot escaped its root")?
+                            .to_path_buf(),
+                        crate::install::hash_content(&bytes),
+                    );
+                }
+                FileKind::Symlink => return Ok(false),
+            }
+        }
+    }
+    Ok(actual == *expected)
 }
 
 async fn read_optional(
@@ -8536,6 +8670,278 @@ target = '$HOME/.config/disabled.txt'
             purge: false,
             input_versions: PlanningInputVersions::default(),
         }
+    }
+
+    fn external_shell_runtime(snapshot: PresetSnapshot) -> CoreRuntime<InMemoryHost> {
+        let home = std::env::temp_dir().join("shine-planner-external-shell-home");
+        let shine = home.join(".shine");
+        let mut context = RuntimeContext::isolated(
+            home.clone(),
+            shine.clone(),
+            home.join("external-presets"),
+            shine.join("bin"),
+            RuntimePlatform::current(),
+        );
+        context.is_external_presets = true;
+        context.external_shell_mode = ExternalShellMode::Snapshot;
+        CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    }
+
+    #[tokio::test]
+    async fn approved_external_shell_install_transactions_the_shared_snapshot() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\necho external\n".to_vec())
+            .build();
+        let runtime = external_shell_runtime(snapshot);
+        runtime.host().put_file(
+            runtime
+                .context()
+                .presets_dir
+                .join("shell/demo/shine.toml"),
+            b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n"
+                .to_vec(),
+        );
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/demo.sh"),
+            b"#!/bin/sh\necho external\n".to_vec(),
+        );
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.target == "shell/demo"
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_snapshot_replace_transaction".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+
+        let installed = runtime
+            .context()
+            .shine_dir
+            .join("installed/shell/demo/demo.sh");
+        assert_eq!(
+            runtime.host().read(&installed).await.unwrap(),
+            b"#!/bin/sh\necho external\n"
+        );
+        assert!(
+            runtime
+                .host()
+                .metadata(&shell_snapshot_stage_path(
+                    &runtime.context().shine_dir.join("installed/shell/demo")
+                ))
+                .await
+                .is_err()
+        );
+        assert!(
+            runtime
+                .host()
+                .metadata(&shell_snapshot_rollback_path(
+                    &runtime.context().shine_dir.join("installed/shell/demo")
+                ))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn external_shell_snapshot_marker_failure_restores_receipts_tree_and_launcher() {
+        let metadata = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n";
+        let script = b"#!/bin/sh\necho external\n";
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("shell/demo/shine.toml", metadata.to_vec())
+            .file("shell/demo/demo.sh", script.to_vec())
+            .build();
+        let runtime = external_shell_runtime(snapshot);
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/shine.toml"),
+            metadata.to_vec(),
+        );
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/demo.sh"),
+            script.to_vec(),
+        );
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 3);
+        assert!(
+            runtime
+                .install_shells_approved(request, &approval)
+                .await
+                .is_err()
+        );
+
+        let destination = runtime.context().shine_dir.join("installed/shell/demo");
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        assert_eq!(
+            runtime
+                .host()
+                .read(&destination.join("demo.sh"))
+                .await
+                .unwrap(),
+            script
+        );
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&journal).await.is_ok());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_some()
+        );
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_previous_snapshot".to_string())
+        }));
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_remove_created_launcher".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&destination).await.is_err());
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&journal).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn external_shell_snapshot_upgrade_marker_failure_restores_previous_tree_and_receipt() {
+        let metadata = b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n";
+        let previous_script = b"#!/bin/sh\necho previous\n";
+        let desired_script = b"#!/bin/sh\necho desired\n";
+        let previous_snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("shell/demo/shine.toml", metadata.to_vec())
+            .file("shell/demo/demo.sh", previous_script.to_vec())
+            .build();
+        let original = external_shell_runtime(previous_snapshot);
+        original.host().put_file(
+            original.context().presets_dir.join("shell/demo/shine.toml"),
+            metadata.to_vec(),
+        );
+        original.host().put_file(
+            original.context().presets_dir.join("shell/demo/demo.sh"),
+            previous_script.to_vec(),
+        );
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let previous_receipt = ShellManifest::load(original.host(), &original.context().shine_dir)
+            .await
+            .unwrap()
+            .find("shell/demo/demo")
+            .unwrap()
+            .clone();
+
+        let desired_snapshot = PresetSnapshot::builder(PresetSourceKind::External)
+            .file("shell/demo/shine.toml", metadata.to_vec())
+            .file("shell/demo/demo.sh", desired_script.to_vec())
+            .build();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            desired_snapshot,
+        );
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/demo.sh"),
+            desired_script.to_vec(),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 2);
+        assert!(
+            runtime
+                .upgrade_shells_approved(request, &approval)
+                .await
+                .is_err()
+        );
+        let destination = runtime.context().shine_dir.join("installed/shell/demo");
+        let rollback = shell_snapshot_rollback_path(&destination);
+        assert_eq!(
+            runtime
+                .host()
+                .read(&destination.join("demo.sh"))
+                .await
+                .unwrap(),
+            desired_script
+        );
+        assert_eq!(
+            runtime
+                .host()
+                .read(&rollback.join("demo.sh"))
+                .await
+                .unwrap(),
+            previous_script
+        );
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime
+                .host()
+                .read(&destination.join("demo.sh"))
+                .await
+                .unwrap(),
+            previous_script
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let restored_receipt = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap()
+            .find("shell/demo/demo")
+            .unwrap()
+            .clone();
+        assert_eq!(restored_receipt, previous_receipt);
     }
 
     #[tokio::test]

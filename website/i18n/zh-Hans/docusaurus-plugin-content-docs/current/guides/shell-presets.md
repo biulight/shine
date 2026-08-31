@@ -45,13 +45,15 @@ shine install shell/proxy --replace-managed
 
 `--replace-managed` 会覆盖 Shine 管理的对应内容。先用 `shine info shell/proxy --diff` 检查状态，避免把有意的本地修改当作损坏处理。
 
-## 恢复中断的 launcher 事务
+## 恢复中断的 Shell 事务
 
 首次安装时，Shine 会先写入 transaction journal，再创建命令 launcher；只有 command manifest
 receipt 持久化后才会清理 journal。如果安装在这个窗口中断，后续修改型 Shell 命令会停止，不会
 猜测 launcher 是否归 Shine 所有。install 或 upgrade 更新未修改、已有 receipt 的 launcher 时也会
 使用同一 journal：旧资源会先移到同目录 `.shine.rollback`，新 receipt 持久化前不会清理这些
-rollback material。请审阅并执行专用 recovery Plan：
+rollback material。外部预设使用 snapshot 模式且选中命令无需 rendered output 时，Shine 也会把
+共享 category snapshot 的创建或替换写入 journal；全部选中 command receipt 与独立 commit marker
+持久化前，旧 category 树会留在确定性的 rollback 目录。请审阅并执行专用 recovery Plan：
 
 ```bash
 shine shell recover
@@ -63,8 +65,10 @@ shine shell recover --yes # 非交互使用
 launcher 会保持安装状态，恢复只清理 stale journal。更新中断时，只有 replacement 与 rollback
 资源仍匹配记录的 target、内容 hash 和 mode，恢复才会还原旧 launcher；新 receipt 已持久化后，
 恢复会保留 replacement，仅清理未修改的 rollback material。replacement 或 rollback 路径发生变化
-会阻塞恢复并保留现场。Shine 管理的 snapshot/render cache 可能继续保留，launcher recovery 不会
-编辑用户的 shell profile。
+会阻塞恢复并保留现场。对于符合条件的 snapshot 事务，commit marker 前的恢复会还原旧的选中
+receipt 与精确旧 category 树；marker 后保留 desired 树，只清理精确 rollback。stage、active tree 或
+rollback tree 被修改都会阻塞恢复。内置 cache 与 rendered 文件仍可能作为 Shine 管理的 material
+保留，recovery 不会编辑用户的 shell profile。
 
 uninstall 只会对未修改、已有 receipt 的 launcher 使用这项事务。它会先把每个平台 launcher
 resource 移到同目录 rollback material，再删除 receipt，随后另行记录持久化 commit marker。如果

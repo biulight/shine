@@ -97,6 +97,13 @@ rollback。如果 receipt 已删除但 marker 尚未写入，`shine shell recove
 还原精确资源。marker 持久化后，恢复会保留已完成的卸载，只移除未修改的 rollback material。
 launcher、rollback 路径或 receipt 冲突发生变化时，恢复会阻塞并保留现场。
 
+外部预设使用 snapshot 模式且选中命令无需 rendered output 时，install 与 upgrade 也会把共享
+category snapshot 的变化写入 journal。Action 使用确定性的 category 同级 stage/rollback 目录，
+以及独立于 receipt 是否相等的正向 commit marker。marker 前，`shine shell recover` 会先恢复旧的
+选中 receipt 集合，再评估依赖 launcher，随后还原精确旧树；marker 后保留 desired 树，只移除精确
+rollback。active、stage 或 rollback 树被修改都会阻塞恢复。内置 cache、rendered output、snapshot
+uninstall 与 profile 编辑仍沿用现有 lifecycle 行为。
+
 不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation、App refresh 和 artifact apply/remove
 都会先显示绑定快照的安全 Plan，并以默认 No 询问一次。`--yes` 仍会完整显示并重新校验 Plan，
 只跳过提示；重定向输出等非交互执行必须传入该参数。在提供 dry-run 的命令中，`--yes` 与

@@ -115,6 +115,15 @@ marker is durable, recovery keeps the completed uninstall and removes only uncha
 material. A changed launcher, rollback path, or conflicting receipt blocks recovery and is
 preserved.
 
+For external presets in snapshot mode, install and upgrade also journal a changed shared category
+snapshot when the selected commands require no rendered output. The action uses deterministic
+category sibling stage/rollback directories and a positive commit marker independent of receipt
+equality. Before that marker, `shine shell recover` restores the previous selected receipt set
+before assessing dependent launchers, then restores the exact old tree. After the marker it keeps
+the desired tree and removes only exact rollback. Changed active, stage, or rollback trees block
+recovery. Embedded cache, rendered output, snapshot uninstall, and profile edits retain their
+existing lifecycle behavior.
+
 Without `--dry-run`, App and Shell lifecycle mutations, App refresh, and artifact apply/remove
 display a snapshot-bound security Plan and ask once with a default answer of No. `--yes` still
 prints and revalidates the full Plan but skips the prompt; redirected or otherwise non-interactive

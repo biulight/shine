@@ -59,6 +59,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   removes desired keys from the new destination and restores previous keys at the old destination
   before receipt commit while preserving unrelated current values at both paths; after commit it
   cleans only exact old rollback material.
+- Journaled raw external Shell snapshot creation and replacement at the category boundary. The
+  transaction binds deterministic stage/rollback trees, selected command receipt transitions, and
+  a positive commit marker; recovery restores the old receipt view before dependent launcher
+  rollback and blocks changed tree material.
 - Journaled first-time Shell launcher creation for Unix symlinks, Unix Bun/live launchers, and
   Windows PowerShell/cmd shim pairs. `shine shell recover` reviews a separate recovery Plan and
   removes only unchanged transaction-created launcher resources, while preserving an exact

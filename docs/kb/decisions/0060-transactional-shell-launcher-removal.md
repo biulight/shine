@@ -4,6 +4,8 @@
 - **Date**: 2026-08-31
 - **Evidence**: `core/src/action.rs`, `core/src/runtime/shell_action_executor.rs`,
   `core/src/runtime/{launcher,shell,planner}.rs`
+- **Update**: [ADR 0064](0064-transactional-external-shell-snapshots.md) reuses positive commit
+  evidence for raw external snapshot replacement; snapshot uninstall remains separate.
 
 ## Context
 

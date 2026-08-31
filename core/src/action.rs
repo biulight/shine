@@ -340,6 +340,26 @@ impl ActionIrV1 {
                         }
                     }
                 }
+                ActionKindV1::ReplaceShellSnapshot {
+                    destination,
+                    stage,
+                    rollback,
+                    ..
+                } => {
+                    for (access, path) in [
+                        (FilesystemAccessV1::Write, destination.as_path()),
+                        (FilesystemAccessV1::Remove, destination.as_path()),
+                        (FilesystemAccessV1::Write, stage.as_path()),
+                        (FilesystemAccessV1::Remove, stage.as_path()),
+                        (FilesystemAccessV1::Write, rollback.as_path()),
+                        (FilesystemAccessV1::Remove, rollback.as_path()),
+                    ] {
+                        required.insert(PermissionV1::Filesystem {
+                            access,
+                            path: path_identity(path),
+                        });
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
                 }
@@ -666,6 +686,31 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn replace_shell_snapshot(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ShellSnapshotReplacementSpecV1,
+    ) -> Self {
+        let stage = shell_snapshot_stage_path(&spec.destination);
+        let rollback = shell_snapshot_rollback_path(&spec.destination);
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::ReplaceShellSnapshot {
+                destination: spec.destination,
+                stage,
+                rollback,
+                previous_present: spec.previous_present,
+                previous_files: spec.previous_files,
+                desired_files: spec.desired_files,
+                receipts: spec.receipts,
+            },
+            rollback: RollbackSupportV1::RestorePreviousShellSnapshotIfUnchanged,
+        }
+    }
+
     fn validate(&self) -> Result<(), ActionIrError> {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
@@ -922,6 +967,32 @@ impl DeclarativeActionV1 {
             }
             (ActionKindV1::RemoveShellLauncher { .. }, _) => Err(ActionIrError::Invalid(
                 "Shell launcher removal requires a valid previous receipt, exact previous resources, canonical rollback paths, and restore-removed-launcher-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::ReplaceShellSnapshot {
+                    destination,
+                    stage,
+                    rollback,
+                    previous_present,
+                    previous_files,
+                    desired_files,
+                    receipts,
+                },
+                RollbackSupportV1::RestorePreviousShellSnapshotIfUnchanged,
+            ) if !destination.as_os_str().is_empty()
+                && *stage == shell_snapshot_stage_path(destination)
+                && *rollback == shell_snapshot_rollback_path(destination)
+                && stage != rollback
+                && valid_shell_tree_files(previous_files, true)
+                && valid_shell_tree_files(desired_files, false)
+                && (*previous_present || previous_files.is_empty())
+                && valid_shell_receipt_transitions(receipts) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::ReplaceShellSnapshot { .. }, _) => Err(ActionIrError::Invalid(
+                "Shell snapshot replacement requires canonical stage/rollback paths, valid tree identities and receipt transitions, and restore-previous-shell-snapshot-if-unchanged rollback"
                     .to_string(),
             )),
             (
@@ -1204,6 +1275,17 @@ pub enum ActionKindV1 {
         previous_receipt: Box<ShellLauncherReceiptV1>,
         resources: Vec<ShellLauncherRemovalResourceV1>,
     },
+    ReplaceShellSnapshot {
+        destination: PathBuf,
+        stage: PathBuf,
+        rollback: PathBuf,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        previous_present: bool,
+        #[serde(default)]
+        previous_files: Vec<ShellTreeFileV1>,
+        desired_files: Vec<ShellTreeFileV1>,
+        receipts: Vec<ShellReceiptTransitionV1>,
+    },
     OpaqueExecution {
         capability: String,
         provenance: ActionProvenanceV1,
@@ -1234,7 +1316,33 @@ pub enum RollbackSupportV1 {
     RemoveCreatedLauncherIfUnchanged,
     RestorePreviousLauncherIfUnchanged,
     RestoreRemovedLauncherIfUnchanged,
+    RestorePreviousShellSnapshotIfUnchanged,
     Unsupported { reason_code: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellTreeFileV1 {
+    pub relative_path: PathBuf,
+    pub content_hash: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellReceiptTransitionV1 {
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<Box<ShellLauncherReceiptV1>>,
+    pub desired: Box<ShellLauncherReceiptV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShellSnapshotReplacementSpecV1 {
+    pub destination: PathBuf,
+    pub previous_present: bool,
+    pub previous_files: Vec<ShellTreeFileV1>,
+    pub desired_files: Vec<ShellTreeFileV1>,
+    pub receipts: Vec<ShellReceiptTransitionV1>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1360,6 +1468,47 @@ fn valid_shell_launcher_removal_resources(resources: &[ShellLauncherRemovalResou
             == resources.len()
 }
 
+fn valid_shell_tree_files(files: &[ShellTreeFileV1], allow_empty: bool) -> bool {
+    (allow_empty || !files.is_empty())
+        && files.iter().all(|file| {
+            !file.relative_path.as_os_str().is_empty()
+                && !file.relative_path.is_absolute()
+                && file
+                    .relative_path
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_)))
+        })
+        && files
+            .iter()
+            .map(|file| &file.relative_path)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == files.len()
+}
+
+fn valid_shell_receipt_transitions(receipts: &[ShellReceiptTransitionV1]) -> bool {
+    !receipts.is_empty()
+        && receipts.iter().all(|transition| {
+            transition.desired.is_valid()
+                && transition.target
+                    == format!(
+                        "shell/{}/{}",
+                        transition.desired.category, transition.desired.command
+                    )
+                && transition.previous.as_ref().is_none_or(|previous| {
+                    previous.is_valid()
+                        && previous.category == transition.desired.category
+                        && previous.command == transition.desired.command
+                })
+        })
+        && receipts
+            .iter()
+            .map(|transition| &transition.target)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == receipts.len()
+}
+
 /// Same-directory, transaction-owned material used only while replacing an
 /// existing managed file. It is distinct from the persistent `.shine.bak`
 /// that preserves a pre-install user file.
@@ -1369,6 +1518,22 @@ pub fn managed_file_rollback_path(destination: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("file");
     destination.with_file_name(format!("{name}.shine.rollback"))
+}
+
+pub fn shell_snapshot_stage_path(destination: &Path) -> PathBuf {
+    let name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("snapshot");
+    destination.with_file_name(format!(".{name}.shine.stage"))
+}
+
+pub fn shell_snapshot_rollback_path(destination: &Path) -> PathBuf {
+    let name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("snapshot");
+    destination.with_file_name(format!(".{name}.shine.rollback"))
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

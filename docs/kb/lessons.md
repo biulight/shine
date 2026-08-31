@@ -3,6 +3,23 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-01 — Shared state needs a positive commit boundary across dependent actions
+
+- **Symptom**: an external Shell category snapshot could be replaced before the launcher journal
+  existed, and a later manifest write could make a new command receipt visible even if the shared
+  snapshot transaction had not committed.
+- **Root cause**: the category tree is shared while receipts are command-scoped; receipt equality is
+  also unchanged when only an auxiliary category file changes. Recovery that inspected launcher
+  actions before reversing the snapshot receipt transition could therefore preserve a launcher that
+  should be rolled back.
+- **Fix**: journal a category-scoped `ReplaceShellSnapshot` with deterministic stage/rollback trees,
+  all selected receipt transitions, and a positive commit marker. Recovery planning and execution
+  first project uncommitted snapshot transitions back onto the manifest before assessing dependent
+  launcher actions.
+- **Rule**: when one transaction action changes the ownership evidence consumed by another action,
+  recovery must evaluate the dependency graph at one coherent receipt boundary; action-local checks
+  in journal order are insufficient.
+
 ## 2026-09-01 — JSON relocation has two independent key-ownership boundaries
 
 - **Symptom**: App upgrade relocated a `json-merge` source through independent new-destination

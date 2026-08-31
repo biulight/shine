@@ -50,8 +50,10 @@
   install/upgrade 更新也已迁移：旧资源先进入同目录 rollback material，新 receipt 前可恢复，commit
   后仅清理精确旧资源。未修改、receipt-owned launcher 的卸载也已迁移：所有平台资源先进入同目录
   rollback material，receipt 删除后必须持久化正向 commit marker；若只写入了 receipt 删除而 marker
-  未写入，显式恢复会先重建旧 receipt 再还原精确资源。共享 snapshot/render、profile block 与 Sys
-  action 尚未迁移，也不代表 Phase 4 exit criteria 已满足。
+  未写入，显式恢复会先重建旧 receipt 再还原精确资源。外部 snapshot 模式中无需 render 的选中
+  category 共享树也已迁移：确定性 stage/rollback、全部选中 command receipt transition 与正向 commit
+  marker 由同一 Action 绑定，恢复会先投影旧 receipt 边界再处理依赖 launcher。内置 cache、rendered
+  output、snapshot uninstall、profile block 与 Sys action 尚未迁移，也不代表 Phase 4 exit criteria 已满足。
 
 ## Guiding Principles
 

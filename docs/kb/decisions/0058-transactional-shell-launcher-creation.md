@@ -4,6 +4,9 @@
 - **Date**: 2026-08-31
 - **Evidence**: `core/src/action.rs`, `core/src/runtime/shell_action_executor.rs`,
   `core/src/runtime/{launcher,shell,planner}.rs`, `cli/src/shells/recovery.rs`
+- **Update**: [ADR 0064](0064-transactional-external-shell-snapshots.md) journals raw external
+  category snapshot replacement in the same Shell operation while keeping its ownership proof
+  separate from launcher creation.
 
 ## Context
 

@@ -287,6 +287,16 @@ bugs. Check this list before changing the modules named in each entry.
   restoring exact resources. Any conflicting receipt, changed destination or rollback identity, or
   occupied rollback path blocks and preserves state. Foreign and modified launchers do not inherit
   this proof; shared snapshot/render state and profile sentinel blocks remain separate actions.
+- **An external Shell snapshot is category-owned, and receipt presence is not its commit marker.**
+  `ReplaceShellSnapshot` applies only to approved snapshot-mode selections whose selected commands
+  require no rendering. It binds the whole sorted category tree, deterministic sibling stage and
+  rollback directories, and all selected command receipt transitions. The journal precedes staging;
+  the old tree remains exact rollback material until the selected receipts and a positive
+  per-action commit marker are durable. Before that marker, recovery must evaluate launcher actions
+  against the previous receipt set and restore the previous tree; afterward it may remove only the
+  exact old rollback tree. Extra or changed stage files, changed destination/rollback trees, or
+  conflicting receipts block all recovery. Embedded cache, rendered outputs, uninstall, and profile
+  sentinel blocks do not inherit this proof.
 - **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
   generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
   privilege, permission and unsupported-rollback classification until a narrower typed action

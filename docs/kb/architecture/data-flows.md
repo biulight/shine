@@ -93,6 +93,13 @@ deployment material so a command can consume sibling resources, while launchers 
 
 Command install filters metadata before transforms and launcher creation, then upserts only the
 selected manifest target. Category install retains the existing replace-category reconciliation.
+For an external snapshot-mode selection with no rendered command output, a changed category tree
+derives one payload-free `ReplaceShellSnapshot` action before launcher actions. The journal binds
+sorted old/new tree identities, deterministic stage/rollback directories, and selected command
+receipt transitions. After saving the desired receipts, Core records a positive commit marker
+before cleaning the exact old tree. Before that marker, recovery projects the previous receipts
+into both planning and execution so dependent launcher actions are assessed at the same old
+boundary, then restores the exact old category tree. Modified tree state blocks the whole recovery.
 For a command with no receipt and entirely absent launcher resources, Core derives a payload-free
 `CreateShellLauncher` action, writes `shell-operation-journal.toml`, creates the Unix symlink,
 Unix generated launcher, or Windows shim pair, persists the exact command receipt, and only then
