@@ -205,6 +205,15 @@ bugs. Check this list before changing the modules named in each entry.
   kind, mode, hash, receipt, destination, backup, or rollback path blocks. Unchanged destinations
   use the ordinary removal action even under `--force`; non-static-Copy paths do not inherit this
   proof.
+- **App upgrade stale pruning is receipt removal, not a generic upgrade write.** A stale static
+  Copy or JSON entry may reuse the corresponding removal Action only when its current owned state
+  still matches the receipt and the approved Upgrade Plan carries `app_stale_source_pruned` for the
+  exact target/resource. Planning must bind destination, optional persistent backup, canonical
+  rollback material, manifest and journal effects with removal permissions even though the outer
+  lifecycle operation is Upgrade. User-modified stale state is preserved, forced removal is not
+  inferred, and a missing destination performs receipt-only cleanup without administrator access.
+  Receipt absence still requires the positive journal commit marker before rollback material may
+  be discarded.
 - **Privileged App static Copy changes the mutation port, not the rollback proof.** Create,
   backup-aware create, update, and the three removal actions persist `requires_admin`, derive
   Administrator permission, and require matching old/new receipts to carry the same flag. Planning

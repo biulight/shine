@@ -1752,7 +1752,7 @@ where
     }
 
     /// Remove only the declared managed JSON keys while staging the exact
-    /// pre-uninstall file for receipt-safe rollback.
+    /// pre-removal file for receipt-safe rollback.
     pub async fn execute_app_managed_json_removal_approved(
         &self,
         plan: &PlanV1,
@@ -1760,8 +1760,11 @@ where
         action_ir: ActionIrV1,
     ) -> Result<AppOperationExecutionV1> {
         approval.validate(plan)?;
-        if plan.operation != PlanOperationV1::Uninstall {
-            bail!("managed JSON removal requires an uninstall Plan");
+        if !matches!(
+            plan.operation,
+            PlanOperationV1::Uninstall | PlanOperationV1::Upgrade
+        ) {
+            bail!("managed JSON removal requires an uninstall or stale-prune upgrade Plan");
         }
         action_ir.validate()?;
         let requirements =
@@ -1812,15 +1815,7 @@ where
             _ => bail!("the managed JSON removal slice requires key-safe rollback"),
         };
         let forced = current_managed_hash != receipt_managed_hash;
-        if !plan.steps.iter().any(|step| {
-            step.target == action.target
-                && step.resource.as_deref() == Some(action.resource.as_str())
-                && step.action == PlanActionV1::Remove
-                && (!forced
-                    || step
-                        .diagnostic_codes
-                        .contains(&"app_user_modification_override".to_string()))
-        }) {
+        if !app_removal_plan_authorizes(plan, action, forced) {
             bail!("managed JSON removal was not described by the approved security Plan");
         }
         let operation_guard = self.host().acquire_privileged_operation().await?;
@@ -1905,8 +1900,11 @@ where
         action_ir: ActionIrV1,
     ) -> Result<AppOperationExecutionV1> {
         approval.validate(plan)?;
-        if plan.operation != PlanOperationV1::Uninstall {
-            bail!("App managed-file removal requires an uninstall Plan");
+        if !matches!(
+            plan.operation,
+            PlanOperationV1::Uninstall | PlanOperationV1::Upgrade
+        ) {
+            bail!("App managed-file removal requires an uninstall or stale-prune upgrade Plan");
         }
         action_ir.validate()?;
         let requirements =
@@ -1922,15 +1920,11 @@ where
         let [action] = action_ir.actions.as_slice() else {
             bail!("the App managed-file removal slice accepts exactly one action");
         };
-        if !plan.steps.iter().any(|step| {
-            step.target == action.target
-                && step.resource.as_deref() == Some(action.resource.as_str())
-                && step.action == PlanActionV1::Remove
-                && (!matches!(action.kind, ActionKindV1::ForceRemoveManagedFile { .. })
-                    || step
-                        .diagnostic_codes
-                        .contains(&"app_user_modification_override".to_string()))
-        }) {
+        if !app_removal_plan_authorizes(
+            plan,
+            action,
+            matches!(action.kind, ActionKindV1::ForceRemoveManagedFile { .. }),
+        ) {
             bail!("App managed-file removal was not described by the approved security Plan");
         }
         let (destination, rollback, original_mode, original_hash, backup, forced, requires_admin) =
@@ -3656,6 +3650,33 @@ fn is_app_removal_action(kind: &ActionKindV1) -> bool {
             | ActionKindV1::ForceRemoveManagedFile { .. }
             | ActionKindV1::RemoveManagedJson { .. }
     )
+}
+
+fn app_removal_plan_authorizes(
+    plan: &PlanV1,
+    action: &crate::action::DeclarativeActionV1,
+    forced: bool,
+) -> bool {
+    plan.steps.iter().any(|step| {
+        step.target == action.target
+            && step.resource.as_deref() == Some(action.resource.as_str())
+            && step.action == PlanActionV1::Remove
+            && match plan.operation {
+                PlanOperationV1::Uninstall => {
+                    !forced
+                        || step
+                            .diagnostic_codes
+                            .contains(&"app_user_modification_override".to_string())
+                }
+                PlanOperationV1::Upgrade => {
+                    !forced
+                        && step
+                            .diagnostic_codes
+                            .contains(&"app_stale_source_pruned".to_string())
+                }
+                _ => false,
+            }
+    })
 }
 
 fn action_source_identity(action: &crate::action::DeclarativeActionV1) -> String {

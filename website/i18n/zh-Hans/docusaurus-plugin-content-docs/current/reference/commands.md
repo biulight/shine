@@ -179,7 +179,8 @@ enrollment，不会批准之后的 lifecycle Plan。
 - `update/upgrade --pull` 会先同步 Git 管理的来源并重新加载配置。
 - 无 target 的 `upgrade` 会一次展示 Shell、App 和已启用 managed Sys 的 Plan，只确认一次，
   并在写入前复核全部 Plan；它不再隐式修改 Sys profile 的启用状态或组合内容。
-- `upgrade --prune-stale` 移除预设来源中已不存在的旧受管 app 文件。
+- `upgrade --prune-stale` 通过 App operation journal 移除预设来源中已不存在且未修改的受管
+  App 条目。用户修改过的 stale 内容仍会保留；移除中断时使用 `app recover` 处理。
 - `upgrade` 默认逐项显示实际更新的 App 类别、Shell 类别或受管系统项，并按用户可见
   target 各计数一次；app 行会附带变更文件数。`--verbose` 会展开 app 文件和成功 hook 的
   输出，还会显示已是最新或跳过的项目，以及 snapshot、template、Bin Link 等 Shell

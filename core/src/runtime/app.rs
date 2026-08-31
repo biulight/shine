@@ -1,4 +1,4 @@
-use crate::action::ActionIrV1;
+use crate::action::{ActionIrV1, ActionKindV1};
 use crate::env::EnvVarSpec;
 use crate::install::file_ops::{
     InstallOutcome, UninstallOutcome, install_bytes_with_host, uninstall_entry_with_host,
@@ -1323,10 +1323,29 @@ where
                 )
             })
             .collect::<BTreeMap<_, _>>();
+        let stale_admin_count = approved
+            .action_irs
+            .iter()
+            .filter(|ir| {
+                ir.actions.iter().any(|action| {
+                    matches!(
+                        action.kind,
+                        ActionKindV1::RemoveManagedFile {
+                            requires_admin: true,
+                            ..
+                        } | ActionKindV1::RemoveManagedFileWithBackup {
+                            requires_admin: true,
+                            ..
+                        }
+                    )
+                })
+            })
+            .count();
         let admin_count = assessments
             .values()
             .filter(|assessment| assessment.file.requires_admin)
-            .count();
+            .count()
+            + stale_admin_count;
         if admin_count > 0
             && !self.context.running_as_admin
             && !interaction.authorize_admin(admin_count).await?
@@ -1375,7 +1394,62 @@ where
                     );
                     continue;
                 }
-                let outcome = self.uninstall_app_entry(&entry, false, false).await?;
+                let target = format!("app/{category_name}");
+                let resource = file_rel.to_string();
+                let action_index = approved.action_irs.iter().position(|ir| {
+                    matches!(ir.actions.as_slice(), [action] if action.target == target && action.resource == resource)
+                });
+                let approved_remove = approved.plan.steps.iter().any(|step| {
+                    step.target == target
+                        && step.resource.as_deref() == Some(resource.as_str())
+                        && step.action == crate::plan::PlanActionV1::Remove
+                        && step
+                            .diagnostic_codes
+                            .contains(&"app_stale_source_pruned".to_string())
+                });
+                let mut journal_execution = None;
+                let outcome = if let Some(index) = action_index {
+                    let action_ir = approved.action_irs.remove(index);
+                    let is_json = matches!(
+                        action_ir.actions.as_slice(),
+                        [action] if matches!(action.kind, ActionKindV1::RemoveManagedJson { .. })
+                    );
+                    let execution = if is_json {
+                        self.execute_app_managed_json_removal_approved(
+                            approved.plan,
+                            approved.approval,
+                            action_ir,
+                        )
+                        .await?
+                    } else {
+                        self.execute_app_managed_file_removal_approved(
+                            approved.plan,
+                            approved.approval,
+                            action_ir,
+                        )
+                        .await?
+                    };
+                    let outcome = match execution.backup.clone() {
+                        Some(backup) => UninstallOutcome::RestoredBackup { backup },
+                        None => UninstallOutcome::Removed,
+                    };
+                    journal_execution = Some(execution);
+                    outcome
+                } else if approved_remove {
+                    match self.host.metadata(&entry.destination).await {
+                        Err(error) if error.is_not_found() => UninstallOutcome::NotFound,
+                        Ok(_) => {
+                            bail!("stale App removal destination changed after Plan approval")
+                        }
+                        Err(error) => {
+                            return Err(error.into_anyhow(
+                                "observing stale App removal destination after approval",
+                            ));
+                        }
+                    }
+                } else {
+                    self.uninstall_app_entry(&entry, false, false).await?
+                };
                 let (status, effects, remove, action) = match outcome {
                     UninstallOutcome::Removed => (
                         LifecycleStatus::Changed,
@@ -1413,6 +1487,10 @@ where
                 };
                 if remove {
                     manifest.remove_by_dest(&entry.destination);
+                    if let Some(execution) = journal_execution {
+                        save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
+                        self.commit_app_managed_file_operation(&execution).await?;
+                    }
                     changed.insert(category_name.to_string());
                 } else {
                     report.user_modified += 1;

@@ -194,8 +194,10 @@ static Copy through the executor, including restoration of an unchanged canonica
 backup. Forced uninstall of a user-modified file uses a separate action for the same static Copy
 boundary. Administrator static Copy create, update, and removal reuse these actions with privileged
 path mutations under the administrator lock. JSON merge install, in-place update, ordinary remove,
-and forced remove use key-owned actions that preserve unrelated current values. Generators and
-relocation retain their existing executors until their rollback contracts land:
+and forced remove use key-owned actions that preserve unrelated current values. App upgrade stale
+pruning reuses the same removal actions when the receipt-owned state is unchanged; a missing
+destination removes only its receipt, while user-modified stale state remains preserved. Generators
+and relocation retain their existing executors until their rollback contracts land:
 
 ```text
 approved PlanV1

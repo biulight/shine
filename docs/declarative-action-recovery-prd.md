@@ -1,7 +1,7 @@
 # Declarative Action and Recovery PRD
 
 > **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
-> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, and 4C.3 are
+> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, 4C.3, and 4C.4a are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
@@ -16,7 +16,9 @@
 > Administrator static Copy creation, backup-aware creation, and in-place update now reuse the
 > same actions, privileged mutation port, lock-spanning execution capability, and recovery rules.
 > JSON merge now uses key-owned typed transactions that preserve unrelated current values during
-> recovery without serializing prior or desired JSON payloads.
+> recovery without serializing prior or desired JSON payloads. App upgrade stale pruning reuses
+> those receipt-gated static Copy and JSON removal transactions while preserving modified stale
+> state.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -54,7 +56,7 @@ prepared journal → rename original to fixed backup → atomic managed write �
        └──────────── explicit recovery restores only an exact safe state ────────────┘
 ```
 
-JSON merge, Shell/Sys actions, and automatic resume remain later slices.
+App relocation, remaining Shell/Sys actions, and automatic resume remain later slices.
 
 ## Goals
 
@@ -100,19 +102,21 @@ are:
   rollback path, previous persistent backup identity, prior mode and original/desired hashes. It is
   valid only for an in-place update with an absent rollback path.
 - `RemoveManagedFile`: an unchanged receipt-owned static Copy destination with no persistent backup,
-  its fixed transaction rollback path, prior mode and original hash. It is valid only for an
-  ordinary uninstall with an absent rollback path.
+  its fixed transaction rollback path, prior mode and original hash. It is valid for an ordinary
+  uninstall or an approved stale-prune upgrade with an absent rollback path.
 - `RemoveManagedFileWithBackup`: the same managed destination and transaction rollback identity,
-  plus the canonical persistent backup and both files' prior modes and hashes. It is valid only for
-  an ordinary uninstall whose unchanged regular backup will be restored.
+  plus the canonical persistent backup and both files' prior modes and hashes. It is valid for an
+  ordinary uninstall or approved stale-prune upgrade whose unchanged regular backup will be
+  restored.
 - `ForceRemoveManagedFile`: a user-modified, receipt-owned static Copy destination,
   its distinct receipt/current hashes and current mode, canonical rollback path, and optional
   canonical persistent backup identity. The Plan must explicitly review the modification override.
 - `MergeManagedJson`: a created or in-place JSON merge, its declared unique top-level keys,
   canonical rollback path, optional whole-file before identity, and previous/desired managed-subset
   hashes. JSON values remain outside the action.
-- `RemoveManagedJson`: ordinary or forced removal of declared JSON keys, binding the whole-file
-  before identity plus distinct receipt/current managed-subset hashes and canonical rollback path.
+- `RemoveManagedJson`: ordinary, stale-prune, or forced removal of declared JSON keys, binding the
+  whole-file before identity plus distinct receipt/current managed-subset hashes and canonical
+  rollback path.
 
 Each static Copy action also binds the receipt's `requires_admin` value. When true, it derives
 Administrator permission and routes protected writes, moves, removals, and mode restoration through
@@ -304,6 +308,17 @@ changed after interruption. Creation at an absent path removes the whole destina
 contains no unrelated keys; committed uninstall preserves the now user-owned JSON object and
 cleans only exact rollback material.
 
+### Slice 4C.4a — App upgrade stale-prune removal (implemented)
+
+- Reuse the existing static Copy, backup-restoring, administrator, and JSON removal actions for an
+  unchanged stale receipt selected by an approved `upgrade --prune-stale` Plan.
+- Bind destination, optional fixed backup, canonical rollback, journal, and manifest effects using
+  removal permissions even though the outer lifecycle operation is Upgrade.
+- Preserve user-modified stale content and never infer force; treat a missing destination as an
+  atomic receipt-only cleanup.
+- Save receipt absence and positive journal commit evidence before removing exact rollback material;
+  recover an interrupted prune through the existing `shine app recover` Plan.
+
 ### Slice 4D — Other domains and opaque inventory
 
 - Shell launcher/profile declarative actions. First-time launcher creation and explicit recovery are
@@ -339,4 +354,5 @@ key-owned JSON merge recovery guidance to both locales. Slice 4D.1 adds first-ti
 creation recovery and `shine shell recover` guidance to both locales. Slice 4D.2 expands that Shell
 recovery guidance to receipt-owned launcher replacement and same-directory rollback material in
 both locales. Slice 4D.3 extends it to launcher removal, including receipt reconstruction when the
-manifest write is durable but the positive removal commit marker is not.
+manifest write is durable but the positive removal commit marker is not. Slice 4C.4a applies the
+same App removal recovery guidance to `upgrade --prune-stale` in both locales.

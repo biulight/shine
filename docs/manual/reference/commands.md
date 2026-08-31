@@ -212,7 +212,9 @@ evaluation failures are reported after the remaining selected generators run.
 - Untargeted `upgrade` reviews Shell, App, and enabled managed-system Plans together, confirms once,
   and revalidates all of them before applying changes. It no longer changes Sys profile enablement
   or composition implicitly.
-- `upgrade --prune-stale` removes old managed app files no longer present in the source.
+- `upgrade --prune-stale` removes unchanged managed App entries no longer present in the source
+  through the App operation journal. User-modified stale content remains preserved; interrupted
+  removal is handled by `app recover`.
 - By default, `upgrade` prints each app category, Shell category, or managed-system item it actually
   updates and counts each user-facing target once. App rows include the number of changed files.
   `--verbose` expands app files and successful hook output, and also shows current/skipped items and

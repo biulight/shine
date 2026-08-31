@@ -47,7 +47,8 @@ shine app uninstall starship --purge
 install、upgrade、uninstall、generator refresh 和 artifact apply/remove 会在 mutation 前显示
 绑定快照的 Plan，确认默认是 No；非交互执行使用命令级 `--yes`。该参数仍会显示并重新校验
 Plan，不能绕过缺失权限、被阻塞的 teardown 或外部代码 gate。upgrade 仅在审阅命令包含
-`--prune-stale` 时移除 App stale 文件。
+`--prune-stale` 时移除 App stale 文件。未修改的静态 Copy 与 JSON stale 条目会复用卸载所用的
+receipt-gated journal；用户修改过的 stale 内容仍会保留。
 
 默认情况下，安装后被用户修改过的文件会保留并标记为用户修改。若安装时创建过备份，安全卸载会恢复原文件。在受支持、已 journal 的静态 Copy 替换不受管 regular-file destination 前，Shine 要求固定的 `<name>.shine.bak` 路径不存在；已有 backup 会阻塞 Plan，并保留两个文件。`--purge` 还会删除相应预设目录；卸载全部类别时也会删除 manifest。
 
@@ -95,6 +96,10 @@ JSON merge 以声明的顶层 key 作为 ownership 边界。已有的完整 JSON
 如果 destination 原本不存在，只有当前 object 不含其它 key 时才删除整个文件。uninstall receipt
 commit 后，当前 JSON object 已归用户所有；即使用户重新加入曾受管的 key，recovery 也只清理未修改
 的 rollback material。
+对于 `upgrade --prune-stale`，未修改的静态 Copy 与 JSON 条目使用相同的 removal recovery
+contract。如果 receipt 已移除但正向 commit marker 尚未持久化，recovery 会重建旧 receipt，并且
+只还原精确匹配的 rollback 状态。destination 已缺失时只清理 receipt；此路径绝不会强制移除用户
+修改过的 stale 内容。
 当上述创建、更新或移除的 recovery 需要修改管理员路径时，recovery Plan 会包含 administrator
 permission，Shine 只在该 Plan 获得批准后请求授权。仅重建 receipt 或清理 journal 的恢复不会请求
 管理员权限。

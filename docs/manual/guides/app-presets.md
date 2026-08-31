@@ -54,7 +54,8 @@ Install, upgrade, uninstall, generator refresh, and artifact apply/remove show a
 before mutation. The prompt defaults to No; use command-level `--yes` for non-interactive execution.
 `--yes` still renders and revalidates the Plan and cannot bypass missing permissions, blocked
 teardown, or external-code gates. App stale files are removed during upgrade only when
-`--prune-stale` was part of the reviewed command.
+`--prune-stale` was part of the reviewed command. Unchanged static Copy and JSON stale entries use
+the same receipt-gated journal as uninstall; user-modified stale content remains preserved.
 
 By default, files modified after installation are preserved and reported as user-modified. A safe
 uninstall restores any backup created during installation. Before a supported journaled static Copy
@@ -114,6 +115,10 @@ current object, preserving unrelated values changed after interruption. Creation
 removes the whole file only when no unrelated keys exist. After uninstall receipt commit, the
 current JSON object is user-owned and recovery removes only unchanged rollback material—even if the
 user has reintroduced a formerly managed key.
+For `upgrade --prune-stale`, unchanged static Copy and JSON entries use the same removal recovery
+contract. If receipt removal is interrupted before its positive commit marker, recovery recreates
+the old receipt and restores only exact rollback state. A missing destination needs receipt-only
+cleanup, and user-modified stale content is never forced through this path.
 When one of these creation, update, or removal recovery operations changes an administrator path,
 the recovery Plan includes administrator permission and Shine requests authorization only after
 that Plan is approved. Repair that only reconstructs a receipt or clears a journal does not request

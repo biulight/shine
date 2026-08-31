@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-31 — Upgrade-internal removals still need removal semantics
+
+- **Symptom**: `upgrade --prune-stale` displayed a stale `Remove` step but did not bind removal,
+  rollback, backup, journal, or administrator effects, then deleted the resource through the legacy
+  executor before its receipt update was durable.
+- **Root cause**: stale cleanup was appended after convergence planning and inherited the outer
+  Upgrade operation's write-oriented assumptions instead of the inner action's removal semantics.
+- **Fix**: observe stale receipt-owned paths, preserve modified state, derive exact removal Action
+  permissions, and reuse the receipt-gated removal journal through manifest commit and recovery.
+- **Rule**: derive observations, permissions, authorization, and commit evidence from the concrete
+  action effect. An outer lifecycle name such as Upgrade does not turn an internal deletion into a
+  write.
+
 ## 2026-08-31 — Receipt absence is not a removal commit record
 
 - **Symptom**: recovery after a Shell launcher uninstall could see a missing command receipt but

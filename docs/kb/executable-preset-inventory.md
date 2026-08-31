@@ -43,8 +43,9 @@ First-time launcher creation is now a typed, journaled action across Unix symlin
 files, and Windows shim pairs. Explicit recovery removes only unchanged transaction-created
 resources or preserves an exact durable command receipt. Replacement of an unchanged,
 receipt-owned launcher is also typed: exact old resources move to same-directory rollback material
-until the new receipt commits. Launcher removal, shared snapshot/render material, and profile
-sentinel blocks remain to migrate.
+until the new receipt commits. Unchanged receipt-owned launcher removal is typed with a positive
+receipt-commit marker. Shared snapshot/render material and profile sentinel blocks remain to
+migrate.
 
 | Category | Targets | Runtime/class | Privilege | Built-in provenance | Rollback classification |
 |---|---|---|---|---|---|
@@ -78,10 +79,12 @@ the target ran but does not own third-party package uninstall or version rollbac
    (implemented).
 5. Administrator static Copy create, backup-aware create, and in-place update plus key-owned JSON
    merge install/update/removal (implemented).
-6. Shell first-time launcher creation plus unchanged receipt-owned launcher update and removal
+6. App upgrade stale-prune removal for unchanged static Copy and JSON receipts (implemented);
+   relocation remains.
+7. Shell first-time launcher creation plus unchanged receipt-owned launcher update and removal
    (implemented); snapshot/render files and profile blocks remain.
-7. Managed Sys files/profile blocks and split DNS.
-8. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
+8. Managed Sys files/profile blocks and split DNS.
+9. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
    opaque escape hatches unless a narrower typed action replaces them.
 
 Any new built-in executable capability must enter this inventory in the same change.

@@ -779,30 +779,198 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         }
 
         if request.operation == LifecycleOperation::Upgrade {
+            let mut stale_receipt_changes = false;
             for entry in manifest.entries.iter().filter(|entry| {
                 request.target.as_ref().is_none_or(|target| {
                     app_source_parts(&entry.source).is_some_and(|(category, _)| category == target)
                 })
             }) {
                 if !active_sources.contains(&entry.source) {
-                    let (_, resource) =
+                    let (category, resource) =
                         app_source_parts(&entry.source).unwrap_or(("unknown", "unknown"));
-                    let category =
-                        app_source_parts(&entry.source).map_or("unknown", |value| value.0);
-                    let action = if request.prune_stale {
+                    if !request.prune_stale {
+                        steps.push(
+                            PlanStepV1::new(
+                                format!("app/{category}"),
+                                Some(resource),
+                                PlanActionV1::Preserve,
+                            )
+                            .with_diagnostic_code("app_stale_source_preserved"),
+                        );
+                        continue;
+                    }
+                    capture_path_state(
+                        self.host(),
+                        state,
+                        format!("stale-resource:{}", entry.source),
+                        &entry.destination,
+                    )
+                    .await?;
+                    let current = read_optional(self.host(), &entry.destination).await?;
+                    if current.is_some()
+                        && let Some(backup) = &entry.backup
+                    {
+                        capture_path_state(
+                            self.host(),
+                            state,
+                            format!("stale-backup:{}", entry.source),
+                            backup,
+                        )
+                        .await?;
+                    }
+                    let current_matches_receipt =
+                        current
+                            .as_deref()
+                            .is_none_or(|bytes| match &entry.install_strategy {
+                                crate::install::AppInstallStrategy::Copy => {
+                                    crate::install::hash_content(bytes) == entry.content_hash
+                                }
+                                crate::install::AppInstallStrategy::JsonMerge { managed_keys } => {
+                                    installed_json_hash(bytes, managed_keys).ok().flatten()
+                                        == Some(entry.content_hash)
+                                }
+                            });
+                    let removal_supported = current.is_none()
+                        || match &entry.install_strategy {
+                            crate::install::AppInstallStrategy::Copy => {
+                                if let Some(backup) = &entry.backup {
+                                    if *backup != crate::install::backup_path(&entry.destination) {
+                                        false
+                                    } else {
+                                        match self.host().metadata(backup).await {
+                                            Ok(metadata) => metadata.kind == FileKind::File,
+                                            Err(error) if error.is_not_found() => false,
+                                            Err(error) => {
+                                                return Err(error.into_anyhow(
+                                                    "observing stale App persistent backup",
+                                                ));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    true
+                                }
+                            }
+                            crate::install::AppInstallStrategy::JsonMerge { .. } => {
+                                !entry.requires_admin && entry.backup.is_none()
+                            }
+                        };
+                    let action = if current_matches_receipt && removal_supported {
                         PlanActionV1::Remove
+                    } else if current_matches_receipt {
+                        PlanActionV1::Blocked
                     } else {
                         PlanActionV1::Preserve
                     };
-                    steps.push(
+                    if action == PlanActionV1::Remove {
+                        stale_receipt_changes = true;
+                        if current.is_some() {
+                            add_app_entry_permissions(
+                                self.context(),
+                                permissions,
+                                entry,
+                                LifecycleOperation::Uninstall,
+                            );
+                            let remove_rollback = match &entry.install_strategy {
+                                crate::install::AppInstallStrategy::JsonMerge { .. }
+                                    if entry.backup.is_none() =>
+                                {
+                                    Some(crate::action::managed_file_rollback_path(
+                                        &entry.destination,
+                                    ))
+                                }
+                                crate::install::AppInstallStrategy::Copy => {
+                                    if let Some(backup) = &entry.backup {
+                                        if *backup
+                                            != crate::install::backup_path(&entry.destination)
+                                        {
+                                            None
+                                        } else {
+                                            match self.host().metadata(backup).await {
+                                                Ok(metadata) if metadata.kind == FileKind::File => {
+                                                    Some(crate::action::managed_file_rollback_path(
+                                                        &entry.destination,
+                                                    ))
+                                                }
+                                                Ok(_) => None,
+                                                Err(error) if error.is_not_found() => None,
+                                                Err(error) => {
+                                                    return Err(error.into_anyhow(
+                                                        "observing stale App persistent backup",
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Some(crate::action::managed_file_rollback_path(
+                                            &entry.destination,
+                                        ))
+                                    }
+                                }
+                                crate::install::AppInstallStrategy::JsonMerge { .. } => None,
+                            };
+                            if let Some(rollback) = remove_rollback {
+                                capture_path_state(
+                                    self.host(),
+                                    state,
+                                    format!("stale-remove-rollback:{}", entry.source),
+                                    &rollback,
+                                )
+                                .await?;
+                                if manifest.find_by_dest(&rollback).is_some()
+                                    || path_exists(self.host(), &rollback).await?
+                                {
+                                    steps.push(
+                                        PlanStepV1::new(
+                                            format!("app/{category}"),
+                                            Some(resource),
+                                            PlanActionV1::Blocked,
+                                        )
+                                        .with_diagnostic_code("app_remove_rollback_occupied"),
+                                    );
+                                    continue;
+                                }
+                                add_app_journal_permissions(self.context(), permissions);
+                                add_app_update_permissions(
+                                    self.context(),
+                                    permissions,
+                                    &entry.destination,
+                                    &rollback,
+                                );
+                                if matches!(
+                                    entry.install_strategy,
+                                    crate::install::AppInstallStrategy::JsonMerge { .. }
+                                ) {
+                                    permissions.implicit(PermissionV1::Filesystem {
+                                        access: FilesystemAccessV1::Write,
+                                        path: review_path(self.context(), &entry.destination),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    let mut step =
                         PlanStepV1::new(format!("app/{category}"), Some(resource), action)
-                            .with_diagnostic_code(if request.prune_stale {
+                            .with_diagnostic_code(if action == PlanActionV1::Remove {
                                 "app_stale_source_pruned"
+                            } else if action == PlanActionV1::Blocked {
+                                "app_stale_removal_unsupported"
                             } else {
                                 "app_stale_source_preserved"
-                            }),
-                    );
+                            });
+                    if !current_matches_receipt {
+                        step = step.with_diagnostic_code("app_user_modified");
+                    }
+                    steps.push(step);
                 }
+            }
+            if stale_receipt_changes {
+                add_shine_receipt_permission(
+                    self.context(),
+                    permissions,
+                    "app-manifest.toml",
+                    LifecycleOperation::Upgrade,
+                );
             }
         }
         Ok(())
@@ -2893,6 +3061,12 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 ));
             }
         }
+        if request.operation == LifecycleOperation::Upgrade && request.prune_stale {
+            actions.extend(
+                self.approved_app_stale_remove_action_irs(request, plan)
+                    .await?,
+            );
+        }
         Ok(actions)
     }
 
@@ -2935,148 +3109,229 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             }) {
                 continue;
             }
-            let metadata = match self.host().metadata(&entry.destination).await {
-                Ok(metadata) if metadata.kind == FileKind::File => metadata,
-                Ok(_) => continue,
-                Err(error) if error.is_not_found() => continue,
-                Err(error) => {
-                    return Err(error.into_anyhow("observing managed App removal destination"));
-                }
-            };
-            let Some(current) = read_optional(self.host(), &entry.destination).await? else {
-                continue;
-            };
-            if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
-                &entry.install_strategy
-            {
-                let Some(current_managed_hash) = installed_json_hash(&current, managed_keys)?
-                else {
-                    continue;
-                };
-                if current_managed_hash != entry.content_hash && !request.force {
-                    continue;
-                }
-                let rollback = crate::action::managed_file_rollback_path(&entry.destination);
-                if manifest.find_by_dest(&rollback).is_some()
-                    || path_exists(self.host(), &rollback).await?
-                {
-                    bail!("managed JSON removal rollback path changed after Plan approval");
-                }
-                let target = format!("app/{category}");
-                let action_identity = format!("{target}/{resource}");
-                let action = DeclarativeActionV1::remove_managed_json(
-                    format!("remove-json:{action_identity}"),
-                    target,
+            if let Some(action) = self
+                .approved_app_remove_action_ir(
+                    &manifest,
+                    entry,
+                    category,
                     resource,
-                    ManagedJsonRemoveSpecV1 {
-                        destination: entry.destination.clone(),
-                        original_mode: metadata.unix_mode,
-                        original_hash: crate::install::hash_content(&current),
-                        receipt_managed_hash: entry.content_hash,
-                        current_managed_hash,
-                        managed_keys: managed_keys.clone(),
-                        uses_env: entry.uses_env,
-                    },
-                );
-                actions.push(ActionIrV1::new(
-                    format!("app-uninstall:{fingerprint}:{action_identity}"),
-                    vec![action],
-                ));
+                    &fingerprint,
+                    "app-uninstall",
+                    request.force,
+                )
+                .await?
+            {
+                actions.push(action);
+            }
+        }
+        Ok(actions)
+    }
+
+    async fn approved_app_stale_remove_action_irs(
+        &self,
+        request: &AppPlanRequest,
+        plan: &PlanV1,
+    ) -> Result<Vec<ActionIrV1>> {
+        let fingerprint = plan.fingerprint()?.as_hex();
+        let (manifest, _) = load_app_manifest(self.host(), &self.context().shine_dir).await?;
+        let active_sources = self
+            .app_categories(request.target.as_deref())?
+            .iter()
+            .flat_map(|category| {
+                category
+                    .files
+                    .iter()
+                    .map(|file| logical_app_source(category, file))
+            })
+            .collect::<BTreeSet<_>>();
+        let mut actions = Vec::new();
+        for entry in manifest.entries.iter().filter(|entry| {
+            request.target.as_ref().is_none_or(|target| {
+                app_source_parts(&entry.source).is_some_and(|(category, _)| category == target)
+            })
+        }) {
+            if active_sources.contains(&entry.source) {
                 continue;
             }
-            if entry.install_strategy != crate::install::AppInstallStrategy::Copy {
+            let Some((category, resource)) = app_source_parts(&entry.source) else {
                 continue;
-            }
-            let current_hash = crate::install::hash_content(&current);
-            if current_hash != entry.content_hash && !request.force {
-                continue;
-            }
-            let backup_identity = if let Some(backup) = &entry.backup {
-                if *backup != crate::install::backup_path(&entry.destination) {
-                    continue;
-                }
-                let metadata = match self.host().metadata(backup).await {
-                    Ok(metadata) if metadata.kind == FileKind::File => metadata,
-                    Ok(_) => continue,
-                    Err(error) if error.is_not_found() => continue,
-                    Err(error) => {
-                        return Err(
-                            error.into_anyhow("observing managed App removal persistent backup")
-                        );
-                    }
-                };
-                let Some(bytes) = read_optional(self.host(), backup).await? else {
-                    continue;
-                };
-                Some((
-                    backup.clone(),
-                    metadata.unix_mode,
-                    crate::install::hash_content(&bytes),
-                ))
-            } else {
-                None
             };
+            if !plan.steps.iter().any(|step| {
+                step.target == format!("app/{category}")
+                    && step.resource.as_deref() == Some(resource)
+                    && step.action == PlanActionV1::Remove
+                    && step
+                        .diagnostic_codes
+                        .contains(&"app_stale_source_pruned".to_string())
+            }) {
+                continue;
+            }
+            if let Some(action) = self
+                .approved_app_remove_action_ir(
+                    &manifest,
+                    entry,
+                    category,
+                    resource,
+                    &fingerprint,
+                    "app-upgrade-prune",
+                    false,
+                )
+                .await?
+            {
+                actions.push(action);
+            }
+        }
+        Ok(actions)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn approved_app_remove_action_ir(
+        &self,
+        manifest: &AppManifest,
+        entry: &AppEntry,
+        category: &str,
+        resource: &str,
+        fingerprint: &str,
+        operation: &str,
+        force: bool,
+    ) -> Result<Option<ActionIrV1>> {
+        let metadata = match self.host().metadata(&entry.destination).await {
+            Ok(metadata) if metadata.kind == FileKind::File => metadata,
+            Ok(_) => return Ok(None),
+            Err(error) if error.is_not_found() => return Ok(None),
+            Err(error) => {
+                return Err(error.into_anyhow("observing managed App removal destination"));
+            }
+        };
+        let Some(current) = read_optional(self.host(), &entry.destination).await? else {
+            return Ok(None);
+        };
+        let target = format!("app/{category}");
+        let action_identity = format!("{target}/{resource}");
+        if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
+            &entry.install_strategy
+        {
+            if entry.requires_admin || entry.backup.is_some() {
+                return Ok(None);
+            }
+            let Some(current_managed_hash) = installed_json_hash(&current, managed_keys)? else {
+                return Ok(None);
+            };
+            if current_managed_hash != entry.content_hash && !force {
+                return Ok(None);
+            }
             let rollback = crate::action::managed_file_rollback_path(&entry.destination);
             if manifest.find_by_dest(&rollback).is_some()
                 || path_exists(self.host(), &rollback).await?
             {
-                bail!("App removal rollback path changed after Plan approval");
+                bail!("managed JSON removal rollback path changed after Plan approval");
             }
-            let target = format!("app/{category}");
-            let action_identity = format!("{target}/{resource}");
-            let action = if current_hash != entry.content_hash {
-                DeclarativeActionV1::force_remove_managed_file(
-                    format!("force-remove:{action_identity}"),
-                    target,
-                    resource,
-                    ForcedManagedFileRemoveSpecV1 {
-                        destination: entry.destination.clone(),
-                        persistent_backup: backup_identity.map(|(path, mode, hash)| {
-                            ForcedManagedFileBackupV1 { path, mode, hash }
-                        }),
-                        receipt_hash: entry.content_hash,
-                        current_mode: metadata.unix_mode,
-                        current_hash,
-                        uses_env: entry.uses_env,
-                        requires_admin: entry.requires_admin,
-                    },
-                )
-            } else if let Some((backup, backup_mode, backup_hash)) = backup_identity {
-                DeclarativeActionV1::remove_managed_file_with_backup(
-                    format!("remove-with-backup:{action_identity}"),
-                    target,
-                    resource,
-                    ManagedFileRemoveWithBackupSpecV1 {
-                        destination: entry.destination.clone(),
-                        backup,
-                        managed_mode: metadata.unix_mode,
-                        managed_hash: entry.content_hash,
-                        backup_mode,
-                        backup_hash,
-                        uses_env: entry.uses_env,
-                        requires_admin: entry.requires_admin,
-                    },
-                )
-            } else {
-                DeclarativeActionV1::remove_managed_file(
-                    format!("remove:{action_identity}"),
-                    target,
-                    resource,
-                    ManagedFileRemoveSpecV1 {
-                        destination: entry.destination.clone(),
-                        original_mode: metadata.unix_mode,
-                        original_hash: entry.content_hash,
-                        uses_env: entry.uses_env,
-                        requires_admin: entry.requires_admin,
-                    },
-                )
-            };
-            actions.push(ActionIrV1::new(
-                format!("app-uninstall:{fingerprint}:{action_identity}"),
+            let action = DeclarativeActionV1::remove_managed_json(
+                format!("remove-json:{action_identity}"),
+                target,
+                resource,
+                ManagedJsonRemoveSpecV1 {
+                    destination: entry.destination.clone(),
+                    original_mode: metadata.unix_mode,
+                    original_hash: crate::install::hash_content(&current),
+                    receipt_managed_hash: entry.content_hash,
+                    current_managed_hash,
+                    managed_keys: managed_keys.clone(),
+                    uses_env: entry.uses_env,
+                },
+            );
+            return Ok(Some(ActionIrV1::new(
+                format!("{operation}:{fingerprint}:{action_identity}"),
                 vec![action],
-            ));
+            )));
         }
-        Ok(actions)
+        if entry.install_strategy != crate::install::AppInstallStrategy::Copy {
+            return Ok(None);
+        }
+        let current_hash = crate::install::hash_content(&current);
+        if current_hash != entry.content_hash && !force {
+            return Ok(None);
+        }
+        let backup_identity = if let Some(backup) = &entry.backup {
+            if *backup != crate::install::backup_path(&entry.destination) {
+                return Ok(None);
+            }
+            let metadata = match self.host().metadata(backup).await {
+                Ok(metadata) if metadata.kind == FileKind::File => metadata,
+                Ok(_) => return Ok(None),
+                Err(error) if error.is_not_found() => return Ok(None),
+                Err(error) => {
+                    return Err(
+                        error.into_anyhow("observing managed App removal persistent backup")
+                    );
+                }
+            };
+            let Some(bytes) = read_optional(self.host(), backup).await? else {
+                return Ok(None);
+            };
+            Some((
+                backup.clone(),
+                metadata.unix_mode,
+                crate::install::hash_content(&bytes),
+            ))
+        } else {
+            None
+        };
+        let rollback = crate::action::managed_file_rollback_path(&entry.destination);
+        if manifest.find_by_dest(&rollback).is_some() || path_exists(self.host(), &rollback).await?
+        {
+            bail!("App removal rollback path changed after Plan approval");
+        }
+        let action = if current_hash != entry.content_hash {
+            DeclarativeActionV1::force_remove_managed_file(
+                format!("force-remove:{action_identity}"),
+                target,
+                resource,
+                ForcedManagedFileRemoveSpecV1 {
+                    destination: entry.destination.clone(),
+                    persistent_backup: backup_identity
+                        .map(|(path, mode, hash)| ForcedManagedFileBackupV1 { path, mode, hash }),
+                    receipt_hash: entry.content_hash,
+                    current_mode: metadata.unix_mode,
+                    current_hash,
+                    uses_env: entry.uses_env,
+                    requires_admin: entry.requires_admin,
+                },
+            )
+        } else if let Some((backup, backup_mode, backup_hash)) = backup_identity {
+            DeclarativeActionV1::remove_managed_file_with_backup(
+                format!("remove-with-backup:{action_identity}"),
+                target,
+                resource,
+                ManagedFileRemoveWithBackupSpecV1 {
+                    destination: entry.destination.clone(),
+                    backup,
+                    managed_mode: metadata.unix_mode,
+                    managed_hash: entry.content_hash,
+                    backup_mode,
+                    backup_hash,
+                    uses_env: entry.uses_env,
+                    requires_admin: entry.requires_admin,
+                },
+            )
+        } else {
+            DeclarativeActionV1::remove_managed_file(
+                format!("remove:{action_identity}"),
+                target,
+                resource,
+                ManagedFileRemoveSpecV1 {
+                    destination: entry.destination.clone(),
+                    original_mode: metadata.unix_mode,
+                    original_hash: entry.content_hash,
+                    uses_env: entry.uses_env,
+                    requires_admin: entry.requires_admin,
+                },
+            )
+        };
+        Ok(Some(ActionIrV1::new(
+            format!("{operation}:{fingerprint}:{action_identity}"),
+            vec![action],
+        )))
     }
 }
 
@@ -8264,6 +8519,273 @@ servers_env = 'PRIVATE_DNS_SERVERS'
                     .diagnostic_codes
                     .contains(&"app_teardown_execution".to_string())
         }));
+    }
+
+    #[tokio::test]
+    async fn approved_app_upgrade_prune_journals_stale_static_copy_removal() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: None,
+            force: false,
+            purge: false,
+            prune_stale: true,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_stale_source_pruned".to_string())
+        }));
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, destination.clone()),
+            (FilesystemAccessV1::Write, rollback.clone()),
+            (FilesystemAccessV1::Remove, rollback.clone()),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), &path),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedFile { .. }))
+        ));
+
+        let mut observer = super::super::NullObserver;
+        let report = runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.lifecycle.summary().changed, 1);
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn app_upgrade_prune_blocks_stale_copy_with_noncanonical_backup() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let backup = runtime
+            .context()
+            .home_dir
+            .join(".config/demo/config.legacy");
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        runtime.host().put_file(&backup, b"original".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination,
+                backup: Some(backup),
+                content_hash: crate::install::hash_content(b"managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+
+        let plan = runtime
+            .plan_apps(AppPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: None,
+                force: false,
+                purge: false,
+                prune_stale: true,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_stale_removal_unsupported".to_string())
+        }));
+    }
+
+    #[tokio::test]
+    async fn app_upgrade_prune_receipt_failure_recovers_stale_static_copy() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let destination = runtime.context().home_dir.join(".config/demo/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, b"managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: None,
+            force: false,
+            purge: false,
+            prune_stale: true,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        assert!(runtime.host().read(&destination).await.is_err());
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"managed");
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.entries.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn approved_app_upgrade_prune_journals_stale_json_keys() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let destination = runtime.context().home_dir.join(".config/demo/config.json");
+        let current = br#"{"proxy":{"mode":"managed"},"theme":"dark"}"#;
+        let managed_source = br#"{"proxy":{"mode":"managed"}}"#;
+        let managed_keys = vec!["proxy".to_string()];
+        runtime.host().put_file(&destination, current.to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.json".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::runtime::app::managed_json_hash(managed_source, &managed_keys)
+                    .unwrap(),
+                install_strategy: crate::install::AppInstallStrategy::JsonMerge { managed_keys },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: None,
+            force: false,
+            purge: false,
+            prune_stale: true,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedJson { .. }))
+        ));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        let remaining = runtime.host().read(&destination).await.unwrap();
+        let remaining: serde_json::Value = serde_json::from_slice(&remaining).unwrap();
+        assert_eq!(remaining, serde_json::json!({ "theme": "dark" }));
     }
 
     #[tokio::test]

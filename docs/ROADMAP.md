@@ -37,7 +37,9 @@
   复用这些 Action，在完整检查/write/move/commit/recovery 期间持有 administrator lock 并使用
   privileged path mutation；仅 receipt 修复或 journal 清理不会请求提权。JSON merge 的
   install、原地 update、普通/强制 uninstall 也已迁移到 key-owned Action；恢复只还原声明的
-  顶层 key，保留中断后发生的其它设置修改。Shell 首次 launcher 创建也已接入独立 journal：Unix
+  顶层 key，保留中断后发生的其它设置修改。App upgrade 的 `--prune-stale` 对未修改的 stale 静态
+  Copy 与 JSON receipt 复用相同 removal Action，在 receipt commit 前可显式恢复；用户修改内容继续
+  保留，目标缺失时仅原子清理 receipt。Shell 首次 launcher 创建也已接入独立 journal：Unix
   symlink、Unix Bun/live launcher 和 Windows 双 shim 都在 command receipt commit 前可按精确
   target/hash/mode 回滚，`shine shell recover` 负责显式恢复。未修改、receipt-owned launcher 的
   install/upgrade 更新也已迁移：旧资源先进入同目录 rollback material，新 receipt 前可恢复，commit

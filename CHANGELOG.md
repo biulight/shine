@@ -47,6 +47,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   Recovery restores or removes only declared top-level keys while preserving unrelated values
   changed after interruption; Action IR and journals contain hashes and key names, never JSON
   payloads.
+- Journaled `upgrade --prune-stale` removal of unchanged App static Copy and JSON receipts by
+  reusing the receipt-gated removal transactions. Interrupted pruning recovers through
+  `shine app recover`; user-modified stale content remains preserved, and missing destinations use
+  receipt-only cleanup.
 - Journaled first-time Shell launcher creation for Unix symlinks, Unix Bun/live launchers, and
   Windows PowerShell/cmd shim pairs. `shine shell recover` reviews a separate recovery Plan and
   removes only unchanged transaction-created launcher resources, while preserving an exact
