@@ -10,6 +10,12 @@ pub enum ShellCommands {
         #[arg(value_name = "TARGET")]
         target: String,
     },
+    /// Review and recover an interrupted shell launcher creation
+    Recover {
+        /// Approve the displayed recovery Plan without prompting
+        #[arg(long)]
+        yes: bool,
+    },
     /// Install shell presets and create bin symlinks.
     /// Run 'shine shell list' to see available categories.
     Install {

@@ -306,7 +306,9 @@ cleans only exact rollback material.
 
 ### Slice 4D — Other domains and opaque inventory
 
-- Shell launcher/profile declarative actions.
+- Shell launcher/profile declarative actions. First-time launcher creation and explicit recovery are
+  implemented as Slice 4D.1; launcher update/removal, shared snapshot/render state, and profile
+  sentinel blocks remain.
 - Managed Sys files and split-DNS typed actions.
 - Sys package/provider and executable code classification.
 - Migrate or explicitly classify every built-in executable Preset listed in
@@ -332,4 +334,5 @@ backup rather than replacing it. Slices 4C.2b-1 and 4C.2b-2 expand the same reco
 receipt removal and fixed-backup restoration. Slice 4C.2b-3a adds forced-removal rollback and the
 same documentation remains aligned across both public manual locales. Slices 4C.2b-3b and 4C.2c
 document administrator-path authorization and recovery timing in both locales. Slice 4C.3 adds
-key-owned JSON merge recovery guidance to both locales.
+key-owned JSON merge recovery guidance to both locales. Slice 4D.1 adds first-time Shell launcher
+creation recovery and `shine shell recover` guidance to both locales.

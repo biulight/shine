@@ -26,6 +26,8 @@ struct MemoryState {
     write_failures: BTreeMap<PathBuf, usize>,
     #[cfg(test)]
     rename_failures: BTreeMap<(PathBuf, PathBuf), usize>,
+    #[cfg(test)]
+    remove_failures: BTreeMap<PathBuf, usize>,
 }
 
 #[derive(Clone, Default)]
@@ -83,6 +85,15 @@ impl InMemoryHost {
             .expect("in-memory host lock")
             .rename_failures
             .insert((from.into(), to.into()), successful_renames);
+    }
+
+    #[cfg(test)]
+    pub fn fail_remove_after(&self, path: impl Into<PathBuf>, successful_removes: usize) {
+        self.state
+            .lock()
+            .expect("in-memory host lock")
+            .remove_failures
+            .insert(path.into(), successful_removes);
     }
 }
 
@@ -262,6 +273,17 @@ impl FileSystemHost for InMemoryHost {
     ) -> Pin<Box<dyn Future<Output = Result<(), HostError>> + Send + 'a>> {
         Box::pin(async move {
             let mut state = self.state.lock().expect("in-memory host lock");
+            #[cfg(test)]
+            if let Some(remaining) = state.remove_failures.get_mut(path) {
+                if *remaining == 0 {
+                    state.remove_failures.remove(path);
+                    return Err(HostError::new(
+                        std::io::ErrorKind::Other,
+                        anyhow::anyhow!("injected in-memory remove failure: {}", path.display()),
+                    ));
+                }
+                *remaining -= 1;
+            }
             if state.nodes.remove(path).is_none() {
                 return Err(not_found(path));
             }

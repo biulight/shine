@@ -1480,6 +1480,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             false,
         )?;
         capture_context(&mut state, self.context())?;
+        let interrupted_operation =
+            if let Some(journal_bytes) = self.shell_operation_journal_bytes().await? {
+                state.bytes("journal:shell-operation", Some(&journal_bytes))?;
+                true
+            } else {
+                false
+            };
         let (manifest, manifest_bytes) =
             load_shell_manifest(self.host(), &self.context().shine_dir).await?;
         capture_manifest_selection(
@@ -1495,6 +1502,23 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         )?;
         let mut permissions = PermissionAccumulator::default();
         let mut steps = Vec::new();
+        let mut first_time_launcher_creation = false;
+
+        if interrupted_operation {
+            steps.push(
+                PlanStepV1::new(
+                    request
+                        .target
+                        .as_ref()
+                        .map(|target| format!("shell/{target}"))
+                        .unwrap_or_else(|| "shell".to_string()),
+                    Some("operation-journal"),
+                    PlanActionV1::Blocked,
+                )
+                .with_diagnostic_code("shell_recovery_required"),
+            );
+            return finish_plan(self, request.operation, state, permissions, steps);
+        }
 
         if request.operation == LifecycleOperation::Uninstall {
             let selected_entries = manifest
@@ -1737,6 +1761,10 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     } else {
                         PlanActionV1::Update
                     };
+                    first_time_launcher_creation |= request.operation
+                        == LifecycleOperation::Install
+                        && action == PlanActionV1::Create
+                        && entry.is_none();
                     add_shell_typed_permissions(
                         self.context(),
                         &mut permissions,
@@ -1801,6 +1829,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 None::<String>,
                 profile_action,
             ));
+        }
+        if first_time_launcher_creation {
+            add_shell_journal_permissions(self.context(), &mut permissions);
         }
         finish_plan(self, request.operation, state, permissions, steps)
     }
@@ -2904,7 +2935,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
     }
 }
 
-impl<H: FileSystemHost> CoreRuntime<H> {
+impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     pub async fn preview_install_shells(
         &self,
         request: ShellLifecycleRequest,
@@ -2934,11 +2965,14 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             bail!("approved Shell install requires an install Plan");
         }
         approval.validate(&self.plan_shells(request.clone()).await?)?;
-        self.install_shells(ShellLifecycleRequest {
-            target: request.target,
-            dry_run: false,
-            force: request.force,
-        })
+        self.install_shells_with_approval(
+            ShellLifecycleRequest {
+                target: request.target,
+                dry_run: false,
+                force: request.force,
+            },
+            approval,
+        )
         .await
     }
 
@@ -3996,6 +4030,24 @@ fn add_app_journal_permissions(
     let path = review_path(
         context,
         &context.shine_dir.join(super::APP_OPERATION_JOURNAL_FILE),
+    );
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Write,
+        path: path.clone(),
+    });
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Remove,
+        path,
+    });
+}
+
+fn add_shell_journal_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+) {
+    let path = review_path(
+        context,
+        &context.shine_dir.join(super::SHELL_OPERATION_JOURNAL_FILE),
     );
     permissions.implicit(PermissionV1::Filesystem {
         access: FilesystemAccessV1::Write,
@@ -6636,6 +6688,239 @@ target = '$HOME/.config/disabled.txt'
             initial.fingerprint().unwrap(),
             unchanged.fingerprint().unwrap()
         );
+    }
+
+    fn shell_launcher_snapshot() -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", b"#!/bin/sh\necho demo\n".to_vec())
+            .build()
+    }
+
+    fn shell_install_request() -> ShellPlanRequest {
+        ShellPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo/demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn approved_shell_launcher_creation_journals_before_mutation_and_commits_after_receipt() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        for access in [FilesystemAccessV1::Write, FilesystemAccessV1::Remove] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: "shine:shell-operation-journal.toml".to_string(),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let manifest_path = runtime.context().shine_dir.join("shell-manifest.toml");
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().read(&journal).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_some());
+
+        let operations = runtime.host().operations();
+        let first_journal_write = operations
+            .iter()
+            .position(
+                |operation| matches!(operation, HostOperation::Write(path) if path == &journal),
+            )
+            .unwrap();
+        let launcher_mutation = operations
+            .iter()
+            .position(|operation| {
+                matches!(operation, HostOperation::CreateSymlink { link, .. } if link == &launcher)
+                    || matches!(operation, HostOperation::Write(path) if path == &launcher)
+            })
+            .unwrap();
+        let receipt_write = operations
+            .iter()
+            .position(|operation| matches!(operation, HostOperation::Write(path) if path == &manifest_path))
+            .unwrap();
+        let journal_commit = operations
+            .iter()
+            .position(
+                |operation| matches!(operation, HostOperation::Remove(path) if path == &journal),
+            )
+            .unwrap();
+        assert!(first_journal_write < launcher_mutation);
+        assert!(launcher_mutation < receipt_write);
+        assert!(receipt_write < journal_commit);
+    }
+
+    #[tokio::test]
+    async fn shell_receipt_failure_leaves_explicit_recovery_that_removes_unchanged_launcher() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let manifest_path = runtime.context().shine_dir.join("shell-manifest.toml");
+        runtime.host().fail_write_after(&manifest_path, 0);
+
+        let error = runtime
+            .install_shells_approved(request.clone(), &approval)
+            .await
+            .err()
+            .expect("Shell receipt write should fail");
+        assert!(error.to_string().contains("failed to write shell manifest"));
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().read(&journal).await.is_ok());
+
+        let blocked = runtime.plan_shells(request).await.unwrap();
+        assert!(!blocked.is_ready());
+        assert!(blocked.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_recovery_required".to_string())
+        }));
+        let recovery_plan = runtime.plan_shell_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        let report = runtime
+            .recover_shell_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(report.rolled_back_actions.len(), 1);
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().read(&journal).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn shell_recovery_preserves_a_launcher_changed_after_interruption() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt write should fail");
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        runtime.host().remove_file(&launcher).await.unwrap();
+        runtime
+            .host()
+            .put_file(&launcher, b"#!/bin/sh\necho user\n".to_vec());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(!recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_recovery_launcher_changed".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&launcher).await.unwrap(),
+            b"#!/bin/sh\necho user\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_recovery_preserves_a_launcher_after_receipt_commit() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_remove_after(&journal, 0);
+        let error = runtime
+            .install_shells_approved(shell_install_request(), &approval)
+            .await
+            .err()
+            .expect("Shell journal commit should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("removing Shell operation journal")
+        );
+
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_some());
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_receipt_already_committed".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        let report = runtime
+            .recover_shell_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(report.rolled_back_actions.is_empty());
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().read(&journal).await.is_err());
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn shell_recovery_removes_a_partial_windows_shim_pair() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let cmd = launcher.with_extension("cmd");
+        runtime.host().fail_write_after(&cmd, 0);
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("second Windows shim write should fail");
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&cmd).await.is_err());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&cmd).await.is_err());
     }
 
     #[tokio::test]

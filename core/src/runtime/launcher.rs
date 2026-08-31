@@ -80,6 +80,135 @@ pub struct LinkSpec {
     pub render_target: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PreparedLauncherResource {
+    Symlink {
+        destination: PathBuf,
+        target: PathBuf,
+    },
+    File {
+        destination: PathBuf,
+        bytes: Vec<u8>,
+        unix_mode: Option<u32>,
+    },
+}
+
+impl PreparedLauncherResource {
+    pub(crate) fn destination(&self) -> &Path {
+        match self {
+            Self::Symlink { destination, .. } | Self::File { destination, .. } => destination,
+        }
+    }
+}
+
+pub(crate) fn prepare_launcher_resources(
+    bin_dir: &Path,
+    spec: &LinkSpec,
+) -> Vec<PreparedLauncherResource> {
+    let link_path = command_path_for_name(bin_dir, &spec.link_name);
+    #[cfg(unix)]
+    {
+        let content = if let Some(target) = spec.render_target.as_deref() {
+            Some(unix_live_launcher_content(
+                &spec.source,
+                &launcher_command_name(&link_path),
+                spec.runtime,
+                spec.bun_dependencies,
+                &spec.env,
+                target,
+            ))
+        } else if spec.runtime == LinkRuntime::Bun {
+            Some(unix_bun_launcher_content(
+                &spec.source,
+                &launcher_command_name(&link_path),
+                spec.bun_dependencies,
+                &spec.env,
+            ))
+        } else {
+            None
+        };
+        match content {
+            Some(content) => vec![PreparedLauncherResource::File {
+                destination: link_path,
+                bytes: content.into_bytes(),
+                unix_mode: Some(0o755),
+            }],
+            None => vec![PreparedLauncherResource::Symlink {
+                destination: link_path,
+                target: spec.source.clone(),
+            }],
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let name = launcher_command_name(&link_path);
+        let ps1 = powershell_shim_content(
+            &spec.source,
+            spec.runtime,
+            &name,
+            spec.bun_dependencies,
+            &spec.env,
+            spec.render_target.as_deref(),
+        );
+        let cmd = cmd_shim_content(
+            &spec.source,
+            spec.runtime,
+            &name,
+            spec.bun_dependencies,
+            &spec.env,
+            spec.render_target.as_deref(),
+        );
+        vec![
+            PreparedLauncherResource::File {
+                destination: link_path.clone(),
+                bytes: ps1.into_bytes(),
+                unix_mode: None,
+            },
+            PreparedLauncherResource::File {
+                destination: link_path.with_extension("cmd"),
+                bytes: cmd.into_bytes(),
+                unix_mode: None,
+            },
+        ]
+    }
+}
+
+pub(crate) async fn apply_prepared_launcher_resource(
+    host: &impl FileSystemHost,
+    resource: &PreparedLauncherResource,
+) -> Result<()> {
+    let destination = resource.destination();
+    if let Some(parent) = destination.parent() {
+        host.create_dir_all(parent)
+            .await
+            .map_err(|error| error.into_anyhow("creating shell launcher directory"))?;
+    }
+    match resource {
+        PreparedLauncherResource::Symlink {
+            destination,
+            target,
+        } => host
+            .symlink(target, destination)
+            .await
+            .map_err(|error| error.into_anyhow("creating shell symlink")),
+        PreparedLauncherResource::File {
+            destination,
+            bytes,
+            unix_mode,
+        } => {
+            host.write_atomic(destination, bytes)
+                .await
+                .map_err(|error| error.into_anyhow("writing shell launcher"))?;
+            if let Some(mode) = unix_mode {
+                host.set_mode(destination, *mode)
+                    .await
+                    .map_err(|error| error.into_anyhow("setting shell launcher permissions"))?;
+            }
+            Ok(())
+        }
+    }
+}
+
 async fn host_launcher_target(host: &impl FileSystemHost, path: &Path) -> Result<Option<PathBuf>> {
     let content = match host.read(path).await {
         Ok(bytes) => match String::from_utf8(bytes) {
@@ -125,60 +254,26 @@ async fn host_create_link(
     env: &[String],
     render_target: Option<&str>,
 ) -> Result<()> {
-    if let Some(parent) = link_path.parent() {
-        host.create_dir_all(parent)
-            .await
-            .map_err(|error| error.into_anyhow("creating shell launcher directory"))?;
-    }
-    #[cfg(unix)]
+    let spec = LinkSpec {
+        source: source.to_path_buf(),
+        link_name: {
+            #[cfg(unix)]
+            let name = link_path.file_name();
+            #[cfg(not(unix))]
+            let name = link_path.file_stem();
+            name.unwrap_or_default().to_os_string()
+        },
+        runtime,
+        bun_dependencies,
+        env: env.to_vec(),
+        render_target: render_target.map(str::to_string),
+    };
+    for resource in
+        prepare_launcher_resources(link_path.parent().unwrap_or_else(|| Path::new("")), &spec)
     {
-        let content = if let Some(target) = render_target {
-            Some(unix_live_launcher_content(
-                source,
-                &launcher_command_name(link_path),
-                runtime,
-                bun_dependencies,
-                env,
-                target,
-            ))
-        } else if runtime == LinkRuntime::Bun {
-            Some(unix_bun_launcher_content(
-                source,
-                &launcher_command_name(link_path),
-                bun_dependencies,
-                env,
-            ))
-        } else {
-            None
-        };
-        if let Some(content) = content {
-            host.write_atomic(link_path, content.as_bytes())
-                .await
-                .map_err(|error| error.into_anyhow("writing shell launcher"))?;
-            host.set_mode(link_path, 0o755)
-                .await
-                .map_err(|error| error.into_anyhow("setting shell launcher permissions"))?;
-        } else {
-            host.symlink(source, link_path)
-                .await
-                .map_err(|error| error.into_anyhow("creating shell symlink"))?;
-        }
-        Ok(())
+        apply_prepared_launcher_resource(host, &resource).await?;
     }
-    #[cfg(not(unix))]
-    {
-        let name = launcher_command_name(link_path);
-        let ps1 =
-            powershell_shim_content(source, runtime, &name, bun_dependencies, env, render_target);
-        let cmd = cmd_shim_content(source, runtime, &name, bun_dependencies, env, render_target);
-        host.write_atomic(link_path, ps1.as_bytes())
-            .await
-            .map_err(|error| error.into_anyhow("writing PowerShell shim"))?;
-        host.write_atomic(&link_path.with_extension("cmd"), cmd.as_bytes())
-            .await
-            .map_err(|error| error.into_anyhow("writing cmd shim"))?;
-        Ok(())
-    }
+    Ok(())
 }
 
 async fn host_launcher_status(

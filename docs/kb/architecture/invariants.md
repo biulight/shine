@@ -229,6 +229,15 @@ bugs. Check this list before changing the modules named in each entry.
   re-read and match the durable manifest receipt. If interruption happens after that receipt is
   durable, explicit recovery preserves the now manifest-owned resource and removes only the stale
   journal.
+- **A first-time Shell launcher is rollback-owned only while every created resource is exact.**
+  `CreateShellLauncher` applies only when the command has no receipt and all launcher paths are
+  absent. One action covers a Unix symlink, a generated Unix Bun/live file, or both Windows shim
+  files. `shell-operation-journal.toml` precedes the first path mutation and survives until the
+  complete command receipt is durable. Explicit `shell-recovery` removes only exact
+  target/hash/mode matches when that receipt is absent; any changed resource or conflicting receipt
+  blocks, while an exact durable receipt preserves the launcher and authorizes stale-journal
+  cleanup. Profile sentinel blocks, shared snapshots, launcher updates, and removals do not inherit
+  this creation proof.
 - **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
   generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
   privilege, permission and unsupported-rollback classification until a narrower typed action

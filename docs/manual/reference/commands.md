@@ -63,6 +63,7 @@ directory temporarily.
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
 shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed] [--yes]
+shine shell recover [--yes]
 shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes]
 
 shine app list
@@ -87,6 +88,16 @@ install strategies retain their existing lifecycle path.
 `shell install --dry-run` resolves metadata, deployment sources, Bun policy, and intended command
 links, but does not extract or snapshot presets, render templates, create links, write a manifest,
 or edit shell profiles.
+
+During a command's first installation, Shine journals launcher creation before writing a Unix
+symlink, Unix Bun/live launcher, or Windows PowerShell/cmd shim pair. The journal is cleared only
+after the exact command receipt is durable, before shell profile editing begins. If this operation
+is interrupted, later mutating Shell commands stop with recovery guidance. Run
+`shine shell recover` to review a separate recovery Plan. Without a matching receipt it removes
+only transaction-created launcher resources whose target or content hash and mode remain exact;
+changed paths block recovery and are preserved. If the exact receipt is already durable, recovery
+keeps the launcher and clears only stale journal state. Recovery defaults to No and requires
+`--yes` outside an interactive terminal.
 
 Without `--dry-run`, App and Shell lifecycle mutations, App refresh, and artifact apply/remove
 display a snapshot-bound security Plan and ask once with a default answer of No. `--yes` still

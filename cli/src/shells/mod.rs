@@ -3,6 +3,7 @@ mod install;
 mod links;
 pub mod metadata;
 mod profile;
+mod recovery;
 mod report;
 mod uninstall;
 
@@ -17,6 +18,7 @@ pub(crate) use install::{
     handle_upgrade_installed_target_with_result_approved,
     handle_upgrade_installed_with_result_prepared,
 };
+pub use recovery::handle_recover_approved;
 #[doc(hidden)]
 pub use report::handle_list_with_presets_note;
 pub use report::{ShellUpgradeReport, handle_info, handle_list};

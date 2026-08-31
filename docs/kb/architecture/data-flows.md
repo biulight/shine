@@ -93,6 +93,13 @@ deployment material so a command can consume sibling resources, while launchers 
 
 Command install filters metadata before transforms and launcher creation, then upserts only the
 selected manifest target. Category install retains the existing replace-category reconciliation.
+For a command with no receipt and entirely absent launcher resources, Core derives a payload-free
+`CreateShellLauncher` action, writes `shell-operation-journal.toml`, creates the Unix symlink,
+Unix generated launcher, or Windows shim pair, persists the exact command receipt, and only then
+clears the journal. Profile reconciliation starts after that commit. An interruption blocks later
+Shell lifecycle Plans until `shine shell recover` reviews current receipt and per-resource state;
+recovery removes only unchanged transaction-created resources or preserves an already receipted
+launcher.
 Status treats a manifest receipt or a compatible legacy launcher as installed; extracted source
 files alone are only cache state. Command uninstall removes only the selected managed launcher,
 rendered output, and receipt, rebuilds source-command profile wrappers from the remaining launchers,

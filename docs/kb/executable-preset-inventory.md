@@ -30,13 +30,19 @@ Preset code. Phase 4 now covers absent-destination and backup-aware unowned regu
 creation, unchanged receipt-owned in-place static Copy update, ordinary removal of an unchanged
 receipt-owned static Copy with or without restoration of its fixed persistent backup, and forced
 removal of a user-modified static Copy. These static Copy actions support both user and
-administrator paths. Merge, generator and relocation actions remain to migrate.
+administrator paths. JSON merge install/update/removal is also typed with key-owned rollback;
+generators and relocation remain to migrate.
 
 ## Shell commands
 
 Shell command *deployment* is Core-owned and declarative, but invoking the installed command runs
 Preset code and can affect user-selected inputs. Uninstall owns only the launcher, rendered copy and
 manifest receipt; it never attempts to reverse command side effects.
+
+First-time launcher creation is now a typed, journaled action across Unix symlinks, Unix Bun/live
+files, and Windows shim pairs. Explicit recovery removes only unchanged transaction-created
+resources or preserves an exact durable command receipt. Launcher replacement/removal, shared
+snapshot/render material, and profile sentinel blocks remain to migrate.
 
 | Category | Targets | Runtime/class | Privilege | Built-in provenance | Rollback classification |
 |---|---|---|---|---|---|
@@ -68,9 +74,10 @@ the target ran but does not own third-party package uninstall or version rollbac
 3. App receipt-owned in-place static Copy update (implemented).
 4. App ordinary, backup-restoring, and forced static Copy remove, including administrator paths
    (implemented).
-5. Administrator static Copy create, backup-aware create, and in-place update (implemented); JSON
-   merge remains.
-6. Shell snapshot files, launchers and profile blocks.
+5. Administrator static Copy create, backup-aware create, and in-place update plus key-owned JSON
+   merge install/update/removal (implemented).
+6. Shell first-time launcher creation (implemented); launcher update/removal, snapshot/render files,
+   and profile blocks remain.
 7. Managed Sys files/profile blocks and split DNS.
 8. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
    opaque escape hatches unless a narrower typed action replaces them.

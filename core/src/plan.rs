@@ -293,6 +293,7 @@ pub enum PlanOperationV1 {
     Uninstall,
     AppRefresh,
     AppRecovery,
+    ShellRecovery,
     AppArtifactApply,
     AppArtifactRemove,
     SysBootstrap,
@@ -309,6 +310,7 @@ impl PlanOperationV1 {
             Self::Uninstall => "uninstall",
             Self::AppRefresh => "app-refresh",
             Self::AppRecovery => "app-recovery",
+            Self::ShellRecovery => "shell-recovery",
             Self::AppArtifactApply => "app-artifact-apply",
             Self::AppArtifactRemove => "app-artifact-remove",
             Self::SysBootstrap => "sys-bootstrap",
@@ -705,6 +707,7 @@ mod tests {
         for (operation, spelling) in [
             (PlanOperationV1::AppRefresh, "app-refresh"),
             (PlanOperationV1::AppRecovery, "app-recovery"),
+            (PlanOperationV1::ShellRecovery, "shell-recovery"),
             (PlanOperationV1::AppArtifactApply, "app-artifact-apply"),
             (PlanOperationV1::AppArtifactRemove, "app-artifact-remove"),
             (PlanOperationV1::SysBootstrap, "sys-bootstrap"),

@@ -1220,7 +1220,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             .with_diagnostic_code(code),
                     );
                 }
-                ActionKindV1::OpaqueExecution { .. } => {
+                ActionKindV1::CreateShellLauncher { .. } | ActionKindV1::OpaqueExecution { .. } => {
                     blocked = true;
                     steps.push(
                         PlanStepV1::new(
@@ -3042,7 +3042,7 @@ where
                         }
                     }
                 }
-                ActionKindV1::OpaqueExecution { .. } => {
+                ActionKindV1::CreateShellLauncher { .. } | ActionKindV1::OpaqueExecution { .. } => {
                     bail!("opaque App actions cannot be rolled back automatically");
                 }
             }
@@ -3314,6 +3314,7 @@ fn matching_app_receipt(
             ActionKindV1::RemoveManagedFileWithBackup { .. } => false,
             ActionKindV1::ForceRemoveManagedFile { .. } => false,
             ActionKindV1::RemoveManagedJson { .. } => false,
+            ActionKindV1::CreateShellLauncher { .. } => false,
             ActionKindV1::OpaqueExecution { .. } => false,
         })
 }
@@ -3632,7 +3633,7 @@ fn conflicting_app_receipt(
         | ActionKindV1::RemoveManagedFileWithBackup { .. }
         | ActionKindV1::ForceRemoveManagedFile { .. }
         | ActionKindV1::RemoveManagedJson { .. } => true,
-        ActionKindV1::OpaqueExecution { .. } => false,
+        ActionKindV1::CreateShellLauncher { .. } | ActionKindV1::OpaqueExecution { .. } => false,
     }
 }
 

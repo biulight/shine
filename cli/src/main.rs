@@ -322,6 +322,9 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Shell { command } => match command {
             ShellCommands::List => Box::pin(shells::handle_list(&config)).await,
             ShellCommands::Info { target } => Box::pin(shells::handle_info(&config, &target)).await,
+            ShellCommands::Recover { yes } => {
+                Box::pin(shells::handle_recover_approved(&config, yes)).await
+            }
             ShellCommands::Install {
                 target,
                 dry_run: true,
@@ -2145,6 +2148,25 @@ mod tests {
             cli.command,
             Commands::App {
                 command: AppCommands::Recover { yes: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_accepts_explicit_shell_recovery() {
+        let cli = Cli::try_parse_from(["shine", "shell", "recover"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Shell {
+                command: ShellCommands::Recover { yes: false }
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "shell", "recover", "--yes"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Shell {
+                command: ShellCommands::Recover { yes: true }
             }
         ));
     }

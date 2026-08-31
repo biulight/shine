@@ -236,6 +236,14 @@ impl ActionIrV1 {
                         });
                     }
                 }
+                ActionKindV1::CreateShellLauncher { resources, .. } => {
+                    for resource in resources {
+                        required.insert(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Write,
+                            path: path_identity(resource.destination()),
+                        });
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
                 }
@@ -448,6 +456,22 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn create_shell_launcher(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        receipt: ShellLauncherReceiptV1,
+        resources: Vec<ShellLauncherResourceV1>,
+    ) -> Self {
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::CreateShellLauncher { receipt, resources },
+            rollback: RollbackSupportV1::RemoveCreatedLauncherIfUnchanged,
+        }
+    }
+
     fn validate(&self) -> Result<(), ActionIrError> {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
@@ -604,6 +628,14 @@ impl DeclarativeActionV1 {
             }
             (ActionKindV1::RemoveManagedJson { .. }, _) => Err(ActionIrError::Invalid(
                 "managed JSON removal requires its canonical rollback path, non-empty unique top-level keys, and restore-removed-json-keys-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::CreateShellLauncher { receipt, resources },
+                RollbackSupportV1::RemoveCreatedLauncherIfUnchanged,
+            ) if receipt.is_valid() && valid_shell_launcher_resources(resources) => Ok(()),
+            (ActionKindV1::CreateShellLauncher { .. }, _) => Err(ActionIrError::Invalid(
+                "Shell launcher creation requires a valid receipt, non-empty unique resources, and remove-created-launcher-if-unchanged rollback"
                     .to_string(),
             )),
             (
@@ -794,6 +826,10 @@ pub enum ActionKindV1 {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         uses_env: bool,
     },
+    CreateShellLauncher {
+        receipt: ShellLauncherReceiptV1,
+        resources: Vec<ShellLauncherResourceV1>,
+    },
     OpaqueExecution {
         capability: String,
         provenance: ActionProvenanceV1,
@@ -819,7 +855,85 @@ pub enum RollbackSupportV1 {
     RestoreForcedPreviousIfUnchanged,
     RestoreJsonKeysIfUnchanged,
     RestoreRemovedJsonKeysIfUnchanged,
+    RemoveCreatedLauncherIfUnchanged,
     Unsupported { reason_code: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellLauncherReceiptV1 {
+    pub category: String,
+    pub command: String,
+    pub mode: String,
+    pub source_path: PathBuf,
+    pub rendered_path: PathBuf,
+    pub runtime: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bun_dependencies: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency_hash: Option<u64>,
+    #[serde(default)]
+    pub transforms: Vec<String>,
+    #[serde(default)]
+    pub env: Vec<String>,
+    #[serde(default)]
+    pub needs_source: bool,
+    pub content_hash: u64,
+}
+
+impl ShellLauncherReceiptV1 {
+    fn is_valid(&self) -> bool {
+        !self.category.is_empty()
+            && !self.command.is_empty()
+            && matches!(self.mode.as_str(), "snapshot" | "live")
+            && !self.source_path.as_os_str().is_empty()
+            && !self.rendered_path.as_os_str().is_empty()
+            && matches!(self.runtime.as_str(), "native" | "bun")
+            && !self.category.chars().any(char::is_control)
+            && !self.command.chars().any(char::is_control)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum ShellLauncherResourceV1 {
+    Symlink {
+        destination: PathBuf,
+        target: PathBuf,
+    },
+    File {
+        destination: PathBuf,
+        desired_hash: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unix_mode: Option<u32>,
+    },
+}
+
+impl ShellLauncherResourceV1 {
+    pub fn destination(&self) -> &Path {
+        match self {
+            Self::Symlink { destination, .. } | Self::File { destination, .. } => destination,
+        }
+    }
+}
+
+fn valid_shell_launcher_resources(resources: &[ShellLauncherResourceV1]) -> bool {
+    !resources.is_empty()
+        && resources.iter().all(|resource| match resource {
+            ShellLauncherResourceV1::Symlink {
+                destination,
+                target,
+            } => !destination.as_os_str().is_empty() && !target.as_os_str().is_empty(),
+            ShellLauncherResourceV1::File { destination, .. } => {
+                !destination.as_os_str().is_empty()
+            }
+        })
+        && resources
+            .iter()
+            .map(ShellLauncherResourceV1::destination)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == resources.len()
 }
 
 /// Same-directory, transaction-owned material used only while replacing an
@@ -917,6 +1031,58 @@ mod tests {
             access: FilesystemAccessV1::Write,
             path: "absolute:/home/test/.config/demo/config".to_string(),
         }));
+    }
+
+    #[test]
+    fn shell_launcher_action_is_payload_free_and_derives_each_resource_write() {
+        let ps1 = PathBuf::from("/home/test/.shine/bin/demo.ps1");
+        let cmd = PathBuf::from("/home/test/.shine/bin/demo.cmd");
+        let value = ActionIrV1::new(
+            "shell-create",
+            vec![DeclarativeActionV1::create_shell_launcher(
+                "create-launcher",
+                "shell/demo/demo",
+                "launcher",
+                ShellLauncherReceiptV1 {
+                    category: "demo".to_string(),
+                    command: "demo".to_string(),
+                    mode: "snapshot".to_string(),
+                    source_path: PathBuf::from("/home/test/.shine/installed/shell/demo/demo.sh"),
+                    rendered_path: PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh"),
+                    runtime: "native".to_string(),
+                    bun_dependencies: None,
+                    dependency_hash: None,
+                    transforms: Vec::new(),
+                    env: Vec::new(),
+                    needs_source: false,
+                    content_hash: hash_content(b"source bytes"),
+                },
+                vec![
+                    ShellLauncherResourceV1::File {
+                        destination: ps1.clone(),
+                        desired_hash: hash_content(b"private ps1 launcher bytes"),
+                        unix_mode: None,
+                    },
+                    ShellLauncherResourceV1::File {
+                        destination: cmd.clone(),
+                        desired_hash: hash_content(b"private cmd launcher bytes"),
+                        unix_mode: None,
+                    },
+                ],
+            )],
+        );
+        value.validate().unwrap();
+        let encoded = toml::to_string(&value).unwrap();
+        assert!(!encoded.contains("private ps1 launcher bytes"));
+        assert!(!encoded.contains("private cmd launcher bytes"));
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.display()));
+        for destination in [ps1, cmd] {
+            assert!(requirements.required.contains(&PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: format!("absolute:{}", destination.display()),
+            }));
+        }
     }
 
     #[test]

@@ -24,6 +24,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, process, privileged, and system mutation ports |
 | `core/src/runtime/planner.rs` | Pure App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
 | `core/src/runtime/action_executor.rs` | Phase 4 App static Copy and key-owned JSON merge create/update/ordinary-or-forced-remove journal, manifest-receipt-gated commit, lock-spanning privileged/unprivileged path dispatch, persistent backup restoration, same-directory rollback material, explicit recovery Plan, and fingerprint/key-guarded remove/restore |
+| `core/src/runtime/shell_action_executor.rs` | Phase 4 first-time Shell launcher action, per-platform resource journal, receipt-gated commit, and explicit fingerprint-guarded recovery |
 | `core/src/runtime/trust.rs` | Derivation of App/Sys external-code requirements from immutable logical code inputs and declared permissions |
 | `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence and `shine trust` workflows |
 | `core/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
@@ -71,7 +72,7 @@ Update this file when modules move, split, merge, or take on a different respons
 
 | Top-level command | Handler |
 |---|---|
-| `shell list/info/install/uninstall` | `cli/src/shells/` |
+| `shell list/info/install/uninstall/recover` | `cli/src/shells/` |
 | `app list/install/uninstall` | `cli/src/apps/` |
 | `install/uninstall <TARGET>` | `cli/src/shim.rs` → `apps/` or `shells/` |
 | `list [--available [KIND]]` | `cli/src/list.rs` or scoped list handlers |
@@ -79,6 +80,7 @@ Update this file when modules move, split, merge, or take on a different respons
 | `app artifact apply/remove <app-id>` | `cli/src/apps/build.rs` |
 | `app refresh <app-id> [file]` | `cli/src/apps/refresh.rs` |
 | `app recover` | `cli/src/apps/recovery.rs` → Core explicit recovery Plan/apply |
+| `shell recover` | `cli/src/shells/recovery.rs` → Core explicit launcher recovery Plan/apply |
 | `sys list/bootstrap/profile/...` | `cli/src/sys/` |
 | `theme sync` | `cli/src/theme/` |
 | `env ...` | `cli/src/env/` plus `cli/src/secret/` |
@@ -124,6 +126,7 @@ logic.
 | `cli/src/shells/mod.rs` | Shell types, shared accessors, handler re-exports |
 | `cli/src/shells/deployment.rs` | Hidden live-render Core adapter |
 | `cli/src/shells/install.rs` | Core category/command install and upgrade adapter |
+| `cli/src/shells/recovery.rs` | Core explicit Shell launcher recovery Plan/apply adapter |
 | `cli/src/shells/uninstall.rs` | Category/command uninstall results with sibling/cache and foreign-launcher protection |
 | `cli/src/shells/links.rs` | Launcher/link specifications and conflict reporting |
 | `cli/src/shells/report.rs` | Shell list/install/uninstall/upgrade reporting |

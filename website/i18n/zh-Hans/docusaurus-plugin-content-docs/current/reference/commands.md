@@ -58,6 +58,7 @@ shine upgrade app/starship
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
 shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed] [--yes]
+shine shell recover [--yes]
 shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes]
 
 shine app list
@@ -74,6 +75,14 @@ shine app artifact remove <APP_ID> [--yes]
 
 `shell install --dry-run` 会解析 metadata、部署来源、Bun 策略和计划中的命令入口，但不会提取或
 快照预设、渲染模板、创建链接、写入 manifest 或修改 shell profile。
+
+首次安装命令时，Shine 会在写入 Unix symlink、Unix Bun/live launcher 或 Windows
+PowerShell/cmd 双 shim 之前记录 launcher creation journal。只有精确的 command receipt
+持久化后才会清理 journal，shell profile 编辑发生在这之后。如果操作在此期间中断，后续修改型
+Shell 命令会停止并提示恢复。运行 `shine shell recover` 可审阅独立的 recovery Plan。没有匹配
+receipt 时，它只移除 target 或内容 hash 与 mode 仍精确匹配的 transaction-created launcher
+resource；路径发生变化会阻塞恢复并保留现状。精确 receipt 已持久化时，恢复保留 launcher，只
+清理 stale journal。确认默认是 No；非交互终端必须传入 `--yes`。
 
 不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation、App refresh 和 artifact apply/remove
 都会先显示绑定快照的安全 Plan，并以默认 No 询问一次。`--yes` 仍会完整显示并重新校验 Plan，

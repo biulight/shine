@@ -20,6 +20,7 @@ pub(crate) enum LifecyclePlanRequest {
     AppRefresh(AppRefreshPlanRequest),
     AppArtifact(AppArtifactPlanRequest),
     Shell(ShellPlanRequest),
+    ShellRecovery,
     Sys(SysManagedPlanRequest),
     SysProfile(SysProfilePlanRequest),
     SysBootstrap {
@@ -41,6 +42,10 @@ impl LifecyclePlanRequest {
     pub(crate) fn shell(mut request: ShellPlanRequest, config: &Config) -> Self {
         request.input_versions = planning_input_versions(config);
         Self::Shell(request)
+    }
+
+    pub(crate) fn shell_recovery() -> Self {
+        Self::ShellRecovery
     }
 
     pub(crate) fn app_refresh(mut request: AppRefreshPlanRequest, config: &Config) -> Self {
@@ -87,6 +92,7 @@ impl LifecyclePlanRequest {
             Self::AppRefresh(request) => runtime.plan_app_refresh(request.clone()).await,
             Self::AppArtifact(request) => runtime.plan_app_artifact(request.clone()).await,
             Self::Shell(request) => runtime.plan_shells(request.clone()).await,
+            Self::ShellRecovery => runtime.plan_shell_operation_recovery().await,
             Self::Sys(request) => runtime.plan_managed_sys(request.clone()).await,
             Self::SysProfile(request) => runtime.plan_sys_profile(request.clone()).await,
             Self::SysBootstrap { request, .. } => runtime.plan_sys_bootstrap(request.clone()).await,
@@ -172,6 +178,12 @@ pub(crate) async fn review_plans(
 fn blocked_plan_message(diagnostics: &std::collections::BTreeSet<String>) -> &'static str {
     if diagnostics.contains("app_recovery_required") {
         "security Plan is blocked by an interrupted App operation; run `shine app recover` to review and resolve it"
+    } else if diagnostics.contains("shell_recovery_required") {
+        "security Plan is blocked by an interrupted Shell operation; run `shine shell recover` to review and resolve it"
+    } else if diagnostics.contains("shell_recovery_launcher_changed") {
+        "Shell recovery is blocked because a transaction-created launcher changed after the interrupted operation; the launcher and operation journal were preserved"
+    } else if diagnostics.contains("shell_recovery_receipt_conflict") {
+        "Shell recovery is blocked because Shell ownership receipts conflict with the interrupted operation; launchers and the operation journal were preserved"
     } else if diagnostics.contains("app_recovery_user_modified") {
         "App recovery is blocked because a managed file changed after the interrupted operation; the file and operation journal were preserved"
     } else if diagnostics.contains("app_recovery_backup_state_changed") {
@@ -424,5 +436,22 @@ mod tests {
         let rollback_occupied =
             std::collections::BTreeSet::from(["app_update_rollback_occupied".to_string()]);
         assert!(blocked_plan_message(&rollback_occupied).contains("already exists"));
+    }
+
+    #[test]
+    fn blocked_plan_messages_point_to_explicit_shell_recovery() {
+        let required = std::collections::BTreeSet::from(["shell_recovery_required".to_string()]);
+        assert_eq!(
+            blocked_plan_message(&required),
+            "security Plan is blocked by an interrupted Shell operation; run `shine shell recover` to review and resolve it"
+        );
+
+        let changed =
+            std::collections::BTreeSet::from(["shell_recovery_launcher_changed".to_string()]);
+        assert!(blocked_plan_message(&changed).contains("launcher changed"));
+
+        let receipt =
+            std::collections::BTreeSet::from(["shell_recovery_receipt_conflict".to_string()]);
+        assert!(blocked_plan_message(&receipt).contains("ownership receipts"));
     }
 }

@@ -1,13 +1,17 @@
+use super::launcher::prepare_launcher_resources;
+use super::shell_action_executor::ShellLauncherCreation;
 use super::{
     CoreRuntime, FileKind, FileSystemHost, InspectionChange, InspectionFileStatus, LinkConflict,
-    LinkConflictKind, LinkReport, LinkSpec, PathUpdateStatus, ShellConfigUpdate,
-    ShellFileInspection, ShellProfileRemoval, UnlinkReport, command_path_for_name,
-    link_executables_with_host, link_is_current_with_host, unlink_managed_command_with_host,
+    LinkConflictKind, LinkReport, LinkSpec, PathUpdateStatus, PrivilegedFileSystemHost,
+    ShellConfigUpdate, ShellFileInspection, ShellProfileRemoval, UnlinkReport,
+    command_path_for_name, link_executables_with_host, link_is_current_with_host,
+    unlink_managed_command_with_host,
 };
 use crate::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
 };
 use crate::permission::PermissionDeclarationV1;
+use crate::plan::PlanApprovalV1;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -300,7 +304,7 @@ fn push_inspection_change(
     }
 }
 
-impl<H: FileSystemHost> CoreRuntime<H> {
+impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     pub async fn installed_shell_source_commands(
         &self,
         category: Option<&str>,
@@ -696,7 +700,16 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         &self,
         request: ShellLifecycleRequest,
     ) -> Result<ShellLifecycleReport> {
-        self.reconcile_shells(request, LifecycleOperation::Install)
+        self.reconcile_shells(request, LifecycleOperation::Install, None)
+            .await
+    }
+
+    pub(crate) async fn install_shells_with_approval(
+        &self,
+        request: ShellLifecycleRequest,
+        approval: &PlanApprovalV1,
+    ) -> Result<ShellLifecycleReport> {
+        self.reconcile_shells(request, LifecycleOperation::Install, Some(approval))
             .await
     }
 
@@ -707,6 +720,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         &self,
         request: ShellLifecycleRequest,
         operation: LifecycleOperation,
+        approval: Option<&PlanApprovalV1>,
     ) -> Result<ShellLifecycleReport> {
         // Future-version rejection is deliberately the first stateful check.
         let manifest_before =
@@ -873,10 +887,58 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         } else {
             applicable_specs.extend(specs.iter().cloned());
         }
+        let mut legacy_specs = Vec::new();
+        let mut launcher_creations = Vec::new();
+        for spec in applicable_specs {
+            let command = spec.link_name.to_string_lossy().to_string();
+            let category = categories
+                .iter()
+                .find(|category| {
+                    category
+                        .files
+                        .iter()
+                        .any(|file| file.command_name == command)
+                })
+                .context("Shell launcher category disappeared before execution")?;
+            let file = category
+                .files
+                .iter()
+                .find(|file| file.command_name == command)
+                .context("Shell launcher command disappeared before execution")?;
+            let target = format!("shell/{}/{}", category.name, command);
+            let resources = prepare_launcher_resources(&self.context().bin_dir, &spec);
+            let all_absent = if operation == LifecycleOperation::Install
+                && approval.is_some()
+                && manifest_before.find(&target).is_none()
+            {
+                let mut absent = true;
+                for resource in &resources {
+                    match self.host().metadata(resource.destination()).await {
+                        Err(error) if error.is_not_found() => {}
+                        Ok(_) => absent = false,
+                        Err(error) => {
+                            return Err(error.into_anyhow("inspecting Shell launcher creation"));
+                        }
+                    }
+                }
+                absent
+            } else {
+                false
+            };
+            if all_absent {
+                launcher_creations.push((
+                    target,
+                    spec,
+                    self.shell_manifest_entry(category, file).await?,
+                ));
+            } else {
+                legacy_specs.push(spec);
+            }
+        }
         let applied = link_executables_with_host(
             self.host(),
             &self.context().bin_dir,
-            &applicable_specs,
+            &legacy_specs,
             request.force,
         )
         .await?;
@@ -884,6 +946,25 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         links.skipped.extend(applied.skipped);
         links.conflicts.extend(applied.conflicts);
         links.overwritten.extend(applied.overwritten);
+        let launcher_creation_refs = launcher_creations
+            .iter()
+            .map(|(target, spec, receipt)| ShellLauncherCreation {
+                target: target.clone(),
+                spec,
+                receipt: receipt.clone(),
+            })
+            .collect::<Vec<_>>();
+        let shell_execution = if let Some(approval) = approval {
+            self.create_shell_launchers_approved(&launcher_creation_refs, approval)
+                .await?
+        } else {
+            None
+        };
+        links.created.extend(
+            launcher_creations.iter().map(|(_, spec, _)| {
+                command_path_for_name(&self.context().bin_dir, &spec.link_name)
+            }),
+        );
         let scope = if selection
             .as_ref()
             .is_some_and(|target| target.command.is_some())
@@ -900,6 +981,9 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         }
         self.update_shell_manifest(&manifest_categories, scope)
             .await?;
+        if let Some(execution) = &shell_execution {
+            self.commit_shell_launcher_operation(execution).await?;
+        }
         let manifest_after =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let mut source_commands = manifest_after
@@ -1064,6 +1148,7 @@ impl<H: FileSystemHost> CoreRuntime<H> {
                         force: true,
                     },
                     LifecycleOperation::Upgrade,
+                    None,
                 )
                 .await?;
             let canonical = format!("shell/{target}");
@@ -1719,25 +1804,13 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         let mut entries = Vec::new();
         for category in categories {
             for file in &category.files {
-                let source_path =
-                    self.shell_deployment_source_path(&category.name, &file.source_rel);
-                let bytes = self
-                    .host()
-                    .read(&source_path)
-                    .await
-                    .map_err(|error| error.into_anyhow("reading installed shell source"))?;
-                let transforms = self.effective_shell_transforms(file, &source_path).await?;
-                let rendered_path = self.shell_rendered_path(&category.name, &file.source_rel);
+                let entry = self.shell_manifest_entry(category, file).await?;
+                let transforms = &entry.transforms;
                 let effective_source = if transforms.is_empty() {
-                    source_path.as_path()
+                    entry.source_path.as_path()
                 } else {
-                    rendered_path.as_path()
+                    entry.rendered_path.as_path()
                 };
-                let env = file
-                    .env
-                    .iter()
-                    .map(crate::env::EnvVarSpec::to_with_arg)
-                    .collect::<Vec<_>>();
                 let bun = self.shell_bun_runtime_spec(&category.name, file)?;
                 let render_target = (self.context().is_external_presets
                     && self.context().external_shell_mode == ExternalShellMode::Live
@@ -1753,36 +1826,14 @@ impl<H: FileSystemHost> CoreRuntime<H> {
                     effective_source,
                     file.runtime,
                     bun.dependency_mode,
-                    &env,
+                    &entry.env,
                     render_target.as_deref(),
                 )
                 .await?
                 {
                     continue;
                 }
-                entries.push(ShellManifestEntry {
-                    category: category.name.clone(),
-                    command: file.command_name.clone(),
-                    mode: if self.context().is_external_presets {
-                        self.context().external_shell_mode
-                    } else {
-                        ExternalShellMode::Snapshot
-                    },
-                    source_path,
-                    rendered_path,
-                    runtime: if file.runtime == LinkRuntime::Bun {
-                        "bun"
-                    } else {
-                        "native"
-                    }
-                    .to_string(),
-                    bun_dependencies: bun.dependency_mode.as_manifest_value().map(str::to_string),
-                    dependency_hash: bun.dependency_hash,
-                    transforms,
-                    env,
-                    needs_source: file.needs_source,
-                    content_hash: crate::install::hash_content(&bytes),
-                });
+                entries.push(entry);
             }
         }
         match scope {
@@ -1790,6 +1841,50 @@ impl<H: FileSystemHost> CoreRuntime<H> {
             ShellManifestUpdateScope::Commands => manifest.replace_targets(&targets, entries),
         }
         save_shell_manifest_with_host(self.host(), &self.context().shine_dir, &manifest).await
+    }
+
+    async fn shell_manifest_entry(
+        &self,
+        category: &ShellCategory,
+        file: &ShellFile,
+    ) -> Result<ShellManifestEntry> {
+        let source_path = self.shell_deployment_source_path(&category.name, &file.source_rel);
+        let bytes = self
+            .host()
+            .read(&source_path)
+            .await
+            .map_err(|error| error.into_anyhow("reading installed shell source"))?;
+        let transforms = self.effective_shell_transforms(file, &source_path).await?;
+        let rendered_path = self.shell_rendered_path(&category.name, &file.source_rel);
+        let env = file
+            .env
+            .iter()
+            .map(crate::env::EnvVarSpec::to_with_arg)
+            .collect::<Vec<_>>();
+        let bun = self.shell_bun_runtime_spec(&category.name, file)?;
+        Ok(ShellManifestEntry {
+            category: category.name.clone(),
+            command: file.command_name.clone(),
+            mode: if self.context().is_external_presets {
+                self.context().external_shell_mode
+            } else {
+                ExternalShellMode::Snapshot
+            },
+            source_path,
+            rendered_path,
+            runtime: if file.runtime == LinkRuntime::Bun {
+                "bun"
+            } else {
+                "native"
+            }
+            .to_string(),
+            bun_dependencies: bun.dependency_mode.as_manifest_value().map(str::to_string),
+            dependency_hash: bun.dependency_hash,
+            transforms,
+            env,
+            needs_source: file.needs_source,
+            content_hash: crate::install::hash_content(&bytes),
+        })
     }
 
     pub async fn render_live_shell(&self, target: &str) -> Result<()> {
@@ -2088,8 +2183,8 @@ impl<H: FileSystemHost> CoreRuntime<H> {
     }
 }
 
-async fn load_shell_manifest_with_host(
-    host: &impl FileSystemHost,
+pub(crate) async fn load_shell_manifest_with_host(
+    host: &impl super::FileSystemObservationHost,
     shine_dir: &Path,
 ) -> Result<ShellManifest> {
     let path = shine_dir.join(SHELL_MANIFEST_FILE);

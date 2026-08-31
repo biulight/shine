@@ -51,6 +51,24 @@ shine install shell/proxy --replace-managed
 `--replace-managed` overwrites the corresponding Shine-managed content. Inspect
 `shine info shell/proxy --diff` first so that intentional local changes are not mistaken for damage.
 
+## Recover an interrupted launcher creation
+
+On first install, Shine writes a transaction journal before creating the command launcher and
+clears it only after the command's manifest receipt is durable. If installation is interrupted in
+that window, later mutating Shell commands stop instead of guessing whether the launcher is owned.
+Review and apply the dedicated recovery Plan:
+
+```bash
+shine shell recover
+shine shell recover --yes # Non-interactive use
+```
+
+Recovery removes only an unreceipted Unix symlink, Unix Bun/live launcher, or Windows shim file
+that still exactly matches the interrupted creation. A changed launcher is preserved and blocks
+recovery. If the receipt was already written, the launcher remains installed and recovery clears
+only the stale journal. Snapshot/render files may remain as Shine-managed cache, and launcher
+recovery never edits your shell profile.
+
 ## Uninstall
 
 ```bash

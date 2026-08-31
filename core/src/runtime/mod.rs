@@ -15,6 +15,7 @@ mod planner;
 mod preset;
 mod profile;
 mod shell;
+mod shell_action_executor;
 mod sys;
 mod sys_bootstrap;
 mod sys_manifest;
@@ -67,6 +68,9 @@ pub use shell::{
     ShellManifestEntry, ShellManifestUpdateScope, ShellScriptTemplate, ShellTarget,
     ShellTemplateReport, ShellType, ShellUninstallReport, ShellUninstallRequest,
     ShellUpgradeLifecycleReport, ShellUpgradeRequest, parse_shell_lifecycle_target,
+};
+pub use shell_action_executor::{
+    SHELL_OPERATION_JOURNAL_FILE, ShellOperationExecutionV1, ShellRecoveryReportV1,
 };
 pub use sys::{
     ManagedFileReceipt, ManagedFileRemoveRequest, ManagedFileRequest, RECEIPT_VERSION,
