@@ -259,6 +259,20 @@ impl ActionIrV1 {
                         }
                     }
                 }
+                ActionKindV1::RemoveShellLauncher { resources, .. } => {
+                    for resource in resources {
+                        for (access, path) in [
+                            (FilesystemAccessV1::Remove, resource.previous.destination()),
+                            (FilesystemAccessV1::Write, resource.rollback.as_path()),
+                            (FilesystemAccessV1::Remove, resource.rollback.as_path()),
+                        ] {
+                            required.insert(PermissionV1::Filesystem {
+                                access,
+                                path: path_identity(path),
+                            });
+                        }
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
                 }
@@ -508,6 +522,25 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn remove_shell_launcher(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        previous_receipt: ShellLauncherReceiptV1,
+        resources: Vec<ShellLauncherRemovalResourceV1>,
+    ) -> Self {
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::RemoveShellLauncher {
+                previous_receipt: Box::new(previous_receipt),
+                resources,
+            },
+            rollback: RollbackSupportV1::RestoreRemovedLauncherIfUnchanged,
+        }
+    }
+
     fn validate(&self) -> Result<(), ActionIrError> {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
@@ -692,6 +725,21 @@ impl DeclarativeActionV1 {
             }
             (ActionKindV1::UpdateShellLauncher { .. }, _) => Err(ActionIrError::Invalid(
                 "Shell launcher update requires distinct valid receipts for one command, exact previous/desired resource pairs, canonical rollback paths, and restore-previous-launcher-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::RemoveShellLauncher {
+                    previous_receipt,
+                    resources,
+                },
+                RollbackSupportV1::RestoreRemovedLauncherIfUnchanged,
+            ) if previous_receipt.is_valid()
+                && valid_shell_launcher_removal_resources(resources) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::RemoveShellLauncher { .. }, _) => Err(ActionIrError::Invalid(
+                "Shell launcher removal requires a valid previous receipt, exact previous resources, canonical rollback paths, and restore-removed-launcher-if-unchanged rollback"
                     .to_string(),
             )),
             (
@@ -891,6 +939,10 @@ pub enum ActionKindV1 {
         desired_receipt: Box<ShellLauncherReceiptV1>,
         resources: Vec<ShellLauncherUpdateResourceV1>,
     },
+    RemoveShellLauncher {
+        previous_receipt: Box<ShellLauncherReceiptV1>,
+        resources: Vec<ShellLauncherRemovalResourceV1>,
+    },
     OpaqueExecution {
         capability: String,
         provenance: ActionProvenanceV1,
@@ -918,6 +970,7 @@ pub enum RollbackSupportV1 {
     RestoreRemovedJsonKeysIfUnchanged,
     RemoveCreatedLauncherIfUnchanged,
     RestorePreviousLauncherIfUnchanged,
+    RestoreRemovedLauncherIfUnchanged,
     Unsupported { reason_code: String },
 }
 
@@ -979,6 +1032,13 @@ pub struct ShellLauncherUpdateResourceV1 {
     pub rollback: PathBuf,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellLauncherRemovalResourceV1 {
+    pub previous: ShellLauncherResourceV1,
+    pub rollback: PathBuf,
+}
+
 impl ShellLauncherResourceV1 {
     pub fn destination(&self) -> &Path {
         match self {
@@ -1011,6 +1071,21 @@ fn valid_shell_launcher_update_resources(resources: &[ShellLauncherUpdateResourc
         && resources.iter().all(|resource| {
             resource.previous.destination() == resource.desired.destination()
                 && resource.previous != resource.desired
+                && resource.rollback == managed_file_rollback_path(resource.previous.destination())
+                && resource.rollback != resource.previous.destination()
+        })
+        && resources
+            .iter()
+            .map(|resource| resource.previous.destination())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == resources.len()
+}
+
+fn valid_shell_launcher_removal_resources(resources: &[ShellLauncherRemovalResourceV1]) -> bool {
+    !resources.is_empty()
+        && resources.iter().all(|resource| {
+            !resource.previous.destination().as_os_str().is_empty()
                 && resource.rollback == managed_file_rollback_path(resource.previous.destination())
                 && resource.rollback != resource.previous.destination()
         })
@@ -1221,6 +1296,56 @@ mod tests {
             value.permission_requirements(|path| format!("absolute:{}", path.display()));
         for (access, path) in [
             (FilesystemAccessV1::Write, &destination),
+            (FilesystemAccessV1::Remove, &destination),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(requirements.required.contains(&PermissionV1::Filesystem {
+                access,
+                path: format!("absolute:{}", path.display()),
+            }));
+        }
+    }
+
+    #[test]
+    fn shell_launcher_removal_is_payload_free_and_derives_rollback_permissions() {
+        let destination = PathBuf::from("/home/test/.shine/bin/demo");
+        let rollback = managed_file_rollback_path(&destination);
+        let value = ActionIrV1::new(
+            "shell-remove",
+            vec![DeclarativeActionV1::remove_shell_launcher(
+                "remove-launcher",
+                "shell/demo/demo",
+                "launcher",
+                ShellLauncherReceiptV1 {
+                    category: "demo".to_string(),
+                    command: "demo".to_string(),
+                    mode: "snapshot".to_string(),
+                    source_path: PathBuf::from("/home/test/.shine/installed/shell/demo/demo.sh"),
+                    rendered_path: PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh"),
+                    runtime: "native".to_string(),
+                    bun_dependencies: None,
+                    dependency_hash: None,
+                    transforms: Vec::new(),
+                    env: Vec::new(),
+                    needs_source: false,
+                    content_hash: hash_content(b"private source bytes"),
+                },
+                vec![ShellLauncherRemovalResourceV1 {
+                    previous: ShellLauncherResourceV1::Symlink {
+                        destination: destination.clone(),
+                        target: PathBuf::from("/home/test/.shine/installed/shell/demo/demo.sh"),
+                    },
+                    rollback: rollback.clone(),
+                }],
+            )],
+        );
+        value.validate().unwrap();
+        let encoded = toml::to_string(&value).unwrap();
+        assert!(!encoded.contains("private source bytes"));
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.display()));
+        for (access, path) in [
             (FilesystemAccessV1::Remove, &destination),
             (FilesystemAccessV1::Write, &rollback),
             (FilesystemAccessV1::Remove, &rollback),

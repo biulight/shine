@@ -1,5 +1,7 @@
 use super::launcher::{prepare_launcher_resources, prepared_launcher_resource_is_exact};
-use super::shell_action_executor::{ShellLauncherCreation, ShellLauncherUpdate};
+use super::shell_action_executor::{
+    ShellLauncherCreation, ShellLauncherRemoval, ShellLauncherUpdate,
+};
 use super::{
     CoreRuntime, FileKind, FileSystemHost, InspectionChange, InspectionFileStatus, LinkConflict,
     LinkConflictKind, LinkReport, LinkSpec, PathUpdateStatus, PrivilegedFileSystemHost,
@@ -1038,6 +1040,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             self.reconcile_shell_launchers_approved(
                 &launcher_creation_refs,
                 &launcher_update_refs,
+                &[],
                 approval,
             )
             .await?
@@ -1265,6 +1268,14 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         &self,
         request: ShellUninstallRequest,
     ) -> Result<ShellUninstallReport> {
+        self.uninstall_shells_with_approval(request, None).await
+    }
+
+    pub(crate) async fn uninstall_shells_with_approval(
+        &self,
+        request: ShellUninstallRequest,
+        approval: Option<&PlanApprovalV1>,
+    ) -> Result<ShellUninstallReport> {
         let mut manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let selection = request
@@ -1317,24 +1328,93 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         }
 
         let selected = targets.clone();
+        let mut launcher_removals = Vec::new();
+        if approval.is_some() && !request.dry_run {
+            for (category, command) in &targets {
+                let target = format!("shell/{category}/{command}");
+                let Some(entry) = manifest.find(&target).cloned() else {
+                    continue;
+                };
+                let spec = shell_link_spec_from_manifest_entry(&entry)?;
+                let resources = prepare_launcher_resources(&self.context().bin_dir, &spec);
+                let mut exact = true;
+                let mut rollback_absent = true;
+                for resource in &resources {
+                    exact &= prepared_launcher_resource_is_exact(self.host(), resource).await?;
+                    let rollback = managed_file_rollback_path(resource.destination());
+                    match self.host().metadata(&rollback).await {
+                        Err(error) if error.is_not_found() => {}
+                        Ok(_) => rollback_absent = false,
+                        Err(error) => {
+                            return Err(
+                                error.into_anyhow("inspecting Shell launcher rollback path")
+                            );
+                        }
+                    }
+                }
+                if exact && rollback_absent {
+                    launcher_removals.push(ShellLauncherRemoval {
+                        target,
+                        previous_receipt: entry,
+                    });
+                }
+            }
+        }
+        let transactional_targets = launcher_removals
+            .iter()
+            .map(|removal| removal.target.clone())
+            .collect::<BTreeSet<_>>();
+        let shell_execution = if let Some(approval) = approval {
+            self.reconcile_shell_launchers_approved(&[], &[], &launcher_removals, approval)
+                .await?
+        } else {
+            None
+        };
         let mut links = empty_unlink_report();
         let mut target_states = Vec::new();
+        let mut rendered_removals = Vec::new();
         for (category, command) in &targets {
             let canonical = format!("shell/{category}/{command}");
             let entry = manifest.find(&canonical).cloned();
-            let roots = self.shell_managed_roots(category, entry.as_ref());
-            let report = unlink_managed_command_with_host(
-                self.host(),
-                &self.context().bin_dir,
-                std::ffi::OsStr::new(command),
-                &roots,
-                request.dry_run,
-            )
-            .await?;
-            let managed = !report.removed.is_empty();
-            let foreign = !report.skipped.is_empty();
-            links.removed.extend(report.removed);
-            links.skipped.extend(report.skipped);
+            let (managed, foreign) = if transactional_targets.contains(&canonical) {
+                let entry = entry
+                    .as_ref()
+                    .context("transactional Shell launcher receipt disappeared")?;
+                let spec = shell_link_spec_from_manifest_entry(entry)?;
+                links.removed.extend(
+                    prepare_launcher_resources(&self.context().bin_dir, &spec)
+                        .into_iter()
+                        .map(|resource| resource.destination().to_path_buf()),
+                );
+                (true, false)
+            } else if approval.is_some() && entry.is_some() {
+                let spec = shell_link_spec_from_manifest_entry(
+                    entry
+                        .as_ref()
+                        .context("planned Shell launcher receipt disappeared")?,
+                )?;
+                links.skipped.extend(
+                    prepare_launcher_resources(&self.context().bin_dir, &spec)
+                        .into_iter()
+                        .map(|resource| resource.destination().to_path_buf()),
+                );
+                (false, true)
+            } else {
+                let roots = self.shell_managed_roots(category, entry.as_ref());
+                let report = unlink_managed_command_with_host(
+                    self.host(),
+                    &self.context().bin_dir,
+                    std::ffi::OsStr::new(command),
+                    &roots,
+                    request.dry_run,
+                )
+                .await?;
+                let managed = !report.removed.is_empty();
+                let foreign = !report.skipped.is_empty();
+                links.removed.extend(report.removed);
+                links.skipped.extend(report.skipped);
+                (managed, foreign)
+            };
             target_states.push((category.clone(), command.clone(), managed, foreign));
 
             if !request.dry_run {
@@ -1347,13 +1427,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         .rendered_path
                         .starts_with(self.context().shine_dir.join("rendered"))
                 {
-                    match self.host().remove_file(&entry.rendered_path).await {
-                        Ok(()) => {}
-                        Err(error) if error.is_not_found() => {}
-                        Err(error) => {
-                            return Err(error.into_anyhow("removing rendered Shell source"));
-                        }
-                    }
+                    rendered_removals.push(entry.rendered_path.clone());
                 }
                 manifest.remove_target(category, command);
             }
@@ -1362,6 +1436,20 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         if !request.dry_run {
             save_shell_manifest_with_host(self.host(), &self.context().shine_dir, &manifest)
                 .await?;
+            if let Some(execution) = &shell_execution {
+                self.mark_shell_launcher_receipt_committed(execution)
+                    .await?;
+                self.commit_shell_launcher_operation(execution).await?;
+            }
+            for rendered_path in rendered_removals {
+                match self.host().remove_file(&rendered_path).await {
+                    Ok(()) => {}
+                    Err(error) if error.is_not_found() => {}
+                    Err(error) => {
+                        return Err(error.into_anyhow("removing rendered Shell source"));
+                    }
+                }
+            }
         }
         let categories_removed = targets
             .iter()

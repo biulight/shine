@@ -55,6 +55,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   Unix or Windows launcher resources move to fingerprint-bound same-directory rollback material;
   recovery restores them before the new command receipt or keeps the replacement and cleans only
   unchanged rollback material after receipt commit.
+- Journaled uninstall of unchanged, receipt-owned Shell launchers. Unix launchers and both Windows
+  shims move to exact same-directory rollback material before receipt removal; a positive commit
+  marker distinguishes completed removal from the crash window that reconstructs the old receipt
+  and restores unchanged resources through `shine shell recover`.
 
 ### Breaking changes
 

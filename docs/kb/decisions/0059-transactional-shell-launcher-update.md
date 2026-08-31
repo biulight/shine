@@ -51,5 +51,5 @@ missing/conflicting receipt, or unrecognized state blocks recovery and preserves
 - Windows Plan approval now binds both shim files for create, update, and removal paths.
 - A launcher that no longer matches the deterministic old receipt is deliberately outside this
   action; `--replace-managed` does not convert user-modified bytes into transaction-owned rollback.
-- Launcher removal, shared snapshot/render resources, and sentinel profile blocks remain separate
-  Phase 4D actions.
+- Launcher removal is specified separately by ADR 0060; shared snapshot/render resources and
+  sentinel profile blocks remain separate Phase 4D actions.

@@ -13,8 +13,8 @@ use super::{
 };
 use crate::action::{
     ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, DeclarativeActionV1,
-    ShellLauncherReceiptV1, ShellLauncherResourceV1, ShellLauncherUpdateResourceV1,
-    managed_file_rollback_path,
+    ShellLauncherReceiptV1, ShellLauncherRemovalResourceV1, ShellLauncherResourceV1,
+    ShellLauncherUpdateResourceV1, managed_file_rollback_path,
 };
 use crate::install::hash_content;
 use crate::plan::{
@@ -42,9 +42,15 @@ pub(crate) struct ShellLauncherUpdate<'a> {
     pub desired_receipt: ShellManifestEntry,
 }
 
+pub(crate) struct ShellLauncherRemoval {
+    pub target: String,
+    pub previous_receipt: ShellManifestEntry,
+}
+
 enum PreparedShellLauncherAction {
     Create(Vec<PreparedLauncherResource>),
     Update(Vec<PreparedShellLauncherUpdateResource>),
+    Remove(Vec<ShellLauncherRemovalResourceV1>),
 }
 
 struct PreparedShellLauncherUpdateResource {
@@ -71,6 +77,8 @@ struct ShellOperationJournalV1 {
     action_ir: ActionIrV1,
     approval: PlanApprovalV1,
     applied: Vec<String>,
+    #[serde(default)]
+    receipt_committed: Vec<String>,
 }
 
 impl ShellOperationJournalV1 {
@@ -80,6 +88,7 @@ impl ShellOperationJournalV1 {
             action_ir,
             approval,
             applied: Vec::new(),
+            receipt_committed: Vec::new(),
         }
     }
 
@@ -99,7 +108,9 @@ impl ShellOperationJournalV1 {
         if self.action_ir.actions.iter().any(|action| {
             !matches!(
                 action.kind,
-                ActionKindV1::CreateShellLauncher { .. } | ActionKindV1::UpdateShellLauncher { .. }
+                ActionKindV1::CreateShellLauncher { .. }
+                    | ActionKindV1::UpdateShellLauncher { .. }
+                    | ActionKindV1::RemoveShellLauncher { .. }
             )
         }) {
             bail!("Shell operation journal contains a non-launcher action");
@@ -114,6 +125,18 @@ impl ShellOperationJournalV1 {
             })
         {
             bail!("Shell operation journal action state does not match its action IR");
+        }
+        if self.receipt_committed.iter().collect::<BTreeSet<_>>().len()
+            != self.receipt_committed.len()
+            || self.receipt_committed.iter().any(|action_id| {
+                !self.applied.contains(action_id)
+                    || !self.action_ir.actions.iter().any(|action| {
+                        &action.action_id == action_id
+                            && matches!(action.kind, ActionKindV1::RemoveShellLauncher { .. })
+                    })
+            })
+        {
+            bail!("Shell operation journal receipt state does not match its action IR");
         }
         Ok(())
     }
@@ -284,6 +307,86 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         }
                     }
                 }
+                ActionKindV1::RemoveShellLauncher {
+                    previous_receipt,
+                    resources,
+                } => {
+                    let receipt_state =
+                        matching_shell_receipt(&manifest, &action.target, previous_receipt);
+                    let committed = journal.receipt_committed.contains(&action.action_id);
+                    if receipt_state == ReceiptState::Conflict
+                        || (committed && receipt_state != ReceiptState::Missing)
+                    {
+                        (
+                            PlanActionV1::Blocked,
+                            "shell_recovery_receipt_conflict",
+                            true,
+                        )
+                    } else {
+                        let restore_receipt = !committed && receipt_state == ReceiptState::Missing;
+                        let mut action_changed = restore_receipt;
+                        let mut action_blocked = false;
+                        if restore_receipt {
+                            required.insert(PermissionV1::Filesystem {
+                                access: FilesystemAccessV1::Write,
+                                path: review_path(
+                                    self.context(),
+                                    &self.context().shine_dir.join("shell-manifest.toml"),
+                                ),
+                            });
+                        }
+                        for (index, resource) in resources.iter().enumerate() {
+                            let observation =
+                                observe_launcher_removal_resource(self.host(), resource, committed)
+                                    .await?;
+                            state.add_observation(
+                                format!("launcher-remove:{}:{index}", action.action_id),
+                                observation.identity(),
+                            )?;
+                            action_changed |= observation.needs_recovery();
+                            action_blocked |= observation == LauncherRemovalObservation::Changed;
+                            for (access, path) in observation.required_permissions(resource) {
+                                required.insert(PermissionV1::Filesystem {
+                                    access,
+                                    path: review_path(self.context(), path),
+                                });
+                            }
+                        }
+                        if action_blocked {
+                            (
+                                PlanActionV1::Blocked,
+                                "shell_recovery_launcher_removal_changed",
+                                true,
+                            )
+                        } else if action_changed {
+                            (
+                                if committed {
+                                    PlanActionV1::Remove
+                                } else {
+                                    PlanActionV1::Update
+                                },
+                                if committed {
+                                    "shell_recovery_cleanup_removed_launcher"
+                                } else if restore_receipt {
+                                    "shell_recovery_restore_removed_launcher_receipt"
+                                } else {
+                                    "shell_recovery_restore_removed_launcher"
+                                },
+                                false,
+                            )
+                        } else {
+                            (
+                                PlanActionV1::None,
+                                if committed {
+                                    "shell_recovery_launcher_removal_committed"
+                                } else {
+                                    "shell_recovery_launcher_removal_not_started"
+                                },
+                                false,
+                            )
+                        }
+                    }
+                }
                 _ => unreachable!("validated Shell journal action kind"),
             };
             blocked |= action_blocked;
@@ -331,9 +434,10 @@ where
         &self,
         creations: &[ShellLauncherCreation<'_>],
         updates: &[ShellLauncherUpdate<'_>],
+        removals: &[ShellLauncherRemoval],
         approval: &PlanApprovalV1,
     ) -> Result<Option<ShellOperationExecutionV1>> {
-        if creations.is_empty() && updates.is_empty() {
+        if creations.is_empty() && updates.is_empty() && removals.is_empty() {
             return Ok(None);
         }
         let operation_guard = self.host().acquire_privileged_operation().await?;
@@ -435,6 +539,43 @@ where
             ));
             prepared.push(PreparedShellLauncherAction::Update(prepared_resources));
         }
+        for removal in removals {
+            let previous_spec = shell_link_spec_from_manifest_entry(&removal.previous_receipt)?;
+            let previous_resources =
+                prepare_launcher_resources(&self.context().bin_dir, &previous_spec);
+            let mut action_resources = Vec::new();
+            for previous in &previous_resources {
+                let previous = resource_contract(previous);
+                if observe_launcher_resource(self.host(), &previous).await?
+                    != LauncherObservation::Exact
+                {
+                    bail!(
+                        "Shell launcher changed after Plan approval: {}",
+                        previous.destination().display()
+                    );
+                }
+                let rollback = managed_file_rollback_path(previous.destination());
+                match self.host().metadata(&rollback).await {
+                    Err(error) if error.is_not_found() => {}
+                    Ok(_) => bail!(
+                        "Shell launcher rollback path is occupied: {}",
+                        rollback.display()
+                    ),
+                    Err(error) => {
+                        return Err(error.into_anyhow("revalidating Shell launcher rollback path"));
+                    }
+                }
+                action_resources.push(ShellLauncherRemovalResourceV1 { previous, rollback });
+            }
+            actions.push(DeclarativeActionV1::remove_shell_launcher(
+                format!("remove-launcher:{}", removal.target),
+                &removal.target,
+                "launcher",
+                receipt_contract(&removal.previous_receipt),
+                action_resources.clone(),
+            ));
+            prepared.push(PreparedShellLauncherAction::Remove(action_resources));
+        }
         let action_ir = ActionIrV1::new(
             format!(
                 "shell-launcher-reconcile:{}",
@@ -493,6 +634,21 @@ where
                         apply_prepared_launcher_resource(self.host(), &resource.desired).await?;
                     }
                 }
+                PreparedShellLauncherAction::Remove(resources) => {
+                    for resource in resources {
+                        if observe_launcher_resource(self.host(), &resource.previous).await?
+                            != LauncherObservation::Exact
+                        {
+                            bail!("Shell launcher changed before transactional removal");
+                        }
+                        self.host()
+                            .rename(resource.previous.destination(), &resource.rollback)
+                            .await
+                            .map_err(|error| {
+                                error.into_anyhow("moving removed Shell launcher to rollback")
+                            })?;
+                    }
+                }
             }
             journal.applied.push(action.action_id.clone());
             save_shell_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
@@ -501,6 +657,39 @@ where
             operation_id: journal.action_ir.operation_id,
             _operation_guard: operation_guard,
         }))
+    }
+
+    pub(crate) async fn mark_shell_launcher_receipt_committed(
+        &self,
+        execution: &ShellOperationExecutionV1,
+    ) -> Result<()> {
+        let (mut journal, _) = load_shell_operation_journal(self.host(), &self.context().shine_dir)
+            .await?
+            .context("no Shell operation journal is available to mark committed")?;
+        if journal.action_ir.operation_id != execution.operation_id {
+            bail!("Shell operation journal changed before receipt commit marker");
+        }
+        let manifest =
+            load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
+        for action in &journal.action_ir.actions {
+            if let ActionKindV1::RemoveShellLauncher {
+                previous_receipt, ..
+            } = &action.kind
+            {
+                if !journal.applied.contains(&action.action_id)
+                    || matching_shell_receipt(&manifest, &action.target, previous_receipt)
+                        != ReceiptState::Missing
+                {
+                    bail!(
+                        "Shell launcher removal cannot mark its receipt committed before the exact receipt is removed"
+                    );
+                }
+                if !journal.receipt_committed.contains(&action.action_id) {
+                    journal.receipt_committed.push(action.action_id.clone());
+                }
+            }
+        }
+        save_shell_operation_journal(self.host(), &self.context().shine_dir, &journal).await
     }
 
     pub(crate) async fn commit_shell_launcher_operation(
@@ -558,11 +747,46 @@ where
                         }
                     }
                 }
+                ActionKindV1::RemoveShellLauncher {
+                    previous_receipt,
+                    resources,
+                } => {
+                    if !journal.receipt_committed.contains(&action.action_id)
+                        || matching_shell_receipt(&manifest, &action.target, previous_receipt)
+                            != ReceiptState::Missing
+                    {
+                        bail!(
+                            "Shell launcher removal cannot commit before its receipt commit marker"
+                        );
+                    }
+                    for resource in resources {
+                        if observe_launcher_resource(self.host(), &resource.previous).await?
+                            != LauncherObservation::Missing
+                            || observe_launcher_resource_at(
+                                self.host(),
+                                &resource.previous,
+                                &resource.rollback,
+                            )
+                            .await?
+                                != LauncherObservation::Exact
+                        {
+                            bail!("Shell launcher removal changed before operation commit");
+                        }
+                    }
+                }
                 _ => unreachable!("validated Shell journal action kind"),
             }
         }
         for action in &journal.action_ir.actions {
             if let ActionKindV1::UpdateShellLauncher { resources, .. } = &action.kind {
+                for resource in resources {
+                    self.host()
+                        .remove_file(&resource.rollback)
+                        .await
+                        .map_err(|error| error.into_anyhow("cleaning Shell launcher rollback"))?;
+                }
+            }
+            if let ActionKindV1::RemoveShellLauncher { resources, .. } = &action.kind {
                 for resource in resources {
                     self.host()
                         .remove_file(&resource.rollback)
@@ -584,7 +808,7 @@ where
         let (journal, _) = load_shell_operation_journal(self.host(), &self.context().shine_dir)
             .await?
             .context("no interrupted Shell operation is available for recovery")?;
-        let manifest =
+        let mut manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let mut rolled_back_actions = Vec::new();
         for action in journal.action_ir.actions.iter().rev() {
@@ -671,6 +895,54 @@ where
                         }
                     }
                 }
+                ActionKindV1::RemoveShellLauncher {
+                    previous_receipt,
+                    resources,
+                } => {
+                    let committed = journal.receipt_committed.contains(&action.action_id);
+                    match matching_shell_receipt(&manifest, &action.target, previous_receipt) {
+                        ReceiptState::Missing if committed => {}
+                        ReceiptState::Missing => {
+                            manifest.replace_targets(
+                                &BTreeSet::from([action.target.clone()]),
+                                vec![manifest_entry_from_receipt(previous_receipt)?],
+                            );
+                            manifest
+                                .save(self.host(), &self.context().shine_dir)
+                                .await?;
+                            changed = true;
+                        }
+                        ReceiptState::Matching if !committed => {}
+                        ReceiptState::Matching | ReceiptState::Conflict => {
+                            bail!("Shell receipt changed after recovery approval")
+                        }
+                    }
+                    for resource in resources.iter().rev() {
+                        match observe_launcher_removal_resource(self.host(), resource, committed)
+                            .await?
+                        {
+                            LauncherRemovalObservation::Stable => {}
+                            LauncherRemovalObservation::RestoreMoved => {
+                                self.host()
+                                    .rename(&resource.rollback, resource.previous.destination())
+                                    .await
+                                    .map_err(|error| {
+                                        error.into_anyhow("restoring removed Shell launcher")
+                                    })?;
+                                changed = true;
+                            }
+                            LauncherRemovalObservation::CleanupRollback => {
+                                self.host().remove_file(&resource.rollback).await.map_err(
+                                    |error| error.into_anyhow("cleaning Shell launcher rollback"),
+                                )?;
+                                changed = true;
+                            }
+                            LauncherRemovalObservation::Changed => {
+                                bail!("Shell launcher removal changed after recovery approval")
+                            }
+                        }
+                    }
+                }
                 _ => unreachable!("validated Shell journal action kind"),
             }
             if changed {
@@ -727,6 +999,28 @@ fn receipt_contract(entry: &ShellManifestEntry) -> ShellLauncherReceiptV1 {
     }
 }
 
+fn manifest_entry_from_receipt(receipt: &ShellLauncherReceiptV1) -> Result<ShellManifestEntry> {
+    let mode = match receipt.mode.as_str() {
+        "snapshot" => super::ExternalShellMode::Snapshot,
+        "live" => super::ExternalShellMode::Live,
+        _ => bail!("Shell launcher receipt contains an unsupported mode"),
+    };
+    Ok(ShellManifestEntry {
+        category: receipt.category.clone(),
+        command: receipt.command.clone(),
+        mode,
+        source_path: receipt.source_path.clone(),
+        rendered_path: receipt.rendered_path.clone(),
+        runtime: receipt.runtime.clone(),
+        bun_dependencies: receipt.bun_dependencies.clone(),
+        dependency_hash: receipt.dependency_hash,
+        transforms: receipt.transforms.clone(),
+        env: receipt.env.clone(),
+        needs_source: receipt.needs_source,
+        content_hash: receipt.content_hash,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReceiptState {
     Missing,
@@ -763,6 +1057,45 @@ enum LauncherUpdateObservation {
     RestoreReplaced,
     CleanupRollback,
     Changed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LauncherRemovalObservation {
+    Stable,
+    RestoreMoved,
+    CleanupRollback,
+    Changed,
+}
+
+impl LauncherRemovalObservation {
+    fn identity(self) -> &'static [u8] {
+        match self {
+            Self::Stable => b"stable",
+            Self::RestoreMoved => b"restore-moved",
+            Self::CleanupRollback => b"cleanup-rollback",
+            Self::Changed => b"changed",
+        }
+    }
+
+    fn needs_recovery(self) -> bool {
+        matches!(self, Self::RestoreMoved | Self::CleanupRollback)
+    }
+
+    fn required_permissions(
+        self,
+        resource: &ShellLauncherRemovalResourceV1,
+    ) -> Vec<(FilesystemAccessV1, &Path)> {
+        match self {
+            Self::Stable | Self::Changed => Vec::new(),
+            Self::RestoreMoved => vec![
+                (FilesystemAccessV1::Write, resource.previous.destination()),
+                (FilesystemAccessV1::Remove, resource.rollback.as_path()),
+            ],
+            Self::CleanupRollback => {
+                vec![(FilesystemAccessV1::Remove, resource.rollback.as_path())]
+            }
+        }
+    }
 }
 
 impl LauncherUpdateObservation {
@@ -912,6 +1245,37 @@ async fn observe_launcher_update_resource(
             LauncherUpdateObservation::RestoreReplaced
         }
         _ => LauncherUpdateObservation::Changed,
+    })
+}
+
+async fn observe_launcher_removal_resource(
+    host: &impl FileSystemObservationHost,
+    resource: &ShellLauncherRemovalResourceV1,
+    committed: bool,
+) -> Result<LauncherRemovalObservation> {
+    let previous = observe_launcher_resource(host, &resource.previous).await?;
+    let rollback =
+        observe_launcher_resource_at(host, &resource.previous, &resource.rollback).await?;
+    Ok(if committed {
+        match (previous, rollback) {
+            (LauncherObservation::Missing, LauncherObservation::Missing) => {
+                LauncherRemovalObservation::Stable
+            }
+            (LauncherObservation::Missing, LauncherObservation::Exact) => {
+                LauncherRemovalObservation::CleanupRollback
+            }
+            _ => LauncherRemovalObservation::Changed,
+        }
+    } else {
+        match (previous, rollback) {
+            (LauncherObservation::Exact, LauncherObservation::Missing) => {
+                LauncherRemovalObservation::Stable
+            }
+            (LauncherObservation::Missing, LauncherObservation::Exact) => {
+                LauncherRemovalObservation::RestoreMoved
+            }
+            _ => LauncherRemovalObservation::Changed,
+        }
     })
 }
 

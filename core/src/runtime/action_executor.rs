@@ -1222,6 +1222,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 }
                 ActionKindV1::CreateShellLauncher { .. }
                 | ActionKindV1::UpdateShellLauncher { .. }
+                | ActionKindV1::RemoveShellLauncher { .. }
                 | ActionKindV1::OpaqueExecution { .. } => {
                     blocked = true;
                     steps.push(
@@ -3046,6 +3047,7 @@ where
                 }
                 ActionKindV1::CreateShellLauncher { .. }
                 | ActionKindV1::UpdateShellLauncher { .. }
+                | ActionKindV1::RemoveShellLauncher { .. }
                 | ActionKindV1::OpaqueExecution { .. } => {
                     bail!("opaque App actions cannot be rolled back automatically");
                 }
@@ -3320,6 +3322,7 @@ fn matching_app_receipt(
             ActionKindV1::RemoveManagedJson { .. } => false,
             ActionKindV1::CreateShellLauncher { .. } => false,
             ActionKindV1::UpdateShellLauncher { .. } => false,
+            ActionKindV1::RemoveShellLauncher { .. } => false,
             ActionKindV1::OpaqueExecution { .. } => false,
         })
 }
@@ -3640,6 +3643,7 @@ fn conflicting_app_receipt(
         | ActionKindV1::RemoveManagedJson { .. } => true,
         ActionKindV1::CreateShellLauncher { .. }
         | ActionKindV1::UpdateShellLauncher { .. }
+        | ActionKindV1::RemoveShellLauncher { .. }
         | ActionKindV1::OpaqueExecution { .. } => false,
     }
 }

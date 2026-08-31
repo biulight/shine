@@ -74,6 +74,13 @@ the new receipt is durable, recovery keeps the replacement and removes only unch
 material. A changed replacement or rollback path blocks recovery and is preserved. Snapshot/render
 files may remain as Shine-managed cache, and launcher recovery never edits your shell profile.
 
+Uninstall uses this transaction only for an unchanged, receipt-owned launcher. It moves every
+platform launcher resource to same-directory rollback material before removing the receipt, then
+records a separate durable commit marker. If interruption happens after receipt removal but before
+that marker, recovery recreates the old receipt before restoring exact resources. After the marker,
+recovery keeps the completed uninstall and cleans only unchanged rollback material. Foreign or
+modified launchers are preserved outside this rollback proof.
+
 ## Uninstall
 
 ```bash

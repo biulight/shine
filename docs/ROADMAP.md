@@ -41,8 +41,10 @@
   symlink、Unix Bun/live launcher 和 Windows 双 shim 都在 command receipt commit 前可按精确
   target/hash/mode 回滚，`shine shell recover` 负责显式恢复。未修改、receipt-owned launcher 的
   install/upgrade 更新也已迁移：旧资源先进入同目录 rollback material，新 receipt 前可恢复，commit
-  后仅清理精确旧资源。launcher 删除、共享 snapshot/render、profile block 与 Sys action 尚未迁移，
-  也不代表 Phase 4 exit criteria 已满足。
+  后仅清理精确旧资源。未修改、receipt-owned launcher 的卸载也已迁移：所有平台资源先进入同目录
+  rollback material，receipt 删除后必须持久化正向 commit marker；若只写入了 receipt 删除而 marker
+  未写入，显式恢复会先重建旧 receipt 再还原精确资源。共享 snapshot/render、profile block 与 Sys
+  action 尚未迁移，也不代表 Phase 4 exit criteria 已满足。
 
 ## Guiding Principles
 

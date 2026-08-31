@@ -308,7 +308,8 @@ cleans only exact rollback material.
 
 - Shell launcher/profile declarative actions. First-time launcher creation and explicit recovery are
   implemented as Slice 4D.1. Unchanged receipt-owned launcher update is implemented as Slice 4D.2;
-  launcher removal, shared snapshot/render state, and profile sentinel blocks remain.
+  unchanged receipt-owned launcher removal with positive receipt-commit evidence is implemented as
+  Slice 4D.3. Shared snapshot/render state and profile sentinel blocks remain.
 - Managed Sys files and split-DNS typed actions.
 - Sys package/provider and executable code classification.
 - Migrate or explicitly classify every built-in executable Preset listed in
@@ -337,4 +338,5 @@ document administrator-path authorization and recovery timing in both locales. S
 key-owned JSON merge recovery guidance to both locales. Slice 4D.1 adds first-time Shell launcher
 creation recovery and `shine shell recover` guidance to both locales. Slice 4D.2 expands that Shell
 recovery guidance to receipt-owned launcher replacement and same-directory rollback material in
-both locales.
+both locales. Slice 4D.3 extends it to launcher removal, including receipt reconstruction when the
+manifest write is durable but the positive removal commit marker is not.

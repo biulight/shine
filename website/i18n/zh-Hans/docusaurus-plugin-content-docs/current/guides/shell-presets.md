@@ -66,6 +66,12 @@ launcher 会保持安装状态，恢复只清理 stale journal。更新中断时
 会阻塞恢复并保留现场。Shine 管理的 snapshot/render cache 可能继续保留，launcher recovery 不会
 编辑用户的 shell profile。
 
+uninstall 只会对未修改、已有 receipt 的 launcher 使用这项事务。它会先把每个平台 launcher
+resource 移到同目录 rollback material，再删除 receipt，随后另行记录持久化 commit marker。如果
+中断发生在 receipt 删除之后、marker 写入之前，恢复会先重建旧 receipt，再还原精确资源。marker
+写入后，恢复会保留已完成的卸载，只清理未修改的 rollback material。foreign 或已修改 launcher
+会被保留在这套 rollback proof 之外。
+
 ## 卸载
 
 ```bash

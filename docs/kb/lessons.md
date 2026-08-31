@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-31 — Receipt absence is not a removal commit record
+
+- **Symptom**: recovery after a Shell launcher uninstall could see a missing command receipt but
+  could not know whether uninstall had committed or the manifest save succeeded immediately before
+  a crash.
+- **Root cause**: absence represented both a desired final state and an intermediate failure window.
+- **Fix**: persist a positive per-action `receipt-committed` journal marker after manifest removal;
+  without it, recovery reconstructs the old receipt before restoring exact rollback resources.
+- **Rule**: destructive receipt transitions need positive durable commit evidence. Never infer
+  cleanup authority from absence when the same absence can occur before the transaction boundary.
+
 ## 2026-08-31 — Shell launcher Plans must enumerate platform resources
 
 - **Symptom**: the Shell planner reviewed only the primary command path even though Windows launcher

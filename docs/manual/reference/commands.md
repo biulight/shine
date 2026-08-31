@@ -106,6 +106,15 @@ only exact previous resources; after receipt commit, it keeps exact replacements
 unchanged rollback material. Any changed replacement, rollback resource, or conflicting receipt
 blocks recovery. Foreign or already modified launchers do not inherit this rollback proof.
 
+Approved uninstall journals launcher removal only when the old receipt and every reconstructed
+launcher resource still match. Each Unix launcher or Windows shim moves to its same-directory
+`.shine.rollback` before receipt removal. After receipt removal, a separate durable journal marker
+must confirm commit before rollback cleanup. If the receipt was removed but that marker was not
+written, `shine shell recover` recreates the old receipt before restoring exact resources. Once the
+marker is durable, recovery keeps the completed uninstall and removes only unchanged rollback
+material. A changed launcher, rollback path, or conflicting receipt blocks recovery and is
+preserved.
+
 Without `--dry-run`, App and Shell lifecycle mutations, App refresh, and artifact apply/remove
 display a snapshot-bound security Plan and ask once with a default answer of No. `--yes` still
 prints and revalidates the full Plan but skips the prompt; redirected or otherwise non-interactive

@@ -105,7 +105,12 @@ changed old resource to its same-directory `.shine.rollback`, writes the replace
 new receipt, removes only exact rollback material, and clears the journal. Before receipt commit,
 explicit recovery restores exact old resources; after commit it preserves the replacement and
 cleans only exact rollback material. The Plan observes and grants every platform resource, including
-both Windows shim files.
+both Windows shim files. Approved uninstall similarly derives `RemoveShellLauncher` only when the
+old receipt and every reconstructed resource remain exact. Core journals, moves each launcher to
+same-directory rollback, removes the command receipt, records a positive `receipt-committed` marker,
+then cleans exact rollback material. Before that marker, recovery restores the old receipt if
+needed and moves exact resources back; after it, recovery preserves the completed uninstall and
+cleans only exact rollback. Modified or foreign launchers remain preserved and outside this proof.
 Status treats a manifest receipt or a compatible legacy launcher as installed; extracted source
 files alone are only cache state. Command uninstall removes only the selected managed launcher,
 rendered output, and receipt, rebuilds source-command profile wrappers from the remaining launchers,

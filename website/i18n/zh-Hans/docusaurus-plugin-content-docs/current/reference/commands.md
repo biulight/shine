@@ -90,6 +90,13 @@ install 与 upgrade 更新 launcher 时，如果旧 command receipt 和所有 la
 的 rollback material。replacement、rollback resource 或 receipt 发生冲突都会阻塞恢复。foreign
 或已经被修改的 launcher 不会继承这套 rollback proof。
 
+已批准的 uninstall 只会在旧 receipt 与重建出的每个 launcher resource 仍精确匹配时记录 launcher
+removal journal。每个 Unix launcher 或 Windows shim 都会在 receipt 删除前移到同目录
+`.shine.rollback`。receipt 删除后，必须另有持久化的 journal marker 确认 commit，才能清理
+rollback。如果 receipt 已删除但 marker 尚未写入，`shine shell recover` 会先重建旧 receipt，再
+还原精确资源。marker 持久化后，恢复会保留已完成的卸载，只移除未修改的 rollback material。
+launcher、rollback 路径或 receipt 冲突发生变化时，恢复会阻塞并保留现场。
+
 不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation、App refresh 和 artifact apply/remove
 都会先显示绑定快照的安全 Plan，并以默认 No 询问一次。`--yes` 仍会完整显示并重新校验 Plan，
 只跳过提示；重定向输出等非交互执行必须传入该参数。在提供 dry-run 的命令中，`--yes` 与

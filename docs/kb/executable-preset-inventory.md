@@ -78,8 +78,8 @@ the target ran but does not own third-party package uninstall or version rollbac
    (implemented).
 5. Administrator static Copy create, backup-aware create, and in-place update plus key-owned JSON
    merge install/update/removal (implemented).
-6. Shell first-time launcher creation and unchanged receipt-owned launcher update (implemented);
-   launcher removal, snapshot/render files, and profile blocks remain.
+6. Shell first-time launcher creation plus unchanged receipt-owned launcher update and removal
+   (implemented); snapshot/render files and profile blocks remain.
 7. Managed Sys files/profile blocks and split DNS.
 8. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
    opaque escape hatches unless a narrower typed action replaces them.

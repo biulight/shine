@@ -236,8 +236,8 @@ bugs. Check this list before changing the modules named in each entry.
   complete command receipt is durable. Explicit `shell-recovery` removes only exact
   target/hash/mode matches when that receipt is absent; any changed resource or conflicting receipt
   blocks, while an exact durable receipt preserves the launcher and authorizes stale-journal
-  cleanup. Profile sentinel blocks, shared snapshots, launcher updates, and removals do not inherit
-  this creation proof.
+  cleanup. Profile sentinel blocks, shared snapshots, launcher updates, and removals use separate
+  proofs.
 - **A receipt-owned Shell launcher update moves exact old resources before replacement.**
   `UpdateShellLauncher` applies only when the old command receipt is still exact, the current Unix
   launcher or every Windows shim matches the launcher deterministically reconstructed from that
@@ -249,6 +249,16 @@ bugs. Check this list before changing the modules named in each entry.
   changed resource, rollback path, or conflicting receipt blocks and preserves all paths. Foreign,
   already modified, removal, shared snapshot/render, and profile-block paths do not inherit this
   update proof.
+- **A receipt-owned Shell launcher removal commits through a positive journal marker.**
+  `RemoveShellLauncher` applies only when the exact old command receipt still exists, every Unix
+  launcher or Windows shim resource deterministically reconstructed from it remains exact, and all
+  canonical same-directory `.shine.rollback` paths are absent. The journal precedes moves of every
+  launcher resource to rollback. After manifest receipt removal, the journal must durably record
+  `receipt-committed` before commit or recovery may clean exact rollback material; bare receipt
+  absence instead requires explicit recovery to reconstruct the complete old receipt before
+  restoring exact resources. Any conflicting receipt, changed destination or rollback identity, or
+  occupied rollback path blocks and preserves state. Foreign and modified launchers do not inherit
+  this proof; shared snapshot/render state and profile sentinel blocks remain separate actions.
 - **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
   generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
   privilege, permission and unsupported-rollback classification until a narrower typed action

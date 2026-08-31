@@ -1545,13 +1545,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .collect::<BTreeSet<_>>();
             for entry in selected_entries {
                 let target = format!("shell/{}/{}", entry.category, entry.command);
-                let link = command_path_for_name(&self.context().bin_dir, entry.command.as_ref());
                 let previous_spec = shell_link_spec_from_manifest_entry(entry)?;
-                for (index, resource) in
-                    prepare_launcher_resources(&self.context().bin_dir, &previous_spec)
-                        .iter()
-                        .enumerate()
-                {
+                let resources = prepare_launcher_resources(&self.context().bin_dir, &previous_spec);
+                let mut exact = true;
+                let mut rollback_occupied = false;
+                for (index, resource) in resources.iter().enumerate() {
                     capture_path_state(
                         self.host(),
                         &mut state,
@@ -1559,26 +1557,58 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         resource.destination(),
                     )
                     .await?;
-                    add_shell_typed_permissions(
-                        self.context(),
-                        &mut permissions,
-                        resource.destination(),
-                        request.operation,
-                    );
+                    exact &= prepared_launcher_resource_is_exact(self.host(), resource).await?;
+                    let rollback = managed_file_rollback_path(resource.destination());
+                    capture_path_state(
+                        self.host(),
+                        &mut state,
+                        format!("launcher-rollback:{target}:{index}"),
+                        &rollback,
+                    )
+                    .await?;
+                    rollback_occupied |= path_exists(self.host(), &rollback).await?;
                 }
-                let managed = launcher_is_managed(self.host(), &link, self.context()).await?;
+                let transactional = exact && !rollback_occupied;
+                if transactional {
+                    typed_launcher_transaction = true;
+                    for resource in &resources {
+                        for (access, path) in [
+                            (
+                                FilesystemAccessV1::Remove,
+                                resource.destination().to_path_buf(),
+                            ),
+                            (
+                                FilesystemAccessV1::Write,
+                                managed_file_rollback_path(resource.destination()),
+                            ),
+                            (
+                                FilesystemAccessV1::Remove,
+                                managed_file_rollback_path(resource.destination()),
+                            ),
+                        ] {
+                            permissions.implicit(PermissionV1::Filesystem {
+                                access,
+                                path: review_path(self.context(), &path),
+                            });
+                        }
+                    }
+                }
                 steps.push(
                     PlanStepV1::new(
                         &target,
                         None::<String>,
-                        if managed {
+                        if exact && rollback_occupied {
+                            PlanActionV1::Blocked
+                        } else if transactional {
                             PlanActionV1::Remove
                         } else {
                             PlanActionV1::Preserve
                         },
                     )
-                    .with_diagnostic_code(if managed {
-                        "shell_managed_launcher_remove"
+                    .with_diagnostic_code(if exact && rollback_occupied {
+                        "shell_launcher_rollback_occupied"
+                    } else if transactional {
+                        "shell_managed_launcher_remove_transaction"
                     } else {
                         "shell_foreign_launcher_preserved"
                     }),
@@ -1917,7 +1947,12 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 step.action,
                 PlanActionV1::Create | PlanActionV1::Update | PlanActionV1::Remove
             )
-        }) {
+        }) || (request.operation == LifecycleOperation::Uninstall
+            && manifest
+                .entries
+                .iter()
+                .any(|entry| shell_entry_selected(entry, selection.as_ref())))
+        {
             add_shine_receipt_permission(
                 self.context(),
                 &mut permissions,
@@ -3095,11 +3130,14 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             bail!("approved Shell uninstall requires an uninstall Plan");
         }
         approval.validate(&self.plan_shells(request.clone()).await?)?;
-        self.uninstall_shells(ShellUninstallRequest {
-            target: request.target,
-            dry_run: false,
-            purge: request.purge,
-        })
+        self.uninstall_shells_with_approval(
+            ShellUninstallRequest {
+                target: request.target,
+                dry_run: false,
+                purge: request.purge,
+            },
+            Some(approval),
+        )
         .await
     }
 
@@ -7358,6 +7396,321 @@ target = '$HOME/.config/disabled.txt'
         assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"user-owned");
     }
 
+    fn shell_uninstall_request() -> ShellPlanRequest {
+        ShellPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo/demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        }
+    }
+
+    async fn installed_shell_runtime() -> CoreRuntime<InMemoryHost> {
+        let runtime = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        runtime
+    }
+
+    #[tokio::test]
+    async fn approved_shell_launcher_removal_moves_before_receipt_commit_and_cleans_transaction() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_managed_launcher_remove_transaction".to_string())
+        }));
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, &launcher),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), path),
+                    })
+            );
+        }
+        let operation_offset = runtime.host().operations().len();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .unwrap();
+
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_none());
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        assert!(runtime.host().metadata(&journal).await.is_err());
+
+        let operations = runtime.host().operations();
+        let operations = &operations[operation_offset..];
+        let journal_write = operations
+            .iter()
+            .position(
+                |operation| matches!(operation, HostOperation::Write(path) if path == &journal),
+            )
+            .unwrap();
+        let launcher_move = operations
+            .iter()
+            .position(
+                |operation| matches!(operation, HostOperation::Remove(path) if path == &launcher),
+            )
+            .unwrap();
+        let receipt_write = operations
+            .iter()
+            .position(|operation| matches!(operation, HostOperation::Write(path) if path == &runtime.context().shine_dir.join("shell-manifest.toml")))
+            .unwrap();
+        let receipt_commit_marker = operations
+            .iter()
+            .rposition(
+                |operation| matches!(operation, HostOperation::Write(path) if path == &journal),
+            )
+            .unwrap();
+        let rollback_cleanup = operations
+            .iter()
+            .position(
+                |operation| matches!(operation, HostOperation::Remove(path) if path == &rollback),
+            )
+            .unwrap();
+        assert!(journal_write < launcher_move);
+        assert!(launcher_move < receipt_write);
+        assert!(receipt_write < receipt_commit_marker);
+        assert!(receipt_commit_marker < rollback_cleanup);
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_removal_receipt_failure_restores_moved_launcher() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_launcher".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_some());
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_removal_marker_failure_reconstructs_receipt_before_restore() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 2);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt commit marker should fail");
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_none());
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_launcher_receipt".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_some());
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_removal_commit_failure_cleans_only_exact_rollback() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime.host().fail_remove_after(&rollback, 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell launcher rollback cleanup should fail");
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_none());
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_cleanup_removed_launcher".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_none());
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_removal_recovery_blocks_modified_rollback_material() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        runtime
+            .host()
+            .put_file(&rollback, b"user-changed rollback".to_vec());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(!recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_launcher_removal_changed".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"user-changed rollback"
+        );
+    }
+
+    #[tokio::test]
+    async fn occupied_shell_launcher_rollback_blocks_before_removal() {
+        let runtime = installed_shell_runtime().await;
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime.host().put_file(&rollback, b"user-owned".to_vec());
+
+        let plan = runtime
+            .plan_shells(shell_uninstall_request())
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_launcher_rollback_occupied".to_string())
+        }));
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"user-owned");
+    }
+
+    #[tokio::test]
+    async fn approved_shell_uninstall_preserves_a_modified_receipt_owned_launcher() {
+        let runtime = installed_shell_runtime().await;
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        runtime
+            .host()
+            .put_file(&launcher, b"#!/bin/sh\necho user-owned\n".to_vec());
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Preserve
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_foreign_launcher_preserved".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let report = runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            runtime.host().read(&launcher).await.unwrap(),
+            b"#!/bin/sh\necho user-owned\n"
+        );
+        assert!(report.lifecycle.outcomes.iter().any(|outcome| {
+            outcome.status == crate::lifecycle::LifecycleStatus::Conflict
+                && outcome
+                    .diagnostic_codes
+                    .contains(&"shell_command_conflict".to_string())
+        }));
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert!(manifest.find("shell/demo/demo").is_none());
+    }
+
     #[tokio::test]
     async fn approved_shell_upgrade_uses_managed_launcher_update_transaction() {
         let original = runtime(shell_launcher_snapshot());
@@ -7485,6 +7838,40 @@ target = '$HOME/.config/disabled.txt'
             .unwrap();
         assert_eq!(runtime.host().read(&launcher).await.unwrap(), old_ps1);
         assert_eq!(runtime.host().read(&cmd).await.unwrap(), old_cmd);
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn shell_recovery_restores_a_partial_windows_launcher_removal() {
+        let runtime = installed_shell_runtime().await;
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let cmd = launcher.with_extension("cmd");
+        let launcher_bytes = runtime.host().read(&launcher).await.unwrap();
+        let cmd_bytes = runtime.host().read(&cmd).await.unwrap();
+        let cmd_rollback = managed_file_rollback_path(&cmd);
+        runtime.host().fail_rename_after(&cmd, &cmd_rollback, 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("second Windows launcher move should fail");
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&launcher).await.unwrap(),
+            launcher_bytes
+        );
+        assert_eq!(runtime.host().read(&cmd).await.unwrap(), cmd_bytes);
+        assert!(runtime.host().metadata(&cmd_rollback).await.is_err());
     }
 
     #[tokio::test]
