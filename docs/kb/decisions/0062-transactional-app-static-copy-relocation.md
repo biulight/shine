@@ -45,5 +45,6 @@ new paths use their separately persisted administrator identities under the shar
 - Successful relocation cannot retain the old backup identity on the new manifest entry.
 - A destination or rollback path appearing after Plan review fails snapshot revalidation before
   mutation.
-- JSON merge relocation remains on the legacy executor until a separate key-owned two-destination
-  recovery contract is implemented.
+- JSON merge relocation does not inherit this whole-file proof; its separate key-owned
+  two-destination recovery contract is defined by
+  [ADR 0063](0063-transactional-app-json-relocation.md).

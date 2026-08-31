@@ -1586,7 +1586,7 @@ where
                 continue;
             }
             let current_hash = match self.host.read(&entry.destination).await {
-                Ok(bytes) => installed_app_hash(&assessment.file, &bytes)?,
+                Ok(bytes) => installed_app_entry_hash(&entry, &bytes)?,
                 Err(error) if error.is_not_found() => None,
                 Err(error) => return Err(error.into_anyhow("reading installed App file")),
             };
@@ -1641,17 +1641,37 @@ where
                 );
                 let is_relocation = matches!(
                     action_ir.actions.as_slice(),
-                    [action] if matches!(action.kind, crate::action::ActionKindV1::RelocateManagedFile { .. })
+                    [action] if matches!(
+                        action.kind,
+                        crate::action::ActionKindV1::RelocateManagedFile { .. }
+                            | crate::action::ActionKindV1::RelocateManagedJson { .. }
+                    )
                 );
                 let execution = if is_relocation {
                     journaled_relocation = true;
-                    self.execute_app_managed_file_relocation_approved(
-                        approved.plan,
-                        approved.approval,
-                        action_ir,
-                        content,
-                    )
-                    .await?
+                    if matches!(
+                        action_ir.actions.as_slice(),
+                        [action] if matches!(
+                            action.kind,
+                            crate::action::ActionKindV1::RelocateManagedJson { .. }
+                        )
+                    ) {
+                        self.execute_app_managed_json_relocation_approved(
+                            approved.plan,
+                            approved.approval,
+                            action_ir,
+                            content,
+                        )
+                        .await?
+                    } else {
+                        self.execute_app_managed_file_relocation_approved(
+                            approved.plan,
+                            approved.approval,
+                            action_ir,
+                            content,
+                        )
+                        .await?
+                    }
                 } else if is_json {
                     self.execute_app_managed_json_merge_approved(
                         approved.plan,
@@ -2279,6 +2299,18 @@ pub(crate) fn desired_app_hash(file: &AppFile, content: &[u8]) -> Result<u64> {
 
 pub(crate) fn installed_app_hash(file: &AppFile, content: &[u8]) -> Result<Option<u64>> {
     match &file.install_strategy {
+        AppInstallStrategy::Copy => Ok(Some(hash_content(content))),
+        AppInstallStrategy::JsonMerge { managed_keys } => {
+            installed_json_hash(content, managed_keys)
+        }
+    }
+}
+
+pub(crate) fn installed_app_entry_hash(
+    entry: &crate::install::AppEntry,
+    content: &[u8],
+) -> Result<Option<u64>> {
+    match &entry.install_strategy {
         AppInstallStrategy::Copy => Ok(Some(hash_content(content))),
         AppInstallStrategy::JsonMerge { managed_keys } => {
             installed_json_hash(content, managed_keys)

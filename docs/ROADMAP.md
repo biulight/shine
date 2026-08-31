@@ -41,7 +41,9 @@
   Copy 与 JSON receipt 复用相同 removal Action，在 receipt commit 前可显式恢复；用户修改内容继续
   保留，目标缺失时仅原子清理 receipt。静态 Copy 的 destination relocation 也已成为单一 Action：
   旧 destination、可选 backup、rollback、新 destination 与新旧 receipt 在同一 journal 中提交，
-  中断时可恢复旧状态；JSON relocation 仍待独立的 key-owned 双端恢复合约。Shell 首次 launcher
+  中断时可恢复旧状态。JSON relocation 也已使用独立的 key-owned 双端 Action：新 receipt 前只移除
+  新路径的 desired keys、还原旧路径的 previous keys，并保留两端其它当前设置；receipt 提交后只清理
+  精确旧 rollback material。Shell 首次 launcher
   创建也已接入独立 journal：Unix
   symlink、Unix Bun/live launcher 和 Windows 双 shim 都在 command receipt commit 前可按精确
   target/hash/mode 回滚，`shine shell recover` 负责显式恢复。未修改、receipt-owned launcher 的

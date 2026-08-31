@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-01 — JSON relocation has two independent key-ownership boundaries
+
+- **Symptom**: App upgrade relocated a `json-merge` source through independent new-destination
+  merge and old-destination uninstall calls. A crash could leave the same managed keys at both
+  paths, while whole-file rollback would overwrite unrelated settings changed after interruption.
+- **Root cause**: relocation was treated as path movement, but JSON ownership is a pair of declared
+  key subsets whose old and new key sets may differ inside one source-receipt transition.
+- **Fix**: bind both destinations, separate old/new keys and subset hashes, the previous whole-file
+  rollback identity, and both receipt states in `RelocateManagedJson`; recover by removing/restoring
+  only owned keys.
+- **Rule**: a structured-resource relocation must model ownership independently at both endpoints.
+  Whole-file rollback proof cannot be promoted to key-owned content.
+
 ## 2026-09-01 — Relocation needs one receipt transition across both paths
 
 - **Symptom**: App upgrade wrote a new effective destination, removed or restored the old one, and

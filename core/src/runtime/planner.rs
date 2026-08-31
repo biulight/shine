@@ -4,7 +4,9 @@
 //! materializes Preset code, invokes a process, requests privilege, or writes
 //! through a host.
 
-use super::app::{desired_app_hash, installed_app_hash, installed_json_hash};
+use super::app::{
+    desired_app_hash, installed_app_entry_hash, installed_app_hash, installed_json_hash,
+};
 use super::launcher::{prepare_launcher_resources, prepared_launcher_resource_is_exact};
 use super::shell::shell_link_spec_from_manifest_entry;
 use super::{
@@ -26,7 +28,7 @@ use crate::action::{
     ActionIrV1, DeclarativeActionV1, ForcedManagedFileBackupV1, ForcedManagedFileRemoveSpecV1,
     ManagedFileRelocationBackupV1, ManagedFileRelocationSpecV1, ManagedFileRemoveSpecV1,
     ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1, ManagedJsonMergeSpecV1,
-    ManagedJsonRemoveSpecV1, managed_file_rollback_path,
+    ManagedJsonRelocationSpecV1, ManagedJsonRemoveSpecV1, managed_file_rollback_path,
 };
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppEntry, AppManifest};
@@ -494,7 +496,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     None => read_optional(self.host(), &destination).await?,
                 };
                 let user_modified = match (entry, current.as_deref()) {
-                    (Some(entry), Some(bytes)) => installed_app_hash(file, bytes)
+                    (Some(entry), Some(bytes)) => installed_app_entry_hash(entry, bytes)
                         .map(|hash| hash.is_some_and(|hash| hash != entry.content_hash))
                         .unwrap_or(true),
                     _ => false,
@@ -611,7 +613,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     }
                     Some(_) => PlanActionV1::Update,
                 };
-                let relocation_entry = entry.filter(|entry| {
+                let static_relocation_entry = entry.filter(|entry| {
                     request.operation == LifecycleOperation::Upgrade
                         && action == PlanActionV1::Update
                         && entry.destination != destination
@@ -620,6 +622,25 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         && file.generator.is_none()
                         && !request.force
                 });
+                let json_relocation_entry = entry.filter(|entry| {
+                    request.operation == LifecycleOperation::Upgrade
+                        && action == PlanActionV1::Update
+                        && entry.destination != destination
+                        && matches!(
+                            entry.install_strategy,
+                            crate::install::AppInstallStrategy::JsonMerge { .. }
+                        )
+                        && matches!(
+                            file.install_strategy,
+                            crate::install::AppInstallStrategy::JsonMerge { .. }
+                        )
+                        && entry.backup.is_none()
+                        && !entry.requires_admin
+                        && !file.requires_admin
+                        && file.generator.is_none()
+                        && !request.force
+                });
+                let relocation_entry = static_relocation_entry.or(json_relocation_entry);
                 let relocation_rollback =
                     if let Some(entry) = relocation_entry {
                         if current.is_none() && entry.backup.is_some() {
@@ -647,6 +668,26 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                     .with_diagnostic_code("app_relocation_source_not_regular"),
                                 );
                                 continue;
+                            }
+                            if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
+                                &entry.install_strategy
+                            {
+                                let current = current
+                                    .as_deref()
+                                    .context("observed App JSON relocation source disappeared")?;
+                                if installed_json_hash(current, managed_keys)?
+                                    != Some(entry.content_hash)
+                                {
+                                    steps.push(
+                                        PlanStepV1::new(
+                                            &target,
+                                            Some(file.source_rel.display().to_string()),
+                                            PlanActionV1::Preserve,
+                                        )
+                                        .with_diagnostic_code("app_user_modified"),
+                                    );
+                                    continue;
+                                }
                             }
                         }
                         if let Some(backup) = &entry.backup {
@@ -3019,6 +3060,112 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 if let Some(entry) = direct.filter(|entry| {
                     request.operation == LifecycleOperation::Upgrade
                         && entry.destination != destination
+                        && matches!(
+                            entry.install_strategy,
+                            crate::install::AppInstallStrategy::JsonMerge { .. }
+                        )
+                        && matches!(
+                            file.install_strategy,
+                            crate::install::AppInstallStrategy::JsonMerge { .. }
+                        )
+                        && entry.backup.is_none()
+                        && !entry.requires_admin
+                        && !file.requires_admin
+                        && !request.force
+                        && plan.steps.iter().any(|step| {
+                            step.target == target
+                                && step.resource.as_deref() == Some(resource.as_str())
+                                && step.action == PlanActionV1::Update
+                                && step
+                                    .diagnostic_codes
+                                    .contains(&"app_destination_relocated".to_string())
+                        })
+                }) {
+                    if manifest.find_by_dest(&destination).is_some()
+                        || path_exists(self.host(), &destination).await?
+                    {
+                        bail!("managed JSON relocation destination changed after Plan approval");
+                    }
+                    let crate::install::AppInstallStrategy::JsonMerge {
+                        managed_keys: previous_managed_keys,
+                    } = &entry.install_strategy
+                    else {
+                        unreachable!("JSON relocation entry checked above")
+                    };
+                    let crate::install::AppInstallStrategy::JsonMerge {
+                        managed_keys: desired_managed_keys,
+                    } = &file.install_strategy
+                    else {
+                        unreachable!("JSON relocation file checked above")
+                    };
+                    let previous = read_optional(self.host(), &entry.destination).await?;
+                    let (previous_present, previous_mode, previous_original_hash) = if let Some(
+                        bytes,
+                    ) = &previous
+                    {
+                        if installed_json_hash(bytes, previous_managed_keys)?
+                            != Some(entry.content_hash)
+                        {
+                            bail!("managed JSON relocation source changed after Plan approval");
+                        }
+                        let metadata =
+                            self.host()
+                                .metadata(&entry.destination)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow(
+                                        "observing managed JSON relocation source mode",
+                                    )
+                                })?;
+                        if metadata.kind != FileKind::File {
+                            bail!(
+                                "managed JSON relocation source changed kind after Plan approval"
+                            );
+                        }
+                        (
+                            true,
+                            metadata.unix_mode,
+                            Some(crate::install::hash_content(bytes)),
+                        )
+                    } else {
+                        (false, None, None)
+                    };
+                    let rollback = crate::action::managed_file_rollback_path(&entry.destination);
+                    if manifest.find_by_dest(&rollback).is_some()
+                        || path_exists(self.host(), &rollback).await?
+                    {
+                        bail!("managed JSON relocation rollback path changed after Plan approval");
+                    }
+                    let action = DeclarativeActionV1::relocate_managed_json(
+                        format!("relocate-json:{action_identity}"),
+                        target,
+                        resource,
+                        ManagedJsonRelocationSpecV1 {
+                            previous_destination: entry.destination.clone(),
+                            desired_destination: destination,
+                            previous_present,
+                            previous_mode,
+                            previous_original_hash,
+                            previous_receipt_hash: entry.content_hash,
+                            previous_managed_keys: previous_managed_keys.clone(),
+                            desired_managed_hash: desired_hash,
+                            desired_managed_keys: desired_managed_keys.clone(),
+                            previous_uses_env: entry.uses_env,
+                            desired_uses_env: file
+                                .transforms
+                                .iter()
+                                .any(|transform| transform == "template"),
+                        },
+                    );
+                    actions.push(ActionIrV1::new(
+                        format!("app-{operation}:{fingerprint}:{action_identity}"),
+                        vec![action],
+                    ));
+                    continue;
+                }
+                if let Some(entry) = direct.filter(|entry| {
+                    request.operation == LifecycleOperation::Upgrade
+                        && entry.destination != destination
                         && entry.install_strategy == crate::install::AppInstallStrategy::Copy
                         && file.install_strategy == crate::install::AppInstallStrategy::Copy
                         && !request.force
@@ -4737,6 +4884,15 @@ fn add_app_relocation_permissions(
                 path: review_path(context, path),
             });
         }
+        if matches!(
+            previous.install_strategy,
+            crate::install::AppInstallStrategy::JsonMerge { .. }
+        ) {
+            permissions.implicit(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: review_path(context, &previous.destination),
+            });
+        }
         if let Some(backup) = &previous.backup {
             permissions.implicit(PermissionV1::Filesystem {
                 access: FilesystemAccessV1::Write,
@@ -6217,6 +6373,457 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
         let remaining = runtime.host().read(&destination).await.unwrap();
         let remaining: serde_json::Value = serde_json::from_slice(&remaining).unwrap();
         assert_eq!(remaining, serde_json::json!({"theme": "dark"}));
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn approved_app_upgrade_journals_key_owned_json_relocation() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['containersProxy']\n".to_vec(),
+            )
+            .file(
+                "app/demo/settings.json",
+                br#"{"containersProxy":"next"}"#.to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/settings.json");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/settings.json");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        let previous_source = br#"{"proxy":"previous"}"#;
+        runtime.host().put_file(
+            &previous,
+            br#"{"proxy":"previous","theme":"dark"}"#.to_vec(),
+        );
+        let managed_keys = vec!["proxy".to_string()];
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/settings.json".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::runtime::app::managed_json_hash(
+                    previous_source,
+                    &managed_keys,
+                )
+                .unwrap(),
+                install_strategy: crate::install::AppInstallStrategy::JsonMerge {
+                    managed_keys: managed_keys.clone(),
+                },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_destination_relocated".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RelocateManagedJson { .. }))
+        ));
+        for (access, path) in [
+            (FilesystemAccessV1::Write, previous.clone()),
+            (FilesystemAccessV1::Remove, previous.clone()),
+            (FilesystemAccessV1::Write, desired.clone()),
+            (FilesystemAccessV1::Write, rollback.clone()),
+            (FilesystemAccessV1::Remove, rollback.clone()),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), &path),
+                    })
+            );
+        }
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        let previous_json: serde_json::Value =
+            serde_json::from_slice(&runtime.host().read(&previous).await.unwrap()).unwrap();
+        let desired_json: serde_json::Value =
+            serde_json::from_slice(&runtime.host().read(&desired).await.unwrap()).unwrap();
+        assert_eq!(previous_json, serde_json::json!({"theme": "dark"}));
+        assert_eq!(desired_json, serde_json::json!({"containersProxy": "next"}));
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let entry = manifest.find_by_source("app/demo/settings.json").unwrap();
+        assert_eq!(entry.destination, desired);
+        assert_eq!(
+            entry.content_hash,
+            crate::runtime::app::managed_json_hash(
+                br#"{"containersProxy":"next"}"#,
+                &["containersProxy".to_string()],
+            )
+            .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_json_relocation_source_recovers_to_the_previous_receipt() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['proxy']\n".to_vec(),
+            )
+            .file("app/demo/settings.json", br#"{"proxy":"next"}"#.to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/settings.json");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/settings.json");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        let managed_keys = vec!["proxy".to_string()];
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/settings.json".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::runtime::app::managed_json_hash(
+                    br#"{"proxy":"previous"}"#,
+                    &managed_keys,
+                )
+                .unwrap(),
+                install_strategy: crate::install::AppInstallStrategy::JsonMerge { managed_keys },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(
+                ir.actions.as_slice(),
+                [action] if matches!(
+                    action.kind,
+                    crate::action::ActionKindV1::RelocateManagedJson {
+                        previous_present: false,
+                        previous_original_hash: None,
+                        ..
+                    }
+                )
+            )
+        ));
+
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        assert!(runtime.host().read(&previous).await.is_err());
+        let desired_json: serde_json::Value =
+            serde_json::from_slice(&runtime.host().read(&desired).await.unwrap()).unwrap();
+        assert_eq!(desired_json, serde_json::json!({"proxy": "next"}));
+        assert!(runtime.host().read(&rollback).await.is_err());
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_restore_json_relocation".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert!(runtime.host().read(&desired).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/settings.json")
+                .unwrap()
+                .destination,
+            previous
+        );
+    }
+
+    #[tokio::test]
+    async fn json_relocation_receipt_failure_restores_only_owned_keys_on_both_sides() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['proxy']\n".to_vec(),
+            )
+            .file("app/demo/settings.json", br#"{"proxy":"next"}"#.to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/settings.json");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/settings.json");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        let managed_keys = vec!["proxy".to_string()];
+        runtime.host().put_file(
+            &previous,
+            br#"{"proxy":"previous","theme":"light"}"#.to_vec(),
+        );
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/settings.json".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::runtime::app::managed_json_hash(
+                    br#"{"proxy":"previous"}"#,
+                    &managed_keys,
+                )
+                .unwrap(),
+                install_strategy: crate::install::AppInstallStrategy::JsonMerge {
+                    managed_keys: managed_keys.clone(),
+                },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        runtime
+            .host()
+            .put_file(&previous, br#"{"theme":"dark","zoom":2}"#.to_vec());
+        runtime
+            .host()
+            .put_file(&desired, br#"{"proxy":"next","font":"large"}"#.to_vec());
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_restore_json_relocation".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        let previous_json: serde_json::Value =
+            serde_json::from_slice(&runtime.host().read(&previous).await.unwrap()).unwrap();
+        let desired_json: serde_json::Value =
+            serde_json::from_slice(&runtime.host().read(&desired).await.unwrap()).unwrap();
+        assert_eq!(
+            previous_json,
+            serde_json::json!({"proxy": "previous", "theme": "dark", "zoom": 2})
+        );
+        assert_eq!(desired_json, serde_json::json!({"font": "large"}));
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn committed_json_relocation_cleanup_preserves_user_owned_values_on_both_sides() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['proxy']\n".to_vec(),
+            )
+            .file("app/demo/settings.json", br#"{"proxy":"next"}"#.to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/settings.json");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/settings.json");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        let managed_keys = vec!["proxy".to_string()];
+        runtime.host().put_file(
+            &previous,
+            br#"{"proxy":"previous","theme":"light"}"#.to_vec(),
+        );
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/settings.json".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::runtime::app::managed_json_hash(
+                    br#"{"proxy":"previous"}"#,
+                    &managed_keys,
+                )
+                .unwrap(),
+                install_strategy: crate::install::AppInstallStrategy::JsonMerge { managed_keys },
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_remove_after(&rollback, 0);
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/settings.json")
+                .unwrap()
+                .destination,
+            desired
+        );
+        runtime.host().put_file(
+            &previous,
+            br#"{"proxy":"user-owned","theme":"dark"}"#.to_vec(),
+        );
+        runtime
+            .host()
+            .put_file(&desired, br#"{"proxy":"next","font":"large"}"#.to_vec());
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_remove_committed_json_relocation_rollback".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&previous).await.unwrap(),
+            br#"{"proxy":"user-owned","theme":"dark"}"#
+        );
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            br#"{"proxy":"next","font":"large"}"#
+        );
         assert!(runtime.host().read(&rollback).await.is_err());
     }
 

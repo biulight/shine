@@ -261,6 +261,31 @@ impl ActionIrV1 {
                         }
                     }
                 }
+                ActionKindV1::RelocateManagedJson {
+                    previous_destination,
+                    previous_rollback,
+                    desired_destination,
+                    previous_present,
+                    ..
+                } => {
+                    required.insert(PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Write,
+                        path: path_identity(desired_destination),
+                    });
+                    if *previous_present {
+                        for (access, path) in [
+                            (FilesystemAccessV1::Write, previous_destination.as_path()),
+                            (FilesystemAccessV1::Remove, previous_destination.as_path()),
+                            (FilesystemAccessV1::Write, previous_rollback.as_path()),
+                            (FilesystemAccessV1::Remove, previous_rollback.as_path()),
+                        ] {
+                            required.insert(PermissionV1::Filesystem {
+                                access,
+                                path: path_identity(path),
+                            });
+                        }
+                    }
+                }
                 ActionKindV1::RemoveManagedJson {
                     destination,
                     rollback,
@@ -556,6 +581,35 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn relocate_managed_json(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ManagedJsonRelocationSpecV1,
+    ) -> Self {
+        let previous_rollback = managed_file_rollback_path(&spec.previous_destination);
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::RelocateManagedJson {
+                previous_destination: spec.previous_destination,
+                previous_rollback,
+                desired_destination: spec.desired_destination,
+                previous_present: spec.previous_present,
+                previous_mode: spec.previous_mode,
+                previous_original_hash: spec.previous_original_hash,
+                previous_receipt_hash: spec.previous_receipt_hash,
+                previous_managed_keys: spec.previous_managed_keys,
+                desired_managed_hash: spec.desired_managed_hash,
+                desired_managed_keys: spec.desired_managed_keys,
+                previous_uses_env: spec.previous_uses_env,
+                desired_uses_env: spec.desired_uses_env,
+            },
+            rollback: RollbackSupportV1::RestoreRelocatedJsonKeysIfUnchanged,
+        }
+    }
+
     pub fn create_shell_launcher(
         action_id: impl Into<String>,
         target: impl Into<String>,
@@ -781,6 +835,35 @@ impl DeclarativeActionV1 {
                     .to_string(),
             )),
             (
+                ActionKindV1::RelocateManagedJson {
+                    previous_destination,
+                    previous_rollback,
+                    desired_destination,
+                    previous_present,
+                    previous_mode,
+                    previous_original_hash,
+                    previous_managed_keys,
+                    desired_managed_keys,
+                    ..
+                },
+                RollbackSupportV1::RestoreRelocatedJsonKeysIfUnchanged,
+            ) if !previous_destination.as_os_str().is_empty()
+                && !desired_destination.as_os_str().is_empty()
+                && previous_destination != desired_destination
+                && *previous_rollback == managed_file_rollback_path(previous_destination)
+                && previous_rollback != desired_destination
+                && *previous_present == previous_original_hash.is_some()
+                && (*previous_present || previous_mode.is_none())
+                && valid_managed_json_keys(previous_managed_keys)
+                && valid_managed_json_keys(desired_managed_keys) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::RelocateManagedJson { .. }, _) => Err(ActionIrError::Invalid(
+                "managed JSON relocation requires distinct old/new destinations, canonical rollback, paired previous whole-file identity, non-empty unique key sets, and restore-relocated-json-keys-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
                 ActionKindV1::RemoveManagedJson {
                     destination,
                     rollback,
@@ -950,6 +1033,21 @@ pub struct ManagedJsonMergeSpecV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedJsonRelocationSpecV1 {
+    pub previous_destination: PathBuf,
+    pub desired_destination: PathBuf,
+    pub previous_present: bool,
+    pub previous_mode: Option<u32>,
+    pub previous_original_hash: Option<u64>,
+    pub previous_receipt_hash: u64,
+    pub previous_managed_keys: Vec<String>,
+    pub desired_managed_hash: u64,
+    pub desired_managed_keys: Vec<String>,
+    pub previous_uses_env: bool,
+    pub desired_uses_env: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ManagedJsonRemoveSpecV1 {
     pub destination: PathBuf,
     pub original_mode: Option<u32>,
@@ -1062,6 +1160,25 @@ pub enum ActionKindV1 {
         desired_managed_hash: u64,
         managed_keys: Vec<String>,
     },
+    RelocateManagedJson {
+        previous_destination: PathBuf,
+        previous_rollback: PathBuf,
+        desired_destination: PathBuf,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        previous_present: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_mode: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_original_hash: Option<u64>,
+        previous_receipt_hash: u64,
+        previous_managed_keys: Vec<String>,
+        desired_managed_hash: u64,
+        desired_managed_keys: Vec<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        previous_uses_env: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        desired_uses_env: bool,
+    },
     RemoveManagedJson {
         destination: PathBuf,
         rollback: PathBuf,
@@ -1112,6 +1229,7 @@ pub enum RollbackSupportV1 {
     RestorePreviousWithBackupIfUnchanged,
     RestoreForcedPreviousIfUnchanged,
     RestoreJsonKeysIfUnchanged,
+    RestoreRelocatedJsonKeysIfUnchanged,
     RestoreRemovedJsonKeysIfUnchanged,
     RemoveCreatedLauncherIfUnchanged,
     RestorePreviousLauncherIfUnchanged,

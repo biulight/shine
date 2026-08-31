@@ -198,8 +198,9 @@ and forced remove use key-owned actions that preserve unrelated current values. 
 pruning reuses the same removal actions when the receipt-owned state is unchanged; a missing
 destination removes only its receipt, while user-modified stale state remains preserved. Static
 Copy relocation uses one action for the old receipt/path/backup, new absent destination, and new
-receipt; JSON relocation and generators retain their existing executors until their rollback
-contracts land:
+receipt. JSON relocation uses a separate action for the old receipt/object/rollback, absent new
+destination, separate old/new managed-key sets, and replacement receipt. Generators retain their
+existing executor and explicit opaque classification:
 
 ```text
 approved PlanV1
@@ -211,6 +212,8 @@ approved PlanV1
        no bytes
     or RelocateManagedFile; old destination + optional backup + rollback + absent new destination +
        old/new receipt identities and hashes, no bytes
+    or RelocateManagedJson; old destination + rollback + absent new destination + separate
+       old/new key/subset/receipt identities, no JSON values
     or RemoveManagedFile; destination + rollback + previous receipt/mode/hash, no bytes
     or RemoveManagedFileWithBackup; destination + persistent backup + rollback + both
        modes/hashes + previous receipt fields, no bytes
@@ -287,9 +290,10 @@ never managed/original content or secret plaintext. See
 [ADR 0054](../decisions/0054-transactional-forced-app-managed-file-remove.md),
 [ADR 0055](../decisions/0055-privileged-app-removal-reuses-typed-transaction.md), and
 [ADR 0056](../decisions/0056-privileged-app-create-update-reuse-typed-transactions.md), and
-[ADR 0057](../decisions/0057-key-owned-json-merge-transactions.md), plus
+[ADR 0057](../decisions/0057-key-owned-json-merge-transactions.md),
+[ADR 0063](../decisions/0063-transactional-app-json-relocation.md), plus
 [ADR 0062](../decisions/0062-transactional-app-static-copy-relocation.md), plus
-`docs/declarative-action-recovery-prd.md` before extending it to JSON relocation or opaque actions.
+`docs/declarative-action-recovery-prd.md` before extending it to opaque actions.
 
 Ordinary App install/upgrade/uninstall/refresh/artifact mutation never recovers implicitly. When
 their planner observes the journal, the blocked Plan directs the user to `shine app recover`.
@@ -318,12 +322,12 @@ the same for env-templated content. This is why changing an env var requires `sh
 take effect in installed files.
 
 Manifest identity for app files is the preset `source`, while ownership checks remain destination-
-based. If metadata changes a static Copy source's effective destination, upgrade journals the old
-receipt, old destination/backup/rollback, and absent new destination as one transaction. The new
-receipt commits with no inherited old backup; interruption before that point restores exact old
-state through `app recover`. A modified old copy or occupied new destination blocks relocation
-without creating a duplicate manifest entry. JSON relocation retains its existing executor until a
-key-owned two-destination recovery contract lands.
+based. If metadata changes a source's effective destination, upgrade journals one receipt
+replacement spanning both paths. Static Copy binds the old destination/backup/rollback and absent
+new destination; interruption before the new receipt restores exact old state. JSON merge instead
+binds separate old/new managed-key sets and restores/removes only those keys, preserving unrelated
+current values at both objects. A modified owned resource or occupied new destination blocks
+relocation without creating a duplicate manifest entry.
 
 Managed sys resources participate in the same flow. `shine update` compares the desired built-in
 resource receipt derived from the active env against `sys-manifest.toml`; `shine upgrade` then

@@ -240,6 +240,16 @@ bugs. Check this list before changing the modules named in each entry.
   unchanged rollback material may be removed. Invalid JSON, changed managed keys, changed rollback
   kind/hash/mode, or a receipt conflict blocks without mutation. Prior and desired JSON values never
   enter Action IR or the journal.
+- **App JSON relocation owns keys independently at both destinations.** `RelocateManagedJson`
+  binds the exact old/new receipt identities, separate old/new managed-key sets and subset hashes,
+  the optional old whole-file identity, canonical old rollback path, and an absent new destination.
+  Before the new receipt is durable, recovery removes only the desired keys from the new object and
+  restores only the previous keys into the old object, preserving unrelated current values on both
+  sides. After receipt commit, the old object is user-owned; recovery preserves it, verifies the new
+  managed subset, and removes only exact rollback material. Missing old state is supported without
+  rollback. Invalid JSON, changed managed keys, rollback changes, occupied paths, or receipt
+  conflicts block all recovery mutation. Neither prior nor desired JSON values enter Action IR or
+  the journal.
 - **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
   first action mutation, update action state atomically, persist the matching domain receipt, and
   only then commit by removing the journal. An existing or unsupported-version journal blocks a new

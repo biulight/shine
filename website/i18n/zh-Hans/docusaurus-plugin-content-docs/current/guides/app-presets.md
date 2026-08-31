@@ -107,8 +107,10 @@ contract。如果 receipt 已移除但正向 commit marker 尚未持久化，rec
 修改过的 stale 内容。
 静态 Copy relocation 的新 receipt 持久化之前，recovery 只会移除未修改的新文件；必要时会把已经
 还原到旧 destination 的用户文件放回固定 backup，再恢复精确的旧受管文件。新 receipt 持久化后，
-recovery 会保留两端最终状态，只清理未修改的旧 rollback material。JSON relocation 仍使用现有
-lifecycle 路径。
+recovery 会保留两端最终状态，只清理未修改的旧 rollback material。JSON relocation 使用独立的
+key-owned transaction：新 receipt 前，recovery 只移除新 destination 的 desired keys，并只还原旧
+destination 的 previous keys，同时保留两端其它当前设置。receipt 提交后，旧 object 已归用户所有；
+只要新 object 的 managed subset 未修改，recovery 就保留两端并只清理精确旧 rollback material。
 当上述创建、更新、relocation 或移除的 recovery 需要修改管理员路径时，recovery Plan 会包含 administrator
 permission，Shine 只在该 Plan 获得批准后请求授权。仅重建 receipt 或清理 journal 的恢复不会请求
 管理员权限。

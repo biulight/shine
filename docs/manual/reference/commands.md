@@ -218,6 +218,9 @@ evaluation failures are reported after the remaining selected generators run.
 - An App static Copy whose effective destination changes is relocated through one journaled
   old-receipt/new-receipt transaction. The old managed content must be unchanged and the new path
   absent; interrupted relocation is handled by `app recover`.
+- An App JSON merge whose effective destination changes uses a key-owned two-destination
+  transaction. Recovery restores/removes only the old/new declared top-level keys and preserves
+  unrelated current settings at both paths.
 - By default, `upgrade` prints each app category, Shell category, or managed-system item it actually
   updates and counts each user-facing target once. App rows include the number of changed files.
   `--verbose` expands app files and successful hook output, and also shows current/skipped items and

@@ -127,7 +127,11 @@ cleanup, and user-modified stale content is never forced through this path.
 For a static Copy relocation, recovery before the new receipt removes only an unchanged new file,
 returns a restored user file to the old fixed backup when necessary, and restores the exact old
 managed file. After the new receipt is durable, it preserves both final destinations and removes
-only unchanged old rollback material. JSON relocation retains its existing lifecycle path.
+only unchanged old rollback material. JSON relocation uses a separate key-owned transaction:
+before the new receipt, recovery removes only the desired keys at the new destination and restores
+only the previous keys at the old destination, preserving unrelated current values on both sides.
+After receipt commit, the old object is user-owned and recovery removes only exact old rollback
+material while preserving the new object when its managed subset is unchanged.
 When one of these creation, update, relocation, or removal recovery operations changes an
 administrator path,
 the recovery Plan includes administrator permission and Shine requests authorization only after

@@ -57,5 +57,6 @@ managed state and removes only exact rollback material.
   when key restoration rewrites a valid JSON object, but unrelated values are not replaced.
 - The same-directory rollback file temporarily contains the complete pre-operation JSON object and
   must be treated as sensitive transaction material.
-- JSON relocation, generators, Shell/Sys actions, and opaque execution remain outside this action
-  slice.
+- JSON relocation is specified separately by
+  [ADR 0063](0063-transactional-app-json-relocation.md); generators, remaining Shell/Sys actions,
+  and opaque execution remain outside this action slice.

@@ -27,8 +27,11 @@ Administrator permission, hold the privileged-operation lock through receipt com
 protected writes, moves, removals, and mode restoration through the host privilege port. Each
 journal remains until its matching manifest receipt state is durable; a
 fresh `app-recovery` Plan is required before removing or restoring unchanged transaction state.
-JSON merge, generators, relocation, and other domains retain their
-existing executors until narrower rollback contracts land.
+JSON merge install/update/removal uses key-owned actions that preserve unrelated current values.
+Static Copy and JSON destination relocation each replace one source receipt through a typed
+two-destination transaction; JSON recovery restores/removes only the independently bound old/new
+managed-key sets. Generators and remaining shared Shell/Sys resources retain their existing
+executors and explicit rollback classifications until narrower contracts land.
 
 Runtime APIs are workspace-internal and hidden from normal documentation. The versioned lifecycle
 result and security Plan contracts retain their documented compatibility guarantees. Protected

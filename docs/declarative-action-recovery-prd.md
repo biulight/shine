@@ -1,7 +1,8 @@
 # Declarative Action and Recovery PRD
 
 > **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
-> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, 4C.3, 4C.4a, and 4C.4b are
+> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, 4C.3, 4C.4a, 4C.4b, and
+> 4C.4c are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
@@ -20,6 +21,9 @@
 > those receipt-gated static Copy and JSON removal transactions while preserving modified stale
 > state. Static Copy relocation now replaces its source-keyed receipt through one action spanning
 > the old path/backup/rollback and absent new destination.
+> JSON relocation now performs the same receipt replacement through a distinct key-owned action:
+> recovery removes/restores only the separate desired/previous key sets and preserves unrelated
+> current values at both destinations.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -57,7 +61,7 @@ prepared journal → rename original to fixed backup → atomic managed write �
        └──────────── explicit recovery restores only an exact safe state ────────────┘
 ```
 
-App JSON relocation, remaining Shell/Sys actions, and automatic resume remain later slices.
+Remaining Shell/Sys actions and automatic resume remain later slices.
 
 ## Goals
 
@@ -119,6 +123,10 @@ are:
 - `MergeManagedJson`: a created or in-place JSON merge, its declared unique top-level keys,
   canonical rollback path, optional whole-file before identity, and previous/desired managed-subset
   hashes. JSON values remain outside the action.
+- `RelocateManagedJson`: an unchanged or already-missing receipt-owned JSON source, old canonical
+  rollback, absent new destination, optional previous whole-file identity, separate old/new
+  managed-key sets and subset hashes, and both receipt environment identities. JSON values remain
+  outside the action.
 - `RemoveManagedJson`: ordinary, stale-prune, or forced removal of declared JSON keys, binding the
   whole-file before identity plus distinct receipt/current managed-subset hashes and canonical
   rollback path.
@@ -338,6 +346,18 @@ cleans only exact rollback material.
 - Leave JSON relocation for a separate key-owned two-destination action rather than applying the
   whole-file static Copy proof.
 
+### Slice 4C.4c — App JSON relocation (implemented)
+
+- Replace independent new-destination merge and old-destination removal with one
+  `RelocateManagedJson` action and one source-receipt transition.
+- Bind the exact old receipt, optional old whole-file hash/mode, canonical old rollback, absent new
+  destination, separate previous/desired key sets and subset hashes, and old/new environment flags.
+- Before receipt commit, recover by removing only desired keys at the new destination and restoring
+  only previous keys at the old destination; preserve unrelated values currently present at both.
+- After receipt commit, preserve the user-owned old object and manifest-owned new subset, and remove
+  only exact old rollback material. Block invalid JSON, changed managed keys, path/receipt
+  conflicts, or changed rollback material.
+
 ### Slice 4D — Other domains and opaque inventory
 
 - Shell launcher/profile declarative actions. First-time launcher creation and explicit recovery are
@@ -375,4 +395,6 @@ recovery guidance to receipt-owned launcher replacement and same-directory rollb
 both locales. Slice 4D.3 extends it to launcher removal, including receipt reconstruction when the
 manifest write is durable but the positive removal commit marker is not. Slice 4C.4a applies the
 same App removal recovery guidance to `upgrade --prune-stale` in both locales. Slice 4C.4b adds
-static Copy relocation recovery and old/new destination safety guidance to both locales.
+static Copy relocation recovery and old/new destination safety guidance to both locales. Slice
+4C.4c extends that guidance to key-owned JSON relocation and unrelated-value preservation at both
+destinations.

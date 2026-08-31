@@ -55,6 +55,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   destination, optional fixed backup, rollback material, and absent new destination. Interrupted
   relocation recovers through `shine app recover`, and the new receipt no longer inherits the old
   backup path.
+- Journaled App JSON relocation as one key-owned old-receipt/new-receipt transaction. Recovery
+  removes desired keys from the new destination and restores previous keys at the old destination
+  before receipt commit while preserving unrelated current values at both paths; after commit it
+  cleans only exact old rollback material.
 - Journaled first-time Shell launcher creation for Unix symlinks, Unix Bun/live launchers, and
   Windows PowerShell/cmd shim pairs. `shine shell recover` reviews a separate recovery Plan and
   removes only unchanged transaction-created launcher resources, while preserving an exact
