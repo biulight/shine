@@ -167,15 +167,15 @@ Reverse of install, driven entirely by the manifest — never by re-scanning pre
 ## Declarative App action and recovery
 
 Approved App install routes two deliberately narrow creation cases through the Roadmap Phase 4
-executor: an unprivileged static Copy whose manifest receipt is absent and whose destination is
-either absent or an unowned regular file with an absent fixed backup path. Approved install and
-upgrade also route an unchanged receipt-owned, in-place, unprivileged static Copy replacement
+executor: a static Copy whose manifest receipt is absent and whose destination is either absent or
+an unowned regular file with an absent fixed backup path. Approved install and upgrade also route
+an unchanged receipt-owned, in-place static Copy replacement
 through the executor. Ordinary uninstall also routes an unchanged, receipt-owned, unprivileged
 static Copy through the executor, including restoration of an unchanged canonical persistent
 backup. Forced uninstall of a user-modified file uses a separate action for the same static Copy
-boundary. Administrator receipts reuse these removal actions with privileged path mutations under
-the administrator lock. JSON merge, generators, and relocation retain their existing executors
-until their rollback contracts land:
+boundary. Administrator static Copy create, update, and removal reuse these actions with privileged
+path mutations under the administrator lock. JSON merge, generators, and relocation retain their
+existing executors until their rollback contracts land:
 
 ```text
 approved PlanV1
@@ -190,11 +190,12 @@ approved PlanV1
        modes/hashes + previous receipt fields, no bytes
     or ForceRemoveManagedFile; destination + optional persistent backup + rollback + distinct
        receipt/current hashes + current/backup modes, no bytes
-  → each removal action also binds requires_admin; derive Administrator permission when true
+  → every static Copy action binds requires_admin; derive Administrator permission when true
   → validate action permissions are included in the approval
   → acquire host cross-process operation lock
-  → for requires_admin removal, keep the administrator lock across every check/move/commit and use
-    privileged move/remove for destination, persistent backup, and rollback paths
+  → for requires_admin static Copy, keep the administrator lock across every check/mutation/commit
+    and use privileged write/move/remove/mode operations for destination, persistent backup, and
+    rollback paths
   → refuse an existing app-operation-journal.toml
   → atomically persist prepared journal with original PlanApprovalV1
   → atomically create the absent destination, rename original to persistent backup then create,
@@ -229,6 +230,8 @@ read versioned journal + App manifest + destination + optional persistent/transa
     uninstall state and remove only exact user-modified rollback material
   → privileged removal recovery: request Administrator only when the selected safe state mutates a
     protected path; authorize after recovery Plan approval, then use privileged move/remove
+  → privileged create/update recovery follows the same rule for protected destination,
+    persistent-backup, and rollback mutations
   → any changed destination, backup, rollback material, or receipt => blocked/preserved
   → `shine app recover` renders explicit destination + operation-journal steps
   → default-No approval, or `--yes` for non-interactive recovery
@@ -245,10 +248,11 @@ never managed/original content or secret plaintext. See
 [ADR 0051](../decisions/0051-transactional-app-managed-file-update.md),
 [ADR 0052](../decisions/0052-transactional-app-managed-file-remove.md),
 [ADR 0053](../decisions/0053-transactional-app-backup-restoring-remove.md),
-[ADR 0054](../decisions/0054-transactional-forced-app-managed-file-remove.md), and
-[ADR 0055](../decisions/0055-privileged-app-removal-reuses-typed-transaction.md), plus
-`docs/declarative-action-recovery-prd.md` before extending it to JSON merge, privileged
-install/update, or opaque actions.
+[ADR 0054](../decisions/0054-transactional-forced-app-managed-file-remove.md),
+[ADR 0055](../decisions/0055-privileged-app-removal-reuses-typed-transaction.md), and
+[ADR 0056](../decisions/0056-privileged-app-create-update-reuse-typed-transactions.md), plus
+`docs/declarative-action-recovery-prd.md` before extending it to JSON merge, relocation, or opaque
+actions.
 
 Ordinary App install/upgrade/uninstall/refresh/artifact mutation never recovers implicitly. When
 their planner observes the journal, the blocked Plan directs the user to `shine app recover`.

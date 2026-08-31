@@ -40,6 +40,9 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Extended journaled ordinary, backup-restoring, and forced static Copy removal to administrator
   paths. Protected moves, cleanup, and recovery share the administrator lock and request elevation
   only when the reviewed Plan will mutate a protected path.
+- Extended journaled static Copy creation, backup-aware creation, and in-place update to
+  administrator paths. Protected writes, moves, mode restoration, receipt commit, and recovery hold
+  one administrator lock; receipt-only recovery does not request elevation.
 
 ### Breaking changes
 

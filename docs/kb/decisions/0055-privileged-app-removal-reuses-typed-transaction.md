@@ -55,5 +55,6 @@ alone does not trigger administrator authorization.
   downgrade a privileged receipt.
 - Recovery clients outside the CLI must honor the Plan's `Administrator` permission before using a
   real privileged host.
-- Privileged install/update, JSON merge, generators, relocation, stale-prune, Shell, and Sys action
-  migration remain separate work.
+- Privileged install/update follow the same principle through
+  [ADR 0056](0056-privileged-app-create-update-reuse-typed-transactions.md). JSON merge, generators,
+  relocation, stale-prune, Shell, and Sys action migration remain separate work.

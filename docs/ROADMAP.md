@@ -25,17 +25,18 @@
   在内存中检查最终内容，写入仍只发生在显式 refresh 或已批准 mutation。GPG/age portable
   secrets 和 machine-local env 已存在。
 - Phase 4 已开始：Core 已有独立于安全 Plan 的版本化 Action IR、App operation journal 与显式
-  recovery Plan；真实 App install 已将“目标缺失或可安全备份、非管理员、静态 Copy”接入
+  recovery Plan；真实 App install 已将“目标缺失或可安全备份的静态 Copy”接入
   create/receipt/commit 链路，`shine app recover` 能显式、重新批准地移除未提交创建或恢复未修改的
-  固定 backup；原地、receipt-owned、非管理员静态 Copy update 也使用同目录 transaction rollback
+  固定 backup；原地、receipt-owned 静态 Copy update 也使用同目录 transaction rollback
   material，并能在旧/新 receipt 边界安全恢复。无 persistent backup、未修改、非管理员静态 Copy 的
   普通 uninstall 也已使用 transaction rollback material，并在旧 receipt/receipt 缺失边界安全恢复；
   若 receipt 还拥有固定 `.shine.bak`，同一事务会恢复用户原文件，并在任一 rename 或 receipt commit
   中断后按双路径 fingerprint 安全回滚。对同一非管理员静态 Copy 边界，`--force` 移除用户修改内容
   也已有独立 Action：修改后内容会先成为同目录、fingerprint-bound rollback material，并在 receipt
-  commit 前连同可选 persistent backup 一起安全反转。管理员静态 Copy uninstall 复用这些 Action，
-  在完整检查/move/commit/recovery 期间持有 administrator lock 并使用 privileged path mutation；仅
-  receipt 修复不会请求提权。JSON merge 与其他 action/domain 尚未迁移，也不代表 Phase 4 exit
+  commit 前连同可选 persistent backup 一起安全反转。管理员静态 Copy create、update 与 uninstall
+  复用这些 Action，在完整检查/write/move/commit/recovery 期间持有 administrator lock 并使用
+  privileged path mutation；仅 receipt 修复或 journal 清理不会请求提权。JSON merge 与其他
+  action/domain 尚未迁移，也不代表 Phase 4 exit
   criteria 已满足。
 
 ## Guiding Principles

@@ -146,6 +146,11 @@ pub trait PrivilegedFileSystemHost {
         path: &'a Path,
         bytes: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
+    fn set_mode_privileged<'a>(
+        &'a self,
+        path: &'a Path,
+        mode: u32,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>>;
     fn move_privileged<'a>(
         &'a self,
         from: &'a Path,
@@ -233,6 +238,8 @@ pub trait SplitDnsHost: SplitDnsObservationHost {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostOperation {
     AcquirePrivilegedOperation,
+    WritePrivileged(PathBuf),
+    SetModePrivileged { path: PathBuf, mode: u32 },
     MovePrivileged { from: PathBuf, to: PathBuf },
     RemovePrivileged(PathBuf),
     Read(PathBuf),
@@ -583,6 +590,14 @@ impl PrivilegedFileSystemHost for RealHost {
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(privileged_write(path, bytes))
     }
+
+    fn set_mode_privileged<'a>(
+        &'a self,
+        path: &'a Path,
+        mode: u32,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(privileged_set_mode(path, mode))
+    }
     fn move_privileged<'a>(
         &'a self,
         from: &'a Path,
@@ -865,6 +880,32 @@ async fn privileged_write(path: &Path, content: &[u8]) -> anyhow::Result<()> {
         anyhow::bail!("failed to install privileged split DNS resource");
     }
     Ok(())
+}
+
+async fn privileged_set_mode(path: &Path, mode: u32) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        let _ = (path, mode);
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        if std::env::var("USER").is_ok_and(|user| user == "root") {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).await?;
+            return Ok(());
+        }
+        let status = tokio::process::Command::new("sudo")
+            .args(["-n", "chmod"])
+            .arg(format!("{:o}", mode & 0o7777))
+            .arg(path)
+            .status()
+            .await?;
+        if !status.success() {
+            anyhow::bail!("administrator permission was not granted");
+        }
+        Ok(())
+    }
 }
 
 async fn privileged_remove(path: &Path) -> anyhow::Result<()> {

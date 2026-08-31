@@ -1,18 +1,20 @@
 # Declarative Action and Recovery PRD
 
 > **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
-> 4C.2b-1, 4C.2b-2, 4C.2b-3a, and 4C.2b-3b are
+> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, and 4C.2c are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
-> unowned, unprivileged static Copy destinations, and the explicit CLI recovery path can remove an
+> unowned static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
-> upgrade also journal in-place replacement of an unchanged, receipt-owned, unprivileged static
+> upgrade also journal in-place replacement of an unchanged, receipt-owned static
 > Copy and retain its previous bytes only as same-directory transaction rollback material. Ordinary
 > uninstall uses the same material for an unchanged, receipt-owned, unprivileged static Copy with
-> no persistent backup until receipt removal and its journal commit marker are durable. The next
-> removal path also journals restoration of an unchanged fixed persistent backup and forced
+> no persistent backup until receipt removal and its journal commit marker are durable. Additional
+> removal paths journal restoration of an unchanged fixed persistent backup and forced
 > removal of a user-modified destination at the same static Copy boundary. Administrator removal
 > reuses the same actions with a persisted privilege flag, administrator permission, locked
 > privileged moves, and recovery authorization only when a protected path will change.
+> Administrator static Copy creation, backup-aware creation, and in-place update now reuse the
+> same actions, privileged mutation port, lock-spanning execution capability, and recovery rules.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -50,7 +52,7 @@ prepared journal → rename original to fixed backup → atomic managed write �
        └──────────── explicit recovery restores only an exact safe state ────────────┘
 ```
 
-JSON merge, privileged install/update, Shell/Sys actions, and automatic resume remain later slices.
+JSON merge, Shell/Sys actions, and automatic resume remain later slices.
 
 ## Goals
 
@@ -71,7 +73,7 @@ JSON merge, privileged install/update, Shell/Sys actions, and automatic resume r
 - No implicit recovery during ordinary list, status, planning, install, upgrade, or uninstall.
 - No serialized managed content, pre-operation content, environment values, or secret plaintext.
 - No rollback of opaque code, package-manager operations, network effects, or privileged work
-  outside the implemented App static Copy removal boundary.
+  outside the implemented App static Copy boundary.
 - No global transaction across targets or domains.
 - No promise that an internal Rust type is a stable third-party API.
 
@@ -90,11 +92,11 @@ are:
 - `CreateManagedFile`: canonical target/resource identity, resolved destination and desired content
   hash. The managed bytes are supplied separately after Plan approval and must match the hash.
 - `CreateManagedFileWithBackup`: the same identity plus the fixed backup path and original content
-  hash. It is valid only for an unowned regular-file, unprivileged static Copy destination with an
+  hash. It is valid only for an unowned regular-file static Copy destination with an
   absent backup.
 - `UpdateManagedFile`: an unchanged receipt-owned static Copy destination, its fixed transaction
   rollback path, previous persistent backup identity, prior mode and original/desired hashes. It is
-  valid only for an in-place, unprivileged update with an absent rollback path.
+  valid only for an in-place update with an absent rollback path.
 - `RemoveManagedFile`: an unchanged receipt-owned static Copy destination with no persistent backup,
   its fixed transaction rollback path, prior mode and original hash. It is valid only for an
   ordinary uninstall with an absent rollback path.
@@ -105,9 +107,9 @@ are:
   its distinct receipt/current hashes and current mode, canonical rollback path, and optional
   canonical persistent backup identity. The Plan must explicitly review the modification override.
 
-Each removal action also binds the receipt's `requires_admin` value. When true, it derives
-Administrator permission and routes protected path changes through the privileged host while
-retaining the same safe-state proof.
+Each static Copy action also binds the receipt's `requires_admin` value. When true, it derives
+Administrator permission and routes protected writes, moves, removals, and mode restoration through
+the privileged host while retaining the same safe-state proof.
 
 The classification-only escape hatch is:
 
@@ -154,9 +156,9 @@ After `receipt-committed`, it keeps the exact user original at the destination a
 unchanged managed rollback material. Forced removal uses the same path transitions but binds the
 different current user-modified hash separately from the receipt hash; before receipt commit it
 restores that modified file and reverses an optional backup restoration, while after commit it
-removes only exact modified rollback material. Administrator removal reuses these state machines:
-the host administrator lock covers revalidation through cleanup, and every protected move/remove
-uses the privileged mutation port.
+removes only exact modified rollback material. Administrator create, update, and removal reuse
+these state machines: the host administrator lock covers revalidation through receipt commit and
+cleanup, and every protected write/move/remove/mode operation uses the privileged mutation port.
 
 ### Recovery
 
@@ -273,6 +275,22 @@ before the first mutation.
   cleanup, and recovery.
 - Ask for recovery elevation only when the exact recovery Plan mutates a protected path.
 
+### Slice 4C.2c — Privileged managed create and update (implemented)
+
+- Bind persisted privilege identity and derive Administrator permission from create, backup-create,
+  and update actions.
+- Hold the administrator lock across exact path checks, journaled writes/moves, receipt commit,
+  rollback cleanup, and recovery; restore the prior mode through the privileged host.
+- Ask for recovery elevation only when the exact safe state changes a protected path; receipt-only
+  cleanup remains unprivileged.
+
+### Slice 4C.3 — JSON merge actions (next)
+
+- Define key-level ownership and rollback semantics without overwriting unrelated user changes.
+- Keep prior and desired JSON payloads out of the Action IR and journal.
+- Cover install, update, forced removal, receipt commit, and every interruption boundary before
+  admitting JSON merge to the action executor.
+
 ### Slice 4D — Other domains and opaque inventory
 
 - Shell launcher/profile declarative actions.
@@ -299,5 +317,5 @@ Slice 4A is internal and adds no public commands or behavior. Slice 4B.5 release
 recovery command and guidance. Slice 4C.1 expands recovery to fixed backups and blocks an occupied
 backup rather than replacing it. Slices 4C.2b-1 and 4C.2b-2 expand the same recovery guidance to
 receipt removal and fixed-backup restoration. Slice 4C.2b-3a adds forced-removal rollback and the
-same documentation remains aligned across both public manual locales. Slice 4C.2b-3b documents
-administrator-path authorization and recovery timing in both locales.
+same documentation remains aligned across both public manual locales. Slices 4C.2b-3b and 4C.2c
+document administrator-path authorization and recovery timing in both locales.

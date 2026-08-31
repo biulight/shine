@@ -53,9 +53,9 @@ Plan，不能绕过缺失权限、被阻塞的 teardown 或外部代码 gate。u
 
 `app uninstall --force` 会显式授权删除被用户修改过的受管内容。对于符合条件的静态 Copy，审阅的
 Plan 会标明该 override；事务会先把修改后的文件暂存到 `<name>.shine.rollback`，直至 receipt
-commit，并在同一事务中还原可选的固定 backup。管理员静态 Copy 使用同一 journal 与 recovery
-contract，其受保护路径 move 会在管理员权限下执行；其他安装策略仍使用原有卸载路径。执行破坏性
-操作前请使用 `--dry-run` 预览。
+commit，并在同一事务中还原可选的固定 backup。管理员静态 Copy 的创建、原地更新和移除使用同一
+journal 与 recovery contract；受保护路径的 write、move、mode 还原与 cleanup 会在管理员权限下
+执行。其他安装策略仍使用原有 lifecycle 路径。执行破坏性操作前请使用 `--dry-run` 预览。
 
 ## 恢复中断的 App 操作
 
@@ -89,8 +89,9 @@ rollback material。两个文件的 mode 与内容 fingerprint 都必须匹配�
 强制移除被用户修改过的静态 Copy 时，恢复会分别绑定旧 receipt hash 与修改后文件的
 mode/hash。receipt commit 前会还原该精确的修改后文件，并反转可选的 backup restoration；commit
 后则保留已完成的卸载，只移除精确匹配修改后文件的 rollback material。
-当上述 rollback 需要修改管理员路径时，recovery Plan 会包含 administrator permission，Shine 只在
-该 Plan 获得批准后请求授权。仅重建 receipt 或清理 journal 的恢复不会请求管理员权限。
+当上述创建、更新或移除的 recovery 需要修改管理员路径时，recovery Plan 会包含 administrator
+permission，Shine 只在该 Plan 获得批准后请求授权。仅重建 receipt 或清理 journal 的恢复不会请求
+管理员权限。
 rollback 文件可能包含之前的受管配置，应按敏感内容处理。如果任一受保护
 路径在中断后被修改，恢复命令返回非零，并保留这些路径和 journal 等待显式处理。把 regular file
 替换为 symlink 或目录也视为修改。不要手动编辑或删除 journal 或 rollback material。

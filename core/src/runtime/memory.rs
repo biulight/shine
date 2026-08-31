@@ -447,7 +447,33 @@ impl PrivilegedFileSystemHost for InMemoryHost {
         Box::pin(async move {
             self.write_atomic(path, bytes)
                 .await
-                .map_err(|error| error.into_anyhow("privileged write"))
+                .map_err(|error| error.into_anyhow("privileged write"))?;
+            self.state
+                .lock()
+                .expect("in-memory host lock")
+                .operations
+                .push(HostOperation::WritePrivileged(path.to_path_buf()));
+            Ok(())
+        })
+    }
+    fn set_mode_privileged<'a>(
+        &'a self,
+        path: &'a Path,
+        mode: u32,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            self.set_mode(path, mode)
+                .await
+                .map_err(|error| error.into_anyhow("privileged set mode"))?;
+            self.state
+                .lock()
+                .expect("in-memory host lock")
+                .operations
+                .push(HostOperation::SetModePrivileged {
+                    path: path.to_path_buf(),
+                    mode,
+                });
+            Ok(())
         })
     }
     fn move_privileged<'a>(

@@ -62,15 +62,23 @@ impl ActionIrV1 {
         let mut uncomputable_codes = BTreeSet::new();
         for action in &self.actions {
             match &action.kind {
-                ActionKindV1::CreateManagedFile { destination, .. } => {
+                ActionKindV1::CreateManagedFile {
+                    destination,
+                    requires_admin,
+                    ..
+                } => {
                     required.insert(PermissionV1::Filesystem {
                         access: FilesystemAccessV1::Write,
                         path: path_identity(destination),
                     });
+                    if *requires_admin {
+                        required.insert(PermissionV1::Administrator);
+                    }
                 }
                 ActionKindV1::CreateManagedFileWithBackup {
                     destination,
                     backup,
+                    requires_admin,
                     ..
                 } => {
                     required.insert(PermissionV1::Filesystem {
@@ -85,10 +93,14 @@ impl ActionIrV1 {
                         access: FilesystemAccessV1::Write,
                         path: path_identity(backup),
                     });
+                    if *requires_admin {
+                        required.insert(PermissionV1::Administrator);
+                    }
                 }
                 ActionKindV1::UpdateManagedFile {
                     destination,
                     rollback,
+                    requires_admin,
                     ..
                 } => {
                     for (access, path) in [
@@ -101,6 +113,9 @@ impl ActionIrV1 {
                             access,
                             path: path_identity(path),
                         });
+                    }
+                    if *requires_admin {
+                        required.insert(PermissionV1::Administrator);
                     }
                 }
                 ActionKindV1::RemoveManagedFile {
@@ -206,6 +221,7 @@ impl DeclarativeActionV1 {
         resource: impl Into<String>,
         destination: PathBuf,
         desired_hash: u64,
+        requires_admin: bool,
     ) -> Self {
         Self {
             action_id: action_id.into(),
@@ -214,6 +230,7 @@ impl DeclarativeActionV1 {
             kind: ActionKindV1::CreateManagedFile {
                 destination,
                 desired_hash,
+                requires_admin,
             },
             rollback: RollbackSupportV1::RemoveCreatedIfUnchanged,
         }
@@ -223,20 +240,18 @@ impl DeclarativeActionV1 {
         action_id: impl Into<String>,
         target: impl Into<String>,
         resource: impl Into<String>,
-        destination: PathBuf,
-        backup: PathBuf,
-        original_hash: u64,
-        desired_hash: u64,
+        spec: ManagedFileCreationWithBackupSpecV1,
     ) -> Self {
         Self {
             action_id: action_id.into(),
             target: target.into(),
             resource: resource.into(),
             kind: ActionKindV1::CreateManagedFileWithBackup {
-                destination,
-                backup,
-                original_hash,
-                desired_hash,
+                destination: spec.destination,
+                backup: spec.backup,
+                original_hash: spec.original_hash,
+                desired_hash: spec.desired_hash,
+                requires_admin: spec.requires_admin,
             },
             rollback: RollbackSupportV1::RestoreBackupIfUnchanged,
         }
@@ -260,6 +275,7 @@ impl DeclarativeActionV1 {
                 original_mode: spec.original_mode,
                 original_hash: spec.original_hash,
                 desired_hash: spec.desired_hash,
+                requires_admin: spec.requires_admin,
             },
             rollback: RollbackSupportV1::RestorePreviousIfUnchanged,
         }
@@ -477,6 +493,16 @@ pub struct ManagedFileUpdateSpecV1 {
     pub original_mode: Option<u32>,
     pub original_hash: u64,
     pub desired_hash: u64,
+    pub requires_admin: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedFileCreationWithBackupSpecV1 {
+    pub destination: PathBuf,
+    pub backup: PathBuf,
+    pub original_hash: u64,
+    pub desired_hash: u64,
+    pub requires_admin: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -526,12 +552,16 @@ pub enum ActionKindV1 {
     CreateManagedFile {
         destination: PathBuf,
         desired_hash: u64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        requires_admin: bool,
     },
     CreateManagedFileWithBackup {
         destination: PathBuf,
         backup: PathBuf,
         original_hash: u64,
         desired_hash: u64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        requires_admin: bool,
     },
     UpdateManagedFile {
         destination: PathBuf,
@@ -542,6 +572,8 @@ pub enum ActionKindV1 {
         original_mode: Option<u32>,
         original_hash: u64,
         desired_hash: u64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        requires_admin: bool,
     },
     RemoveManagedFile {
         destination: PathBuf,
@@ -670,6 +702,7 @@ mod tests {
                 "config",
                 PathBuf::from("/home/test/.config/demo/config"),
                 hash_content(b"super-secret-managed-bytes"),
+                false,
             )],
         )
     }
@@ -698,6 +731,31 @@ mod tests {
     }
 
     #[test]
+    fn privileged_file_actions_derive_administrator_permission() {
+        let destination = PathBuf::from("/etc/demo/config");
+        let value = ActionIrV1::new(
+            "operation-privileged",
+            vec![DeclarativeActionV1::update_managed_file(
+                "action-privileged",
+                "app/demo",
+                "config",
+                ManagedFileUpdateSpecV1 {
+                    destination,
+                    previous_backup: None,
+                    original_mode: Some(0o100600),
+                    original_hash: hash_content(b"previous"),
+                    desired_hash: hash_content(b"next"),
+                    requires_admin: true,
+                },
+            )],
+        );
+
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.display()));
+        assert!(requirements.required.contains(&PermissionV1::Administrator));
+    }
+
+    #[test]
     fn backup_creation_is_payload_free_and_derives_both_path_effects() {
         let destination = PathBuf::from("/home/test/.config/demo/config");
         let backup = PathBuf::from("/home/test/.config/demo/config.shine.bak");
@@ -707,10 +765,13 @@ mod tests {
                 "action-backup",
                 "app/demo",
                 "config",
-                destination.clone(),
-                backup.clone(),
-                hash_content(b"private-original"),
-                hash_content(b"private-managed"),
+                ManagedFileCreationWithBackupSpecV1 {
+                    destination: destination.clone(),
+                    backup: backup.clone(),
+                    original_hash: hash_content(b"private-original"),
+                    desired_hash: hash_content(b"private-managed"),
+                    requires_admin: false,
+                },
             )],
         );
         value.validate().unwrap();
@@ -757,6 +818,7 @@ mod tests {
                     original_mode: Some(0o100600),
                     original_hash: hash_content(b"private-previous-managed"),
                     desired_hash: hash_content(b"private-next-managed"),
+                    requires_admin: false,
                 },
             )],
         );

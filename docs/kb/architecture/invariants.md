@@ -166,7 +166,7 @@ bugs. Check this list before changing the modules named in each entry.
   receipt commits ownership of both paths, and any non-matching receipt that claims the source or
   either path blocks recovery.
 - **A managed App update moves, never serializes, its previous bytes.** The Phase 4 in-place update
-  slice applies only to an unchanged receipt-owned, unprivileged static Copy at the same
+  slice applies only to an unchanged receipt-owned static Copy at the same
   destination. Before replacement it journals, then renames the previous file to the canonical
   same-directory `<name>.shine.rollback` path; that path must be absent and unclaimed. The Action IR
   binds the previous App backup identity, prior mode and original/desired hashes but never either
@@ -205,14 +205,15 @@ bugs. Check this list before changing the modules named in each entry.
   kind, mode, hash, receipt, destination, backup, or rollback path blocks. Unchanged destinations
   use the ordinary removal action even under `--force`; non-static-Copy paths do not inherit this
   proof.
-- **Privileged App removal changes the mutation port, not the rollback proof.** The three static
-  Copy removal actions persist `requires_admin`, derive Administrator permission, and require the
-  exact old receipt to carry the same flag. Planning requests elevation only for an actual protected
-  path mutation. Apply, commit, and recovery hold the host-provided cross-process administrator
-  lock across revalidation and use privileged move/remove for destination, persistent backup, and
-  transaction rollback paths. A freshly reviewed recovery Plan requests Administrator only when
-  its exact safe state moves or removes one of those paths; receipt-only repair and journal cleanup
-  do not. CLI recovery obtains authorization after Plan approval and before mutation.
+- **Privileged App static Copy changes the mutation port, not the rollback proof.** Create,
+  backup-aware create, update, and the three removal actions persist `requires_admin`, derive
+  Administrator permission, and require matching old/new receipts to carry the same flag. Planning
+  requests elevation only for an actual protected path mutation. Apply, receipt commit, and recovery
+  hold the host-provided cross-process administrator lock across revalidation and use privileged
+  write/move/remove/mode operations for destination, persistent backup, and transaction rollback
+  paths. A freshly reviewed recovery Plan requests Administrator only when its exact safe state
+  changes one of those paths; receipt-only repair and journal cleanup do not. CLI recovery obtains
+  authorization after Plan approval and before mutation.
 - **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
   first action mutation, update action state atomically, persist the matching domain receipt, and
   only then commit by removing the journal. An existing or unsupported-version journal blocks a new

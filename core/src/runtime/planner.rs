@@ -403,8 +403,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     && direct.is_none()
                     && destination_exists
                     && file.generator.is_none()
-                    && file.install_strategy == crate::install::AppInstallStrategy::Copy
-                    && !file.requires_admin;
+                    && file.install_strategy == crate::install::AppInstallStrategy::Copy;
                 let backup = if backup_action_candidate {
                     let metadata = self.host().metadata(&destination).await.map_err(|error| {
                         error.into_anyhow("observing backup-aware App destination")
@@ -630,7 +629,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         })
                     })
                     && file.install_strategy == crate::install::AppInstallStrategy::Copy
-                    && !file.requires_admin
                     && file.generator.is_none()
                     && update_destination_regular
                     && !request.force;
@@ -669,7 +667,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 if request.operation == LifecycleOperation::Install
                     && action == PlanActionV1::Create
                     && file.install_strategy == crate::install::AppInstallStrategy::Copy
-                    && !file.requires_admin
                 {
                     add_app_journal_permissions(self.context(), permissions);
                     if let Some(backup) = &backup {
@@ -2478,7 +2475,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         for category in categories {
             for file in &category.files {
                 if file.generator.is_some()
-                    || file.requires_admin
                     || file.install_strategy != crate::install::AppInstallStrategy::Copy
                 {
                     continue;
@@ -2498,7 +2494,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 let action = if let Some(entry) = direct {
                     if entry.destination != destination
                         || entry.install_strategy != crate::install::AppInstallStrategy::Copy
-                        || entry.requires_admin
+                        || entry.requires_admin != file.requires_admin
                         || request.force
                         || desired_hash == entry.content_hash
                         || !plan.steps.iter().any(|step| {
@@ -2539,6 +2535,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             original_mode,
                             original_hash: entry.content_hash,
                             desired_hash,
+                            requires_admin: file.requires_admin,
                         },
                     )
                 } else {
@@ -2559,6 +2556,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             resource,
                             destination,
                             desired_hash,
+                            file.requires_admin,
                         ),
                         Some(original) => {
                             let backup = crate::install::backup_path(&destination);
@@ -2571,10 +2569,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                                 format!("create-with-backup:{action_identity}"),
                                 target,
                                 resource,
-                                destination,
-                                backup,
-                                crate::install::hash_content(&original),
-                                desired_hash,
+                                crate::action::ManagedFileCreationWithBackupSpecV1 {
+                                    destination,
+                                    backup,
+                                    original_hash: crate::install::hash_content(&original),
+                                    desired_hash,
+                                    requires_admin: file.requires_admin,
+                                },
                             )
                         }
                     }
@@ -5243,6 +5244,114 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
     }
 
     #[tokio::test]
+    async fn approved_privileged_app_install_journals_static_copy_creation() {
+        let runtime = runtime(privileged_static_copy_app_snapshot());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(
+                ir.actions.as_slice(),
+                [action] if matches!(
+                    action.kind,
+                    crate::action::ActionKindV1::CreateManagedFile {
+                        requires_admin: true,
+                        ..
+                    }
+                )
+            )
+        ));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        let destination = PathBuf::from("/etc/demo/config.toml");
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .contains(&HostOperation::WritePrivileged(destination))
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_privileged_app_install_journals_backup_aware_creation() {
+        let runtime = runtime(privileged_static_copy_app_snapshot());
+        let destination = PathBuf::from("/etc/demo/config.toml");
+        let backup = crate::install::backup_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, b"user-original".to_vec());
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(
+                ir.actions.as_slice(),
+                [action] if matches!(
+                    action.kind,
+                    crate::action::ActionKindV1::CreateManagedFileWithBackup {
+                        requires_admin: true,
+                        ..
+                    }
+                )
+            )
+        ));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .install_apps_approved(request, &approval, &mut observer, &mut Interaction)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&destination).await.unwrap(), b"managed");
+        assert_eq!(
+            runtime.host().read(&backup).await.unwrap(),
+            b"user-original"
+        );
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .contains(&HostOperation::MovePrivileged {
+                    from: destination,
+                    to: backup,
+                })
+        );
+    }
+
+    #[tokio::test]
     async fn approved_app_upgrade_journals_static_in_place_managed_update() {
         let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
             .file(
@@ -5354,6 +5463,80 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
                 .map(|entry| entry.content_hash),
             Some(crate::install::hash_content(b"next-managed"))
         );
+    }
+
+    #[tokio::test]
+    async fn approved_privileged_app_upgrade_journals_static_copy_update() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '/etc/demo'\n[permissions]\nschema_version = 1\nadministrator = true\n[[files]]\nsource = 'config.toml'\nrequires_admin = true\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let (destination, _) = seed_privileged_static_copy_app(&runtime, b"managed", None).await;
+        runtime
+            .host()
+            .set_mode(&destination, 0o100600)
+            .await
+            .unwrap();
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(
+                ir.actions.as_slice(),
+                [action] if matches!(
+                    action.kind,
+                    crate::action::ActionKindV1::UpdateManagedFile {
+                        requires_admin: true,
+                        ..
+                    }
+                )
+            )
+        ));
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            b"next-managed"
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let operations = runtime.host().operations();
+        assert!(operations.contains(&HostOperation::MovePrivileged {
+            from: destination.clone(),
+            to: rollback.clone(),
+        }));
+        assert!(operations.contains(&HostOperation::WritePrivileged(destination.clone())));
+        assert!(operations.contains(&HostOperation::SetModePrivileged {
+            path: destination,
+            mode: 0o100600,
+        }));
+        assert!(operations.contains(&HostOperation::RemovePrivileged(rollback)));
     }
 
     #[tokio::test]

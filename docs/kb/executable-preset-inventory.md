@@ -29,9 +29,8 @@ All other built-in App file copy/transform/JSON-merge effects are Core-typed rat
 Preset code. Phase 4 now covers absent-destination and backup-aware unowned regular-file static Copy
 creation, unchanged receipt-owned in-place static Copy update, ordinary removal of an unchanged
 receipt-owned static Copy with or without restoration of its fixed persistent backup, and forced
-removal of a user-modified static Copy. These removal actions now support both user and
-administrator paths. Merge, privileged install/update, generator and relocation actions remain to
-migrate.
+removal of a user-modified static Copy. These static Copy actions support both user and
+administrator paths. Merge, generator and relocation actions remain to migrate.
 
 ## Shell commands
 
@@ -68,10 +67,12 @@ the target ran but does not own third-party package uninstall or version rollbac
 2. App backup-aware unowned regular-file static Copy create and restore (implemented).
 3. App receipt-owned in-place static Copy update (implemented).
 4. App ordinary, backup-restoring, and forced static Copy remove, including administrator paths
-   (implemented); JSON merge and privileged install/update remain.
-5. Shell snapshot files, launchers and profile blocks.
-6. Managed Sys files/profile blocks and split DNS.
-7. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
+   (implemented).
+5. Administrator static Copy create, backup-aware create, and in-place update (implemented); JSON
+   merge remains.
+6. Shell snapshot files, launchers and profile blocks.
+7. Managed Sys files/profile blocks and split DNS.
+8. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
    opaque escape hatches unless a narrower typed action replaces them.
 
 Any new built-in executable capability must enter this inventory in the same change.
