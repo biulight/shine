@@ -1,7 +1,7 @@
 # Declarative Action and Recovery PRD
 
 > **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
-> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, and 4C.2c are
+> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, and 4C.3 are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
@@ -15,6 +15,8 @@
 > privileged moves, and recovery authorization only when a protected path will change.
 > Administrator static Copy creation, backup-aware creation, and in-place update now reuse the
 > same actions, privileged mutation port, lock-spanning execution capability, and recovery rules.
+> JSON merge now uses key-owned typed transactions that preserve unrelated current values during
+> recovery without serializing prior or desired JSON payloads.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -106,6 +108,11 @@ are:
 - `ForceRemoveManagedFile`: a user-modified, receipt-owned static Copy destination,
   its distinct receipt/current hashes and current mode, canonical rollback path, and optional
   canonical persistent backup identity. The Plan must explicitly review the modification override.
+- `MergeManagedJson`: a created or in-place JSON merge, its declared unique top-level keys,
+  canonical rollback path, optional whole-file before identity, and previous/desired managed-subset
+  hashes. JSON values remain outside the action.
+- `RemoveManagedJson`: ordinary or forced removal of declared JSON keys, binding the whole-file
+  before identity plus distinct receipt/current managed-subset hashes and canonical rollback path.
 
 Each static Copy action also binds the receipt's `requires_admin` value. When true, it derives
 Administrator permission and routes protected writes, moves, removals, and mode restoration through
@@ -284,12 +291,18 @@ before the first mutation.
 - Ask for recovery elevation only when the exact safe state changes a protected path; receipt-only
   cleanup remains unprivileged.
 
-### Slice 4C.3 — JSON merge actions (next)
+### Slice 4C.3 — JSON merge actions (implemented)
 
 - Define key-level ownership and rollback semantics without overwriting unrelated user changes.
 - Keep prior and desired JSON payloads out of the Action IR and journal.
 - Cover install, update, forced removal, receipt commit, and every interruption boundary before
   admitting JSON merge to the action executor.
+
+The implemented actions move an existing whole JSON file to exact same-directory rollback material
+but restore only declared top-level keys into the current object. This preserves unrelated values
+changed after interruption. Creation at an absent path removes the whole destination only when it
+contains no unrelated keys; committed uninstall preserves the now user-owned JSON object and
+cleans only exact rollback material.
 
 ### Slice 4D — Other domains and opaque inventory
 
@@ -318,4 +331,5 @@ recovery command and guidance. Slice 4C.1 expands recovery to fixed backups and 
 backup rather than replacing it. Slices 4C.2b-1 and 4C.2b-2 expand the same recovery guidance to
 receipt removal and fixed-backup restoration. Slice 4C.2b-3a adds forced-removal rollback and the
 same documentation remains aligned across both public manual locales. Slices 4C.2b-3b and 4C.2c
-document administrator-path authorization and recovery timing in both locales.
+document administrator-path authorization and recovery timing in both locales. Slice 4C.3 adds
+key-owned JSON merge recovery guidance to both locales.

@@ -43,6 +43,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 - Extended journaled static Copy creation, backup-aware creation, and in-place update to
   administrator paths. Protected writes, moves, mode restoration, receipt commit, and recovery hold
   one administrator lock; receipt-only recovery does not request elevation.
+- Journaled App JSON merge install, in-place update, ordinary uninstall, and forced uninstall.
+  Recovery restores or removes only declared top-level keys while preserving unrelated values
+  changed after interruption; Action IR and journals contain hashes and key names, never JSON
+  payloads.
 
 ### Breaking changes
 

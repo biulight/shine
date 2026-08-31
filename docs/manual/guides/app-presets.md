@@ -67,7 +67,8 @@ eligible static Copy, the reviewed Plan marks that override and the transaction 
 file at `<name>.shine.rollback` until receipt commit; an optional fixed backup is restored in the
 same transaction. Administrator static Copy files use the same journal and recovery contract for
 creation, in-place update, and removal while their protected writes, moves, mode restoration, and
-cleanup run with administrator access. Other install strategies retain their existing lifecycle
+cleanup run with administrator access. JSON merge is also journaled for install, in-place update,
+ordinary uninstall, and forced uninstall. Other install strategies retain their existing lifecycle
 path. Preview destructive intent with `--dry-run`.
 
 ## Recover an interrupted App operation
@@ -107,6 +108,12 @@ For a forced removal of a user-modified static Copy, recovery instead binds the 
 receipt hash separately from the modified file's mode and hash. Before receipt commit it restores
 that exact modified file and reverses an optional backup restoration; after commit it keeps the
 completed uninstall and removes only exact modified rollback material.
+For JSON merge, the declared top-level keys are the ownership boundary. An existing whole JSON
+object is moved to `.shine.rollback`, but recovery reads it only to restore those keys into the
+current object, preserving unrelated values changed after interruption. Creation at an absent path
+removes the whole file only when no unrelated keys exist. After uninstall receipt commit, the
+current JSON object is user-owned and recovery removes only unchanged rollback material—even if the
+user has reintroduced a formerly managed key.
 When one of these creation, update, or removal recovery operations changes an administrator path,
 the recovery Plan includes administrator permission and Shine requests authorization only after
 that Plan is approved. Repair that only reconstructs a receipt or clears a journal does not request

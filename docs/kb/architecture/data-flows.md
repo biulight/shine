@@ -160,7 +160,8 @@ The Core flow is:
 Reverse of install, driven entirely by the manifest — never by re-scanning presets:
 
 1. Look up the `AppEntry` by dest in `~/.shine/app-manifest.toml`.
-2. Remove the installed file (sudo path if the entry has `requires_admin = true`).
+2. Remove the installed static Copy (sudo path if `requires_admin = true`) or remove only the
+   receipt-declared top-level keys for JSON merge.
 3. Restore `<name>.shine.bak` if one exists.
 4. Remove the manifest entry.
 
@@ -174,8 +175,9 @@ through the executor. Ordinary uninstall also routes an unchanged, receipt-owned
 static Copy through the executor, including restoration of an unchanged canonical persistent
 backup. Forced uninstall of a user-modified file uses a separate action for the same static Copy
 boundary. Administrator static Copy create, update, and removal reuse these actions with privileged
-path mutations under the administrator lock. JSON merge, generators, and relocation retain their
-existing executors until their rollback contracts land:
+path mutations under the administrator lock. JSON merge install, in-place update, ordinary remove,
+and forced remove use key-owned actions that preserve unrelated current values. Generators and
+relocation retain their existing executors until their rollback contracts land:
 
 ```text
 approved PlanV1
@@ -190,6 +192,10 @@ approved PlanV1
        modes/hashes + previous receipt fields, no bytes
     or ForceRemoveManagedFile; destination + optional persistent backup + rollback + distinct
        receipt/current hashes + current/backup modes, no bytes
+    or MergeManagedJson; destination + rollback + managed keys + whole-file before identity +
+       previous/desired managed-subset hashes, no JSON values
+    or RemoveManagedJson; destination + rollback + managed keys + whole-file before identity +
+       distinct receipt/current managed-subset hashes, no JSON values
   → every static Copy action binds requires_admin; derive Administrator permission when true
   → validate action permissions are included in the approval
   → acquire host cross-process operation lock
@@ -201,7 +207,8 @@ approved PlanV1
   → atomically create the absent destination, rename original to persistent backup then create,
     rename previous managed bytes to `.shine.rollback` then replace and restore their mode,
     or rename an ordinary/forced uninstall destination to `.shine.rollback`, then optionally move
-       `.shine.bak` to destination
+       `.shine.bak` to destination; JSON actions rename an existing whole object to rollback but
+       write only a managed-key merge/removal result
   → atomically persist applied action state
   → App lifecycle atomically persists the matching manifest receipt state
     (owned receipt for create/update; safe receipt absence for remove)
@@ -228,6 +235,11 @@ read versioned journal + App manifest + destination + optional persistent/transa
   → forced managed-remove: before receipt commit, restore the exact user-modified rollback to the
     destination and reverse an optional backup restoration; after commit keep the completed
     uninstall state and remove only exact user-modified rollback material
+  → JSON merge/remove: exact rollback supplies prior managed-key values, but recovery changes only
+    those declared keys in current JSON and preserves unrelated values; absent-path creation removes
+    the file only when no unrelated keys exist
+  → committed JSON removal: preserve the now user-owned current object, even if a formerly managed
+    key was reintroduced, and remove only exact rollback material
   → privileged removal recovery: request Administrator only when the selected safe state mutates a
     protected path; authorize after recovery Plan approval, then use privileged move/remove
   → privileged create/update recovery follows the same rule for protected destination,
@@ -250,8 +262,9 @@ never managed/original content or secret plaintext. See
 [ADR 0053](../decisions/0053-transactional-app-backup-restoring-remove.md),
 [ADR 0054](../decisions/0054-transactional-forced-app-managed-file-remove.md),
 [ADR 0055](../decisions/0055-privileged-app-removal-reuses-typed-transaction.md), and
-[ADR 0056](../decisions/0056-privileged-app-create-update-reuse-typed-transactions.md), plus
-`docs/declarative-action-recovery-prd.md` before extending it to JSON merge, relocation, or opaque
+[ADR 0056](../decisions/0056-privileged-app-create-update-reuse-typed-transactions.md), and
+[ADR 0057](../decisions/0057-key-owned-json-merge-transactions.md), plus
+`docs/declarative-action-recovery-prd.md` before extending it to relocation or opaque
 actions.
 
 Ordinary App install/upgrade/uninstall/refresh/artifact mutation never recovers implicitly. When

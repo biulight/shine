@@ -56,5 +56,6 @@ alone does not trigger administrator authorization.
 - Recovery clients outside the CLI must honor the Plan's `Administrator` permission before using a
   real privileged host.
 - Privileged install/update follow the same principle through
-  [ADR 0056](0056-privileged-app-create-update-reuse-typed-transactions.md). JSON merge, generators,
+  [ADR 0056](0056-privileged-app-create-update-reuse-typed-transactions.md). JSON merge follows its
+  separate key-owned contract in [ADR 0057](0057-key-owned-json-merge-transactions.md); generators,
   relocation, stale-prune, Shell, and Sys action migration remain separate work.

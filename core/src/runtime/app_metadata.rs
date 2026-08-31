@@ -428,8 +428,9 @@ fn install_strategy(file: &FileToml, context: &str) -> Result<AppInstallStrategy
                 || keys
                     .iter()
                     .any(|key| key.trim().is_empty() || key.contains('.'))
+                || keys.iter().collect::<std::collections::BTreeSet<_>>().len() != keys.len()
             {
-                bail!("{context}: managed_keys must contain non-empty top-level JSON keys");
+                bail!("{context}: managed_keys must contain unique non-empty top-level JSON keys");
             }
             Ok(AppInstallStrategy::JsonMerge { managed_keys: keys })
         }

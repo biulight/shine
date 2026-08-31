@@ -35,8 +35,9 @@
   也已有独立 Action：修改后内容会先成为同目录、fingerprint-bound rollback material，并在 receipt
   commit 前连同可选 persistent backup 一起安全反转。管理员静态 Copy create、update 与 uninstall
   复用这些 Action，在完整检查/write/move/commit/recovery 期间持有 administrator lock 并使用
-  privileged path mutation；仅 receipt 修复或 journal 清理不会请求提权。JSON merge 与其他
-  action/domain 尚未迁移，也不代表 Phase 4 exit
+  privileged path mutation；仅 receipt 修复或 journal 清理不会请求提权。JSON merge 的
+  install、原地 update、普通/强制 uninstall 也已迁移到 key-owned Action；恢复只还原声明的
+  顶层 key，保留中断后发生的其它设置修改。其它 action/domain 尚未迁移，也不代表 Phase 4 exit
   criteria 已满足。
 
 ## Guiding Principles

@@ -23,6 +23,7 @@ use super::{
 use crate::action::{
     ActionIrV1, DeclarativeActionV1, ForcedManagedFileBackupV1, ForcedManagedFileRemoveSpecV1,
     ManagedFileRemoveSpecV1, ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1,
+    ManagedJsonMergeSpecV1, ManagedJsonRemoveSpecV1,
 };
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppEntry, AppManifest};
@@ -632,7 +633,52 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     && file.generator.is_none()
                     && update_destination_regular
                     && !request.force;
-                let update_rollback = update_action_candidate
+                let json_action_candidate = matches!(
+                    file.install_strategy,
+                    crate::install::AppInstallStrategy::JsonMerge { .. }
+                ) && file.generator.is_none()
+                    && matches!(action, PlanActionV1::Create | PlanActionV1::Update)
+                    && entry.is_none_or(|entry| {
+                        entry.destination == destination
+                            && entry.install_strategy == file.install_strategy
+                            && !entry.requires_admin
+                    });
+                let json_destination_regular = if json_action_candidate && current.is_some() {
+                    let metadata =
+                        self.host().metadata(&destination).await.map_err(|error| {
+                            error.into_anyhow("observing managed JSON destination")
+                        })?;
+                    metadata.kind == FileKind::File
+                } else {
+                    true
+                };
+                if json_action_candidate && !json_destination_regular {
+                    steps.push(
+                        PlanStepV1::new(
+                            &target,
+                            Some(file.source_rel.display().to_string()),
+                            PlanActionV1::Blocked,
+                        )
+                        .with_diagnostic_code("app_json_destination_not_regular"),
+                    );
+                    continue;
+                }
+                if json_action_candidate
+                    && current
+                        .as_deref()
+                        .is_some_and(|bytes| installed_app_hash(file, bytes).is_err())
+                {
+                    steps.push(
+                        PlanStepV1::new(
+                            &target,
+                            Some(file.source_rel.display().to_string()),
+                            PlanActionV1::Blocked,
+                        )
+                        .with_diagnostic_code("app_json_destination_invalid"),
+                    );
+                    continue;
+                }
+                let update_rollback = (update_action_candidate || json_action_candidate)
                     .then(|| crate::action::managed_file_rollback_path(&destination));
                 if let Some(rollback) = &update_rollback {
                     capture_path_state(
@@ -944,15 +990,22 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             if action == PlanActionV1::Remove && current.is_some() {
                 add_app_entry_permissions(self.context(), permissions, entry, request.operation);
             }
-            let remove_rollback = if action == PlanActionV1::Remove
-                && entry.install_strategy == crate::install::AppInstallStrategy::Copy
-                && active_file.as_ref().is_some_and(|file| {
-                    file.generator.is_none()
-                        && file.install_strategy == crate::install::AppInstallStrategy::Copy
-                })
-                && current.as_deref().is_some_and(|bytes| {
-                    crate::install::hash_content(bytes) == entry.content_hash || request.force
-                }) {
+            let typed_removal_candidate = active_file.as_ref().is_some_and(|file| {
+                file.generator.is_none()
+                    && file.install_strategy == entry.install_strategy
+                    && matches!(
+                        file.install_strategy,
+                        crate::install::AppInstallStrategy::Copy
+                            | crate::install::AppInstallStrategy::JsonMerge { .. }
+                    )
+                    && current.as_deref().is_some_and(|bytes| {
+                        installed_app_hash(file, bytes)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|hash| hash == entry.content_hash || request.force)
+                    })
+            });
+            let remove_rollback = if action == PlanActionV1::Remove && typed_removal_candidate {
                 let metadata = self
                     .host()
                     .metadata(&entry.destination)
@@ -1015,6 +1068,15 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     &entry.destination,
                     rollback,
                 );
+                if matches!(
+                    entry.install_strategy,
+                    crate::install::AppInstallStrategy::JsonMerge { .. }
+                ) {
+                    permissions.implicit(PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Write,
+                        path: review_path(self.context(), &entry.destination),
+                    });
+                }
             }
             let mut step = PlanStepV1::new(format!("app/{category}"), Some(resource), action);
             if modified {
@@ -2474,9 +2536,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
 
         for category in categories {
             for file in &category.files {
-                if file.generator.is_some()
-                    || file.install_strategy != crate::install::AppInstallStrategy::Copy
-                {
+                if file.generator.is_some() {
                     continue;
                 }
                 let source = logical_app_source(&category, file);
@@ -2489,8 +2549,79 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     &self.context().env,
                 )?;
                 let action_identity = format!("{target}/{resource}");
-                let desired_hash = crate::install::hash_content(&desired);
+                let desired_hash = desired_app_hash(file, &desired)?;
                 let direct = manifest.find_by_source(&source);
+                if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
+                    &file.install_strategy
+                {
+                    let expected_step = if direct.is_some() {
+                        PlanActionV1::Update
+                    } else {
+                        PlanActionV1::Create
+                    };
+                    if !matches!(
+                        request.operation,
+                        LifecycleOperation::Install | LifecycleOperation::Upgrade
+                    ) || direct.is_some_and(|entry| {
+                        entry.destination != destination
+                            || entry.install_strategy != file.install_strategy
+                            || entry.requires_admin
+                            || desired_hash == entry.content_hash
+                    }) || (direct.is_none() && request.operation != LifecycleOperation::Install)
+                        || !plan.steps.iter().any(|step| {
+                            step.target == target
+                                && step.resource.as_deref() == Some(resource.as_str())
+                                && step.action == expected_step
+                        })
+                    {
+                        continue;
+                    }
+                    let current = read_optional(self.host(), &destination).await?;
+                    let (original_mode, original_hash) = if let Some(bytes) = &current {
+                        let metadata =
+                            self.host().metadata(&destination).await.map_err(|error| {
+                                error.into_anyhow("observing managed JSON destination mode")
+                            })?;
+                        if metadata.kind != FileKind::File {
+                            continue;
+                        }
+                        installed_json_hash(bytes, managed_keys)?;
+                        (
+                            metadata.unix_mode,
+                            Some(crate::install::hash_content(bytes)),
+                        )
+                    } else {
+                        (None, None)
+                    };
+                    if direct.is_some() && current.is_none() {
+                        continue;
+                    }
+                    let rollback = crate::action::managed_file_rollback_path(&destination);
+                    if manifest.find_by_dest(&rollback).is_some()
+                        || path_exists(self.host(), &rollback).await?
+                    {
+                        bail!("managed JSON rollback path changed after Plan approval");
+                    }
+                    let action = DeclarativeActionV1::merge_managed_json(
+                        format!("merge-json:{action_identity}"),
+                        target,
+                        resource,
+                        ManagedJsonMergeSpecV1 {
+                            destination,
+                            original_mode,
+                            original_hash,
+                            previous_receipt_hash: direct.map(|entry| entry.content_hash),
+                            desired_managed_hash: desired_hash,
+                            managed_keys: managed_keys.clone(),
+                        },
+                    );
+                    actions.push(ActionIrV1::new(
+                        format!("app-{operation}:{fingerprint}:{action_identity}"),
+                        vec![action],
+                    ));
+                    continue;
+                }
+                let desired_hash = crate::install::hash_content(&desired);
                 let action = if let Some(entry) = direct {
                     if entry.destination != destination
                         || entry.install_strategy != crate::install::AppInstallStrategy::Copy
@@ -2619,17 +2750,13 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .into_iter()
                 .flat_map(|category| category.files)
                 .find(|file| logical_app_source_for(category, file) == entry.source);
-            if entry.install_strategy != crate::install::AppInstallStrategy::Copy
-                || !active_file.as_ref().is_some_and(|file| {
-                    file.generator.is_none()
-                        && file.install_strategy == crate::install::AppInstallStrategy::Copy
-                })
-                || !plan.steps.iter().any(|step| {
-                    step.target == format!("app/{category}")
-                        && step.resource.as_deref() == Some(resource)
-                        && step.action == PlanActionV1::Remove
-                })
-            {
+            if !active_file.as_ref().is_some_and(|file| {
+                file.generator.is_none() && file.install_strategy == entry.install_strategy
+            }) || !plan.steps.iter().any(|step| {
+                step.target == format!("app/{category}")
+                    && step.resource.as_deref() == Some(resource)
+                    && step.action == PlanActionV1::Remove
+            }) {
                 continue;
             }
             let metadata = match self.host().metadata(&entry.destination).await {
@@ -2643,6 +2770,47 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             let Some(current) = read_optional(self.host(), &entry.destination).await? else {
                 continue;
             };
+            if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
+                &entry.install_strategy
+            {
+                let Some(current_managed_hash) = installed_json_hash(&current, managed_keys)?
+                else {
+                    continue;
+                };
+                if current_managed_hash != entry.content_hash && !request.force {
+                    continue;
+                }
+                let rollback = crate::action::managed_file_rollback_path(&entry.destination);
+                if manifest.find_by_dest(&rollback).is_some()
+                    || path_exists(self.host(), &rollback).await?
+                {
+                    bail!("managed JSON removal rollback path changed after Plan approval");
+                }
+                let target = format!("app/{category}");
+                let action_identity = format!("{target}/{resource}");
+                let action = DeclarativeActionV1::remove_managed_json(
+                    format!("remove-json:{action_identity}"),
+                    target,
+                    resource,
+                    ManagedJsonRemoveSpecV1 {
+                        destination: entry.destination.clone(),
+                        original_mode: metadata.unix_mode,
+                        original_hash: crate::install::hash_content(&current),
+                        receipt_managed_hash: entry.content_hash,
+                        current_managed_hash,
+                        managed_keys: managed_keys.clone(),
+                        uses_env: entry.uses_env,
+                    },
+                );
+                actions.push(ActionIrV1::new(
+                    format!("app-uninstall:{fingerprint}:{action_identity}"),
+                    vec![action],
+                ));
+                continue;
+            }
+            if entry.install_strategy != crate::install::AppInstallStrategy::Copy {
+                continue;
+            }
             let current_hash = crate::install::hash_content(&current);
             if current_hash != entry.content_hash && !request.force {
                 continue;
@@ -5241,6 +5409,103 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
         assert!(destination_write < journal_writes[1]);
         assert!(journal_writes[1] < receipt_write);
         assert!(receipt_write < journal_commit);
+    }
+
+    #[tokio::test]
+    async fn approved_json_merge_install_and_uninstall_use_key_owned_actions() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'settings.json'\ninstall_mode = 'json-merge'\nmanaged_keys = ['proxy', 'containersProxy']\n".to_vec(),
+            )
+            .file(
+                "app/demo/settings.json",
+                br#"{"proxy":"managed","containersProxy":"managed"}"#.to_vec(),
+            )
+            .build();
+        let runtime = runtime(snapshot);
+        let destination = runtime
+            .context()
+            .home_dir
+            .join(".config/demo/settings.json");
+        let rollback = crate::action::managed_file_rollback_path(&destination);
+        runtime
+            .host()
+            .put_file(&destination, br#"{"theme":"dark"}"#.to_vec());
+        let install_request = AppPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let install_plan = runtime.plan_apps(install_request.clone()).await.unwrap();
+        let install_approval = PlanApprovalV1::for_reviewed_plan(&install_plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&install_request, &install_plan, &install_approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::MergeManagedJson { .. }))
+        ));
+        let mut observer = super::super::NullObserver;
+        runtime
+            .install_apps_approved(
+                install_request,
+                &install_approval,
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        let installed = runtime.host().read(&destination).await.unwrap();
+        let installed: serde_json::Value = serde_json::from_slice(&installed).unwrap();
+        assert_eq!(installed["theme"], "dark");
+        assert_eq!(installed["proxy"], "managed");
+        assert!(runtime.host().read(&rollback).await.is_err());
+
+        let uninstall_request = AppPlanRequest {
+            operation: LifecycleOperation::Uninstall,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let uninstall_plan = runtime.plan_apps(uninstall_request.clone()).await.unwrap();
+        assert!(
+            uninstall_plan
+                .permissions
+                .required
+                .contains(&PermissionV1::Filesystem {
+                    access: FilesystemAccessV1::Write,
+                    path: review_path(runtime.context(), &destination),
+                })
+        );
+        let uninstall_approval = PlanApprovalV1::for_reviewed_plan(&uninstall_plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&uninstall_request, &uninstall_plan, &uninstall_approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedJson { .. }))
+        ));
+        runtime
+            .uninstall_apps_approved(
+                uninstall_request,
+                &uninstall_approval,
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        let remaining = runtime.host().read(&destination).await.unwrap();
+        let remaining: serde_json::Value = serde_json::from_slice(&remaining).unwrap();
+        assert_eq!(remaining, serde_json::json!({"theme": "dark"}));
+        assert!(runtime.host().read(&rollback).await.is_err());
     }
 
     #[tokio::test]

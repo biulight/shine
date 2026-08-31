@@ -468,7 +468,19 @@ where
                     action_ir.actions.as_slice(),
                     [action] if matches!(action.kind, crate::action::ActionKindV1::UpdateManagedFile { .. })
                 );
-                let execution = if is_update {
+                let is_json = matches!(
+                    action_ir.actions.as_slice(),
+                    [action] if matches!(action.kind, crate::action::ActionKindV1::MergeManagedJson { .. })
+                );
+                let execution = if is_json {
+                    self.execute_app_managed_json_merge_approved(
+                        approved.plan,
+                        approved.approval,
+                        action_ir,
+                        content,
+                    )
+                    .await?
+                } else if is_update {
                     self.execute_app_managed_file_update_approved(
                         approved.plan,
                         approved.approval,
@@ -487,13 +499,14 @@ where
                 };
                 let backup = (!is_update).then(|| execution.backup.clone()).flatten();
                 journal_execution = Some(execution);
+                let installed_hash = desired_app_hash(&assessment.file, content)?;
                 Ok(match backup {
                     Some(backup) => InstallOutcome::BackedUpAndInstalled {
                         backup,
-                        hash: hash_content(content),
+                        hash: installed_hash,
                     },
                     None => InstallOutcome::Installed {
-                        hash: hash_content(content),
+                        hash: installed_hash,
                     },
                 })
             } else {
@@ -826,13 +839,25 @@ where
             let outcome = if let Some(index) = action_index {
                 let approved = approved.as_mut().expect("approved App uninstall actions");
                 let action_ir = approved.action_irs.remove(index);
-                let execution = self
-                    .execute_app_managed_file_removal_approved(
+                let is_json = matches!(
+                    action_ir.actions.as_slice(),
+                    [action] if matches!(action.kind, crate::action::ActionKindV1::RemoveManagedJson { .. })
+                );
+                let execution = if is_json {
+                    self.execute_app_managed_json_removal_approved(
                         approved.plan,
                         approved.approval,
                         action_ir,
                     )
-                    .await?;
+                    .await?
+                } else {
+                    self.execute_app_managed_file_removal_approved(
+                        approved.plan,
+                        approved.approval,
+                        action_ir,
+                    )
+                    .await?
+                };
                 let outcome = match (execution.forced, execution.backup.clone()) {
                     (false, None) => UninstallOutcome::Removed,
                     (false, Some(backup)) => UninstallOutcome::RestoredBackup { backup },
@@ -1523,14 +1548,27 @@ where
             let mut journal_execution = None;
             let installed = if let Some(index) = action_index {
                 let action_ir = approved.action_irs.remove(index);
-                let execution = self
-                    .execute_app_managed_file_update_approved(
+                let is_json = matches!(
+                    action_ir.actions.as_slice(),
+                    [action] if matches!(action.kind, crate::action::ActionKindV1::MergeManagedJson { .. })
+                );
+                let execution = if is_json {
+                    self.execute_app_managed_json_merge_approved(
                         approved.plan,
                         approved.approval,
                         action_ir,
                         content,
                     )
-                    .await?;
+                    .await?
+                } else {
+                    self.execute_app_managed_file_update_approved(
+                        approved.plan,
+                        approved.approval,
+                        action_ir,
+                        content,
+                    )
+                    .await?
+                };
                 journal_execution = Some(execution);
                 Ok(InstallOutcome::Installed { hash: desired_hash })
             } else {
@@ -2127,9 +2165,7 @@ fn app_upgrade_file_report(
 pub(crate) fn desired_app_hash(file: &AppFile, content: &[u8]) -> Result<u64> {
     match &file.install_strategy {
         AppInstallStrategy::Copy => Ok(hash_content(content)),
-        AppInstallStrategy::JsonMerge { managed_keys } => Ok(hash_content(&serialize_json_object(
-            &managed_json_payload(content, managed_keys)?,
-        )?)),
+        AppInstallStrategy::JsonMerge { managed_keys } => managed_json_hash(content, managed_keys),
     }
 }
 
@@ -2302,7 +2338,74 @@ async fn uninstall_json_merge(
     })
 }
 
-fn managed_json_payload(
+pub(crate) fn managed_json_hash(source: &[u8], managed_keys: &[String]) -> Result<u64> {
+    Ok(hash_content(&serialize_json_object(
+        &managed_json_payload(source, managed_keys)?,
+    )?))
+}
+
+pub(crate) fn merge_managed_json_bytes(
+    current: Option<&[u8]>,
+    source: &[u8],
+    managed_keys: &[String],
+) -> Result<Vec<u8>> {
+    let managed = managed_json_payload(source, managed_keys)?;
+    let mut root = current
+        .map(|bytes| parse_json_object(bytes, "json-merge: destination must be a JSON object"))
+        .transpose()?
+        .unwrap_or_default();
+    for (key, value) in managed {
+        root.insert(key, value);
+    }
+    serialize_json_object(&root)
+}
+
+pub(crate) fn remove_managed_json_bytes(
+    current: &[u8],
+    managed_keys: &[String],
+) -> Result<Vec<u8>> {
+    let mut root = parse_json_object(current, "json-merge: destination must be a JSON object")?;
+    for key in managed_keys {
+        root.remove(key);
+    }
+    serialize_json_object(&root)
+}
+
+pub(crate) fn restore_managed_json_bytes(
+    current: &[u8],
+    original: &[u8],
+    managed_keys: &[String],
+) -> Result<Vec<u8>> {
+    let mut root = parse_json_object(current, "json-merge: destination must be a JSON object")?;
+    let original = parse_json_object(original, "json-merge: rollback must be a JSON object")?;
+    for key in managed_keys {
+        if let Some(value) = original.get(key) {
+            root.insert(key.clone(), value.clone());
+        } else {
+            root.remove(key);
+        }
+    }
+    serialize_json_object(&root)
+}
+
+pub(crate) fn managed_json_keys_match(
+    left: &[u8],
+    right: &[u8],
+    managed_keys: &[String],
+) -> Result<bool> {
+    let left = parse_json_object(left, "json-merge: destination must be a JSON object")?;
+    let right = parse_json_object(right, "json-merge: comparison must be a JSON object")?;
+    Ok(managed_keys
+        .iter()
+        .all(|key| left.get(key) == right.get(key)))
+}
+
+pub(crate) fn managed_json_keys_absent(bytes: &[u8], managed_keys: &[String]) -> Result<bool> {
+    let root = parse_json_object(bytes, "json-merge: destination must be a JSON object")?;
+    Ok(managed_keys.iter().all(|key| !root.contains_key(key)))
+}
+
+pub(crate) fn managed_json_payload(
     source: &[u8],
     managed_keys: &[String],
 ) -> Result<JsonMap<String, JsonValue>> {
@@ -2332,7 +2435,10 @@ pub(crate) fn installed_json_hash(bytes: &[u8], managed_keys: &[String]) -> Resu
     }
 }
 
-fn parse_json_object(bytes: &[u8], context: &'static str) -> Result<JsonMap<String, JsonValue>> {
+pub(crate) fn parse_json_object(
+    bytes: &[u8],
+    context: &'static str,
+) -> Result<JsonMap<String, JsonValue>> {
     let value: JsonValue = serde_json::from_slice(bytes).context(context)?;
     let JsonValue::Object(object) = value else {
         bail!("{context}");
@@ -2340,7 +2446,7 @@ fn parse_json_object(bytes: &[u8], context: &'static str) -> Result<JsonMap<Stri
     Ok(object)
 }
 
-fn serialize_json_object(object: &JsonMap<String, JsonValue>) -> Result<Vec<u8>> {
+pub(crate) fn serialize_json_object(object: &JsonMap<String, JsonValue>) -> Result<Vec<u8>> {
     let mut bytes =
         serde_json::to_vec_pretty(object).context("json-merge: serialization failed")?;
     if bytes.last() != Some(&b'\n') {

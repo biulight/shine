@@ -55,7 +55,8 @@ Plan，不能绕过缺失权限、被阻塞的 teardown 或外部代码 gate。u
 Plan 会标明该 override；事务会先把修改后的文件暂存到 `<name>.shine.rollback`，直至 receipt
 commit，并在同一事务中还原可选的固定 backup。管理员静态 Copy 的创建、原地更新和移除使用同一
 journal 与 recovery contract；受保护路径的 write、move、mode 还原与 cleanup 会在管理员权限下
-执行。其他安装策略仍使用原有 lifecycle 路径。执行破坏性操作前请使用 `--dry-run` 预览。
+执行。JSON merge 的 install、原地 update、普通 uninstall 和强制 uninstall 也会写入 journal。
+其他安装策略仍使用原有 lifecycle 路径。执行破坏性操作前请使用 `--dry-run` 预览。
 
 ## 恢复中断的 App 操作
 
@@ -89,6 +90,11 @@ rollback material。两个文件的 mode 与内容 fingerprint 都必须匹配�
 强制移除被用户修改过的静态 Copy 时，恢复会分别绑定旧 receipt hash 与修改后文件的
 mode/hash。receipt commit 前会还原该精确的修改后文件，并反转可选的 backup restoration；commit
 后则保留已完成的卸载，只移除精确匹配修改后文件的 rollback material。
+JSON merge 以声明的顶层 key 作为 ownership 边界。已有的完整 JSON object 会被移动到
+`.shine.rollback`，但 recovery 只从中读取并还原这些 key，同时保留中断后修改的其它当前值。
+如果 destination 原本不存在，只有当前 object 不含其它 key 时才删除整个文件。uninstall receipt
+commit 后，当前 JSON object 已归用户所有；即使用户重新加入曾受管的 key，recovery 也只清理未修改
+的 rollback material。
 当上述创建、更新或移除的 recovery 需要修改管理员路径时，recovery Plan 会包含 administrator
 permission，Shine 只在该 Plan 获得批准后请求授权。仅重建 receipt 或清理 journal 的恢复不会请求
 管理员权限。

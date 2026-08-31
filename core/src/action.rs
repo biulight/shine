@@ -192,6 +192,50 @@ impl ActionIrV1 {
                         required.insert(PermissionV1::Administrator);
                     }
                 }
+                ActionKindV1::MergeManagedJson {
+                    destination,
+                    rollback,
+                    original_hash,
+                    ..
+                } => {
+                    for (access, path) in [
+                        (FilesystemAccessV1::Write, destination.as_path()),
+                        (FilesystemAccessV1::Remove, destination.as_path()),
+                    ] {
+                        required.insert(PermissionV1::Filesystem {
+                            access,
+                            path: path_identity(path),
+                        });
+                    }
+                    if original_hash.is_some() {
+                        for (access, path) in [
+                            (FilesystemAccessV1::Write, rollback.as_path()),
+                            (FilesystemAccessV1::Remove, rollback.as_path()),
+                        ] {
+                            required.insert(PermissionV1::Filesystem {
+                                access,
+                                path: path_identity(path),
+                            });
+                        }
+                    }
+                }
+                ActionKindV1::RemoveManagedJson {
+                    destination,
+                    rollback,
+                    ..
+                } => {
+                    for (access, path) in [
+                        (FilesystemAccessV1::Write, destination.as_path()),
+                        (FilesystemAccessV1::Remove, destination.as_path()),
+                        (FilesystemAccessV1::Write, rollback.as_path()),
+                        (FilesystemAccessV1::Remove, rollback.as_path()),
+                    ] {
+                        required.insert(PermissionV1::Filesystem {
+                            access,
+                            path: path_identity(path),
+                        });
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
                 }
@@ -355,6 +399,55 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn merge_managed_json(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ManagedJsonMergeSpecV1,
+    ) -> Self {
+        let rollback = managed_file_rollback_path(&spec.destination);
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::MergeManagedJson {
+                destination: spec.destination,
+                rollback,
+                original_mode: spec.original_mode,
+                original_hash: spec.original_hash,
+                previous_receipt_hash: spec.previous_receipt_hash,
+                desired_managed_hash: spec.desired_managed_hash,
+                managed_keys: spec.managed_keys,
+            },
+            rollback: RollbackSupportV1::RestoreJsonKeysIfUnchanged,
+        }
+    }
+
+    pub fn remove_managed_json(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ManagedJsonRemoveSpecV1,
+    ) -> Self {
+        let rollback = managed_file_rollback_path(&spec.destination);
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::RemoveManagedJson {
+                destination: spec.destination,
+                rollback,
+                original_mode: spec.original_mode,
+                original_hash: spec.original_hash,
+                receipt_managed_hash: spec.receipt_managed_hash,
+                current_managed_hash: spec.current_managed_hash,
+                managed_keys: spec.managed_keys,
+                uses_env: spec.uses_env,
+            },
+            rollback: RollbackSupportV1::RestoreRemovedJsonKeysIfUnchanged,
+        }
+    }
+
     fn validate(&self) -> Result<(), ActionIrError> {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
@@ -473,6 +566,47 @@ impl DeclarativeActionV1 {
                     .to_string(),
             )),
             (
+                ActionKindV1::MergeManagedJson {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    previous_receipt_hash,
+                    managed_keys,
+                    ..
+                },
+                RollbackSupportV1::RestoreJsonKeysIfUnchanged,
+            ) if !destination.as_os_str().is_empty()
+                && *rollback == managed_file_rollback_path(destination)
+                && (original_hash.is_some() || original_mode.is_none())
+                && (previous_receipt_hash.is_none() || original_hash.is_some())
+                && valid_managed_json_keys(managed_keys) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::MergeManagedJson { .. }, _) => Err(ActionIrError::Invalid(
+                "managed JSON merge requires canonical rollback, paired original identity, non-empty unique top-level keys, and restore-json-keys-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::RemoveManagedJson {
+                    destination,
+                    rollback,
+                    managed_keys,
+                    ..
+                },
+                RollbackSupportV1::RestoreRemovedJsonKeysIfUnchanged,
+            ) if !destination.as_os_str().is_empty()
+                && *rollback == managed_file_rollback_path(destination)
+                && valid_managed_json_keys(managed_keys) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::RemoveManagedJson { .. }, _) => Err(ActionIrError::Invalid(
+                "managed JSON removal requires its canonical rollback path, non-empty unique top-level keys, and restore-removed-json-keys-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
                 ActionKindV1::OpaqueExecution { capability, .. },
                 RollbackSupportV1::Unsupported { reason_code },
             ) => {
@@ -546,6 +680,27 @@ pub struct ForcedManagedFileRemoveSpecV1 {
     pub requires_admin: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedJsonMergeSpecV1 {
+    pub destination: PathBuf,
+    pub original_mode: Option<u32>,
+    pub original_hash: Option<u64>,
+    pub previous_receipt_hash: Option<u64>,
+    pub desired_managed_hash: u64,
+    pub managed_keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedJsonRemoveSpecV1 {
+    pub destination: PathBuf,
+    pub original_mode: Option<u32>,
+    pub original_hash: u64,
+    pub receipt_managed_hash: u64,
+    pub current_managed_hash: u64,
+    pub managed_keys: Vec<String>,
+    pub uses_env: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ActionKindV1 {
@@ -615,6 +770,30 @@ pub enum ActionKindV1 {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         requires_admin: bool,
     },
+    MergeManagedJson {
+        destination: PathBuf,
+        rollback: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_mode: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_hash: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_receipt_hash: Option<u64>,
+        desired_managed_hash: u64,
+        managed_keys: Vec<String>,
+    },
+    RemoveManagedJson {
+        destination: PathBuf,
+        rollback: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_mode: Option<u32>,
+        original_hash: u64,
+        receipt_managed_hash: u64,
+        current_managed_hash: u64,
+        managed_keys: Vec<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        uses_env: bool,
+    },
     OpaqueExecution {
         capability: String,
         provenance: ActionProvenanceV1,
@@ -638,6 +817,8 @@ pub enum RollbackSupportV1 {
     RestorePreviousIfUnchanged,
     RestorePreviousWithBackupIfUnchanged,
     RestoreForcedPreviousIfUnchanged,
+    RestoreJsonKeysIfUnchanged,
+    RestoreRemovedJsonKeysIfUnchanged,
     Unsupported { reason_code: String },
 }
 
@@ -686,6 +867,14 @@ fn validate_identity(kind: &str, value: &str) -> Result<(), ActionIrError> {
         )));
     }
     Ok(())
+}
+
+fn valid_managed_json_keys(keys: &[String]) -> bool {
+    !keys.is_empty()
+        && keys.iter().all(|key| {
+            !key.trim().is_empty() && !key.contains('.') && !key.chars().any(char::is_control)
+        })
+        && keys.iter().collect::<BTreeSet<_>>().len() == keys.len()
 }
 
 #[cfg(test)]

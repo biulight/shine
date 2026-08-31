@@ -214,6 +214,14 @@ bugs. Check this list before changing the modules named in each entry.
   paths. A freshly reviewed recovery Plan requests Administrator only when its exact safe state
   changes one of those paths; receipt-only repair and journal cleanup do not. CLI recovery obtains
   authorization after Plan approval and before mutation.
+- **App JSON merge owns declared keys, never the whole object.** Install/update and ordinary or
+  forced removal bind the exact pre-operation JSON file as same-directory rollback material, but
+  recovery reads it only to restore declared unique top-level keys into the current object. It must
+  preserve every current unrelated value. Creation at an absent path removes the whole file only
+  when no unrelated keys exist; after removal receipt commit, current JSON is user-owned and only
+  unchanged rollback material may be removed. Invalid JSON, changed managed keys, changed rollback
+  kind/hash/mode, or a receipt conflict blocks without mutation. Prior and desired JSON values never
+  enter Action IR or the journal.
 - **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
   first action mutation, update action state atomically, persist the matching domain receipt, and
   only then commit by removing the journal. An existing or unsupported-version journal blocks a new

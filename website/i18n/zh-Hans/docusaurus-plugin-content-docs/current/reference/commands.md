@@ -70,7 +70,7 @@ shine app artifact apply <APP_ID> [--yes]
 shine app artifact remove <APP_ID> [--yes]
 ```
 
-`--replace-managed` 会覆盖安装后被用户修改的受管内容。先使用 `shine info <TARGET> --diff` 检查差异。`app uninstall --force` 会删除被用户修改过的受管文件，执行前应加 `--dry-run` 预览。对于符合条件的静态 Copy，该强制删除会写入 journal，并把修改后的文件作为同目录 rollback material 暂存到 receipt commit；管理员静态 Copy 的创建、原地更新和移除通过 privileged write、move、mode 还原与 cleanup 使用同一 journaled transaction，其他安装策略仍使用原有 lifecycle 路径。
+`--replace-managed` 会覆盖安装后被用户修改的受管内容。先使用 `shine info <TARGET> --diff` 检查差异。`app uninstall --force` 会删除被用户修改过的受管文件，执行前应加 `--dry-run` 预览。对于符合条件的静态 Copy，该强制删除会写入 journal，并把修改后的文件作为同目录 rollback material 暂存到 receipt commit；管理员静态 Copy 的创建、原地更新和移除通过 privileged write、move、mode 还原与 cleanup 使用同一 journaled transaction。JSON merge 的 install、原地 update、普通 uninstall 和强制 uninstall 也会按顶层 key ownership 写入 journal；其它安装策略仍使用原有 lifecycle 路径。
 
 `shell install --dry-run` 会解析 metadata、部署来源、Bun 策略和计划中的命令入口，但不会提取或
 快照预设、渲染模板、创建链接、写入 manifest 或修改 shell profile。
@@ -100,6 +100,9 @@ rollback material。两个文件的 mode 与内容 fingerprint 都必须与 jour
 强制移除被用户修改过的静态 Copy 会使用独立 action：receipt commit 前的恢复会还原
 精确的修改后文件并反转可选 backup restoration；commit 后的恢复会保留已完成卸载，只移除与所
 捕获修改后 mode/hash 匹配的 rollback material。
+JSON merge recovery 只把精确的完整 rollback 文件用作旧声明 key 值的来源。它会在当前 object
+中还原或移除这些 key，不会替换中断后发生变化的其它值。uninstall receipt commit 后，它会保留
+用户所有的当前 object，只移除精确匹配的 rollback material。
 管理员静态 Copy 的 recovery 仅在精确恢复状态需要 write、move、remove 或改变受保护路径 mode 时
 包含 administrator permission。Shine 会在 recovery Plan 获批后请求授权；仅修复 receipt 或清理
 stale journal 不会请求。

@@ -1,3 +1,8 @@
+use super::app::{
+    installed_json_hash, managed_json_hash, managed_json_keys_absent, managed_json_keys_match,
+    merge_managed_json_bytes, parse_json_object, remove_managed_json_bytes,
+    restore_managed_json_bytes,
+};
 use super::{
     CoreRuntime, FileKind, FileSystemHost, FileSystemObservationHost, PrivilegedFileSystemHost,
     RuntimeContext,
@@ -136,6 +141,18 @@ impl AppOperationJournalV1 {
                     }) =>
                 {
                     bail!("App operation journal contains a non-canonical forced-removal path");
+                }
+                ActionKindV1::MergeManagedJson {
+                    destination,
+                    rollback,
+                    ..
+                }
+                | ActionKindV1::RemoveManagedJson {
+                    destination,
+                    rollback,
+                    ..
+                } if managed_file_rollback_path(destination) != *rollback => {
+                    bail!("App operation journal contains a non-canonical JSON rollback path");
                 }
                 _ => {}
             }
@@ -977,6 +994,232 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             .with_diagnostic_code(code),
                     );
                 }
+                ActionKindV1::MergeManagedJson {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    desired_managed_hash,
+                    managed_keys,
+                    ..
+                } => {
+                    let current = observe_recovery_file(self.host(), destination).await?;
+                    let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                    state.add_observation(
+                        format!("destination:{}", action.action_id),
+                        current.identity(),
+                    )?;
+                    state.add_observation(
+                        format!("rollback:{}", action.action_id),
+                        rollback_current.identity(),
+                    )?;
+                    let (plan_action, code) = if matching_app_receipt(&manifest, action) {
+                        match json_rollback_is_exact(
+                            &rollback_current,
+                            *original_hash,
+                            *original_mode,
+                        ) {
+                            Some(false) => {
+                                blocked = true;
+                                (PlanActionV1::Blocked, "app_recovery_json_rollback_changed")
+                            }
+                            Some(true) => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                (
+                                    PlanActionV1::Remove,
+                                    "app_recovery_remove_committed_json_rollback",
+                                )
+                            }
+                            None => (
+                                PlanActionV1::None,
+                                "app_recovery_json_receipt_already_committed",
+                            ),
+                        }
+                    } else {
+                        match assess_json_merge_recovery(
+                            &current,
+                            &rollback_current,
+                            *original_hash,
+                            *original_mode,
+                            *desired_managed_hash,
+                            managed_keys,
+                        )? {
+                            JsonRecoveryAssessment::NotStarted => {
+                                (PlanActionV1::None, "app_recovery_json_merge_not_started")
+                            }
+                            JsonRecoveryAssessment::AlreadyRestored => {
+                                if matches!(
+                                    rollback_current,
+                                    RecoveryFileObservation::Regular(_, _)
+                                ) {
+                                    required.insert(PermissionV1::Filesystem {
+                                        access: FilesystemAccessV1::Remove,
+                                        path: review_path(self.context(), rollback),
+                                    });
+                                    (
+                                        PlanActionV1::Remove,
+                                        "app_recovery_remove_restored_json_rollback",
+                                    )
+                                } else {
+                                    (PlanActionV1::None, "app_recovery_json_merge_not_started")
+                                }
+                            }
+                            JsonRecoveryAssessment::RestoreByMove
+                            | JsonRecoveryAssessment::RestoreKeys => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Write,
+                                    path: review_path(self.context(), destination),
+                                });
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                (
+                                    PlanActionV1::Update,
+                                    "app_recovery_restore_json_managed_keys",
+                                )
+                            }
+                            JsonRecoveryAssessment::RemoveCreatedFile => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), destination),
+                                });
+                                (
+                                    PlanActionV1::Remove,
+                                    "app_recovery_remove_created_json_file",
+                                )
+                            }
+                            JsonRecoveryAssessment::RemoveCreatedKeys => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Write,
+                                    path: review_path(self.context(), destination),
+                                });
+                                (
+                                    PlanActionV1::Update,
+                                    "app_recovery_remove_created_json_keys",
+                                )
+                            }
+                            JsonRecoveryAssessment::Blocked => {
+                                blocked = true;
+                                (PlanActionV1::Blocked, "app_recovery_json_state_changed")
+                            }
+                        }
+                    };
+                    steps.push(
+                        PlanStepV1::new(&action.target, Some(&action.resource), plan_action)
+                            .with_diagnostic_code(code),
+                    );
+                }
+                ActionKindV1::RemoveManagedJson {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    managed_keys,
+                    ..
+                } => {
+                    let current = observe_recovery_file(self.host(), destination).await?;
+                    let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                    state.add_observation(
+                        format!("destination:{}", action.action_id),
+                        current.identity(),
+                    )?;
+                    state.add_observation(
+                        format!("rollback:{}", action.action_id),
+                        rollback_current.identity(),
+                    )?;
+                    let committed = action_state == JournalActionStateV1::ReceiptCommitted;
+                    let previous_receipt_present = matching_previous_app_receipt(&manifest, action);
+                    let (plan_action, code) = if committed {
+                        match json_rollback_is_exact(
+                            &rollback_current,
+                            Some(*original_hash),
+                            *original_mode,
+                        ) {
+                            Some(false) => {
+                                blocked = true;
+                                (PlanActionV1::Blocked, "app_recovery_json_rollback_changed")
+                            }
+                            Some(true) => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                (
+                                    PlanActionV1::Remove,
+                                    "app_recovery_remove_committed_json_rollback",
+                                )
+                            }
+                            None => (
+                                PlanActionV1::None,
+                                "app_recovery_json_removal_already_committed",
+                            ),
+                        }
+                    } else {
+                        if !previous_receipt_present {
+                            required.insert(PermissionV1::Filesystem {
+                                access: FilesystemAccessV1::Write,
+                                path: review_path(
+                                    self.context(),
+                                    &self.context().shine_dir.join("app-manifest.toml"),
+                                ),
+                            });
+                        }
+                        match assess_json_remove_recovery(
+                            &current,
+                            &rollback_current,
+                            *original_hash,
+                            *original_mode,
+                            managed_keys,
+                        )? {
+                            JsonRecoveryAssessment::NotStarted if previous_receipt_present => {
+                                (PlanActionV1::None, "app_recovery_json_removal_not_started")
+                            }
+                            JsonRecoveryAssessment::NotStarted => (
+                                PlanActionV1::Update,
+                                "app_recovery_restore_json_removal_receipt",
+                            ),
+                            JsonRecoveryAssessment::RestoreByMove
+                            | JsonRecoveryAssessment::RestoreKeys => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Write,
+                                    path: review_path(self.context(), destination),
+                                });
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                (
+                                    PlanActionV1::Update,
+                                    "app_recovery_restore_removed_json_keys",
+                                )
+                            }
+                            JsonRecoveryAssessment::AlreadyRestored => {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), rollback),
+                                });
+                                (
+                                    PlanActionV1::Remove,
+                                    "app_recovery_remove_restored_json_rollback",
+                                )
+                            }
+                            JsonRecoveryAssessment::Blocked
+                            | JsonRecoveryAssessment::RemoveCreatedFile
+                            | JsonRecoveryAssessment::RemoveCreatedKeys => {
+                                blocked = true;
+                                (PlanActionV1::Blocked, "app_recovery_json_state_changed")
+                            }
+                        }
+                    };
+                    steps.push(
+                        PlanStepV1::new(&action.target, Some(&action.resource), plan_action)
+                            .with_diagnostic_code(code),
+                    );
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     blocked = true;
                     steps.push(
@@ -1335,6 +1578,318 @@ where
             backup: previous_backup,
             forced: false,
             privileged_operation: requires_admin.then_some(operation_guard),
+        })
+    }
+
+    /// Merge one top-level managed JSON subset while retaining the previous
+    /// whole file only as same-directory transaction material. Recovery reads
+    /// that material but restores only the declared keys.
+    pub async fn execute_app_managed_json_merge_approved(
+        &self,
+        plan: &PlanV1,
+        approval: &PlanApprovalV1,
+        action_ir: ActionIrV1,
+        source: &[u8],
+    ) -> Result<AppOperationExecutionV1> {
+        approval.validate(plan)?;
+        if !matches!(
+            plan.operation,
+            PlanOperationV1::Install | PlanOperationV1::Upgrade
+        ) {
+            bail!("managed JSON merge requires an install or upgrade Plan");
+        }
+        action_ir.validate()?;
+        let requirements =
+            action_ir.permission_requirements(|path| review_path(self.context(), path));
+        if !requirements.uncomputable_codes.is_empty()
+            || requirements
+                .required
+                .iter()
+                .any(|permission| !approval.approved_permissions.contains(permission))
+        {
+            bail!(
+                "managed JSON action permissions were not included in the approved security Plan"
+            );
+        }
+        let [action] = action_ir.actions.as_slice() else {
+            bail!("the managed JSON merge slice accepts exactly one action");
+        };
+        if !plan.steps.iter().any(|step| {
+            step.target == action.target
+                && step.resource.as_deref() == Some(action.resource.as_str())
+                && matches!(step.action, PlanActionV1::Create | PlanActionV1::Update)
+        }) {
+            bail!("managed JSON merge was not described by the approved security Plan");
+        }
+        let (
+            destination,
+            rollback,
+            original_mode,
+            original_hash,
+            previous_receipt_hash,
+            desired_managed_hash,
+            managed_keys,
+        ) = match (&action.kind, &action.rollback) {
+            (
+                ActionKindV1::MergeManagedJson {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    previous_receipt_hash,
+                    desired_managed_hash,
+                    managed_keys,
+                },
+                RollbackSupportV1::RestoreJsonKeysIfUnchanged,
+            ) => (
+                destination.clone(),
+                rollback.clone(),
+                *original_mode,
+                *original_hash,
+                *previous_receipt_hash,
+                *desired_managed_hash,
+                managed_keys.clone(),
+            ),
+            _ => bail!("the managed JSON merge slice requires key-safe rollback"),
+        };
+        if managed_json_hash(source, &managed_keys)? != desired_managed_hash {
+            bail!("managed JSON source does not match the action IR identity");
+        }
+        let action_id = action.action_id.clone();
+        let operation_guard = self.host().acquire_privileged_operation().await?;
+        if load_app_operation_journal(self.host(), &self.context().shine_dir)
+            .await?
+            .is_some()
+        {
+            bail!("an interrupted App operation must be recovered before starting another one");
+        }
+        let (manifest, _) =
+            load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
+        if previous_receipt_hash.is_some() {
+            if !matching_previous_app_receipt(&manifest, action) {
+                bail!("managed JSON update requires its exact previous App receipt");
+            }
+        } else {
+            let source_identity = action_source_identity(action);
+            if manifest.find_by_source(&source_identity).is_some()
+                || manifest.find_by_dest(&destination).is_some()
+            {
+                bail!("managed JSON creation requires an unowned destination");
+            }
+        }
+        if managed_file_rollback_path(&destination) != rollback
+            || manifest.find_by_dest(&rollback).is_some()
+            || path_exists(self.host(), &rollback).await?
+        {
+            bail!("managed JSON rollback path must be absent and unowned");
+        }
+        let original = match original_hash {
+            Some(expected_hash) => {
+                let metadata = self.host().metadata(&destination).await.map_err(|error| {
+                    error.into_anyhow("failed to inspect managed JSON destination")
+                })?;
+                if metadata.kind != FileKind::File || metadata.unix_mode != original_mode {
+                    bail!("managed JSON destination kind or mode changed after Plan approval");
+                }
+                let bytes = read_optional(self.host(), &destination)
+                    .await?
+                    .context("managed JSON merge requires its existing destination")?;
+                if hash_content(&bytes) != expected_hash {
+                    bail!("managed JSON destination changed after Plan approval");
+                }
+                Some(bytes)
+            }
+            None => {
+                if path_exists(self.host(), &destination).await? {
+                    bail!("managed JSON creation requires an absent destination");
+                }
+                None
+            }
+        };
+        let merged = merge_managed_json_bytes(original.as_deref(), source, &managed_keys)?;
+        let mut journal = AppOperationJournalV1::new(action_ir, approval.clone());
+        save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
+        if original.is_some() {
+            move_app_managed_path(
+                self.host(),
+                &destination,
+                &rollback,
+                false,
+                "failed to stage previous managed JSON file",
+            )
+            .await?;
+        }
+        write_app_managed_path(
+            self.host(),
+            &destination,
+            &merged,
+            false,
+            "failed to write managed JSON merge",
+        )
+        .await?;
+        if let Some(mode) = original_mode {
+            set_app_managed_mode(
+                self.host(),
+                &destination,
+                mode,
+                false,
+                "failed to preserve managed JSON mode",
+            )
+            .await?;
+        }
+        journal.mark_applied(&action_id)?;
+        save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
+        drop(operation_guard);
+        Ok(AppOperationExecutionV1 {
+            operation_id: journal.action_ir.operation_id,
+            backup: None,
+            forced: false,
+            privileged_operation: None,
+        })
+    }
+
+    /// Remove only the declared managed JSON keys while staging the exact
+    /// pre-uninstall file for receipt-safe rollback.
+    pub async fn execute_app_managed_json_removal_approved(
+        &self,
+        plan: &PlanV1,
+        approval: &PlanApprovalV1,
+        action_ir: ActionIrV1,
+    ) -> Result<AppOperationExecutionV1> {
+        approval.validate(plan)?;
+        if plan.operation != PlanOperationV1::Uninstall {
+            bail!("managed JSON removal requires an uninstall Plan");
+        }
+        action_ir.validate()?;
+        let requirements =
+            action_ir.permission_requirements(|path| review_path(self.context(), path));
+        if !requirements.uncomputable_codes.is_empty()
+            || requirements
+                .required
+                .iter()
+                .any(|permission| !approval.approved_permissions.contains(permission))
+        {
+            bail!(
+                "managed JSON removal permissions were not included in the approved security Plan"
+            );
+        }
+        let [action] = action_ir.actions.as_slice() else {
+            bail!("the managed JSON removal slice accepts exactly one action");
+        };
+        let (
+            destination,
+            rollback,
+            original_mode,
+            original_hash,
+            receipt_managed_hash,
+            current_managed_hash,
+            managed_keys,
+        ) = match (&action.kind, &action.rollback) {
+            (
+                ActionKindV1::RemoveManagedJson {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    receipt_managed_hash,
+                    current_managed_hash,
+                    managed_keys,
+                    ..
+                },
+                RollbackSupportV1::RestoreRemovedJsonKeysIfUnchanged,
+            ) => (
+                destination.clone(),
+                rollback.clone(),
+                *original_mode,
+                *original_hash,
+                *receipt_managed_hash,
+                *current_managed_hash,
+                managed_keys.clone(),
+            ),
+            _ => bail!("the managed JSON removal slice requires key-safe rollback"),
+        };
+        let forced = current_managed_hash != receipt_managed_hash;
+        if !plan.steps.iter().any(|step| {
+            step.target == action.target
+                && step.resource.as_deref() == Some(action.resource.as_str())
+                && step.action == PlanActionV1::Remove
+                && (!forced
+                    || step
+                        .diagnostic_codes
+                        .contains(&"app_user_modification_override".to_string()))
+        }) {
+            bail!("managed JSON removal was not described by the approved security Plan");
+        }
+        let operation_guard = self.host().acquire_privileged_operation().await?;
+        if load_app_operation_journal(self.host(), &self.context().shine_dir)
+            .await?
+            .is_some()
+        {
+            bail!("an interrupted App operation must be recovered before starting another one");
+        }
+        let (manifest, _) =
+            load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
+        if !matching_previous_app_receipt(&manifest, action) {
+            bail!("managed JSON removal requires its exact previous App receipt");
+        }
+        if managed_file_rollback_path(&destination) != rollback
+            || manifest.find_by_dest(&rollback).is_some()
+            || path_exists(self.host(), &rollback).await?
+        {
+            bail!("managed JSON rollback path must be absent and unowned");
+        }
+        let metadata = self.host().metadata(&destination).await.map_err(|error| {
+            error.into_anyhow("failed to inspect managed JSON removal destination")
+        })?;
+        if metadata.kind != FileKind::File || metadata.unix_mode != original_mode {
+            bail!("managed JSON destination kind or mode changed after Plan approval");
+        }
+        let original = read_optional(self.host(), &destination)
+            .await?
+            .context("managed JSON removal requires its existing destination")?;
+        if hash_content(&original) != original_hash
+            || installed_json_hash(&original, &managed_keys)? != Some(current_managed_hash)
+        {
+            bail!("managed JSON destination changed after Plan approval");
+        }
+        let removed = remove_managed_json_bytes(&original, &managed_keys)?;
+        let action_id = action.action_id.clone();
+        let mut journal = AppOperationJournalV1::new(action_ir, approval.clone());
+        save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
+        move_app_managed_path(
+            self.host(),
+            &destination,
+            &rollback,
+            false,
+            "failed to stage managed JSON removal",
+        )
+        .await?;
+        write_app_managed_path(
+            self.host(),
+            &destination,
+            &removed,
+            false,
+            "failed to write managed JSON removal",
+        )
+        .await?;
+        if let Some(mode) = original_mode {
+            set_app_managed_mode(
+                self.host(),
+                &destination,
+                mode,
+                false,
+                "failed to preserve managed JSON mode",
+            )
+            .await?;
+        }
+        journal.mark_applied(&action_id)?;
+        save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
+        drop(operation_guard);
+        Ok(AppOperationExecutionV1 {
+            operation_id: journal.action_ir.operation_id,
+            backup: None,
+            forced,
+            privileged_operation: None,
         })
     }
 
@@ -1754,6 +2309,60 @@ where
                             "forced App removal rollback material changed before commit; operation journal preserved"
                         ),
                     }
+                }
+            }
+            if let ActionKindV1::MergeManagedJson {
+                rollback,
+                original_mode,
+                original_hash,
+                ..
+            } = &action.kind
+            {
+                match json_rollback_is_exact(
+                    &observe_recovery_file(self.host(), rollback).await?,
+                    *original_hash,
+                    *original_mode,
+                ) {
+                    None => {}
+                    Some(true) => {
+                        remove_app_managed_path(
+                            self.host(),
+                            rollback,
+                            false,
+                            "failed to remove managed JSON rollback material",
+                        )
+                        .await?;
+                    }
+                    Some(false) => bail!(
+                        "managed JSON rollback material changed before commit; operation journal preserved"
+                    ),
+                }
+            }
+            if let ActionKindV1::RemoveManagedJson {
+                rollback,
+                original_mode,
+                original_hash,
+                ..
+            } = &action.kind
+            {
+                match json_rollback_is_exact(
+                    &observe_recovery_file(self.host(), rollback).await?,
+                    Some(*original_hash),
+                    *original_mode,
+                ) {
+                    None => {}
+                    Some(true) => {
+                        remove_app_removal_path(
+                            self.host(),
+                            rollback,
+                            false,
+                            "failed to remove managed JSON removal rollback material",
+                        )
+                        .await?;
+                    }
+                    Some(false) => bail!(
+                        "managed JSON removal rollback material changed before commit; operation journal preserved"
+                    ),
                 }
             }
         }
@@ -2236,6 +2845,203 @@ where
                         }
                     }
                 }
+                ActionKindV1::MergeManagedJson {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    desired_managed_hash,
+                    managed_keys,
+                    ..
+                } => {
+                    let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                    if matching_app_receipt(&manifest, action) {
+                        match json_rollback_is_exact(
+                            &rollback_current,
+                            *original_hash,
+                            *original_mode,
+                        ) {
+                            None => {}
+                            Some(true) => {
+                                remove_app_managed_path(
+                                    self.host(),
+                                    rollback,
+                                    false,
+                                    "failed to remove committed managed JSON rollback material",
+                                )
+                                .await?;
+                            }
+                            Some(false) => bail!(
+                                "managed JSON rollback material changed after receipt commit; recovery preserved it"
+                            ),
+                        }
+                        continue;
+                    }
+                    let current = observe_recovery_file(self.host(), destination).await?;
+                    match assess_json_merge_recovery(
+                        &current,
+                        &rollback_current,
+                        *original_hash,
+                        *original_mode,
+                        *desired_managed_hash,
+                        managed_keys,
+                    )? {
+                        JsonRecoveryAssessment::NotStarted => {}
+                        JsonRecoveryAssessment::RestoreByMove => {
+                            move_app_managed_path(
+                                self.host(),
+                                rollback,
+                                destination,
+                                false,
+                                "failed to restore previous managed JSON file",
+                            )
+                            .await?;
+                        }
+                        JsonRecoveryAssessment::RestoreKeys => {
+                            restore_json_keys_from_rollback(
+                                self.host(),
+                                destination,
+                                rollback,
+                                managed_keys,
+                            )
+                            .await?;
+                        }
+                        JsonRecoveryAssessment::AlreadyRestored => {
+                            if matches!(rollback_current, RecoveryFileObservation::Regular(_, _)) {
+                                remove_app_managed_path(
+                                    self.host(),
+                                    rollback,
+                                    false,
+                                    "failed to remove restored managed JSON rollback material",
+                                )
+                                .await?;
+                            }
+                        }
+                        JsonRecoveryAssessment::RemoveCreatedFile => {
+                            remove_app_managed_path(
+                                self.host(),
+                                destination,
+                                false,
+                                "failed to remove interrupted managed JSON file",
+                            )
+                            .await?;
+                        }
+                        JsonRecoveryAssessment::RemoveCreatedKeys => {
+                            let RecoveryFileObservation::Regular(bytes, mode) = current else {
+                                unreachable!("assessment requires a regular JSON destination")
+                            };
+                            let removed = remove_managed_json_bytes(&bytes, managed_keys)?;
+                            write_app_managed_path(
+                                self.host(),
+                                destination,
+                                &removed,
+                                false,
+                                "failed to remove interrupted managed JSON keys",
+                            )
+                            .await?;
+                            if let Some(mode) = mode {
+                                set_app_managed_mode(
+                                    self.host(),
+                                    destination,
+                                    mode,
+                                    false,
+                                    "failed to preserve managed JSON recovery mode",
+                                )
+                                .await?;
+                            }
+                        }
+                        JsonRecoveryAssessment::Blocked => bail!(
+                            "managed JSON keys or rollback material changed after the interrupted merge; recovery preserved both"
+                        ),
+                    }
+                }
+                ActionKindV1::RemoveManagedJson {
+                    destination,
+                    rollback,
+                    original_mode,
+                    original_hash,
+                    managed_keys,
+                    ..
+                } => {
+                    let rollback_current = observe_recovery_file(self.host(), rollback).await?;
+                    if action_state == JournalActionStateV1::ReceiptCommitted {
+                        match json_rollback_is_exact(
+                            &rollback_current,
+                            Some(*original_hash),
+                            *original_mode,
+                        ) {
+                            None => {}
+                            Some(true) => {
+                                remove_app_removal_path(
+                                    self.host(),
+                                    rollback,
+                                    false,
+                                    "failed to remove committed managed JSON removal rollback material",
+                                )
+                                .await?;
+                            }
+                            Some(false) => bail!(
+                                "managed JSON removal rollback material changed after receipt commit; recovery preserved it"
+                            ),
+                        }
+                        continue;
+                    }
+                    let current = observe_recovery_file(self.host(), destination).await?;
+                    let assessment = assess_json_remove_recovery(
+                        &current,
+                        &rollback_current,
+                        *original_hash,
+                        *original_mode,
+                        managed_keys,
+                    )?;
+                    if assessment == JsonRecoveryAssessment::Blocked {
+                        bail!(
+                            "managed JSON keys or rollback material changed after the interrupted uninstall; recovery preserved both"
+                        );
+                    }
+                    if !matching_previous_app_receipt(&manifest, action) {
+                        manifest.upsert(previous_removed_app_receipt(action)?);
+                        manifest
+                            .save(self.host(), &self.context().shine_dir)
+                            .await?;
+                    }
+                    match assessment {
+                        JsonRecoveryAssessment::NotStarted => {}
+                        JsonRecoveryAssessment::RestoreByMove => {
+                            move_app_removal_path(
+                                self.host(),
+                                rollback,
+                                destination,
+                                false,
+                                "failed to restore removed managed JSON file",
+                            )
+                            .await?;
+                        }
+                        JsonRecoveryAssessment::RestoreKeys => {
+                            restore_json_keys_from_rollback(
+                                self.host(),
+                                destination,
+                                rollback,
+                                managed_keys,
+                            )
+                            .await?;
+                        }
+                        JsonRecoveryAssessment::AlreadyRestored => {
+                            remove_app_removal_path(
+                                self.host(),
+                                rollback,
+                                false,
+                                "failed to remove restored managed JSON rollback material",
+                            )
+                            .await?;
+                        }
+                        JsonRecoveryAssessment::Blocked
+                        | JsonRecoveryAssessment::RemoveCreatedFile
+                        | JsonRecoveryAssessment::RemoveCreatedKeys => {
+                            unreachable!("managed JSON removal assessment checked above")
+                        }
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     bail!("opaque App actions cannot be rolled back automatically");
                 }
@@ -2265,6 +3071,54 @@ fn recovery_permissions_touch_paths<'a>(
             PermissionV1::Filesystem { path, .. } if paths.contains(path)
         )
     })
+}
+
+async fn restore_json_keys_from_rollback<H>(
+    host: &H,
+    destination: &Path,
+    rollback: &Path,
+    managed_keys: &[String],
+) -> Result<()>
+where
+    H: FileSystemHost + PrivilegedFileSystemHost,
+{
+    let destination_metadata = host.metadata(destination).await.map_err(|error| {
+        error.into_anyhow("failed to inspect managed JSON recovery destination")
+    })?;
+    let current = host
+        .read(destination)
+        .await
+        .map_err(|error| error.into_anyhow("failed to read managed JSON recovery destination"))?;
+    let original = host
+        .read(rollback)
+        .await
+        .map_err(|error| error.into_anyhow("failed to read managed JSON rollback material"))?;
+    let restored = restore_managed_json_bytes(&current, &original, managed_keys)?;
+    write_app_managed_path(
+        host,
+        destination,
+        &restored,
+        false,
+        "failed to restore managed JSON keys",
+    )
+    .await?;
+    if let Some(mode) = destination_metadata.unix_mode {
+        set_app_managed_mode(
+            host,
+            destination,
+            mode,
+            false,
+            "failed to preserve managed JSON recovery mode",
+        )
+        .await?;
+    }
+    remove_app_managed_path(
+        host,
+        rollback,
+        false,
+        "failed to remove restored managed JSON rollback material",
+    )
+    .await
 }
 
 async fn move_app_removal_path<H>(
@@ -2441,9 +3295,25 @@ fn matching_app_receipt(
                     && entry.install_strategy == AppInstallStrategy::Copy
                     && entry.requires_admin == *requires_admin
             }
+            ActionKindV1::MergeManagedJson {
+                destination,
+                desired_managed_hash,
+                managed_keys,
+                ..
+            } => {
+                entry.destination == *destination
+                    && entry.content_hash == *desired_managed_hash
+                    && entry.backup.is_none()
+                    && entry.install_strategy
+                        == AppInstallStrategy::JsonMerge {
+                            managed_keys: managed_keys.clone(),
+                        }
+                    && !entry.requires_admin
+            }
             ActionKindV1::RemoveManagedFile { .. } => false,
             ActionKindV1::RemoveManagedFileWithBackup { .. } => false,
             ActionKindV1::ForceRemoveManagedFile { .. } => false,
+            ActionKindV1::RemoveManagedJson { .. } => false,
             ActionKindV1::OpaqueExecution { .. } => false,
         })
 }
@@ -2452,6 +3322,46 @@ fn matching_previous_app_receipt(
     manifest: &AppManifest,
     action: &crate::action::DeclarativeActionV1,
 ) -> bool {
+    if let ActionKindV1::MergeManagedJson {
+        destination,
+        previous_receipt_hash: Some(previous_receipt_hash),
+        managed_keys,
+        ..
+    } = &action.kind
+    {
+        let source = action_source_identity(action);
+        return manifest.find_by_source(&source).is_some_and(|entry| {
+            entry.destination == *destination
+                && entry.content_hash == *previous_receipt_hash
+                && entry.backup.is_none()
+                && entry.install_strategy
+                    == AppInstallStrategy::JsonMerge {
+                        managed_keys: managed_keys.clone(),
+                    }
+                && !entry.requires_admin
+        });
+    }
+    if let ActionKindV1::RemoveManagedJson {
+        destination,
+        receipt_managed_hash,
+        managed_keys,
+        uses_env,
+        ..
+    } = &action.kind
+    {
+        let source = action_source_identity(action);
+        return manifest.find_by_source(&source).is_some_and(|entry| {
+            entry.destination == *destination
+                && entry.content_hash == *receipt_managed_hash
+                && entry.backup.is_none()
+                && entry.install_strategy
+                    == AppInstallStrategy::JsonMerge {
+                        managed_keys: managed_keys.clone(),
+                    }
+                && entry.uses_env == *uses_env
+                && !entry.requires_admin
+        });
+    }
     let (destination, previous_backup, original_hash, uses_env, requires_admin) = match &action.kind
     {
         ActionKindV1::UpdateManagedFile {
@@ -2508,6 +3418,9 @@ fn matching_previous_app_receipt(
             Some(*uses_env),
             *requires_admin,
         ),
+        ActionKindV1::MergeManagedJson { .. } | ActionKindV1::RemoveManagedJson { .. } => {
+            return false;
+        }
         _ => return false,
     };
     let source = action_source_identity(action);
@@ -2560,6 +3473,25 @@ fn previous_removed_app_receipt(
             uses_env,
             requires_admin,
         ),
+        ActionKindV1::RemoveManagedJson {
+            destination,
+            receipt_managed_hash,
+            managed_keys,
+            uses_env,
+            ..
+        } => {
+            return Ok(crate::install::AppEntry {
+                source: action_source_identity(action),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: *receipt_managed_hash,
+                install_strategy: AppInstallStrategy::JsonMerge {
+                    managed_keys: managed_keys.clone(),
+                },
+                uses_env: *uses_env,
+                requires_admin: false,
+            });
+        }
         _ => bail!("only a managed-file removal has a restorable previous receipt"),
     };
     Ok(crate::install::AppEntry {
@@ -2599,6 +3531,11 @@ fn removed_app_receipt_committed(
             persistent_backup.as_ref().map(|backup| &backup.path),
             rollback,
         ),
+        ActionKindV1::RemoveManagedJson {
+            destination,
+            rollback,
+            ..
+        } => (destination, None, rollback),
         _ => return false,
     };
     let source = action_source_identity(action);
@@ -2616,7 +3553,8 @@ fn removal_receipt_conflict(
     let rollback = match &action.kind {
         ActionKindV1::RemoveManagedFile { rollback, .. }
         | ActionKindV1::RemoveManagedFileWithBackup { rollback, .. }
-        | ActionKindV1::ForceRemoveManagedFile { rollback, .. } => rollback,
+        | ActionKindV1::ForceRemoveManagedFile { rollback, .. }
+        | ActionKindV1::RemoveManagedJson { rollback, .. } => rollback,
         _ => return true,
     };
     if receipt_committed {
@@ -2634,13 +3572,37 @@ fn conflicting_app_receipt(
     if matching_app_receipt(manifest, action) {
         return false;
     }
-    if matches!(action.kind, ActionKindV1::UpdateManagedFile { .. }) {
+    if matches!(
+        action.kind,
+        ActionKindV1::UpdateManagedFile { .. } | ActionKindV1::MergeManagedJson { .. }
+    ) {
         if !matching_previous_app_receipt(manifest, action) {
-            return true;
+            if !matches!(
+                action.kind,
+                ActionKindV1::MergeManagedJson {
+                    previous_receipt_hash: None,
+                    ..
+                }
+            ) {
+                return true;
+            }
+            let source = action_source_identity(action);
+            let destination = match &action.kind {
+                ActionKindV1::MergeManagedJson { destination, .. } => destination,
+                _ => unreachable!(),
+            };
+            if manifest.find_by_source(&source).is_some()
+                || manifest.find_by_dest(destination).is_some()
+            {
+                return true;
+            }
         }
-        if let ActionKindV1::UpdateManagedFile { rollback, .. } = &action.kind {
-            return manifest.find_by_dest(rollback).is_some();
-        }
+        let rollback = match &action.kind {
+            ActionKindV1::UpdateManagedFile { rollback, .. }
+            | ActionKindV1::MergeManagedJson { rollback, .. } => rollback,
+            _ => unreachable!(),
+        };
+        return manifest.find_by_dest(rollback).is_some();
     }
     let source = action_source_identity(action);
     if manifest.find_by_source(&source).is_some() {
@@ -2658,9 +3620,18 @@ fn conflicting_app_receipt(
             manifest.find_by_dest(destination).is_some() || manifest.find_by_dest(backup).is_some()
         }
         ActionKindV1::UpdateManagedFile { .. } => false,
+        ActionKindV1::MergeManagedJson {
+            destination,
+            rollback,
+            ..
+        } => {
+            manifest.find_by_dest(destination).is_some()
+                || manifest.find_by_dest(rollback).is_some()
+        }
         ActionKindV1::RemoveManagedFile { .. }
         | ActionKindV1::RemoveManagedFileWithBackup { .. }
-        | ActionKindV1::ForceRemoveManagedFile { .. } => true,
+        | ActionKindV1::ForceRemoveManagedFile { .. }
+        | ActionKindV1::RemoveManagedJson { .. } => true,
         ActionKindV1::OpaqueExecution { .. } => false,
     }
 }
@@ -2671,6 +3642,7 @@ fn is_app_removal_action(kind: &ActionKindV1) -> bool {
         ActionKindV1::RemoveManagedFile { .. }
             | ActionKindV1::RemoveManagedFileWithBackup { .. }
             | ActionKindV1::ForceRemoveManagedFile { .. }
+            | ActionKindV1::RemoveManagedJson { .. }
     )
 }
 
@@ -2709,6 +3681,134 @@ enum CommittedBackupRemoveRecoveryAssessment {
     Complete,
     RemoveRollback,
     Blocked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum JsonRecoveryAssessment {
+    NotStarted,
+    RestoreByMove,
+    RestoreKeys,
+    AlreadyRestored,
+    RemoveCreatedFile,
+    RemoveCreatedKeys,
+    Blocked,
+}
+
+fn json_rollback_is_exact(
+    rollback: &RecoveryFileObservation,
+    original_hash: Option<u64>,
+    original_mode: Option<u32>,
+) -> Option<bool> {
+    match (rollback, original_hash) {
+        (RecoveryFileObservation::Missing, _) => None,
+        (RecoveryFileObservation::Regular(bytes, mode), Some(hash)) => {
+            Some(hash_content(bytes) == hash && recovery_mode_matches(*mode, original_mode))
+        }
+        (RecoveryFileObservation::Regular(_, _), None) | (RecoveryFileObservation::Other(_), _) => {
+            Some(false)
+        }
+    }
+}
+
+fn assess_json_merge_recovery(
+    destination: &RecoveryFileObservation,
+    rollback: &RecoveryFileObservation,
+    original_hash: Option<u64>,
+    original_mode: Option<u32>,
+    desired_managed_hash: u64,
+    managed_keys: &[String],
+) -> Result<JsonRecoveryAssessment> {
+    let Some(original_hash) = original_hash else {
+        if !matches!(rollback, RecoveryFileObservation::Missing) {
+            return Ok(JsonRecoveryAssessment::Blocked);
+        }
+        return match destination {
+            RecoveryFileObservation::Missing => Ok(JsonRecoveryAssessment::NotStarted),
+            RecoveryFileObservation::Regular(bytes, _) => {
+                if managed_json_keys_absent(bytes, managed_keys)? {
+                    Ok(JsonRecoveryAssessment::AlreadyRestored)
+                } else if installed_json_hash(bytes, managed_keys)? == Some(desired_managed_hash) {
+                    let root =
+                        parse_json_object(bytes, "json-merge: destination must be a JSON object")?;
+                    if root.keys().all(|key| managed_keys.contains(key)) {
+                        Ok(JsonRecoveryAssessment::RemoveCreatedFile)
+                    } else {
+                        Ok(JsonRecoveryAssessment::RemoveCreatedKeys)
+                    }
+                } else {
+                    Ok(JsonRecoveryAssessment::Blocked)
+                }
+            }
+            RecoveryFileObservation::Other(_) => Ok(JsonRecoveryAssessment::Blocked),
+        };
+    };
+    match (destination, rollback) {
+        (RecoveryFileObservation::Regular(current, mode), RecoveryFileObservation::Missing)
+            if hash_content(current) == original_hash
+                && recovery_mode_matches(*mode, original_mode) =>
+        {
+            Ok(JsonRecoveryAssessment::NotStarted)
+        }
+        (RecoveryFileObservation::Missing, RecoveryFileObservation::Regular(original, mode))
+            if hash_content(original) == original_hash
+                && recovery_mode_matches(*mode, original_mode) =>
+        {
+            Ok(JsonRecoveryAssessment::RestoreByMove)
+        }
+        (
+            RecoveryFileObservation::Regular(current, _),
+            RecoveryFileObservation::Regular(original, mode),
+        ) if hash_content(original) == original_hash
+            && recovery_mode_matches(*mode, original_mode) =>
+        {
+            if managed_json_keys_match(current, original, managed_keys)? {
+                Ok(JsonRecoveryAssessment::AlreadyRestored)
+            } else if installed_json_hash(current, managed_keys)? == Some(desired_managed_hash) {
+                Ok(JsonRecoveryAssessment::RestoreKeys)
+            } else {
+                Ok(JsonRecoveryAssessment::Blocked)
+            }
+        }
+        _ => Ok(JsonRecoveryAssessment::Blocked),
+    }
+}
+
+fn assess_json_remove_recovery(
+    destination: &RecoveryFileObservation,
+    rollback: &RecoveryFileObservation,
+    original_hash: u64,
+    original_mode: Option<u32>,
+    managed_keys: &[String],
+) -> Result<JsonRecoveryAssessment> {
+    match (destination, rollback) {
+        (RecoveryFileObservation::Regular(current, mode), RecoveryFileObservation::Missing)
+            if hash_content(current) == original_hash
+                && recovery_mode_matches(*mode, original_mode) =>
+        {
+            Ok(JsonRecoveryAssessment::NotStarted)
+        }
+        (RecoveryFileObservation::Missing, RecoveryFileObservation::Regular(original, mode))
+            if hash_content(original) == original_hash
+                && recovery_mode_matches(*mode, original_mode) =>
+        {
+            Ok(JsonRecoveryAssessment::RestoreByMove)
+        }
+        (
+            RecoveryFileObservation::Regular(current, _),
+            RecoveryFileObservation::Regular(original, mode),
+        ) if hash_content(original) == original_hash
+            && recovery_mode_matches(*mode, original_mode) =>
+        {
+            if managed_json_keys_match(current, original, managed_keys)? {
+                Ok(JsonRecoveryAssessment::AlreadyRestored)
+            } else if managed_json_keys_absent(current, managed_keys)? {
+                Ok(JsonRecoveryAssessment::RestoreKeys)
+            } else {
+                Ok(JsonRecoveryAssessment::Blocked)
+            }
+        }
+        _ => Ok(JsonRecoveryAssessment::Blocked),
+    }
 }
 
 fn assess_backup_recovery(
@@ -3019,7 +4119,8 @@ mod tests {
     use crate::action::{
         DeclarativeActionV1, ForcedManagedFileBackupV1, ForcedManagedFileRemoveSpecV1,
         ManagedFileCreationWithBackupSpecV1, ManagedFileRemoveSpecV1,
-        ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1,
+        ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1, ManagedJsonMergeSpecV1,
+        ManagedJsonRemoveSpecV1,
     };
     use crate::install::AppEntry;
     use crate::plan::PlanStepV1;
@@ -3175,6 +4276,62 @@ mod tests {
                     current_hash: hash_content(current),
                     uses_env: false,
                     requires_admin: false,
+                },
+            )],
+        )
+    }
+
+    fn json_keys() -> Vec<String> {
+        vec!["proxy".to_string(), "containersProxy".to_string()]
+    }
+
+    fn json_merge_action_ir(
+        runtime: &CoreRuntime<InMemoryHost>,
+        original: Option<&[u8]>,
+        previous_receipt_hash: Option<u64>,
+        source: &[u8],
+    ) -> ActionIrV1 {
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        ActionIrV1::new(
+            "operation-json-merge",
+            vec![DeclarativeActionV1::merge_managed_json(
+                "action-json-merge",
+                "app/demo",
+                "config",
+                ManagedJsonMergeSpecV1 {
+                    destination,
+                    original_mode: original.map(|_| 0o100644),
+                    original_hash: original.map(hash_content),
+                    previous_receipt_hash,
+                    desired_managed_hash: managed_json_hash(source, &json_keys()).unwrap(),
+                    managed_keys: json_keys(),
+                },
+            )],
+        )
+    }
+
+    fn json_remove_action_ir(
+        runtime: &CoreRuntime<InMemoryHost>,
+        receipt_source: &[u8],
+        current: &[u8],
+    ) -> ActionIrV1 {
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        ActionIrV1::new(
+            "operation-json-remove",
+            vec![DeclarativeActionV1::remove_managed_json(
+                "action-json-remove",
+                "app/demo",
+                "config",
+                ManagedJsonRemoveSpecV1 {
+                    destination,
+                    original_mode: Some(0o100644),
+                    original_hash: hash_content(current),
+                    receipt_managed_hash: managed_json_hash(receipt_source, &json_keys()).unwrap(),
+                    current_managed_hash: installed_json_hash(current, &json_keys())
+                        .unwrap()
+                        .unwrap(),
+                    managed_keys: json_keys(),
+                    uses_env: false,
                 },
             )],
         )
@@ -3352,6 +4509,26 @@ mod tests {
                 install_strategy: AppInstallStrategy::Copy,
                 uses_env: false,
                 requires_admin: true,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+    }
+
+    async fn save_json_receipt(runtime: &CoreRuntime<InMemoryHost>, source: &[u8]) {
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config".to_string(),
+                destination: runtime.context().home_dir.join(".config/demo/config"),
+                backup: None,
+                content_hash: managed_json_hash(source, &json_keys()).unwrap(),
+                install_strategy: AppInstallStrategy::JsonMerge {
+                    managed_keys: json_keys(),
+                },
+                uses_env: false,
+                requires_admin: false,
             }],
         }
         .save(runtime.host(), &runtime.context().shine_dir)
@@ -4203,6 +5380,208 @@ mod tests {
             .unwrap();
         assert!(recovered.rolled_back_actions.is_empty());
         assert_eq!(runtime.host().read(&destination).await.unwrap(), content);
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn interrupted_json_update_restores_only_managed_keys() {
+        let runtime = runtime();
+        let previous_source = br#"{"proxy":{"mode":"old"},"containersProxy":{"mode":"old"}}"#;
+        let next_source = br#"{"proxy":{"mode":"new"},"containersProxy":{"mode":"new"}}"#;
+        let original =
+            br#"{"proxy":{"mode":"old"},"containersProxy":{"mode":"old"},"theme":"light"}"#;
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, original.to_vec());
+        save_json_receipt(&runtime, previous_source).await;
+        let ir = json_merge_action_ir(
+            &runtime,
+            Some(original),
+            Some(managed_json_hash(previous_source, &json_keys()).unwrap()),
+            next_source,
+        );
+        let (plan, approval) = approved_update_plan(&runtime, &ir);
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        assert!(
+            runtime
+                .execute_app_managed_json_merge_approved(&plan, &approval, ir, next_source)
+                .await
+                .is_err()
+        );
+        runtime.host().put_file(
+            &destination,
+            br#"{"proxy":{"mode":"new"},"containersProxy":{"mode":"new"},"theme":"dark","zoom":2}"#
+                .to_vec(),
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_restore_json_managed_keys".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+
+        let restored = runtime.host().read(&destination).await.unwrap();
+        let restored = parse_json_object(&restored, "test JSON").unwrap();
+        assert_eq!(restored["proxy"]["mode"], "old");
+        assert_eq!(restored["containersProxy"]["mode"], "old");
+        assert_eq!(restored["theme"], "dark");
+        assert_eq!(restored["zoom"], 2);
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn interrupted_json_creation_removes_only_created_keys() {
+        let runtime = runtime();
+        let source = br#"{"proxy":{"mode":"new"},"containersProxy":{"mode":"new"}}"#;
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let ir = json_merge_action_ir(&runtime, None, None, source);
+        let (plan, approval) = approved_install_plan(&runtime, &ir);
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        let _ = runtime
+            .execute_app_managed_json_merge_approved(&plan, &approval, ir, source)
+            .await;
+        runtime.host().put_file(
+            &destination,
+            br#"{"proxy":{"mode":"new"},"containersProxy":{"mode":"new"},"theme":"dark"}"#.to_vec(),
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        let restored = runtime.host().read(&destination).await.unwrap();
+        let restored = parse_json_object(&restored, "test JSON").unwrap();
+        assert_eq!(restored["theme"], "dark");
+        assert!(!restored.contains_key("proxy"));
+        assert!(!restored.contains_key("containersProxy"));
+    }
+
+    #[tokio::test]
+    async fn interrupted_json_removal_restores_receipt_and_only_managed_keys() {
+        let runtime = runtime();
+        let source = br#"{"proxy":{"mode":"managed"},"containersProxy":{"mode":"managed"}}"#;
+        let current =
+            br#"{"proxy":{"mode":"managed"},"containersProxy":{"mode":"managed"},"theme":"light"}"#;
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        runtime.host().put_file(&destination, current.to_vec());
+        save_json_receipt(&runtime, source).await;
+        let ir = json_remove_action_ir(&runtime, source, current);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        runtime.host().fail_write_after(
+            runtime.context().shine_dir.join(APP_OPERATION_JOURNAL_FILE),
+            1,
+        );
+        let _ = runtime
+            .execute_app_managed_json_removal_approved(&plan, &approval, ir)
+            .await;
+        remove_matching_receipt(&runtime).await;
+        runtime
+            .host()
+            .put_file(&destination, br#"{"theme":"dark","zoom":3}"#.to_vec());
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        let restored = runtime.host().read(&destination).await.unwrap();
+        let restored = parse_json_object(&restored, "test JSON").unwrap();
+        assert_eq!(restored["proxy"]["mode"], "managed");
+        assert_eq!(restored["theme"], "dark");
+        assert_eq!(restored["zoom"], 3);
+        let (manifest, _) =
+            load_app_manifest_receipts(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap();
+        assert!(matching_previous_app_receipt(
+            &manifest,
+            &json_remove_action_ir(&runtime, source, current).actions[0]
+        ));
+    }
+
+    #[tokio::test]
+    async fn forced_json_removal_commits_key_removal_and_preserves_unmanaged_values() {
+        let runtime = runtime();
+        let receipt_source = br#"{"proxy":"managed","containersProxy":"managed"}"#;
+        let current = br#"{"proxy":"user","containersProxy":"managed","theme":"dark"}"#;
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        runtime.host().put_file(&destination, current.to_vec());
+        save_json_receipt(&runtime, receipt_source).await;
+        let ir = json_remove_action_ir(&runtime, receipt_source, current);
+        let (plan, approval) = approved_forced_remove_plan(&runtime, &ir);
+        let execution = runtime
+            .execute_app_managed_json_removal_approved(&plan, &approval, ir)
+            .await
+            .unwrap();
+        assert!(execution.forced);
+        remove_matching_receipt(&runtime).await;
+        runtime
+            .commit_app_managed_file_operation(&execution)
+            .await
+            .unwrap();
+        let remaining = runtime.host().read(&destination).await.unwrap();
+        let remaining = parse_json_object(&remaining, "test JSON").unwrap();
+        assert_eq!(remaining["theme"], "dark");
+        assert!(!remaining.contains_key("proxy"));
+        assert!(!remaining.contains_key("containersProxy"));
+    }
+
+    #[tokio::test]
+    async fn committed_json_removal_cleanup_preserves_new_user_owned_keys() {
+        let runtime = runtime();
+        let source = br#"{"proxy":"managed","containersProxy":"managed"}"#;
+        let current = br#"{"proxy":"managed","containersProxy":"managed","theme":"light"}"#;
+        let destination = runtime.context().home_dir.join(".config/demo/config");
+        let rollback = managed_file_rollback_path(&destination);
+        runtime.host().put_file(&destination, current.to_vec());
+        save_json_receipt(&runtime, source).await;
+        let ir = json_remove_action_ir(&runtime, source, current);
+        let (plan, approval) = approved_remove_plan(&runtime, &ir);
+        runtime
+            .execute_app_managed_json_removal_approved(&plan, &approval, ir)
+            .await
+            .unwrap();
+        remove_matching_receipt(&runtime).await;
+        let (mut journal, _) =
+            load_app_operation_journal(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .unwrap();
+        journal
+            .mark_receipt_committed("action-json-remove")
+            .unwrap();
+        save_app_operation_journal(runtime.host(), &runtime.context().shine_dir, &journal)
+            .await
+            .unwrap();
+        runtime.host().put_file(
+            &destination,
+            br#"{"proxy":"user-owned","theme":"dark"}"#.to_vec(),
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&destination).await.unwrap(),
+            br#"{"proxy":"user-owned","theme":"dark"}"#
+        );
         assert!(runtime.host().read(&rollback).await.is_err());
     }
 

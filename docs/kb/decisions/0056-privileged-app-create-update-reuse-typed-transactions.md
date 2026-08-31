@@ -54,5 +54,6 @@ change.
 - Privileged update preserves the previously observed Unix mode through an explicit elevated mode
   operation.
 - Receipt-only recovery and stale-journal cleanup never trigger administrator authorization.
-- JSON merge, generators, relocation, stale-prune, Shell, and Sys action migration remain separate
-  work.
+- JSON merge follows the separate key-owned contract in
+  [ADR 0057](0057-key-owned-json-merge-transactions.md); generators, relocation, stale-prune, Shell,
+  and Sys action migration remain separate work.
