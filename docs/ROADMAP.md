@@ -39,7 +39,10 @@
   install、原地 update、普通/强制 uninstall 也已迁移到 key-owned Action；恢复只还原声明的
   顶层 key，保留中断后发生的其它设置修改。App upgrade 的 `--prune-stale` 对未修改的 stale 静态
   Copy 与 JSON receipt 复用相同 removal Action，在 receipt commit 前可显式恢复；用户修改内容继续
-  保留，目标缺失时仅原子清理 receipt。Shell 首次 launcher 创建也已接入独立 journal：Unix
+  保留，目标缺失时仅原子清理 receipt。静态 Copy 的 destination relocation 也已成为单一 Action：
+  旧 destination、可选 backup、rollback、新 destination 与新旧 receipt 在同一 journal 中提交，
+  中断时可恢复旧状态；JSON relocation 仍待独立的 key-owned 双端恢复合约。Shell 首次 launcher
+  创建也已接入独立 journal：Unix
   symlink、Unix Bun/live launcher 和 Windows 双 shim 都在 command receipt commit 前可按精确
   target/hash/mode 回滚，`shine shell recover` 负责显式恢复。未修改、receipt-owned launcher 的
   install/upgrade 更新也已迁移：旧资源先进入同目录 rollback material，新 receipt 前可恢复，commit

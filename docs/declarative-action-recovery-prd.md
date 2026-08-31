@@ -1,7 +1,7 @@
 # Declarative Action and Recovery PRD
 
 > **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
-> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, 4C.3, and 4C.4a are
+> 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, 4C.3, 4C.4a, and 4C.4b are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
@@ -18,7 +18,8 @@
 > JSON merge now uses key-owned typed transactions that preserve unrelated current values during
 > recovery without serializing prior or desired JSON payloads. App upgrade stale pruning reuses
 > those receipt-gated static Copy and JSON removal transactions while preserving modified stale
-> state.
+> state. Static Copy relocation now replaces its source-keyed receipt through one action spanning
+> the old path/backup/rollback and absent new destination.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -56,7 +57,7 @@ prepared journal → rename original to fixed backup → atomic managed write �
        └──────────── explicit recovery restores only an exact safe state ────────────┘
 ```
 
-App relocation, remaining Shell/Sys actions, and automatic resume remain later slices.
+App JSON relocation, remaining Shell/Sys actions, and automatic resume remain later slices.
 
 ## Goals
 
@@ -101,6 +102,10 @@ are:
 - `UpdateManagedFile`: an unchanged receipt-owned static Copy destination, its fixed transaction
   rollback path, previous persistent backup identity, prior mode and original/desired hashes. It is
   valid only for an in-place update with an absent rollback path.
+- `RelocateManagedFile`: an unchanged or already-missing receipt-owned static Copy source, old
+  destination, optional canonical persistent backup, old same-directory rollback, absent new
+  destination, desired hash, old/new receipt fields, and both privilege identities. A missing old
+  destination is valid only without a persistent backup.
 - `RemoveManagedFile`: an unchanged receipt-owned static Copy destination with no persistent backup,
   its fixed transaction rollback path, prior mode and original hash. It is valid for an ordinary
   uninstall or an approved stale-prune upgrade with an absent rollback path.
@@ -118,9 +123,10 @@ are:
   whole-file before identity plus distinct receipt/current managed-subset hashes and canonical
   rollback path.
 
-Each static Copy action also binds the receipt's `requires_admin` value. When true, it derives
-Administrator permission and routes protected writes, moves, removals, and mode restoration through
-the privileged host while retaining the same safe-state proof.
+Each static Copy action also binds the receipt's `requires_admin` value; relocation binds the old
+and new values separately. When an affected path requires it, the action derives Administrator
+permission and routes protected writes, moves, removals, and mode restoration through the
+privileged host while retaining the same safe-state proof.
 
 The classification-only escape hatch is:
 
@@ -319,6 +325,19 @@ cleans only exact rollback material.
 - Save receipt absence and positive journal commit evidence before removing exact rollback material;
   recover an interrupted prune through the existing `shine app recover` Plan.
 
+### Slice 4C.4b — App static Copy relocation (implemented)
+
+- Replace the old and new destination lifecycle calls with one `RelocateManagedFile` action for an
+  approved, non-forced static Copy Upgrade step.
+- Bind the exact old receipt, optional canonical persistent backup, old rollback path, absent new
+  destination, desired hash, old/new environment flags, and both administrator identities.
+- Journal before staging the old managed file, restoring its backup, or writing the new file; commit
+  only after the new source-keyed receipt is durable and carries no old backup path.
+- Recover every exact boundary by removing an unchanged new file and restoring old managed/backup
+  state before receipt commit, or by cleaning only exact old rollback material afterward.
+- Leave JSON relocation for a separate key-owned two-destination action rather than applying the
+  whole-file static Copy proof.
+
 ### Slice 4D — Other domains and opaque inventory
 
 - Shell launcher/profile declarative actions. First-time launcher creation and explicit recovery are
@@ -355,4 +374,5 @@ creation recovery and `shine shell recover` guidance to both locales. Slice 4D.2
 recovery guidance to receipt-owned launcher replacement and same-directory rollback material in
 both locales. Slice 4D.3 extends it to launcher removal, including receipt reconstruction when the
 manifest write is durable but the positive removal commit marker is not. Slice 4C.4a applies the
-same App removal recovery guidance to `upgrade --prune-stale` in both locales.
+same App removal recovery guidance to `upgrade --prune-stale` in both locales. Slice 4C.4b adds
+static Copy relocation recovery and old/new destination safety guidance to both locales.

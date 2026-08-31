@@ -1323,7 +1323,7 @@ where
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        let stale_admin_count = approved
+        let additional_admin_count = approved
             .action_irs
             .iter()
             .filter(|ir| {
@@ -1337,6 +1337,14 @@ where
                             requires_admin: true,
                             ..
                         }
+                    ) || matches!(
+                        action.kind,
+                        ActionKindV1::RelocateManagedFile {
+                            previous_requires_admin: true,
+                            desired_requires_admin: false,
+                            previous_present: true,
+                            ..
+                        }
                     )
                 })
             })
@@ -1345,7 +1353,7 @@ where
             .values()
             .filter(|assessment| assessment.file.requires_admin)
             .count()
-            + stale_admin_count;
+            + additional_admin_count;
         if admin_count > 0
             && !self.context.running_as_admin
             && !interaction.authorize_admin(admin_count).await?
@@ -1624,13 +1632,27 @@ where
                 matches!(ir.actions.as_slice(), [action] if action.target == target && action.resource == resource)
             });
             let mut journal_execution = None;
+            let mut journaled_relocation = false;
             let installed = if let Some(index) = action_index {
                 let action_ir = approved.action_irs.remove(index);
                 let is_json = matches!(
                     action_ir.actions.as_slice(),
                     [action] if matches!(action.kind, crate::action::ActionKindV1::MergeManagedJson { .. })
                 );
-                let execution = if is_json {
+                let is_relocation = matches!(
+                    action_ir.actions.as_slice(),
+                    [action] if matches!(action.kind, crate::action::ActionKindV1::RelocateManagedFile { .. })
+                );
+                let execution = if is_relocation {
+                    journaled_relocation = true;
+                    self.execute_app_managed_file_relocation_approved(
+                        approved.plan,
+                        approved.approval,
+                        action_ir,
+                        content,
+                    )
+                    .await?
+                } else if is_json {
                     self.execute_app_managed_json_merge_approved(
                         approved.plan,
                         approved.approval,
@@ -1685,7 +1707,7 @@ where
                     continue;
                 }
             };
-            if relocated {
+            if relocated && !journaled_relocation {
                 match self.uninstall_app_entry(&entry, false, false).await {
                     Ok(UninstallOutcome::Removed)
                     | Ok(UninstallOutcome::RestoredBackup { .. })
@@ -1717,7 +1739,15 @@ where
                     }
                 }
             }
-            manifest.upsert(app_entry(&assessment, hash, entry.backup.clone()));
+            manifest.upsert(app_entry(
+                &assessment,
+                hash,
+                if relocated {
+                    None
+                } else {
+                    entry.backup.clone()
+                },
+            ));
             if let Some(execution) = journal_execution {
                 save_manifest(&self.host, &self.context.shine_dir, &manifest).await?;
                 self.commit_app_managed_file_operation(&execution).await?;

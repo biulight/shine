@@ -57,6 +57,11 @@ teardown, or external-code gates. App stale files are removed during upgrade onl
 `--prune-stale` was part of the reviewed command. Unchanged static Copy and JSON stale entries use
 the same receipt-gated journal as uninstall; user-modified stale content remains preserved.
 
+When metadata moves a static Copy file to a different effective destination, upgrade journals the
+old receipt and destination, optional fixed backup, rollback path, and absent new destination as one
+relocation. The old managed file must be unchanged (or already missing without a backup), and the
+new destination must be free. An occupied new path or changed old file is preserved as a conflict.
+
 By default, files modified after installation are preserved and reported as user-modified. A safe
 uninstall restores any backup created during installation. Before a supported journaled static Copy
 replaces an unowned regular-file destination, Shine requires its fixed `<name>.shine.bak` path to be
@@ -119,7 +124,12 @@ For `upgrade --prune-stale`, unchanged static Copy and JSON entries use the same
 contract. If receipt removal is interrupted before its positive commit marker, recovery recreates
 the old receipt and restores only exact rollback state. A missing destination needs receipt-only
 cleanup, and user-modified stale content is never forced through this path.
-When one of these creation, update, or removal recovery operations changes an administrator path,
+For a static Copy relocation, recovery before the new receipt removes only an unchanged new file,
+returns a restored user file to the old fixed backup when necessary, and restores the exact old
+managed file. After the new receipt is durable, it preserves both final destinations and removes
+only unchanged old rollback material. JSON relocation retains its existing lifecycle path.
+When one of these creation, update, relocation, or removal recovery operations changes an
+administrator path,
 the recovery Plan includes administrator permission and Shine requests authorization only after
 that Plan is approved. Repair that only reconstructs a receipt or clears a journal does not request
 administrator access.

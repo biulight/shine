@@ -31,7 +31,8 @@ creation, unchanged receipt-owned in-place static Copy update, ordinary removal 
 receipt-owned static Copy with or without restoration of its fixed persistent backup, and forced
 removal of a user-modified static Copy. These static Copy actions support both user and
 administrator paths. JSON merge install/update/removal is also typed with key-owned rollback;
-generators and relocation remain to migrate.
+static Copy relocation is typed across its old receipt/path/backup and absent new destination.
+Generators and JSON relocation remain to migrate.
 
 ## Shell commands
 
@@ -79,8 +80,8 @@ the target ran but does not own third-party package uninstall or version rollbac
    (implemented).
 5. Administrator static Copy create, backup-aware create, and in-place update plus key-owned JSON
    merge install/update/removal (implemented).
-6. App upgrade stale-prune removal for unchanged static Copy and JSON receipts (implemented);
-   relocation remains.
+6. App upgrade stale-prune removal for unchanged static Copy and JSON receipts plus static Copy
+   relocation (implemented); JSON relocation remains.
 7. Shell first-time launcher creation plus unchanged receipt-owned launcher update and removal
    (implemented); snapshot/render files and profile blocks remain.
 8. Managed Sys files/profile blocks and split DNS.

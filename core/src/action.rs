@@ -118,6 +118,48 @@ impl ActionIrV1 {
                         required.insert(PermissionV1::Administrator);
                     }
                 }
+                ActionKindV1::RelocateManagedFile {
+                    previous_destination,
+                    previous_backup,
+                    previous_rollback,
+                    desired_destination,
+                    previous_present,
+                    previous_requires_admin,
+                    desired_requires_admin,
+                    ..
+                } => {
+                    required.insert(PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Write,
+                        path: path_identity(desired_destination),
+                    });
+                    if *previous_present {
+                        required.insert(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Remove,
+                            path: path_identity(previous_destination),
+                        });
+                        required.insert(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Write,
+                            path: path_identity(previous_rollback),
+                        });
+                        required.insert(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Remove,
+                            path: path_identity(previous_rollback),
+                        });
+                    }
+                    if let Some(backup) = previous_backup {
+                        required.insert(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Write,
+                            path: path_identity(previous_destination),
+                        });
+                        required.insert(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Remove,
+                            path: path_identity(&backup.path),
+                        });
+                    }
+                    if (*previous_present && *previous_requires_admin) || *desired_requires_admin {
+                        required.insert(PermissionV1::Administrator);
+                    }
+                }
                 ActionKindV1::RemoveManagedFile {
                     destination,
                     rollback,
@@ -362,6 +404,35 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn relocate_managed_file(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ManagedFileRelocationSpecV1,
+    ) -> Self {
+        let previous_rollback = managed_file_rollback_path(&spec.previous_destination);
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::RelocateManagedFile {
+                previous_destination: spec.previous_destination,
+                previous_backup: spec.previous_backup,
+                previous_rollback,
+                desired_destination: spec.desired_destination,
+                previous_present: spec.previous_present,
+                previous_mode: spec.previous_mode,
+                previous_hash: spec.previous_hash,
+                desired_hash: spec.desired_hash,
+                previous_uses_env: spec.previous_uses_env,
+                desired_uses_env: spec.desired_uses_env,
+                previous_requires_admin: spec.previous_requires_admin,
+                desired_requires_admin: spec.desired_requires_admin,
+            },
+            rollback: RollbackSupportV1::RestoreRelocatedPreviousIfUnchanged,
+        }
+    }
+
     pub fn remove_managed_file(
         action_id: impl Into<String>,
         target: impl Into<String>,
@@ -598,6 +669,34 @@ impl DeclarativeActionV1 {
                     .to_string(),
             )),
             (
+                ActionKindV1::RelocateManagedFile {
+                    previous_destination,
+                    previous_backup,
+                    previous_rollback,
+                    desired_destination,
+                    previous_present,
+                    ..
+                },
+                RollbackSupportV1::RestoreRelocatedPreviousIfUnchanged,
+            ) if !previous_destination.as_os_str().is_empty()
+                && !desired_destination.as_os_str().is_empty()
+                && previous_destination != desired_destination
+                && *previous_rollback == managed_file_rollback_path(previous_destination)
+                && previous_rollback != desired_destination
+                && previous_backup.as_ref().is_none_or(|backup| {
+                    *previous_present
+                        && backup.path == crate::install::backup_path(previous_destination)
+                        && backup.path != *previous_rollback
+                        && backup.path != *desired_destination
+                }) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::RelocateManagedFile { .. }, _) => Err(ActionIrError::Invalid(
+                "managed-file relocation requires distinct old/new destinations, canonical rollback and optional backup paths, and restore-relocated-previous-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
                 ActionKindV1::RemoveManagedFile {
                     destination,
                     rollback,
@@ -766,6 +865,30 @@ pub struct ManagedFileUpdateSpecV1 {
     pub requires_admin: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedFileRelocationBackupV1 {
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
+    pub hash: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ManagedFileRelocationSpecV1 {
+    pub previous_destination: PathBuf,
+    pub previous_backup: Option<ManagedFileRelocationBackupV1>,
+    pub desired_destination: PathBuf,
+    pub previous_present: bool,
+    pub previous_mode: Option<u32>,
+    pub previous_hash: u64,
+    pub desired_hash: u64,
+    pub previous_uses_env: bool,
+    pub desired_uses_env: bool,
+    pub previous_requires_admin: bool,
+    pub desired_requires_admin: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ManagedFileCreationWithBackupSpecV1 {
     pub destination: PathBuf,
@@ -866,6 +989,27 @@ pub enum ActionKindV1 {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         requires_admin: bool,
     },
+    RelocateManagedFile {
+        previous_destination: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_backup: Option<ManagedFileRelocationBackupV1>,
+        previous_rollback: PathBuf,
+        desired_destination: PathBuf,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        previous_present: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous_mode: Option<u32>,
+        previous_hash: u64,
+        desired_hash: u64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        previous_uses_env: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        desired_uses_env: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        previous_requires_admin: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        desired_requires_admin: bool,
+    },
     RemoveManagedFile {
         destination: PathBuf,
         rollback: PathBuf,
@@ -964,6 +1108,7 @@ pub enum RollbackSupportV1 {
     RemoveCreatedIfUnchanged,
     RestoreBackupIfUnchanged,
     RestorePreviousIfUnchanged,
+    RestoreRelocatedPreviousIfUnchanged,
     RestorePreviousWithBackupIfUnchanged,
     RestoreForcedPreviousIfUnchanged,
     RestoreJsonKeysIfUnchanged,
@@ -1192,6 +1337,54 @@ mod tests {
             access: FilesystemAccessV1::Write,
             path: "absolute:/home/test/.config/demo/config".to_string(),
         }));
+    }
+
+    #[test]
+    fn relocation_action_binds_both_destinations_and_previous_rollback() {
+        let previous = PathBuf::from("/etc/demo-old/config.toml");
+        let desired = PathBuf::from("/home/test/.config/demo-next/config.toml");
+        let rollback = managed_file_rollback_path(&previous);
+        let value = ActionIrV1::new(
+            "relocate-operation",
+            vec![DeclarativeActionV1::relocate_managed_file(
+                "relocate-config",
+                "app/demo",
+                "config.toml",
+                ManagedFileRelocationSpecV1 {
+                    previous_destination: previous.clone(),
+                    previous_backup: None,
+                    desired_destination: desired.clone(),
+                    previous_present: true,
+                    previous_mode: Some(0o100600),
+                    previous_hash: hash_content(b"previous-private-bytes"),
+                    desired_hash: hash_content(b"desired-private-bytes"),
+                    previous_uses_env: false,
+                    desired_uses_env: false,
+                    previous_requires_admin: true,
+                    desired_requires_admin: false,
+                },
+            )],
+        );
+        value.validate().unwrap();
+        let encoded = toml::to_string(&value).unwrap();
+        assert!(!encoded.contains("previous-private-bytes"));
+        assert!(!encoded.contains("desired-private-bytes"));
+        let decoded: ActionIrV1 = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded, value);
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.display()));
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, &previous),
+            (FilesystemAccessV1::Write, &desired),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(requirements.required.contains(&PermissionV1::Filesystem {
+                access,
+                path: format!("absolute:{}", path.display()),
+            }));
+        }
+        assert!(requirements.required.contains(&PermissionV1::Administrator));
     }
 
     #[test]

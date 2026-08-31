@@ -50,6 +50,11 @@ Plan，不能绕过缺失权限、被阻塞的 teardown 或外部代码 gate。u
 `--prune-stale` 时移除 App stale 文件。未修改的静态 Copy 与 JSON stale 条目会复用卸载所用的
 receipt-gated journal；用户修改过的 stale 内容仍会保留。
 
+当 metadata 把静态 Copy 文件迁移到新的 effective destination 时，upgrade 会把旧 receipt 与
+destination、可选固定 backup、rollback 路径和必须为空的新 destination 纳入同一个 relocation
+事务。旧受管文件必须未修改（或者在没有 backup 时已经缺失），新路径也必须空闲；新路径被占用或旧
+文件被修改时会保留现状并报告冲突。
+
 默认情况下，安装后被用户修改过的文件会保留并标记为用户修改。若安装时创建过备份，安全卸载会恢复原文件。在受支持、已 journal 的静态 Copy 替换不受管 regular-file destination 前，Shine 要求固定的 `<name>.shine.bak` 路径不存在；已有 backup 会阻塞 Plan，并保留两个文件。`--purge` 还会删除相应预设目录；卸载全部类别时也会删除 manifest。
 
 `app uninstall --force` 会显式授权删除被用户修改过的受管内容。对于符合条件的静态 Copy，审阅的
@@ -100,7 +105,11 @@ commit 后，当前 JSON object 已归用户所有；即使用户重新加入曾
 contract。如果 receipt 已移除但正向 commit marker 尚未持久化，recovery 会重建旧 receipt，并且
 只还原精确匹配的 rollback 状态。destination 已缺失时只清理 receipt；此路径绝不会强制移除用户
 修改过的 stale 内容。
-当上述创建、更新或移除的 recovery 需要修改管理员路径时，recovery Plan 会包含 administrator
+静态 Copy relocation 的新 receipt 持久化之前，recovery 只会移除未修改的新文件；必要时会把已经
+还原到旧 destination 的用户文件放回固定 backup，再恢复精确的旧受管文件。新 receipt 持久化后，
+recovery 会保留两端最终状态，只清理未修改的旧 rollback material。JSON relocation 仍使用现有
+lifecycle 路径。
+当上述创建、更新、relocation 或移除的 recovery 需要修改管理员路径时，recovery Plan 会包含 administrator
 permission，Shine 只在该 Plan 获得批准后请求授权。仅重建 receipt 或清理 journal 的恢复不会请求
 管理员权限。
 rollback 文件可能包含之前的受管配置，应按敏感内容处理。如果任一受保护

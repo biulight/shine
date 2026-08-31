@@ -51,6 +51,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   reusing the receipt-gated removal transactions. Interrupted pruning recovers through
   `shine app recover`; user-modified stale content remains preserved, and missing destinations use
   receipt-only cleanup.
+- Journaled App static Copy relocation as one old-receipt/new-receipt transaction spanning the old
+  destination, optional fixed backup, rollback material, and absent new destination. Interrupted
+  relocation recovers through `shine app recover`, and the new receipt no longer inherits the old
+  backup path.
 - Journaled first-time Shell launcher creation for Unix symlinks, Unix Bun/live launchers, and
   Windows PowerShell/cmd shim pairs. `shine shell recover` reviews a separate recovery Plan and
   removes only unchanged transaction-created launcher resources, while preserving an exact

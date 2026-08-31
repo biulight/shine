@@ -214,6 +214,15 @@ bugs. Check this list before changing the modules named in each entry.
   inferred, and a missing destination performs receipt-only cleanup without administrator access.
   Receipt absence still requires the positive journal commit marker before rollback material may
   be discarded.
+- **App static Copy relocation is one receipt replacement, not create plus remove.** An approved
+  `RelocateManagedFile` binds the exact old receipt, old destination, optional canonical persistent
+  backup, old same-directory rollback, absent new destination, desired hash, and both privilege
+  identities. The journal precedes staging the old managed file, restoring its backup, and writing
+  the new file. Before the new receipt is durable, recovery removes only an unchanged new file and
+  restores the exact old path/backup state; after it is durable, recovery preserves the final paths
+  and removes only exact rollback material. The new receipt never inherits the old backup path. A
+  missing old destination is eligible only without a persistent backup; JSON relocation does not
+  inherit this whole-file proof.
 - **Privileged App static Copy changes the mutation port, not the rollback proof.** Create,
   backup-aware create, update, and the three removal actions persist `requires_admin`, derive
   Administrator permission, and require matching old/new receipts to carry the same flag. Planning

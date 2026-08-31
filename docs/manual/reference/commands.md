@@ -215,6 +215,9 @@ evaluation failures are reported after the remaining selected generators run.
 - `upgrade --prune-stale` removes unchanged managed App entries no longer present in the source
   through the App operation journal. User-modified stale content remains preserved; interrupted
   removal is handled by `app recover`.
+- An App static Copy whose effective destination changes is relocated through one journaled
+  old-receipt/new-receipt transaction. The old managed content must be unchanged and the new path
+  absent; interrupted relocation is handled by `app recover`.
 - By default, `upgrade` prints each app category, Shell category, or managed-system item it actually
   updates and counts each user-facing target once. App rows include the number of changed files.
   `--verbose` expands app files and successful hook output, and also shows current/skipped items and

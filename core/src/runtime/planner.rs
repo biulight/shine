@@ -24,8 +24,9 @@ use super::{
 };
 use crate::action::{
     ActionIrV1, DeclarativeActionV1, ForcedManagedFileBackupV1, ForcedManagedFileRemoveSpecV1,
-    ManagedFileRemoveSpecV1, ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1,
-    ManagedJsonMergeSpecV1, ManagedJsonRemoveSpecV1, managed_file_rollback_path,
+    ManagedFileRelocationBackupV1, ManagedFileRelocationSpecV1, ManagedFileRemoveSpecV1,
+    ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1, ManagedJsonMergeSpecV1,
+    ManagedJsonRemoveSpecV1, managed_file_rollback_path,
 };
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppEntry, AppManifest};
@@ -610,6 +611,111 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     }
                     Some(_) => PlanActionV1::Update,
                 };
+                let relocation_entry = entry.filter(|entry| {
+                    request.operation == LifecycleOperation::Upgrade
+                        && action == PlanActionV1::Update
+                        && entry.destination != destination
+                        && entry.install_strategy == crate::install::AppInstallStrategy::Copy
+                        && file.install_strategy == crate::install::AppInstallStrategy::Copy
+                        && file.generator.is_none()
+                        && !request.force
+                });
+                let relocation_rollback =
+                    if let Some(entry) = relocation_entry {
+                        if current.is_none() && entry.backup.is_some() {
+                            steps.push(
+                                PlanStepV1::new(
+                                    &target,
+                                    Some(file.source_rel.display().to_string()),
+                                    PlanActionV1::Blocked,
+                                )
+                                .with_diagnostic_code("app_relocation_backup_source_missing"),
+                            );
+                            continue;
+                        }
+                        if current.is_some() {
+                            let metadata = self.host().metadata(&entry.destination).await.map_err(
+                                |error| error.into_anyhow("observing App relocation source"),
+                            )?;
+                            if metadata.kind != FileKind::File {
+                                steps.push(
+                                    PlanStepV1::new(
+                                        &target,
+                                        Some(file.source_rel.display().to_string()),
+                                        PlanActionV1::Blocked,
+                                    )
+                                    .with_diagnostic_code("app_relocation_source_not_regular"),
+                                );
+                                continue;
+                            }
+                        }
+                        if let Some(backup) = &entry.backup {
+                            capture_path_state(
+                                self.host(),
+                                state,
+                                format!("relocation-backup:{source}"),
+                                backup,
+                            )
+                            .await?;
+                            let canonical = crate::install::backup_path(&entry.destination);
+                            let backup_regular = match self.host().metadata(backup).await {
+                                Ok(metadata) => metadata.kind == FileKind::File,
+                                Err(error) if error.is_not_found() => false,
+                                Err(error) => {
+                                    return Err(error.into_anyhow(
+                                        "observing App relocation persistent backup",
+                                    ));
+                                }
+                            };
+                            if *backup != canonical || !backup_regular {
+                                steps.push(
+                                    PlanStepV1::new(
+                                        &target,
+                                        Some(file.source_rel.display().to_string()),
+                                        PlanActionV1::Blocked,
+                                    )
+                                    .with_diagnostic_code("app_relocation_backup_unsupported"),
+                                );
+                                continue;
+                            }
+                        }
+                        let rollback =
+                            crate::action::managed_file_rollback_path(&entry.destination);
+                        if rollback == destination {
+                            steps.push(
+                                PlanStepV1::new(
+                                    &target,
+                                    Some(file.source_rel.display().to_string()),
+                                    PlanActionV1::Blocked,
+                                )
+                                .with_diagnostic_code("app_relocation_path_conflict"),
+                            );
+                            continue;
+                        }
+                        capture_path_state(
+                            self.host(),
+                            state,
+                            format!("relocation-rollback:{source}"),
+                            &rollback,
+                        )
+                        .await?;
+                        if manifest.find_by_dest(&rollback).is_some()
+                            || path_exists(self.host(), &rollback).await?
+                        {
+                            steps.push(
+                                PlanStepV1::new(
+                                    &target,
+                                    Some(file.source_rel.display().to_string()),
+                                    PlanActionV1::Blocked,
+                                )
+                                .with_diagnostic_code("app_relocation_rollback_occupied"),
+                            );
+                            continue;
+                        }
+                        Some(rollback)
+                    } else {
+                        None
+                    };
                 let update_destination_regular = if action == PlanActionV1::Update
                     && entry.is_some_and(|entry| entry.destination == destination)
                 {
@@ -706,7 +812,9 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 }
                 let mut step =
                     PlanStepV1::new(&target, Some(file.source_rel.display().to_string()), action);
-                if user_modified && request.force {
+                if relocation_rollback.is_some() {
+                    step = step.with_diagnostic_code("app_destination_relocated");
+                } else if user_modified && request.force {
                     step = step.with_diagnostic_code("app_user_modification_override");
                 } else if occupied && request.force {
                     step = step.with_diagnostic_code("app_destination_occupation_override");
@@ -728,6 +836,19 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 } else if let Some(rollback) = &update_rollback {
                     add_app_journal_permissions(self.context(), permissions);
                     add_app_update_permissions(self.context(), permissions, &destination, rollback);
+                } else if let (Some(entry), Some(rollback)) =
+                    (relocation_entry, relocation_rollback.as_ref())
+                {
+                    add_app_journal_permissions(self.context(), permissions);
+                    add_app_relocation_permissions(
+                        self.context(),
+                        permissions,
+                        entry,
+                        current.is_some(),
+                        &destination,
+                        rollback,
+                        file.requires_admin,
+                    );
                 }
                 steps.push(step);
             }
@@ -2895,6 +3016,99 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 let action_identity = format!("{target}/{resource}");
                 let desired_hash = desired_app_hash(file, &desired)?;
                 let direct = manifest.find_by_source(&source);
+                if let Some(entry) = direct.filter(|entry| {
+                    request.operation == LifecycleOperation::Upgrade
+                        && entry.destination != destination
+                        && entry.install_strategy == crate::install::AppInstallStrategy::Copy
+                        && file.install_strategy == crate::install::AppInstallStrategy::Copy
+                        && !request.force
+                        && plan.steps.iter().any(|step| {
+                            step.target == target
+                                && step.resource.as_deref() == Some(resource.as_str())
+                                && step.action == PlanActionV1::Update
+                                && step
+                                    .diagnostic_codes
+                                    .contains(&"app_destination_relocated".to_string())
+                        })
+                }) {
+                    if manifest.find_by_dest(&destination).is_some()
+                        || path_exists(self.host(), &destination).await?
+                    {
+                        bail!("App relocation destination changed after Plan approval");
+                    }
+                    let previous = read_optional(self.host(), &entry.destination).await?;
+                    if previous.is_none() && entry.backup.is_some() {
+                        bail!("App relocation source disappeared while its backup remains owned");
+                    }
+                    let (previous_present, previous_mode) =
+                        if let Some(bytes) = &previous {
+                            if crate::install::hash_content(bytes) != entry.content_hash {
+                                bail!("App relocation source changed after Plan approval");
+                            }
+                            let metadata = self.host().metadata(&entry.destination).await.map_err(
+                                |error| error.into_anyhow("observing App relocation source mode"),
+                            )?;
+                            if metadata.kind != FileKind::File {
+                                bail!("App relocation source changed kind after Plan approval");
+                            }
+                            (true, metadata.unix_mode)
+                        } else {
+                            (false, None)
+                        };
+                    let previous_backup = if let Some(backup) = &entry.backup {
+                        if *backup != crate::install::backup_path(&entry.destination) {
+                            bail!("App relocation backup changed after Plan approval");
+                        }
+                        let metadata = self.host().metadata(backup).await.map_err(|error| {
+                            error.into_anyhow("observing App relocation backup mode")
+                        })?;
+                        if metadata.kind != FileKind::File {
+                            bail!("App relocation backup changed kind after Plan approval");
+                        }
+                        let bytes = read_optional(self.host(), backup)
+                            .await?
+                            .context("App relocation backup disappeared after Plan approval")?;
+                        Some(ManagedFileRelocationBackupV1 {
+                            path: backup.clone(),
+                            mode: metadata.unix_mode,
+                            hash: crate::install::hash_content(&bytes),
+                        })
+                    } else {
+                        None
+                    };
+                    let rollback = crate::action::managed_file_rollback_path(&entry.destination);
+                    if manifest.find_by_dest(&rollback).is_some()
+                        || path_exists(self.host(), &rollback).await?
+                    {
+                        bail!("App relocation rollback path changed after Plan approval");
+                    }
+                    let action = DeclarativeActionV1::relocate_managed_file(
+                        format!("relocate:{action_identity}"),
+                        target,
+                        resource,
+                        ManagedFileRelocationSpecV1 {
+                            previous_destination: entry.destination.clone(),
+                            previous_backup,
+                            desired_destination: destination,
+                            previous_present,
+                            previous_mode,
+                            previous_hash: entry.content_hash,
+                            desired_hash,
+                            previous_uses_env: entry.uses_env,
+                            desired_uses_env: file
+                                .transforms
+                                .iter()
+                                .any(|transform| transform == "template"),
+                            previous_requires_admin: entry.requires_admin,
+                            desired_requires_admin: file.requires_admin,
+                        },
+                    );
+                    actions.push(ActionIrV1::new(
+                        format!("app-{operation}:{fingerprint}:{action_identity}"),
+                        vec![action],
+                    ));
+                    continue;
+                }
                 if let crate::install::AppInstallStrategy::JsonMerge { managed_keys } =
                     &file.install_strategy
                 {
@@ -4496,6 +4710,46 @@ fn add_app_update_permissions(
             access,
             path: review_path(context, path),
         });
+    }
+}
+
+fn add_app_relocation_permissions(
+    context: &super::RuntimeContext,
+    permissions: &mut PermissionAccumulator,
+    previous: &AppEntry,
+    previous_present: bool,
+    desired_destination: &Path,
+    rollback: &Path,
+    desired_requires_admin: bool,
+) {
+    permissions.implicit(PermissionV1::Filesystem {
+        access: FilesystemAccessV1::Write,
+        path: review_path(context, desired_destination),
+    });
+    if previous_present {
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, previous.destination.as_path()),
+            (FilesystemAccessV1::Write, rollback),
+            (FilesystemAccessV1::Remove, rollback),
+        ] {
+            permissions.implicit(PermissionV1::Filesystem {
+                access,
+                path: review_path(context, path),
+            });
+        }
+        if let Some(backup) = &previous.backup {
+            permissions.implicit(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Write,
+                path: review_path(context, &previous.destination),
+            });
+            permissions.implicit(PermissionV1::Filesystem {
+                access: FilesystemAccessV1::Remove,
+                path: review_path(context, backup),
+            });
+        }
+    }
+    if (previous_present && previous.requires_admin) || desired_requires_admin {
+        permissions.implicit(PermissionV1::Administrator);
     }
 }
 
@@ -6185,6 +6439,555 @@ generator = { script = 'gen.ts', runtime = 'bun', env = ['TOKEN'], when_env = 'T
                 .find_by_source("app/demo/config.toml")
                 .map(|entry| entry.content_hash),
             Some(crate::install::hash_content(b"next-managed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn approved_app_upgrade_journals_static_copy_relocation() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        runtime
+            .host()
+            .put_file(&previous, b"previous-managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_destination_relocated".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let actions = runtime
+            .approved_app_file_action_irs(&request, &plan, &approval)
+            .await
+            .unwrap();
+        assert!(matches!(
+            actions.as_slice(),
+            [ir] if matches!(ir.actions.as_slice(), [action] if matches!(action.kind, crate::action::ActionKindV1::RelocateManagedFile { .. }))
+        ));
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, previous.clone()),
+            (FilesystemAccessV1::Write, desired.clone()),
+            (FilesystemAccessV1::Write, rollback.clone()),
+            (FilesystemAccessV1::Remove, rollback.clone()),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), &path),
+                    })
+            );
+        }
+
+        let mut observer = super::super::NullObserver;
+        runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        let entry = manifest.find_by_source("app/demo/config.toml").unwrap();
+        assert_eq!(entry.destination, desired);
+        assert!(entry.backup.is_none());
+    }
+
+    #[tokio::test]
+    async fn app_relocation_uses_previous_receipt_administrator_identity() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = PathBuf::from("/etc/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        runtime
+            .host()
+            .put_file(&previous, b"previous-managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: true,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        assert!(
+            plan.permissions
+                .required
+                .contains(&PermissionV1::Administrator)
+        );
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let mut observer = super::super::NullObserver;
+        runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .operations()
+                .contains(&HostOperation::MovePrivileged {
+                    from: previous,
+                    to: rollback,
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn app_relocation_rejects_destination_created_after_review() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        runtime
+            .host()
+            .put_file(&previous, b"previous-managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .put_file(&desired, b"late-user-file".to_vec());
+
+        let mut observer = super::super::NullObserver;
+        let error = runtime
+            .upgrade_apps_approved(
+                request,
+                &approval,
+                AppApprovedUpgradeOptions::default(),
+                &mut observer,
+                &mut Interaction,
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Plan"));
+        assert_eq!(
+            runtime.host().read(&previous).await.unwrap(),
+            b"previous-managed"
+        );
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"late-user-file"
+        );
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::APP_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn app_relocation_recovery_after_receipt_commit_cleans_only_rollback() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        runtime
+            .host()
+            .put_file(&previous, b"previous-managed".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_remove_after(&rollback, 0);
+
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"previous-managed"
+        );
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/config.toml")
+                .unwrap()
+                .destination,
+            desired
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        assert!(recovery_plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"app_recovery_remove_committed_relocation_rollback".to_string())
+        }));
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn app_relocation_receipt_failure_recovers_previous_file_and_backup() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        let backup = crate::install::backup_path(&previous);
+        let rollback = crate::action::managed_file_rollback_path(&previous);
+        runtime
+            .host()
+            .put_file(&previous, b"previous-managed".to_vec());
+        runtime.host().put_file(&backup, b"user-original".to_vec());
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: Some(backup.clone()),
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            runtime.host().read(&previous).await.unwrap(),
+            b"user-original"
+        );
+        assert!(runtime.host().read(&backup).await.is_err());
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"previous-managed"
+        );
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        assert!(recovery_plan.is_ready());
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&previous).await.unwrap(),
+            b"previous-managed"
+        );
+        assert_eq!(
+            runtime.host().read(&backup).await.unwrap(),
+            b"user-original"
+        );
+        assert!(runtime.host().read(&desired).await.is_err());
+        assert!(runtime.host().read(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn app_relocation_recovers_created_destination_when_previous_file_was_missing() {
+        let snapshot = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "app/demo/shine.toml",
+                b"dest = '~/.config/demo-next'\n[permissions]\nschema_version = 1\n[[files]]\nsource = 'config.toml'\n".to_vec(),
+            )
+            .file("app/demo/config.toml", b"next-managed".to_vec())
+            .build();
+        let runtime = runtime(snapshot);
+        let previous = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-old/config.toml");
+        let desired = runtime
+            .context()
+            .home_dir
+            .join(".config/demo-next/config.toml");
+        AppManifest {
+            schema_version: APP_MANIFEST_SCHEMA_VERSION,
+            entries: vec![AppEntry {
+                source: "app/demo/config.toml".to_string(),
+                destination: previous.clone(),
+                backup: None,
+                content_hash: crate::install::hash_content(b"previous-managed"),
+                install_strategy: crate::install::AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+        }
+        .save(runtime.host(), &runtime.context().shine_dir)
+        .await
+        .unwrap();
+        let request = AppPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            prune_stale: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_apps(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("app-manifest.toml"), 0);
+
+        let mut observer = super::super::NullObserver;
+        assert!(
+            runtime
+                .upgrade_apps_approved(
+                    request,
+                    &approval,
+                    AppApprovedUpgradeOptions::default(),
+                    &mut observer,
+                    &mut Interaction,
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            runtime.host().read(&desired).await.unwrap(),
+            b"next-managed"
+        );
+        let recovery_plan = runtime.plan_app_operation_recovery().await.unwrap();
+        let recovery_approval = PlanApprovalV1::for_reviewed_plan(&recovery_plan).unwrap();
+        runtime
+            .recover_app_operation_approved(&recovery_approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().read(&previous).await.is_err());
+        assert!(runtime.host().read(&desired).await.is_err());
+        let manifest = AppManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest
+                .find_by_source("app/demo/config.toml")
+                .unwrap()
+                .destination,
+            previous
         );
     }
 

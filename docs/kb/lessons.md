@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-01 — Relocation needs one receipt transition across both paths
+
+- **Symptom**: App upgrade wrote a new effective destination, removed or restored the old one, and
+  saved the replacement receipt only afterward. A crash could leave two copies or no managed copy,
+  and a successful move could retain the old backup path on the new receipt.
+- **Root cause**: relocation reused independent legacy install and uninstall calls even though both
+  mutations replace one source-keyed receipt and must commit together.
+- **Fix**: bind both destinations, old backup/rollback, desired hash, old/new receipt fields, and
+  privilege identities in one `RelocateManagedFile` journal action; clear the old backup identity
+  when the new receipt commits.
+- **Rule**: when one ownership receipt moves across paths, model the complete move as one action.
+  Independent create/remove success is not an atomic ownership transition.
+
 ## 2026-08-31 — Upgrade-internal removals still need removal semantics
 
 - **Symptom**: `upgrade --prune-stale` displayed a stale `Remove` step but did not bind removal,

@@ -113,6 +113,18 @@ impl AppOperationJournalV1 {
                 } if managed_file_rollback_path(destination) != *rollback => {
                     bail!("App operation journal contains a non-canonical rollback path");
                 }
+                ActionKindV1::RelocateManagedFile {
+                    previous_destination,
+                    previous_backup,
+                    previous_rollback,
+                    ..
+                } if managed_file_rollback_path(previous_destination) != *previous_rollback
+                    || previous_backup.as_ref().is_some_and(|backup| {
+                        crate::install::backup_path(previous_destination) != backup.path
+                    }) =>
+                {
+                    bail!("App operation journal contains a non-canonical relocation path");
+                }
                 ActionKindV1::RemoveManagedFile {
                     destination,
                     rollback,
@@ -508,6 +520,152 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     {
                         required.insert(PermissionV1::Administrator);
                     }
+                }
+                ActionKindV1::RelocateManagedFile {
+                    previous_destination,
+                    previous_backup,
+                    previous_rollback,
+                    desired_destination,
+                    previous_present,
+                    previous_mode,
+                    previous_hash,
+                    desired_hash,
+                    previous_requires_admin,
+                    desired_requires_admin,
+                    ..
+                } => {
+                    let previous = observe_recovery_file(self.host(), previous_destination).await?;
+                    let rollback = observe_recovery_file(self.host(), previous_rollback).await?;
+                    let desired = observe_recovery_file(self.host(), desired_destination).await?;
+                    state.add_observation(
+                        format!("previous-destination:{}", action.action_id),
+                        previous.identity(),
+                    )?;
+                    state.add_observation(
+                        format!("previous-rollback:{}", action.action_id),
+                        rollback.identity(),
+                    )?;
+                    state.add_observation(
+                        format!("desired-destination:{}", action.action_id),
+                        desired.identity(),
+                    )?;
+                    let backup = if let Some(backup) = previous_backup {
+                        let observed = observe_recovery_file(self.host(), &backup.path).await?;
+                        state.add_observation(
+                            format!("previous-backup:{}", action.action_id),
+                            observed.identity(),
+                        )?;
+                        Some(observed)
+                    } else {
+                        None
+                    };
+                    let assessment = assess_relocation_recovery(
+                        &previous,
+                        backup.as_ref(),
+                        &rollback,
+                        &desired,
+                        *previous_present,
+                        *previous_mode,
+                        *previous_hash,
+                        *desired_hash,
+                        previous_backup
+                            .as_ref()
+                            .map(|backup| (backup.hash, backup.mode)),
+                        matching_app_receipt(&manifest, action),
+                    );
+                    let (plan_action, code) = match assessment {
+                        RelocationRecoveryAssessment::NotStarted => {
+                            (PlanActionV1::None, "app_recovery_relocation_not_started")
+                        }
+                        RelocationRecoveryAssessment::RemoveDesired => {
+                            required.insert(PermissionV1::Filesystem {
+                                access: FilesystemAccessV1::Remove,
+                                path: review_path(self.context(), desired_destination),
+                            });
+                            (
+                                PlanActionV1::Remove,
+                                "app_recovery_remove_relocated_destination",
+                            )
+                        }
+                        RelocationRecoveryAssessment::Restore {
+                            remove_desired,
+                            restore_backup,
+                        } => {
+                            if remove_desired {
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), desired_destination),
+                                });
+                            }
+                            if restore_backup {
+                                let backup = previous_backup
+                                    .as_ref()
+                                    .expect("relocation backup restoration assessment");
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Remove,
+                                    path: review_path(self.context(), previous_destination),
+                                });
+                                required.insert(PermissionV1::Filesystem {
+                                    access: FilesystemAccessV1::Write,
+                                    path: review_path(self.context(), &backup.path),
+                                });
+                            }
+                            required.insert(PermissionV1::Filesystem {
+                                access: FilesystemAccessV1::Write,
+                                path: review_path(self.context(), previous_destination),
+                            });
+                            required.insert(PermissionV1::Filesystem {
+                                access: FilesystemAccessV1::Remove,
+                                path: review_path(self.context(), previous_rollback),
+                            });
+                            (
+                                PlanActionV1::Update,
+                                "app_recovery_restore_relocation_source",
+                            )
+                        }
+                        RelocationRecoveryAssessment::RemoveCommittedRollback => {
+                            required.insert(PermissionV1::Filesystem {
+                                access: FilesystemAccessV1::Remove,
+                                path: review_path(self.context(), previous_rollback),
+                            });
+                            (
+                                PlanActionV1::Remove,
+                                "app_recovery_remove_committed_relocation_rollback",
+                            )
+                        }
+                        RelocationRecoveryAssessment::Committed => (
+                            PlanActionV1::None,
+                            "app_recovery_relocation_already_committed",
+                        ),
+                        RelocationRecoveryAssessment::Blocked => {
+                            blocked = true;
+                            (
+                                PlanActionV1::Blocked,
+                                "app_recovery_relocation_state_changed",
+                            )
+                        }
+                    };
+                    let previous_admin_touched = *previous_requires_admin
+                        && recovery_permissions_touch_paths(
+                            &required,
+                            self.context(),
+                            std::iter::once(previous_destination.as_path())
+                                .chain(std::iter::once(previous_rollback.as_path()))
+                                .chain(previous_backup.iter().map(|backup| backup.path.as_path())),
+                        );
+                    let desired_admin_touched = *desired_requires_admin
+                        && recovery_permissions_touch_paths(
+                            &required,
+                            self.context(),
+                            [desired_destination.as_path()],
+                        );
+                    if previous_admin_touched || desired_admin_touched {
+                        required.insert(PermissionV1::Administrator);
+                    }
+                    steps.push(
+                        PlanStepV1::new(&action.target, Some(&action.resource), plan_action)
+                            .with_diagnostic_code(code),
+                    );
                 }
                 ActionKindV1::RemoveManagedFile {
                     destination,
@@ -1584,6 +1742,198 @@ where
         })
     }
 
+    /// Move one static Copy receipt to a new, absent destination while retaining
+    /// exact rollback material for the previous managed file until the new
+    /// receipt is durable.
+    pub async fn execute_app_managed_file_relocation_approved(
+        &self,
+        plan: &PlanV1,
+        approval: &PlanApprovalV1,
+        action_ir: ActionIrV1,
+        content: &[u8],
+    ) -> Result<AppOperationExecutionV1> {
+        approval.validate(plan)?;
+        if plan.operation != PlanOperationV1::Upgrade {
+            bail!("App managed-file relocation requires an upgrade Plan");
+        }
+        action_ir.validate()?;
+        let requirements =
+            action_ir.permission_requirements(|path| review_path(self.context(), path));
+        if !requirements.uncomputable_codes.is_empty()
+            || requirements
+                .required
+                .iter()
+                .any(|permission| !approval.approved_permissions.contains(permission))
+        {
+            bail!("App relocation permissions were not included in the approved security Plan");
+        }
+        let [action] = action_ir.actions.as_slice() else {
+            bail!("the App relocation slice accepts exactly one action");
+        };
+        if !plan.steps.iter().any(|step| {
+            step.target == action.target
+                && step.resource.as_deref() == Some(action.resource.as_str())
+                && step.action == PlanActionV1::Update
+                && step
+                    .diagnostic_codes
+                    .contains(&"app_destination_relocated".to_string())
+        }) {
+            bail!("App relocation was not described by the approved security Plan");
+        }
+        let (
+            previous_destination,
+            previous_backup,
+            previous_rollback,
+            desired_destination,
+            previous_present,
+            previous_mode,
+            previous_hash,
+            desired_hash,
+            previous_requires_admin,
+            desired_requires_admin,
+        ) = match (&action.kind, &action.rollback) {
+            (
+                ActionKindV1::RelocateManagedFile {
+                    previous_destination,
+                    previous_backup,
+                    previous_rollback,
+                    desired_destination,
+                    previous_present,
+                    previous_mode,
+                    previous_hash,
+                    desired_hash,
+                    previous_requires_admin,
+                    desired_requires_admin,
+                    ..
+                },
+                RollbackSupportV1::RestoreRelocatedPreviousIfUnchanged,
+            ) => (
+                previous_destination.clone(),
+                previous_backup.clone(),
+                previous_rollback.clone(),
+                desired_destination.clone(),
+                *previous_present,
+                *previous_mode,
+                *previous_hash,
+                *desired_hash,
+                *previous_requires_admin,
+                *desired_requires_admin,
+            ),
+            _ => bail!("the App relocation slice requires relocation-safe rollback"),
+        };
+        if hash_content(content) != desired_hash {
+            bail!("managed-file content does not match the relocation action IR identity");
+        }
+        let action_id = action.action_id.clone();
+        let uses_privilege =
+            (previous_present && previous_requires_admin) || desired_requires_admin;
+
+        let operation_guard = self.host().acquire_privileged_operation().await?;
+        if load_app_operation_journal(self.host(), &self.context().shine_dir)
+            .await?
+            .is_some()
+        {
+            bail!("an interrupted App operation must be recovered before starting another one");
+        }
+        let (manifest, _) =
+            load_app_manifest_receipts(self.host(), &self.context().shine_dir).await?;
+        if !matching_previous_app_receipt(&manifest, action) {
+            bail!("App relocation requires its exact previous receipt");
+        }
+        if conflicting_app_receipt(&manifest, action) {
+            bail!("another App receipt conflicts with the relocation paths");
+        }
+        if managed_file_rollback_path(&previous_destination) != previous_rollback
+            || manifest.find_by_dest(&previous_rollback).is_some()
+            || path_exists(self.host(), &previous_rollback).await?
+        {
+            bail!("App relocation rollback path must be absent and unowned");
+        }
+        if manifest.find_by_dest(&desired_destination).is_some()
+            || path_exists(self.host(), &desired_destination).await?
+        {
+            bail!("App relocation requires an absent, unowned destination");
+        }
+        if previous_present {
+            let metadata = self
+                .host()
+                .metadata(&previous_destination)
+                .await
+                .map_err(|error| error.into_anyhow("failed to inspect App relocation source"))?;
+            if metadata.kind != FileKind::File || metadata.unix_mode != previous_mode {
+                bail!("App relocation source kind or mode changed after Plan approval");
+            }
+            let previous = read_optional(self.host(), &previous_destination)
+                .await?
+                .context("App relocation requires its previous managed file")?;
+            if hash_content(&previous) != previous_hash {
+                bail!("App relocation source changed after Plan approval");
+            }
+        } else if path_exists(self.host(), &previous_destination).await? {
+            bail!("App relocation source appeared after Plan approval");
+        }
+        if let Some(backup) = &previous_backup {
+            if !previous_present
+                || crate::install::backup_path(&previous_destination) != backup.path
+            {
+                bail!("App relocation requires its canonical previous backup");
+            }
+            let metadata =
+                self.host().metadata(&backup.path).await.map_err(|error| {
+                    error.into_anyhow("failed to inspect App relocation backup")
+                })?;
+            if metadata.kind != FileKind::File || metadata.unix_mode != backup.mode {
+                bail!("App relocation backup kind or mode changed after Plan approval");
+            }
+            let bytes = read_optional(self.host(), &backup.path)
+                .await?
+                .context("App relocation requires its previous persistent backup")?;
+            if hash_content(&bytes) != backup.hash {
+                bail!("App relocation backup changed after Plan approval");
+            }
+        }
+
+        let mut journal = AppOperationJournalV1::new(action_ir, approval.clone());
+        save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
+        if previous_present {
+            move_app_managed_path(
+                self.host(),
+                &previous_destination,
+                &previous_rollback,
+                previous_requires_admin,
+                "failed to stage previous App relocation source",
+            )
+            .await?;
+        }
+        if let Some(backup) = &previous_backup {
+            move_app_managed_path(
+                self.host(),
+                &backup.path,
+                &previous_destination,
+                previous_requires_admin,
+                "failed to restore the previous App destination backup",
+            )
+            .await?;
+        }
+        write_app_managed_path(
+            self.host(),
+            &desired_destination,
+            content,
+            desired_requires_admin,
+            "failed to create the relocated managed App file",
+        )
+        .await?;
+        journal.mark_applied(&action_id)?;
+        save_app_operation_journal(self.host(), &self.context().shine_dir, &journal).await?;
+
+        Ok(AppOperationExecutionV1 {
+            operation_id: journal.action_ir.operation_id,
+            backup: None,
+            forced: false,
+            privileged_operation: uses_privilege.then_some(operation_guard),
+        })
+    }
+
     /// Merge one top-level managed JSON subset while retaining the previous
     /// whole file only as same-directory transaction material. Recovery reads
     /// that material but restores only the declared keys.
@@ -2169,6 +2519,37 @@ where
                     }
                 }
             }
+            if let ActionKindV1::RelocateManagedFile {
+                previous_rollback,
+                previous_present,
+                previous_mode,
+                previous_hash,
+                previous_requires_admin,
+                ..
+            } = &action.kind
+                && *previous_present
+            {
+                match observe_recovery_file(self.host(), previous_rollback).await? {
+                    RecoveryFileObservation::Missing => {}
+                    RecoveryFileObservation::Regular(bytes, mode)
+                        if hash_content(&bytes) == *previous_hash
+                            && recovery_mode_matches(mode, *previous_mode) =>
+                    {
+                        remove_app_managed_path(
+                            self.host(),
+                            previous_rollback,
+                            *previous_requires_admin,
+                            "failed to remove App relocation rollback material",
+                        )
+                        .await?;
+                    }
+                    RecoveryFileObservation::Regular(_, _) | RecoveryFileObservation::Other(_) => {
+                        bail!(
+                            "App relocation rollback material changed before commit; operation journal preserved"
+                        );
+                    }
+                }
+            }
             if let ActionKindV1::RemoveManagedFile {
                 destination,
                 rollback,
@@ -2388,6 +2769,7 @@ where
                 && !matches!(
                     action.kind,
                     ActionKindV1::UpdateManagedFile { .. }
+                        | ActionKindV1::RelocateManagedFile { .. }
                         | ActionKindV1::RemoveManagedFile { .. }
                         | ActionKindV1::RemoveManagedFileWithBackup { .. }
                         | ActionKindV1::ForceRemoveManagedFile { .. }
@@ -2522,6 +2904,102 @@ where
                         }
                         BackupRecoveryAssessment::Blocked => bail!(
                             "managed App destination or rollback material changed after the interrupted update; recovery preserved both"
+                        ),
+                    }
+                }
+                ActionKindV1::RelocateManagedFile {
+                    previous_destination,
+                    previous_backup,
+                    previous_rollback,
+                    desired_destination,
+                    previous_present,
+                    previous_mode,
+                    previous_hash,
+                    desired_hash,
+                    previous_requires_admin,
+                    desired_requires_admin,
+                    ..
+                } => {
+                    let previous = observe_recovery_file(self.host(), previous_destination).await?;
+                    let rollback = observe_recovery_file(self.host(), previous_rollback).await?;
+                    let desired = observe_recovery_file(self.host(), desired_destination).await?;
+                    let backup = if let Some(backup) = previous_backup {
+                        Some(observe_recovery_file(self.host(), &backup.path).await?)
+                    } else {
+                        None
+                    };
+                    match assess_relocation_recovery(
+                        &previous,
+                        backup.as_ref(),
+                        &rollback,
+                        &desired,
+                        *previous_present,
+                        *previous_mode,
+                        *previous_hash,
+                        *desired_hash,
+                        previous_backup
+                            .as_ref()
+                            .map(|backup| (backup.hash, backup.mode)),
+                        matching_app_receipt(&manifest, action),
+                    ) {
+                        RelocationRecoveryAssessment::NotStarted => {}
+                        RelocationRecoveryAssessment::RemoveDesired => {
+                            remove_app_managed_path(
+                                self.host(),
+                                desired_destination,
+                                *desired_requires_admin,
+                                "failed to remove interrupted App relocation destination",
+                            )
+                            .await?;
+                        }
+                        RelocationRecoveryAssessment::Restore {
+                            remove_desired,
+                            restore_backup,
+                        } => {
+                            if remove_desired {
+                                remove_app_managed_path(
+                                    self.host(),
+                                    desired_destination,
+                                    *desired_requires_admin,
+                                    "failed to remove interrupted App relocation destination",
+                                )
+                                .await?;
+                            }
+                            if restore_backup {
+                                let backup = previous_backup
+                                    .as_ref()
+                                    .expect("relocation backup restoration assessment");
+                                move_app_managed_path(
+                                    self.host(),
+                                    previous_destination,
+                                    &backup.path,
+                                    *previous_requires_admin,
+                                    "failed to restore the App relocation persistent backup",
+                                )
+                                .await?;
+                            }
+                            move_app_managed_path(
+                                self.host(),
+                                previous_rollback,
+                                previous_destination,
+                                *previous_requires_admin,
+                                "failed to restore the previous App relocation source",
+                            )
+                            .await?;
+                        }
+                        RelocationRecoveryAssessment::RemoveCommittedRollback => {
+                            remove_app_managed_path(
+                                self.host(),
+                                previous_rollback,
+                                *previous_requires_admin,
+                                "failed to remove committed App relocation rollback material",
+                            )
+                            .await?;
+                            continue;
+                        }
+                        RelocationRecoveryAssessment::Committed => continue,
+                        RelocationRecoveryAssessment::Blocked => bail!(
+                            "App relocation paths changed after the interrupted upgrade; recovery preserved them"
                         ),
                     }
                 }
@@ -3295,6 +3773,20 @@ fn matching_app_receipt(
                     && entry.install_strategy == AppInstallStrategy::Copy
                     && entry.requires_admin == *requires_admin
             }
+            ActionKindV1::RelocateManagedFile {
+                desired_destination,
+                desired_hash,
+                desired_uses_env,
+                desired_requires_admin,
+                ..
+            } => {
+                entry.destination == *desired_destination
+                    && entry.content_hash == *desired_hash
+                    && entry.backup.is_none()
+                    && entry.install_strategy == AppInstallStrategy::Copy
+                    && entry.uses_env == *desired_uses_env
+                    && entry.requires_admin == *desired_requires_admin
+            }
             ActionKindV1::MergeManagedJson {
                 destination,
                 desired_managed_hash,
@@ -3325,6 +3817,25 @@ fn matching_previous_app_receipt(
     manifest: &AppManifest,
     action: &crate::action::DeclarativeActionV1,
 ) -> bool {
+    if let ActionKindV1::RelocateManagedFile {
+        previous_destination,
+        previous_backup,
+        previous_hash,
+        previous_uses_env,
+        previous_requires_admin,
+        ..
+    } = &action.kind
+    {
+        let source = action_source_identity(action);
+        return manifest.find_by_source(&source).is_some_and(|entry| {
+            entry.destination == *previous_destination
+                && entry.content_hash == *previous_hash
+                && entry.backup.as_ref() == previous_backup.as_ref().map(|backup| &backup.path)
+                && entry.install_strategy == AppInstallStrategy::Copy
+                && entry.uses_env == *previous_uses_env
+                && entry.requires_admin == *previous_requires_admin
+        });
+    }
     if let ActionKindV1::MergeManagedJson {
         destination,
         previous_receipt_hash: Some(previous_receipt_hash),
@@ -3572,6 +4083,34 @@ fn conflicting_app_receipt(
     manifest: &AppManifest,
     action: &crate::action::DeclarativeActionV1,
 ) -> bool {
+    if let ActionKindV1::RelocateManagedFile {
+        previous_destination,
+        previous_backup,
+        previous_rollback,
+        desired_destination,
+        ..
+    } = &action.kind
+    {
+        if !matching_app_receipt(manifest, action)
+            && !matching_previous_app_receipt(manifest, action)
+        {
+            return true;
+        }
+        let source = action_source_identity(action);
+        return manifest.entries.iter().any(|entry| {
+            entry.source != source
+                && std::iter::once(entry.destination.as_path())
+                    .chain(entry.backup.iter().map(PathBuf::as_path))
+                    .any(|claimed| {
+                        claimed == previous_destination
+                            || claimed == desired_destination
+                            || claimed == previous_rollback
+                            || previous_backup
+                                .as_ref()
+                                .is_some_and(|backup| claimed == backup.path)
+                    })
+        });
+    }
     if matching_app_receipt(manifest, action) {
         return false;
     }
@@ -3622,7 +4161,7 @@ fn conflicting_app_receipt(
         } => {
             manifest.find_by_dest(destination).is_some() || manifest.find_by_dest(backup).is_some()
         }
-        ActionKindV1::UpdateManagedFile { .. } => false,
+        ActionKindV1::UpdateManagedFile { .. } | ActionKindV1::RelocateManagedFile { .. } => false,
         ActionKindV1::MergeManagedJson {
             destination,
             rollback,
@@ -3691,6 +4230,19 @@ fn action_source_identity(action: &crate::action::DeclarativeActionV1) -> String
 enum BackupRecoveryAssessment {
     NotStarted,
     Restore { remove_destination: bool },
+    Blocked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RelocationRecoveryAssessment {
+    NotStarted,
+    RemoveDesired,
+    Restore {
+        remove_desired: bool,
+        restore_backup: bool,
+    },
+    RemoveCommittedRollback,
+    Committed,
     Blocked,
 }
 
@@ -3873,6 +4425,133 @@ fn assess_backup_recovery(
         }
         _ => BackupRecoveryAssessment::Blocked,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assess_relocation_recovery(
+    previous: &RecoveryFileObservation,
+    backup: Option<&RecoveryFileObservation>,
+    rollback: &RecoveryFileObservation,
+    desired: &RecoveryFileObservation,
+    previous_present: bool,
+    previous_mode: Option<u32>,
+    previous_hash: u64,
+    desired_hash: u64,
+    backup_identity: Option<(u64, Option<u32>)>,
+    committed: bool,
+) -> RelocationRecoveryAssessment {
+    let previous_managed = recovery_file_matches(previous, previous_hash, previous_mode);
+    let rollback_managed = recovery_file_matches(rollback, previous_hash, previous_mode);
+    let desired_exact = recovery_file_matches_hash(desired, desired_hash);
+    let backup_original = backup_identity
+        .zip(backup)
+        .is_some_and(|((hash, mode), observed)| recovery_file_matches(observed, hash, mode));
+    let previous_original =
+        backup_identity.is_some_and(|(hash, mode)| recovery_file_matches(previous, hash, mode));
+    let backup_missing =
+        backup.is_none_or(|observed| matches!(observed, RecoveryFileObservation::Missing));
+    let previous_final = if backup_identity.is_some() {
+        previous_original && backup_missing
+    } else {
+        matches!(previous, RecoveryFileObservation::Missing)
+    };
+
+    if committed {
+        if !desired_exact || !previous_final {
+            return RelocationRecoveryAssessment::Blocked;
+        }
+        return if previous_present && rollback_managed {
+            RelocationRecoveryAssessment::RemoveCommittedRollback
+        } else if matches!(rollback, RecoveryFileObservation::Missing) {
+            RelocationRecoveryAssessment::Committed
+        } else {
+            RelocationRecoveryAssessment::Blocked
+        };
+    }
+
+    if !previous_present {
+        if !matches!(previous, RecoveryFileObservation::Missing)
+            || !matches!(rollback, RecoveryFileObservation::Missing)
+            || backup.is_some()
+        {
+            return RelocationRecoveryAssessment::Blocked;
+        }
+        return match desired {
+            RecoveryFileObservation::Missing => RelocationRecoveryAssessment::NotStarted,
+            _ if desired_exact => RelocationRecoveryAssessment::RemoveDesired,
+            _ => RelocationRecoveryAssessment::Blocked,
+        };
+    }
+
+    if backup_identity.is_some() {
+        if previous_managed
+            && backup_original
+            && matches!(rollback, RecoveryFileObservation::Missing)
+            && matches!(desired, RecoveryFileObservation::Missing)
+        {
+            return RelocationRecoveryAssessment::NotStarted;
+        }
+        if matches!(previous, RecoveryFileObservation::Missing)
+            && backup_original
+            && rollback_managed
+            && matches!(desired, RecoveryFileObservation::Missing)
+        {
+            return RelocationRecoveryAssessment::Restore {
+                remove_desired: false,
+                restore_backup: false,
+            };
+        }
+        if previous_original && backup_missing && rollback_managed {
+            return match desired {
+                RecoveryFileObservation::Missing => RelocationRecoveryAssessment::Restore {
+                    remove_desired: false,
+                    restore_backup: true,
+                },
+                _ if desired_exact => RelocationRecoveryAssessment::Restore {
+                    remove_desired: true,
+                    restore_backup: true,
+                },
+                _ => RelocationRecoveryAssessment::Blocked,
+            };
+        }
+        return RelocationRecoveryAssessment::Blocked;
+    }
+
+    if previous_managed
+        && matches!(rollback, RecoveryFileObservation::Missing)
+        && matches!(desired, RecoveryFileObservation::Missing)
+    {
+        return RelocationRecoveryAssessment::NotStarted;
+    }
+    if matches!(previous, RecoveryFileObservation::Missing) && rollback_managed {
+        return match desired {
+            RecoveryFileObservation::Missing => RelocationRecoveryAssessment::Restore {
+                remove_desired: false,
+                restore_backup: false,
+            },
+            _ if desired_exact => RelocationRecoveryAssessment::Restore {
+                remove_desired: true,
+                restore_backup: false,
+            },
+            _ => RelocationRecoveryAssessment::Blocked,
+        };
+    }
+    RelocationRecoveryAssessment::Blocked
+}
+
+fn recovery_file_matches(observed: &RecoveryFileObservation, hash: u64, mode: Option<u32>) -> bool {
+    matches!(
+        observed,
+        RecoveryFileObservation::Regular(bytes, observed_mode)
+            if hash_content(bytes) == hash && recovery_mode_matches(*observed_mode, mode)
+    )
+}
+
+fn recovery_file_matches_hash(observed: &RecoveryFileObservation, hash: u64) -> bool {
+    matches!(
+        observed,
+        RecoveryFileObservation::Regular(bytes, _) if hash_content(bytes) == hash
+    )
 }
 
 fn assess_update_recovery(
