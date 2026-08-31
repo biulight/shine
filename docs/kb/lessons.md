@@ -3,6 +3,17 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-08-31 — Shell launcher Plans must enumerate platform resources
+
+- **Symptom**: the Shell planner reviewed only the primary command path even though Windows launcher
+  creation, update, and removal also mutate the sibling `.cmd` shim.
+- **Root cause**: planning treated a launcher as one logical path while the launcher executor
+  expanded it into platform-specific resources later.
+- **Fix**: derive Plan observations and permissions from the same prepared launcher resource list
+  used by execution, including rollback paths for receipt-owned updates.
+- **Rule**: when one logical lifecycle resource expands into multiple platform files, planning,
+  Action IR, receipt checks, mutation, and recovery must share one exact resource expansion.
+
 ## 2026-08-31 — A privileged transaction lock must outlive executor apply
 
 - **Symptom**: a privileged App removal could release the cross-process administrator lock after

@@ -99,7 +99,13 @@ Unix generated launcher, or Windows shim pair, persists the exact command receip
 clears the journal. Profile reconciliation starts after that commit. An interruption blocks later
 Shell lifecycle Plans until `shine shell recover` reviews current receipt and per-resource state;
 recovery removes only unchanged transaction-created resources or preserves an already receipted
-launcher.
+launcher. Install or upgrade may also derive `UpdateShellLauncher` when the command's old receipt
+and every reconstructed launcher resource remain exact. Core journals both receipts, moves each
+changed old resource to its same-directory `.shine.rollback`, writes the replacement, persists the
+new receipt, removes only exact rollback material, and clears the journal. Before receipt commit,
+explicit recovery restores exact old resources; after commit it preserves the replacement and
+cleans only exact rollback material. The Plan observes and grants every platform resource, including
+both Windows shim files.
 Status treats a manifest receipt or a compatible legacy launcher as installed; extracted source
 files alone are only cache state. Command uninstall removes only the selected managed launcher,
 rendered output, and receipt, rebuilds source-command profile wrappers from the remaining launchers,

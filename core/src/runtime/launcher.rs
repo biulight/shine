@@ -209,6 +209,40 @@ pub(crate) async fn apply_prepared_launcher_resource(
     }
 }
 
+pub(crate) async fn prepared_launcher_resource_is_exact(
+    host: &impl FileSystemObservationHost,
+    resource: &PreparedLauncherResource,
+) -> Result<bool> {
+    let metadata = match host.metadata(resource.destination()).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.is_not_found() => return Ok(false),
+        Err(error) => return Err(error.into_anyhow("observing prepared Shell launcher")),
+    };
+    Ok(match resource {
+        PreparedLauncherResource::Symlink { target, .. } => {
+            metadata.kind == FileKind::Symlink
+                && host
+                    .read_link(resource.destination())
+                    .await
+                    .is_ok_and(|current| current == *target)
+        }
+        PreparedLauncherResource::File {
+            bytes, unix_mode, ..
+        } => {
+            metadata.kind == FileKind::File
+                && host
+                    .read(resource.destination())
+                    .await
+                    .is_ok_and(|current| current == *bytes)
+                && unix_mode.is_none_or(|expected| {
+                    metadata
+                        .unix_mode
+                        .is_some_and(|mode| mode & 0o777 == expected)
+                })
+        }
+    })
+}
+
 async fn host_launcher_target(host: &impl FileSystemHost, path: &Path) -> Result<Option<PathBuf>> {
     let content = match host.read(path).await {
         Ok(bytes) => match String::from_utf8(bytes) {

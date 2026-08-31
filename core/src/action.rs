@@ -244,6 +244,21 @@ impl ActionIrV1 {
                         });
                     }
                 }
+                ActionKindV1::UpdateShellLauncher { resources, .. } => {
+                    for resource in resources {
+                        for (access, path) in [
+                            (FilesystemAccessV1::Write, resource.previous.destination()),
+                            (FilesystemAccessV1::Remove, resource.previous.destination()),
+                            (FilesystemAccessV1::Write, resource.rollback.as_path()),
+                            (FilesystemAccessV1::Remove, resource.rollback.as_path()),
+                        ] {
+                            required.insert(PermissionV1::Filesystem {
+                                access,
+                                path: path_identity(path),
+                            });
+                        }
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
                 }
@@ -472,6 +487,27 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn update_shell_launcher(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        previous_receipt: ShellLauncherReceiptV1,
+        desired_receipt: ShellLauncherReceiptV1,
+        resources: Vec<ShellLauncherUpdateResourceV1>,
+    ) -> Self {
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::UpdateShellLauncher {
+                previous_receipt: Box::new(previous_receipt),
+                desired_receipt: Box::new(desired_receipt),
+                resources,
+            },
+            rollback: RollbackSupportV1::RestorePreviousLauncherIfUnchanged,
+        }
+    }
+
     fn validate(&self) -> Result<(), ActionIrError> {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
@@ -636,6 +672,26 @@ impl DeclarativeActionV1 {
             ) if receipt.is_valid() && valid_shell_launcher_resources(resources) => Ok(()),
             (ActionKindV1::CreateShellLauncher { .. }, _) => Err(ActionIrError::Invalid(
                 "Shell launcher creation requires a valid receipt, non-empty unique resources, and remove-created-launcher-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::UpdateShellLauncher {
+                    previous_receipt,
+                    desired_receipt,
+                    resources,
+                },
+                RollbackSupportV1::RestorePreviousLauncherIfUnchanged,
+            ) if previous_receipt.is_valid()
+                && desired_receipt.is_valid()
+                && previous_receipt.category == desired_receipt.category
+                && previous_receipt.command == desired_receipt.command
+                && previous_receipt != desired_receipt
+                && valid_shell_launcher_update_resources(resources) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::UpdateShellLauncher { .. }, _) => Err(ActionIrError::Invalid(
+                "Shell launcher update requires distinct valid receipts for one command, exact previous/desired resource pairs, canonical rollback paths, and restore-previous-launcher-if-unchanged rollback"
                     .to_string(),
             )),
             (
@@ -830,6 +886,11 @@ pub enum ActionKindV1 {
         receipt: ShellLauncherReceiptV1,
         resources: Vec<ShellLauncherResourceV1>,
     },
+    UpdateShellLauncher {
+        previous_receipt: Box<ShellLauncherReceiptV1>,
+        desired_receipt: Box<ShellLauncherReceiptV1>,
+        resources: Vec<ShellLauncherUpdateResourceV1>,
+    },
     OpaqueExecution {
         capability: String,
         provenance: ActionProvenanceV1,
@@ -856,6 +917,7 @@ pub enum RollbackSupportV1 {
     RestoreJsonKeysIfUnchanged,
     RestoreRemovedJsonKeysIfUnchanged,
     RemoveCreatedLauncherIfUnchanged,
+    RestorePreviousLauncherIfUnchanged,
     Unsupported { reason_code: String },
 }
 
@@ -909,6 +971,14 @@ pub enum ShellLauncherResourceV1 {
     },
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellLauncherUpdateResourceV1 {
+    pub previous: ShellLauncherResourceV1,
+    pub desired: ShellLauncherResourceV1,
+    pub rollback: PathBuf,
+}
+
 impl ShellLauncherResourceV1 {
     pub fn destination(&self) -> &Path {
         match self {
@@ -931,6 +1001,22 @@ fn valid_shell_launcher_resources(resources: &[ShellLauncherResourceV1]) -> bool
         && resources
             .iter()
             .map(ShellLauncherResourceV1::destination)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == resources.len()
+}
+
+fn valid_shell_launcher_update_resources(resources: &[ShellLauncherUpdateResourceV1]) -> bool {
+    !resources.is_empty()
+        && resources.iter().all(|resource| {
+            resource.previous.destination() == resource.desired.destination()
+                && resource.previous != resource.desired
+                && resource.rollback == managed_file_rollback_path(resource.previous.destination())
+                && resource.rollback != resource.previous.destination()
+        })
+        && resources
+            .iter()
+            .map(|resource| resource.previous.destination())
             .collect::<BTreeSet<_>>()
             .len()
             == resources.len()
@@ -1081,6 +1167,67 @@ mod tests {
             assert!(requirements.required.contains(&PermissionV1::Filesystem {
                 access: FilesystemAccessV1::Write,
                 path: format!("absolute:{}", destination.display()),
+            }));
+        }
+    }
+
+    #[test]
+    fn shell_launcher_update_is_payload_free_and_derives_rollback_permissions() {
+        let destination = PathBuf::from("/home/test/.shine/bin/demo");
+        let rollback = managed_file_rollback_path(&destination);
+        let previous_receipt = ShellLauncherReceiptV1 {
+            category: "demo".to_string(),
+            command: "demo".to_string(),
+            mode: "snapshot".to_string(),
+            source_path: PathBuf::from("/home/test/.shine/installed/shell/demo/demo.sh"),
+            rendered_path: PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh"),
+            runtime: "native".to_string(),
+            bun_dependencies: None,
+            dependency_hash: None,
+            transforms: Vec::new(),
+            env: Vec::new(),
+            needs_source: false,
+            content_hash: hash_content(b"old source"),
+        };
+        let mut desired_receipt = previous_receipt.clone();
+        desired_receipt.runtime = "bun".to_string();
+        desired_receipt.content_hash = hash_content(b"new source");
+        let value = ActionIrV1::new(
+            "shell-update",
+            vec![DeclarativeActionV1::update_shell_launcher(
+                "update-launcher",
+                "shell/demo/demo",
+                "launcher",
+                previous_receipt,
+                desired_receipt,
+                vec![ShellLauncherUpdateResourceV1 {
+                    previous: ShellLauncherResourceV1::Symlink {
+                        destination: destination.clone(),
+                        target: PathBuf::from("/home/test/.shine/installed/shell/demo/demo.sh"),
+                    },
+                    desired: ShellLauncherResourceV1::File {
+                        destination: destination.clone(),
+                        desired_hash: hash_content(b"private replacement launcher bytes"),
+                        unix_mode: Some(0o755),
+                    },
+                    rollback: rollback.clone(),
+                }],
+            )],
+        );
+        value.validate().unwrap();
+        let encoded = toml::to_string(&value).unwrap();
+        assert!(!encoded.contains("private replacement launcher bytes"));
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.display()));
+        for (access, path) in [
+            (FilesystemAccessV1::Write, &destination),
+            (FilesystemAccessV1::Remove, &destination),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(requirements.required.contains(&PermissionV1::Filesystem {
+                access,
+                path: format!("absolute:{}", path.display()),
             }));
         }
     }

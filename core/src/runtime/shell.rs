@@ -1,5 +1,5 @@
-use super::launcher::prepare_launcher_resources;
-use super::shell_action_executor::ShellLauncherCreation;
+use super::launcher::{prepare_launcher_resources, prepared_launcher_resource_is_exact};
+use super::shell_action_executor::{ShellLauncherCreation, ShellLauncherUpdate};
 use super::{
     CoreRuntime, FileKind, FileSystemHost, InspectionChange, InspectionFileStatus, LinkConflict,
     LinkConflictKind, LinkReport, LinkSpec, PathUpdateStatus, PrivilegedFileSystemHost,
@@ -7,6 +7,7 @@ use super::{
     command_path_for_name, link_executables_with_host, link_is_current_with_host,
     unlink_managed_command_with_host,
 };
+use crate::action::managed_file_rollback_path;
 use crate::lifecycle::{
     LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
 };
@@ -83,6 +84,34 @@ impl BunDependencyMode {
 pub struct BunRuntimeSpec {
     pub dependency_mode: BunDependencyMode,
     pub dependency_hash: Option<u64>,
+}
+
+pub(crate) fn shell_link_spec_from_manifest_entry(entry: &ShellManifestEntry) -> Result<LinkSpec> {
+    let runtime = match entry.runtime.as_str() {
+        "native" => LinkRuntime::Native,
+        "bun" => LinkRuntime::Bun,
+        value => bail!("unsupported Shell launcher runtime in receipt: {value}"),
+    };
+    let bun_dependencies = match entry.bun_dependencies.as_deref() {
+        None => BunDependencyMode::Disabled,
+        Some("locked") => BunDependencyMode::Locked,
+        Some(value) => bail!("unsupported Shell Bun dependency mode in receipt: {value}"),
+    };
+    let source = if entry.transforms.is_empty() {
+        entry.source_path.clone()
+    } else {
+        entry.rendered_path.clone()
+    };
+    let render_target = (entry.mode == ExternalShellMode::Live && !entry.transforms.is_empty())
+        .then(|| format!("shell/{}/{}", entry.category, entry.command));
+    Ok(LinkSpec {
+        source,
+        link_name: OsString::from(&entry.command),
+        runtime,
+        bun_dependencies,
+        env: entry.env.clone(),
+        render_target,
+    })
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -889,6 +918,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         }
         let mut legacy_specs = Vec::new();
         let mut launcher_creations = Vec::new();
+        let mut launcher_updates = Vec::new();
         for spec in applicable_specs {
             let command = spec.link_name.to_string_lossy().to_string();
             let category = categories
@@ -907,6 +937,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 .context("Shell launcher command disappeared before execution")?;
             let target = format!("shell/{}/{}", category.name, command);
             let resources = prepare_launcher_resources(&self.context().bin_dir, &spec);
+            let desired_receipt = self.shell_manifest_entry(category, file).await?;
             let all_absent = if operation == LifecycleOperation::Install
                 && approval.is_some()
                 && manifest_before.find(&target).is_none()
@@ -926,11 +957,49 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 false
             };
             if all_absent {
-                launcher_creations.push((
-                    target,
-                    spec,
-                    self.shell_manifest_entry(category, file).await?,
-                ));
+                launcher_creations.push((target, spec, desired_receipt));
+            } else if approval.is_some()
+                && let Some(previous_receipt) = manifest_before.find(&target)
+                && *previous_receipt != desired_receipt
+            {
+                let previous_spec = shell_link_spec_from_manifest_entry(previous_receipt)?;
+                let previous_resources =
+                    prepare_launcher_resources(&self.context().bin_dir, &previous_spec);
+                let same_shape = previous_resources.len() == resources.len()
+                    && previous_resources
+                        .iter()
+                        .zip(&resources)
+                        .all(|(previous, desired)| previous.destination() == desired.destination());
+                let mut exact = same_shape;
+                let mut changed = false;
+                let mut rollback_absent = true;
+                if same_shape {
+                    for (previous, desired) in previous_resources.iter().zip(&resources) {
+                        exact &= prepared_launcher_resource_is_exact(self.host(), previous).await?;
+                        if previous != desired {
+                            changed = true;
+                            let rollback = managed_file_rollback_path(previous.destination());
+                            match self.host().metadata(&rollback).await {
+                                Err(error) if error.is_not_found() => {}
+                                Ok(_) => rollback_absent = false,
+                                Err(error) => {
+                                    return Err(error
+                                        .into_anyhow("inspecting Shell launcher rollback path"));
+                                }
+                            }
+                        }
+                    }
+                }
+                if exact && changed && rollback_absent {
+                    launcher_updates.push((
+                        target,
+                        previous_receipt.clone(),
+                        spec,
+                        desired_receipt,
+                    ));
+                } else {
+                    legacy_specs.push(spec);
+                }
             } else {
                 legacy_specs.push(spec);
             }
@@ -954,9 +1023,24 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 receipt: receipt.clone(),
             })
             .collect::<Vec<_>>();
+        let launcher_update_refs = launcher_updates
+            .iter()
+            .map(
+                |(target, previous_receipt, desired_spec, desired_receipt)| ShellLauncherUpdate {
+                    target: target.clone(),
+                    previous_receipt: previous_receipt.clone(),
+                    desired_spec,
+                    desired_receipt: desired_receipt.clone(),
+                },
+            )
+            .collect::<Vec<_>>();
         let shell_execution = if let Some(approval) = approval {
-            self.create_shell_launchers_approved(&launcher_creation_refs, approval)
-                .await?
+            self.reconcile_shell_launchers_approved(
+                &launcher_creation_refs,
+                &launcher_update_refs,
+                approval,
+            )
+            .await?
         } else {
             None
         };
@@ -965,6 +1049,11 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 command_path_for_name(&self.context().bin_dir, &spec.link_name)
             }),
         );
+        links
+            .overwritten
+            .extend(launcher_updates.iter().map(|(_, _, spec, _)| {
+                command_path_for_name(&self.context().bin_dir, &spec.link_name)
+            }));
         let scope = if selection
             .as_ref()
             .is_some_and(|target| target.command.is_some())
@@ -1094,6 +1183,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
     pub(crate) async fn upgrade_shells(
         &self,
         request: ShellUpgradeRequest,
+        approval: &PlanApprovalV1,
     ) -> Result<ShellUpgradeLifecycleReport> {
         let manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
@@ -1148,7 +1238,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                         force: true,
                     },
                     LifecycleOperation::Upgrade,
-                    None,
+                    Some(approval),
                 )
                 .await?;
             let canonical = format!("shell/{target}");
@@ -2385,7 +2475,7 @@ pub fn parse_shell_lifecycle_target(target: &str) -> Result<ShellTarget<'_>> {
     Ok(ShellTarget { category, command })
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ShellManifestEntry {
     pub category: String,
     pub command: String,

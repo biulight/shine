@@ -24,7 +24,8 @@ Action IR v1 adds `CreateShellLauncher`. One action binds the exact command-scop
 platform resource: symlink destination/target or generated-file destination/content hash/mode. It
 contains no launcher bytes. The action is eligible only during install when the command has no
 receipt and every launcher resource is absent; existing, stale, foreign, upgrade, and uninstall
-paths retain their previous executor until separate typed actions define their rollback.
+paths do not inherit the creation rollback proof. Receipt-owned update is defined separately by
+ADR 0059; the other paths retain their previous executor until narrower actions define rollback.
 
 Core writes `shell-operation-journal.toml` before the first launcher mutation while holding the
 cross-process operation lock. Unix native creation applies one symlink, Unix Bun/live creation one
@@ -49,5 +50,5 @@ launcher and removes only the stale journal. A conflicting receipt blocks.
 - User-created or user-modified launcher paths are never removed by recovery.
 - Snapshot/render cache may remain as harmless Shine-owned material after rollback; profile files
   are not touched by launcher recovery.
-- Launcher update/removal, shared snapshot/render resources, and sentinel profile blocks remain
-  Phase 4D follow-up actions with distinct ownership proofs.
+- Launcher removal, shared snapshot/render resources, and sentinel profile blocks remain Phase 4D
+  follow-up actions with distinct ownership proofs; ADR 0059 defines receipt-owned update.

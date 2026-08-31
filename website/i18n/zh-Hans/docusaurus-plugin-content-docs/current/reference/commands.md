@@ -84,6 +84,12 @@ receipt 时，它只移除 target 或内容 hash 与 mode 仍精确匹配的 tra
 resource；路径发生变化会阻塞恢复并保留现状。精确 receipt 已持久化时，恢复保留 launcher，只
 清理 stale journal。确认默认是 No；非交互终端必须传入 `--yes`。
 
+install 与 upgrade 更新 launcher 时，如果旧 command receipt 和所有 launcher resource 仍精确匹配，
+也会写入 journal。发生变化的旧资源会先移到同目录的规范 `.shine.rollback` 路径。新 receipt
+持久化前，恢复只还原精确匹配的旧资源；receipt commit 后，恢复保留精确 replacement，仅移除未修改
+的 rollback material。replacement、rollback resource 或 receipt 发生冲突都会阻塞恢复。foreign
+或已经被修改的 launcher 不会继承这套 rollback proof。
+
 不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation、App refresh 和 artifact apply/remove
 都会先显示绑定快照的安全 Plan，并以默认 No 询问一次。`--yes` 仍会完整显示并重新校验 Plan，
 只跳过提示；重定向输出等非交互执行必须传入该参数。在提供 dry-run 的命令中，`--yes` 与

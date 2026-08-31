@@ -45,11 +45,13 @@ shine install shell/proxy --replace-managed
 
 `--replace-managed` 会覆盖 Shine 管理的对应内容。先用 `shine info shell/proxy --diff` 检查状态，避免把有意的本地修改当作损坏处理。
 
-## 恢复中断的 launcher 创建
+## 恢复中断的 launcher 事务
 
 首次安装时，Shine 会先写入 transaction journal，再创建命令 launcher；只有 command manifest
 receipt 持久化后才会清理 journal。如果安装在这个窗口中断，后续修改型 Shell 命令会停止，不会
-猜测 launcher 是否归 Shine 所有。请审阅并执行专用 recovery Plan：
+猜测 launcher 是否归 Shine 所有。install 或 upgrade 更新未修改、已有 receipt 的 launcher 时也会
+使用同一 journal：旧资源会先移到同目录 `.shine.rollback`，新 receipt 持久化前不会清理这些
+rollback material。请审阅并执行专用 recovery Plan：
 
 ```bash
 shine shell recover
@@ -58,8 +60,11 @@ shine shell recover --yes # 非交互使用
 
 对于尚无 receipt 的 Unix symlink、Unix Bun/live launcher 或 Windows shim，只有它仍与中断创建
 的精确状态一致时，恢复才会移除它；launcher 被修改后会保留并阻塞恢复。如果 receipt 已写入，
-launcher 会保持安装状态，恢复只清理 stale journal。Shine 管理的 snapshot/render cache 可能继续
-保留，launcher recovery 不会编辑用户的 shell profile。
+launcher 会保持安装状态，恢复只清理 stale journal。更新中断时，只有 replacement 与 rollback
+资源仍匹配记录的 target、内容 hash 和 mode，恢复才会还原旧 launcher；新 receipt 已持久化后，
+恢复会保留 replacement，仅清理未修改的 rollback material。replacement 或 rollback 路径发生变化
+会阻塞恢复并保留现场。Shine 管理的 snapshot/render cache 可能继续保留，launcher recovery 不会
+编辑用户的 shell profile。
 
 ## 卸载
 

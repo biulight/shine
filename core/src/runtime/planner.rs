@@ -5,25 +5,27 @@
 //! through a host.
 
 use super::app::{desired_app_hash, installed_app_hash, installed_json_hash};
+use super::launcher::{prepare_launcher_resources, prepared_launcher_resource_is_exact};
+use super::shell::shell_link_spec_from_manifest_entry;
 use super::{
     AppArtifactAction, AppArtifactRequest, AppCategory, AppFile, AppLifecycleReport,
     AppLifecycleRequest, AppRefreshRequest, AppUninstallLifecycleRequest,
     AppUpgradeLifecycleReport, AppUpgradeRequest, ArtifactRuntime, CoreRuntime, ExternalShellMode,
-    FileKind, FileSystemHost, FileSystemObservationHost, LinkRuntime, PrivilegedFileSystemHost,
-    ProcessHost, RuntimeInteraction, RuntimeObserver, ShellFile, ShellLifecycleReport,
-    ShellLifecycleRequest, ShellManifest, ShellManifestEntry, ShellUninstallReport,
-    ShellUninstallRequest, ShellUpgradeLifecycleReport, ShellUpgradeRequest, SplitDnsHost,
-    SplitDnsObservationHost, SplitDnsRequest, SysBootstrapBatchReport, SysBootstrapBatchRequest,
-    SysDetection, SysDetectionProbe, SysDriverKind, SysInstall, SysItem, SysItemMode,
-    SysManagedAction, SysManagedReport, SysManagedRequest, SysManifest, SysPackageProvider,
-    SysProfileStateReport, SysProfileStateRequest, SysRunEntry, SysRunManifest, SystemReceipt,
-    command_path_for_name, link_is_current_with_host, parse_shell_lifecycle_target,
+    FileKind, FileSystemHost, FileSystemObservationHost, LinkRuntime, LinkSpec,
+    PrivilegedFileSystemHost, ProcessHost, RuntimeInteraction, RuntimeObserver, ShellFile,
+    ShellLifecycleReport, ShellLifecycleRequest, ShellManifest, ShellManifestEntry,
+    ShellUninstallReport, ShellUninstallRequest, ShellUpgradeLifecycleReport, ShellUpgradeRequest,
+    SplitDnsHost, SplitDnsObservationHost, SplitDnsRequest, SysBootstrapBatchReport,
+    SysBootstrapBatchRequest, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall, SysItem,
+    SysItemMode, SysManagedAction, SysManagedReport, SysManagedRequest, SysManifest,
+    SysPackageProvider, SysProfileStateReport, SysProfileStateRequest, SysRunEntry, SysRunManifest,
+    SystemReceipt, command_path_for_name, link_is_current_with_host, parse_shell_lifecycle_target,
     split_dns_receipt,
 };
 use crate::action::{
     ActionIrV1, DeclarativeActionV1, ForcedManagedFileBackupV1, ForcedManagedFileRemoveSpecV1,
     ManagedFileRemoveSpecV1, ManagedFileRemoveWithBackupSpecV1, ManagedFileUpdateSpecV1,
-    ManagedJsonMergeSpecV1, ManagedJsonRemoveSpecV1,
+    ManagedJsonMergeSpecV1, ManagedJsonRemoveSpecV1, managed_file_rollback_path,
 };
 use crate::install::manifest::APP_MANIFEST_SCHEMA_VERSION;
 use crate::install::{AppEntry, AppManifest};
@@ -1502,7 +1504,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
         )?;
         let mut permissions = PermissionAccumulator::default();
         let mut steps = Vec::new();
-        let mut first_time_launcher_creation = false;
+        let mut typed_launcher_transaction = false;
 
         if interrupted_operation {
             steps.push(
@@ -1544,15 +1546,27 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
             for entry in selected_entries {
                 let target = format!("shell/{}/{}", entry.category, entry.command);
                 let link = command_path_for_name(&self.context().bin_dir, entry.command.as_ref());
-                capture_path_state(self.host(), &mut state, format!("launcher:{target}"), &link)
+                let previous_spec = shell_link_spec_from_manifest_entry(entry)?;
+                for (index, resource) in
+                    prepare_launcher_resources(&self.context().bin_dir, &previous_spec)
+                        .iter()
+                        .enumerate()
+                {
+                    capture_path_state(
+                        self.host(),
+                        &mut state,
+                        format!("launcher:{target}:{index}"),
+                        resource.destination(),
+                    )
                     .await?;
+                    add_shell_typed_permissions(
+                        self.context(),
+                        &mut permissions,
+                        resource.destination(),
+                        request.operation,
+                    );
+                }
                 let managed = launcher_is_managed(self.host(), &link, self.context()).await?;
-                add_shell_typed_permissions(
-                    self.context(),
-                    &mut permissions,
-                    &link,
-                    request.operation,
-                );
                 steps.push(
                     PlanStepV1::new(
                         &target,
@@ -1673,13 +1687,6 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         &mut state,
                         &mut permissions,
                     )?;
-                    capture_path_state(
-                        self.host(),
-                        &mut state,
-                        format!("launcher:{canonical}"),
-                        &link,
-                    )
-                    .await?;
                     let managed = launcher_is_managed(self.host(), &link, self.context()).await?;
                     let source =
                         self.shell_deployment_source_path(&category.name, &file.source_rel);
@@ -1716,6 +1723,28 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         && self.context().external_shell_mode == ExternalShellMode::Live
                         && !file.transforms.is_empty())
                     .then(|| canonical.clone());
+                    let desired_spec = LinkSpec {
+                        source: effective.clone(),
+                        link_name: file.command_name.clone().into(),
+                        runtime: file.runtime,
+                        bun_dependencies: bun.dependency_mode,
+                        env: env.clone(),
+                        render_target: render_target.clone(),
+                    };
+                    let desired_resources =
+                        prepare_launcher_resources(&self.context().bin_dir, &desired_spec);
+                    let mut all_launcher_resources_absent = true;
+                    for (index, resource) in desired_resources.iter().enumerate() {
+                        capture_path_state(
+                            self.host(),
+                            &mut state,
+                            format!("launcher:{canonical}:{index}"),
+                            resource.destination(),
+                        )
+                        .await?;
+                        all_launcher_resources_absent &=
+                            self.host().metadata(resource.destination()).await.is_err();
+                    }
                     let link_current = exists
                         && managed
                         && link_is_current_with_host(
@@ -1752,7 +1781,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             && entry.needs_source == file.needs_source
                     });
                     let current = link_current && source_current && manifest_current;
-                    let action = if exists && !managed && !request.force {
+                    let mut action = if exists && !managed && !request.force {
                         PlanActionV1::Blocked
                     } else if !exists {
                         PlanActionV1::Create
@@ -1761,16 +1790,88 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     } else {
                         PlanActionV1::Update
                     };
-                    first_time_launcher_creation |= request.operation
-                        == LifecycleOperation::Install
+                    if action == PlanActionV1::Create && !all_launcher_resources_absent {
+                        action = PlanActionV1::Blocked;
+                    }
+                    let first_time_creation = request.operation == LifecycleOperation::Install
                         && action == PlanActionV1::Create
-                        && entry.is_none();
-                    add_shell_typed_permissions(
-                        self.context(),
-                        &mut permissions,
-                        &link,
-                        request.operation,
-                    );
+                        && entry.is_none()
+                        && all_launcher_resources_absent;
+                    let mut managed_update = false;
+                    let mut rollback_occupied = false;
+                    let mut managed_update_permissions = Vec::new();
+                    if action == PlanActionV1::Update
+                        && managed
+                        && let Some(entry) = entry
+                    {
+                        let previous_spec = shell_link_spec_from_manifest_entry(entry)?;
+                        let previous_resources =
+                            prepare_launcher_resources(&self.context().bin_dir, &previous_spec);
+                        if previous_resources.len() == desired_resources.len()
+                            && previous_resources.iter().zip(&desired_resources).all(
+                                |(previous, desired)| {
+                                    previous.destination() == desired.destination()
+                                },
+                            )
+                        {
+                            let mut previous_exact = true;
+                            let mut changed_resource = false;
+                            for (index, (previous, desired)) in previous_resources
+                                .iter()
+                                .zip(&desired_resources)
+                                .enumerate()
+                            {
+                                previous_exact &=
+                                    prepared_launcher_resource_is_exact(self.host(), previous)
+                                        .await?;
+                                if previous == desired {
+                                    continue;
+                                }
+                                changed_resource = true;
+                                let rollback = managed_file_rollback_path(previous.destination());
+                                capture_path_state(
+                                    self.host(),
+                                    &mut state,
+                                    format!("launcher-rollback:{canonical}:{index}"),
+                                    &rollback,
+                                )
+                                .await?;
+                                rollback_occupied |= self.host().metadata(&rollback).await.is_ok();
+                                for (access, path) in [
+                                    (
+                                        FilesystemAccessV1::Remove,
+                                        previous.destination().to_path_buf(),
+                                    ),
+                                    (FilesystemAccessV1::Write, rollback.clone()),
+                                    (FilesystemAccessV1::Remove, rollback),
+                                ] {
+                                    managed_update_permissions.push((access, path));
+                                }
+                            }
+                            managed_update = previous_exact && changed_resource;
+                        }
+                    }
+                    if managed_update && rollback_occupied {
+                        action = PlanActionV1::Blocked;
+                    }
+                    if managed_update && !rollback_occupied {
+                        for (access, path) in managed_update_permissions {
+                            permissions.implicit(PermissionV1::Filesystem {
+                                access,
+                                path: review_path(self.context(), &path),
+                            });
+                        }
+                    }
+                    typed_launcher_transaction |=
+                        first_time_creation || (managed_update && !rollback_occupied);
+                    for resource in &desired_resources {
+                        add_shell_typed_permissions(
+                            self.context(),
+                            &mut permissions,
+                            resource.destination(),
+                            request.operation,
+                        );
+                    }
                     if !(self.context().is_external_presets
                         && self.context().external_shell_mode == ExternalShellMode::Live)
                     {
@@ -1791,7 +1892,16 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     }
                     let mut step = PlanStepV1::new(&canonical, None::<String>, action);
                     if action == PlanActionV1::Blocked {
-                        step = step.with_diagnostic_code("shell_foreign_launcher_conflict");
+                        step = step.with_diagnostic_code(if rollback_occupied {
+                            "shell_launcher_rollback_occupied"
+                        } else if !all_launcher_resources_absent && !exists {
+                            "shell_launcher_resource_conflict"
+                        } else {
+                            "shell_foreign_launcher_conflict"
+                        });
+                    } else if managed_update {
+                        step =
+                            step.with_diagnostic_code("shell_managed_launcher_update_transaction");
                     } else if exists && !managed && request.force {
                         step = step.with_diagnostic_code("shell_foreign_launcher_override");
                     } else if request.force && action == PlanActionV1::Update {
@@ -1830,7 +1940,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 profile_action,
             ));
         }
-        if first_time_launcher_creation {
+        if typed_launcher_transaction {
             add_shell_journal_permissions(self.context(), &mut permissions);
         }
         finish_plan(self, request.operation, state, permissions, steps)
@@ -3002,9 +3112,12 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             bail!("approved Shell upgrade requires an upgrade Plan");
         }
         approval.validate(&self.plan_shells(request.clone()).await?)?;
-        self.upgrade_shells(ShellUpgradeRequest {
-            category: request.target,
-        })
+        self.upgrade_shells(
+            ShellUpgradeRequest {
+                category: request.target,
+            },
+            approval,
+        )
         .await
     }
 }
@@ -6701,6 +6814,17 @@ target = '$HOME/.config/disabled.txt'
             .build()
     }
 
+    fn shell_bun_launcher_snapshot() -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.ts'\ntarget = 'demo'\nruntime = 'bun'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.ts", b"console.log('demo')\n".to_vec())
+            .build()
+    }
+
     fn shell_install_request() -> ShellPlanRequest {
         ShellPlanRequest {
             operation: LifecycleOperation::Install,
@@ -6832,7 +6956,6 @@ target = '$HOME/.config/disabled.txt'
             .err()
             .expect("Shell receipt write should fail");
         let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
-        runtime.host().remove_file(&launcher).await.unwrap();
         runtime
             .host()
             .put_file(&launcher, b"#!/bin/sh\necho user\n".to_vec());
@@ -6895,6 +7018,406 @@ target = '$HOME/.config/disabled.txt'
         assert!(runtime.host().read(&journal).await.is_err());
     }
 
+    #[tokio::test]
+    async fn managed_shell_launcher_update_moves_old_resource_before_receipt_commit() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_managed_launcher_update_transaction".to_string())
+        }));
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, &launcher),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), path),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.find("shell/demo/demo").unwrap().runtime, "bun");
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .read(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join("shell-operation-journal.toml"),
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_update_receipt_failure_recovers_previous_resource() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
+        let old_kind = original.host().metadata(&launcher).await.unwrap().kind;
+        let old_target = original.host().read_link(&launcher).await.ok();
+        let old_bytes = original.host().read(&launcher).await.ok();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("replacement receipt write should fail");
+        let rollback = managed_file_rollback_path(&launcher);
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_previous_launcher".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().metadata(&launcher).await.unwrap().kind,
+            old_kind
+        );
+        assert_eq!(runtime.host().read_link(&launcher).await.ok(), old_target);
+        assert_eq!(runtime.host().read(&launcher).await.ok(), old_bytes);
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.find("shell/demo/demo").unwrap().runtime, "native");
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_update_write_failure_restores_moved_previous_resource() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
+        let old_kind = original.host().metadata(&launcher).await.unwrap().kind;
+        let old_target = original.host().read_link(&launcher).await.ok();
+        let old_bytes = original.host().read(&launcher).await.ok();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_write_after(&launcher, 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("replacement launcher write should fail");
+        let rollback = managed_file_rollback_path(&launcher);
+        assert!(runtime.host().metadata(&launcher).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().metadata(&launcher).await.unwrap().kind,
+            old_kind
+        );
+        assert_eq!(runtime.host().read_link(&launcher).await.ok(), old_target);
+        assert_eq!(runtime.host().read(&launcher).await.ok(), old_bytes);
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_update_rename_failure_recovers_not_started_state() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
+        let old_target = original.host().read_link(&launcher).await.ok();
+        let old_bytes = original.host().read(&launcher).await.ok();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let rollback = managed_file_rollback_path(&launcher);
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_rename_after(&launcher, &rollback, 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("moving old launcher should fail");
+        assert!(runtime.host().metadata(&launcher).await.is_ok());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_launcher_update_not_started".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read_link(&launcher).await.ok(), old_target);
+        assert_eq!(runtime.host().read(&launcher).await.ok(), old_bytes);
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_update_commit_failure_cleans_only_exact_rollback() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_remove_after(&rollback, 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("rollback cleanup should fail");
+        let replacement = runtime.host().read(&launcher).await.unwrap();
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_cleanup_launcher_rollback".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&launcher).await.unwrap(), replacement);
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.find("shell/demo/demo").unwrap().runtime, "bun");
+    }
+
+    #[tokio::test]
+    async fn shell_launcher_update_recovery_blocks_modified_replacement() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("replacement receipt write should fail");
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime
+            .host()
+            .put_file(&launcher, b"#!/bin/sh\necho user change\n".to_vec());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(!recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_launcher_update_changed".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&launcher).await.unwrap(),
+            b"#!/bin/sh\necho user change\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn occupied_shell_launcher_rollback_blocks_before_update() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let rollback = managed_file_rollback_path(&launcher);
+        runtime.host().put_file(&rollback, b"user-owned".to_vec());
+
+        let plan = runtime.plan_shells(install).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_launcher_rollback_occupied".to_string())
+        }));
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"user-owned");
+    }
+
+    #[tokio::test]
+    async fn approved_shell_upgrade_uses_managed_launcher_update_transaction() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_managed_launcher_update_transaction".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .upgrade_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        let manifest = ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+            .await
+            .unwrap();
+        assert_eq!(manifest.find("shell/demo/demo").unwrap().runtime, "bun");
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn shell_plan_binds_both_windows_launcher_resources() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let plan = runtime.plan_shells(shell_install_request()).await.unwrap();
+        let launcher = command_path_for_name(&runtime.context().bin_dir, "demo".as_ref());
+        let cmd = launcher.with_extension("cmd");
+        for destination in [launcher, cmd] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access: FilesystemAccessV1::Write,
+                        path: review_path(runtime.context(), &destination),
+                    })
+            );
+        }
+    }
+
     #[cfg(not(unix))]
     #[tokio::test]
     async fn shell_recovery_removes_a_partial_windows_shim_pair() {
@@ -6921,6 +7444,47 @@ target = '$HOME/.config/disabled.txt'
             .unwrap();
         assert!(runtime.host().metadata(&launcher).await.is_err());
         assert!(runtime.host().metadata(&cmd).await.is_err());
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn shell_recovery_restores_a_partial_windows_launcher_update() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install.clone(), &approval)
+            .await
+            .unwrap();
+        let launcher = command_path_for_name(&original.context().bin_dir, "demo".as_ref());
+        let cmd = launcher.with_extension("cmd");
+        let old_ps1 = original.host().read(&launcher).await.unwrap();
+        let old_cmd = original.host().read(&cmd).await.unwrap();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            shell_bun_launcher_snapshot(),
+        );
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime.host().fail_write_after(&cmd, 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("second replacement shim write should fail");
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(runtime.host().read(&launcher).await.unwrap(), old_ps1);
+        assert_eq!(runtime.host().read(&cmd).await.unwrap(), old_cmd);
     }
 
     #[tokio::test]

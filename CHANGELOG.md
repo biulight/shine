@@ -51,6 +51,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   Windows PowerShell/cmd shim pairs. `shine shell recover` reviews a separate recovery Plan and
   removes only unchanged transaction-created launcher resources, while preserving an exact
   receipt-owned launcher or any user-modified path.
+- Journaled updates of unchanged, receipt-owned Shell launchers during install and upgrade. Old
+  Unix or Windows launcher resources move to fingerprint-bound same-directory rollback material;
+  recovery restores them before the new command receipt or keeps the replacement and cleans only
+  unchanged rollback material after receipt commit.
 
 ### Breaking changes
 

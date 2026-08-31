@@ -99,6 +99,13 @@ changed paths block recovery and are preserved. If the exact receipt is already 
 keeps the launcher and clears only stale journal state. Recovery defaults to No and requires
 `--yes` outside an interactive terminal.
 
+Install and upgrade also journal an in-place launcher update when the old command receipt and every
+launcher resource still match. Changed resources move to canonical same-directory
+`.shine.rollback` paths before replacement. Before the new receipt is durable, recovery restores
+only exact previous resources; after receipt commit, it keeps exact replacements and removes only
+unchanged rollback material. Any changed replacement, rollback resource, or conflicting receipt
+blocks recovery. Foreign or already modified launchers do not inherit this rollback proof.
+
 Without `--dry-run`, App and Shell lifecycle mutations, App refresh, and artifact apply/remove
 display a snapshot-bound security Plan and ask once with a default answer of No. `--yes` still
 prints and revalidates the full Plan but skips the prompt; redirected or otherwise non-interactive

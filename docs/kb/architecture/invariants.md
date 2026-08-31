@@ -238,6 +238,17 @@ bugs. Check this list before changing the modules named in each entry.
   blocks, while an exact durable receipt preserves the launcher and authorizes stale-journal
   cleanup. Profile sentinel blocks, shared snapshots, launcher updates, and removals do not inherit
   this creation proof.
+- **A receipt-owned Shell launcher update moves exact old resources before replacement.**
+  `UpdateShellLauncher` applies only when the old command receipt is still exact, the current Unix
+  launcher or every Windows shim matches the launcher deterministically reconstructed from that
+  receipt, and each canonical same-directory `.shine.rollback` path is absent. The journal binds
+  complete old/new receipts plus target/hash/mode identities, never launcher bytes. Each changed
+  old resource moves to rollback before its replacement is written. While the old receipt remains,
+  recovery restores only exact missing-or-replaced states; after the new receipt is durable,
+  commit/recovery keeps exact replacements and removes only unchanged rollback material. Any
+  changed resource, rollback path, or conflicting receipt blocks and preserves all paths. Foreign,
+  already modified, removal, shared snapshot/render, and profile-block paths do not inherit this
+  update proof.
 - **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
   generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
   privilege, permission and unsupported-rollback classification until a narrower typed action

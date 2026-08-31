@@ -39,8 +39,10 @@
   install、原地 update、普通/强制 uninstall 也已迁移到 key-owned Action；恢复只还原声明的
   顶层 key，保留中断后发生的其它设置修改。Shell 首次 launcher 创建也已接入独立 journal：Unix
   symlink、Unix Bun/live launcher 和 Windows 双 shim 都在 command receipt commit 前可按精确
-  target/hash/mode 回滚，`shine shell recover` 负责显式恢复。launcher 更新/删除、共享 snapshot/
-  render、profile block 与 Sys action 尚未迁移，也不代表 Phase 4 exit criteria 已满足。
+  target/hash/mode 回滚，`shine shell recover` 负责显式恢复。未修改、receipt-owned launcher 的
+  install/upgrade 更新也已迁移：旧资源先进入同目录 rollback material，新 receipt 前可恢复，commit
+  后仅清理精确旧资源。launcher 删除、共享 snapshot/render、profile block 与 Sys action 尚未迁移，
+  也不代表 Phase 4 exit criteria 已满足。
 
 ## Guiding Principles
 
