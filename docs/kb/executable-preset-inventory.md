@@ -27,9 +27,10 @@ Classification vocabulary:
 
 All other built-in App file copy/transform/JSON-merge effects are Core-typed rather than executable
 Preset code. Phase 4 now covers absent-destination and backup-aware unowned regular-file static Copy
-creation, unchanged receipt-owned in-place static Copy update, and ordinary removal of an unchanged
-receipt-owned static Copy with or without restoration of its fixed persistent backup. Merge, forced
-remove, administrator, generator and relocation actions remain to migrate.
+creation, unchanged receipt-owned in-place static Copy update, ordinary removal of an unchanged
+receipt-owned static Copy with or without restoration of its fixed persistent backup, and forced
+removal of a user-modified static Copy at the same unprivileged boundary. Merge, administrator,
+generator and relocation actions remain to migrate.
 
 ## Shell commands
 
@@ -65,7 +66,8 @@ the target ran but does not own third-party package uninstall or version rollbac
 1. App absent-destination managed file create and explicit recovery (implemented).
 2. App backup-aware unowned regular-file static Copy create and restore (implemented).
 3. App receipt-owned in-place static Copy update (implemented).
-4. App backup-restoring static Copy remove (implemented); forced remove and JSON merge remain.
+4. App ordinary, backup-restoring, and forced static Copy remove (implemented for unprivileged
+   files); JSON merge and administrator removal remain.
 5. Shell snapshot files, launchers and profile blocks.
 6. Managed Sys files/profile blocks and split DNS.
 7. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit

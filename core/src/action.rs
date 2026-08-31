@@ -138,6 +138,33 @@ impl ActionIrV1 {
                         });
                     }
                 }
+                ActionKindV1::ForceRemoveManagedFile {
+                    destination,
+                    persistent_backup,
+                    rollback,
+                    ..
+                } => {
+                    for (access, path) in [
+                        (FilesystemAccessV1::Remove, destination.as_path()),
+                        (FilesystemAccessV1::Write, rollback.as_path()),
+                        (FilesystemAccessV1::Remove, rollback.as_path()),
+                    ] {
+                        required.insert(PermissionV1::Filesystem {
+                            access,
+                            path: path_identity(path),
+                        });
+                    }
+                    if let Some(backup) = persistent_backup {
+                        required.insert(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Write,
+                            path: path_identity(destination),
+                        });
+                        required.insert(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Remove,
+                            path: path_identity(&backup.path),
+                        });
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
                 }
@@ -273,6 +300,30 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn force_remove_managed_file(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ForcedManagedFileRemoveSpecV1,
+    ) -> Self {
+        let rollback = managed_file_rollback_path(&spec.destination);
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::ForceRemoveManagedFile {
+                destination: spec.destination,
+                persistent_backup: spec.persistent_backup,
+                rollback,
+                receipt_hash: spec.receipt_hash,
+                current_mode: spec.current_mode,
+                current_hash: spec.current_hash,
+                uses_env: spec.uses_env,
+            },
+            rollback: RollbackSupportV1::RestoreForcedPreviousIfUnchanged,
+        }
+    }
+
     fn validate(&self) -> Result<(), ActionIrError> {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
@@ -367,6 +418,30 @@ impl DeclarativeActionV1 {
                 ),
             ),
             (
+                ActionKindV1::ForceRemoveManagedFile {
+                    destination,
+                    persistent_backup,
+                    rollback,
+                    receipt_hash,
+                    current_hash,
+                    ..
+                },
+                RollbackSupportV1::RestoreForcedPreviousIfUnchanged,
+            ) if !destination.as_os_str().is_empty()
+                && *rollback == managed_file_rollback_path(destination)
+                && receipt_hash != current_hash
+                && persistent_backup.as_ref().is_none_or(|backup| {
+                    backup.path == crate::install::backup_path(destination)
+                        && backup.path != *rollback
+                }) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::ForceRemoveManagedFile { .. }, _) => Err(ActionIrError::Invalid(
+                "forced managed-file removal requires changed current content, its canonical rollback path, an optional canonical persistent backup, and restore-forced-previous-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
                 ActionKindV1::OpaqueExecution { capability, .. },
                 RollbackSupportV1::Unsupported { reason_code },
             ) => {
@@ -405,6 +480,25 @@ pub struct ManagedFileRemoveWithBackupSpecV1 {
     pub managed_hash: u64,
     pub backup_mode: Option<u32>,
     pub backup_hash: u64,
+    pub uses_env: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForcedManagedFileBackupV1 {
+    pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
+    pub hash: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForcedManagedFileRemoveSpecV1 {
+    pub destination: PathBuf,
+    pub persistent_backup: Option<ForcedManagedFileBackupV1>,
+    pub receipt_hash: u64,
+    pub current_mode: Option<u32>,
+    pub current_hash: u64,
     pub uses_env: bool,
 }
 
@@ -453,6 +547,18 @@ pub enum ActionKindV1 {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         uses_env: bool,
     },
+    ForceRemoveManagedFile {
+        destination: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        persistent_backup: Option<ForcedManagedFileBackupV1>,
+        rollback: PathBuf,
+        receipt_hash: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        current_mode: Option<u32>,
+        current_hash: u64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        uses_env: bool,
+    },
     OpaqueExecution {
         capability: String,
         provenance: ActionProvenanceV1,
@@ -475,6 +581,7 @@ pub enum RollbackSupportV1 {
     RestoreBackupIfUnchanged,
     RestorePreviousIfUnchanged,
     RestorePreviousWithBackupIfUnchanged,
+    RestoreForcedPreviousIfUnchanged,
     Unsupported { reason_code: String },
 }
 
@@ -710,6 +817,53 @@ mod tests {
         value.validate().unwrap();
         let encoded = toml::to_string(&value).unwrap();
         assert!(!encoded.contains("private-managed"));
+        assert!(!encoded.contains("private-user-original"));
+
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.to_string_lossy()));
+        for (access, path) in [
+            (FilesystemAccessV1::Write, destination.clone()),
+            (FilesystemAccessV1::Remove, destination),
+            (FilesystemAccessV1::Remove, backup),
+            (FilesystemAccessV1::Write, rollback.clone()),
+            (FilesystemAccessV1::Remove, rollback),
+        ] {
+            assert!(requirements.required.contains(&PermissionV1::Filesystem {
+                access,
+                path: format!("absolute:{}", path.display()),
+            }));
+        }
+    }
+
+    #[test]
+    fn forced_remove_is_distinct_payload_free_and_derives_all_path_effects() {
+        let destination = PathBuf::from("/home/test/.config/demo/config");
+        let backup = crate::install::backup_path(&destination);
+        let rollback = managed_file_rollback_path(&destination);
+        let value = ActionIrV1::new(
+            "operation-force-remove",
+            vec![DeclarativeActionV1::force_remove_managed_file(
+                "action-force-remove",
+                "app/demo",
+                "config",
+                ForcedManagedFileRemoveSpecV1 {
+                    destination: destination.clone(),
+                    persistent_backup: Some(ForcedManagedFileBackupV1 {
+                        path: backup.clone(),
+                        mode: Some(0o100640),
+                        hash: hash_content(b"private-user-original"),
+                    }),
+                    receipt_hash: hash_content(b"previous-managed"),
+                    current_mode: Some(0o100600),
+                    current_hash: hash_content(b"private-user-modification"),
+                    uses_env: true,
+                },
+            )],
+        );
+        value.validate().unwrap();
+        let encoded = toml::to_string(&value).unwrap();
+        assert!(!encoded.contains("previous-managed"));
+        assert!(!encoded.contains("private-user-modification"));
         assert!(!encoded.contains("private-user-original"));
 
         let requirements =

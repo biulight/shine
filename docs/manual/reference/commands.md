@@ -77,7 +77,9 @@ shine app artifact remove <APP_ID> [--yes]
 
 `--replace-managed` overwrites managed content modified after installation; inspect
 `shine info <TARGET> --diff` first. `app uninstall --force` deletes user-modified managed files, so
-preview with `--dry-run`.
+preview with `--dry-run`. For unprivileged static Copy files, that forced deletion is journaled and
+stages the modified file as same-directory rollback material until receipt commit; administrator
+and other install strategies retain their existing removal path.
 
 `shell install --dry-run` resolves metadata, deployment sources, Bun policy, and intended command
 links, but does not extract or snapshot presets, render templates, create links, write a manifest,
@@ -112,6 +114,10 @@ moves `.shine.bak` to the destination. Recovery before receipt commit reverses o
 state of those three paths, restoring both the managed destination and persistent backup. Recovery
 after commit keeps the exact restored user destination and removes only unchanged managed rollback
 material. Both file modes and hashes must still match the journal.
+Forced removal of a user-modified, unprivileged static Copy uses a distinct action: recovery before
+receipt commit restores the exact modified file and reverses an optional backup restoration;
+recovery after commit keeps the completed uninstall and removes only rollback material matching
+the captured modified mode and hash.
 Treat interrupted rollback material as sensitive managed configuration. Recovery
 defaults to No and requires `--yes` when no interactive terminal is available. A missing or invalid
 journal, unsupported action, or changed destination/backup/rollback path returns nonzero without

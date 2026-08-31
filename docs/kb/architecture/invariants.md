@@ -194,6 +194,17 @@ bugs. Check this list before changing the modules named in each entry.
   the user file to backup and managed rollback to destination. After `receipt-committed`, recovery
   keeps the exact restored user destination and removes only unchanged managed rollback material.
   Any changed kind, mode, hash, receipt, or claimed path blocks and preserves all three paths.
+- **A forced App removal binds the modified file separately from its receipt.** The applicable
+  Phase 4 action is limited to a receipt-owned, unprivileged static Copy regular file whose current
+  hash differs from the receipt hash. The Plan must carry the explicit user-modification override.
+  The journal stores both hashes and the current mode, but never file bytes, before moving the
+  modified destination to canonical same-directory rollback material and optionally restoring the
+  exact fixed backup. Before receipt commit, recovery reconstructs a missing old receipt and
+  restores the exact modified destination plus optional backup; after `receipt-committed`, it keeps
+  the completed uninstall state and removes only unchanged modified rollback material. Any changed
+  kind, mode, hash, receipt, destination, backup, or rollback path blocks. Unchanged destinations
+  use the ordinary removal action even under `--force`; administrator and non-static-Copy paths do
+  not inherit this proof.
 - **The journal precedes mutation and outlives the receipt.** Write the versioned journal before the
   first action mutation, update action state atomically, persist the matching domain receipt, and
   only then commit by removing the journal. An existing or unsupported-version journal blocks a new

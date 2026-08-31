@@ -1,7 +1,7 @@
 # Declarative Action and Recovery PRD
 
 > **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
-> 4C.2b-1, and 4C.2b-2 are
+> 4C.2b-1, 4C.2b-2, and 4C.2b-3a are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned, unprivileged static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
@@ -9,8 +9,9 @@
 > Copy and retain its previous bytes only as same-directory transaction rollback material. Ordinary
 > uninstall uses the same material for an unchanged, receipt-owned, unprivileged static Copy with
 > no persistent backup until receipt removal and its journal commit marker are durable. The next
-> removal slice also journals restoration of an unchanged fixed persistent backup, binding both
-> files by mode and hash across the two renames and the same receipt boundary.
+> removal path also journals restoration of an unchanged fixed persistent backup and forced
+> removal of a user-modified destination at the same unprivileged static Copy boundary. Both bind
+> every moved file by mode and hash across the same receipt boundary.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -48,8 +49,7 @@ prepared journal → rename original to fixed backup → atomic managed write �
        └──────────── explicit recovery restores only an exact safe state ────────────┘
 ```
 
-Forced managed remove, JSON merge, administrator paths, Shell/Sys actions, and automatic resume
-remain later slices.
+JSON merge, administrator paths, Shell/Sys actions, and automatic resume remain later slices.
 
 ## Goals
 
@@ -99,6 +99,9 @@ are:
 - `RemoveManagedFileWithBackup`: the same managed destination and transaction rollback identity,
   plus the canonical persistent backup and both files' prior modes and hashes. It is valid only for
   an ordinary unprivileged uninstall whose unchanged regular backup will be restored.
+- `ForceRemoveManagedFile`: a user-modified, receipt-owned, unprivileged static Copy destination,
+  its distinct receipt/current hashes and current mode, canonical rollback path, and optional
+  canonical persistent backup identity. The Plan must explicitly review the modification override.
 
 The classification-only escape hatch is:
 
@@ -142,7 +145,10 @@ moves the persistent backup to the destination. Before receipt commit, recovery 
 `managed/original/missing`, `missing/original/managed`, or `original/missing/managed`
 destination/backup/rollback states and recreates a missing old receipt before restoring both paths.
 After `receipt-committed`, it keeps the exact user original at the destination and removes only
-unchanged managed rollback material. Force and administrator removal require later action kinds.
+unchanged managed rollback material. Forced removal uses the same path transitions but binds the
+different current user-modified hash separately from the receipt hash; before receipt commit it
+restores that modified file and reverses an optional backup restoration, while after commit it
+removes only exact modified rollback material. Administrator removal requires a later action kind.
 
 ### Recovery
 
@@ -246,9 +252,14 @@ before the first mutation.
 - Recover before, between, and after both renames, plus both sides of receipt commit; block any
   changed path, mode, hash, or receipt.
 
-### Slice 4C.2b-3 — Forced and privileged managed uninstall
+### Slice 4C.2b-3a — Forced managed uninstall (implemented)
 
-- Give forced removal of user-modified content a distinct reviewed action contract.
+- Give forced removal of user-modified static Copy content a distinct reviewed action contract.
+- Bind the old receipt separately from current modified mode/hash and optional persistent backup.
+- Recover both sides of receipt commit without serializing user-modified or backup payloads.
+
+### Slice 4C.2b-3b — Privileged managed uninstall
+
 - Add administrator locking and rollback tests before privileged actions join the IR.
 
 ### Slice 4D — Other domains and opaque inventory
@@ -276,4 +287,5 @@ The Roadmap Phase 4 gate remains stricter than Slice 4A:
 Slice 4A is internal and adds no public commands or behavior. Slice 4B.5 releases the explicit
 recovery command and guidance. Slice 4C.1 expands recovery to fixed backups and blocks an occupied
 backup rather than replacing it. Slices 4C.2b-1 and 4C.2b-2 expand the same recovery guidance to
-receipt removal and fixed-backup restoration, so both public manual locales remain aligned.
+receipt removal and fixed-backup restoration. Slice 4C.2b-3a adds forced-removal rollback and the
+same documentation remains aligned across both public manual locales.

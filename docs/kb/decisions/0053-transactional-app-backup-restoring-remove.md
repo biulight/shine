@@ -45,7 +45,8 @@ receipt and then restores the corresponding safe state. After `receipt-committed
 state is the exact user original at the destination, a missing persistent backup, and either exact
 managed rollback material or an already missing rollback; recovery removes only the former.
 
-Any other kind, mode, hash, receipt, or path combination blocks and preserves all state. Force,
+Any other kind, mode, hash, receipt, or path combination blocks and preserves all state.
+[ADR 0054](0054-transactional-forced-app-managed-file-remove.md) gives force a distinct action;
 administrator, JSON merge, relocation, stale-prune, and upgrade-internal removal remain outside
 this action.
 

@@ -62,6 +62,12 @@ replaces an unowned regular-file destination, Shine requires its fixed `<name>.s
 absent; an existing backup blocks the Plan and both files are preserved. `--purge` also removes the
 category's preset directory; uninstalling every category also removes the manifest.
 
+`app uninstall --force` explicitly authorizes deletion of user-modified managed content. For an
+unprivileged static Copy, the reviewed Plan marks that override and the transaction stages the
+modified file at `<name>.shine.rollback` until receipt commit; an optional fixed backup is restored
+in the same transaction. Administrator and other install strategies retain their existing removal
+path. Preview destructive intent with `--dry-run`.
+
 ## Recover an interrupted App operation
 
 Shine writes an operation journal before the supported App file mutation. If the process stops
@@ -95,6 +101,10 @@ recovery accepts only the exact three-path states produced before, between, or a
 it returns the restored user file to `.shine.bak` when necessary, then restores the managed file and
 old receipt. After receipt commit, recovery keeps the unchanged user file at the destination and
 removes only unchanged managed rollback material. The modes and bytes of both files are bound.
+For a forced removal of a user-modified, unprivileged static Copy, recovery instead binds the old
+receipt hash separately from the modified file's mode and hash. Before receipt commit it restores
+that exact modified file and reverses an optional backup restoration; after commit it keeps the
+completed uninstall and removes only exact modified rollback material.
 A rollback file may contain prior managed configuration and should be treated as sensitive. If any
 guarded path changed after interruption, recovery returns nonzero and preserves the paths plus the
 journal; replacing a regular file with a symlink or directory also counts as a change. Do not edit

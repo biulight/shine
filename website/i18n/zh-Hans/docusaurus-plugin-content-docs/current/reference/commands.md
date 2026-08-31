@@ -70,7 +70,7 @@ shine app artifact apply <APP_ID> [--yes]
 shine app artifact remove <APP_ID> [--yes]
 ```
 
-`--replace-managed` 会覆盖安装后被用户修改的受管内容。先使用 `shine info <TARGET> --diff` 检查差异。`app uninstall --force` 会删除被用户修改过的受管文件，执行前应加 `--dry-run` 预览。
+`--replace-managed` 会覆盖安装后被用户修改的受管内容。先使用 `shine info <TARGET> --diff` 检查差异。`app uninstall --force` 会删除被用户修改过的受管文件，执行前应加 `--dry-run` 预览。对于非管理员静态 Copy，该强制删除会写入 journal，并把修改后的文件作为同目录 rollback material 暂存到 receipt commit；管理员路径与其他安装策略仍使用原有卸载路径。
 
 `shell install --dry-run` 会解析 metadata、部署来源、Bun 策略和计划中的命令入口，但不会提取或
 快照预设、渲染模板、创建链接、写入 manifest 或修改 shell profile。
@@ -97,6 +97,9 @@ backup-aware creation，只有 destination 与固定 backup 仍匹配 journal �
 destination。receipt commit 前，恢复只会反转这三个路径的精确安全状态，同时恢复受管 destination
 与 persistent backup；commit 后则保留 destination 中精确匹配的用户原文件，只移除未修改的受管
 rollback material。两个文件的 mode 与内容 fingerprint 都必须与 journal 一致。
+强制移除被用户修改过的非管理员静态 Copy 会使用独立 action：receipt commit 前的恢复会还原
+精确的修改后文件并反转可选 backup restoration；commit 后的恢复会保留已完成卸载，只移除与所
+捕获修改后 mode/hash 匹配的 rollback material。
 中断后的 rollback material 可能包含敏感受管配置。ownership receipt 已持久化时，Shine 保留受管
 destination 与持久 backup，只清理 stale transaction state。恢复确认默认是 No；没有交互终端时
 必须传入 `--yes`。journal 缺失或无效、action 不受支持，或 destination/backup/rollback 已被修改时，

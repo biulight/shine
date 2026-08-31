@@ -51,6 +51,11 @@ Plan，不能绕过缺失权限、被阻塞的 teardown 或外部代码 gate。u
 
 默认情况下，安装后被用户修改过的文件会保留并标记为用户修改。若安装时创建过备份，安全卸载会恢复原文件。在受支持、已 journal 的静态 Copy 替换不受管 regular-file destination 前，Shine 要求固定的 `<name>.shine.bak` 路径不存在；已有 backup 会阻塞 Plan，并保留两个文件。`--purge` 还会删除相应预设目录；卸载全部类别时也会删除 manifest。
 
+`app uninstall --force` 会显式授权删除被用户修改过的受管内容。对于非管理员静态 Copy，审阅的
+Plan 会标明该 override；事务会先把修改后的文件暂存到 `<name>.shine.rollback`，直至 receipt
+commit，并在同一事务中还原可选的固定 backup。管理员路径与其他安装策略仍使用原有卸载路径。
+执行破坏性操作前请使用 `--dry-run` 预览。
+
 ## 恢复中断的 App 操作
 
 在受支持的 App 文件 mutation 之前，Shine 会先写入 operation journal。如果进程在这之后中断，
@@ -80,6 +85,9 @@ material 和 stale journal。普通卸载一个未修改、没有 persistent bac
 之前、之间或之后产生的精确三路径状态；必要时先把已经还原的用户文件移回 `.shine.bak`，再恢复受管
 文件与旧 receipt。receipt commit 后，恢复保留 destination 中未修改的用户文件，只清理未修改的受管
 rollback material。两个文件的 mode 与内容 fingerprint 都必须匹配。
+强制移除被用户修改过的非管理员静态 Copy 时，恢复会分别绑定旧 receipt hash 与修改后文件的
+mode/hash。receipt commit 前会还原该精确的修改后文件，并反转可选的 backup restoration；commit
+后则保留已完成的卸载，只移除精确匹配修改后文件的 rollback material。
 rollback 文件可能包含之前的受管配置，应按敏感内容处理。如果任一受保护
 路径在中断后被修改，恢复命令返回非零，并保留这些路径和 journal 等待显式处理。把 regular file
 替换为 symlink 或目录也视为修改。不要手动编辑或删除 journal 或 rollback material。

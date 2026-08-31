@@ -807,12 +807,12 @@ where
                         action_ir,
                     )
                     .await?;
-                let outcome = execution
-                    .backup
-                    .clone()
-                    .map_or(UninstallOutcome::Removed, |backup| {
-                        UninstallOutcome::RestoredBackup { backup }
-                    });
+                let outcome = match (execution.forced, execution.backup.clone()) {
+                    (false, None) => UninstallOutcome::Removed,
+                    (false, Some(backup)) => UninstallOutcome::RestoredBackup { backup },
+                    (true, None) => UninstallOutcome::ForceRemoved,
+                    (true, Some(backup)) => UninstallOutcome::ForceRestoredBackup { backup },
+                };
                 journal_execution = Some(execution);
                 Ok(outcome)
             } else {

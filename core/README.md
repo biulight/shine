@@ -19,11 +19,13 @@ upgrade also route unchanged, receipt-owned in-place static Copy replacement thr
 same-directory transaction rollback material. Ordinary removal of an unchanged, receipt-owned,
 unprivileged static Copy uses the same transaction path until receipt absence and its positive
 journal commit marker are durable; when the receipt owns a fixed persistent backup, the action
-restores that user file through a second fingerprint-bound rename. Each journal remains until its matching
-manifest receipt state is durable; a
+restores that user file through a second fingerprint-bound rename. Forced removal of a
+user-modified file uses a distinct action at the same unprivileged static Copy boundary, stages the
+modified bytes as fingerprint-bound rollback material, and reverses an optional backup restoration
+until receipt commit. Each journal remains until its matching manifest receipt state is durable; a
 fresh `app-recovery` Plan is required before removing or restoring unchanged transaction state.
-Forced removal, JSON merge, generators, administrator writes, relocation, and other
-domains retain their existing executors until narrower rollback contracts land.
+JSON merge, generators, administrator writes, relocation, and other domains retain their existing
+executors until narrower rollback contracts land.
 
 Runtime APIs are workspace-internal and hidden from normal documentation. The versioned lifecycle
 result and security Plan contracts retain their documented compatibility guarantees. Protected
