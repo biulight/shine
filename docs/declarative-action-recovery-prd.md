@@ -2,7 +2,7 @@
 
 > **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
 > 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, 4C.3, 4C.4a, 4C.4b,
-> 4C.4c, 4D.4a, and 4D.4b are
+> 4C.4c, 4D.4a, 4D.4b, and 4D.4c are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
@@ -30,6 +30,8 @@
 > Lifecycle-rendered Shell files now use file-scoped replacement actions with exact hash/mode
 > identities, same-directory rollback, consuming receipt transitions, and independent positive
 > commit evidence.
+> Embedded Shell cache writes now use category-scoped file-patch actions with per-file identities
+> and rollback, selected receipt transitions, and positive commit evidence.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -390,8 +392,23 @@ cleans only exact rollback material.
   then remove an exact created file or restore the exact previous file. After commit, preserve the
   desired file and clean only exact rollback material.
 - Block non-file destinations, occupied or changed rollback, modified rendered files, and receipt
-  conflicts. Keep embedded cache, rendered uninstall, execution-time live rendering, snapshot
-  uninstall, and profile blocks for later slices.
+  conflicts. Keep rendered uninstall, execution-time live rendering, snapshot uninstall, and
+  profile blocks for later slices.
+
+### Slice 4D.4c — Embedded Shell cache replacement (implemented)
+
+- Replace actual embedded extraction writes through one `ReplaceShellCache` action per selected
+  category before rendered-file and launcher actions.
+- Preserve extraction semantics: include missing files and differing files during upgrade or under
+  `--replace-managed`; exclude skipped existing and unrelated local files.
+- Bind optional previous and required desired hash/mode identities, canonical same-directory
+  rollback per changed file, selected command receipt transitions, and a positive commit marker
+  without serializing cache bytes.
+- Before commit, project previous receipts then reverse exact created/moved/replaced files in reverse
+  order. After commit, preserve desired files and clean only exact rollback. Block non-file,
+  occupied/aliased rollback, modified file, or conflicting receipt state.
+- Keep cache uninstall, rendered uninstall, execution-time live rendering, snapshot uninstall, and
+  profile blocks for later slices.
 
 ### Slice 4D — Other domains and opaque inventory
 
@@ -399,8 +416,9 @@ cleans only exact rollback material.
   implemented as Slice 4D.1. Unchanged receipt-owned launcher update is implemented as Slice 4D.2;
   unchanged receipt-owned launcher removal with positive receipt-commit evidence is implemented as
   Slice 4D.3. Raw external snapshot replacement is implemented as Slice 4D.4a and lifecycle-rendered
-  replacement as Slice 4D.4b; embedded cache, rendered uninstall, execution-time live rendering,
-  snapshot uninstall, and profile sentinel blocks remain.
+  replacement as Slice 4D.4b, and embedded cache replacement as Slice 4D.4c; cache uninstall,
+  rendered uninstall, execution-time live rendering, snapshot uninstall, and profile sentinel
+  blocks remain.
 - Managed Sys files and split-DNS typed actions.
 - Sys package/provider and executable code classification.
 - Migrate or explicitly classify every built-in executable Preset listed in
@@ -438,3 +456,5 @@ destinations. Slice 4D.4a extends `shine shell recover` to raw external category
 and replacement, including selected-receipt restoration before dependent launcher rollback.
 Slice 4D.4b extends the same command to lifecycle-rendered file creation and replacement, including
 exact hash/mode rollback and receipt restoration before dependent launcher recovery.
+Slice 4D.4c extends it to embedded category cache creation and `--replace-managed` replacement,
+including per-file rollback while preserving skipped and unrelated cache files.

@@ -2025,7 +2025,121 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 }
             }
         } else {
+            let overwrite_embedded_cache =
+                request.force || request.operation == LifecycleOperation::Upgrade;
             for category in selected_categories.unwrap_or_default() {
+                if !self.context().is_external_presets {
+                    let prefix = format!("shell/{}/", category.name);
+                    let mut cache_mutations = Vec::new();
+                    let mut cache_created = false;
+                    let mut cache_updated = false;
+                    let mut cache_conflict = false;
+                    let mut cache_rollback_occupied = false;
+                    for (logical, desired) in self
+                        .presets()
+                        .files()
+                        .iter()
+                        .filter(|(logical, _)| logical.starts_with(&prefix))
+                    {
+                        let destination = self.context().presets_dir.join(logical);
+                        let mutation = match self.host().metadata(&destination).await {
+                            Ok(metadata) if metadata.kind == FileKind::File => {
+                                let current =
+                                    self.host().read(&destination).await.map_err(|error| {
+                                        error.into_anyhow("reading embedded Shell cache file")
+                                    })?;
+                                let mutation = current != *desired && overwrite_embedded_cache;
+                                cache_updated |= mutation;
+                                mutation
+                            }
+                            Ok(_) => {
+                                capture_path_state(
+                                    self.host(),
+                                    &mut state,
+                                    format!("shell-cache-conflict:{}:{}", category.name, logical),
+                                    &destination,
+                                )
+                                .await?;
+                                cache_conflict = true;
+                                false
+                            }
+                            Err(error) if error.is_not_found() => {
+                                cache_created = true;
+                                true
+                            }
+                            Err(error) => {
+                                return Err(
+                                    error.into_anyhow("inspecting embedded Shell cache file")
+                                );
+                            }
+                        };
+                        if mutation {
+                            let rollback = managed_file_rollback_path(&destination);
+                            capture_path_state(
+                                self.host(),
+                                &mut state,
+                                format!("shell-cache:{}:{}", category.name, logical),
+                                &destination,
+                            )
+                            .await?;
+                            capture_path_state(
+                                self.host(),
+                                &mut state,
+                                format!("shell-cache-rollback:{}:{}", category.name, logical),
+                                &rollback,
+                            )
+                            .await?;
+                            cache_rollback_occupied |= path_exists(self.host(), &rollback).await?;
+                            cache_mutations.push((destination, rollback));
+                        }
+                    }
+                    cache_rollback_occupied |= cache_mutations.iter().any(|(destination, _)| {
+                        cache_mutations
+                            .iter()
+                            .any(|(_, rollback)| destination == rollback)
+                    });
+                    if cache_conflict || !cache_mutations.is_empty() {
+                        let blocked = cache_conflict || cache_rollback_occupied;
+                        if !blocked {
+                            typed_launcher_transaction = true;
+                            for (destination, rollback) in &cache_mutations {
+                                for (access, path) in [
+                                    (FilesystemAccessV1::Write, destination),
+                                    (FilesystemAccessV1::Remove, destination),
+                                    (FilesystemAccessV1::Write, rollback),
+                                    (FilesystemAccessV1::Remove, rollback),
+                                ] {
+                                    permissions.implicit(PermissionV1::Filesystem {
+                                        access,
+                                        path: review_path(self.context(), path),
+                                    });
+                                }
+                            }
+                        }
+                        steps.push(
+                            PlanStepV1::new(
+                                format!("shell/{}", category.name),
+                                Some("preset-cache"),
+                                if blocked {
+                                    PlanActionV1::Blocked
+                                } else if cache_updated {
+                                    PlanActionV1::Update
+                                } else if cache_created {
+                                    PlanActionV1::Create
+                                } else {
+                                    PlanActionV1::Update
+                                },
+                            )
+                            .with_diagnostic_code(if cache_conflict {
+                                "shell_cache_destination_conflict"
+                            } else if cache_rollback_occupied {
+                                "shell_cache_rollback_occupied"
+                            } else {
+                                "shell_cache_replace_transaction"
+                            }),
+                        );
+                    }
+                }
                 let untransformed_snapshot = self.context().is_external_presets
                     && self.context().external_shell_mode == ExternalShellMode::Snapshot
                     && category.files.iter().all(|file| {
@@ -2311,8 +2425,23 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     {
                         true
                     } else {
-                        read_optional(self.host(), &source).await?.as_deref()
-                            == Some(desired_source)
+                        match self.host().metadata(&source).await {
+                            Ok(metadata) if metadata.kind == FileKind::File => {
+                                self.host()
+                                    .read(&source)
+                                    .await
+                                    .map_err(|error| {
+                                        error.into_anyhow("reading Shell deployment source")
+                                    })?
+                                    .as_slice()
+                                    == desired_source
+                            }
+                            Ok(_) => false,
+                            Err(error) if error.is_not_found() => false,
+                            Err(error) => {
+                                return Err(error.into_anyhow("inspecting Shell deployment source"));
+                            }
+                        }
                     };
                     let expected_runtime = match file.runtime {
                         LinkRuntime::Native => "native",
@@ -8807,6 +8936,12 @@ target = '$HOME/.config/disabled.txt'
         let plan = runtime.plan_shells(request.clone()).await.unwrap();
         assert!(plan.is_ready());
         assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("preset-cache")
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_cache_replace_transaction".to_string())
+        }));
+        assert!(plan.steps.iter().any(|step| {
             step.resource.as_deref() == Some("rendered-output")
                 && step
                     .diagnostic_codes
@@ -8854,6 +8989,153 @@ target = '$HOME/.config/disabled.txt'
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn embedded_shell_cache_receipt_failure_removes_created_files_on_recovery() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt write should fail");
+        let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        assert_eq!(
+            runtime.host().read(&source).await.unwrap(),
+            b"#!/bin/sh\necho demo\n"
+        );
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_previous_cache".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&source).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn embedded_shell_cache_marker_failure_restores_previous_files_and_receipt() {
+        let original = runtime(shell_launcher_snapshot());
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let previous_receipt = ShellManifest::load(original.host(), &original.context().shine_dir)
+            .await
+            .unwrap()
+            .find("shell/demo/demo")
+            .unwrap()
+            .clone();
+        let desired = PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file(
+                "shell/demo/demo.sh",
+                b"#!/bin/sh\necho desired\n".to_vec(),
+            )
+            .build();
+        let runtime =
+            CoreRuntime::new(original.host().clone(), original.context().clone(), desired);
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Install,
+            target: Some("demo".to_string()),
+            force: true,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_cache_replace_transaction".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 2);
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell cache receipt marker write should fail");
+        let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&source);
+        assert_eq!(
+            runtime.host().read(&source).await.unwrap(),
+            b"#!/bin/sh\necho desired\n"
+        );
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"#!/bin/sh\necho demo\n"
+        );
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&source).await.unwrap(),
+            b"#!/bin/sh\necho demo\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert_eq!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .unwrap(),
+            &previous_receipt
+        );
+    }
+
+    #[tokio::test]
+    async fn occupied_embedded_shell_cache_rollback_blocks_before_mutation() {
+        let runtime = runtime(shell_launcher_snapshot());
+        let source = runtime.context().presets_dir.join("shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&source);
+        runtime.host().put_file(&rollback, b"occupied".to_vec());
+        let plan = runtime.plan_shells(shell_install_request()).await.unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("preset-cache")
+                && step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_cache_rollback_occupied".to_string())
+        }));
+        assert!(runtime.host().metadata(&source).await.is_err());
+        assert_eq!(runtime.host().read(&rollback).await.unwrap(), b"occupied");
     }
 
     #[tokio::test]
@@ -9336,7 +9618,7 @@ target = '$HOME/.config/disabled.txt'
             .recover_shell_operation_approved(&recovery_approval)
             .await
             .unwrap();
-        assert_eq!(report.rolled_back_actions.len(), 1);
+        assert_eq!(report.rolled_back_actions.len(), 2);
         assert!(runtime.host().metadata(&launcher).await.is_err());
         assert!(runtime.host().read(&journal).await.is_err());
     }

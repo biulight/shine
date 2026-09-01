@@ -297,6 +297,17 @@ bugs. Check this list before changing the modules named in each entry.
   exact old rollback tree. Extra or changed stage files, changed destination/rollback trees, or
   conflicting receipts block all recovery. Embedded cache, rendered outputs, uninstall, and profile
   sentinel blocks do not inherit this proof.
+- **Embedded Shell cache replacement is a category-scoped file-patch transaction.**
+  `ReplaceShellCache` contains only files that the established extraction policy will write:
+  missing files, plus differing files during upgrade or under `--replace-managed`. Every entry binds optional previous
+  and required desired hash/mode identity with a distinct canonical same-directory rollback path;
+  the action also binds all selected category command receipt transitions and a positive commit
+  marker. Before the marker, recovery projects the previous receipt boundary and reverses exact
+  created/moved/replaced files in reverse order; afterward it preserves exact desired files and
+  removes only exact rollback. Non-file destinations, occupied or aliased rollback paths, changed
+  files, or conflicting receipts block the whole action. Skipped existing and unrelated cache files
+  are never transaction material. Cache uninstall, rendered/live output, snapshot uninstall, and
+  profile sentinel blocks do not inherit this proof.
 - **A lifecycle-rendered Shell file commits at a file and receipt-set boundary.**
   `ReplaceShellRenderedFile` binds the optional previous and required desired hash/mode identity,
   canonical same-directory `.shine.rollback`, every selected command receipt transition consuming
@@ -304,8 +315,9 @@ bugs. Check this list before changing the modules named in each entry.
   transitions back to the previous manifest boundary before restoring an exact prior file or
   removing an exact transaction-created file; afterward it preserves the exact desired file and
   cleans only exact rollback. Changed or non-file destinations, occupied/changed rollback paths, or
-  conflicting receipts block all recovery. Embedded cache, rendered uninstall, execution-time live
-  rendering, snapshot uninstall, and profile sentinel blocks do not inherit this proof.
+  conflicting receipts block all recovery. Embedded cache uses its separate file-patch action;
+  rendered uninstall, execution-time live rendering, snapshot uninstall, and profile sentinel
+  blocks do not inherit this proof.
 - **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
   generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
   privilege, permission and unsupported-rollback classification until a narrower typed action

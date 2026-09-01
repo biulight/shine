@@ -93,6 +93,13 @@ deployment material so a command can consume sibling resources, while launchers 
 
 Command install filters metadata before transforms and launcher creation, then upserts only the
 selected manifest target. Category install retains the existing replace-category reconciliation.
+For embedded sources, Core derives one payload-free `ReplaceShellCache` action per selected category
+that has actual extraction writes. The action includes missing files and differing existing files
+during upgrade or under `--replace-managed`; skipped and unrelated files stay outside the action.
+Each changed file binds old/new hash and mode plus a canonical same-directory rollback, while the
+category action binds selected command receipt transitions and a positive commit marker. Recovery
+projects the old receipt boundary before dependent rendered/launcher recovery and then reverses only
+exact created or replaced cache files. After commit it keeps desired files and cleans exact rollback.
 For an external snapshot-mode selection with no rendered command output, a changed category tree
 derives one payload-free `ReplaceShellSnapshot` action before launcher actions. The journal binds
 sorted old/new tree identities, deterministic stage/rollback directories, and selected command
@@ -107,6 +114,10 @@ command receipt transitions, and a positive commit marker. Recovery projects unc
 receipt transitions back before assessing launchers, then removes an exact new file or restores the
 exact previous file. Once marked committed, it keeps the desired file and cleans only exact
 rollback. Execution-time live rendering remains outside this lifecycle journal.
+See [ADR 0064](../decisions/0064-transactional-external-shell-snapshots.md),
+[ADR 0065](../decisions/0065-transactional-shell-rendered-files.md), and
+[ADR 0066](../decisions/0066-transactional-embedded-shell-cache.md) for the distinct shared-source
+ownership boundaries.
 For a command with no receipt and entirely absent launcher resources, Core derives a payload-free
 `CreateShellLauncher` action, writes `shell-operation-journal.toml`, creates the Unix symlink,
 Unix generated launcher, or Windows shim pair, persists the exact command receipt, and only then
@@ -480,9 +491,10 @@ The Shell source/deployment model, canonical target parser, external mode, and v
 are Core-owned. The CLI deployment module consumes those types while retaining the current
 distribution adapter for embedded `rust-embed` assets and terminal presentation.
 
-Embedded install extracts assets, links executables into `~/.shine/bin/` (`bin_links.rs`), and
-appends a sentinel-guarded PATH block to the shell config (`shells/profile.rs`). Uninstall removes
-only Shine-managed symlinks/files and deletes the sentinel block precisely.
+Embedded install transactionally patches selected category assets into the managed cache, links
+executables into `~/.shine/bin/` (`bin_links.rs`), and appends a sentinel-guarded PATH block to the
+shell config (`shells/profile.rs`). Uninstall removes only Shine-managed symlinks/files and deletes
+the sentinel block precisely.
 
 For external presets, `external_shell_mode = "snapshot"` first materializes the effective
 base/overlay category under `<shine_dir>/installed/shell/`; update compares that snapshot with the

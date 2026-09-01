@@ -101,15 +101,22 @@ launcher、rollback 路径或 receipt 冲突发生变化时，恢复会阻塞并
 category snapshot 的变化写入 journal。Action 使用确定性的 category 同级 stage/rollback 目录，
 以及独立于 receipt 是否相等的正向 commit marker。marker 前，`shine shell recover` 会先恢复旧的
 选中 receipt 集合，再评估依赖 launcher，随后还原精确旧树；marker 后保留 desired 树，只移除精确
-rollback。active、stage 或 rollback 树被修改都会阻塞恢复。内置 cache、snapshot uninstall 与
-profile 编辑仍沿用现有 lifecycle 行为。
+rollback。active、stage 或 rollback 树被修改都会阻塞恢复。snapshot uninstall 与 profile 编辑仍沿用
+现有 lifecycle 行为。
+
+对于内置预设，install 会在依赖它的 rendered 文件或 launcher 变化前，把本次实际 category cache
+写入记录到 journal。缺失文件与 upgrade 或 `--replace-managed` 将要更新的差异文件会分别绑定前后 hash/mode 和同目录
+rollback；跳过及无关 cache 文件不属于本 Action。正向 marker 前，恢复会还原旧 receipt 与精确旧文件，
+或移除精确匹配的事务新建文件；marker 后保留 desired 文件，只清理精确 rollback。destination 不是普通
+文件、rollback 被占用或修改、cache 文件被修改、或 receipt 冲突时，整个 cache Action 都会阻塞。
+cache 卸载仍沿用现有 lifecycle 行为。
 
 install 或 upgrade 创建或更新 transformed output 时，Shine 也会先把 rendered 文件写入 journal，
 再处理依赖它的 launcher。已有文件会移到同目录的规范 `.shine.rollback`；journal 绑定文件前后的
 hash/mode、所有消费该路径的 command receipt transition，以及独立的正向 commit marker。marker 前，
 恢复会还原旧 receipt 与精确旧文件，或移除精确匹配的事务新建文件；marker 后保留 desired 文件，
 只清理精确 rollback。destination 不是普通文件、destination 或 rollback 被修改、rollback 路径被占用，
-或 receipt 冲突时都会阻塞恢复。内置 cache 替换、rendered 文件卸载、执行期 live rendering、snapshot
+或 receipt 冲突时都会阻塞恢复。rendered 文件卸载、执行期 live rendering、snapshot
 卸载与 profile 编辑仍沿用原有 lifecycle 行为。
 
 不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation、App refresh 和 artifact apply/remove

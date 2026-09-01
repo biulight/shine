@@ -3,6 +3,18 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-01 — Embedded cache ownership is a patch, not a whole tree
+
+- **Symptom**: embedded Shell cache files were created or overwritten before the Shell journal, so
+  a later receipt failure could leave new source bytes active after launcher recovery.
+- **Root cause**: cache deployment is category-scoped but merge-like: missing files are created,
+  differing files are overwritten by upgrade or `--replace-managed`, and unrelated local files remain. Neither a command
+  receipt nor whole-tree snapshot replacement describes that ownership boundary.
+- **Fix**: journal one category `ReplaceShellCache` action containing only actual file writes, exact
+  old/new hash and mode, per-file rollback, selected receipt transitions, and a positive marker.
+- **Rule**: recovery identity must match the mutation's ownership granularity; never promote a
+  merge-style cache to whole-tree ownership merely to reuse a transaction primitive.
+
 ## 2026-09-01 — Rendered bytes can change without a receipt transition
 
 - **Symptom**: transformed Shell output was rewritten before the launcher journal, so a later

@@ -360,6 +360,21 @@ impl ActionIrV1 {
                         });
                     }
                 }
+                ActionKindV1::ReplaceShellCache { files, .. } => {
+                    for file in files {
+                        for (access, path) in [
+                            (FilesystemAccessV1::Write, file.destination.as_path()),
+                            (FilesystemAccessV1::Remove, file.destination.as_path()),
+                            (FilesystemAccessV1::Write, file.rollback.as_path()),
+                            (FilesystemAccessV1::Remove, file.rollback.as_path()),
+                        ] {
+                            required.insert(PermissionV1::Filesystem {
+                                access,
+                                path: path_identity(path),
+                            });
+                        }
+                    }
+                }
                 ActionKindV1::ReplaceShellRenderedFile {
                     destination,
                     rollback,
@@ -728,6 +743,24 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn replace_shell_cache(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ShellCacheReplacementSpecV1,
+    ) -> Self {
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::ReplaceShellCache {
+                files: spec.files,
+                receipts: spec.receipts,
+            },
+            rollback: RollbackSupportV1::RestorePreviousShellCacheIfUnchanged,
+        }
+    }
+
     pub fn replace_shell_rendered_file(
         action_id: impl Into<String>,
         target: impl Into<String>,
@@ -1032,6 +1065,16 @@ impl DeclarativeActionV1 {
             }
             (ActionKindV1::ReplaceShellSnapshot { .. }, _) => Err(ActionIrError::Invalid(
                 "Shell snapshot replacement requires canonical stage/rollback paths, valid tree identities and receipt transitions, and restore-previous-shell-snapshot-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::ReplaceShellCache { files, receipts },
+                RollbackSupportV1::RestorePreviousShellCacheIfUnchanged,
+            ) if valid_shell_cache_files(files) && valid_shell_receipt_transitions(receipts) => {
+                Ok(())
+            }
+            (ActionKindV1::ReplaceShellCache { .. }, _) => Err(ActionIrError::Invalid(
+                "Shell cache replacement requires distinct previous/desired file identities, canonical rollback paths, valid receipt transitions, and restore-previous-shell-cache-if-unchanged rollback"
                     .to_string(),
             )),
             (
@@ -1345,6 +1388,10 @@ pub enum ActionKindV1 {
         desired_files: Vec<ShellTreeFileV1>,
         receipts: Vec<ShellReceiptTransitionV1>,
     },
+    ReplaceShellCache {
+        files: Vec<ShellCacheFileReplacementV1>,
+        receipts: Vec<ShellReceiptTransitionV1>,
+    },
     ReplaceShellRenderedFile {
         destination: PathBuf,
         rollback: PathBuf,
@@ -1384,6 +1431,7 @@ pub enum RollbackSupportV1 {
     RestorePreviousLauncherIfUnchanged,
     RestoreRemovedLauncherIfUnchanged,
     RestorePreviousShellSnapshotIfUnchanged,
+    RestorePreviousShellCacheIfUnchanged,
     RestorePreviousShellRenderedFileIfUnchanged,
     Unsupported { reason_code: String },
 }
@@ -1410,6 +1458,22 @@ pub struct ShellFileIdentityV1 {
     pub content_hash: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unix_mode: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellCacheFileReplacementV1 {
+    pub destination: PathBuf,
+    pub rollback: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<ShellFileIdentityV1>,
+    pub desired: ShellFileIdentityV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShellCacheReplacementSpecV1 {
+    pub files: Vec<ShellCacheFileReplacementV1>,
+    pub receipts: Vec<ShellReceiptTransitionV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1591,6 +1655,26 @@ fn valid_shell_receipt_transitions(receipts: &[ShellReceiptTransitionV1]) -> boo
             .collect::<BTreeSet<_>>()
             .len()
             == receipts.len()
+}
+
+fn valid_shell_cache_files(files: &[ShellCacheFileReplacementV1]) -> bool {
+    let destinations = files
+        .iter()
+        .map(|file| &file.destination)
+        .collect::<BTreeSet<_>>();
+    let rollbacks = files
+        .iter()
+        .map(|file| &file.rollback)
+        .collect::<BTreeSet<_>>();
+    !files.is_empty()
+        && files.iter().all(|file| {
+            !file.destination.as_os_str().is_empty()
+                && file.rollback == managed_file_rollback_path(&file.destination)
+                && file.previous.as_ref() != Some(&file.desired)
+        })
+        && destinations.len() == files.len()
+        && rollbacks.len() == files.len()
+        && destinations.is_disjoint(&rollbacks)
 }
 
 /// Same-directory, transaction-owned material used only while replacing an
@@ -1963,6 +2047,70 @@ mod tests {
         let encoded = toml::to_string(&value).unwrap();
         assert!(!encoded.contains("private previous rendered bytes"));
         assert!(!encoded.contains("private desired rendered bytes"));
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.display()));
+        for (access, path) in [
+            (FilesystemAccessV1::Write, &destination),
+            (FilesystemAccessV1::Remove, &destination),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(requirements.required.contains(&PermissionV1::Filesystem {
+                access,
+                path: format!("absolute:{}", path.display()),
+            }));
+        }
+    }
+
+    #[test]
+    fn shell_cache_action_is_payload_free_and_derives_all_file_permissions() {
+        let destination = PathBuf::from("/home/test/.shine/presets/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&destination);
+        let receipt = ShellLauncherReceiptV1 {
+            category: "demo".to_string(),
+            command: "demo".to_string(),
+            mode: "snapshot".to_string(),
+            source_path: destination.clone(),
+            rendered_path: PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh"),
+            runtime: "native".to_string(),
+            bun_dependencies: None,
+            dependency_hash: None,
+            transforms: Vec::new(),
+            env: Vec::new(),
+            needs_source: false,
+            content_hash: hash_content(b"private desired cache bytes"),
+        };
+        let value = ActionIrV1::new(
+            "shell-cache",
+            vec![DeclarativeActionV1::replace_shell_cache(
+                "replace-cache",
+                "shell/demo",
+                "preset-cache",
+                ShellCacheReplacementSpecV1 {
+                    files: vec![ShellCacheFileReplacementV1 {
+                        destination: destination.clone(),
+                        rollback: rollback.clone(),
+                        previous: Some(ShellFileIdentityV1 {
+                            content_hash: hash_content(b"private previous cache bytes"),
+                            unix_mode: Some(0o100755),
+                        }),
+                        desired: ShellFileIdentityV1 {
+                            content_hash: hash_content(b"private desired cache bytes"),
+                            unix_mode: Some(0o100755),
+                        },
+                    }],
+                    receipts: vec![ShellReceiptTransitionV1 {
+                        target: "shell/demo/demo".to_string(),
+                        previous: Some(Box::new(receipt.clone())),
+                        desired: Box::new(receipt),
+                    }],
+                },
+            )],
+        );
+        value.validate().unwrap();
+        let encoded = toml::to_string(&value).unwrap();
+        assert!(!encoded.contains("private previous cache bytes"));
+        assert!(!encoded.contains("private desired cache bytes"));
         let requirements =
             value.permission_requirements(|path| format!("absolute:{}", path.display()));
         for (access, path) in [

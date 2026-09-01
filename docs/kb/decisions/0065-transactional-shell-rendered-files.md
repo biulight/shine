@@ -47,5 +47,5 @@ rendering, and profile sentinel blocks remain outside this action.
 - The security Plan observes rendered and rollback paths and grants write/remove access for both.
 - Runtime live rendering remains atomic but is invocation-scoped and does not create a lifecycle
   operation journal.
-- Embedded cache keeps its existing behavior until a separate category/source ownership proof is
-  defined.
+- Embedded cache does not inherit this file-consumer proof; its separate category/source ownership
+  proof is defined by [ADR 0066](0066-transactional-embedded-shell-cache.md).

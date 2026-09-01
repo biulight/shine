@@ -59,6 +59,10 @@ that window, later mutating Shell commands stop instead of guessing whether the 
 Shine uses the same journal when install or upgrade replaces an unchanged, receipt-owned launcher:
 each old resource moves to a same-directory `.shine.rollback` path before its replacement is
 written, and that rollback material remains until the new receipt is durable.
+Embedded category cache writes use the same receipt-coherent journal. Missing cache files and
+differing files changed by upgrade or `--replace-managed` are tracked individually; an existing file moves to
+same-directory `.shine.rollback` before replacement. Skipped and unrelated cache files are not part
+of the transaction.
 For an external preset in snapshot mode, Shine also journals creation or replacement of a shared
 category snapshot when the selected commands need no rendered output. The old category tree stays
 in a deterministic rollback directory until all selected command receipts and a separate commit
@@ -81,13 +85,16 @@ the new receipt is durable, recovery keeps the replacement and removes only unch
 material. A changed replacement or rollback path blocks recovery and is preserved. For an eligible
 snapshot transaction, recovery before the commit marker restores the previous selected receipts and
 exact old category tree; afterward it keeps the desired tree and cleans only exact rollback. A
-changed stage, active tree, or rollback tree blocks recovery. Embedded cache and rendered files may
-still remain as Shine-managed material. For an interrupted rendered-file transaction, recovery
+changed stage, active tree, or rollback tree blocks recovery. For an interrupted embedded cache
+transaction, recovery before the marker removes exact newly created files or restores exact old
+files and receipts; afterward it keeps desired files and cleans only exact rollback. A modified
+cache destination or rollback blocks the whole cache action while skipped and unrelated files stay
+untouched. For an interrupted rendered-file transaction, recovery
 before the marker restores previous receipts and the exact old file, or removes an exact newly
 created file; after the marker it keeps the desired file and cleans only exact rollback. Modified
-rendered or rollback files block recovery. Embedded cache replacement, rendered-file uninstall,
-execution-time live rendering, and profile edits remain outside this proof; recovery never edits
-your shell profile.
+rendered or rollback files block recovery. Cache uninstall, rendered-file uninstall, execution-time
+live rendering, and profile edits remain outside this proof; recovery never edits your shell
+profile.
 
 Uninstall uses this transaction only for an unchanged, receipt-owned launcher. It moves every
 platform launcher resource to same-directory rollback material before removing the receipt, then

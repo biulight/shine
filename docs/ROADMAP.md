@@ -54,8 +54,11 @@
   category 共享树也已迁移：确定性 stage/rollback、全部选中 command receipt transition 与正向 commit
   marker 由同一 Action 绑定，恢复会先投影旧 receipt 边界再处理依赖 launcher。install/upgrade 期间
   缺失或变化的 transformed rendered output 也已迁移：文件 hash/mode、同目录 rollback、全部消费方
-  receipt transition 与独立 marker 由文件级 Action 绑定。内置 cache、rendered uninstall、运行时 live
-  render、snapshot uninstall、profile block 与 Sys action 尚未迁移，也不代表 Phase 4 exit criteria 已满足。
+  receipt transition 与独立 marker 由文件级 Action 绑定。内置 Shell cache 的实际创建与
+  `--replace-managed` 覆盖也已迁移：category Action 只绑定本次写入文件、逐文件 rollback、所选 command
+  receipt transition 与正向 marker，未触碰文件保持在事务之外。cache uninstall、rendered uninstall、
+  运行时 live render、snapshot uninstall、profile block 与 Sys action 尚未迁移，也不代表 Phase 4 exit
+  criteria 已满足。
 
 ## Guiding Principles
 

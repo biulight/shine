@@ -121,8 +121,15 @@ category sibling stage/rollback directories and a positive commit marker indepen
 equality. Before that marker, `shine shell recover` restores the previous selected receipt set
 before assessing dependent launchers, then restores the exact old tree. After the marker it keeps
 the desired tree and removes only exact rollback. Changed active, stage, or rollback trees block
-recovery. Embedded cache, snapshot uninstall, and profile edits retain their existing lifecycle
-behavior.
+recovery. Snapshot uninstall and profile edits retain their existing lifecycle behavior.
+
+For embedded presets, install journals actual category cache writes before dependent rendered-file
+or launcher changes. Missing files and differing files changed by upgrade or `--replace-managed` each bind
+previous/desired hash and mode plus same-directory rollback; skipped and unrelated cache files stay
+outside the action. Before its positive marker, recovery restores previous receipts and exact old
+files or removes exact created files. Afterward it keeps desired files and cleans exact rollback.
+A non-file destination, occupied/modified rollback, modified cache file, or receipt conflict blocks
+the whole cache action. Cache uninstall retains its existing lifecycle behavior.
 
 When install or upgrade creates or changes transformed output, Shine also journals the rendered
 file before dependent launcher changes. An existing file moves to its canonical same-directory
@@ -130,8 +137,8 @@ file before dependent launcher changes. An existing file moves to its canonical 
 receipt transition, and a positive commit marker. Before that marker, recovery restores the
 previous receipts and exact prior file, or removes an exact transaction-created file. After the
 marker it keeps the desired file and cleans only exact rollback. A changed or non-file destination,
-occupied or modified rollback, or conflicting receipt blocks recovery. Embedded cache replacement,
-rendered-file uninstall, execution-time live rendering, snapshot uninstall, and profile edits retain
+occupied or modified rollback, or conflicting receipt blocks recovery. Rendered-file uninstall,
+execution-time live rendering, snapshot uninstall, and profile edits retain
 their existing lifecycle behavior.
 
 Without `--dry-run`, App and Shell lifecycle mutations, App refresh, and artifact apply/remove
