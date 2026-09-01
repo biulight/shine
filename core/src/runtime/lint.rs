@@ -6,20 +6,21 @@ use super::{
     RuntimePlatform,
 };
 use crate::permission::{DeclaredNetworkScopeV1, PermissionDeclarationV1, PermissionPathBaseV1};
+use schemars::JsonSchema;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub const PRESET_LINT_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PresetLintSeverity {
     Error,
     Warning,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct PresetLintDiagnosticV1 {
     pub severity: PresetLintSeverity,
     pub code: String,
@@ -30,14 +31,14 @@ pub struct PresetLintDiagnosticV1 {
     pub message: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetLintSummaryV1 {
     pub categories: usize,
     pub errors: usize,
     pub warnings: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetLintReportV1 {
     pub schema_version: u32,
     pub valid: bool,

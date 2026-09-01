@@ -22,10 +22,10 @@ the authority for templates and validation.
 
 ## Workflow
 
-1. Run `shine preset validate --help`, `shine preset lint --help`,
-   `shine preset plan --help`, and `shine preset test --help`. If any is
-   unavailable, stop and explain that
-   the installed Shine version must be upgraded; do not guess an older schema.
+1. Run `shine preset schema --format json`. It is generated from the installed
+   binary's authoring types and live command help. If it is unavailable, fall
+   back to `shine preset validate --help`, `lint --help`, `plan --help`, and
+   `test --help`; do not guess a schema missing from the installed version.
 2. Confirm the requested outcome, target operating systems, destination paths,
    required environment values or secrets, and whether to start from a built-in
    category. Ask and report in the user's language.
@@ -58,7 +58,11 @@ the authority for templates and validation.
    state; explain it, but never invent those inputs or call the report approved.
 9. If the category contains `shine.test.toml`, run
    `shine preset test <category-path> --format json` and fix every failed case.
-   Never add executable fixture setup or teardown.
+   Model only declared synthetic state: environment-name presence, opaque secret
+   versions, files, command detection, versioned receipt documents, exact trust
+   selections, and administrator state. Never add executable fixture setup,
+   teardown, real credentials, or private machine paths. Prefer exact action,
+   permission, and diagnostic sets when the expectation is intentionally stable.
 10. If the user requests a distributable bundle, write it outside the category
     with `shine preset pack <category-path> --output <file> --format json`.
     Never use `--force` to bypass a policy failure; it replaces only output.

@@ -41,11 +41,17 @@ impl InMemoryHost {
     }
 
     pub fn put_file(&self, path: impl Into<PathBuf>, bytes: Vec<u8>) {
+        self.put_file_with_mode(path, bytes, 0o100644);
+    }
+
+    /// Seed deterministic observation state without recording a host mutation.
+    /// This is used by declarative authoring fixtures before planning begins.
+    pub fn put_file_with_mode(&self, path: impl Into<PathBuf>, bytes: Vec<u8>, unix_mode: u32) {
         let path = path.into();
         let mut state = self.state.lock().expect("in-memory host lock");
         insert_parent_dirs(&mut state.nodes, &path);
         state.nodes.insert(path.clone(), MemoryNode::File(bytes));
-        state.modes.insert(path, 0o100644);
+        state.modes.insert(path, unix_mode);
     }
 
     pub fn queue_process_output(&self, output: anyhow::Result<ProcessOutput>) {

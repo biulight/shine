@@ -6,6 +6,7 @@
 //! arguments.
 
 use crate::lifecycle::LifecycleOperation;
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,7 +18,9 @@ pub const PLAN_APPROVAL_SCHEMA_VERSION: u32 = 1;
 const SNAPSHOT_HASH_DOMAIN: &[u8] = b"shine.snapshot.v1";
 const PLAN_HASH_DOMAIN: &[u8] = b"shine.plan.v1";
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum FilesystemAccessV1 {
     Read,
@@ -26,14 +29,16 @@ pub enum FilesystemAccessV1 {
     Execute,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NetworkScopeV1 {
     Any,
     Host(String),
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum EnvironmentSensitivityV1 {
     Plain,
@@ -44,7 +49,7 @@ pub enum EnvironmentSensitivityV1 {
 ///
 /// Command permissions contain only the program identity. Arguments may be
 /// derived from private inputs and therefore do not belong in this contract.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum PermissionV1 {
     Filesystem {
@@ -70,7 +75,7 @@ pub enum PermissionV1 {
 }
 
 /// A stable, sorted, duplicate-free permission set.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct PermissionSetV1(BTreeSet<PermissionV1>);
 
@@ -110,7 +115,7 @@ impl FromIterator<PermissionV1> for PermissionSetV1 {
 ///
 /// Missing declarations and uncomputable requirements are blockers. Codes are
 /// stable identifiers, never arbitrary error prose.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PermissionResolutionV1 {
     pub required: PermissionSetV1,
     pub missing_declarations: PermissionSetV1,
@@ -136,7 +141,7 @@ impl PermissionResolutionV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PlanActionV1 {
     None,
@@ -148,7 +153,7 @@ pub enum PlanActionV1 {
     Blocked,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PlanStepV1 {
     pub target: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -284,7 +289,7 @@ impl SnapshotDigestBuilderV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PlanOperationV1 {
     Install,

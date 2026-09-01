@@ -106,14 +106,29 @@ explicit frontend exit policy and does not change report contents or runtime acc
 ## Preset fixture tests
 
 `shine preset test` loads one category and its versioned `shine.test.toml` from the same immutable
-snapshot. Each unique named case selects a platform, invokes the synthetic authoring Plan flow, and
-compares only declared structured expectations. Missing expectation fields are ignored; explicit
-lists compare as sorted sets. Fixture parsing exposes no executable or real-host setup path.
+snapshot. Each unique named case selects a platform, materializes only declared observations into a
+fresh `InMemoryHost` and isolated context, derives requested trust grants from the exact current code
+requirements, invokes the synthetic authoring Plan flow, and compares only declared structured
+expectations. Missing expectation fields are ignored; explicit lists compare as sorted sets. Opaque
+secret versions feed `PlanningInputVersions`; their text and all synthetic contents stay out of the
+report. Fixture parsing exposes no executable or real-host setup path.
 
 ```text
-category + shine.test.toml → strict fixture schema → platform case
-    → synthetic authoring report → structured expectation comparison
+category + shine.test.toml → strict fixture schema → platform + bounded host observations
+    → fresh InMemoryHost/context + exact derived trust grants → synthetic authoring report
+    → structured action/permission/diagnostic expectation comparison
     → stable per-case failure codes + versioned aggregate report
+```
+
+## Preset schema reference
+
+`shine preset schema` combines Core-generated JSON Schemas with help rendered from the current Clap
+command tree. The CLI adds presentation metadata only; it does not maintain another schema model.
+
+```text
+shipped Rust authoring types → schemars draft 2020-12 documents
+live Clap preset subcommands → generated long help
+    → versioned deterministic reference JSON or compact text index
 ```
 
 ## Preset pack

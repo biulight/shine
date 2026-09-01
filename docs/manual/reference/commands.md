@@ -300,6 +300,7 @@ outside this recovery boundary.
 
 ```text
 shine preset new <app|shell|sys> [--force]
+shine preset schema [--format <text|json>]
 shine preset validate [PATH] [--format <text|json>]
 shine preset lint [PATH] [--format <text|json>] [--deny-warnings]
 shine preset plan <CATEGORY> --platform <macos|linux|windows> [--format <text|json>]
@@ -318,6 +319,13 @@ shine preset pull
 `preset copy` copies one complete built-in category for a partial overlay; `preset export` exports the
 full collection. External shell presets use snapshots by default and require `shine upgrade` after
 source changes. `--live` is for preset development.
+
+`preset schema` generates reference schema v1 from the report, fixture, and bundle Rust types
+shipped in the current binary, plus the live Clap help for `validate`, `lint`, `plan`, `test`,
+`pack`, and `schema`. Text output lists the included contracts; `--format json` emits command help
+and JSON Schema draft 2020-12 documents in one JSON value. It does not duplicate the complete
+App/Shell/Sys TOML grammar: `preset validate` remains the metadata acceptance authority. The
+command does not load or initialize configuration.
 
 `preset validate` accepts a preset repository root, an `app|shell|sys/<name>` category, or its
 `shine.toml`; the path defaults to the current directory. It statically checks every declared
@@ -346,12 +354,24 @@ blocker under the stated assumptions and does not make an otherwise valid report
 input or static validation still exits with status 1. JSON output uses its own `schema_version: 1`.
 
 `preset test` reads `shine.test.toml` from exactly one category and runs each declared case through
-the same synthetic authoring-plan path. Fixture schema v1 requires unique case names and a platform;
+the same synthetic authoring-plan path. Fixture schema v1 requires unique case names and a platform.
+Optional `[cases.host]` state may declare environment-name presence, opaque `secret_versions`,
+synthetic files under `home|shine|data-dir|bin|absolute`, detected command names, administrator
+state, exact external-code trust selections, and App/Shell/Sys receipt documents. Receipt text may
+use `${HOME}`, `${SHINE}`, `${DATA_DIR}`, and `${BIN}` placeholders and must parse as the current
+runtime manifest schema. Fixture values never enter reports.
+
 `[cases.expect]` may assert `valid`, `ready`, and exact sorted sets named `plan_kinds`,
-`diagnostic_codes`, `step_diagnostic_codes`, and `actions`. Missing expectation fields are not
-asserted; an explicit empty list asserts no values. Fixtures cannot declare setup, teardown, or
-executable code. A parse/schema error or any failed case exits with status 1, and JSON report schema
-v1 contains stable failure codes rather than terminal prose.
+`diagnostic_codes`, `step_diagnostic_codes`, `actions`, `required_permissions`,
+`missing_permissions`, and `permission_diagnostic_codes`. Missing expectation fields are not
+asserted; an explicit empty list asserts no values. The JSON case result includes all corresponding
+actual sets to support repair loops. Fixtures cannot declare setup, teardown, commands to run,
+network activity, or executable code. A parse/schema error or any failed case exits with status 1,
+and JSON report schema v1 contains stable failure codes rather than terminal prose.
+Permission identities use `administrator`, `command:<program>`, `network:any`,
+`network:host:<host>`, `environment:<plain|secret>:<name>`,
+`filesystem:<read|write|remove|execute>:<logical-path>`, or
+`system:<capability>[:<resource>]`.
 
 `preset pack` validates one category and atomically writes a deterministic bundle outside that
 category. Bundle v1 is an unsigned tar.gz containing `shine.bundle.json` plus sorted files under

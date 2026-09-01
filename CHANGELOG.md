@@ -9,6 +9,13 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
 
 ### Features
 
+- Added `shine preset schema` to generate a versioned reference directly from shipped Rust report,
+  fixture, and bundle types plus live Clap help, avoiding a handwritten schema copy that can drift.
+- Expanded `shine.test.toml` synthetic host state with environment presence, opaque secret
+  versions, files, runtime receipt documents, command detection, exact scoped trust grants, and
+  administrator state. Test reports now expose the actual structured Plan sets used for comparison.
+- Added fixture-tested App, Shell, and Sys authoring examples and exercise all three through schema,
+  validation, strict lint, test, and deterministic pack gates in CI.
 - Added `shine preset plan <CATEGORY> --platform <macos|linux|windows>` with versioned text/JSON
   authoring reports. It reuses static validation and Core lifecycle planners against deterministic
   empty in-memory state, exposing semantic steps, permissions, and blockers without loading active

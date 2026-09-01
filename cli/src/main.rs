@@ -88,6 +88,14 @@ async fn run(cli: Cli) -> Result<()> {
     }
 
     if let Commands::Preset {
+        command: PresetCommands::Schema { format },
+    } = &cli.command
+    {
+        cli::preset_schema::handle_schema(*format)?;
+        return Ok(());
+    }
+
+    if let Commands::Preset {
         command: PresetCommands::Validate { path, format },
     } = &cli.command
     {
@@ -323,6 +331,7 @@ async fn run(cli: Cli) -> Result<()> {
                 PresetTemplateKind::Shell => shells::handle_init_template(force).await,
                 PresetTemplateKind::Sys => sys::handle_init_template(force).await,
             },
+            PresetCommands::Schema { .. } => unreachable!(),
             PresetCommands::Validate { .. } => unreachable!(),
             PresetCommands::Lint { .. } => unreachable!(),
             PresetCommands::Plan { .. } => unreachable!(),
@@ -1429,6 +1438,16 @@ mod tests {
             cli.command,
             Commands::Preset {
                 command: PresetCommands::Unlink
+            }
+        ));
+
+        let cli = Cli::try_parse_from(["shine", "preset", "schema", "--format", "json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Preset {
+                command: PresetCommands::Schema {
+                    format: commands::PresetReportFormat::Json,
+                }
             }
         ));
 

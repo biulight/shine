@@ -4,20 +4,23 @@ use super::validation::{
     PresetSourceScope, load_preset_source_scope, validate_preset_source_scope,
 };
 use super::{
-    AppPlanRequest, CoreRuntime, FileSystemObservationHost, InMemoryHost, PlanningInputVersions,
-    RuntimeContext, RuntimePlatform, ShellPlanRequest, SysBootstrapPlanRequest, SysItemMode,
-    SysManagedPlanRequest,
+    AppPlanRequest, CoreRuntime, FileSystemObservationHost, InMemoryHost, OpaqueSecretVersion,
+    PlanningInputVersions, RuntimeContext, RuntimePlatform, ShellPlanRequest,
+    SysBootstrapPlanRequest, SysItemMode, SysManagedPlanRequest,
 };
 use crate::lifecycle::LifecycleOperation;
 use crate::plan::{PermissionResolutionV1, PlanOperationV1, PlanStepV1, PlanV1};
+use crate::trust::{TrustCapabilityV1, TrustGrantV1};
+use schemars::JsonSchema;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::validation::{PresetDiagnostic, PresetDiagnosticSeverity};
 
 pub const PRESET_AUTHORING_PLAN_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetAuthoringPlanAssumptionsV1 {
     pub lifecycle_state: String,
     pub environment: String,
@@ -40,7 +43,7 @@ impl Default for PresetAuthoringPlanAssumptionsV1 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetAuthoringPlanSectionV1 {
     pub kind: String,
     pub target: String,
@@ -50,7 +53,7 @@ pub struct PresetAuthoringPlanSectionV1 {
     pub permissions: PermissionResolutionV1,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetAuthoringPlanReportV1 {
     pub schema_version: u32,
     pub valid: bool,
@@ -77,6 +80,68 @@ impl PresetAuthoringPlanReportV1 {
             diagnostics: Vec::new(),
             plans: Vec::new(),
         }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct PresetAuthoringSyntheticState {
+    pub host: InMemoryHost,
+    pub environment: BTreeMap<String, String>,
+    pub secret_versions: BTreeMap<String, String>,
+    pub path_env: Option<String>,
+    pub running_as_admin: bool,
+    pub trusted_capabilities: Vec<(String, TrustCapabilityV1)>,
+    pub lifecycle_state_present: bool,
+}
+
+impl PresetAuthoringSyntheticState {
+    pub(super) fn empty(host: InMemoryHost) -> Self {
+        Self {
+            host,
+            environment: BTreeMap::new(),
+            secret_versions: BTreeMap::new(),
+            path_env: None,
+            running_as_admin: false,
+            trusted_capabilities: Vec::new(),
+            lifecycle_state_present: false,
+        }
+    }
+
+    fn assumptions(&self) -> PresetAuthoringPlanAssumptionsV1 {
+        PresetAuthoringPlanAssumptionsV1 {
+            lifecycle_state: if self.lifecycle_state_present {
+                "provided"
+            } else {
+                "empty"
+            }
+            .to_string(),
+            environment: presence_summary(self.environment.len()),
+            secrets: version_summary(self.secret_versions.len()),
+            trust_grants: presence_summary(self.trusted_capabilities.len()),
+            detected_commands: if self.path_env.is_some() {
+                "provided"
+            } else {
+                "absent"
+            }
+            .to_string(),
+            administrator: self.running_as_admin,
+        }
+    }
+}
+
+fn presence_summary(count: usize) -> String {
+    if count == 0 {
+        "absent".to_string()
+    } else {
+        format!("provided:{count}")
+    }
+}
+
+fn version_summary(count: usize) -> String {
+    if count == 0 {
+        "absent".to_string()
+    } else {
+        format!("versioned:{count}")
     }
 }
 
@@ -109,7 +174,21 @@ pub(super) async fn plan_preset_source_scope(
     platform: RuntimePlatform,
     synthetic_host: InMemoryHost,
 ) -> PresetAuthoringPlanReportV1 {
+    plan_preset_source_scope_with_state(
+        scope,
+        platform,
+        PresetAuthoringSyntheticState::empty(synthetic_host),
+    )
+    .await
+}
+
+pub(super) async fn plan_preset_source_scope_with_state(
+    scope: PresetSourceScope,
+    platform: RuntimePlatform,
+    state: PresetAuthoringSyntheticState,
+) -> PresetAuthoringPlanReportV1 {
     let mut report = PresetAuthoringPlanReportV1::empty(platform);
+    report.assumptions = state.assumptions();
     let validation = validate_preset_source_scope(&scope).await;
     if scope.categories.len() != 1
         || (scope.canonical != scope.categories[0].root
@@ -160,8 +239,47 @@ pub(super) async fn plan_preset_source_scope(
         platform,
     );
     context.is_external_presets = true;
-    let runtime = CoreRuntime::new(synthetic_host, context, scope.snapshot);
-    let planned = build_sections(&runtime, category.kind, &category.name).await;
+    context.running_as_admin = state.running_as_admin;
+    context.path_env = state.path_env.clone();
+    context.env = state.environment.clone();
+    for (name, version) in &state.secret_versions {
+        context
+            .env
+            .insert(name.clone(), format!("<secret-version:{version}>"));
+    }
+    if !state.trusted_capabilities.is_empty() {
+        let discovery =
+            CoreRuntime::new(state.host.clone(), context.clone(), scope.snapshot.clone());
+        let mut grants = Vec::new();
+        for (trust_target, capability) in &state.trusted_capabilities {
+            let requirement = match discovery.external_code_requirements(trust_target).await {
+                Ok(requirements) => requirements
+                    .requirements
+                    .into_iter()
+                    .find(|requirement| requirement.capability == *capability),
+                Err(_) => None,
+            };
+            let Some(requirement) = requirement else {
+                report.diagnostics.push(PresetDiagnostic {
+                    severity: PresetDiagnosticSeverity::Error,
+                    code: "fixture_trust_requirement_unavailable".to_string(),
+                    message: format!(
+                        "fixture trust selection does not match external code for {trust_target}"
+                    ),
+                    path: None,
+                });
+                return report;
+            };
+            grants.push(TrustGrantV1::for_reviewed_requirement(&requirement));
+        }
+        context.trust_grants = grants;
+    }
+    let mut input_versions = PlanningInputVersions::default();
+    for (name, version) in &state.secret_versions {
+        input_versions.insert_secret_version(name, OpaqueSecretVersion::new(version));
+    }
+    let runtime = CoreRuntime::new(state.host, context, scope.snapshot);
+    let planned = build_sections(&runtime, category.kind, &category.name, &input_versions).await;
     match planned {
         Ok(plans) if !plans.is_empty() => {
             report.valid = true;
@@ -188,6 +306,7 @@ async fn build_sections(
     runtime: &CoreRuntime<InMemoryHost>,
     kind: &str,
     name: &str,
+    input_versions: &PlanningInputVersions,
 ) -> anyhow::Result<Vec<PresetAuthoringPlanSectionV1>> {
     match kind {
         "app" => Ok(vec![section(
@@ -200,7 +319,7 @@ async fn build_sections(
                     force: false,
                     purge: false,
                     prune_stale: false,
-                    input_versions: PlanningInputVersions::default(),
+                    input_versions: input_versions.clone(),
                 })
                 .await?,
         )]),
@@ -213,7 +332,7 @@ async fn build_sections(
                     target: Some(name.to_string()),
                     force: false,
                     purge: false,
-                    input_versions: PlanningInputVersions::default(),
+                    input_versions: input_versions.clone(),
                 })
                 .await?,
         )]),
@@ -237,7 +356,7 @@ async fn build_sections(
                             operation: LifecycleOperation::Install,
                             os_id: name.to_string(),
                             target: None,
-                            input_versions: PlanningInputVersions::default(),
+                            input_versions: input_versions.clone(),
                         })
                         .await?,
                 ));
@@ -257,7 +376,7 @@ async fn build_sections(
                             item_ids: bootstrap,
                             sys_shell: sys_shell.to_string(),
                             force_profile: false,
-                            input_versions: PlanningInputVersions::default(),
+                            input_versions: input_versions.clone(),
                         })
                         .await?,
                 ));

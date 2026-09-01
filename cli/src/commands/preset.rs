@@ -114,6 +114,12 @@ pub enum PresetCommands {
         #[arg(long, short = 'f')]
         force: bool,
     },
+    /// Generate the versioned JSON Schema and command-help reference
+    Schema {
+        /// Output format
+        #[arg(long, value_enum, default_value_t = PresetReportFormat::Text)]
+        format: PresetReportFormat,
+    },
     /// Statically validate preset metadata and referenced files
     Validate {
         /// Preset repository, category directory, or shine.toml (defaults to current directory)

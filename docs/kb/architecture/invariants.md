@@ -20,9 +20,10 @@ bugs. Check this list before changing the modules named in each entry.
   `app-artifact-apply/remove`, and `sys-profile-enable/disable`; they must not be described as
   lifecycle Plans or `LifecycleResultV1` operations.
 - **A Preset authoring plan is hypothetical and never authorizes mutation.** `shine preset plan`
-  validates and plans from one immutable external snapshot, but observes only deterministic empty
-  `InMemoryHost` state for the selected platform. Its versioned report may reuse semantic step and
-  permission-resolution values, but it must not serialize `PlanInputsV1`, a Plan fingerprint,
+  validates and plans from one immutable external snapshot, but observes only deterministic
+  `InMemoryHost` state for the selected platform. The direct command uses empty state; declarative
+  fixture tests may seed explicitly bounded observations. Its versioned report may reuse semantic
+  step and permission-resolution values, but it must not serialize `PlanInputsV1`, a Plan fingerprint,
   `PlanApprovalV1`, private checkout paths, content, argv, environment values, secret plaintext, or
   raw errors. No apply entry point accepts an authoring report. `ready` means only that the
   hypothetical Plan has no blocker under the report's explicit absent-state assumptions.
@@ -35,8 +36,15 @@ bugs. Check this list before changing the modules named in each entry.
 - **Preset fixtures are declarative assertions, never executable setup.** `shine preset test`
   accepts one category-local `shine.test.toml`, rejects unknown fields and unsupported schema
   versions, and runs each unique named case only through the synthetic authoring-report path.
-  Expectations compare structured validity, readiness, Plan kinds, actions, and stable diagnostic
-  codes. The schema has no command, setup, teardown, network, or arbitrary host-mutation field.
+  Host state may contain environment-name presence, opaque secret versions, bounded synthetic
+  files, command-presence identities, current-version receipt documents, exact derived trust grants,
+  and administrator state. Values and receipt contents never enter reports. Expectations compare
+  structured validity, readiness, Plan kinds, actions, permissions, and stable diagnostic codes.
+  The schema has no process invocation, setup, teardown, network, or arbitrary host-mutation field.
+- **Preset schema reference is generated, not copied.** `shine preset schema` serializes JSON Schema
+  from the Rust types shipped for authoring reports, fixtures, and bundle manifests, and captures
+  command help from the live Clap tree. It must route before configuration loading. It does not
+  redefine the App/Shell/Sys TOML grammar; runtime parsers plus `preset validate` remain authoritative.
 - **Preset bundle bytes exclude host identity and author-only state.** `shine preset pack` uses one
   validation-clean immutable category snapshot plus a read-only physical-tree policy scan. Logical
   file order, normalized mode, zero uid/gid/mtime, and a fixed gzip header determine bytes; physical

@@ -5,19 +5,20 @@ use super::{
     PresetSourceKind, RuntimeContext, RuntimePlatform, SysDriverKind, SysInstall,
 };
 use crate::permission::PermissionDeclarationV1;
+use schemars::JsonSchema;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 pub const PRESET_VALIDATION_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PresetDiagnosticSeverity {
     Error,
     Warning,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetDiagnostic {
     pub severity: PresetDiagnosticSeverity,
     pub code: String,
@@ -26,14 +27,14 @@ pub struct PresetDiagnostic {
     pub path: Option<PathBuf>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetValidationSummary {
     pub categories: usize,
     pub errors: usize,
     pub warnings: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetCategoryValidation {
     pub kind: String,
     pub name: String,
@@ -42,7 +43,7 @@ pub struct PresetCategoryValidation {
     pub diagnostics: Vec<PresetDiagnostic>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetValidationReportV1 {
     pub schema_version: u32,
     pub valid: bool,

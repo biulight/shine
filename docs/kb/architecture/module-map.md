@@ -169,10 +169,12 @@ logic.
 | `cli/src/preset_authoring.rs` | Hypothetical authoring-plan text/JSON rendering and platform mapping |
 | `cli/src/preset_test.rs` | Declarative fixture report rendering and failed-case exit mapping |
 | `cli/src/preset_pack.rs` | Deterministic bundle report rendering and explicit atomic output write |
+| `cli/src/preset_schema.rs` | Live Clap help plus Core-generated authoring schema reference rendering |
 | `core/src/runtime/authoring.rs` | Same-snapshot static validation and synthetic-host App/Shell/Sys authoring reports |
 | `core/src/runtime/lint.rs` | Same-snapshot cross-platform author-quality, portability, and permission-minimization diagnostics |
 | `core/src/runtime/fixture.rs` | Versioned `shine.test.toml` parsing and structured authoring-report assertions |
 | `core/src/runtime/pack.rs` | Bundle manifest, reproducible tar.gz bytes, and source-tree pack policy |
+| `core/src/runtime/schema.rs` | Generated JSON Schemas for authoring reports, fixtures, and bundle manifests |
 | `cli/src/git_pull.rs` | FF-only external source pulls and managed overlay mirroring |
 | `cli/src/state.rs` | Versioned runtime-state cleanup |
 | `cli/src/status.rs` | Core App/Shell inspection-to-terminal row adapter |

@@ -27,6 +27,7 @@ pub mod preset_lint;
 #[cfg(test)]
 mod preset_meta;
 pub mod preset_pack;
+pub mod preset_schema;
 pub mod preset_test;
 pub mod preset_validation;
 pub mod presets;

@@ -3,6 +3,7 @@
 use super::validation::{load_preset_source_scope, validate_preset_source_scope};
 use super::{FileKind, FileSystemObservationHost};
 use flate2::{Compression, GzBuilder};
+use schemars::JsonSchema;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,7 +11,7 @@ use std::path::Path;
 
 pub const PRESET_BUNDLE_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct PresetPackReportV1 {
     pub schema_version: u32,
     pub valid: bool,
@@ -29,15 +30,15 @@ pub struct PresetPackArtifactV1 {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Serialize)]
-struct BundleManifestV1 {
+#[derive(JsonSchema, Serialize)]
+pub(crate) struct BundleManifestV1 {
     schema_version: u32,
     target: String,
     files: Vec<BundleFileV1>,
 }
 
-#[derive(Serialize)]
-struct BundleFileV1 {
+#[derive(JsonSchema, Serialize)]
+pub(crate) struct BundleFileV1 {
     path: String,
     sha256: String,
     mode: u32,

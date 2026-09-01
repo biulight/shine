@@ -34,9 +34,9 @@
   bootstrap profile composition 与 active/base/new/merge 三方合并文件已按 execution、privilege、
   provenance 和 rollback support 明确分类，并在执行前标记为 opaque 或不可事务恢复。Phase 4 不承诺
   package manager、network、跨 target 或命令处理过的用户数据的全局 rollback。
-- Phase 5 已具备首轮 authoring workflow：`preset validate`、`lint`、基于合成空宿主的 `plan`、
-  声明式 `shine.test.toml` fixture test，以及带 policy gate 的确定性 unsigned bundle pack；示例已接入
-  CI。后续仍需扩展 fixture host-state matrix、生成式 schema reference 与更多三类 Preset 示例。
+- Phase 5 已完成：`preset validate`、`lint`、`plan`、声明式合成 host-state fixture test、确定性
+  unsigned bundle pack，以及由 shipped Rust types 与 live CLI help 生成的 schema reference 已形成
+  authoring 闭环；App、Shell、Sys 示例均进入 CI。
 
 ## Guiding Principles
 
@@ -115,7 +115,7 @@ recovery 和 per-target rollback，同时保留明确标记的 opaque code escap
 Rollback 不承诺跨 package manager、network 和多个 target 的全局事务；删除动作默认只能作用于
 transaction-created 或 manifest-owned 资源。
 
-## Phase 5 — Preset Developer Experience
+## Phase 5 — Preset Developer Experience (Complete)
 
 **Outcome:** 在现有 `preset new` 和 `preset validate` 基础上，补齐 lint、authoring plan、test、pack、
 fixtures、schema reference、examples 和 CI workflow。

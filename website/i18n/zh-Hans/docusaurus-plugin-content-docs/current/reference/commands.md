@@ -253,6 +253,7 @@ profile 文件继续使用三方合并，并会明确显示为非事务化；boo
 
 ```text
 shine preset new <app|shell|sys> [--force]
+shine preset schema [--format <text|json>]
 shine preset validate [PATH] [--format <text|json>]
 shine preset lint [PATH] [--format <text|json>] [--deny-warnings]
 shine preset plan <CATEGORY> --platform <macos|linux|windows> [--format <text|json>]
@@ -271,6 +272,12 @@ shine preset pull
 `preset copy` 只把一个完整的内置预设复制到当前目录，适合创建局部 overlay；`preset export`
 导出整套内置预设。外部 Shell 预设默认以快照方式运行，来源内容变更需通过
 `shine upgrade` 应用；`--live` 只适合预设开发，令源内容在下一次调用时生效。
+
+`preset schema` 直接从当前 binary 内 shipped 的 report、fixture 与 bundle Rust type，以及
+`validate`、`lint`、`plan`、`test`、`pack`、`schema` 的 live Clap help 生成 reference schema v1。
+文本输出列出所含 contract；`--format json` 在一个 JSON value 中输出命令 help 与 JSON Schema
+draft 2020-12 文档。它不会复制完整 App/Shell/Sys TOML grammar；metadata 是否接受仍以
+`preset validate` 为准。该命令不会读取或初始化配置。
 
 `preset validate` 接受预设仓库根目录、`app|shell|sys/<name>` 类别目录或其中的
 `shine.toml`；默认检查当前目录。它会静态检查所有平台分支和引用文件，不读取当前激活的预设
@@ -292,11 +299,22 @@ managed-resource 与 bootstrap section。该命令不会初始化配置、访问
 以失败退出；非法输入或静态校验失败仍返回退出码 1。JSON 输出使用独立的 `schema_version: 1`。
 
 `preset test` 从单个类别读取 `shine.test.toml`，并让每个声明 case 复用相同的 synthetic authoring
-plan 路径。Fixture schema v1 要求唯一 case name 与 platform；`[cases.expect]` 可断言 `valid`、
-`ready`，以及名为 `plan_kinds`、`diagnostic_codes`、`step_diagnostic_codes`、`actions` 的精确排序
-集合。缺失字段表示不做该断言；显式空数组表示断言没有任何值。Fixture 不能声明 setup、teardown
-或可执行代码。解析/schema 错误或任一 case 失败都会返回退出码 1；JSON 报告 schema v1 使用稳定
-failure code，而非 terminal prose。
+plan 路径。Fixture schema v1 要求唯一 case name 与 platform。可选 `[cases.host]` 可声明环境变量名
+存在、opaque `secret_versions`、位于 `home|shine|data-dir|bin|absolute` 下的 synthetic file、已检测
+命令名、管理员状态、精确 external-code trust selection，以及 App/Shell/Sys receipt document。
+Receipt 文本可使用 `${HOME}`、`${SHINE}`、`${DATA_DIR}` 与 `${BIN}` placeholder，并且必须能按
+当前 runtime manifest schema 解析。Fixture value 不会进入报告。
+
+`[cases.expect]` 可断言 `valid`、`ready`，以及名为 `plan_kinds`、`diagnostic_codes`、
+`step_diagnostic_codes`、`actions`、`required_permissions`、`missing_permissions` 与
+`permission_diagnostic_codes` 的精确排序集合。缺失字段表示不做该断言；显式空数组表示断言没有值。
+JSON case result 会包含对应的全部 actual set，供 repair loop 使用。Fixture 不能声明 setup、teardown、
+待运行命令、网络活动或可执行代码。解析/schema 错误或任一 case 失败都会返回退出码 1；JSON 报告
+schema v1 使用稳定 failure code，而非 terminal prose。
+Permission identity 采用 `administrator`、`command:<program>`、`network:any`、
+`network:host:<host>`、`environment:<plain|secret>:<name>`、
+`filesystem:<read|write|remove|execute>:<logical-path>` 或
+`system:<capability>[:<resource>]`。
 
 `preset pack` 校验单个类别，并在类别外原子写入确定性 bundle。Bundle v1 是未签名 tar.gz，包含
 `shine.bundle.json`，以及按顺序位于 `preset/<kind>/<name>/` 下的文件；manifest 记录逻辑路径、

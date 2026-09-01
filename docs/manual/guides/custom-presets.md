@@ -59,6 +59,11 @@ check for updates, write files, access the network, or execute preset code.
 The default output is text. `--format json` emits the stable `schema_version: 1` report used by the
 skill; validation errors exit with status 1, while warnings do not.
 
+Run `shine preset schema --format json` when tooling needs the exact authoring report, fixture, or
+bundle contract shipped by the installed binary. The generated document also embeds current
+authoring-command help. Preset metadata itself remains parser-driven, so use validation rather than
+treating the generated reference as a replacement App/Shell/Sys grammar.
+
 Run `preset lint` after validation. Its separate schema-v1 report flags author-quality and
 portability concerns without redefining what the runtime accepts. Warnings are advisory by default;
 CI can use `--deny-warnings` after consciously accepting or fixing all current findings.
@@ -70,9 +75,12 @@ empty assumptions omit a required environment value, trust grant, command, or ad
 it is still useful authoring feedback and is never an approval for real installation.
 
 Add `shine.test.toml` when the category needs repeatable cross-platform expectations. Cases are
-declarative and run only against in-memory authoring state. A minimal example is available under
-`examples/presets/app/demo`; use it to assert structured actions and codes rather than copying text
-output. `preset test` requires a single category, not a repository root.
+declarative and run only against in-memory authoring state. `[cases.host]` can model environment
+presence, opaque secret versions, files, command detection, runtime receipts, exact trust grants,
+and administrator state without executing setup code. Runnable examples for App, Shell, and Sys
+are available under `examples/presets`; use them to assert structured actions, permissions, and
+codes rather than copying text output. `preset test` requires a single category, not a repository
+root.
 
 When you need a distributable artifact, pack the reviewed category outside its source tree:
 

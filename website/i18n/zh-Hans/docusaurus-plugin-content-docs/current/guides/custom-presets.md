@@ -52,6 +52,11 @@ shine preset test . --format json
 默认输出文本；`--format json` 输出 skill 使用的稳定 `schema_version: 1` 报告。校验错误的
 退出码为 1，warning 不会导致失败。
 
+工具需要当前安装 binary 精确的 authoring report、fixture 或 bundle contract 时，运行
+`shine preset schema --format json`。生成文档还会嵌入当前 authoring command help。Preset metadata
+本身仍由 parser 驱动，因此应使用 validate，不要把生成 reference 当作 App/Shell/Sys grammar 的
+替代品。
+
 校验后运行 `preset lint`。它用独立的 schema-v1 报告指出作者质量与可移植性问题，但不会重新定义
 runtime 接受的内容。warning 默认只是建议；CI 可在有意识地接受或修复全部现有 finding 后使用
 `--deny-warnings`。
@@ -62,8 +67,10 @@ blocked 通常表示空假设中没有提供所需环境变量、trust grant、�
 反馈，而且绝不构成真实安装的批准。
 
 需要可重复的跨平台预期时，在类别中加入 `shine.test.toml`。Case 是纯声明式的，并且只针对内存中的
-authoring 状态运行。最小示例位于 `examples/presets/app/demo`；应断言结构化 action 与 code，而非
-复制文本输出。`preset test` 只接受单个类别，不能传仓库根目录。
+authoring 状态运行。`[cases.host]` 可以模拟环境变量存在、opaque secret version、file、命令探测、
+runtime receipt、精确 trust grant 与管理员状态，而且不会执行 setup code。`examples/presets` 下提供
+App、Shell、Sys 三类可运行示例；应断言结构化 action、permission 与 code，而非复制文本输出。
+`preset test` 只接受单个类别，不能传仓库根目录。
 
 需要可分发 artifact 时，把已审查类别打包到 source tree 外部：
 

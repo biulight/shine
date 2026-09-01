@@ -18,6 +18,7 @@ mod pack;
 mod planner;
 mod preset;
 mod profile;
+mod schema;
 mod shell;
 mod shell_action_executor;
 mod sys;
@@ -80,6 +81,9 @@ pub use profile::{
     ShellProfileRemoval, managed_profile_snippet, managed_shell_profile_path,
     powershell_bin_assignment, powershell_quote, remove_shell_sentinel, shell_config_snippet,
     shell_source_command, supports_completion_registration,
+};
+pub use schema::{
+    PRESET_SCHEMA_REFERENCE_VERSION, PresetSchemaReferenceV1, preset_schema_reference_v1,
 };
 pub use shell::{
     BunDependencyMode, BunRuntimeSpec, ExternalShellMode, LinkRuntime, SHELL_MANIFEST_FILE,

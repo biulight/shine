@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-09-01
-- **Evidence**: `core/src/runtime/authoring.rs`, `cli/src/preset_authoring.rs`,
+- **Evidence**: `core/src/runtime/authoring.rs`, `core/src/runtime/fixture.rs`, `cli/src/preset_authoring.rs`,
   `docs/preset-developer-experience-prd.md`
 
 ## Context
@@ -26,12 +26,13 @@ authoring report. The report may reuse the semantic step and permission-resoluti
 it does not expose `PlanApprovalV1`, an apply token, or an authoring fingerprint accepted by any
 mutation entry point.
 
-Every report identifies its platform and synthetic assumptions. The initial contract models a
+Every report identifies its platform and synthetic assumptions. The direct command models a
 first install with empty manifests, absent destinations, absent environment and secret inputs, no
 trust grants, no detected commands, and no administrator state. App and Shell categories use their
 install planners. A Sys category uses the managed-resource planner for managed items and the
-bootstrap planner for init items. Fixture-backed planning may later replace individual assumptions
-with declared observations while remaining non-applicable.
+bootstrap planner for init items. Fixture-backed planning may replace individual assumptions with
+strictly declared in-memory observations, opaque secret versions, and exact trust grants derived
+from current code requirements while remaining non-applicable.
 
 The command validates and plans from the same captured source snapshot. It routes before runtime
 configuration initialization and update checks, never runs Preset code or processes, and never uses

@@ -1,0 +1,33 @@
+schema_version = 1
+
+[[cases]]
+name = "linux-empty-host"
+platform = "linux"
+
+[cases.expect]
+valid = true
+ready = true
+plan_kinds = ["bootstrap", "managed-install"]
+diagnostic_codes = []
+step_diagnostic_codes = ["sys_bootstrap_profile_recovery_unsupported"]
+actions = ["create", "execute", "update"]
+missing_permissions = []
+permission_diagnostic_codes = []
+
+[[cases]]
+name = "linux-command-present"
+platform = "linux"
+
+[cases.host]
+commands = ["demo-tool"]
+administrator = true
+
+[cases.expect]
+valid = true
+ready = true
+plan_kinds = ["bootstrap", "managed-install"]
+diagnostic_codes = []
+step_diagnostic_codes = ["sys_bootstrap_profile_recovery_unsupported"]
+actions = ["create", "update"]
+missing_permissions = []
+permission_diagnostic_codes = []

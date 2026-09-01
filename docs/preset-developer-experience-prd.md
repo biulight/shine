@@ -1,6 +1,6 @@
 # Preset Developer Experience PRD
 
-> **Status:** Roadmap Phase 5 planning. This document is internal and does not define released CLI
+> **Status:** Implemented. This document is internal and does not define released CLI
 > behavior. Each public command becomes part of the bilingual manual only when its implementation
 > lands.
 
@@ -42,6 +42,13 @@ of introducing a second Preset implementation.
 
 ## Command boundaries
 
+### `preset schema`
+
+`schema` emits a versioned reference generated at runtime from the shipped Rust report, fixture,
+and bundle types together with live Clap help for every authoring command. It does not copy the
+complete App/Shell/Sys TOML grammar: `preset validate` and the runtime parsers remain authoritative
+for Preset metadata acceptance.
+
 ### `preset validate`
 
 `validate` remains the sole authority for schema and semantic correctness. It checks every supported
@@ -72,7 +79,7 @@ The first slice accepts exactly one category directory or its `shine.toml`, plus
 `--platform macos|linux|windows`. App and Shell categories produce an install preview. Sys categories
 produce a managed-resource install preview for managed items and a bootstrap preview for init items.
 Synthetic environment values, trust grants, detected commands, and installed receipts are absent;
-the report must say so. Later fixture support supplies those observations explicitly.
+the report must say so. Fixture cases may supply those observations explicitly.
 
 ### `preset test`
 
@@ -133,7 +140,7 @@ fixtures or generated from tested sources.
 - Define warning/error and optional strict-CI exit behavior.
 - Run built-in Presets and checked-in examples through validate and lint in repository CI.
 
-### Slice 5C — Declarative fixtures and `preset test` (empty-host assertions implemented)
+### Slice 5C — Declarative fixtures and `preset test` (implemented)
 
 - Add fixture schema v1 and safe host-state materialization.
 - Support structured assertions over validation, steps, permissions, and blockers.
@@ -145,7 +152,7 @@ fixtures or generated from tested sources.
 - Verify reproducibility across different checkout paths and enumeration orders.
 - Reject secrets, private paths, ignored dependency trees, escaping links, and undeclared code.
 
-### Slice 5E — Reference and workflow completion (in progress)
+### Slice 5E — Reference and workflow completion (implemented)
 
 - Generate schema/report references from shipped types.
 - Keep examples executable and documentation bilingual.
