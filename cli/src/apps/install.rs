@@ -1,21 +1,20 @@
-use super::report::{
-    print_already_managed, print_dry_run_install, print_install_error, print_install_success,
-    print_install_success_with_backup,
-};
-use super::{
-    install_prepared_content, materialize_file_content, materialize_static_file_content, metadata,
-    resolve_install_destination, validate_unique_install_destinations,
-};
-use crate::colors;
+use super::metadata;
+use super::report;
 use crate::config::Config;
 use crate::env::EnvConfig;
-use crate::install_core::manifest::{AppEntry, AppManifest};
-use crate::output;
-use anyhow::Result;
-use file_ops::InstallOutcome;
-use std::collections::{BTreeMap, BTreeSet};
-
-use crate::install_core::file_ops;
+use crate::presentation::{
+    LifecycleReporter, PresentationEvent, TerminalInteraction, TerminalRenderer,
+};
+use anyhow::{Result, anyhow};
+use shine_core::lifecycle::LifecycleOperation;
+use shine_core::lifecycle::LifecycleResultV1;
+#[cfg(test)]
+use shine_core::lifecycle::LifecycleStatus;
+use shine_core::runtime::{
+    AppFileAction, AppLifecycleRequest, AppPlanRequest, PlanningInputVersions, RuntimeEvent,
+    RuntimeObserver,
+};
+use std::collections::BTreeSet;
 
 pub async fn handle_install(
     config: &Config,
@@ -23,249 +22,286 @@ pub async fn handle_install(
     dry_run: bool,
     force: bool,
 ) -> Result<()> {
-    crate::config::print_presets_note(config);
+    handle_install_approved(config, category, dry_run, force, true).await
+}
+
+pub async fn handle_install_approved(
+    config: &Config,
+    category: Option<&str>,
+    dry_run: bool,
+    force: bool,
+    yes: bool,
+) -> Result<()> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_install_with_reporter(config, category, dry_run, force, yes, &mut renderer)
+        .await
+        .map(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) async fn handle_install_with_result(
+    config: &Config,
+    category: Option<&str>,
+    dry_run: bool,
+    force: bool,
+) -> Result<LifecycleResultV1> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_install_with_reporter(config, category, dry_run, force, true, &mut renderer).await
+}
+
+async fn handle_install_with_reporter(
+    config: &Config,
+    category: Option<&str>,
+    dry_run: bool,
+    force: bool,
+    yes: bool,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<LifecycleResultV1> {
+    for line in crate::config::presets_note_lines(config) {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
     if dry_run {
-        println!("{}", colors::dim("[dry-run] No files will be modified."));
+        reporter.emit(PresentationEvent::stdout(report::dry_run_header_text()));
     }
 
-    let prefix = match category {
-        Some(cat) => format!("app/{cat}"),
-        None => "app".to_string(),
+    let plan_request = AppPlanRequest {
+        operation: LifecycleOperation::Install,
+        target: category.map(str::to_string),
+        force,
+        purge: false,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
     };
-
-    // Resolve platform availability before config initialization or embedded
-    // extraction so a targeted request for an unavailable category has no
-    // lifecycle side effects.
-    let categories = metadata::load_active_categories(config, category).await?;
-    if let Some(category) = category
-        && categories.is_empty()
-    {
-        anyhow::bail!("app preset category not found: {category}");
-    }
-
-    // Load env config once — used by the `template` transform.
+    let reviewed = if dry_run {
+        None
+    } else {
+        crate::lifecycle_plan::review_plans(
+            config,
+            [crate::lifecycle_plan::LifecyclePlanRequest::app(
+                plan_request.clone(),
+                config,
+            )],
+            yes,
+        )
+        .await?
+        .into_iter()
+        .next()
+    };
+    let mut runtime = if let Some(reviewed) = &reviewed {
+        crate::lifecycle_plan::prepare_runtime(config, reviewed).await?
+    } else {
+        crate::core_runtime::from_config(config).await?
+    };
     let env = EnvConfig::load_or_init(config).await?;
-    let env_map = env.as_map();
-
-    // When the user has configured a custom presets directory, the app preset
-    // files are already there — skip the embedded-asset extraction step.
-    if !config.is_external_presets {
-        // Refresh the managed embedded preset cache on each install so metadata
-        // and transformed source updates from the current binary take effect.
-        let _extract_report =
-            crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
-    }
-    validate_unique_install_destinations(&categories, config)?;
-    let total_available: usize = categories.iter().map(|c| c.files.len()).sum();
-    output::summary_line(
-        "App Configs",
-        &[colors::dim(&format!("{total_available} files available"))],
-    );
-
-    let mut manifest = AppManifest::load(config.shine_dir()).await?;
-    let mut generated_content: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    let mut unavailable_generators: BTreeSet<String> = BTreeSet::new();
-
-    // Run enabled generators before any install writes. A first-time failure
-    // aborts cleanly; an existing managed destination is the last-known-good
-    // snapshot and is kept with a warning.
-    for cat in &categories {
-        for file in &cat.files {
-            if dry_run {
-                continue;
-            }
-            let Some(generator) = &file.generator else {
-                continue;
-            };
-            if !env_map.contains_key(&generator.when_env) {
-                continue;
-            }
-            let key = format!("{}/{}", cat.name, file.source_rel.display());
-            let destination = resolve_install_destination(cat, file, config)?;
-            match materialize_file_content(config, cat, file, env_map).await {
-                Ok(content) => {
-                    generated_content.insert(key, content);
-                }
-                Err(error)
-                    if manifest.find_by_dest(&destination).is_some() && destination.exists() =>
-                {
-                    eprintln!(
-                        "  {} {}/{}: generator unavailable; installed copy kept ({error:#})",
-                        colors::symbol("!"),
-                        cat.name,
-                        file.source_rel.display()
-                    );
-                    unavailable_generators.insert(key);
-                }
-                Err(error) => return Err(error),
-            }
-        }
-    }
-
+    runtime.context_mut_for_cli().env = env.as_map().clone();
+    let categories = runtime.app_categories(category)?;
+    let total_available = categories.iter().map(|value| value.files.len()).sum();
+    reporter.emit(PresentationEvent::stdout(report::app_configs_summary_text(
+        total_available,
+    )));
+    let mut observer = InstallObserver {
+        reporter,
+        categories: &categories,
+    };
+    let mut interaction = TerminalInteraction;
+    let core_report = if let Some(reviewed) = &reviewed {
+        runtime
+            .install_apps_approved(
+                match &reviewed.request {
+                    crate::lifecycle_plan::LifecyclePlanRequest::App(request) => request.clone(),
+                    _ => unreachable!("reviewed App Plan"),
+                },
+                &reviewed.approval,
+                &mut observer,
+                &mut interaction,
+            )
+            .await?
+    } else {
+        runtime
+            .preview_install_apps(
+                AppLifecycleRequest {
+                    target: category.map(str::to_string),
+                    dry_run,
+                    force,
+                },
+                &mut observer,
+                &mut interaction,
+            )
+            .await?
+    };
     let mut installed = 0usize;
     let mut skipped = 0usize;
     let mut backed_up = 0usize;
     let mut restart_hints = BTreeSet::new();
-    // Categories with at least one file actually written this run — the trigger
-    // set for `post_install` hooks (mirrors `post_upgrade`'s changed-only rule).
-    let mut changed_categories: BTreeSet<String> = BTreeSet::new();
-
-    for cat in &categories {
-        for file in &cat.files {
-            let display_name = format!("{}/{}", cat.name, file.source_rel.display());
-            if unavailable_generators.contains(&display_name) {
-                skipped += 1;
-                continue;
-            }
-            let destination = match resolve_install_destination(cat, file, config) {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!(
-                        "  {} {display_name}: bad destination: {e:#}",
-                        colors::symbol("✗")
-                    );
-                    continue;
-                }
-            };
-
-            let is_managed = manifest.find_by_dest(&destination).is_some();
-
-            let file_uses_env =
-                file.transforms.iter().any(|t| t == "template") || file.generator.is_some();
-
-            let content = if let Some(content) = generated_content.remove(&display_name) {
-                content
-            } else {
-                let materialized = if dry_run {
-                    materialize_static_file_content(config, cat, file, env_map).await
-                } else {
-                    materialize_file_content(config, cat, file, env_map).await
-                };
-                match materialized {
-                    Ok(content) => content,
-                    Err(error) => {
-                        eprintln!("  {} {display_name}: {error:#}", colors::symbol_stderr("✗"));
-                        continue;
-                    }
-                }
-            };
-            let outcome =
-                install_prepared_content(file, &content, &destination, is_managed, dry_run, force)
-                    .await;
-
-            let transform_label = if !file.transforms.is_empty() {
-                format!(
-                    "  {}",
-                    colors::dim(&format!("[{}]", file.transforms.join(", ")))
-                )
-            } else {
-                String::new()
-            };
-
-            let file_label = file.source_rel.display().to_string();
-
-            match outcome {
-                Ok(InstallOutcome::Installed { hash }) => {
-                    print_install_success(&file_label, &transform_label, &destination, config);
-                    manifest.upsert(AppEntry {
-                        source: format!("app/{}/{}", cat.name, file.source_rel.display()),
-                        destination,
-                        backup: None,
-                        content_hash: hash,
-                        install_strategy: file.install_strategy.clone(),
-                        uses_env: file_uses_env,
-                        requires_admin: file.requires_admin,
-                    });
-                    installed += 1;
-                    changed_categories.insert(cat.name.clone());
-                    if let Some(hint) = &file.restart_hint {
-                        restart_hints.insert(hint.clone());
-                    }
-                }
-                Ok(InstallOutcome::AlreadyManaged) => {
-                    print_already_managed(&file_label);
-                    skipped += 1;
-                }
-                Ok(InstallOutcome::BackedUpAndInstalled { backup, hash }) => {
-                    print_install_success_with_backup(
-                        &file_label,
-                        &transform_label,
-                        &destination,
-                        &backup,
-                        config,
-                    );
-                    manifest.upsert(AppEntry {
-                        source: format!("app/{}/{}", cat.name, file.source_rel.display()),
-                        destination,
-                        backup: Some(backup),
-                        content_hash: hash,
-                        install_strategy: file.install_strategy.clone(),
-                        uses_env: file_uses_env,
-                        requires_admin: file.requires_admin,
-                    });
-                    installed += 1;
+    for file in &core_report.files {
+        let label = file.source.display().to_string();
+        let display_name = format!("{}/{}", file.category, file.source.display());
+        let transform_label = report::transform_label(&file.transforms);
+        match file.action {
+            AppFileAction::Installed | AppFileAction::BackedUp => {
+                installed += 1;
+                if file.action == AppFileAction::BackedUp {
+                    let backup = file.backup.as_ref().expect("Core backed-up App report");
                     backed_up += 1;
-                    changed_categories.insert(cat.name.clone());
-                    if let Some(hint) = &file.restart_hint {
-                        restart_hints.insert(hint.clone());
-                    }
+                    observer.reporter.emit(PresentationEvent::stdout(
+                        report::install_success_with_backup_text(
+                            &label,
+                            &transform_label,
+                            &file.destination,
+                            backup,
+                            config,
+                        ),
+                    ));
+                } else {
+                    observer.reporter.emit(PresentationEvent::stdout(
+                        report::install_success_text(
+                            &label,
+                            &transform_label,
+                            &file.destination,
+                            config,
+                        ),
+                    ));
                 }
-                Ok(InstallOutcome::DryRun) => {
-                    print_dry_run_install(&file_label, &transform_label, &destination, config);
-                    skipped += 1;
-                }
-                Err(e) => {
-                    print_install_error(&display_name, &e);
+                if let Some(hint) = &file.restart_hint {
+                    restart_hints.insert(hint.clone());
                 }
             }
+            AppFileAction::Unchanged => {
+                skipped += 1;
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::already_managed_text(
+                        &label,
+                    )));
+            }
+            AppFileAction::PreviewInstall => {
+                skipped += 1;
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::dry_run_install_text(
+                        &label,
+                        &transform_label,
+                        &file.destination,
+                        config,
+                    )));
+            }
+            AppFileAction::GeneratorPreserved => {
+                skipped += 1;
+                if let Some(error) = &file.generator_error {
+                    observer.reporter.emit(PresentationEvent::stderr(
+                        report::generator_unavailable_text(&display_name, &anyhow!(error.clone())),
+                    ));
+                }
+            }
+            AppFileAction::Failed => {
+                if let Some(error) = &file.error {
+                    observer
+                        .reporter
+                        .emit(PresentationEvent::stderr(report::install_error_text(
+                            &display_name,
+                            &anyhow!(error.clone()),
+                        )));
+                }
+            }
+            _ => skipped += 1,
         }
     }
-
-    if !dry_run {
-        manifest.save(config.shine_dir()).await?;
-        super::hooks::run_app_hooks(
-            config,
-            |name| categories.iter().find(|c| c.name == name),
-            &changed_categories,
-            super::hooks::HookPhase::PostInstall,
-            true,
-        )
-        .await;
-    }
-
-    let mut summary_parts: Vec<String> = Vec::new();
-    if installed > 0 {
-        let backup_note = if backed_up > 0 {
-            format!(", {backed_up} backed up")
-        } else {
-            String::new()
-        };
-        summary_parts.push(colors::green(&format!(
-            "{installed} installed{backup_note}"
+    let summary_parts = report::install_summary_parts(installed, backed_up, skipped);
+    observer.reporter.emit(PresentationEvent::BlankLine);
+    observer
+        .reporter
+        .emit(PresentationEvent::stdout(report::done_summary_text(
+            &summary_parts,
         )));
-    }
-    if skipped > 0 {
-        summary_parts.push(colors::dim(&format!("{skipped} skipped")));
-    }
-    output::footer("Done", &summary_parts);
     for hint in restart_hints {
-        println!("  {} {}", colors::symbol("!"), colors::yellow(&hint));
+        observer
+            .reporter
+            .emit(PresentationEvent::stdout(report::restart_hint_text(&hint)));
     }
+    Ok(core_report.lifecycle)
+}
 
-    Ok(())
+struct InstallObserver<'a> {
+    reporter: &'a mut dyn LifecycleReporter,
+    categories: &'a [metadata::AppCategory],
+}
+
+impl RuntimeObserver for InstallObserver<'_> {
+    fn emit(&mut self, event: RuntimeEvent) {
+        match event {
+            RuntimeEvent::Warning {
+                code,
+                target,
+                detail,
+            } => {
+                let category = target
+                    .as_deref()
+                    .and_then(|value| value.strip_prefix("app/"))
+                    .unwrap_or("app");
+                if code == "app_hook_permission_required" {
+                    let hooks = self
+                        .categories
+                        .iter()
+                        .find(|value| value.name == category)
+                        .map(|value| value.post_install.as_slice())
+                        .unwrap_or_default();
+                    let sequence = hooks
+                        .iter()
+                        .map(|hook| {
+                            std::iter::once(hook.command.as_str())
+                                .chain(hook.args.iter().map(String::as_str))
+                                .map(crate::shell_quote::quote_if_needed)
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" && ");
+                    self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: post-install hook skipped (run `shine trust grant app/{category}` after review; manual: {sequence})", report::symbol("!"))));
+                } else {
+                    self.reporter.emit(PresentationEvent::stderr(format!(
+                        "  {} {category}: post-install hook failed: {detail}",
+                        report::symbol("!")
+                    )));
+                }
+            }
+            RuntimeEvent::Progress {
+                code: "app_hook_completed",
+                target,
+            } => {
+                let category = target.strip_prefix("app/").unwrap_or(&target);
+                self.reporter.emit(PresentationEvent::stdout(format!(
+                    "  {} {category}: post-install hook completed",
+                    report::symbol("✓")
+                )));
+            }
+            RuntimeEvent::ProcessOutput { text, .. } => {
+                for line in text.lines() {
+                    self.reporter.emit(PresentationEvent::stdout(format!(
+                        "     {}",
+                        report::dim(line)
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::await_holding_lock)]
+    #[cfg(windows)]
     use super::super::uninstall::handle_uninstall;
+    use super::super::uninstall::handle_uninstall_with_result;
     use super::*;
+    use crate::apps::resolve_install_destination;
     use crate::config::Config;
     use crate::install_core::manifest::AppManifest;
     #[cfg(unix)]
     use crate::presets;
     #[cfg(unix)]
     use crate::test_support::env_lock;
+    use shine_core::lifecycle::{LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1};
     use tokio::fs;
 
     async fn make_temp_dir() -> std::path::PathBuf {
@@ -287,10 +323,28 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, None, false, false).await.unwrap();
+        let install_result = handle_install_with_result(&config, Some("git"), false, false)
+            .await
+            .unwrap();
+        assert!(install_result.summary().changed > 0);
+        assert!(
+            install_result
+                .outcomes
+                .iter()
+                .all(|outcome| outcome.target.starts_with("app/") && outcome.resource.is_some())
+        );
+        assert!(
+            install_result
+                .outcomes
+                .iter()
+                .filter(|outcome| outcome.status == LifecycleStatus::Failed)
+                .all(|outcome| !outcome.diagnostic_codes.is_empty())
+        );
 
         // At least the manifest should have entries
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             !manifest.entries.is_empty(),
             "manifest should have entries after install"
@@ -305,11 +359,27 @@ mod tests {
             );
         }
 
-        handle_uninstall(&config, None, false, false, false)
+        let no_op_result = handle_install_with_result(&config, Some("git"), false, false)
             .await
             .unwrap();
+        assert!(no_op_result.summary().unchanged > 0);
 
-        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        let uninstall_result =
+            handle_uninstall_with_result(&config, Some("git"), false, false, false)
+                .await
+                .unwrap();
+        assert!(uninstall_result.summary().changed > 0);
+        assert!(uninstall_result.outcomes.iter().all(|outcome| {
+            outcome.status != LifecycleStatus::Failed
+                || outcome.resource.as_deref() == Some("artifact:teardown")
+        }));
+
+        let serialized = serde_json::to_string(&uninstall_result).unwrap();
+        assert!(!serialized.contains(&dir.display().to_string()));
+
+        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest_after.entries.is_empty(),
             "manifest should be empty after uninstall"
@@ -317,6 +387,202 @@ mod tests {
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[test]
+    fn lifecycle_result_v1_json_shape_is_stable() {
+        let mut result = LifecycleResultV1::new(LifecycleOperation::Install, false);
+        result.push(LifecycleOutcomeV1::new(
+            "app/sample",
+            Some("config.toml"),
+            LifecycleStatus::Changed,
+            [
+                LifecycleEffect::BackupCreated,
+                LifecycleEffect::ResourceWritten,
+                LifecycleEffect::ReceiptWritten,
+            ],
+        ));
+        result.push(LifecycleOutcomeV1::new(
+            "shell/sample/tool",
+            Some("preset-cache"),
+            LifecycleStatus::Pending,
+            [
+                LifecycleEffect::ReceiptWritePreviewed,
+                LifecycleEffect::ReceiptRemovePreviewed,
+                LifecycleEffect::CacheWritten,
+                LifecycleEffect::CacheRemoved,
+                LifecycleEffect::CachePurged,
+                LifecycleEffect::CacheWritePreviewed,
+                LifecycleEffect::CacheRemovePreviewed,
+                LifecycleEffect::CodeExecuted,
+                LifecycleEffect::CodeExecutionPreviewed,
+            ],
+        ));
+
+        assert_eq!(
+            serde_json::to_string_pretty(&result).unwrap(),
+            r#"{
+  "schema_version": 1,
+  "operation": "install",
+  "dry_run": false,
+  "outcomes": [
+    {
+      "target": "app/sample",
+      "resource": "config.toml",
+      "status": "changed",
+      "effects": [
+        "backup-created",
+        "resource-written",
+        "receipt-written"
+      ]
+    },
+    {
+      "target": "shell/sample/tool",
+      "resource": "preset-cache",
+      "status": "pending",
+      "effects": [
+        "receipt-write-previewed",
+        "receipt-remove-previewed",
+        "cache-written",
+        "cache-removed",
+        "cache-purged",
+        "cache-write-previewed",
+        "cache-remove-previewed",
+        "code-executed",
+        "code-execution-previewed"
+      ]
+    }
+  ]
+}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn structured_roundtrip_records_backup_creation_and_restore() {
+        let dir = make_temp_dir().await;
+        let category_dir = dir.join("presets/app/sample");
+        let destination_root = dir.join("destination");
+        fs::create_dir_all(&category_dir).await.unwrap();
+        fs::create_dir_all(&destination_root).await.unwrap();
+        fs::write(
+            category_dir.join("shine.toml"),
+            format!(
+                "description = \"Sample\"\ndest = {:?}\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"config.toml\"\n",
+                destination_root.to_string_lossy()
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(category_dir.join("config.toml"), b"managed\n")
+            .await
+            .unwrap();
+        let destination = destination_root.join("config.toml");
+        fs::write(&destination, b"original\n").await.unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+
+        let install = handle_install_with_result(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+        assert_eq!(install.summary().changed, 1);
+        assert!(install.outcomes.iter().any(|outcome| {
+            outcome.resource.as_deref() == Some("config.toml")
+                && outcome.effects.contains(&LifecycleEffect::BackupCreated)
+        }));
+
+        let uninstall = handle_uninstall_with_result(&config, Some("sample"), false, false, false)
+            .await
+            .unwrap();
+        assert_eq!(uninstall.summary().changed, 1);
+        assert!(
+            uninstall.outcomes[0]
+                .effects
+                .contains(&LifecycleEffect::BackupRestored)
+        );
+        assert_eq!(fs::read(&destination).await.unwrap(), b"original\n");
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn future_app_manifest_fails_before_destination_mutation() {
+        let dir = make_temp_dir().await;
+        let category_dir = dir.join("presets/app/sample");
+        let destination_root = dir.join("destination");
+        fs::create_dir_all(&category_dir).await.unwrap();
+        fs::write(
+            category_dir.join("shine.toml"),
+            format!(
+                "description = \"Sample\"\ndest = {:?}\n\n[[files]]\nsource = \"config.toml\"\n",
+                destination_root.to_string_lossy()
+            ),
+        )
+        .await
+        .unwrap();
+        fs::write(category_dir.join("config.toml"), b"managed\n")
+            .await
+            .unwrap();
+
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        fs::write(
+            config.shine_dir().join("app-manifest.toml"),
+            "schema_version = 2\n",
+        )
+        .await
+        .unwrap();
+
+        let error = handle_install_with_result(&config, Some("sample"), false, false)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("newer than this Shine supports"));
+        assert!(!destination_root.join("config.toml").exists());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn embedded_install_dry_run_previews_cache_without_extracting_it() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+
+        let result = handle_install_with_result(&config, Some("git"), true, false)
+            .await
+            .unwrap();
+
+        let cache = result
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.resource.as_deref() == Some("preset-cache"))
+            .unwrap();
+        assert_eq!(cache.status, LifecycleStatus::Previewed);
+        assert_eq!(cache.effects, [LifecycleEffect::CacheWritePreviewed]);
+        assert!(!config.presets_dir().join("app/git").exists());
+        assert!(!config.shine_dir().join("app-manifest.toml").exists());
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn future_app_manifest_rejects_embedded_cache_extraction() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::write(
+            config.shine_dir().join("app-manifest.toml"),
+            "schema_version = 2\n",
+        )
+        .await
+        .unwrap();
+
+        let error = handle_install_with_result(&config, Some("git"), false, false)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("newer than this Shine supports"));
+        assert!(!config.presets_dir().join("app/git").exists());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -333,12 +599,20 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, None, false, false).await.unwrap();
-        let manifest_first = AppManifest::load(config.shine_dir()).await.unwrap();
+        handle_install(&config, Some("git"), false, false)
+            .await
+            .unwrap();
+        let manifest_first = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let count_first = manifest_first.entries.len();
 
-        handle_install(&config, None, false, false).await.unwrap();
-        let manifest_second = AppManifest::load(config.shine_dir()).await.unwrap();
+        handle_install(&config, Some("git"), false, false)
+            .await
+            .unwrap();
+        let manifest_second = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
 
         assert_eq!(
             manifest_second.entries.len(),
@@ -365,6 +639,9 @@ mod tests {
                 "description = \"hook test\"\n\
 dest = \"{dest_root}\"\n\
 post_install = {{ command = \"/bin/sh\", args = [\"-c\", \"touch {marker}\"] }}\n\n\
+[permissions]\n\
+schema_version = 1\n\
+commands = [\"/bin/sh\"]\n\n\
 [[files]]\n\
 source = \"file.conf\"\n",
                 marker = marker.display()
@@ -378,8 +655,8 @@ source = \"file.conf\"\n",
 
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
-        config.allow_app_hooks = true;
         fs::create_dir_all(config.shine_dir()).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "app/hooktest").await;
 
         // First install writes the file → post_install fires.
         handle_install(&config, Some("hooktest"), false, false)
@@ -445,10 +722,19 @@ source = \"file.conf\"\n",
         let mut config = Config::new_for_test(&dir);
         config.is_external_presets = true;
         config.env.insert("RUN".to_string(), "yes".to_string());
-        handle_install(&config, Some("generated"), true, false)
+        let result = handle_install_with_result(&config, Some("generated"), true, false)
             .await
             .unwrap();
 
+        assert!(result.dry_run);
+        assert_eq!(result.summary().previewed, 1);
+        assert!(result.outcomes.iter().any(|outcome| {
+            outcome.effects
+                == vec![
+                    LifecycleEffect::ResourceWritePreviewed,
+                    LifecycleEffect::ReceiptWritePreviewed,
+                ]
+        }));
         assert!(!marker.exists());
         assert!(!destination.exists());
         fs::remove_dir_all(&dir).await.unwrap();
@@ -487,6 +773,8 @@ source = \"file.conf\"\n",
             format!(
                 "description = \"Docker Desktop proxy settings\"\n\
 dest = \"{dest_root}\"\n\n\
+[permissions]\n\
+schema_version = 1\n\n\
 [[files]]\n\
 source = \"settings-store.jsonc\"\n\
 target = \"settings-store.json\"\n\
@@ -566,7 +854,9 @@ managed_keys = [\"proxy\", \"containersProxy\"]\n"
             })
         );
 
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest.entries.is_empty(),
             "docker-desktop uninstall should clear manifest entries"

@@ -17,8 +17,8 @@ list_mode = "files"
 # (CVR is cross-platform). bun is an external prerequisite (https://bun.sh).
 #
 # The real logic (rendering the active subscription's four bound enhancement
-# files + refreshing rule-providers) lives in the artifact because only it receives the `[env]` table and
-# SHINE_APP_OVERLAY_DIR. The hooks below do NOT run that logic directly — they
+# files + refreshing rule-providers) lives in the artifact because only it receives its explicit
+# `[artifact].env` allowlist and SHINE_APP_OVERLAY_DIR. The hooks below do NOT run that logic directly — they
 # re-invoke `shine app artifact apply clash-verge` so it runs automatically after
 # `shine app install`/`shine upgrade` changes merge.yaml. (No recursion: build
 # fires neither install nor upgrade hooks.) Requires `shine` on PATH; external
@@ -26,16 +26,31 @@ list_mode = "files"
 # are ordinary managed files, so their updates trigger the same hook and
 # provider refresh as merge.yaml updates.
 post_install = [
-  { command = "shine", args = ["app", "artifact", "apply", "clash-verge"], show_output = true },
+  { command = "shine", args = ["app", "artifact", "apply", "clash-verge", "--yes"], show_output = true },
 ]
 post_upgrade = [
-  { command = "shine", args = ["app", "artifact", "apply", "clash-verge"], show_output = true },
+  { command = "shine", args = ["app", "artifact", "apply", "clash-verge", "--yes"], show_output = true },
 ]
 
 [artifact]
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
+env = ["CLASH_PROFILES_FILE", "CLASH_CONTROLLER_URL", "CLASH_CONTROLLER_TOKEN"]
+
+[permissions]
+schema_version = 1
+filesystem = [
+  { access = ["execute"], base = "preset", path = "build.ts" },
+  { access = ["execute"], base = "preset", path = "unbuild.ts" },
+]
+network = [{ scope = "any" }]
+commands = ["bun", "shine"]
+environment = [
+  { name = "CLASH_PROFILES_FILE", sensitivity = "plain" },
+  { name = "CLASH_CONTROLLER_URL", sensitivity = "plain" },
+  { name = "CLASH_CONTROLLER_TOKEN", sensitivity = "secret" },
+]
 
 # The single composite enhancement payload, installed verbatim (plain Copy — no
 # templating, so the file is always valid YAML). build.ts splits its keys into

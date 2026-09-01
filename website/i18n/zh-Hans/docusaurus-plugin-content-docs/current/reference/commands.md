@@ -32,15 +32,16 @@ shine upgrade app/starship
 | `shine init [--yes]` | 在当前项目创建 `shine.config.toml` |
 | `shine shell <SUBCOMMAND>` | 管理 Shell 命令预设 |
 | `shine app <SUBCOMMAND>` | 管理应用配置预设 |
-| `shine install <TARGET> [--replace-managed]` | 安装或修复一个 app/shell target |
-| `shine uninstall <TARGET> [--force] [--purge] [--dry-run]` | 卸载一个 app/shell target |
+| `shine install <TARGET> [--replace-managed] [--yes]` | 安装或修复一个 app/shell target |
+| `shine uninstall <TARGET> [--force] [--purge] [--dry-run] [--yes]` | 卸载一个 app/shell target |
 | `shine completions <SUBCOMMAND>` | 生成或安装 Shell 补全 |
 | `shine list [--available [KIND]]` | 列出已安装资源，或用 `app`、`shell`、`sys` 浏览可用资源目录 |
 | `shine info <TARGET> [--diff] [--verbose]` | 查看可用或已安装的 app/shell target，或 `sys/<ITEM>` |
 | `shine update [TARGET]` | 检查受管内容和 Shine 稳定版更新 |
-| `shine upgrade [TARGET]` | 应用全部或指定 app、shell、受管 sys 更新 |
+| `shine upgrade [TARGET] [--yes]` | 应用全部或指定 app、shell、受管 sys 更新 |
 | `shine preset <SUBCOMMAND>` | 管理预设来源、overlay、导出和 Git 同步 |
 | `shine state migrate [--dry-run]` | 迁移并清理旧版 Shine 运行时状态 |
+| `shine trust <SUBCOMMAND>` | 查看、授予、列出或撤销 target-scoped 外部代码信任 |
 | `shine self <SUBCOMMAND>` | 安装或升级 Shine 程序 |
 | `shine serve <SUBCOMMAND>` | 通过本地 HTTP 服务发布 `~/.shine/http/` 下的资源 |
 | `shine env <SUBCOMMAND>` | 管理预设变量、workspace 环境、代理与密钥 |
@@ -56,36 +57,135 @@ shine upgrade app/starship
 ```text
 shine shell list
 shine shell info <CATEGORY|COMMAND|CATEGORY/COMMAND>
-shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed]
-shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run]
+shine shell install [<CATEGORY>|<CATEGORY>/<COMMAND>] [--dry-run] [--replace-managed] [--yes]
+shine shell recover [--yes]
+shine shell uninstall [<CATEGORY>|<CATEGORY>/<COMMAND>] [--purge] [--dry-run] [--yes]
 
 shine app list
-shine app info <CATEGORY>
-shine app install [CATEGORY] [--dry-run] [--replace-managed]
-shine app refresh <CATEGORY> [FILE] [--force]
-shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run]
-shine app artifact apply <APP_ID>
-shine app artifact remove <APP_ID>
+shine app info <CATEGORY> [--run-generators] [--diff]
+shine app install [CATEGORY] [--dry-run] [--replace-managed] [--yes]
+shine app refresh <CATEGORY> [FILE] [--force] [--yes]
+shine app recover [--yes]
+shine app uninstall [CATEGORY] [--force] [--purge] [--dry-run] [--yes]
+shine app artifact apply <APP_ID> [--yes]
+shine app artifact remove <APP_ID> [--yes]
 ```
 
-`--replace-managed` 会覆盖安装后被用户修改的受管内容。先使用 `shine info <TARGET> --diff` 检查差异。`app uninstall --force` 会删除被用户修改过的受管文件，执行前应加 `--dry-run` 预览。
+`--replace-managed` 会覆盖安装后被用户修改的受管内容。先使用 `shine info <TARGET> --diff` 检查差异。`app uninstall --force` 会删除被用户修改过的受管文件，执行前应加 `--dry-run` 预览。对于符合条件的静态 Copy，该强制删除会写入 journal，并把修改后的文件作为同目录 rollback material 暂存到 receipt commit；管理员静态 Copy 的创建、原地更新和移除通过 privileged write、move、mode 还原与 cleanup 使用同一 journaled transaction。JSON merge 的 install、原地 update、普通 uninstall 和强制 uninstall 也会按顶层 key ownership 写入 journal；其它安装策略仍使用原有 lifecycle 路径。
 
 `shell install --dry-run` 会解析 metadata、部署来源、Bun 策略和计划中的命令入口，但不会提取或
 快照预设、渲染模板、创建链接、写入 manifest 或修改 shell profile。
 
+首次安装命令时，Shine 会在写入 Unix symlink、Unix Bun/live launcher 或 Windows
+PowerShell/cmd 双 shim 之前记录 launcher creation journal。只有精确的 command receipt
+持久化后才会清理 journal，shell profile 编辑发生在这之后。如果操作在此期间中断，后续修改型
+Shell 命令会停止并提示恢复。运行 `shine shell recover` 可审阅独立的 recovery Plan。没有匹配
+receipt 时，它只移除 target 或内容 hash 与 mode 仍精确匹配的 transaction-created launcher
+resource；路径发生变化会阻塞恢复并保留现状。精确 receipt 已持久化时，恢复保留 launcher，只
+清理 stale journal。确认默认是 No；非交互终端必须传入 `--yes`。
+
+install 与 upgrade 更新 launcher 时，如果旧 command receipt 和所有 launcher resource 仍精确匹配，
+也会写入 journal。发生变化的旧资源会先移到同目录的规范 `.shine.rollback` 路径。新 receipt
+持久化前，恢复只还原精确匹配的旧资源；receipt commit 后，恢复保留精确 replacement，仅移除未修改
+的 rollback material。replacement、rollback resource 或 receipt 发生冲突都会阻塞恢复。foreign
+或已经被修改的 launcher 不会继承这套 rollback proof。
+
+已批准的 uninstall 只会在旧 receipt 与重建出的每个 launcher resource 仍精确匹配时记录 launcher
+removal journal。每个 Unix launcher 或 Windows shim 都会在 receipt 删除前移到同目录
+`.shine.rollback`。receipt 删除后，必须另有持久化的 journal marker 确认 commit，才能清理
+rollback。如果 receipt 已删除但 marker 尚未写入，`shine shell recover` 会先重建旧 receipt，再
+还原精确资源。marker 持久化后，恢复会保留已完成的卸载，只移除未修改的 rollback material。
+launcher、rollback 路径或 receipt 冲突发生变化时，恢复会阻塞并保留现场。
+
+外部预设使用 snapshot 模式且选中命令无需 rendered output 时，install 与 upgrade 也会把共享
+category snapshot 的变化写入 journal。Action 使用确定性的 category 同级 stage/rollback 目录，
+以及独立于 receipt 是否相等的正向 commit marker。marker 前，`shine shell recover` 会先恢复旧的
+选中 receipt 集合，再评估依赖 launcher，随后还原精确旧树；marker 后保留 desired 树，只移除精确
+rollback。active、stage 或 rollback 树被修改都会阻塞恢复。snapshot uninstall 使用独立 removal
+Action，并遵循相同的 receipt/marker 边界。
+
+对于内置预设，install 会在依赖它的 rendered 文件或 launcher 变化前，把本次实际 category cache
+写入记录到 journal。缺失文件与 upgrade 或 `--replace-managed` 将要更新的差异文件会分别绑定前后 hash/mode 和同目录
+rollback；跳过及无关 cache 文件不属于本 Action。正向 marker 前，恢复会还原旧 receipt 与精确旧文件，
+或移除精确匹配的事务新建文件；marker 后保留 desired 文件，只清理精确 rollback。destination 不是普通
+文件、rollback 被占用或修改、cache 文件被修改、或 receipt 冲突时，整个 cache Action 都会阻塞。
+cache 卸载使用独立 removal Action；正向 marker 前只还原精确匹配的选中文件与 receipt。
+
+install 或 upgrade 创建或更新 transformed output 时，Shine 也会先把 rendered 文件写入 journal，
+再处理依赖它的 launcher。已有文件会移到同目录的规范 `.shine.rollback`；journal 绑定文件前后的
+hash/mode、所有消费该路径的 command receipt transition，以及独立的正向 commit marker。marker 前，
+恢复会还原旧 receipt 与精确旧文件，或移除精确匹配的事务新建文件；marker 后保留 desired 文件，
+只清理精确 rollback。destination 不是普通文件、destination 或 rollback 被修改、rollback 路径被占用，
+或 receipt 冲突时都会阻塞恢复。卸载选择全部 consumer receipt 时，也会先把精确 rendered 文件移到
+rollback，再删除 receipt；receipt 缺失只有在正向 marker 持久化后才代表可清理。marker 前，恢复会
+重建缺失 receipt 并还原精确文件；marker 后保持删除结果，只清理精确 rollback。未选择的 consumer
+与无关 rendered 文件保持不变。执行期 live rendering 与 lifecycle/recovery 使用同一 lock，pending
+journal 存在时拒绝运行，同时继续保持 invocation-scoped atomic write。profile reconciliation 使用
+独立的 sentinel-owned Action；恢复只把记录的 `# >>> shine >>>` block transition 合并到当前 profile，
+并保留无关编辑。
+
+不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation、App refresh 和 artifact apply/remove
+都会先显示绑定快照的安全 Plan，并以默认 No 询问一次。`--yes` 仍会完整显示并重新校验 Plan，
+只跳过提示；重定向输出等非交互执行必须传入该参数。在提供 dry-run 的命令中，`--yes` 与
+`--dry-run` 互斥；dry-run 保持原有预览格式，不是已批准 Plan。
+
 `app refresh` 只处理 manifest 已跟踪的生成式文件；失败时保留上次成功内容。`app artifact apply/remove` 显式运行预设声明的外部集成脚本，Shine 不会把 apply 隐式作为普通安装或升级的一部分。
+
+如果受支持的 App creation、原地静态 Copy update，或未修改静态 Copy 的普通
+removal 在 operation journal 写入后中断，之后需要安全
+Plan 的 App mutation 命令会停止并
+提示恢复，不会隐式修改这段中断状态；只读检查也不会恢复或丢弃 journal。运行
+`shine app recover` 可以审阅独立的 recovery Plan。中断后被用户修改的文件会保留；对于
+backup-aware creation，只有 destination 与固定 backup 仍匹配 journal 绑定的原始/目标 fingerprint
+时才恢复 backup。原地 managed update 会把前一个受管文件临时移动到
+`<name>.shine.rollback`；只有它仍匹配 journal 绑定的旧 fingerprint 时，恢复才会还原或移除它。
+普通 removal 中，精确的旧 receipt 仍存在时会还原未修改的 rollback material；receipt 移除持久化后
+还必须有 journal 中对应的 commit 状态，才会移除该未修改 material。receipt 缺失但没有这个状态时
+恢复会重建旧 receipt，并还原未修改的文件。两种可恢复情况都绑定原 mode。
+对于需要恢复 backup 的 removal，Shine 先把受管文件移到 `.shine.rollback`，再把 `.shine.bak` 移到
+destination。receipt commit 前，恢复只会反转这三个路径的精确安全状态，同时恢复受管 destination
+与 persistent backup；commit 后则保留 destination 中精确匹配的用户原文件，只移除未修改的受管
+rollback material。两个文件的 mode 与内容 fingerprint 都必须与 journal 一致。
+强制移除被用户修改过的静态 Copy 会使用独立 action：receipt commit 前的恢复会还原
+精确的修改后文件并反转可选 backup restoration；commit 后的恢复会保留已完成卸载，只移除与所
+捕获修改后 mode/hash 匹配的 rollback material。
+JSON merge recovery 只把精确的完整 rollback 文件用作旧声明 key 值的来源。它会在当前 object
+中还原或移除这些 key，不会替换中断后发生变化的其它值。uninstall receipt commit 后，它会保留
+用户所有的当前 object，只移除精确匹配的 rollback material。
+管理员静态 Copy 的 recovery 仅在精确恢复状态需要 write、move、remove 或改变受保护路径 mode 时
+包含 administrator permission。Shine 会在 recovery Plan 获批后请求授权；仅修复 receipt 或清理
+stale journal 不会请求。
+中断后的 rollback material 可能包含敏感受管配置。ownership receipt 已持久化时，Shine 保留受管
+destination 与持久 backup，只清理 stale transaction state。恢复确认默认是 No；没有交互终端时
+必须传入 `--yes`。journal 缺失或无效、action 不受支持，或 destination/backup/rollback 已被修改时，
+命令返回非零且不执行 mutation。已有固定 backup 或 update rollback path 也会阻塞相应的受支持
+Plan，不会被替换；removal rollback path 也遵循相同规则。
 
 ## 状态、更新与补全
 
 ```text
 shine list [--available [<app|shell|sys>]]
-shine info <TARGET> [--diff] [--verbose]
-shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release]
-shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale]
+shine info <TARGET> [--diff] [--verbose] [--run-generators]
+shine update [TARGET] [--pull] [--diff] [--verbose] [--refresh-release] [--run-generators]
+shine upgrade [TARGET] [--pull] [--verbose] [--prune-stale] [--yes]
 shine state migrate [--dry-run]
+shine trust inspect <app/CATEGORY|sys/ITEM>
+shine trust grant <app/CATEGORY|sys/ITEM> [--yes]
+shine trust list
+shine trust revoke <app/CATEGORY|sys/ITEM>
 shine completions install
 shine completions <bash|zsh|powershell>
 ```
+
+Trust enrollment 从当前不可变 Preset snapshot 推导范围。`--yes` 只用于非交互确认当前展示的
+enrollment，不会批准之后的 lifecycle Plan。
+
+`app info`、顶层 `info` 和 `update` 默认都不执行 App generator。无法静态确定动态预期内容时，
+这些命令会醒目提示 generator 尚未评估，不会把已安装文件误报为最新。传入
+`--run-generators` 后，Shine 会显式执行自动和手动 generator，在内存中应用 transform 并计算
+状态或 `--diff`，但不会写入目标文件或 manifest。全局 `update --run-generators` 会评估所有
+已安装 App 类别，定向 info/update 只评估选中的 App。外部 generator 仍需匹配当前代码与权限的
+`shine trust grant`；某项评估失败时，其余 generator 仍会继续，最后统一报告不完整结果。
 
 - `update --refresh-release` 跳过 24 小时版本检查缓存。`update` 默认复用 `shine list` 的
   Homebrew 风格分栏：交互终端横向排列，重定向输出则保持每行一个 target；末尾只提示
@@ -104,7 +204,14 @@ shine completions <bash|zsh|powershell>
   已包含详细信息，因此不会增加更多条目。定向检查不会检查 Shine 版本，仍不能与
   `--refresh-release` 组合使用。
 - `update/upgrade --pull` 会先同步 Git 管理的来源并重新加载配置。
-- `upgrade --prune-stale` 移除预设来源中已不存在的旧受管 app 文件。
+- 无 target 的 `upgrade` 会一次展示 Shell、App 和已启用 managed Sys 的 Plan，只确认一次，
+  并在写入前复核全部 Plan；它不再隐式修改 Sys profile 的启用状态或组合内容。
+- `upgrade --prune-stale` 通过 App operation journal 移除预设来源中已不存在且未修改的受管
+  App 条目。用户修改过的 stale 内容仍会保留；移除中断时使用 `app recover` 处理。
+- App 静态 Copy 的 effective destination 变化时，会通过一个 journaled 的旧 receipt/新 receipt
+  事务完成 relocation。旧受管内容必须未修改且新路径必须为空；中断时使用 `app recover` 处理。
+- App JSON merge 的 effective destination 变化时，会使用 key-owned 双 destination transaction。
+  recovery 只还原/移除两端各自声明的顶层 key，并保留两个路径中的其它当前设置。
 - `upgrade` 默认逐项显示实际更新的 App 类别、Shell 类别或受管系统项，并按用户可见
   target 各计数一次；app 行会附带变更文件数。`--verbose` 会展开 app 文件和成功 hook 的
   输出，还会显示已是最新或跳过的项目，以及 snapshot、template、Bin Link 等 Shell
@@ -119,20 +226,39 @@ shine completions <bash|zsh|powershell>
 shine sys list [--all]
 shine sys info <ITEM>
 shine sys status
-shine sys bootstrap [ITEM]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy]
-shine sys profile enable <ITEM> [--dry-run]
-shine sys profile disable <ITEM> [--dry-run]
-shine sys apply [ITEM] [--dry-run]
-shine sys uninstall <ITEM> [--dry-run]
+shine sys recover [--yes]
+shine sys bootstrap [ITEM]... [--item <ITEM>]... [--preset <PROFILE>] [--dry-run] [--force-profile] [--proxy] [--yes]
+shine sys profile enable <ITEM> [--dry-run] [--yes]
+shine sys profile disable <ITEM> [--dry-run] [--yes]
+shine sys apply [ITEM] [--dry-run] [--yes]
+shine sys uninstall <ITEM> [--dry-run] [--yes]
 ```
 
-位置参数 item 与 `--preset` 互斥。`sys bootstrap` 只确保选中的软件存在，并启用其声明的 shell 集成；重复运行不会升级软件。`sys profile enable/disable` 只修改 Shine 自己管理的集成内容。第三方软件升级请使用其包管理器或上游工具；独立受管系统项可通过 `shine upgrade sys/<ITEM>` 收敛到当前预设状态。
+位置参数 item、重复的 `--item` 与 `--preset` 三者互斥。执行变更前，`sys bootstrap` 会展示绑定
+输入快照的安全 Plan，并以默认否请求确认。非交互环境使用 `--yes`；它仍会展示并重新验证
+Plan，且不能与 `--dry-run` 同时使用。Bootstrap 只确保选中的软件存在，并启用其声明的 shell
+集成；重复运行不会升级软件。`sys profile enable/disable` 使用同一套 Plan 批准契约，并且只修改
+Shine 自己管理的集成内容。第三方软件升级请使用其包管理器或上游工具；独立受管系统项可通过
+`shine upgrade sys/<ITEM>` 收敛到当前预设状态。
+
+受管文件与 split-DNS mutation，以及显式 `sys profile enable/disable` 修改的 shell sentinel，都会在
+资源变化前写入 journal，并且只有精确 Sys receipt 持久化后才提交。pending journal 会阻塞后续修改型
+Sys 命令。运行 `shine sys recover` 可审阅新的 recovery Plan：receipt commit 前只还原 fingerprint
+仍匹配的旧状态，commit 后保留 desired 状态并清理精确 rollback。resource、rollback material、
+owned sentinel block 或 receipt 被修改时，恢复会阻塞并保留现场。生成的 active/base/new/merge
+profile 文件继续使用三方合并，并会明确显示为非事务化；bootstrap script 与 package/provider 调用仍
+明确属于 opaque effect，不在这套恢复边界内。
 
 ## 预设来源与定制
 
 ```text
 shine preset new <app|shell|sys> [--force]
+shine preset schema [--format <text|json>]
 shine preset validate [PATH] [--format <text|json>]
+shine preset lint [PATH] [--format <text|json>] [--deny-warnings]
+shine preset plan <CATEGORY> --platform <macos|linux|windows> [--format <text|json>]
+shine preset test <CATEGORY> [--format <text|json>]
+shine preset pack <CATEGORY> --output <FILE> [--force] [--format <text|json>]
 shine preset export [DIR] [--force]
 shine preset copy <app|shell|sys>/<NAME> [--force]
 shine preset link <PATH> [--create] [--live]
@@ -147,11 +273,56 @@ shine preset pull
 导出整套内置预设。外部 Shell 预设默认以快照方式运行，来源内容变更需通过
 `shine upgrade` 应用；`--live` 只适合预设开发，令源内容在下一次调用时生效。
 
+`preset schema` 直接从当前 binary 内 shipped 的 report、fixture 与 bundle Rust type，以及
+`validate`、`lint`、`plan`、`test`、`pack`、`schema` 的 live Clap help 生成 reference schema v1。
+文本输出列出所含 contract；`--format json` 在一个 JSON value 中输出命令 help 与 JSON Schema
+draft 2020-12 文档。它不会复制完整 App/Shell/Sys TOML grammar；metadata 是否接受仍以
+`preset validate` 为准。该命令不会读取或初始化配置。
+
 `preset validate` 接受预设仓库根目录、`app|shell|sys/<name>` 类别目录或其中的
 `shine.toml`；默认检查当前目录。它会静态检查所有平台分支和引用文件，不读取当前激活的预设
 来源、不初始化 Shine 配置、不检查更新、不联网，也不运行任何预设代码。输入或类别无效时退出码
 为 1，warning 不会导致失败。JSON 输出固定使用 `schema_version: 1`，不含颜色，也不会在 JSON
 文档之外输出说明文字。Git 管理来源的安全限制及完整流程见[自定义预设](../guides/custom-presets.md)。
+
+`preset lint` 接受与 validate 相同的仓库、类别和 manifest 输入，并复用已校验的不可变 metadata；
+其作者质量与可移植性 finding 不会改变 runtime validity。报告 schema v1 覆盖缺少 category/resource
+description、legacy metadata、过宽的 `network any` 声明，以及疑似包含私有机器 HOME 的绝对
+permission/destination 路径。报告只显示逻辑 target/resource，绝不打印疑似私有路径。warning 默认
+不导致失败；`--deny-warnings` 会在报告有效但不 clean 时返回退出码 1。静态校验错误始终失败。
+
+`preset plan` 只接受一个类别目录或其中的 `shine.toml`。它先复用静态校验，再针对所选平台和空的
+内存宿主生成假设性首次安装报告。其假设刻意不包含已安装 receipt、destination、环境变量或密钥值、
+trust grant、已检测命令和管理员状态。App 与 Shell 类别展示 install step；Sys 类别会按需分别展示
+managed-resource 与 bootstrap section。该命令不会初始化配置、访问真实 HOME、运行任何预设代码，
+也不会生成可用于 apply 的批准。`ready: false` 只表示在这些假设下存在 blocker，本身不会让有效报告
+以失败退出；非法输入或静态校验失败仍返回退出码 1。JSON 输出使用独立的 `schema_version: 1`。
+
+`preset test` 从单个类别读取 `shine.test.toml`，并让每个声明 case 复用相同的 synthetic authoring
+plan 路径。Fixture schema v1 要求唯一 case name 与 platform。可选 `[cases.host]` 可声明环境变量名
+存在、opaque `secret_versions`、位于 `home|shine|data-dir|bin|absolute` 下的 synthetic file、已检测
+命令名、管理员状态、精确 external-code trust selection，以及 App/Shell/Sys receipt document。
+Receipt 文本可使用 `${HOME}`、`${SHINE}`、`${DATA_DIR}` 与 `${BIN}` placeholder，并且必须能按
+当前 runtime manifest schema 解析。Fixture value 不会进入报告。
+
+`[cases.expect]` 可断言 `valid`、`ready`，以及名为 `plan_kinds`、`diagnostic_codes`、
+`step_diagnostic_codes`、`actions`、`required_permissions`、`missing_permissions` 与
+`permission_diagnostic_codes` 的精确排序集合。缺失字段表示不做该断言；显式空数组表示断言没有值。
+JSON case result 会包含对应的全部 actual set，供 repair loop 使用。Fixture 不能声明 setup、teardown、
+待运行命令、网络活动或可执行代码。解析/schema 错误或任一 case 失败都会返回退出码 1；JSON 报告
+schema v1 使用稳定 failure code，而非 terminal prose。
+Permission identity 采用 `administrator`、`command:<program>`、`network:any`、
+`network:host:<host>`、`environment:<plain|secret>:<name>`、
+`filesystem:<read|write|remove|execute>:<logical-path>` 或
+`system:<capability>[:<resource>]`。
+
+`preset pack` 校验单个类别，并在类别外原子写入确定性 bundle。Bundle v1 是未签名 tar.gz，包含
+`shine.bundle.json`，以及按顺序位于 `preset/<kind>/<name>/` 下的文件；manifest 记录逻辑路径、
+规范化 `0644`/`0755` mode 与 SHA-256。checkout root、枚举顺序、uid/gid、时间戳和
+`shine.test.toml` 都不影响 bundle bytes。打包会拒绝 `node_modules`、symlink、私钥文件名/material、
+私有 HOME 路径，以及 metadata 未引用的 executable/shebang 文件，并且不会打印疑似数据。已有输出
+需要 `--force`；输出位于类别内部时始终拒绝。报告 schema v1 包含最终 archive size 与 SHA-256。
+该命令不负责签名或发布到 registry。
 
 ## 环境变量与密钥
 

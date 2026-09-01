@@ -7,7 +7,7 @@ and feature-specific authoring guidance belong in `docs/kb/`.
 `shine` is a self-contained Rust CLI that bundles shell scripts, app config presets, and OS
 bootstrap presets into one binary (`rust-embed`), installs them under `~/.shine/`, and supports
 safe, manifest-tracked uninstall. The workspace root is the publishable `shine-cli` package
-(binary plus the `cli` library); `utils/` is the reusable `shine-core` package.
+(binary plus the `cli` library); `core/` is the reusable `shine-core` package.
 
 ## Required workflow
 
@@ -37,6 +37,7 @@ Full KB maintenance protocol: [`docs/kb/README.md`](docs/kb/README.md).
 | Module ownership and command routing | [`docs/kb/architecture/module-map.md`](docs/kb/architecture/module-map.md) |
 | Cross-module data flows | [`docs/kb/architecture/data-flows.md`](docs/kb/architecture/data-flows.md) |
 | Safety and behavioral invariants | [`docs/kb/architecture/invariants.md`](docs/kb/architecture/invariants.md) |
+| Declarative action/recovery design and executable inventory | [`docs/declarative-action-recovery-prd.md`](docs/declarative-action-recovery-prd.md), [`docs/kb/executable-preset-inventory.md`](docs/kb/executable-preset-inventory.md) |
 | Platform coverage, gaps, and implementation priorities | [`docs/kb/architecture/platform-support.md`](docs/kb/architecture/platform-support.md) |
 | Shell, app, and sys preset authoring | [`docs/kb/preset-authoring.md`](docs/kb/preset-authoring.md) |
 | Design rationale | [`docs/kb/decisions/`](docs/kb/decisions/) |
@@ -148,13 +149,15 @@ More diagnostic cases: [`operations/troubleshooting.md`](docs/kb/operations/trou
 | Shell deployment and launcher activation | `cli/src/shells/`, `cli/src/bin_links.rs` |
 | System bootstrap and managed resources | `cli/src/sys/` |
 | Config discovery, layering, and save | `cli/src/config/` |
+| External-code trust contracts and global grant store | `core/src/trust.rs`, `core/src/runtime/trust.rs`, `cli/src/trust.rs` |
 | Env, secrets, workspaces, and proxy injection | `cli/src/env/`, `cli/src/secret/` |
 | SSH wrapper, transfer, and secret broker | `cli/src/ssh/` |
 | Preset source/overlay operations | `cli/src/presets.rs`, `cli/src/preset_commands.rs`, `cli/src/git_pull.rs` |
 | Update checks and self-install | `cli/src/update_check/`, `cli/src/self_install.rs` |
+| Declarative actions and recovery foundation | `core/src/action.rs`, `core/src/runtime/action_executor.rs` |
 | Personal task registry | `cli/src/task/` |
 | Embedded assets | `presets/` |
-| Shared library | `utils/` |
+| Shared core | `core/` |
 
 Use the detailed [module map](docs/kb/architecture/module-map.md) for per-file ownership and command
 routing. Use [data flows](docs/kb/architecture/data-flows.md) before changing behavior that spans

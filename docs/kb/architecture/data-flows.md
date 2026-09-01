@@ -4,6 +4,166 @@ End-to-end flows that span multiple modules and are not visible in any single fi
 ownership and the per-command routing table, see [`module-map.md`](module-map.md) — this file only
 records the cross-module sequences and their gotchas.
 
+## Pure security Plan assessment
+
+`shine-core::plan` defines the Phase 3 approval contract used by protected mutation.
+`runtime::planner` consumes one immutable `PresetSnapshot`, a validated App/Shell/managed Sys,
+exact Sys bootstrap, App refresh/artifact, or Sys profile request, captured runtime inputs,
+manifests, receipts, and live resource observations. It emits
+ordered semantic steps plus a required permission set; missing declarations, uncomputable
+permissions, or a blocked step make the Plan non-ready. Planning cannot invoke host mutation or
+Preset code, and its output carries no content, env values, secret plaintext, raw errors, or raw
+command arguments.
+
+The effective Preset snapshot hashes sorted logical paths, bytes, and trust layers without hashing
+its physical checkout root. Target selection from immutable request/Preset input occurs before
+host-state reads. Filesystem and split-DNS observation traits expose manifests, receipts, live
+resources, launchers, and system state without exposing write/process/privileged/apply methods.
+Planners hash every outcome-affecting observation using the same framed SHA-256 builder. Plain env
+values contribute hashes; secrets contribute only caller-supplied opaque handles or versions.
+
+```text
+validated target + immutable Preset snapshot
+    → observation-only manifest/receipt/live-state capture
+    → ownership and lifecycle assessment
+    → merge typed effects + explicit target permissions
+    → ordered payload-free PlanV1 + state/Preset digests
+```
+
+Generator, hook, artifact, bootstrap, and profile-code triggers are modeled as conservative
+`execute` plus potential resource steps; the code is never run during planning and missing or stale
+target-scoped trust remains a blocker. A supported receipt can drive uninstall after source
+disappearance, but cannot recreate missing teardown code.
+CLI review creates approval for one exact ready Plan. Apply deliberately follows:
+
+```text
+capture current source/state → regenerate Plan → match approved fingerprint + permissions
+    → execute existing Core lifecycle → return LifecycleResultV1
+```
+
+App, Shell, managed Sys install/upgrade/uninstall, exact Sys bootstrap, App refresh/artifact, and
+Sys profile enable/disable route through this flow. Untargeted `shine upgrade` renders the three
+final lifecycle Plans together, confirms once, and prevalidates all three before protected mutation
+starts. `upgrade --pull` pulls and reloads first. Existing dry-run/status remain separate
+preview/inspection paths. Scoped external-code trust, ownership, and administrator authorization
+remain additional gates.
+
+Sys bootstrap uses the dedicated `sys-bootstrap` Plan operation rather than a lifecycle install.
+Interactive or profile selection resolves to an exact ordered item list before planning. The pure
+planner observes command/path presence without executing detection, binds run-manifest,
+environment/proxy and profile state, and derives package-provider, script, administrator and
+profile permissions. Approved execution re-plans before any detection command, installer,
+materialization, profile write, or receipt mutation. Its existing domain report remains separate
+from `LifecycleResultV1`.
+
+Permission declaration schema v1 is parsed from the same immutable snapshot: one App category
+table, one table per Shell command/platform variant, and one table per Sys item. Static validation
+checks version, placement, structured paths, payload-free identities, and duplicates without
+executing Preset code. Typed metadata continues to describe Core-bounded effects; explicit tables
+record additional capabilities. Pure planners combine both sources into the required/declared
+resolution used by `PlanV1`; missing or uncomputable capabilities make that Plan non-ready and
+protected execution fails closed.
+
+## Preset authoring Plan report
+
+`shine preset plan` is routed before runtime config initialization and background update checks.
+Core resolves exactly one category directory or manifest, captures one immutable external snapshot,
+and runs static validation against that snapshot. Only a valid category proceeds to planning.
+
+```text
+category path + explicit platform
+    → one immutable external Preset snapshot
+    → same-snapshot all-platform static validation
+    → deterministic empty RuntimeContext + InMemoryHost
+    → existing App/Shell/managed-Sys/bootstrap planner
+    → authoring report (assumptions + steps + permissions + blockers)
+```
+
+App and Shell use a first-install lifecycle request. Sys partitions the validated manifest into
+managed and init items, then emits separate managed-install and bootstrap sections. The synthetic
+context contains no env values, secret versions, trust grants, detected commands, manifests,
+destinations, or administrator state, so related blockers remain visible. The output deliberately
+drops source/state digests and fingerprints: it is not a security Plan approval and cannot enter an
+apply path. Planning may perform only in-memory filesystem or split-DNS observation and never
+process, network, privilege, or mutation operations.
+
+## Preset lint
+
+`shine preset lint` shares source-scope capture and all-platform validation with `preset validate`.
+Only a validation-clean immutable snapshot reaches lint policy. Core loads the already-authoritative
+App, Shell, and Sys models for each relevant platform, deduplicates logical findings, and emits a
+versioned report with no physical checkout or suspected private path.
+
+```text
+repository/category/manifest path → immutable scope → all-platform validation
+    → Core metadata models → quality/portability/minimization rules
+    → stable logical diagnostics → optional --deny-warnings exit policy in CLI
+```
+
+Default lint success means the Preset is valid even when advisory warnings exist. Strict CI is an
+explicit frontend exit policy and does not change report contents or runtime acceptance.
+
+## Preset fixture tests
+
+`shine preset test` loads one category and its versioned `shine.test.toml` from the same immutable
+snapshot. Each unique named case selects a platform, materializes only declared observations into a
+fresh `InMemoryHost` and isolated context, derives requested trust grants from the exact current code
+requirements, invokes the synthetic authoring Plan flow, and compares only declared structured
+expectations. Missing expectation fields are ignored; explicit lists compare as sorted sets. Opaque
+secret versions feed `PlanningInputVersions`; their text and all synthetic contents stay out of the
+report. Fixture parsing exposes no executable or real-host setup path.
+
+```text
+category + shine.test.toml → strict fixture schema → platform + bounded host observations
+    → fresh InMemoryHost/context + exact derived trust grants → synthetic authoring report
+    → structured action/permission/diagnostic expectation comparison
+    → stable per-case failure codes + versioned aggregate report
+```
+
+## Preset schema reference
+
+`shine preset schema` combines Core-generated JSON Schemas with help rendered from the current Clap
+command tree. The CLI adds presentation metadata only; it does not maintain another schema model.
+
+```text
+shipped Rust authoring types → schemars draft 2020-12 documents
+live Clap preset subcommands → generated long help
+    → versioned deterministic reference JSON or compact text index
+```
+
+## Preset pack
+
+Packing validates one immutable category snapshot, then separately walks the physical category with
+an observation-only host so ignored trees and symlinks cannot evade policy. After policy checks,
+Core sorts logical files, excludes the author-only fixture, builds the versioned hash/mode manifest,
+and encodes fixed-metadata tar.gz bytes. The CLI performs only the requested atomic output write.
+
+```text
+category → immutable validation → physical policy scan
+    → sorted logical files - shine.test.toml → shine.bundle.json
+    → fixed tar/gzip metadata → bytes + SHA-256 → explicit CLI output
+```
+
+## Scoped external-code trust
+
+`core::runtime::trust` derives requirements only from the immutable logical Preset snapshot. Each
+requirement binds a canonical App/Sys target, capability kind, digest of the relevant code inputs
+and effective trust layers, and the exact target permission set. `core::trust::evaluate_trust`
+matches that requirement against versioned grants without consulting project configuration.
+
+```text
+immutable code inputs + trust layers + declared permissions
+    → TrustRequirementV1
+    → exact match against global owner-only trust.toml
+    → trusted or stable missing/stale decision
+    → decision bound into Plan state → separate one-shot Plan approval
+```
+
+The CLI loads `~/.shine/trust.toml` before constructing `RuntimeContext`. `shine trust grant`
+derives and renders the current requirement, confirms with default No, then atomically stores only
+the reviewed identities. Code, layer, or permission changes do not match. Legacy coarse booleans
+are diagnostic-only and never create grants.
+
 ## Shell install and uninstall
 
 Shell lifecycle targets are either a category (`utils`) or one command in a category
@@ -13,15 +173,93 @@ deployment material so a command can consume sibling resources, while launchers 
 
 Command install filters metadata before transforms and launcher creation, then upserts only the
 selected manifest target. Category install retains the existing replace-category reconciliation.
+For embedded sources, Core derives one payload-free `ReplaceShellCache` action per selected category
+that has actual extraction writes. The action includes missing files and differing existing files
+during upgrade or under `--replace-managed`; skipped and unrelated files stay outside the action.
+Each changed file binds old/new hash and mode plus a canonical same-directory rollback, while the
+category action binds selected command receipt transitions and a positive commit marker. Recovery
+projects the old receipt boundary before dependent rendered/launcher recovery and then reverses only
+exact created or replaced cache files. After commit it keeps desired files and cleans exact rollback.
+For an external snapshot-mode selection with no rendered command output, a changed category tree
+derives one payload-free `ReplaceShellSnapshot` action before launcher actions. The journal binds
+sorted old/new tree identities, deterministic stage/rollback directories, and selected command
+receipt transitions. After saving the desired receipts, Core records a positive commit marker
+before cleaning the exact old tree. Before that marker, recovery projects the previous receipts
+into both planning and execution so dependent launcher actions are assessed at the same old
+boundary, then restores the exact old category tree. Modified tree state blocks the whole recovery.
+For every selected command whose lifecycle transforms produce missing or changed output, Core also
+derives a payload-free `ReplaceShellRenderedFile` action before launcher actions. One file-scoped
+action binds its previous/desired hash and mode, canonical same-directory rollback, all consuming
+command receipt transitions, and a positive commit marker. Recovery projects uncommitted rendered
+receipt transitions back before assessing launchers, then removes an exact new file or restores the
+exact previous file. Once marked committed, it keeps the desired file and cleans only exact
+rollback. Execution-time live rendering remains outside this lifecycle journal.
+See [ADR 0064](../decisions/0064-transactional-external-shell-snapshots.md),
+[ADR 0065](../decisions/0065-transactional-shell-rendered-files.md), and
+[ADR 0066](../decisions/0066-transactional-embedded-shell-cache.md) for the distinct shared-source
+ownership boundaries.
+For a command with no receipt and entirely absent launcher resources, Core derives a payload-free
+`CreateShellLauncher` action, writes `shell-operation-journal.toml`, creates the Unix symlink,
+Unix generated launcher, or Windows shim pair, persists the exact command receipt, and only then
+clears the journal. Profile reconciliation starts after that commit. An interruption blocks later
+Shell lifecycle Plans until `shine shell recover` reviews current receipt and per-resource state;
+recovery removes only unchanged transaction-created resources or preserves an already receipted
+launcher. Install or upgrade may also derive `UpdateShellLauncher` when the command's old receipt
+and every reconstructed launcher resource remain exact. Core journals both receipts, moves each
+changed old resource to its same-directory `.shine.rollback`, writes the replacement, persists the
+new receipt, removes only exact rollback material, and clears the journal. Before receipt commit,
+explicit recovery restores exact old resources; after commit it preserves the replacement and
+cleans only exact rollback material. The Plan observes and grants every platform resource, including
+both Windows shim files. Approved uninstall similarly derives `RemoveShellLauncher` only when the
+old receipt and every reconstructed resource remain exact. Core journals, moves each launcher to
+same-directory rollback, removes the command receipt, records a positive `receipt-committed` marker,
+then cleans exact rollback material. Before that marker, recovery restores the old receipt if
+needed and moves exact resources back; after it, recovery preserves the completed uninstall and
+cleans only exact rollback. Modified or foreign launchers remain preserved and outside this proof.
+When uninstall selects the last command receipts consuming a regular managed rendered path, Core
+also derives `RemoveShellRenderedFile`: the exact file moves to same-directory rollback before the
+receipt set is removed, and a positive marker separates receipt absence from committed deletion.
+Before that marker, recovery reconstructs missing receipts and restores only the exact old file;
+afterward it preserves absence and cleans exact rollback. Unselected consumers and unrelated
+rendered files are preserved. Invocation-time live rendering takes the same cross-process lock,
+refuses a pending journal, and re-reads its receipt before atomically replacing last-known-good
+output.
+When the final selected receipts release embedded cache files or an external snapshot category,
+Core derives `RemoveShellCache` or `RemoveShellSnapshot`. Exact files/trees move to rollback before
+receipt removal, and a positive marker distinguishes committed absence from an interruption that
+must reconstruct old receipts and restore exact material. Shell profile reconciliation uses
+`ReconcileShellProfile`; recovery merges only the recorded Shine sentinel transition into the
+current profile so unrelated later edits survive.
 Status treats a manifest receipt or a compatible legacy launcher as installed; extracted source
 files alone are only cache state. Command uninstall removes only the selected managed launcher,
 rendered output, and receipt, rebuilds source-command profile wrappers from the remaining launchers,
 and removes shared category material only after the last installed command is gone. Foreign command
 entries are never removed.
 
+Every mutating or dry-run Shell lifecycle entry loads `shell-manifest.toml` before extraction,
+snapshot, render, launcher, receipt, or profile work. Legacy v0 normalizes in memory, successful
+mutations save schema v1, read-only status/update does not rewrite it, and a future version fails
+before mutation. The Shell adapter emits one `shell/<category>/<command>` outcome per installed or
+selected command. Read-only update maps typed row changes to `pending` plus write-preview effects;
+foreign launcher ownership is `conflict`, not pending, and upgrade preserves that launcher and its
+receipt. Shared cache/snapshot/rendered effects attach to affected commands without turning source
+presence into installation evidence.
+
+Shell execution emits CLI-private presentation events instead of writing terminal output. The
+terminal renderer owns shared upgrade-section state, while writer-backed recording tests pin
+quiet/verbose sections, conflicts, profile hints, and stdout/stderr routing.
+
 ## App install (`shine app install <category>`)
 
-`cli/src/apps/mod.rs` orchestrates:
+`CoreRuntime` owns the complete App lifecycle from an immutable preset snapshot: metadata and
+destination resolution, one-pass assessment, generators, transforms, Copy/JSON merge, relocation,
+ownership, hooks, artifacts, embedded cache, manifest persistence, and Contract v1 mapping. The
+CLI supplies resolved config plus `rust-embed` bytes. Shared runtime bootstrap discovers any
+external/overlay tree through `FileSystemHost`, constructs the immutable snapshot, and submits the
+request; the CLI renders typed events/reports. There is no frontend-specific directory walker,
+prepared-file path, or CLI fallback executor.
+
+The Core flow is:
 
 1. **Metadata** — `apps/metadata.rs` parses `presets/app/<category>/shine.toml` (category `dest`,
    optional per-`[[files]]` `dest`, `transforms`, `requires_admin`, …). A file destination overrides
@@ -31,30 +269,170 @@ entries are never removed.
    until a `Config` resolves the current user's platform data directory. Duplicate effective
    destinations fail before any writes. Legacy categories without `shine.toml` (git, starship) use
    `apps/annotation.rs` to read a `shine-dest:` comment from the file itself.
-2. **Transforms** — `install_core/transforms/` applies `jsonc-to-json` and/or `template`
+2. **Runtime state gate** — `install_core/manifest.rs` loads `app-manifest.toml` before env
+   initialization, embedded extraction, generator execution, or destination writes. A missing
+   `schema_version` is legacy v0 and normalizes to v1 in memory; an unsupported future version
+   fails before lifecycle mutation.
+3. **Transforms** — `install_core/transforms/` applies `jsonc-to-json` and/or `template`
    (`@@VAR@@` substitution from the `[env]` config table) in declaration order, in memory, before
    writing.
-3. **File ops** — `install_core/file_ops.rs` backs up any pre-existing user file to
+4. **File ops** — `install_core/file_ops.rs` backs up any pre-existing user file to
    `<name>.shine.bak`, then writes the (transformed) content to `dest`. Destinations with
    `requires_admin = true` (e.g. `/etc/docker/daemon.json`) go through the sudo path, serialized
    by a cross-process advisory lock (`$TMPDIR/shine-admin.lock`, `create_dir` as mutex).
-4. **Manifest** — `install_core/manifest.rs` upserts an `AppEntry` into `~/.shine/app-manifest.toml`,
+5. **Manifest** — `install_core/manifest.rs` upserts an `AppEntry` into `~/.shine/app-manifest.toml`,
    recording dest, content hash, strategy, and **`requires_admin`** (must persist — uninstall
-   routes on it; see lessons entry 2026-07-04).
-5. **Report** — `apps/report.rs` prints the outcome.
+   routes on it; see lessons entry 2026-07-04). Successful saves from mutation commands write
+   `schema_version = 1`.
+6. **Result and report** — the App adapter records safe file/receipt canonical targets, logical
+   resources, statuses, effects, and diagnostic codes in `shine-core`'s `LifecycleResultV1`.
+   App upgrade, hooks, implicit teardown, embedded preset-cache, and purge join the same result;
+   hook and teardown failures retain their non-fatal command semantics. CLI-private presentation
+   events flow through a writer-backed reporter, and stale cleanup confirmation uses the frontend
+   interaction adapter. Reusable results never include absolute destinations, content, raw errors
+   or child output, environment values, or secret values.
 
 ## App uninstall
 
 Reverse of install, driven entirely by the manifest — never by re-scanning presets:
 
 1. Look up the `AppEntry` by dest in `~/.shine/app-manifest.toml`.
-2. Remove the installed file (sudo path if the entry has `requires_admin = true`).
+2. Remove the installed static Copy (sudo path if `requires_admin = true`) or remove only the
+   receipt-declared top-level keys for JSON merge.
 3. Restore `<name>.shine.bak` if one exists.
 4. Remove the manifest entry.
 
+## Declarative App action and recovery
+
+Approved App install routes two deliberately narrow creation cases through the Roadmap Phase 4
+executor: a static Copy whose manifest receipt is absent and whose destination is either absent or
+an unowned regular file with an absent fixed backup path. Approved install and upgrade also route
+an unchanged receipt-owned, in-place static Copy replacement
+through the executor. Ordinary uninstall also routes an unchanged, receipt-owned, unprivileged
+static Copy through the executor, including restoration of an unchanged canonical persistent
+backup. Forced uninstall of a user-modified file uses a separate action for the same static Copy
+boundary. Administrator static Copy create, update, and removal reuse these actions with privileged
+path mutations under the administrator lock. JSON merge install, in-place update, ordinary remove,
+and forced remove use key-owned actions that preserve unrelated current values. App upgrade stale
+pruning reuses the same removal actions when the receipt-owned state is unchanged; a missing
+destination removes only its receipt, while user-modified stale state remains preserved. Static
+Copy relocation uses one action for the old receipt/path/backup, new absent destination, and new
+receipt. JSON relocation uses a separate action for the old receipt/object/rollback, absent new
+destination, separate old/new managed-key sets, and replacement receipt. Generators retain their
+existing executor and explicit opaque classification:
+
+```text
+approved PlanV1
+  → include App journal write/remove infrastructure permissions
+  → regenerate and validate the exact Plan after approval
+  → ActionIrV1(CreateManagedFile; destination + desired hash, no bytes)
+    or CreateManagedFileWithBackup; destination + backup + original/desired hashes, no bytes
+    or UpdateManagedFile; destination + rollback + previous receipt/mode + before/after hashes,
+       no bytes
+    or RelocateManagedFile; old destination + optional backup + rollback + absent new destination +
+       old/new receipt identities and hashes, no bytes
+    or RelocateManagedJson; old destination + rollback + absent new destination + separate
+       old/new key/subset/receipt identities, no JSON values
+    or RemoveManagedFile; destination + rollback + previous receipt/mode/hash, no bytes
+    or RemoveManagedFileWithBackup; destination + persistent backup + rollback + both
+       modes/hashes + previous receipt fields, no bytes
+    or ForceRemoveManagedFile; destination + optional persistent backup + rollback + distinct
+       receipt/current hashes + current/backup modes, no bytes
+    or MergeManagedJson; destination + rollback + managed keys + whole-file before identity +
+       previous/desired managed-subset hashes, no JSON values
+    or RemoveManagedJson; destination + rollback + managed keys + whole-file before identity +
+       distinct receipt/current managed-subset hashes, no JSON values
+  → every static Copy action binds requires_admin; derive Administrator permission when true
+  → validate action permissions are included in the approval
+  → acquire host cross-process operation lock
+  → for requires_admin static Copy, keep the administrator lock across every check/mutation/commit
+    and use privileged write/move/remove/mode operations for destination, persistent backup, and
+    rollback paths
+  → refuse an existing app-operation-journal.toml
+  → atomically persist prepared journal with original PlanApprovalV1
+  → atomically create the absent destination, rename original to persistent backup then create,
+    rename previous managed bytes to `.shine.rollback` then replace and restore their mode,
+    or rename an ordinary/forced uninstall destination to `.shine.rollback`, then optionally move
+       `.shine.bak` to destination; JSON actions rename an existing whole object to rollback but
+       write only a managed-key merge/removal result
+  → atomically persist applied action state
+  → App lifecycle atomically persists the matching manifest receipt state
+    (owned receipt for create/update; safe receipt absence for remove)
+  → removal durably records `receipt-committed` in the journal after manifest save
+  → commit re-reads and matches that receipt state
+  → update/removal commit removes unchanged transaction rollback material, then removes the journal
+```
+
+If execution is interrupted, recovery is separate from ordinary lifecycle planning:
+
+```text
+read versioned journal + App manifest + destination + optional persistent/transaction backup
+  → matching durable creation receipt => preserve manifest-owned destination/backup; clean journal
+  → matching durable update receipt => preserve destination; remove only unchanged rollback material
+  → otherwise build app-recovery Plan bound to exact journal, manifest, and current path bytes
+  → absent-create: remove only unchanged desired bytes
+  → backup-create: restore only original/missing, missing/original, or desired/original safe state
+  → managed-update: use the same safe states with `.shine.rollback` and the previous receipt
+  → managed-remove: exact old receipt restores unchanged rollback; receipt-committed plus safe
+    receipt absence removes it; bare receipt absence restores the old receipt and file
+  → backup-restoring managed-remove: before receipt commit, restore only exact
+    managed/original/missing, missing/original/managed, or original/missing/managed path states;
+    after commit keep the exact user destination and remove only unchanged managed rollback
+  → forced managed-remove: before receipt commit, restore the exact user-modified rollback to the
+    destination and reverse an optional backup restoration; after commit keep the completed
+    uninstall state and remove only exact user-modified rollback material
+  → JSON merge/remove: exact rollback supplies prior managed-key values, but recovery changes only
+    those declared keys in current JSON and preserves unrelated values; absent-path creation removes
+    the file only when no unrelated keys exist
+  → committed JSON removal: preserve the now user-owned current object, even if a formerly managed
+    key was reintroduced, and remove only exact rollback material
+  → privileged removal recovery: request Administrator only when the selected safe state mutates a
+    protected path; authorize after recovery Plan approval, then use privileged move/remove
+  → privileged create/update recovery follows the same rule for protected destination,
+    persistent-backup, and rollback mutations
+  → any changed destination, backup, rollback material, or receipt => blocked/preserved
+  → `shine app recover` renders explicit destination + operation-journal steps
+  → default-No approval, or `--yes` for non-interactive recovery
+  → acquire operation lock
+  → regenerate and revalidate the same recovery Plan
+  → remove or restore only unchanged transaction-created/rollback bytes
+  → remove journal
+```
+
+The journal contains Action IR identities, paths, hashes, modes, state and the original approval,
+never managed/original content or secret plaintext. See
+[ADR 0048](../decisions/0048-separate-action-ir-and-explicit-recovery.md),
+[ADR 0050](../decisions/0050-backup-aware-app-creation-recovery.md),
+[ADR 0051](../decisions/0051-transactional-app-managed-file-update.md),
+[ADR 0052](../decisions/0052-transactional-app-managed-file-remove.md),
+[ADR 0053](../decisions/0053-transactional-app-backup-restoring-remove.md),
+[ADR 0054](../decisions/0054-transactional-forced-app-managed-file-remove.md),
+[ADR 0055](../decisions/0055-privileged-app-removal-reuses-typed-transaction.md), and
+[ADR 0056](../decisions/0056-privileged-app-create-update-reuse-typed-transactions.md), and
+[ADR 0057](../decisions/0057-key-owned-json-merge-transactions.md),
+[ADR 0063](../decisions/0063-transactional-app-json-relocation.md), plus
+[ADR 0062](../decisions/0062-transactional-app-static-copy-relocation.md), plus
+`docs/declarative-action-recovery-prd.md` before extending it to opaque actions.
+
+Ordinary App install/upgrade/uninstall/refresh/artifact mutation never recovers implicitly. When
+their planner observes the journal, the blocked Plan directs the user to `shine app recover`.
+Read-only status/update inspection does not remove the journal. Missing or invalid journals,
+unsupported schemas, opaque actions, and post-interruption user changes fail without mutation; the
+CLI reports only a safe rollback count and journal-cleanup outcome.
+
+## App update (`shine update`)
+
+App update loads active categories, the App manifest, and effective env once, then derives each
+`AppRow` and `LifecycleOutcomeV1` from the same `AppFileAssessment`. This keeps terminal filtering
+compatible while preventing an automatic generator from running a second time solely to build the
+structured result. Manifest-owned current files are `unchanged`; source, new-file, relocation, or
+missing-destination work is `pending`; user-modified destinations are `conflict` with a safe code
+and preservation effect. Preview effects describe resource/receipt work without copying the
+assessment's absolute paths or content into the reusable result.
+
 ## App upgrade (`shine upgrade`)
 
-`apps/upgrade.rs::handle_upgrade_installed` re-applies presets (including re-running transforms
+Core App upgrade re-applies presets (including re-running transforms
 with the *current* `[env]` values) to every manifest-tracked install, and cleans up stale entries
 whose preset no longer exists. `shine upgrade app/<category>` selects manifest entries before the
 stale/update loop, so no other app category can be mutated. Shell and managed-sys targeted upgrades
@@ -63,17 +441,38 @@ the same for env-templated content. This is why changing an env var requires `sh
 take effect in installed files.
 
 Manifest identity for app files is the preset `source`, while ownership checks remain destination-
-based. If metadata changes a source's effective destination, upgrade installs the new copy and
-removes/restores the old one only after verifying the old content is still manifest-current and the
-new destination is free. A modified old copy or occupied new destination blocks relocation without
-creating a duplicate manifest entry.
+based. If metadata changes a source's effective destination, upgrade journals one receipt
+replacement spanning both paths. Static Copy binds the old destination/backup/rollback and absent
+new destination; interruption before the new receipt restores exact old state. JSON merge instead
+binds separate old/new managed-key sets and restores/removes only those keys, preserving unrelated
+current values at both objects. A modified owned resource or occupied new destination blocks
+relocation without creating a duplicate manifest entry.
 
 Managed sys resources participate in the same flow. `shine update` compares the desired built-in
 resource receipt derived from the active env against `sys-manifest.toml`; `shine upgrade` then
-re-applies recorded managed resources and replaces the receipt after convergence. For split DNS,
+re-applies only recorded, profile-enabled managed resources and replaces the receipt after
+convergence. Aggregate upgrade does not implicitly compose the Sys shell profile; use explicit
+`sys profile enable/disable` for that state. For split DNS,
 the receipt comparison includes the normalized domain, DNS servers, and platform resource path.
 Update and sys-info output render those receipt differences field by field (`old -> new`) so the
 user can inspect the pending system change before granting administrator access to upgrade.
+The managed-file driver compares only its desired destination and content hash with the recorded
+receipt and emits safe field labels rather than paths or content.
+
+Managed apply/upgrade/uninstall loads the independently versioned `sys-manifest.toml` before
+resource, elevation, or composed-profile mutation. Read-only update uses the same typed receipt
+comparison to produce both the existing field-difference rows and `pending` `sys/<item>` outcomes.
+Built-in drivers return typed resource/backup effects and typed user-modification conflicts; the
+adapter never classifies reusable results by parsing `detail` or raw errors. No-op upgrade does not
+rewrite the receipt merely to refresh metadata. Bootstrap execution, profile enable/disable, and
+composed-profile sync remain outside the structured managed-resource result. Explicit profile
+mutation has its own `sys-profile-enable` or `sys-profile-disable` security Plan: it binds live
+detection for enable, the run manifest, desired enabled set, generated profile files, and shell
+configuration state before writing either the profile or receipt.
+
+Managed Sys presentation also flows through the CLI reporter. Item ownership is rendered before
+the interaction adapter requests administrator authorization, preserving prompt context without
+making terminal or privilege APIs part of the reusable lifecycle result.
 
 `shine update --diff` expands stale shell/app rows, while `shine update <TARGET>` resolves one
 installed shell/app through the same aliases as `shine info` and prints only its stale files. Each
@@ -89,26 +488,34 @@ managed sys resources keep their structured receipt differences instead.
 
 An app `[[files]]` entry may declare
 `generator = { script, runtime, env, when_env, auto }`. The static `source` remains a
-safe fallback and stable manifest identity. When `when_env` exists in the active
-`[env]` table, `apps::materialize_file_content` runs the generator and uses its
-UTF-8 stdout as the effective source before normal transforms and install
-strategies:
+safe fallback and stable manifest identity. When `when_env` exists in the active `[env]` table, an
+approved install, upgrade, or explicit refresh may run the generator and use its UTF-8 stdout as
+the effective source before normal transforms and install strategies. Ordinary read-oriented
+inspection never runs it; explicit evaluation may:
 
 1. `shine app install` always materializes first, then reuses the normal
    manifest hash and atomic file installer.
-2. `auto` defaults to true; automatic generators retain the existing behavior
-   of materializing during status/update checks and `shine upgrade`.
-3. `auto = false` makes status local-only and excludes the file from upgrade.
+2. `auto` defaults to true; automatic generators may materialize during an approved
+   `shine upgrade`. Ordinary status/update reports `app_generator_not_evaluated` when dynamic
+   output cannot be known without execution. `info`/`update --run-generators` executes selected
+   generators once, applies transforms in memory, and computes status/diffs without writing.
+3. `auto = false` makes implicit status local-only and excludes the file from upgrade, but explicit
+   `--run-generators` evaluation includes it.
    `shine app refresh <category> [source]` explicitly refreshes only
-   manifest-owned generated files, with an optional `--force` for user changes.
+   manifest-owned generated files, with an optional `--force` for user changes. Refresh reviews an
+   `app-refresh` Plan that binds manifest ownership, live destination state, generator inputs, and
+   potential post-upgrade hooks. Embedded generator Plans also bind the runtime-script
+   materialization path before generator execution.
 4. An existing managed destination is the last-known-good snapshot when a
    generator fails; a first-time enabled generator failure is fatal.
-5. Only `generator.env` values are injected. External preset or overlay
-   generator code requires `allow_app_hooks = true`. Execution is deadline- and
+5. Only `generator.env` values are injected. External preset or overlay generator code requires a
+   matching `app/<category>` scoped trust grant. Execution is deadline- and
    output-size-limited.
 6. A Bun generator is resolved against the physical category that supplied its effective script.
    Embedded temporary scripts use `--no-install`; an external/overlay script uses
    `--install=fallback` only with a valid `package.json` + `bun.lock` pair in that category.
+7. External evaluation still requires snapshot-scoped trust. Per-file evaluation failures continue
+   through the remaining selection and cause a nonzero command result after all statuses render.
 
 The Surge generator downloads the Base64 URI list in
 `SURGE_SUBSCRIPTION_URL`, converts supported SS/VMess nodes, and writes bare
@@ -121,13 +528,13 @@ counted and skipped without logging credentials.
 
 ## App artifact build (`shine app artifact apply <app-id>`)
 
-`apps/build.rs::handle_build` is fully separate from install/upgrade — it never runs
-automatically; see [ADR 0009](../decisions/0009-app-artifact-build-explicit-command.md). Given an
-app preset's `[artifact].script`:
+Artifact execution is fully separate from install/upgrade — it never runs automatically; see
+[ADR 0009](../decisions/0009-app-artifact-build-explicit-command.md). The CLI reviews a specialized
+`app-artifact-apply` Plan, then Core re-plans and validates approval before the following executor
+flow for an app preset's `[artifact].script`:
 
-1. Resolves the category the same way `app info`/`app install` do
-   (`metadata::load_active_categories`), force-extracting embedded assets first when not in
-   external-presets mode (the same `extract_prefix` call `app install` makes).
+1. Resolves the category from the immutable Preset snapshot and materializes the embedded category
+   cache only after approval when embedded mode is active.
 2. Resolves the script's location: an overlay's `app/<name>/<script>` wins when that exact script
    exists; otherwise the source (built-in or external) script is used. This lets an overlay keep
    local policy files while inheriting a generic built-in artifact.
@@ -135,11 +542,11 @@ app preset's `[artifact].script`:
    `SHINE_STATE_DIR` (`<shine_dir>/state/app/<name>`), and `SHINE_CACHE_DIR` (the OS cache dir via
    the `directories` crate — `<os-cache>/shine/app/<name>`, the same crate/pattern
    `env/workspace.rs::cache_path` already uses for its own per-project cache).
-4. Injects the active `[env]` table into the child **as stored** (`EnvConfig::as_map` — no
-   decryption, same as the `template` transform), so a script can read user-configured values such
-   as `SURGE_PROFILE`; `_SECRET` keys pass through as ciphertext and no build ever triggers a
-   secret-decryption prompt. The `SHINE_APP_*` contract vars are set *after* the `[env]` values, so
-   they win on any name collision.
+4. Injects only `[artifact].env` mappings whose sources are listed by the category's
+   `[permissions].environment`, using the current stored values without decryption, plus fixed
+   `SHINE_APP_*` contract variables. The fixed variables win on collisions. Planning fingerprints
+   plain values by hash and requires opaque versions for secret-classified names; neither enters
+   Plan serialization.
 5. Runs the script with `current_dir` set to the resolved app directory and inherited stdio (not
    captured like `post_upgrade` hooks), so build output streams live; a nonzero exit becomes a
    real `Result::Err` instead of being swallowed.
@@ -158,25 +565,30 @@ patchable include. Subscription nodes are not added to `[Proxy]`;
 `policy-path`.
 
 **Teardown (`shine app artifact remove <app-id>`, ADR 0012).** An `[artifact].teardown` script reverses
-`build`, sharing the *identical* resolution and env contract above (steps 1–4). It has two entry
-points: `handle_unbuild` (explicit, ungated, errors propagate — symmetric to `build`) and
-`run_teardown_for_uninstall`, called best-effort from `apps/uninstall.rs` *before* the file-removal
-loop (implicit, so gated by `allow_app_hooks` for external presets and non-fatal, and a no-op under
-`--dry-run`). Surge ships a symmetric built-in Bun `unbuild.ts`; other app
+`build`, sharing the *identical* resolution and env contract above (steps 1–4). Explicit removal
+reviews an `app-artifact-remove` Plan and propagates failure. Uninstall includes available teardown
+in its lifecycle Plan, runs it best-effort before the file-removal loop, and safely skips blocked
+external teardown without stopping owned-file removal. Surge ships a symmetric built-in Bun
+`unbuild.ts`; other app
 presets may still keep artifact-specific reversal logic in an overlay.
 
 **Lifecycle command hooks (`apps/hooks.rs`).** `post_install` (fired by `install`, including
 `--replace-managed`) and
 `post_upgrade` (fired by `upgrade`) share one runner, `run_app_hooks(config, get_category, changed,
-HookPhase)` — run once per *changed* category, gated by `allow_app_hooks` for external presets,
-failures non-fatal. These are plain argv commands with only the inherited parent env — distinct from
-the richer `SHINE_APP_*` + `[env]` artifact contract used by `build`/`teardown`.
+HookPhase)` — run once per *changed* category, gated by target-scoped trust for external presets,
+failures non-fatal. These are plain argv commands with only their declared env allowlist — distinct from
+the explicit `[artifact].env` + fixed `SHINE_APP_*` artifact contract.
 
 ## Shell install / uninstall
 
-Embedded install extracts assets, links executables into `~/.shine/bin/` (`bin_links.rs`), and
-appends a sentinel-guarded PATH block to the shell config (`shells/profile.rs`). Uninstall removes
-only Shine-managed symlinks/files and deletes the sentinel block precisely.
+The Shell source/deployment model, canonical target parser, external mode, and versioned manifest
+are Core-owned. The CLI deployment module consumes those types while retaining the current
+distribution adapter for embedded `rust-embed` assets and terminal presentation.
+
+Embedded install transactionally patches selected category assets into the managed cache, links
+executables into `~/.shine/bin/` (`bin_links.rs`), and appends a sentinel-guarded PATH block to the
+shell config (`shells/profile.rs`). Uninstall removes only Shine-managed symlinks/files and deletes
+the sentinel block precisely.
 
 For external presets, `external_shell_mode = "snapshot"` first materializes the effective
 base/overlay category under `<shine_dir>/installed/shell/`; update compares that snapshot with the
@@ -192,6 +604,27 @@ current package files immediately, while status reports that its receipt and lau
 A transformed live launcher calls the manifest-constrained internal renderer on each
 invocation, then executes or sources the atomically refreshed file under `rendered/`.
 
+## Managed Sys apply and recovery
+
+Managed-file and split-DNS apply/update/uninstall first derive typed actions and an exact previous
+and desired `SysRunEntry`. Core writes `sys-operation-journal.toml` before the first resource
+mutation, persists the desired receipt, records receipt commit, and then removes exact rollback
+material and the journal. Managed files reuse the create/update/relocate/remove state machines;
+split DNS binds the complete previous and desired typed state rather than shelling out during
+recovery.
+
+A pending journal blocks later mutating Sys Plans. `shine sys recover` captures the journal,
+manifest, resource, and rollback observations in a fresh `sys-recovery` Plan, revalidates approval
+under the operation lock, and restores only fingerprint-matching previous state before receipt
+commit. After commit it keeps the desired resource and cleans exact rollback. Explicit
+`sys profile enable/disable` also journals its shell rc changes, but owns only per-phase Shine
+sentinel blocks; recovery preserves unrelated current file content.
+
+Profile active/base/new/merge file reconciliation retains the established three-way merge and is
+marked non-transactional in its Plan. Bootstrap profile composition, package/provider calls, and
+bootstrap scripts are likewise outside managed Sys recovery and retain their explicit opaque or
+unsupported-rollback classification.
+
 ## Workspace environment export
 
 `shine env workspace export --format dotenv` resolves one explicit mode through the same ordered
@@ -203,8 +636,12 @@ owner-only file on Unix. Export never edits or removes the workspace definition 
 
 ## Sys bootstrap (`shine sys bootstrap`)
 
-Selection resolves explicit ordered items, a named selection profile, or the existing
-interactive/default path through `sys/selection.rs`. Explicit items accept only `mode = "init"`,
+Sys driver/status types, receipts, resource outcomes, `sys-manifest.toml`, split-DNS, bootstrap,
+and profile orchestration are Core-owned. Managed mutations return Contract v1; bootstrap and
+profile retain their separate typed domain reports.
+
+Core selection resolves explicit ordered items, a named selection profile, or the existing
+interactive/default path through the interaction port. Explicit items accept only `mode = "init"`,
 deduplicate by first occurrence, and never widen to sibling items.
 
 Every executable sys manifest declares `version = 2`. Each init item has both `[items.detect]` and
@@ -213,9 +650,16 @@ provider argv or one per-item script, limits runtime/output, detects again, and 
 canonical `sys/<item>` outcome. A v1 or unknown manifest version fails before detection, elevation,
 installer execution, or profile writes.
 
-Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`. `sys/profile_compose.rs` combines base pre/post content
-with all enabled item integrations in stable manifest order. `sys/profile.rs` reconciles the two
-generated files before `sys/profile_blocks.rs` updates the existing pre/post sentinels. Composition
+Inspection, preview, preflight, and profile composition read the immutable Sys snapshot without
+materializing it. Script existence is proven by the logical snapshot entry. After authorization,
+script execution atomically replaces `<shine_dir>/runtime/sys/<os-id>/` with the captured category
+and runs that staged copy; neither external-source paths nor `Path::is_file` can reopen ambient
+preset state after shared bootstrap capture.
+
+Successful bootstrap items set `profile_enabled` in `sys-manifest.toml`.
+`core/src/runtime/sys_profile/compose.rs` combines base pre/post content with all enabled item
+integrations in stable manifest order. Core reconciles the two generated files before its profile
+block module updates the existing pre/post sentinels. Composition
 happens once after item execution, and render failure leaves the last installed profile intact.
 `sys profile enable/disable` changes only this activation state and generated profile content.
 
@@ -272,7 +716,7 @@ usable. `shine preset overlay link --git <url>` writes the config and clones imm
 `SHINE_CONFIG_DIR` env → `SHINE_PRESETS` env (presets dir only) → `presets_dir` in
 `config.toml` → default `~/.shine/`. Project-local configs inherit unset keys from the global
 config (see lessons entry 2026-07-04 on inheritance). `Config` saves go through
-`utils::sync_table`, which preserves TOML comments.
+`shine_core::sync_table`, which preserves TOML comments.
 
 ## Dynamic shell completion
 

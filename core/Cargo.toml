@@ -1,0 +1,28 @@
+[package]
+name = "shine-core"
+version.workspace = true
+edition = "2024"
+rust-version = "1.88"
+license.workspace = true
+description = "Reusable lifecycle runtime and domain core for Shine applications"
+readme = "README.md"
+repository = "https://github.com/biulight/shine"
+homepage = "https://github.com/biulight/shine"
+keywords = ["configuration", "toml", "presets"]
+categories = ["config"]
+
+[dependencies]
+anyhow = { workspace = true }
+directories = { workspace = true }
+flate2 = "1.1.4"
+jsonc-parser = { version = "=0.32.3", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+schemars = "1.2.2"
+sha2 = "0.10.9"
+similar = "3.1"
+tar = "0.4.44"
+tokio = { version = "1.52.1", features = ["fs", "io-util", "macros", "process", "rt", "time"] }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+uuid = { version = "1.23.1", features = ["v4"] }

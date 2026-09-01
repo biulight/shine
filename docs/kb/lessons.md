@@ -3,6 +3,337 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-01 — File identity compares permission bits, not Unix file-type bits
+
+- **Symptom**: normal CLI Shell installs wrote the exact new profile bytes and mode, but receipt
+  commit rejected the file as non-durable; the same transaction passed on `InMemoryHost`.
+- **Root cause**: `RealHost` observations carry the full Unix `st_mode` (for example `0100644`),
+  while a newly desired file declares permission bits (`0644`). Exact integer equality therefore
+  disagreed across host adapters even though both described the same regular-file permissions.
+- **Fix**: Shell regular-file identity first requires a regular-file observation and equal content,
+  then compares only the low Unix permission/special bits.
+- **Rule**: when resource kind is represented separately, fingerprint mode comparison must exclude
+  duplicate file-type bits and behave identically across real and in-memory hosts.
+
+## 2026-09-01 — Transactional file removal must finish its empty-directory contract
+
+- **Symptom**: `shell uninstall --purge` removed every managed cache file transactionally but left
+  the empty category directories, regressing its documented purge result.
+- **Root cause**: migration treated cache files and receipts as the complete operation while the
+  legacy lifecycle also owned empty-directory cleanup.
+- **Fix**: include possible empty category/root removals in Plan state and permissions, then remove
+  only directory trees proven to contain no files after the journaled file transaction commits.
+- **Rule**: when migrating a mutation to typed actions, inventory post-commit structural cleanup as
+  well as byte writes; never restore only the main-path effect and silently drop its lifecycle tail.
+
+## 2026-09-01 — Force does not manufacture a profile ownership transition
+
+- **Symptom**: a forced Shell reinstall generated `ReconcileShellProfile` even when the existing
+  Shine sentinel block already matched the desired block, producing an invalid Action IR and
+  breaking otherwise unrelated interrupted-cache coverage.
+- **Root cause**: `--force` was allowed to bypass the no-op check used to decide whether an owned
+  subset actually changes. Force authorizes replacement of conflicting managed state; it is not a
+  state transition by itself.
+- **Fix**: always skip profile reconciliation when the exact owned sentinel is already present,
+  independent of force, and keep Action validation strict about previous/desired identity changes.
+- **Rule**: authorization flags may widen an eligible mutation, but must never manufacture an
+  Action when the resource ownership projection is unchanged.
+
+## 2026-09-01 — Rendered-file removal and live rendering share one mutation boundary
+
+- **Symptom**: Shell uninstall committed command receipt removal before directly deleting the last
+  rendered output, while a live launcher could atomically rewrite the same path outside the
+  lifecycle lock. A crash or concurrent invocation could leave an orphan, remove an active source,
+  or change rollback state during recovery.
+- **Root cause**: rendered output was treated as command-local cleanup even though it has a
+  file-scoped consumer receipt set and an invocation-time writer.
+- **Fix**: journal `RemoveShellRenderedFile` with the exact file identity, canonical rollback,
+  every previous consumer receipt, and a positive commit marker; serialize live rendering on the
+  same operation lock and reject it while recovery is pending.
+- **Rule**: every writer of a transactional resource must share its serialization boundary. Atomic
+  replacement protects file integrity, not receipt coherence or rollback ownership.
+
+## 2026-09-01 — Embedded cache ownership is a patch, not a whole tree
+
+- **Symptom**: embedded Shell cache files were created or overwritten before the Shell journal, so
+  a later receipt failure could leave new source bytes active after launcher recovery.
+- **Root cause**: cache deployment is category-scoped but merge-like: missing files are created,
+  differing files are overwritten by upgrade or `--replace-managed`, and unrelated local files remain. Neither a command
+  receipt nor whole-tree snapshot replacement describes that ownership boundary.
+- **Fix**: journal one category `ReplaceShellCache` action containing only actual file writes, exact
+  old/new hash and mode, per-file rollback, selected receipt transitions, and a positive marker.
+- **Rule**: recovery identity must match the mutation's ownership granularity; never promote a
+  merge-style cache to whole-tree ownership merely to reuse a transaction primitive.
+
+## 2026-09-01 — Rendered bytes can change without a receipt transition
+
+- **Symptom**: transformed Shell output was rewritten before the launcher journal, so a later
+  receipt failure could leave new rendered bytes active while recovery restored the previous
+  command boundary.
+- **Root cause**: command receipts intentionally omit environment values, but those values affect
+  rendered bytes. Receipt equality therefore cannot prove that a shared rendered-file replacement
+  committed.
+- **Fix**: journal a file-scoped `ReplaceShellRenderedFile` with old/new hash and mode, canonical
+  rollback, all consuming receipt transitions, and an independent positive commit marker.
+- **Rule**: when durable output depends on intentionally unrecorded inputs, commit evidence must bind
+  the output identity itself rather than infer completion from unchanged ownership metadata.
+
+## 2026-09-01 — Shared state needs a positive commit boundary across dependent actions
+
+- **Symptom**: an external Shell category snapshot could be replaced before the launcher journal
+  existed, and a later manifest write could make a new command receipt visible even if the shared
+  snapshot transaction had not committed.
+- **Root cause**: the category tree is shared while receipts are command-scoped; receipt equality is
+  also unchanged when only an auxiliary category file changes. Recovery that inspected launcher
+  actions before reversing the snapshot receipt transition could therefore preserve a launcher that
+  should be rolled back.
+- **Fix**: journal a category-scoped `ReplaceShellSnapshot` with deterministic stage/rollback trees,
+  all selected receipt transitions, and a positive commit marker. Recovery planning and execution
+  first project uncommitted snapshot transitions back onto the manifest before assessing dependent
+  launcher actions.
+- **Rule**: when one transaction action changes the ownership evidence consumed by another action,
+  recovery must evaluate the dependency graph at one coherent receipt boundary; action-local checks
+  in journal order are insufficient.
+
+## 2026-09-01 — JSON relocation has two independent key-ownership boundaries
+
+- **Symptom**: App upgrade relocated a `json-merge` source through independent new-destination
+  merge and old-destination uninstall calls. A crash could leave the same managed keys at both
+  paths, while whole-file rollback would overwrite unrelated settings changed after interruption.
+- **Root cause**: relocation was treated as path movement, but JSON ownership is a pair of declared
+  key subsets whose old and new key sets may differ inside one source-receipt transition.
+- **Fix**: bind both destinations, separate old/new keys and subset hashes, the previous whole-file
+  rollback identity, and both receipt states in `RelocateManagedJson`; recover by removing/restoring
+  only owned keys.
+- **Rule**: a structured-resource relocation must model ownership independently at both endpoints.
+  Whole-file rollback proof cannot be promoted to key-owned content.
+
+## 2026-09-01 — Relocation needs one receipt transition across both paths
+
+- **Symptom**: App upgrade wrote a new effective destination, removed or restored the old one, and
+  saved the replacement receipt only afterward. A crash could leave two copies or no managed copy,
+  and a successful move could retain the old backup path on the new receipt.
+- **Root cause**: relocation reused independent legacy install and uninstall calls even though both
+  mutations replace one source-keyed receipt and must commit together.
+- **Fix**: bind both destinations, old backup/rollback, desired hash, old/new receipt fields, and
+  privilege identities in one `RelocateManagedFile` journal action; clear the old backup identity
+  when the new receipt commits.
+- **Rule**: when one ownership receipt moves across paths, model the complete move as one action.
+  Independent create/remove success is not an atomic ownership transition.
+
+## 2026-08-31 — Upgrade-internal removals still need removal semantics
+
+- **Symptom**: `upgrade --prune-stale` displayed a stale `Remove` step but did not bind removal,
+  rollback, backup, journal, or administrator effects, then deleted the resource through the legacy
+  executor before its receipt update was durable.
+- **Root cause**: stale cleanup was appended after convergence planning and inherited the outer
+  Upgrade operation's write-oriented assumptions instead of the inner action's removal semantics.
+- **Fix**: observe stale receipt-owned paths, preserve modified state, derive exact removal Action
+  permissions, and reuse the receipt-gated removal journal through manifest commit and recovery.
+- **Rule**: derive observations, permissions, authorization, and commit evidence from the concrete
+  action effect. An outer lifecycle name such as Upgrade does not turn an internal deletion into a
+  write.
+
+## 2026-08-31 — Receipt absence is not a removal commit record
+
+- **Symptom**: recovery after a Shell launcher uninstall could see a missing command receipt but
+  could not know whether uninstall had committed or the manifest save succeeded immediately before
+  a crash.
+- **Root cause**: absence represented both a desired final state and an intermediate failure window.
+- **Fix**: persist a positive per-action `receipt-committed` journal marker after manifest removal;
+  without it, recovery reconstructs the old receipt before restoring exact rollback resources.
+- **Rule**: destructive receipt transitions need positive durable commit evidence. Never infer
+  cleanup authority from absence when the same absence can occur before the transaction boundary.
+
+## 2026-08-31 — Shell launcher Plans must enumerate platform resources
+
+- **Symptom**: the Shell planner reviewed only the primary command path even though Windows launcher
+  creation, update, and removal also mutate the sibling `.cmd` shim.
+- **Root cause**: planning treated a launcher as one logical path while the launcher executor
+  expanded it into platform-specific resources later.
+- **Fix**: derive Plan observations and permissions from the same prepared launcher resource list
+  used by execution, including rollback paths for receipt-owned updates.
+- **Rule**: when one logical lifecycle resource expands into multiple platform files, planning,
+  Action IR, receipt checks, mutation, and recovery must share one exact resource expansion.
+
+## 2026-08-31 — A privileged transaction lock must outlive executor apply
+
+- **Symptom**: a privileged App removal could release the cross-process administrator lock after
+  staging filesystem changes, then save the manifest receipt and reacquire a new lock for journal
+  commit. Another process could enter between those two critical sections.
+- **Root cause**: the executor returned only operation metadata, so its local lock guard was dropped
+  at the apply function boundary even though the transaction remained journaled and uncommitted.
+- **Fix**: return a non-cloneable execution capability that owns the privileged guard, and require
+  that capability when committing after the lifecycle's durable manifest save.
+- **Rule**: when the caller owns part of a journaled transaction, the executor must transfer the
+  lock guard as an explicit capability; reacquiring by operation ID does not preserve one critical
+  section.
+
+## 2026-08-31 — Preserved privileged files must not trigger administrator authorization
+
+- **Symptom**: uninstalling an App with a user-modified administrator file could request elevation
+  even though the reviewed outcome preserved that file and changed only no privileged path.
+- **Root cause**: uninstall permission and authorization counts were derived from every selected
+  `requires_admin` receipt before the planner decided whether its step was `Remove` or `Preserve`.
+- **Fix**: add protected-path permissions only for an actual removal, then derive authorization
+  from the approved Plan's Administrator permission and mutating file steps.
+- **Rule**: privilege follows a reviewed protected mutation, not the static category of a selected
+  resource. Preserve, missing-resource receipt cleanup, and receipt-only recovery must not prompt
+  for administrator access.
+
+## 2026-08-31 — Backup restoration needs permissions for both rename endpoints
+
+- **Symptom**: an App uninstall Plan described removing the managed destination but did not include
+  writing that destination from `.shine.bak` or removing the backup path, even though the legacy
+  executor performed both effects.
+- **Root cause**: receipt-driven uninstall permissions modeled every Copy entry as a one-path
+  deletion and treated backup restoration as an implementation detail rather than a reviewed
+  mutation.
+- **Fix**: capture the persistent backup in the Plan state and require destination write plus backup
+  removal permissions; the transactional backup-restoring action derives the same effects directly.
+- **Rule**: a rename or move changes both endpoint states. Security planning must bind the source
+  observation and declare source removal plus destination write, even when the user-visible outcome
+  is described as “restore.”
+
+## 2026-08-30 — Cleanup-only recovery still needs a mutating Plan step
+
+- **Symptom**: recovering an interrupted App operation after its matching receipt was already
+  durable would remove the stale journal without asking for CLI Plan confirmation.
+- **Root cause**: the recovery Plan declared journal removal permission but represented only the
+  managed destination as a `None` step; CLI confirmation is intentionally derived from mutating
+  semantic steps rather than permissions alone.
+- **Fix**: add an explicit journal Remove step to every ready recovery Plan and a Preserve step to
+  blocked recovery, then expose the operation through the default-No `shine app recover` flow.
+- **Rule**: infrastructure cleanup is still a user-visible mutation. Every approved cleanup must
+  have a matching semantic Plan step; a permission entry by itself is not presentation or consent.
+
+## 2026-08-30 — Generator evaluation must be explicit without inventing a preview lifecycle
+
+- **Symptom**: making all App inspection process-free prevented developers from checking final
+  transformed generator output before installation, while re-enabling implicit execution would
+  restore surprising network and process effects.
+- **Root cause**: generator evaluation and configuration mutation were treated as the only two
+  choices even though evaluation can execute code while retaining no-write semantics.
+- **Fix**: add `--run-generators` to App info and targeted/global update; ordinary inspection warns
+  that dynamic output was not evaluated, while opt-in evaluation runs each selected generator once
+  and keeps results in memory.
+- **Rule**: code execution and state mutation are separate dimensions. An inspection flag may
+  authorize explicit code execution, but it must preserve trust gates, avoid writes/hooks/artifacts,
+  continue across per-file failures, and never make the default inspection path active.
+
+## 2026-08-30 — Durable code trust must not reuse declarations or one-shot approval
+
+- **Symptom**: global `allow_app_hooks` and `allow_sys_code` booleans trusted unrelated targets and
+  future external code changes, while read-oriented App status could execute an automatic generator.
+- **Root cause**: author-declared capabilities, durable user trust, and per-mutation Plan approval
+  were represented by two coarse gates instead of three separate contracts.
+- **Fix**: add target-local grants bound to capability, logical code digest, trust layer, and exact
+  permission set; keep Plan approval one-shot; stop generator execution during inspection.
+- **Rule**: a Preset declaration is an author claim, a trust grant acknowledges one exact opaque
+  code identity, and a Plan approval authorizes one exact mutation. None may substitute for another.
+
+## 2026-08-30 — Platform-only external Preset fixtures must satisfy enforced Plan declarations
+
+- **Symptom**: Windows CI failed the Docker Desktop JSON merge roundtrip before mutation with
+  `app_permission_declaration_missing`, while Linux and macOS passed.
+- **Root cause**: lifecycle Plan enforcement made permission declarations mandatory for external
+  Presets, but the only undeclared lifecycle fixture was compiled exclusively on Windows and was
+  therefore invisible to the Linux quality job and non-Windows test suites.
+- **Fix**: give the Windows external App fixture the same schema-v1 category declaration required
+  of real external App Presets.
+- **Rule**: when a fail-closed metadata contract becomes mandatory, migrate platform-gated external
+  fixtures together with built-ins and shared fixtures; host-only tests are contract consumers too.
+
+## 2026-08-30 — Reviewable environment permissions require executor allowlists
+
+- **Symptom**: App artifact execution inherited the complete active `[env]` table, so a security
+  Plan could not prove which environment capabilities the script would receive; reusing the whole
+  category permission table also exposed generator-only values to artifacts.
+- **Root cause**: the execution contract had fixed path variables but no artifact-local environment
+  input list, and permission declarations were treated as a convenient source of values rather than
+  as review identities.
+- **Fix**: add `[artifact].env`, require each source in `[permissions].environment`, pass only those
+  mappings plus fixed `SHINE_APP_*` values, and keep generators scoped to `generator.env`.
+- **Rule**: a permission declaration describes capability identity; it must never implicitly grant
+  or inject a value. Every executable Preset surface needs its own explicit input allowlist.
+
+## 2026-08-30 — Planner boundary tests must distinguish assessment from approval gates
+
+- **Symptom**: the Core boundary suite rejected `runtime/planner.rs` for mentioning mutation host
+  traits even though every Plan assessment compiled and ran with an observation-only host.
+- **Root cause**: the source-level test scanned the whole module, which intentionally contains both
+  pure planner implementations and approved execution gates that call already-owned executors.
+- **Fix**: assert the observation-only planner bounds and reject raw mutation calls, while runtime
+  tests instantiate App, Shell, managed Sys, and bootstrap planners with observation-only hosts.
+- **Rule**: capability-boundary tests should verify the bound and calls of the assessment seam, not
+  ban a capability name from a module that also owns the post-approval gate.
+
+## 2026-08-30 — Executor-side choices expanded reviewed lifecycle work
+
+- **Symptom**: a reviewed App upgrade could still ask to remove stale files, and aggregate upgrade
+  could synchronize the composed Sys profile even though neither mutation was fixed by the Plan.
+- **Root cause**: lifecycle options and shared-state convergence were partly decided inside CLI
+  execution adapters after planning instead of being bound to the reviewed request and steps.
+- **Fix**: make `--prune-stale` the only stale-removal input, disable executor-side stale prompts,
+  batch and prevalidate aggregate lifecycle Plans, and remove implicit Sys profile sync from
+  untargeted upgrade.
+- **Rule**: after Plan review, execution may request administrator authorization but may not add a
+  target, resource, permission, or cleanup action; every such choice belongs in the reviewed Plan.
+
+## 2026-08-29 — In-memory runtime tests still need host-native captured paths
+
+- **Symptom**: the full Windows `shine-core` suite failed three in-memory App, Shell, and Sys
+  lifecycle tests that passed on Unix hosts.
+- **Root cause**: `InMemoryHost` abstracts filesystem I/O, but captured `PathBuf` values, native
+  shell defaults, and Shell launcher names still follow the compiled host. The tests used
+  Unix-rooted homes, inherited the Windows PowerShell default while simulating Zsh, and assumed a
+  suffix-free launcher.
+- **Fix**: derive isolated homes from the host-native temporary directory and resolve the expected
+  launcher through the same platform helper as production code; explicitly select Zsh in the Sys
+  test whose requested behavior is Zsh profile composition.
+- **Rule**: in-memory host tests must use host-native absolute paths for captured runtime context
+  and shared platform helpers for host-specific artifact names. Tests that simulate a target shell
+  or platform must set it explicitly instead of inheriting the compiled host's default.
+
+## 2026-08-29 — Cross-platform validation must not use host-native path parsing
+
+- **Symptom**: Windows CI rejected every built-in App preset destination and reported a missing-file
+  fixture as invalid metadata before it reached the missing reference.
+- **Root cause**: static validation simulated macOS, Linux, and Windows metadata with a fixed Unix
+  `/validation-home`, then used the Windows host's `Path::is_absolute()` and component parser.
+  Target-platform paths were therefore interpreted using the runner's path grammar.
+- **Fix**: use a native absolute synthetic home derived from the canonical preset root for runtime
+  simulation, and validate declared absolute, relative, and parent-path syntax lexically across both
+  separator styles.
+- **Rule**: validators that evaluate multiple target platforms on one host must separate target
+  path grammar from host filesystem paths; use host-native paths only for captured runtime context.
+
+## 2026-08-29 — Platform-selected preset tests must follow the selected source
+
+- **Symptom**: the Windows Rust test job failed while checking that Shell info rendered expected
+  content from the embedded proxy preset instead of a stale extracted source.
+- **Root cause**: after inspection moved to `CoreRuntime`, the test selected the native Shell preset
+  at runtime but still wrote `set_proxy.sh` and asserted its Unix assignment syntax; Windows
+  correctly selected `set_proxy.ps1` and rendered PowerShell syntax.
+- **Fix**: discover the selected source path from runtime inspection, seed the stale file there,
+  and assert the cross-platform rendered proxy value rather than one shell's assignment syntax.
+- **Rule**: when production metadata selects a platform variant, tests must seed and inspect that
+  selected variant and assert shared semantics unless syntax itself is the behavior under test.
+
+## 2026-08-29 — A host boundary must remove ambient compatibility entry points
+
+- **Symptom**: the Phase 2 migration routed normal CLI commands through `CoreRuntime`, but Sys
+  preflight and preset validation could still observe the real filesystem, while public legacy
+  launcher and manifest methods could mutate state without a host.
+- **Root cause**: boundary tests checked that selected CLI files were deleted or mentioned Core,
+  but did not reject no-host public APIs or direct `Path`/`std::fs` calls inside Core-owned flows.
+- **Fix**: require hosts for validation and manifest persistence, capture cwd explicitly, move
+  external/overlay discovery into shared host-backed runtime bootstrap, materialize Sys inputs only
+  for authorized execution, hide test-only launcher helpers, and add behavioral boundary tests.
+- **Rule**: dependency inversion does not forbid Core infrastructure from observing a real host. It
+  requires shared bootstrap and resource operations to observe through explicit ports, while domain
+  execution consumes captured inputs and exposes no ambient or no-host compatibility entry point.
+
 ## 2026-08-28 — Native-shell integration tests must assert native syntax
 
 - **Symptom**: the Windows Rust test job rejected the profile written by `shell completion install`
@@ -459,7 +790,7 @@ the second was the real blocker.
   in `apply_*_env_override`). `env set`/`encrypt`/`delete` consult it before writing: refuse
   with a clear "this write would have no effect, X currently wins" error by default; `--force`
   writes directly into that override file instead (`write_env_override_entry`, comment- and
-  description-preserving via the same `utils::migration::sync_table` `Config::save()` uses),
+  description-preserving via the same `shine_core::migration::sync_table` `Config::save()` uses),
   and warns loudly when the winning file is the shine-managed overlay mirror, since that
   write is discarded on the next `shine preset pull`.
 - **Rule**: a `set`/`delete`-shaped command must never report success for a write that a

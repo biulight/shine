@@ -24,7 +24,7 @@ impl Config {
                     .parse()
                     .context("Fail to parse existing config for comment preservation")?;
 
-                utils::migration::sync_table(doc.as_table_mut(), &new_table);
+                shine_core::migration::sync_table(doc.as_table_mut(), &new_table);
                 doc.to_string()
             }
         } else {
@@ -53,6 +53,7 @@ impl Config {
             sparse.remove("last_cleared_schema_version");
             // Executable sys-code permission is intentionally global-only. Never preserve or
             // materialize it in a project configuration that could authorize its own presets.
+            sparse.remove("allow_app_hooks");
             sparse.remove("allow_sys_code");
             return Ok(sparse);
         }
@@ -339,31 +340,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn allow_app_hooks_round_trips_through_save() {
+    async fn retired_coarse_trust_flags_are_not_saved() {
         let dir = make_temp_dir().await;
         let mut config = config_in(&dir);
-        config.allow_app_hooks = true;
+        config.legacy_allow_app_hooks = true;
+        config.legacy_allow_sys_code = true;
 
         config.save().await.unwrap();
 
         let content = fs::read_to_string(&config.config_path).await.unwrap();
-        let loaded: Config = toml::from_str(&content).unwrap();
-        assert!(loaded.allow_app_hooks);
-
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn allow_sys_code_round_trips_through_save() {
-        let dir = make_temp_dir().await;
-        let mut config = config_in(&dir);
-        config.allow_sys_code = true;
-
-        config.save().await.unwrap();
-
-        let content = fs::read_to_string(&config.config_path).await.unwrap();
-        let loaded: Config = toml::from_str(&content).unwrap();
-        assert!(loaded.allow_sys_code);
+        assert!(!content.contains("allow_app_hooks"));
+        assert!(!content.contains("allow_sys_code"));
 
         fs::remove_dir_all(&dir).await.unwrap();
     }

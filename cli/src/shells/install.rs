@@ -1,19 +1,24 @@
-use super::links::{build_link_specs, print_link_conflicts};
+use super::links::link_conflict_render_lines;
+#[cfg(test)]
+use super::profile::append_path_to_shell_config;
 use super::profile::{
-    append_path_to_shell_config, managed_shell_profile_path, print_source_command_activation_hint,
-    shell_source_command,
+    managed_shell_profile_path, shell_source_command, source_command_activation_hint_lines,
 };
 use super::report::{
-    ShellUpgradeReport, link_report_summary_parts, preset_extract_summary_parts,
-    upgrade_link_report_summary_parts,
+    ShellUpgradeReport, link_report_summary_parts, shell_cache_summary_parts, style_bold,
+    style_dim, style_green, style_symbol, style_yellow,
 };
-use super::template::{ScriptTemplate, apply_template_to_scripts};
 use super::{PathUpdateStatus, get_shell_config_path, metadata};
-use crate::colors;
 use crate::config::Config;
 use crate::output;
+use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
 use anyhow::{Context, Result};
+use shine_core::lifecycle::{
+    LifecycleEffect, LifecycleOperation, LifecycleOutcomeV1, LifecycleResultV1, LifecycleStatus,
+};
+use shine_core::runtime::{PlanningInputVersions, ShellPlanRequest};
 use std::collections::BTreeSet;
+#[cfg(test)]
 use std::path::Path;
 
 const SHELL_TEMPLATE: &str = r#"# Shell preset metadata for shine.
@@ -25,6 +30,9 @@ target = "mytool"
 needs_source = false
 # Optional: limit a file to specific platforms.
 # platforms = ["macos"]    # exact: macos/linux/windows; unix groups macOS + Linux
+
+[files.permissions]
+schema_version = 1
 
 # PowerShell scripts are also supported:
 # source = "my_tool.ps1"
@@ -38,12 +46,19 @@ needs_source = false
 # description = "What mytool does."  # or a `// ...` header at the top of my_tool.ts
 # transforms = ["template"] # opt into @@VAR@@ env substitution (static, needs `shine upgrade`)
 # env = ["API_URL", "SERVICE_TOKEN=API_TOKEN"]  # inject shine values at launch; read via Bun.env
+# [files.permissions]
+# schema_version = 1
+# commands = ["bun"]
+# environment = [
+#   { name = "API_URL", sensitivity = "plain" },
+#   { name = "SERVICE_TOKEN", sensitivity = "secret" },
+# ]
 "#;
 
 pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
     let (path, overwritten) =
-        utils::init_template::write_shine_toml_template(&dir, force, SHELL_TEMPLATE)?;
+        shine_core::init_template::write_shine_toml_template(&dir, force, SHELL_TEMPLATE)?;
     if overwritten {
         println!("Updated shell preset template: {}", path.display());
     } else {
@@ -53,132 +68,174 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
 }
 
 pub async fn handle_install(config: &Config, target: Option<&str>, force: bool) -> Result<()> {
-    crate::config::print_presets_note(config);
+    handle_install_approved(config, target, force, true).await
+}
+
+pub async fn handle_install_approved(
+    config: &Config,
+    target: Option<&str>,
+    force: bool,
+    yes: bool,
+) -> Result<()> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_install_with_reporter(config, target, force, yes, &mut renderer)
+        .await
+        .map(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) async fn handle_install_with_result(
+    config: &Config,
+    target: Option<&str>,
+    force: bool,
+) -> Result<LifecycleResultV1> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_install_with_reporter(config, target, force, true, &mut renderer).await
+}
+
+async fn handle_install_with_reporter(
+    config: &Config,
+    target: Option<&str>,
+    force: bool,
+    yes: bool,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<LifecycleResultV1> {
+    for line in crate::config::presets_note_lines(config) {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
     let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
     let category_filter = selection.map(|target| target.category);
-    let mut categories = match selection {
-        Some(target) => metadata::load_active_target(config, target).await?,
-        None => metadata::load_active_categories(config, None).await?,
-    };
-    if categories.is_empty() {
-        anyhow::bail!("no shell preset categories found");
-    }
-
-    let prefix = match category_filter {
-        Some(category) => format!("shell/{category}"),
-        None => "shell".to_string(),
-    };
-
-    // When using the default presets directory, extract the embedded assets first.
+    let reviewed = crate::lifecycle_plan::review_plans(
+        config,
+        [crate::lifecycle_plan::LifecyclePlanRequest::shell(
+            ShellPlanRequest {
+                operation: LifecycleOperation::Install,
+                target: target.map(str::to_string),
+                force,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            },
+            config,
+        )],
+        yes,
+    )
+    .await?
+    .into_iter()
+    .next()
+    .expect("one reviewed Shell Plan");
+    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    let core_report = runtime
+        .install_shells_approved(
+            match &reviewed.request {
+                crate::lifecycle_plan::LifecyclePlanRequest::Shell(request) => request.clone(),
+                _ => unreachable!("reviewed Shell Plan"),
+            },
+            &reviewed.approval,
+        )
+        .await?;
     if !config.is_external_presets {
-        let report = crate::presets::extract_prefix(&prefix, config.presets_dir(), force).await?;
-        output::summary_line("Shell Presets", &preset_extract_summary_parts(&report));
+        reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+            "Shell Presets",
+            &shell_cache_summary_parts(&core_report.cache),
+        )));
     }
-
-    // Embedded extraction populates the installed preset cache but must not expand a
-    // command-scoped selection into every command in its category.
-    if let Some(selection) = selection {
-        categories = metadata::load_active_target(config, selection).await?;
-    }
-    super::deployment::validate_snapshot_categories(config, &categories).await?;
-    let snapshots_updated =
-        super::deployment::materialize_snapshot_categories(config, &categories).await?;
     if config.is_external_presets
         && config.external_shell_mode == crate::config::ExternalShellMode::Snapshot
     {
-        let summary = if snapshots_updated > 0 {
-            colors::green(&format!("{snapshots_updated} updated"))
+        let summary = if core_report.snapshots_updated > 0 {
+            style_green(&format!("{} updated", core_report.snapshots_updated))
         } else {
-            colors::dim("up to date")
+            style_dim("up to date")
         };
-        output::summary_line("Shell Snapshots", &[summary]);
+        reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+            "Shell Snapshots",
+            &[summary],
+        )));
     }
-    // Build (template_source, rendered_dest) pairs for all scripts.
-    // apply_template_to_scripts renders source → rendered_dir, never modifies presets_dir.
-    let script_pairs = build_script_pairs(config, &categories);
-
-    // Apply env-variable substitution to scripts that opt in via `# shine-template: true`.
-    // Output goes to rendered_dir; presets_dir templates are left untouched.
-    apply_template_to_scripts(config, &script_pairs).await?;
-
-    // Symlinks point to the rendered file when one was produced, otherwise to the
-    // raw source in presets_dir (non-template scripts).
-    let link_specs = build_link_specs(config, &categories)?;
-    let link_report =
-        crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, force).await?;
-    let manifest_scope = if selection.is_some_and(|target| target.command.is_some()) {
-        super::deployment::ManifestUpdateScope::Commands
-    } else {
-        super::deployment::ManifestUpdateScope::Categories
-    };
-    super::deployment::update_manifest(config, &categories, manifest_scope).await?;
-
-    output::summary_line("Bin Links", &link_report_summary_parts(&link_report));
-    print_link_conflicts(config, &link_report.conflicts, category_filter);
-
-    let source_commands = installed_source_commands(config).await?;
-    let installed_commands = installed_source_commands_for_categories(config, &categories).await?;
-
+    reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+        "Bin Links",
+        &link_report_summary_parts(&core_report.links),
+    )));
+    for line in link_conflict_render_lines(config, &core_report.links.conflicts, category_filter) {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
     let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
-    let shell_update = append_path_to_shell_config(config, force, &source_commands).await?;
+    let shell_update = core_report
+        .profile
+        .as_ref()
+        .expect("Core Shell install profile report");
     let profile_path = managed_shell_profile_path(config);
     if shell_update.profile_updated {
-        output::detail_line(
+        reporter.emit(PresentationEvent::stdout(output::detail_line_text(
             "Shell Profile",
-            &colors::green("updated"),
+            &style_green("updated"),
             Some(profile_path.display().to_string()),
-        );
+        )));
     }
-    match shell_update.config_status {
+    match &shell_update.config_status {
         PathUpdateStatus::AlreadyConfigured => {
-            output::detail_line(
+            reporter.emit(PresentationEvent::stdout(output::detail_line_text(
                 "Shell Config",
-                &colors::dim("up to date"),
+                &style_dim("up to date"),
                 Some(shell_config_path.display().to_string()),
-            );
+            )));
         }
         PathUpdateStatus::Updated(path) => {
-            output::detail_line(
+            reporter.emit(PresentationEvent::stdout(output::detail_line_text(
                 "Shell Config",
-                &colors::green("updated"),
+                &style_green("updated"),
                 Some(path.display().to_string()),
-            );
+            )));
         }
     }
-    print_source_command_activation_hint(config, &shell_config_path, &installed_commands);
-    Ok(())
+    for line in source_command_activation_hint_lines(
+        config,
+        &shell_config_path,
+        &core_report.source_commands,
+    ) {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
+
+    Ok(core_report.lifecycle)
 }
 
 /// Resolve and validate a shell installation plan without extracting presets,
 /// rendering templates, creating links, updating manifests, or editing shell
 /// profiles.
 pub async fn handle_install_dry_run(config: &Config, target: Option<&str>) -> Result<()> {
-    crate::config::print_presets_note(config);
-    let selection = target.map(metadata::parse_lifecycle_target).transpose()?;
-    let categories = match selection {
-        Some(target) => metadata::load_active_target(config, target).await?,
-        None => metadata::load_active_categories(config, None).await?,
-    };
-    if categories.is_empty() {
-        anyhow::bail!("no shell preset categories found");
+    let mut renderer = TerminalRenderer::stdio();
+    handle_install_dry_run_with_reporter(config, target, &mut renderer)
+        .await
+        .map(|_| ())
+}
+
+async fn handle_install_dry_run_with_reporter(
+    config: &Config,
+    target: Option<&str>,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<LifecycleResultV1> {
+    for line in crate::config::presets_note_lines(config) {
+        reporter.emit(PresentationEvent::stdout(line));
     }
-    super::deployment::validate_snapshot_categories(config, &categories).await?;
-    let specs = build_link_specs(config, &categories)?;
-    let mut command_names = BTreeSet::new();
-    for spec in &specs {
-        let command = spec.link_name.to_string_lossy().to_string();
-        if !command_names.insert(command.clone()) {
-            anyhow::bail!("duplicate requested shell command: {command}");
-        }
-        let target = crate::bin_links::command_path_for_name(config.bin_dir(), &spec.link_name);
-        println!(
+    let core_report = crate::core_runtime::from_config(config)
+        .await?
+        .preview_install_shells(shine_core::runtime::ShellLifecycleRequest {
+            target: target.map(str::to_string),
+            dry_run: true,
+            force: false,
+        })
+        .await?;
+    for (command, target, source) in &core_report.planned_links {
+        reporter.emit(PresentationEvent::stdout(format!(
             "Would link shell command {command}: {} -> {}",
             target.display(),
-            spec.source.display()
-        );
+            source.display()
+        )));
     }
-    println!("Dry run: no shell files, links, manifests, or profiles were changed.");
-    Ok(())
+    reporter.emit(PresentationEvent::stdout(
+        "Dry run: no shell files, links, manifests, or profiles were changed.",
+    ));
+    Ok(core_report.lifecycle)
 }
 
 pub async fn handle_upgrade_installed(
@@ -186,7 +243,35 @@ pub async fn handle_upgrade_installed(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<ShellUpgradeReport> {
-    handle_upgrade_installed_target(config, None, verbose, sep).await
+    handle_upgrade_installed_with_result_approved(config, verbose, true, sep)
+        .await
+        .map(|(report, _)| report)
+}
+
+pub(crate) async fn handle_upgrade_installed_with_result_approved(
+    config: &Config,
+    verbose: bool,
+    yes: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    handle_upgrade_installed_target_with_result_approved(config, None, verbose, yes, sep).await
+}
+
+pub(crate) async fn handle_upgrade_installed_with_result_prepared(
+    config: &Config,
+    verbose: bool,
+    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+    handle_upgrade_installed_target_with_prepared_reporter(
+        config,
+        None,
+        verbose,
+        prepared,
+        &mut renderer,
+    )
+    .await
 }
 
 pub async fn handle_upgrade_installed_target(
@@ -195,185 +280,227 @@ pub async fn handle_upgrade_installed_target(
     verbose: bool,
     sep: &mut crate::output::SectionSeparator,
 ) -> Result<ShellUpgradeReport> {
-    let all_categories = if config.is_external_presets {
-        metadata::load_installed_categories(config, None).await?
-    } else {
-        metadata::load_embedded_categories(None)?
-    };
-    let shell_manifest = super::deployment::ShellManifest::load(config).await?;
-
-    let installed_commands: Vec<(String, String)> = all_categories
-        .iter()
-        .filter(|cat| category_filter.is_none_or(|filter| cat.name == filter))
-        .flat_map(|cat| {
-            cat.files.iter().filter_map(|file| {
-                let link = crate::bin_links::command_path_for_name(
-                    config.bin_dir(),
-                    std::ffi::OsStr::new(&file.command_name),
-                );
-                let canonical = format!("shell/{}/{}", cat.name, file.command_name);
-                (shell_link_exists(&link) || shell_manifest.find(&canonical).is_some())
-                    .then(|| (cat.name.clone(), file.command_name.clone()))
-            })
-        })
-        .collect();
-
-    if installed_commands.is_empty() {
-        if let Some(category) = category_filter {
-            anyhow::bail!("shell preset is not installed: {category}");
-        }
-        if verbose {
-            println!("{}", colors::dim("No installed shell presets found."));
-        }
-        return Ok(ShellUpgradeReport::default());
-    }
-
-    let installed_categories: std::collections::BTreeSet<String> = installed_commands
-        .iter()
-        .map(|(cat_name, _)| cat_name.clone())
-        .collect();
-
-    let pending_targets = pending_upgrade_targets(config, &installed_commands).await?;
-
-    if !config.is_external_presets {
-        for category in &installed_categories {
-            let prefix = format!("shell/{category}");
-            let _ = crate::presets::extract_prefix(&prefix, config.presets_dir(), true).await?;
-        }
-    }
-
-    let categories = metadata::load_installed_categories(config, None).await?;
-    let mut categories: Vec<_> = categories
-        .into_iter()
-        .filter(|cat| installed_categories.contains(&cat.name))
-        .collect();
-    for cat in &mut categories {
-        cat.files.retain(|file| {
-            installed_commands.contains(&(cat.name.clone(), file.command_name.clone()))
-        });
-    }
-
-    super::deployment::validate_snapshot_categories(config, &categories).await?;
-    let snapshots_updated =
-        super::deployment::materialize_snapshot_categories(config, &categories).await?;
-
-    let script_pairs = build_script_pairs(config, &categories);
-    let template_report = apply_template_to_scripts(config, &script_pairs).await?;
-
-    let link_specs = build_link_specs(config, &categories)?;
-    let link_report =
-        crate::bin_links::link_executables_with_names(config.bin_dir(), &link_specs, true).await?;
-    super::deployment::update_manifest(
+    handle_upgrade_installed_target_with_result_approved(
         config,
-        &categories,
-        super::deployment::ManifestUpdateScope::Categories,
-    )
-    .await?;
-
-    let link_parts = upgrade_link_report_summary_parts(&link_report, verbose);
-
-    let source_commands = installed_source_commands(config).await?;
-
-    let shell_update = append_path_to_shell_config(config, false, &source_commands).await?;
-    let updated_shell_config = match shell_update.config_status {
-        PathUpdateStatus::AlreadyConfigured => None,
-        PathUpdateStatus::Updated(path) => Some(path),
-    };
-
-    let remaining_targets = pending_upgrade_targets(config, &installed_commands).await?;
-    let mut updated_targets = pending_targets
-        .difference(&remaining_targets)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    updated_targets.extend(template_report.updated.iter().cloned());
-    for link in link_report.created.iter().chain(&link_report.overwritten) {
-        let Some(command) = link.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        updated_targets.extend(
-            installed_commands
-                .iter()
-                .filter(|(_, installed_command)| installed_command == command)
-                .map(|(category, installed_command)| format!("{category}/{installed_command}")),
-        );
-    }
-    let updated_targets = updated_targets.into_iter().collect::<Vec<_>>();
-    let updated_categories = lifecycle_categories(&updated_targets);
-
-    let has_visible_result = should_print_upgrade_section(
+        category_filter,
         verbose,
-        !updated_categories.is_empty(),
-        !link_report.conflicts.is_empty(),
-        updated_shell_config.is_some(),
-    );
-    if has_visible_result {
-        sep.begin();
-        if verbose {
-            output::summary_line(
-                "Shell Presets",
-                &[colors::dim(&format!(
-                    "{} installed categories",
-                    installed_categories.len()
-                ))],
-            );
-        } else {
-            println!("{}", colors::bold("Shell Presets"));
-        }
-
-        for category in &updated_categories {
-            println!("  {} {category}", colors::symbol("✓"));
-        }
-        if verbose && snapshots_updated > 0 {
-            println!(
-                "  {} {}",
-                colors::symbol("✓"),
-                colors::green(&format!("{snapshots_updated} snapshot(s) updated"))
-            );
-        }
-        if verbose && !template_report.updated.is_empty() {
-            output::summary_line(
-                "Templates",
-                &[colors::green(&format!(
-                    "{} rendered",
-                    template_report.updated.len()
-                ))],
-            );
-        }
-        if should_print_link_summary(verbose, link_report.conflicts.len()) {
-            if verbose && !link_parts.is_empty() {
-                output::summary_line("Bin Links", &link_parts);
-            } else if !link_report.conflicts.is_empty() {
-                output::summary_line(
-                    "Bin Links",
-                    &[colors::yellow(&format!(
-                        "{} conflicts",
-                        link_report.conflicts.len()
-                    ))],
-                );
-            }
-        }
-        print_link_conflicts(config, &link_report.conflicts, None);
-        if let Some(path) = &updated_shell_config {
-            output::detail_line(
-                "Shell Config",
-                &colors::green("updated"),
-                Some(path.display().to_string()),
-            );
-        }
-    }
-
-    Ok(ShellUpgradeReport {
-        updated_targets,
-        updated_categories,
-        snapshots_updated,
-        templates_updated: template_report.updated.len(),
-        links_created: link_report.created.len(),
-        links_updated: link_report.overwritten.len(),
-        link_conflicts: link_report.conflicts.len(),
-        path_changed: updated_shell_config.is_some(),
-    })
+        true,
+        sep,
+    )
+    .await
+    .map(|(report, _)| report)
 }
 
+#[cfg(test)]
+pub(crate) async fn handle_upgrade_installed_target_with_result(
+    config: &Config,
+    category_filter: Option<&str>,
+    verbose: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    handle_upgrade_installed_target_with_result_approved(
+        config,
+        category_filter,
+        verbose,
+        true,
+        sep,
+    )
+    .await
+}
+
+pub(crate) async fn handle_upgrade_installed_target_with_result_approved(
+    config: &Config,
+    category_filter: Option<&str>,
+    verbose: bool,
+    yes: bool,
+    sep: &mut crate::output::SectionSeparator,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    let mut renderer = TerminalRenderer::stdio_with_separator(sep);
+    handle_upgrade_installed_target_with_reporter(
+        config,
+        category_filter,
+        verbose,
+        yes,
+        &mut renderer,
+    )
+    .await
+}
+
+async fn handle_upgrade_installed_target_with_reporter(
+    config: &Config,
+    category_filter: Option<&str>,
+    verbose: bool,
+    yes: bool,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    let reviewed = crate::lifecycle_plan::review_plans(
+        config,
+        [crate::lifecycle_plan::LifecyclePlanRequest::shell(
+            ShellPlanRequest {
+                operation: LifecycleOperation::Upgrade,
+                target: category_filter.map(str::to_string),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            },
+            config,
+        )],
+        yes,
+    )
+    .await?
+    .into_iter()
+    .next()
+    .expect("one reviewed Shell Plan");
+    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
+    handle_upgrade_installed_target_with_prepared_reporter(
+        config,
+        category_filter,
+        verbose,
+        crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime },
+        reporter,
+    )
+    .await
+}
+
+async fn handle_upgrade_installed_target_with_prepared_reporter(
+    config: &Config,
+    category_filter: Option<&str>,
+    verbose: bool,
+    prepared: crate::lifecycle_plan::PreparedLifecyclePlan,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<(ShellUpgradeReport, LifecycleResultV1)> {
+    let crate::lifecycle_plan::PreparedLifecyclePlan { reviewed, runtime } = prepared;
+    let core = runtime
+        .upgrade_shells_approved(
+            match &reviewed.request {
+                crate::lifecycle_plan::LifecyclePlanRequest::Shell(request) => request.clone(),
+                _ => unreachable!("reviewed Shell Plan"),
+            },
+            &reviewed.approval,
+        )
+        .await?;
+    if core.runs.is_empty() {
+        if verbose {
+            reporter.emit(PresentationEvent::stdout(style_dim(
+                "No installed shell presets found.",
+            )));
+        }
+        return Ok((ShellUpgradeReport::default(), core.lifecycle));
+    }
+
+    let snapshots_updated = core.runs.iter().map(|run| run.snapshots_updated).sum();
+    let templates_updated = core
+        .runs
+        .iter()
+        .map(|run| run.templates.updated.len())
+        .sum();
+    let links_created = core.runs.iter().map(|run| run.links.created.len()).sum();
+    let links_updated = core
+        .runs
+        .iter()
+        .map(|run| run.links.overwritten.len())
+        .sum();
+    let link_conflicts = core.runs.iter().map(|run| run.links.conflicts.len()).sum();
+    let path_changed = core.runs.iter().any(|run| {
+        run.profile.as_ref().is_some_and(|profile| {
+            profile.profile_updated || matches!(profile.config_status, PathUpdateStatus::Updated(_))
+        })
+    });
+    let has_visible_result = should_print_upgrade_section(
+        verbose,
+        !core.updated_categories.is_empty(),
+        link_conflicts > 0,
+        path_changed,
+    );
+    if has_visible_result {
+        reporter.emit(PresentationEvent::SectionStart);
+        if verbose {
+            let installed_categories = core
+                .runs
+                .iter()
+                .flat_map(|run| run.categories.iter().map(|category| category.name.as_str()))
+                .collect::<BTreeSet<_>>()
+                .len();
+            reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+                "Shell Presets",
+                &[style_dim(&format!(
+                    "{installed_categories} installed categories"
+                ))],
+            )));
+        } else {
+            reporter.emit(PresentationEvent::stdout(style_bold("Shell Presets")));
+        }
+        for category in &core.updated_categories {
+            reporter.emit(PresentationEvent::stdout(format!(
+                "  {} {category}",
+                style_symbol("✓")
+            )));
+        }
+        if verbose && snapshots_updated > 0 {
+            reporter.emit(PresentationEvent::stdout(format!(
+                "  {} {}",
+                style_symbol("✓"),
+                style_green(&format!("{snapshots_updated} snapshot(s) updated"))
+            )));
+        }
+        if verbose && templates_updated > 0 {
+            reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+                "Templates",
+                &[style_green(&format!("{templates_updated} rendered"))],
+            )));
+        }
+        if should_print_link_summary(verbose, link_conflicts) {
+            let parts = vec![
+                (links_created > 0).then(|| style_green(&format!("{links_created} created"))),
+                (links_updated > 0).then(|| style_green(&format!("{links_updated} updated"))),
+                (link_conflicts > 0).then(|| style_yellow(&format!("{link_conflicts} conflicts"))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+            if !parts.is_empty() {
+                reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+                    "Bin Links",
+                    &parts,
+                )));
+            }
+        }
+        for run in &core.runs {
+            for line in link_conflict_render_lines(config, &run.links.conflicts, category_filter) {
+                reporter.emit(PresentationEvent::stdout(line));
+            }
+        }
+        if path_changed
+            && let Some(path) = core.runs.iter().find_map(|run| {
+                run.profile
+                    .as_ref()
+                    .and_then(|profile| match &profile.config_status {
+                        PathUpdateStatus::Updated(path) => Some(path),
+                        PathUpdateStatus::AlreadyConfigured => None,
+                    })
+            })
+        {
+            reporter.emit(PresentationEvent::stdout(output::detail_line_text(
+                "Shell Config",
+                &style_green("updated"),
+                Some(path.display().to_string()),
+            )));
+        }
+    }
+    Ok((
+        ShellUpgradeReport {
+            updated_targets: core.updated_targets,
+            updated_categories: core.updated_categories,
+            snapshots_updated,
+            templates_updated,
+            links_created,
+            links_updated,
+            link_conflicts,
+            path_changed,
+        },
+        core.lifecycle,
+    ))
+}
 fn should_print_upgrade_section(
     verbose: bool,
     targets_updated: bool,
@@ -387,51 +514,91 @@ fn should_print_link_summary(verbose: bool, conflict_count: usize) -> bool {
     verbose || conflict_count > 0
 }
 
-fn lifecycle_categories(targets: &[String]) -> Vec<String> {
-    targets
-        .iter()
-        .filter_map(|target| {
-            target
-                .split_once('/')
-                .map(|(category, _)| category.to_string())
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-async fn pending_upgrade_targets(
-    config: &Config,
-    installed_commands: &[(String, String)],
-) -> Result<BTreeSet<String>> {
-    let installed_targets = installed_commands
-        .iter()
-        .map(|(category, command)| format!("{category}/{command}"))
-        .collect::<BTreeSet<_>>();
-    Ok(crate::status::build_shell_rows(config)
+pub(crate) async fn collect_update_lifecycle_result(config: &Config) -> Result<LifecycleResultV1> {
+    let mut result = LifecycleResultV1::new(LifecycleOperation::Update, false);
+    for row in crate::status::build_shell_rows(config)
         .await?
         .into_iter()
-        .filter(|row| row.status_sym == "↑" && installed_targets.contains(&row.label))
-        .map(|row| row.label)
-        .collect())
+        .filter(|row| row.is_installed)
+    {
+        let mut effects = Vec::new();
+        if row.changes.iter().any(|change| {
+            matches!(
+                change,
+                crate::status::UpdateChange::ContentChanged
+                    | crate::status::UpdateChange::SourceRelocated { .. }
+                    | crate::status::UpdateChange::DeploymentChanged {
+                        field: "snapshot",
+                        ..
+                    }
+            )
+        }) {
+            effects.push(LifecycleEffect::CacheWritePreviewed);
+        }
+        if row.changes.iter().any(|change| {
+            matches!(
+                change,
+                crate::status::UpdateChange::ManifestEntryMissing { .. }
+            )
+        }) {
+            effects.push(LifecycleEffect::ReceiptWritePreviewed);
+        }
+        if row.changes.iter().any(|change| {
+            !matches!(
+                change,
+                crate::status::UpdateChange::ManifestEntryMissing { .. }
+            )
+        }) {
+            effects.push(LifecycleEffect::ResourceWritePreviewed);
+        }
+        let outcome = LifecycleOutcomeV1::new(
+            format!(
+                "shell/{}/{}",
+                row.category,
+                row.label.split('/').next_back().unwrap_or(&row.label)
+            ),
+            None::<String>,
+            if row.link_conflict {
+                LifecycleStatus::Conflict
+            } else if row.status_sym == "↑" {
+                LifecycleStatus::Pending
+            } else {
+                LifecycleStatus::Unchanged
+            },
+            if row.link_conflict {
+                vec![LifecycleEffect::UserResourcePreserved]
+            } else {
+                effects
+            },
+        );
+        result.push(if row.link_conflict {
+            outcome.with_diagnostic_code("shell_command_conflict")
+        } else {
+            outcome
+        });
+    }
+    Ok(result)
 }
 
 pub async fn handle_completion_install(config: &Config) -> Result<()> {
-    let source_commands = installed_source_commands(config).await?;
+    let completion = crate::core_runtime::from_config(config)
+        .await?
+        .install_shell_completion(false)
+        .await?;
     let shell_config_path = get_shell_config_path(&config.shell_type, &config.home_dir)?;
-    let shell_update = append_path_to_shell_config(config, false, &source_commands).await?;
+    let shell_update = completion.profile;
     let profile_path = managed_shell_profile_path(config);
 
     if shell_update.profile_updated {
         output::detail_line(
             "Shell Profile",
-            &colors::green("updated"),
+            &style_green("updated"),
             Some(profile_path.display().to_string()),
         );
     } else {
         output::detail_line(
             "Shell Profile",
-            &colors::dim("up to date"),
+            &style_dim("up to date"),
             Some(profile_path.display().to_string()),
         );
     }
@@ -440,14 +607,14 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
         PathUpdateStatus::AlreadyConfigured => {
             output::detail_line(
                 "Shell Config",
-                &colors::dim("up to date"),
+                &style_dim("up to date"),
                 Some(shell_config_path.display().to_string()),
             );
         }
         PathUpdateStatus::Updated(path) => {
             output::detail_line(
                 "Shell Config",
-                &colors::green("updated"),
+                &style_green("updated"),
                 Some(path.display().to_string()),
             );
         }
@@ -457,7 +624,7 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
         let shell: &'static str = config.shell_type.into();
         output::detail_line(
             "Completion",
-            &colors::yellow("unsupported"),
+            &style_yellow("unsupported"),
             Some(format!("{shell}; PATH setup was installed")),
         );
     }
@@ -470,65 +637,6 @@ pub async fn handle_completion_install(config: &Config) -> Result<()> {
         ),
     );
     Ok(())
-}
-
-fn shell_link_exists(link: &Path) -> bool {
-    link.exists()
-        || std::fs::symlink_metadata(link)
-            .map(|meta| meta.file_type().is_symlink())
-            .unwrap_or(false)
-}
-
-/// For each script that declares `# shine-template: true`, read the template from
-/// `source_path` (presets_dir — never modified), substitute env variables from
-fn build_script_pairs(
-    config: &Config,
-    categories: &[metadata::ShellCategory],
-) -> Vec<ScriptTemplate> {
-    categories
-        .iter()
-        .flat_map(|cat| {
-            cat.files.iter().map(|file| {
-                let source =
-                    super::deployment::deployment_source_path(config, &cat.name, &file.source_rel);
-                let rendered =
-                    super::deployment::rendered_path(config, &cat.name, &file.source_rel);
-                ScriptTemplate {
-                    source_path: source,
-                    rendered_path: rendered,
-                    display_name: format!("{}/{}", cat.name, file.command_name),
-                    transforms: file.transforms.clone(),
-                }
-            })
-        })
-        .collect()
-}
-
-pub(super) async fn installed_source_commands(config: &Config) -> Result<Vec<String>> {
-    let categories = metadata::load_installed_categories(config, None).await?;
-    installed_source_commands_for_categories(config, &categories).await
-}
-
-async fn installed_source_commands_for_categories(
-    config: &Config,
-    categories: &[metadata::ShellCategory],
-) -> Result<Vec<String>> {
-    let mut commands = categories
-        .iter()
-        .flat_map(|cat| cat.files.iter())
-        .filter(|file| file.needs_source)
-        .filter(|file| {
-            let link = crate::bin_links::command_path_for_name(
-                config.bin_dir(),
-                std::ffi::OsStr::new(&file.command_name),
-            );
-            shell_link_exists(&link)
-        })
-        .map(|file| file.command_name.clone())
-        .collect::<Vec<_>>();
-    commands.sort();
-    commands.dedup();
-    Ok(commands)
 }
 
 #[cfg(test)]
@@ -555,17 +663,6 @@ mod tests {
         assert!(!should_print_link_summary(false, 0));
         assert!(should_print_link_summary(true, 0));
         assert!(should_print_link_summary(false, 1));
-    }
-
-    #[test]
-    fn lifecycle_categories_count_each_shell_category_once() {
-        let targets = vec![
-            "proxy/setproxy".to_string(),
-            "proxy/usetproxy".to_string(),
-            "utils/copyfile".to_string(),
-        ];
-
-        assert_eq!(lifecycle_categories(&targets), vec!["proxy", "utils"]);
     }
 
     async fn make_temp_dir() -> PathBuf {
@@ -606,9 +703,13 @@ mod tests {
         let config = Config::new_for_test(&dir);
         fs::create_dir_all(config.bin_dir()).await.unwrap();
 
-        handle_install(&config, Some("utils/shine-env-export"), false)
+        let lifecycle = handle_install_with_result(&config, Some("utils/shine-env-export"), false)
             .await
             .unwrap();
+
+        assert_eq!(lifecycle.outcomes.len(), 1);
+        assert_eq!(lifecycle.outcomes[0].target, "shell/utils/shine-env-export");
+        assert_eq!(lifecycle.outcomes[0].status, LifecycleStatus::Changed);
 
         let selected = crate::bin_links::command_path_for_name(
             config.bin_dir(),
@@ -621,9 +722,10 @@ mod tests {
         assert!(selected.exists());
         assert!(!sibling.exists());
 
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_some());
         assert!(manifest.find("shell/utils/shine-theme-sync").is_none());
 
@@ -656,9 +758,10 @@ mod tests {
             .await
             .unwrap();
 
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_some());
         assert!(manifest.find("shell/utils/shine-theme-sync").is_some());
 
@@ -675,10 +778,32 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("shell preset command not found: utils/not-a-command"));
+        assert!(error.contains("not-a-command"), "{error}");
         assert!(!config.bin_dir().exists());
         assert!(!config.presets_dir().join("shell/utils").exists());
 
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn future_manifest_rejects_install_before_shell_mutation() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        fs::write(
+            config.shine_dir().join("shell-manifest.toml"),
+            "schema_version = 2\nentries = []\n",
+        )
+        .await
+        .unwrap();
+
+        let error = handle_install(&config, Some("utils/shine-env-export"), false)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("newer than this Shine supports"));
+        assert!(!config.presets_dir().join("shell/utils").exists());
+        assert!(!config.bin_dir().exists());
+        assert!(!config.home_dir.join(".zshrc").exists());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -698,7 +823,8 @@ mod tests {
             config.bin_dir(),
             std::ffi::OsStr::new("shine-theme-sync"),
         );
-        crate::bin_links::unlink_managed_command(
+        shine_core::runtime::unlink_managed_command_with_host(
+            &shine_core::runtime::RealHost,
             config.bin_dir(),
             std::ffi::OsStr::new("shine-env-export"),
             &[config.presets_dir().join("shell/utils")],
@@ -706,6 +832,19 @@ mod tests {
         )
         .await
         .unwrap();
+
+        let pending = collect_update_lifecycle_result(&config).await.unwrap();
+        let selected_pending = pending
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target == "shell/utils/shine-env-export")
+            .unwrap();
+        assert_eq!(selected_pending.status, LifecycleStatus::Pending);
+        assert!(
+            selected_pending
+                .effects
+                .contains(&LifecycleEffect::ResourceWritePreviewed)
+        );
 
         let mut separator = crate::output::SectionSeparator::new();
         handle_upgrade_installed_target(&config, Some("utils"), false, &mut separator)
@@ -725,7 +864,7 @@ mod tests {
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n",
+            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -761,6 +900,98 @@ mod tests {
         assert!(!sibling.is_installed);
         assert_eq!(sibling.status_text, "not installed");
         assert!(sibling.changes.is_empty());
+
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn structured_snapshot_lifecycle_covers_update_upgrade_and_uninstall() {
+        let dir = make_temp_dir().await;
+        let category = dir.join("presets/shell/custom");
+        fs::create_dir_all(&category).await.unwrap();
+        fs::write(
+            category.join("shine.toml"),
+            b"[[files]]\nsource = \"one.sh\"\ntarget = \"one\"\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"two.sh\"\ntarget = \"two\"\n[files.permissions]\nschema_version = 1\n",
+        )
+        .await
+        .unwrap();
+        fs::write(category.join("one.sh"), b"#!/bin/sh\necho one\n")
+            .await
+            .unwrap();
+        fs::write(category.join("two.sh"), b"#!/bin/sh\necho two\n")
+            .await
+            .unwrap();
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.bin_dir()).await.unwrap();
+
+        let install = handle_install_with_result(&config, Some("custom/one"), false)
+            .await
+            .unwrap();
+        assert!(install.outcomes.iter().any(|outcome| {
+            outcome.target == "shell/custom/one" && outcome.status == LifecycleStatus::Changed
+        }));
+        let sibling =
+            crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("two"));
+        assert!(!sibling.exists());
+        assert!(config.installed_shell_dir().join("custom/two.sh").exists());
+
+        fs::write(category.join("one.sh"), b"#!/bin/sh\necho updated\n")
+            .await
+            .unwrap();
+        let update = collect_update_lifecycle_result(&config).await.unwrap();
+        let pending = update
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target == "shell/custom/one")
+            .unwrap();
+        assert_eq!(pending.status, LifecycleStatus::Pending);
+        assert!(
+            pending
+                .effects
+                .contains(&LifecycleEffect::CacheWritePreviewed)
+        );
+
+        let mut separator = crate::output::SectionSeparator::new();
+        let (report, upgrade) = handle_upgrade_installed_target_with_result(
+            &config,
+            Some("custom"),
+            false,
+            &mut separator,
+        )
+        .await
+        .unwrap();
+        assert_eq!(report.updated_targets, ["custom/one"]);
+        assert!(upgrade.outcomes.iter().any(|outcome| {
+            outcome.target == "shell/custom/one" && outcome.status == LifecycleStatus::Changed
+        }));
+        assert!(!sibling.exists());
+        assert_eq!(
+            fs::read(category.join("one.sh")).await.unwrap(),
+            b"#!/bin/sh\necho updated\n"
+        );
+
+        let current = collect_update_lifecycle_result(&config).await.unwrap();
+        assert!(current.outcomes.iter().any(|outcome| {
+            outcome.target == "shell/custom/one" && outcome.status == LifecycleStatus::Unchanged
+        }));
+
+        let uninstall = super::super::uninstall::handle_uninstall_with_result(
+            &config,
+            Some("custom/one"),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(uninstall.outcomes.iter().any(|outcome| {
+            outcome.target == "shell/custom/one" && outcome.status == LifecycleStatus::Changed
+        }));
+        assert!(!config.installed_shell_dir().join("custom").exists());
+        assert!(category.join("one.sh").exists());
+        assert!(category.join("two.sh").exists());
+        assert!(!sibling.exists());
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1123,10 +1354,10 @@ mod tests {
         handle_install(&config, Some("agent"), false).await.unwrap();
         handle_install(&config, Some("proxy"), false).await.unwrap();
 
-        let proxy_only = metadata::load_installed_categories(&config, Some("proxy"))
+        let commands = crate::core_runtime::from_config(&config)
             .await
-            .unwrap();
-        let commands = installed_source_commands_for_categories(&config, &proxy_only)
+            .unwrap()
+            .installed_shell_source_commands(Some("proxy"))
             .await
             .unwrap();
 
@@ -1151,6 +1382,12 @@ mod tests {
         fs::write(&script, b"#!/bin/bash\n# My tool.\necho hi\n")
             .await
             .unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"my_tool.sh\"\ntarget = \"my_tool\"\n[files.permissions]\nschema_version = 1\n",
+        )
+        .await
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&script).await.unwrap().permissions();
         perms.set_mode(perms.mode() | 0o111);
@@ -1165,7 +1402,7 @@ mod tests {
             .unwrap();
 
         // The script must NOT have been extracted from embedded assets into
-        // presets_dir — the only file there is the one we created above.
+        // presets_dir — only the user script and its metadata are present.
         let count = {
             let mut rd = fs::read_dir(&cat_dir).await.unwrap();
             let mut n = 0u32;
@@ -1174,7 +1411,7 @@ mod tests {
             }
             n
         };
-        assert_eq!(count, 1, "no embedded assets should have been extracted");
+        assert_eq!(count, 2, "no embedded assets should have been extracted");
 
         // A bin symlink for the script should have been created.
         let link = config.bin_dir().join("my_tool");
@@ -1191,7 +1428,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1226,7 +1463,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n[[files]]\nsource = \"uset_proxy.sh\"\ntarget = \"usetproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n[files.permissions]\nschema_version = 1\n[[files]]\nsource = \"uset_proxy.sh\"\ntarget = \"usetproxy\"\nneeds_source = true\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1262,7 +1499,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
 
         let (path, overwritten) =
-            utils::init_template::write_shine_toml_template(&cat_dir, false, SHELL_TEMPLATE)
+            shine_core::init_template::write_shine_toml_template(&cat_dir, false, SHELL_TEMPLATE)
                 .unwrap();
         fs::write(
             cat_dir.join("my_tool.sh"),
@@ -1289,6 +1526,13 @@ mod tests {
         );
         assert_eq!(categories[0].files[0].command_name, "mytool");
         assert!(!categories[0].files[0].needs_source);
+        assert_eq!(
+            categories[0].files[0]
+                .permissions
+                .as_ref()
+                .map(|permissions| permissions.schema_version),
+            Some(1)
+        );
 
         fs::remove_dir_all(&dir).await.unwrap();
     }
@@ -1298,7 +1542,7 @@ mod tests {
         let dir = make_temp_dir().await;
         fs::write(dir.join("shine.toml"), b"old").await.unwrap();
 
-        let err = utils::init_template::write_shine_toml_template(&dir, false, SHELL_TEMPLATE)
+        let err = shine_core::init_template::write_shine_toml_template(&dir, false, SHELL_TEMPLATE)
             .unwrap_err();
         assert!(
             err.to_string().contains("use --force to overwrite"),
@@ -1307,7 +1551,8 @@ mod tests {
         assert_eq!(fs::read(dir.join("shine.toml")).await.unwrap(), b"old");
 
         let (_path, overwritten) =
-            utils::init_template::write_shine_toml_template(&dir, true, SHELL_TEMPLATE).unwrap();
+            shine_core::init_template::write_shine_toml_template(&dir, true, SHELL_TEMPLATE)
+                .unwrap();
         assert!(overwritten);
         let content = fs::read_to_string(dir.join("shine.toml")).await.unwrap();
         assert!(content.contains("target = \"mytool\""));
@@ -1323,7 +1568,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1388,7 +1633,12 @@ mod tests {
         );
         assert!(launcher_content.contains("bun"));
 
-        let source_commands = installed_source_commands(&config).await.unwrap();
+        let source_commands = crate::core_runtime::from_config(&config)
+            .await
+            .unwrap()
+            .installed_shell_source_commands(None)
+            .await
+            .unwrap();
         assert!(!source_commands.contains(&"ccenv".to_string()));
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -1441,7 +1691,7 @@ mod tests {
 
         fs::write(
             proxy_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n",
+            b"[[files]]\nsource = \"set_proxy.sh\"\ntarget = \"setproxy\"\nneeds_source = true\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1507,7 +1757,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1566,7 +1816,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\nenv = [\"API_URL\", \"SERVICE_TOKEN=API_TOKEN\"]\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\nenv = [\"API_URL\", \"SERVICE_TOKEN=API_TOKEN\"]\n[files.permissions]\nschema_version = 1\nenvironment = [{ name = \"API_URL\", sensitivity = \"plain\" }, { name = \"SERVICE_TOKEN\", sensitivity = \"plain\" }]\n",
         )
         .await
         .unwrap();
@@ -1601,7 +1851,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1641,9 +1891,10 @@ mod tests {
                 .join("custom/node_modules")
                 .exists()
         );
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
         let entry = manifest.find("shell/custom/mytool").unwrap();
         assert_eq!(entry.bun_dependencies.as_deref(), Some("locked"));
         assert!(entry.dependency_hash.is_some());
@@ -1659,7 +1910,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1709,7 +1960,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n",
+            b"[[files]]\nsource = \"tool.ts\"\ntarget = \"mytool\"\nruntime = \"bun\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1779,7 +2030,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1835,7 +2086,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1862,7 +2113,7 @@ mod tests {
             config.installed_shell_dir().join("custom/tool.sh")
         );
         assert!(
-            crate::shells::deployment::ShellManifest::load(&config)
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
                 .await
                 .unwrap()
                 .find("shell/custom/mytool")
@@ -1879,7 +2130,7 @@ mod tests {
         fs::create_dir_all(&cat_dir).await.unwrap();
         fs::write(
             cat_dir.join("shine.toml"),
-            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n",
+            b"[[files]]\nsource = \"tool.sh\"\ntarget = \"mytool\"\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -1903,9 +2154,10 @@ mod tests {
                 .unwrap(),
             source
         );
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
         assert_eq!(
             manifest.find("shell/custom/mytool").unwrap().mode,
             crate::config::ExternalShellMode::Live

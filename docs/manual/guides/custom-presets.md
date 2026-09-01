@@ -40,6 +40,9 @@ cd my-presets/app/my-editor
 shine preset new app
 # Add config files and edit shine.toml.
 shine preset validate . --format json
+shine preset lint . --format json
+shine preset plan . --platform macos --format json
+shine preset test . --format json
 ```
 
 Use `shell` or `sys` in `preset new` for the other kinds. To customize an embedded category, enter
@@ -55,6 +58,73 @@ check for updates, write files, access the network, or execute preset code.
 
 The default output is text. `--format json` emits the stable `schema_version: 1` report used by the
 skill; validation errors exit with status 1, while warnings do not.
+
+Run `shine preset schema --format json` when tooling needs the exact authoring report, fixture, or
+bundle contract shipped by the installed binary. The generated document also embeds current
+authoring-command help. Preset metadata itself remains parser-driven, so use validation rather than
+treating the generated reference as a replacement App/Shell/Sys grammar.
+
+Run `preset lint` after validation. Its separate schema-v1 report flags author-quality and
+portability concerns without redefining what the runtime accepts. Warnings are advisory by default;
+CI can use `--deny-warnings` after consciously accepting or fixing all current findings.
+
+After validation, run `preset plan` once for each target platform. It accepts only one category or
+its manifest and models a first install against deterministic empty in-memory state. Review its
+semantic steps, permissions, opaque actions, and blockers. A blocked report commonly means the
+empty assumptions omit a required environment value, trust grant, command, or administrator state;
+it is still useful authoring feedback and is never an approval for real installation.
+
+Add `shine.test.toml` when the category needs repeatable cross-platform expectations. Cases are
+declarative and run only against in-memory authoring state. `[cases.host]` can model environment
+presence, opaque secret versions, files, command detection, runtime receipts, exact trust grants,
+and administrator state without executing setup code. Runnable examples for App, Shell, and Sys
+are available under `examples/presets`; use them to assert structured actions, permissions, and
+codes rather than copying text output. `preset test` requires a single category, not a repository
+root.
+
+When you need a distributable artifact, pack the reviewed category outside its source tree:
+
+```bash
+shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
+```
+
+The returned hash identifies deterministic bundle bytes. `shine.test.toml` remains author-only and
+is not included. A pack-policy failure must be fixed in the source; `--force` only replaces the
+output file and never bypasses validation or policy.
+
+## Declare permissions
+
+New Presets declare reviewable capability identities with permission schema v1. App permissions
+belong to the category root, each Shell `[[files]]` command has its own `[files.permissions]`, and
+each Sys `[[items]]` target has its own `[items.permissions]`. A protected install, upgrade, or
+uninstall fails closed when a required declaration is missing; static validation reports
+`missing_permission_declaration`. Unsupported versions, unknown fields, invalid identities, and
+duplicates are errors.
+
+```toml
+[permissions]
+schema_version = 1
+administrator = true
+filesystem = [
+  { access = ["read", "write"], base = "home", path = ".config/example" },
+  { access = ["execute"], base = "preset", path = "build.ts" },
+]
+network = [{ scope = "host", host = "api.example.com" }]
+commands = ["bun"]
+environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
+system = [{ capability = "split-dns", resource = "private-domain" }]
+```
+
+Filesystem bases are `home`, `shine`, `data-dir`, `preset`, or `absolute`; non-absolute paths are
+normalized relative paths, with `.` meaning the selected base root. Commands contain one program
+identity without arguments. Environment entries contain names and `plain`/`secret` sensitivity,
+never values or ciphertext. Existing typed metadata already bounds ordinary destinations,
+launchers, receipts, and fixed package providers, so do not repeat those mechanics.
+
+A declaration is not an authorization grant and does not prove opaque script behavior complete.
+External executable code additionally requires a target-scoped `shine trust grant <TARGET>` after
+review. The grant binds the current code identity and exact declared permission set; it does not
+replace administrator authorization or the per-mutation security Plan.
 
 ## From source folders to installed capabilities
 
@@ -410,12 +480,11 @@ stable composition. Named `[profiles.*]` tables select bootstrap items; they do 
 content or disable integrations outside the selection.
 
 External sys install scripts and executable profile content (`eval`, `source`, fragments, and base
-files) require the user to review the source and set `allow_sys_code = true` in the global config;
-the project config cannot authorize itself. If executable sys code is blocked during bootstrap
-preflight, the error identifies the code kind and path when available, each active external preset
-layer, and the global config path. It presents separate actions to grant permission or keep external
-code blocked; no installer has run yet. Static detection, package metadata, PATH, env, and aliases
-remain available without that opt-in. Validate with
+files) require the user to review the active snapshot and run `shine trust grant sys/<ITEM>`; the
+project config and Preset cannot authorize themselves. The grant is invalidated by changed code,
+source layer, or permissions. If trust is missing during bootstrap preflight, no installer has run
+yet. Static detection, package metadata, PATH, env, and aliases remain available without a grant.
+Validate with
 `shine sys list`, `shine sys info <ITEM>`, and `shine sys bootstrap <ITEM> --dry-run`.
 
 ## Application artifact runtimes
@@ -427,10 +496,15 @@ An application's `[artifact]` can also use Bun for cross-platform apply and tear
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
+env = ["PROFILE_PATH", "API_TOKEN"]
 ```
 
 The default is `native`, which executes the script directly. `bun` accepts only `.ts`, `.js`, `.mts`,
-or `.mjs` and requires Bun on the machine. Artifact scripts receive the current Shine `[env]` and
-application path variables. To run an artifact automatically after installation or upgrade actually
-changes files, separately declare `post_install` or `post_upgrade`; external presets still require
-the user to set `allow_app_hooks = true`.
+or `.mjs` and requires Bun on the machine. `env` is the only Shine `[env]` allowlist passed to the
+artifact and supports `SOURCE=TARGET` aliases; declare each source and sensitivity again under the
+category's `[permissions].environment`. Listed sources are forwarded only when configured; missing
+optional values are omitted. Fixed application path variables are added separately. To
+run an artifact automatically after installation or upgrade actually changes files, declare
+`post_install` or `post_upgrade`; external presets require `shine trust grant app/<CATEGORY>` after
+review. A hook that invokes `shine app artifact apply` runs non-interactively and
+must include `--yes`; the nested command still renders and freshly validates its security Plan.

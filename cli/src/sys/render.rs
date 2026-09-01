@@ -1,30 +1,8 @@
-use anyhow::Result;
-use console::{Style, style};
-use dialoguer::theme::ColorfulTheme;
-
 use crate::colors;
 use crate::sys::execution::{status_symbol, status_text};
 use crate::sys::run_manifest::SysRunEntry;
 use crate::sys::{LoadedSysPreset, ResolvedSelection, SysDriverKind, SysItem, SysItemMode};
-
-pub(super) fn sys_init_theme() -> ColorfulTheme {
-    ColorfulTheme {
-        prompt_prefix: style(">".to_string()).for_stderr().cyan().bold(),
-        prompt_suffix: style("".to_string()).for_stderr(),
-        success_prefix: style("✓".to_string()).for_stderr().green(),
-        success_suffix: style("".to_string()).for_stderr(),
-        active_item_prefix: style("›".to_string()).for_stderr().cyan().bold(),
-        inactive_item_prefix: style(" ".to_string()).for_stderr(),
-        checked_item_prefix: style("[x]".to_string()).for_stderr().green(),
-        unchecked_item_prefix: style("[ ]".to_string()).for_stderr().black().bright(),
-        prompt_style: Style::new().for_stderr().bold(),
-        active_item_style: Style::new().for_stderr().cyan(),
-        inactive_item_style: Style::new().for_stderr(),
-        values_style: Style::new().for_stderr().cyan(),
-        hint_style: Style::new().for_stderr().black().bright(),
-        ..ColorfulTheme::default()
-    }
-}
+use anyhow::Result;
 
 pub(in crate::sys) fn print_available_item(item: &SysItem, entry: Option<&SysRunEntry>) {
     let kind = item_mode_name(item.mode);
@@ -72,12 +50,12 @@ pub(in crate::sys) fn driver_name(driver: SysDriverKind) -> &'static str {
 }
 
 pub(in crate::sys) async fn print_dry_run(
-    config: &crate::config::Config,
     os_id: &str,
     loaded: &LoadedSysPreset,
     selection: &ResolvedSelection,
     sys_shell: &str,
     proxy_env: &[(&'static str, String)],
+    previews: &[String],
 ) -> Result<()> {
     println!("{}", colors::dim("[dry-run] System init preview"));
     println!("  OS: {os_id}");
@@ -98,18 +76,7 @@ pub(in crate::sys) async fn print_dry_run(
         }
     );
     println!("  Commands:");
-    for item_id in &selection.item_ids {
-        let item = loaded
-            .manifest
-            .items
-            .iter()
-            .find(|item| item.id == *item_id);
-        let preview = crate::sys::bootstrap::standard_install_preview(
-            config,
-            os_id,
-            loaded,
-            item.expect("selection was validated against the manifest"),
-        )?;
+    for preview in previews {
         println!("    {preview}");
     }
     let integrations = selection

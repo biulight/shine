@@ -2,8 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-27
-- **Evidence**: `cli/src/platform.rs`, `cli/src/preset_meta.rs`,
-  `cli/src/apps/metadata.rs`, `cli/src/shells/metadata.rs`
+- **Evidence**: `core/src/runtime/{context,app_metadata,shell}.rs`
 
 ## Context
 

@@ -1,19 +1,14 @@
-use super::report::{
-    print_force_removed, print_force_removed_with_restore, print_removed,
-    print_removed_with_restore, print_uninstall_dry_run, print_uninstall_error,
-    print_uninstall_not_found, print_user_modified_kept,
-};
-use super::{metadata, resolve_install_destination, uninstall_app_entry};
-use crate::colors;
+use super::report;
 use crate::config::Config;
+#[cfg(test)]
 use crate::install_core::manifest::{AppEntry, AppManifest};
-use crate::output;
-use anyhow::{Context, Result};
-use file_ops::UninstallOutcome;
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-
-use crate::install_core::file_ops;
+use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
+use anyhow::Result;
+#[cfg(test)]
+use shine_core::lifecycle::LifecycleEffect;
+use shine_core::lifecycle::LifecycleOperation;
+use shine_core::lifecycle::LifecycleResultV1;
+use shine_core::runtime::{AppPlanRequest, PlanningInputVersions};
 
 pub async fn handle_uninstall(
     config: &Config,
@@ -22,209 +17,240 @@ pub async fn handle_uninstall(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
+    handle_uninstall_approved(config, category, force, purge, dry_run, true).await
+}
+
+pub async fn handle_uninstall_approved(
+    config: &Config,
+    category: Option<&str>,
+    force: bool,
+    purge: bool,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_uninstall_with_reporter(config, category, force, purge, dry_run, yes, &mut renderer)
+        .await
+        .map(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) async fn handle_uninstall_with_result(
+    config: &Config,
+    category: Option<&str>,
+    force: bool,
+    purge: bool,
+    dry_run: bool,
+) -> Result<LifecycleResultV1> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_uninstall_with_reporter(config, category, force, purge, dry_run, true, &mut renderer)
+        .await
+}
+
+async fn handle_uninstall_with_reporter(
+    config: &Config,
+    category: Option<&str>,
+    force: bool,
+    purge: bool,
+    dry_run: bool,
+    yes: bool,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<LifecycleResultV1> {
     if dry_run {
-        println!("{}", colors::dim("[dry-run] No files will be modified."));
+        reporter.emit(PresentationEvent::stdout(report::dry_run_header_text()));
     }
-
-    let mut manifest = AppManifest::load(config.shine_dir()).await?;
-
-    let entries: Vec<_> = if let Some(cat) = category {
-        let filtered = uninstall_entries_for_category(config, &manifest, cat).await?;
-        if filtered.is_empty() {
-            println!(
-                "{}",
-                colors::dim(&format!("No installed files found for category '{cat}'."))
-            );
-            return Ok(());
-        }
-        filtered
-    } else {
-        manifest.entries.clone()
+    let plan_request = AppPlanRequest {
+        operation: LifecycleOperation::Uninstall,
+        target: category.map(str::to_string),
+        force,
+        purge,
+        prune_stale: false,
+        input_versions: PlanningInputVersions::default(),
     };
-
-    // Run each involved category's artifact teardown (best-effort) *before*
-    // removing its files, so a teardown script sees the same on-disk state
-    // `build` saw. Loaded from metadata (still present until `remove_prefix`
-    // below); a metadata-load failure just skips teardown, never blocks removal.
-    let involved_categories: BTreeSet<String> = entries
-        .iter()
-        .filter_map(|entry| super::app_category_from_source(&entry.source))
-        .collect();
-    if !involved_categories.is_empty() {
-        let categories = metadata::load_active_categories(config, category)
-            .await
-            .unwrap_or_default();
-        for cat in &categories {
-            if involved_categories.contains(&cat.name) {
-                super::build::run_teardown_for_uninstall(config, cat, dry_run).await;
-            }
-        }
+    let reviewed = if dry_run {
+        None
+    } else {
+        crate::lifecycle_plan::review_plans(
+            config,
+            [crate::lifecycle_plan::LifecyclePlanRequest::app(
+                plan_request,
+                config,
+            )],
+            yes,
+        )
+        .await?
+        .into_iter()
+        .next()
+    };
+    let runtime = if let Some(reviewed) = &reviewed {
+        crate::lifecycle_plan::prepare_runtime(config, reviewed).await?
+    } else {
+        crate::core_runtime::from_config(config).await?
+    };
+    let mut observer = UninstallObserver { reporter };
+    let mut interaction = crate::presentation::TerminalInteraction;
+    let core_report = if let Some(reviewed) = &reviewed {
+        runtime
+            .uninstall_apps_approved(
+                match &reviewed.request {
+                    crate::lifecycle_plan::LifecyclePlanRequest::App(request) => request.clone(),
+                    _ => unreachable!("reviewed App Plan"),
+                },
+                &reviewed.approval,
+                &mut observer,
+                &mut interaction,
+            )
+            .await?
+    } else {
+        runtime
+            .preview_uninstall_apps(
+                shine_core::runtime::AppUninstallLifecycleRequest {
+                    target: category.map(str::to_string),
+                    dry_run,
+                    force,
+                    purge,
+                },
+                &mut observer,
+                &mut interaction,
+            )
+            .await?
+    };
+    if let Some(category) = category.filter(|_| core_report.files.is_empty()) {
+        observer
+            .reporter
+            .emit(PresentationEvent::stdout(report::no_installed_files_text(
+                category,
+            )));
+        return Ok(core_report.lifecycle);
     }
-
     let mut removed = 0usize;
     let mut restored = 0usize;
     let mut user_modified = 0usize;
     let mut skipped = 0usize;
-
-    for entry in &entries {
-        match uninstall_app_entry(entry, dry_run, force).await {
-            Ok(UninstallOutcome::Removed) => {
-                print_removed(config, &entry.destination);
-                manifest.remove_by_dest(&entry.destination);
+    for file in &core_report.files {
+        match file.action {
+            shine_core::runtime::AppFileAction::Removed => {
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::removed_text(
+                        config,
+                        &file.destination,
+                    )));
                 removed += 1;
             }
-            Ok(UninstallOutcome::RestoredBackup { backup }) => {
-                print_removed_with_restore(config, &entry.destination, &backup);
-                manifest.remove_by_dest(&entry.destination);
-                removed += 1;
-                restored += 1;
-            }
-            Ok(UninstallOutcome::ForceRemoved) => {
-                print_force_removed(&entry.destination);
-                manifest.remove_by_dest(&entry.destination);
-                removed += 1;
-            }
-            Ok(UninstallOutcome::ForceRestoredBackup { backup }) => {
-                print_force_removed_with_restore(&entry.destination, &backup);
-                manifest.remove_by_dest(&entry.destination);
+            shine_core::runtime::AppFileAction::Restored => {
+                let backup = file
+                    .backup
+                    .as_ref()
+                    .expect("Core restored App backup report");
+                observer.reporter.emit(PresentationEvent::stdout(
+                    report::removed_with_restore_text(config, &file.destination, backup),
+                ));
                 removed += 1;
                 restored += 1;
             }
-            Ok(UninstallOutcome::NotFound) => {
-                print_uninstall_not_found(config, &entry.destination);
-                manifest.remove_by_dest(&entry.destination);
+            shine_core::runtime::AppFileAction::ForceRemoved => {
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::force_removed_text(
+                        &file.destination,
+                    )));
+                removed += 1;
+            }
+            shine_core::runtime::AppFileAction::ForceRestored => {
+                let backup = file
+                    .backup
+                    .as_ref()
+                    .expect("Core force-restored App backup report");
+                observer.reporter.emit(PresentationEvent::stdout(
+                    report::force_removed_with_restore_text(&file.destination, backup),
+                ));
+                removed += 1;
+                restored += 1;
+            }
+            shine_core::runtime::AppFileAction::Missing => {
+                observer.reporter.emit(PresentationEvent::stdout(
+                    report::uninstall_not_found_text(config, &file.destination),
+                ));
                 skipped += 1;
             }
-            Ok(UninstallOutcome::UserModified) => {
-                print_user_modified_kept(config, &entry.destination);
+            shine_core::runtime::AppFileAction::UserModified => {
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::user_modified_kept_text(
+                        config,
+                        &file.destination,
+                    )));
                 user_modified += 1;
             }
-            Ok(UninstallOutcome::DryRun) => {
-                print_uninstall_dry_run(config, &entry.destination);
+            shine_core::runtime::AppFileAction::PreviewRemove => {
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stdout(report::uninstall_dry_run_text(
+                        config,
+                        &file.destination,
+                    )));
                 skipped += 1;
             }
-            Err(e) => {
-                print_uninstall_error(config, &entry.destination, &e);
+            shine_core::runtime::AppFileAction::Failed => {
+                let error = anyhow::anyhow!(
+                    file.error
+                        .clone()
+                        .unwrap_or_else(|| "App uninstall failed".to_string())
+                );
+                observer
+                    .reporter
+                    .emit(PresentationEvent::stderr(report::uninstall_error_text(
+                        config,
+                        &file.destination,
+                        &error,
+                    )));
             }
+            _ => {}
         }
     }
-
-    if !dry_run {
-        manifest.save(config.shine_dir()).await?;
+    if purge && !config.is_external_presets {
+        observer
+            .reporter
+            .emit(PresentationEvent::stdout(match category {
+                Some(category) => report::purge_category_text(category),
+                None => report::purge_all_text(),
+            }));
     }
-
-    // Only clean up extracted preset files when using embedded presets.
-    // For external presets the presets_dir is user-managed and must not be touched.
-    if !config.is_external_presets {
-        let remove_prefix_key = match category {
-            Some(cat) => format!("app/{cat}"),
-            None => "app".to_string(),
-        };
-        let _remove_report =
-            crate::presets::remove_prefix(&remove_prefix_key, config.presets_dir(), dry_run)
-                .await?;
-
-        if purge && !dry_run {
-            if let Some(cat) = category {
-                let cat_dir = config.presets_dir().join("app").join(cat);
-                if cat_dir.exists() {
-                    tokio::fs::remove_dir_all(&cat_dir).await.with_context(|| {
-                        format!(
-                            "removing app category presets directory: {}",
-                            cat_dir.display()
-                        )
-                    })?;
-                }
-                println!(
-                    "  {}  {}",
-                    colors::symbol("✓"),
-                    colors::dim(&format!("app/{cat} presets directory purged")),
-                );
-            } else {
-                let app_dir = config.presets_dir().join("app");
-                if app_dir.exists() {
-                    tokio::fs::remove_dir_all(&app_dir).await.with_context(|| {
-                        format!("removing app presets directory: {}", app_dir.display())
-                    })?;
-                }
-                let manifest_path = config.shine_dir().join("app-manifest.toml");
-                if manifest_path.exists() {
-                    tokio::fs::remove_file(&manifest_path)
-                        .await
-                        .context("removing app manifest")?;
-                }
-                println!(
-                    "  {}  {}",
-                    colors::symbol("✓"),
-                    colors::dim("app presets directory and manifest purged"),
-                );
-            }
-        }
-    }
-
-    let mut summary_parts: Vec<String> = Vec::new();
-    if removed > 0 {
-        let restore_note = if restored > 0 {
-            format!(", {restored} backups restored")
-        } else {
-            String::new()
-        };
-        summary_parts.push(colors::green(&format!("{removed} removed{restore_note}")));
-    }
-    if user_modified > 0 {
-        summary_parts.push(colors::yellow(&format!(
-            "{user_modified} user-modified (kept)"
+    let summary_parts = report::uninstall_summary_parts(removed, restored, user_modified, skipped);
+    observer.reporter.emit(PresentationEvent::BlankLine);
+    observer
+        .reporter
+        .emit(PresentationEvent::stdout(report::done_summary_text(
+            &summary_parts,
         )));
-    }
-    if skipped > 0 {
-        summary_parts.push(colors::dim(&format!("{skipped} skipped")));
-    }
-    output::footer("Done", &summary_parts);
-
-    Ok(())
+    Ok(core_report.lifecycle)
 }
 
-async fn uninstall_entries_for_category(
-    config: &Config,
-    manifest: &AppManifest,
-    category: &str,
-) -> Result<Vec<AppEntry>> {
-    let prefix = format!("app/{category}/");
-    let mut entries_by_dest: BTreeMap<PathBuf, AppEntry> = manifest
-        .entries
-        .iter()
-        .filter(|entry| entry.source.starts_with(&prefix))
-        .map(|entry| (entry.destination.clone(), entry.clone()))
-        .collect();
-
-    let categories = metadata::load_active_categories(config, Some(category)).await?;
-
-    for cat in categories.iter().filter(|cat| cat.name == category) {
-        append_manifest_entries_for_category_destinations(
-            config,
-            manifest,
-            cat,
-            &mut entries_by_dest,
-        );
-    }
-
-    Ok(entries_by_dest.into_values().collect())
+struct UninstallObserver<'a> {
+    reporter: &'a mut dyn LifecycleReporter,
 }
 
-fn append_manifest_entries_for_category_destinations(
-    config: &Config,
-    manifest: &AppManifest,
-    category: &metadata::AppCategory,
-    entries_by_dest: &mut BTreeMap<PathBuf, AppEntry>,
-) {
-    for file in &category.files {
-        let Ok(destination) = resolve_install_destination(category, file, config) else {
-            continue;
-        };
-        if let Some(entry) = manifest.find_by_dest(&destination) {
-            entries_by_dest
-                .entry(entry.destination.clone())
-                .or_insert_with(|| entry.clone());
+impl shine_core::runtime::RuntimeObserver for UninstallObserver<'_> {
+    fn emit(&mut self, event: shine_core::runtime::RuntimeEvent) {
+        if let shine_core::runtime::RuntimeEvent::Warning {
+            code,
+            target,
+            detail,
+        } = event
+        {
+            let category = target
+                .as_deref()
+                .and_then(|value| value.strip_prefix("app/"))
+                .unwrap_or("app");
+            if code == "app_artifact_permission_required" {
+                self.reporter.emit(PresentationEvent::stdout(format!("  {} {category}: artifact teardown skipped (run `shine trust grant app/{category}` after review; manual: shine app artifact remove {category})", report::symbol("!"))));
+            } else {
+                self.reporter.emit(PresentationEvent::stderr(format!(
+                    "  {} {category}: artifact teardown failed: {detail}",
+                    report::symbol("!")
+                )));
+            }
         }
     }
 }
@@ -235,7 +261,6 @@ mod tests {
     #[cfg(unix)]
     use super::super::install::handle_install;
     use super::*;
-    use crate::apps::metadata::{AppCategory, AppDestinationRoot, AppFile, AppListMode};
     use crate::install_core::manifest::AppInstallStrategy;
     #[cfg(unix)]
     use crate::test_support::env_lock;
@@ -249,7 +274,7 @@ mod tests {
     async fn write_external_sample_app(dir: &std::path::Path, body: &[u8]) {
         let cat_dir = dir.join("presets/app/sample");
         fs::create_dir_all(&cat_dir).await.unwrap();
-        let manifest = "description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n".to_string();
+        let manifest = "description = \"Sample app\"\ndest = \"~/.config/sample\"\n\n[permissions]\nschema_version = 1\n\n[[files]]\nsource = \"daemon.jsonc\"\ntarget = \"daemon.json\"\ntransforms = [\"template\", \"jsonc-to-json\"]\n".to_string();
         fs::write(cat_dir.join("shine.toml"), manifest)
             .await
             .unwrap();
@@ -269,16 +294,53 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        handle_install(&config, None, false, false).await.unwrap();
-
-        let manifest_before = AppManifest::load(config.shine_dir()).await.unwrap();
-        let count_before = manifest_before.entries.len();
-
-        handle_uninstall(&config, None, false, false, true)
+        handle_install(&config, Some("git"), false, false)
             .await
             .unwrap();
 
-        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_before = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
+        let count_before = manifest_before.entries.len();
+
+        let result = handle_uninstall_with_result(&config, Some("git"), false, false, true)
+            .await
+            .unwrap();
+        assert!(result.dry_run);
+        assert_eq!(
+            result
+                .outcomes
+                .iter()
+                .filter(|outcome| {
+                    outcome.effects
+                        == vec![
+                            LifecycleEffect::ResourceRemovePreviewed,
+                            LifecycleEffect::ReceiptRemovePreviewed,
+                        ]
+                })
+                .count(),
+            count_before
+        );
+        assert!(
+            result
+                .outcomes
+                .iter()
+                .filter(|outcome| {
+                    outcome.resource.as_deref() != Some("artifact:teardown")
+                        && outcome.resource.as_deref() != Some("preset-cache")
+                })
+                .all(|outcome| {
+                    outcome.effects
+                        == vec![
+                            LifecycleEffect::ResourceRemovePreviewed,
+                            LifecycleEffect::ReceiptRemovePreviewed,
+                        ]
+                })
+        );
+
+        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert_eq!(
             manifest_after.entries.len(),
             count_before,
@@ -293,66 +355,6 @@ mod tests {
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
-        fs::remove_dir_all(&dir).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn uninstall_category_selection_matches_current_destination() {
-        let dir = make_temp_dir().await;
-        let config = Config::new_for_test(&dir);
-        let destination_root = dir.join(".docker");
-        let destination = destination_root.join("daemon.json");
-        let category = AppCategory {
-            name: "docker-engine".to_string(),
-            description: None,
-            destination_root: Some(destination_root.display().to_string()),
-            files: vec![AppFile {
-                source_rel: PathBuf::from("daemon.jsonc"),
-                target_rel: PathBuf::from("daemon.json"),
-                destination_root: Some(AppDestinationRoot::Path(
-                    destination_root.display().to_string(),
-                )),
-                description: None,
-                display_name: None,
-                legacy_dest_annotation: None,
-                transforms: vec![],
-                install_strategy: AppInstallStrategy::Copy,
-                requires_admin: false,
-                restart_hint: None,
-                generator: None,
-            }],
-            list_mode: AppListMode::Files,
-            post_upgrade: Vec::new(),
-            post_install: Vec::new(),
-            uses_metadata: true,
-            has_explicit_files: true,
-            artifact: None,
-        };
-        let manifest = AppManifest {
-            entries: vec![AppEntry {
-                source: "app/docker/daemon.jsonc".to_string(),
-                destination: destination.clone(),
-                backup: None,
-                content_hash: 42,
-                install_strategy: AppInstallStrategy::Copy,
-                uses_env: false,
-                requires_admin: false,
-            }],
-        };
-        let mut entries_by_dest = BTreeMap::new();
-
-        append_manifest_entries_for_category_destinations(
-            &config,
-            &manifest,
-            &category,
-            &mut entries_by_dest,
-        );
-
-        assert!(
-            entries_by_dest.contains_key(&destination),
-            "category uninstall should find legacy manifest entries by current destination"
-        );
-
         fs::remove_dir_all(&dir).await.unwrap();
     }
 
@@ -375,11 +377,19 @@ mod tests {
         let dest = dir.join(".config/sample/daemon.json");
         fs::write(&dest, b"{\"debug\": false}\n").await.unwrap();
 
-        handle_uninstall(&config, Some("sample"), true, false, false)
+        let result = handle_uninstall_with_result(&config, Some("sample"), true, false, false)
             .await
             .unwrap();
+        assert_eq!(result.summary().changed, 1);
+        assert!(
+            result.outcomes[0]
+                .effects
+                .contains(&LifecycleEffect::UserModificationOverridden)
+        );
 
-        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         assert!(
             manifest_after.entries.is_empty(),
             "force uninstall should remove manifest entry"
@@ -407,9 +417,16 @@ mod tests {
         fs::create_dir_all(config.presets_dir()).await.unwrap();
         fs::create_dir_all(config.shine_dir()).await.unwrap();
 
-        // Install all categories
-        handle_install(&config, None, false, false).await.unwrap();
-        let manifest_all = AppManifest::load(config.shine_dir()).await.unwrap();
+        // Install two categories so targeted removal can prove isolation.
+        handle_install(&config, Some("git"), false, false)
+            .await
+            .unwrap();
+        handle_install(&config, Some("starship"), false, false)
+            .await
+            .unwrap();
+        let manifest_all = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let total = manifest_all.entries.len();
         assert!(total > 0, "need at least one installed entry");
 
@@ -432,11 +449,20 @@ mod tests {
             .count();
 
         // Uninstall only that category
-        handle_uninstall(&config, Some(&first_category), false, false, false)
+        let result =
+            handle_uninstall_with_result(&config, Some(&first_category), false, false, false)
+                .await
+                .unwrap();
+        assert!(
+            result
+                .outcomes
+                .iter()
+                .all(|outcome| outcome.target == format!("app/{first_category}"))
+        );
+
+        let manifest_after = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
             .await
             .unwrap();
-
-        let manifest_after = AppManifest::load(config.shine_dir()).await.unwrap();
         assert_eq!(
             manifest_after.entries.len(),
             total - category_count,
@@ -454,6 +480,161 @@ mod tests {
 
         // SAFETY: `_guard` holds `env_lock()`, serialising HOME mutations across test threads.
         unsafe { std::env::remove_var("HOME") };
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn structured_uninstall_preserves_user_modified_resource_and_receipt() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let destination = dir.join("destination/config.toml");
+        fs::create_dir_all(destination.parent().unwrap())
+            .await
+            .unwrap();
+        fs::write(&destination, b"user change\n").await.unwrap();
+        let manifest = AppManifest {
+            entries: vec![AppEntry {
+                source: "app/sample/config.toml".to_string(),
+                destination: destination.clone(),
+                backup: None,
+                content_hash: crate::install_core::hash_content(b"installed\n"),
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+            ..AppManifest::default()
+        };
+        manifest
+            .save(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
+
+        let result = handle_uninstall_with_result(&config, None, false, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(result.summary().preserved, 1);
+        assert_eq!(
+            result.outcomes[0].effects,
+            vec![LifecycleEffect::UserResourcePreserved]
+        );
+        assert_eq!(fs::read(&destination).await.unwrap(), b"user change\n");
+        assert_eq!(
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn structured_uninstall_reports_stale_receipt_cleanup_as_change() {
+        let dir = make_temp_dir().await;
+        let mut config = Config::new_for_test(&dir);
+        config.is_external_presets = true;
+        fs::create_dir_all(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest {
+            entries: vec![AppEntry {
+                source: "app/sample/missing.toml".to_string(),
+                destination: dir.join("destination/missing.toml"),
+                backup: None,
+                content_hash: crate::install_core::hash_content(b"installed\n"),
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+            ..AppManifest::default()
+        };
+        manifest
+            .save(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
+
+        let result = handle_uninstall_with_result(&config, None, false, false, false)
+            .await
+            .unwrap();
+
+        assert_eq!(result.summary().changed, 1);
+        assert_eq!(
+            result.outcomes[0].effects,
+            vec![LifecycleEffect::ReceiptRemoved]
+        );
+        assert!(
+            AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+        fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn embedded_category_and_global_purge_record_cache_and_manifest_effects() {
+        let dir = make_temp_dir().await;
+        let config = Config::new_for_test(&dir);
+        let category_cache = config.presets_dir().join("app/git");
+        fs::create_dir_all(&category_cache).await.unwrap();
+        fs::write(category_cache.join("orphan"), b"cache")
+            .await
+            .unwrap();
+        let manifest = AppManifest {
+            entries: vec![AppEntry {
+                source: "app/git/gitconfig".to_string(),
+                destination: dir.join("missing-gitconfig"),
+                backup: None,
+                content_hash: 1,
+                install_strategy: AppInstallStrategy::Copy,
+                uses_env: false,
+                requires_admin: false,
+            }],
+            ..AppManifest::default()
+        };
+        manifest
+            .save(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
+
+        let category = handle_uninstall_with_result(&config, Some("git"), false, true, false)
+            .await
+            .unwrap();
+        let category_purge = category
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.resource.as_deref() == Some("purge"))
+            .unwrap();
+        assert_eq!(category_purge.target, "app/git");
+        assert!(
+            category_purge
+                .effects
+                .contains(&LifecycleEffect::CachePurged)
+        );
+
+        let global_cache = config.presets_dir().join("app/other");
+        fs::create_dir_all(&global_cache).await.unwrap();
+        fs::write(global_cache.join("orphan"), b"cache")
+            .await
+            .unwrap();
+        let global = handle_uninstall_with_result(&config, None, false, true, false)
+            .await
+            .unwrap();
+        let global_purge = global
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target == "app" && outcome.resource.as_deref() == Some("purge"))
+            .unwrap();
+        assert!(global_purge.effects.contains(&LifecycleEffect::CachePurged));
+        assert!(
+            global_purge
+                .effects
+                .contains(&LifecycleEffect::ReceiptRemoved)
+        );
+        assert!(!config.shine_dir().join("app-manifest.toml").exists());
         fs::remove_dir_all(&dir).await.unwrap();
     }
 

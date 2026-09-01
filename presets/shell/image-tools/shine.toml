@@ -8,6 +8,11 @@ platforms = ["unix", "windows"]
 env = ["IMAGE_QUALITY"]
 description = "Compress JPEG, PNG, and WebP images without modifying the originals."
 
+[files.permissions]
+schema_version = 1
+commands = ["bun"]
+environment = [{ name = "IMAGE_QUALITY", sensitivity = "plain" }]
+
 [[files]]
 source = "resize.ts"
 target = "img-resize"
@@ -16,6 +21,15 @@ platforms = ["unix", "windows"]
 env = ["IMAGE_QUALITY", "IMAGE_MAX_WIDTH", "IMAGE_MAX_HEIGHT"]
 description = "Resize JPEG, PNG, and WebP images to fit configured bounds."
 
+[files.permissions]
+schema_version = 1
+commands = ["bun"]
+environment = [
+  { name = "IMAGE_QUALITY", sensitivity = "plain" },
+  { name = "IMAGE_MAX_WIDTH", sensitivity = "plain" },
+  { name = "IMAGE_MAX_HEIGHT", sensitivity = "plain" },
+]
+
 [[files]]
 source = "convert.ts"
 target = "img-convert"
@@ -23,3 +37,8 @@ runtime = "bun"
 platforms = ["unix", "windows"]
 env = ["IMAGE_QUALITY"]
 description = "Convert images to JPEG, PNG, or WebP."
+
+[files.permissions]
+schema_version = 1
+commands = ["bun"]
+environment = [{ name = "IMAGE_QUALITY", sensitivity = "plain" }]

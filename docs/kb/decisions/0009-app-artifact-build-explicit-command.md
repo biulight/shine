@@ -8,7 +8,7 @@
   generator is separate from artifact build scripts. The placement of the
   canonical Surge artifact in a private overlay is superseded by
   [ADR 0017](0017-built-in-surge-profile-artifact.md).
-- **Evidence**: `cli/src/apps/build.rs`, `cli/src/apps/metadata.rs` (`[artifact]`/`AppArtifact`),
+- **Evidence**: `cli/src/apps/build.rs`, `core/src/runtime/app_metadata.rs` (`[artifact]`/`AppArtifact`),
   `shine app artifact apply <app-id>`, `presets/app/surge/build.ts`
 
 ## Context

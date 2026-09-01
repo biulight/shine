@@ -1,0 +1,9 @@
+description = "Minimal fixture-tested App preset."
+dest = "~/.config/shine-demo"
+
+[permissions]
+schema_version = 1
+
+[[files]]
+source = "config.toml"
+description = "Example application configuration."

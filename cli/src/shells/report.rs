@@ -1,6 +1,26 @@
 use super::metadata;
 use crate::colors;
 
+pub(super) fn style_dim(value: &str) -> String {
+    colors::dim(value)
+}
+
+pub(super) fn style_green(value: &str) -> String {
+    colors::green(value)
+}
+
+pub(super) fn style_yellow(value: &str) -> String {
+    colors::yellow(value)
+}
+
+pub(super) fn style_bold(value: &str) -> String {
+    colors::bold(value)
+}
+
+pub(super) fn style_symbol(value: &str) -> String {
+    colors::symbol(value)
+}
+
 #[derive(Debug, Default)]
 pub struct ShellUpgradeReport {
     /// User-facing shell targets that were brought up to date. A target is
@@ -18,25 +38,26 @@ pub struct ShellUpgradeReport {
     pub path_changed: bool,
 }
 
-pub(super) fn preset_extract_summary_parts(report: &crate::presets::ExtractReport) -> Vec<String> {
+pub(super) fn shell_cache_summary_parts(
+    report: &shine_core::runtime::ShellCacheReport,
+) -> Vec<String> {
+    cache_summary_parts(
+        report.created.len(),
+        report.overwritten.len(),
+        report.skipped.len(),
+    )
+}
+
+fn cache_summary_parts(created: usize, overwritten: usize, skipped: usize) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
-    if !report.created.is_empty() {
-        parts.push(colors::green(&format_file_action(
-            report.created.len(),
-            "created",
-        )));
+    if created > 0 {
+        parts.push(colors::green(&format_file_action(created, "created")));
     }
-    if !report.overwritten.is_empty() {
-        parts.push(colors::green(&format_file_action(
-            report.overwritten.len(),
-            "updated",
-        )));
+    if overwritten > 0 {
+        parts.push(colors::green(&format_file_action(overwritten, "updated")));
     }
-    if !report.skipped.is_empty() {
-        parts.push(colors::dim(&format_file_action(
-            report.skipped.len(),
-            "skipped",
-        )));
+    if skipped > 0 {
+        parts.push(colors::dim(&format_file_action(skipped, "skipped")));
     }
     parts
 }
@@ -60,19 +81,19 @@ pub(super) fn unlink_report_summary_parts(
     parts
 }
 
-pub(super) fn remove_report_summary_parts(
-    remove_report: &crate::presets::RemoveReport,
+pub(super) fn shell_cache_remove_summary_parts(
+    report: &shine_core::runtime::ShellCacheReport,
 ) -> Vec<String> {
-    let mut parts: Vec<String> = Vec::new();
-    if !remove_report.removed.is_empty() {
+    let mut parts = Vec::new();
+    if !report.removed.is_empty() {
         parts.push(colors::green(&format_file_action(
-            remove_report.removed.len(),
+            report.removed.len(),
             "removed",
         )));
     }
-    if !remove_report.skipped.is_empty() {
+    if !report.skipped.is_empty() {
         parts.push(colors::dim(&format_file_action(
-            remove_report.skipped.len(),
+            report.skipped.len(),
             "skipped",
         )));
     }
@@ -111,6 +132,7 @@ pub(super) fn link_report_summary_parts(link_report: &crate::bin_links::LinkRepo
     parts
 }
 
+#[cfg(test)]
 pub(super) fn upgrade_link_report_summary_parts(
     link_report: &crate::bin_links::LinkReport,
     verbose: bool,
@@ -306,14 +328,7 @@ pub async fn handle_info(config: &crate::config::Config, target: &str) -> anyhow
     for file in files {
         let label = format!("{}/{}", category.name, file.command_name);
         let row = rows.iter().find(|row| row.label == label);
-        let command_path = crate::bin_links::command_path_for_name(
-            config.bin_dir(),
-            std::ffi::OsStr::new(&file.command_name),
-        );
-        any_installed |= command_path.exists()
-            || tokio::fs::symlink_metadata(&command_path)
-                .await
-                .is_ok_and(|metadata| metadata.file_type().is_symlink());
+        any_installed |= row.is_some_and(|row| row.status_text != "not installed");
         println!();
         println!("  {}", colors::bold(&file.command_name));
         println!(
@@ -416,5 +431,28 @@ mod info_tests {
         assert!(handle_info(&config, "not-a-preset").await.is_err());
 
         tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_render_tests {
+    use super::*;
+
+    #[test]
+    fn shell_lifecycle_summary_parts_keep_legacy_wording() {
+        let report = crate::bin_links::LinkReport {
+            created: vec!["created".into()],
+            overwritten: vec!["updated".into()],
+            skipped: vec!["current".into()],
+            conflicts: Vec::new(),
+        };
+        assert_eq!(
+            link_report_summary_parts(&report),
+            vec!["1 created", "1 updated", "1 up to date"]
+        );
+        assert_eq!(
+            upgrade_link_report_summary_parts(&report, false),
+            vec!["1 created", "1 updated"]
+        );
     }
 }

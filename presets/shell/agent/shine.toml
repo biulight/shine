@@ -6,3 +6,8 @@ target = "ccenv"
 runtime = "bun"
 platforms = ["unix", "windows"]
 description = "Launch Claude Code with a selected provider."
+
+[files.permissions]
+schema_version = 1
+network = [{ scope = "any" }]
+commands = ["bun", "claude", "shine"]

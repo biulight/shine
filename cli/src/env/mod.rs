@@ -8,7 +8,9 @@ pub mod workspace;
 
 use crate::config::Config;
 use anyhow::{Result, bail};
-use std::collections::{BTreeMap, BTreeSet};
+pub use shine_core::env::EnvVarSpec;
+pub(crate) use shine_core::env::{parse_env_specs, validate_env_key};
+use std::collections::BTreeMap;
 
 /// User-editable environment variables stored in `config.toml` under `[env]`.
 ///
@@ -94,66 +96,6 @@ pub fn resolve_stored_value<'a>(env: &'a EnvConfig, key: &str) -> Result<StoredV
 /// Return the encrypted-storage key associated with an environment variable.
 pub fn secret_key(key: &str) -> String {
     format!("{key}_SECRET")
-}
-
-/// A validated environment declaration using the `env run --with` grammar:
-/// resolve `source` from the active config and expose it under `target`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EnvVarSpec {
-    pub source: String,
-    pub target: String,
-}
-
-impl EnvVarSpec {
-    /// The `--with` argument token that reproduces this declaration:
-    /// `KEY` when source and target match, otherwise `SOURCE=TARGET`.
-    pub fn to_with_arg(&self) -> String {
-        if self.source == self.target {
-            self.source.clone()
-        } else {
-            format!("{}={}", self.source, self.target)
-        }
-    }
-}
-
-/// Parse and validate an ordered list of `KEY` / `SOURCE_KEY=TARGET_KEY` specs
-/// (the shared grammar for `env run --with` and a Bun preset's `env` array).
-///
-/// Declaration order is preserved. Both names must be valid environment
-/// identifiers, and no two declarations may write the same target. Values are
-/// never resolved here — this is pure name validation, safe to run at metadata
-/// load time.
-pub(crate) fn parse_env_specs(specs: &[String]) -> Result<Vec<EnvVarSpec>> {
-    let mut parsed = Vec::with_capacity(specs.len());
-    let mut targets = BTreeSet::new();
-    for spec in specs {
-        let (source, target) = spec.split_once('=').unwrap_or((spec, spec));
-        validate_env_key(source)?;
-        validate_env_key(target)?;
-        if !targets.insert(target.to_string()) {
-            bail!("duplicate target variable: {target}");
-        }
-        parsed.push(EnvVarSpec {
-            source: source.to_string(),
-            target: target.to_string(),
-        });
-    }
-    Ok(parsed)
-}
-
-/// Validate an environment variable name: first character `[A-Za-z_]`, remaining
-/// characters `[A-Za-z0-9_]*`.
-pub(crate) fn validate_env_key(key: &str) -> Result<()> {
-    let mut chars = key.chars();
-    let Some(first) = chars.next() else {
-        bail!("environment variable name must not be empty");
-    };
-    if !(first == '_' || first.is_ascii_alphabetic())
-        || !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-    {
-        bail!("invalid environment variable name: {key}");
-    }
-    Ok(())
 }
 
 impl EnvConfig {

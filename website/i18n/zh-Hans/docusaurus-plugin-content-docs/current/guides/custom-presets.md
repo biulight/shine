@@ -35,6 +35,9 @@ cd my-presets/app/my-editor
 shine preset new app
 # 添加配置文件并编辑 shine.toml。
 shine preset validate . --format json
+shine preset lint . --format json
+shine preset plan . --platform macos --format json
+shine preset test . --format json
 ```
 
 其它类型把 `preset new` 的参数换成 `shell` 或 `sys`。定制内置类别时，进入仓库或 overlay 根目录
@@ -48,6 +51,66 @@ shine preset validate . --format json
 
 默认输出文本；`--format json` 输出 skill 使用的稳定 `schema_version: 1` 报告。校验错误的
 退出码为 1，warning 不会导致失败。
+
+工具需要当前安装 binary 精确的 authoring report、fixture 或 bundle contract 时，运行
+`shine preset schema --format json`。生成文档还会嵌入当前 authoring command help。Preset metadata
+本身仍由 parser 驱动，因此应使用 validate，不要把生成 reference 当作 App/Shell/Sys grammar 的
+替代品。
+
+校验后运行 `preset lint`。它用独立的 schema-v1 报告指出作者质量与可移植性问题，但不会重新定义
+runtime 接受的内容。warning 默认只是建议；CI 可在有意识地接受或修复全部现有 finding 后使用
+`--deny-warnings`。
+
+校验通过后，对每个目标平台分别运行 `preset plan`。它只接受一个类别或其 manifest，并针对确定性
+空内存状态模拟首次安装。应审查其中的语义 step、permission、opaque action 与 blocker。报告被
+blocked 通常表示空假设中没有提供所需环境变量、trust grant、命令或管理员状态；这仍是有效的作者
+反馈，而且绝不构成真实安装的批准。
+
+需要可重复的跨平台预期时，在类别中加入 `shine.test.toml`。Case 是纯声明式的，并且只针对内存中的
+authoring 状态运行。`[cases.host]` 可以模拟环境变量存在、opaque secret version、file、命令探测、
+runtime receipt、精确 trust grant 与管理员状态，而且不会执行 setup code。`examples/presets` 下提供
+App、Shell、Sys 三类可运行示例；应断言结构化 action、permission 与 code，而非复制文本输出。
+`preset test` 只接受单个类别，不能传仓库根目录。
+
+需要可分发 artifact 时，把已审查类别打包到 source tree 外部：
+
+```bash
+shine preset pack . --output ../../my-editor.shine-preset.tar.gz --format json
+```
+
+返回的 hash 标识确定性 bundle bytes。`shine.test.toml` 只供作者使用，不会进入 bundle。Pack policy
+失败必须修改 source；`--force` 只能替换输出文件，不能绕过校验或 policy。
+
+## 声明权限
+
+新预设使用权限 schema v1 声明可审查的 capability identity。App 在类别根部使用
+`[permissions]`；Shell 的每个 `[[files]]` 命令分别使用 `[files.permissions]`；Sys 的每个
+`[[items]]` target 分别使用 `[items.permissions]`。受保护的 install、upgrade 或 uninstall
+在缺少必要声明时会 fail closed；静态校验会报告 `missing_permission_declaration`。不支持的
+版本、未知字段、非法 identity 和重复项均为错误。
+
+```toml
+[permissions]
+schema_version = 1
+administrator = true
+filesystem = [
+  { access = ["read", "write"], base = "home", path = ".config/example" },
+  { access = ["execute"], base = "preset", path = "build.ts" },
+]
+network = [{ scope = "host", host = "api.example.com" }]
+commands = ["bun"]
+environment = [{ name = "API_TOKEN", sensitivity = "secret" }]
+system = [{ capability = "split-dns", resource = "private-domain" }]
+```
+
+Filesystem base 只接受 `home`、`shine`、`data-dir`、`preset` 或 `absolute`；非绝对路径必须是
+规范化相对路径，`.` 表示所选 base 的根。Command 只能填写一个不带参数的 program identity。
+Environment 只填写变量名及 `plain`/`secret` 敏感度，不能填写值或密文。普通 destination、launcher、
+receipt 和固定 package provider 已由现有强类型 metadata 约束，不需要重复描述其内部机制。
+
+权限声明不是授权，也不能证明 opaque script 已完整披露行为。外部可执行代码还要求用户审阅后运行
+`shine trust grant <TARGET>`。Grant 会绑定当前代码身份与准确的权限声明，不能替代管理员授权或每次
+mutation 的安全 Plan。
 
 ## 从来源文件夹到已安装能力
 
@@ -346,11 +409,10 @@ Shell integration 必须且只能声明 `path`、`env`、`eval`、`source`、`al
 `profile/<item>.sh`。phase、可选 priority、manifest 顺序和声明顺序共同决定稳定的组合顺序。
 命名 `[profiles.*]` 表只选择 bootstrap items，不定义 shell 内容，也不会禁用选择之外的集成。
 
-外部 sys 安装脚本和可执行 profile 内容（`eval`、`source`、fragment 与 base 文件）要求用户先审查
-来源并在全局配置中设置 `allow_sys_code = true`；项目配置不能授权自身。如果可执行 sys 代码在
-bootstrap 预检阶段被拦截，错误会指出可用的代码类型和路径、当前每一层外部 preset 来源以及全局
-配置路径，并分别给出“授予权限”和“继续阻止外部代码”两种操作；此时尚未运行任何安装器。静态
-detection、package metadata、PATH、env 和 aliases 无需该授权。使用
+外部 sys 安装脚本和可执行 profile 内容（`eval`、`source`、fragment 与 base 文件）要求用户审阅
+当前 snapshot 后运行 `shine trust grant sys/<ITEM>`；项目配置和 Preset 不能自行授权。代码、来源层或
+权限变化后 grant 会失效。bootstrap 预检因缺少信任而停止时尚未运行任何安装器。静态 detection、
+package metadata、PATH、env 和 aliases 无需 grant。使用
 `shine sys list`、`shine sys info <ITEM>` 和
 `shine sys bootstrap <ITEM> --dry-run` 完成验证。
 
@@ -363,6 +425,14 @@ App 类别的 `[artifact]` 也可选择 Bun，使 `build` 与 `unbuild` 脚本�
 script = "build.ts"
 teardown = "unbuild.ts"
 runtime = "bun"
+env = ["PROFILE_PATH", "API_TOKEN"]
 ```
 
-`runtime` 省略时为 `native`，直接执行脚本；`bun` 仅接受 `.ts`、`.js`、`.mts` 或 `.mjs`，并要求运行机器已安装 Bun。构建脚本会收到当前 Shine `[env]` 和 app 路径变量。若希望安装或升级实际改动文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设仍需用户设置 `allow_app_hooks = true`。
+`runtime` 省略时为 `native`，直接执行脚本；`bun` 仅接受 `.ts`、`.js`、`.mts` 或 `.mjs`，并要求
+运行机器已安装 Bun。只有 `env` allowlist 中的 Shine `[env]` 变量会传给 artifact，也可写成
+`SOURCE=TARGET` alias；每个 source 及其敏感度还必须在类别
+`[permissions].environment` 中声明。allowlist 中未配置的可选值会被省略；固定 app 路径变量会
+另外加入。若希望安装或升级实际改动
+文件后自动构建，可另外声明 `post_install`、`post_upgrade` 钩子；外部预设需用户审阅后运行
+`shine trust grant app/<CATEGORY>`。hook 中调用 `shine app artifact apply` 时属于非交互子进程，必须带
+`--yes`；嵌套命令仍会显示并重新校验自己的安全 Plan。

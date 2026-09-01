@@ -20,6 +20,7 @@ It complements — and never duplicates — the existing docs:
 - [`architecture/module-map.md`](architecture/module-map.md) — module ownership and command routing
 - [`architecture/platform-support.md`](architecture/platform-support.md) — macOS, Ubuntu, and Windows capability matrix, gaps, and implementation priorities
 - [`preset-authoring.md`](preset-authoring.md) — shell, app, and sys preset authoring rules
+- [`executable-preset-inventory.md`](executable-preset-inventory.md) — Phase 4 execution, privilege, provenance, and rollback classification
 - [`decisions/`](decisions/) — ADR-lite records (one decision per file, numbered)
 - [`conventions.md`](conventions.md) — commit, versioning, and testing conventions
 - [`operations/release-runbook.md`](operations/release-runbook.md) — how to cut a release

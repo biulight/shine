@@ -276,6 +276,7 @@ mod tests {
                 uses_metadata: true,
                 has_explicit_files: true,
                 artifact: None,
+                permissions: None,
             },
             file: crate::apps::AppFile {
                 source_rel: PathBuf::from(source),
@@ -293,7 +294,11 @@ mod tests {
             destination: PathBuf::from(dest),
             status: FileStatus::UpToDate,
             manifest_entry: None,
+            desired_content: None,
+            current_content: None,
             changes: Vec::new(),
+            assessment_error: None,
+            assessment_diagnostic: None,
         }
     }
 
@@ -313,12 +318,15 @@ mod tests {
                 runtime: crate::bin_links::LinkRuntime::Native,
                 transforms: vec![],
                 env: vec![],
+                permissions: None,
             },
             source_path: PathBuf::from(format!("/tmp/{source}")),
             installed_source_path: PathBuf::from(format!("/tmp/{source}")),
             rendered_path: PathBuf::from(format!("/tmp/rendered/{source}")),
             link_path: PathBuf::from(format!("/tmp/bin/{command}")),
             link_target: None,
+            desired_content: None,
+            current_content: None,
             status: "up-to-date",
             changes: Vec::new(),
         }

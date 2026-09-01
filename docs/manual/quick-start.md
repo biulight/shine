@@ -31,6 +31,10 @@ shine shell install proxy
 Shine places the scripts under `~/.shine/presets/shell/`, creates command entries in
 `~/.shine/bin/`, and adds that directory to supported shell profiles.
 
+Before writing anything, Shine shows the ordered lifecycle Plan, complete permissions, input
+digests, and fingerprint. Confirm explicitly; the prompt defaults to No. In automation, add
+`--yes`—the Plan is still shown and revalidated before mutation.
+
 Open a new terminal or reload the current shell configuration:
 
 ```bash

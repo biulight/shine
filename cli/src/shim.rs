@@ -24,30 +24,42 @@ pub async fn handle_install_shim(
     target: &str,
     replace_managed: bool,
 ) -> Result<()> {
+    handle_install_shim_approved(config, target, replace_managed, true).await
+}
+
+pub async fn handle_install_shim_approved(
+    config: &Config,
+    target: &str,
+    replace_managed: bool,
+    yes: bool,
+) -> Result<()> {
     let (explicit_kind, category) = parse_preset_target(target)?;
     if explicit_kind == Some(PresetKind::Shell) && category.contains('/') {
-        return Box::pin(shells::handle_install(
+        return Box::pin(shells::handle_install_approved(
             config,
             Some(category),
             replace_managed,
+            yes,
         ))
         .await;
     }
     match resolve_shim_target(config, explicit_kind, category).await? {
         ShimResolution::Found(PresetKind::Shell) => {
-            Box::pin(shells::handle_install(
+            Box::pin(shells::handle_install_approved(
                 config,
                 Some(category),
                 replace_managed,
+                yes,
             ))
             .await
         }
         ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_install(
+            Box::pin(apps::handle_install_approved(
                 config,
                 Some(category),
                 false,
                 replace_managed,
+                yes,
             ))
             .await
         }
@@ -63,16 +75,28 @@ pub async fn handle_uninstall_shim(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
+    handle_uninstall_shim_approved(config, target, force, purge, dry_run, true).await
+}
+
+pub async fn handle_uninstall_shim_approved(
+    config: &Config,
+    target: &str,
+    force: bool,
+    purge: bool,
+    dry_run: bool,
+    yes: bool,
+) -> Result<()> {
     let (explicit_kind, category) = parse_preset_target(target)?;
     if explicit_kind == Some(PresetKind::Shell) && category.contains('/') {
         if force {
             bail!("`--force` applies only to app presets");
         }
-        return Box::pin(shells::handle_uninstall(
+        return Box::pin(shells::handle_uninstall_approved(
             config,
             Some(category),
             purge,
             dry_run,
+            yes,
         ))
         .await;
     }
@@ -81,21 +105,23 @@ pub async fn handle_uninstall_shim(
             if force {
                 bail!("`--force` applies only to app presets");
             }
-            Box::pin(shells::handle_uninstall(
+            Box::pin(shells::handle_uninstall_approved(
                 config,
                 Some(category),
                 purge,
                 dry_run,
+                yes,
             ))
             .await
         }
         ShimResolution::Found(PresetKind::App) => {
-            Box::pin(apps::handle_uninstall(
+            Box::pin(apps::handle_uninstall_approved(
                 config,
                 Some(category),
                 force,
                 purge,
                 dry_run,
+                yes,
             ))
             .await
         }

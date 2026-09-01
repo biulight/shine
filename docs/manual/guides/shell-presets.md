@@ -51,6 +51,67 @@ shine install shell/proxy --replace-managed
 `--replace-managed` overwrites the corresponding Shine-managed content. Inspect
 `shine info shell/proxy --diff` first so that intentional local changes are not mistaken for damage.
 
+## Recover an interrupted Shell transaction
+
+On first install, Shine writes a transaction journal before creating the command launcher and
+clears it only after the command's manifest receipt is durable. If installation is interrupted in
+that window, later mutating Shell commands stop instead of guessing whether the launcher is owned.
+Shine uses the same journal when install or upgrade replaces an unchanged, receipt-owned launcher:
+each old resource moves to a same-directory `.shine.rollback` path before its replacement is
+written, and that rollback material remains until the new receipt is durable.
+Embedded category cache writes use the same receipt-coherent journal. Missing cache files and
+differing files changed by upgrade or `--replace-managed` are tracked individually; an existing file moves to
+same-directory `.shine.rollback` before replacement. Skipped and unrelated cache files are not part
+of the transaction.
+For an external preset in snapshot mode, Shine also journals creation or replacement of a shared
+category snapshot when the selected commands need no rendered output. The old category tree stays
+in a deterministic rollback directory until all selected command receipts and a separate commit
+marker are durable.
+Transformed output created during install or upgrade uses a separate file-scoped transaction. An
+existing rendered file moves to same-directory `.shine.rollback`, and the exact old file remains
+there until all command receipts consuming that path and a separate commit marker are durable.
+Review and apply the dedicated recovery Plan:
+
+```bash
+shine shell recover
+shine shell recover --yes # Non-interactive use
+```
+
+Recovery removes only an unreceipted Unix symlink, Unix Bun/live launcher, or Windows shim file
+that still exactly matches the interrupted creation. A changed launcher is preserved and blocks
+recovery. For an interrupted update, recovery restores the previous launcher only while the
+replacement and rollback resources still match the recorded target, content hash, and mode. Once
+the new receipt is durable, recovery keeps the replacement and removes only unchanged rollback
+material. A changed replacement or rollback path blocks recovery and is preserved. For an eligible
+snapshot transaction, recovery before the commit marker restores the previous selected receipts and
+exact old category tree; afterward it keeps the desired tree and cleans only exact rollback. A
+changed stage, active tree, or rollback tree blocks recovery. For an interrupted embedded cache
+transaction, recovery before the marker removes exact newly created files or restores exact old
+files and receipts; afterward it keeps desired files and cleans only exact rollback. A modified
+cache destination or rollback blocks the whole cache action while skipped and unrelated files stay
+untouched. For an interrupted rendered-file transaction, recovery
+before the marker restores previous receipts and the exact old file, or removes an exact newly
+created file; after the marker it keeps the desired file and cleans only exact rollback. Modified
+rendered or rollback files block recovery. When uninstall selects the last receipt consuming a
+rendered path, Shine separately journals the exact file before removing every consumer receipt.
+Before its positive marker, recovery reconstructs missing receipts and restores only the exact old
+file; afterward it keeps the path absent and cleans exact rollback. An unselected consumer or an
+unrelated rendered file is preserved. Execution-time live rendering uses the same lifecycle lock
+and refuses to run while recovery is pending, but remains an atomic invocation-time write rather
+than a persistent transaction. Cache and snapshot uninstall journal the exact files or tree plus
+their receipt transition; recovery restores unchanged rollback material before the positive commit
+marker and preserves completed removal afterward. Shell profile reconciliation is also journaled,
+but owns only the `# >>> shine >>>` sentinel block: recovery merges that recorded block transition
+into the current profile and preserves unrelated edits made after interruption. A changed
+Shine-owned block blocks recovery instead of being overwritten.
+
+Uninstall uses this transaction only for an unchanged, receipt-owned launcher. It moves every
+platform launcher resource to same-directory rollback material before removing the receipt, then
+records a separate durable commit marker. If interruption happens after receipt removal but before
+that marker, recovery recreates the old receipt before restoring exact resources. After the marker,
+recovery keeps the completed uninstall and cleans only unchanged rollback material. Foreign or
+modified launchers are preserved outside this rollback proof.
+
 ## Uninstall
 
 ```bash
@@ -59,6 +120,10 @@ shine shell uninstall proxy
 shine shell uninstall utils/shine-env-export
 shine shell uninstall proxy --purge
 ```
+
+Non-dry-run install and uninstall, plus `shine upgrade`, show a snapshot-bound lifecycle Plan. The
+confirmation defaults to No; automation must pass `--yes`, which still renders and revalidates all
+steps and permissions. `--dry-run` remains a separate preview and cannot be combined with `--yes`.
 
 Command-scoped uninstall preserves other installed commands in the category. Shared preset or
 snapshot files may remain while a sibling command still needs them. `--purge` also removes empty

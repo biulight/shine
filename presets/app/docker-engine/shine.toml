@@ -4,6 +4,10 @@ description = "Docker Engine daemon configuration"
 windows = "~/.docker"
 unix = "/etc/docker"
 
+[permissions]
+schema_version = 1
+administrator = true
+
 [[files]]
 source      = "daemon.jsonc"
 target      = "daemon.json"

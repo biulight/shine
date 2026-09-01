@@ -13,7 +13,30 @@ Update this file when modules move, split, merge, or take on a different respons
 | `Cargo.toml` | Workspace manifest and publishable `shine-cli` package root |
 | `cli/` | Main `shine` binary plus its library crate |
 | `cli/build.rs` | `rust-embed` rebuild trigger for `presets/` |
-| `utils/` | Reusable `shine-core` package with no CLI/Tauri dependency |
+| `core/` | Reusable `shine-core` package with no CLI/Tauri dependency |
+| `core/src/lifecycle.rs` | Versioned frontend-neutral lifecycle result envelope and safe effect/status vocabulary |
+| `core/src/plan.rs` | Versioned snapshot-bound security Plan, permission resolution, fingerprint, and approval contracts |
+| `core/src/action.rs` | Versioned executable Action IR, typed permission derivation, opaque provenance, and rollback classification |
+| `core/src/permission.rs` | Versioned target-local Preset permission declarations, normalization, and payload-free identity validation |
+| `core/src/trust.rs` | Versioned target-local external-code trust grants, exact matching, and stale-scope decisions |
+| `core/src/runtime/` | Internal Core runtime facade, immutable preset inputs, host ports, in-memory host, domain models, manifests, and migrated executors |
+| `core/src/runtime/bootstrap.rs` | CLI/UI-shared, host-backed external/overlay discovery and immutable snapshot construction |
+| `core/src/runtime/host.rs` | Observation-only filesystem/split-DNS ports plus inheriting filesystem, process, privileged, and system mutation ports |
+| `core/src/runtime/planner.rs` | Pure App, Shell, managed Sys, Sys bootstrap, App refresh/artifact, and Sys profile Plan requests plus approved execution gates that re-plan before invoking internal mutation helpers |
+| `core/src/runtime/action_executor.rs` | Phase 4 App static Copy and key-owned JSON create/update/relocate/ordinary-or-forced-remove journal, manifest-receipt-gated commit, lock-spanning privileged/unprivileged path dispatch, persistent backup restoration, same-directory rollback material, explicit recovery Plan, and fingerprint/key-guarded remove/restore |
+| `core/src/runtime/shell_action_executor.rs` | Phase 4 Shell launcher, embedded cache, external snapshot, rendered file, and profile-sentinel create/update/remove actions; per-resource rollback journal, receipt/positive-marker-gated commit, and explicit fingerprint/owned-subset recovery |
+| `core/src/runtime/sys_action_executor.rs` | Phase 4 managed Sys file, split-DNS, and explicit profile-sentinel actions; Sys receipt transition journal, exact rollback cleanup, and explicit recovery Plan/apply |
+| `core/src/runtime/trust.rs` | Derivation of App/Sys external-code requirements from immutable logical code inputs and declared permissions |
+| `cli/src/trust.rs`, `cli/src/commands/trust.rs` | Owner-only trust-store persistence and `shine trust` workflows |
+| `core/src/runtime/app.rs` | Complete App assessment/install/upgrade/refresh/uninstall, generators, hooks, artifacts, embedded cache, and manifest orchestration |
+| `core/src/runtime/shell.rs` | Complete Shell assessment/install/upgrade/uninstall/live render, launcher, cache, profile, and manifest orchestration |
+| `core/src/runtime/sys.rs` | Managed Sys receipt assessment, managed-file/split-DNS transactional orchestration, and run-manifest persistence |
+| `core/src/runtime/sys_bootstrap.rs` | Sys v2 selection, preflight, detection, provider/script execution, post-detection, and batch persistence |
+| `core/src/runtime/sys_profile/` | Sys profile composition, three-way reconciliation, phase sentinels, BOM and CRLF behavior |
+| `core/src/runtime/validation.rs` | Host-backed preset discovery from a captured cwd, V1 diagnostics, and App/Shell/Sys schema validation |
+| `core/src/runtime/inspection.rs` | Typed App/Shell inspection status and structural change vocabulary |
+| `core/src/install/` | Core-owned transforms, EOL handling, host-required App manifest persistence, and host-neutral managed-file operations |
+| `core/src/persist.rs` | Core-owned atomic persistence and versioned TOML helpers |
 | `presets/` | Embedded shell, app, and OS bootstrap assets |
 | `skills/shine-preset-author/` | Portable AI workflow and kind-specific preset author references |
 | `docs/manual/` | Default English public manual |
@@ -36,10 +59,13 @@ Update this file when modules move, split, merge, or take on a different respons
 | `cli/src/path_display.rs` | Home-relative terminal path formatting |
 | `cli/src/colors.rs` | Terminal color helpers |
 | `cli/src/output.rs` | Shared command output mode and rendering support |
+| `cli/src/presentation.rs` | CLI-private lifecycle events, writer-backed terminal renderer, and interaction ports |
+| `cli/src/core_runtime.rs` | CLI settings and embedded-byte supply into the shared host-backed runtime bootstrap |
+| `cli/src/lifecycle_plan.rs` | Stable security Plan rendering, default-No/non-TTY approval policy, input identities, and batch prevalidation |
 | `cli/src/platform.rs` | Platform classification shared across command domains |
 | `cli/src/privilege.rs` | Cross-platform administrator/elevation orchestration |
 | `cli/src/proc.rs` | Small domain-neutral subprocess helpers |
-| `cli/src/persist.rs` | Shared safe persistence helpers |
+| `cli/src/persist.rs` | Compatibility re-export of Core persistence helpers |
 | `cli/src/shell_quote.rs` | Copy-paste-safe shell argument rendering |
 | `cli/src/version.rs` | Version string formatting |
 
@@ -47,22 +73,25 @@ Update this file when modules move, split, merge, or take on a different respons
 
 | Top-level command | Handler |
 |---|---|
-| `shell list/info/install/uninstall` | `cli/src/shells/` |
+| `shell list/info/install/uninstall/recover` | `cli/src/shells/` |
 | `app list/install/uninstall` | `cli/src/apps/` |
 | `install/uninstall <TARGET>` | `cli/src/shim.rs` → `apps/` or `shells/` |
 | `list [--available [KIND]]` | `cli/src/list.rs` or scoped list handlers |
 | `info <TARGET>` | `cli/src/info/`; explicit system items delegate to `sys/` |
 | `app artifact apply/remove <app-id>` | `cli/src/apps/build.rs` |
 | `app refresh <app-id> [file]` | `cli/src/apps/refresh.rs` |
+| `app recover` | `cli/src/apps/recovery.rs` → Core explicit recovery Plan/apply |
+| `shell recover` | `cli/src/shells/recovery.rs` → Core explicit Shell transaction recovery Plan/apply |
+| `sys recover` | `cli/src/sys/recovery.rs` → Core explicit managed Sys recovery Plan/apply |
 | `sys list/bootstrap/profile/...` | `cli/src/sys/` |
 | `theme sync` | `cli/src/theme/` |
 | `env ...` | `cli/src/env/` plus `cli/src/secret/` |
 | `preset export/copy/link/unlink/overlay` | `cli/src/preset_commands.rs` |
-| `preset new/validate` | Kind template handlers and `cli/src/preset_validation.rs` |
+| `preset new/validate/lint/plan/test/pack` | Kind template handlers plus the `cli/src/preset_{validation,lint,authoring,test,pack}.rs` adapters |
 | `preset pull`, `update --pull`, `upgrade --pull` | `cli/src/git_pull.rs` plus top-level routing |
 | `init` | `cli/src/init.rs` |
 | `self install/upgrade` | `cli/src/self_install.rs`, `cli/src/update_check/` |
-| `update [TARGET]`, `upgrade [TARGET]` | filtered app/shell/sys handlers plus update/self-install logic |
+| `update [TARGET]`, `upgrade [TARGET]` | filtered handlers; untargeted upgrade batches Shell/App/managed Sys review in `self_install.rs` |
 | `state migrate` | `cli/src/state.rs` |
 | `serve install/start/status/uninstall/url` | `cli/src/serve.rs` |
 | `ssh ...` | `cli/src/ssh/mod.rs` |
@@ -75,22 +104,19 @@ Update this file when modules move, split, merge, or take on a different respons
 | Path | Responsibility |
 |---|---|
 | `cli/src/apps/mod.rs` | Shared app kernel and handler re-exports |
-| `cli/src/apps/install.rs` | App install orchestration |
-| `cli/src/apps/uninstall.rs` | Manifest-driven, category-scoped uninstall |
-| `cli/src/apps/upgrade.rs` | Installed app upgrades and stale-entry cleanup |
+| `cli/src/apps/install.rs` | Core App-install request adapter and terminal rendering |
+| `cli/src/apps/uninstall.rs` | Core App-uninstall request adapter and terminal rendering |
+| `cli/src/apps/upgrade.rs` | Core App-upgrade request adapter and terminal rendering |
 | `cli/src/apps/info.rs` | App list/info status |
 | `cli/src/apps/report.rs` | Install/uninstall outcome formatting |
-| `cli/src/apps/metadata.rs` | `shine.toml` app schema and parsing |
+| `cli/src/apps/metadata.rs` | Compatibility re-exports of Core App metadata types |
 | `cli/src/apps/annotation.rs` | Legacy `shine-dest:` annotation parsing |
-| `cli/src/apps/generator.rs` | `[[files]].generator` execution, limits, and permission gate |
-| `cli/src/apps/refresh.rs` | Explicit generator refresh with ownership/modification guards |
-| `cli/src/apps/hooks.rs` | Shared `post_install`/`post_upgrade` hook runner |
-| `cli/src/apps/build.rs` | Explicit artifact apply/remove and uninstall teardown |
-| `cli/src/apps/json_merge.rs` | Managed-key JSON merge strategy |
-| `cli/src/install_core/file_ops.rs` | Copy, backup, restore, privileged filesystem operations |
-| `cli/src/install_core/manifest.rs` | `app-manifest.toml` model and persistence |
-| `cli/src/install_core/transforms/` | `jsonc-to-json`, `template`, EOL helpers |
-| `cli/src/install_core/line_endings.rs` | Shared EOL detection, normalization, and comparison |
+| `cli/src/apps/refresh.rs` | Core explicit-generator-refresh adapter |
+| `cli/src/apps/recovery.rs` | Core explicit App operation recovery Plan/apply adapter |
+| `cli/src/apps/build.rs` | Core artifact apply/remove adapter |
+| `cli/src/install_core/file_ops.rs` | Test-only compatibility coverage for Core host-backed copy, backup, and restore primitives |
+| `cli/src/install_core/manifest.rs` | Compatibility re-export of Core-owned `app-manifest.toml` types |
+| `core/src/install/` | App manifest, file ownership primitives, `jsonc-to-json`/`template`, and EOL helpers |
 
 `install_core` contains app/sys-shared primitives only; `sys` depends on it, not on app-specific
 logic.
@@ -100,15 +126,13 @@ logic.
 | Path | Responsibility |
 |---|---|
 | `cli/src/shells/mod.rs` | Shell types, shared accessors, handler re-exports |
-| `cli/src/shells/deployment.rs` | Embedded/external snapshot/live deployment and shell manifest |
-| `cli/src/shells/install.rs` | Category/command install and installed-shell upgrade |
-| `cli/src/shells/uninstall.rs` | Category/command uninstall |
+| `cli/src/shells/deployment.rs` | Hidden live-render Core adapter |
+| `cli/src/shells/install.rs` | Core category/command install and upgrade adapter |
+| `cli/src/shells/recovery.rs` | Core explicit Shell transaction recovery Plan/apply adapter |
+| `cli/src/shells/uninstall.rs` | Category/command uninstall results with sibling/cache and foreign-launcher protection |
 | `cli/src/shells/links.rs` | Launcher/link specifications and conflict reporting |
 | `cli/src/shells/report.rs` | Shell list/install/uninstall/upgrade reporting |
-| `cli/src/shells/profile.rs` | PATH/source-command profile blocks |
-| `cli/src/shells/template.rs` | Installed shell template rendering |
-| `cli/src/shells/metadata.rs` | Shell category/file metadata parsing |
-| `cli/src/bin_links.rs` | Native symlinks/shims and managed Bun launchers in `~/.shine/bin/` |
+| `cli/src/shells/metadata.rs` | Compatibility re-exports of Core Shell metadata types |
 | `cli/src/bun_runtime.rs` | Shared source-scoped Bun dependency policy and command construction |
 | `cli/src/sentinel.rs` | Shared sentinel-block primitives used by shell and sys profiles |
 
@@ -116,22 +140,17 @@ logic.
 
 | Path | Responsibility |
 |---|---|
-| `cli/src/sys/commands.rs` | List/info/status/bootstrap orchestration and manifest loading |
-| `cli/src/sys/bootstrap.rs` | Read-only detection plus Homebrew/APT/Winget/script install actions |
+| `cli/src/sys/commands.rs` | Sys list/info/status rendering, exact bootstrap selection, and approved Core bootstrap Plan adapter |
 | `cli/src/sys/detect.rs` | OS and Linux distribution detection |
-| `cli/src/sys/managed.rs` | Managed-resource apply/remove/upgrade family |
-| `cli/src/sys/model.rs` | Sys manifest and runtime outcome models |
-| `cli/src/sys/manifest.rs` | Preset parsing and validation |
-| `cli/src/sys/run_manifest.rs` | `sys-manifest.toml` receipts |
-| `cli/src/sys/selection.rs` | Positional/profile/interactive item selection |
+| `cli/src/sys/managed.rs` | Managed-resource apply/update/remove/upgrade and structured result adapters |
+| `cli/src/sys/model.rs` | Compatibility re-exports of Core Sys models |
+| `cli/src/sys/manifest.rs` | Core parser compatibility adapter |
+| `cli/src/sys/run_manifest.rs` | Compatibility re-export of Core-owned Sys manifest and receipt state |
+| `cli/src/sys/selection.rs` | Selected-item terminal formatting only |
 | `cli/src/sys/execution.rs` | Bootstrap reporting and proxy environment |
 | `cli/src/sys/render.rs` | System command presentation helpers |
-| `cli/src/sys/resources.rs` | `SystemDriver` abstraction and built-in dispatch |
-| `cli/src/sys/drivers/` | Built-in managed-resource drivers such as split DNS and managed file |
-| `cli/src/sys/profile.rs` | Generated profile install and three-way reconciliation |
-| `cli/src/sys/profile_compose.rs` | Deterministic base plus enabled-item composition |
-| `cli/src/sys/profile_commands.rs` | Explicit profile enable/disable |
-| `cli/src/sys/profile_blocks.rs` | Phase-specific sentinel insertion/removal and BOM handling |
+| `cli/src/sys/profile_commands.rs` | Core profile enable/disable adapter and rendering |
+| `cli/src/sys/recovery.rs` | Core explicit managed Sys operation recovery Plan/apply adapter |
 
 ## Configuration, presets, and runtime state
 
@@ -144,11 +163,21 @@ logic.
 | `cli/src/config/env_layer.rs` | `[env]` parsing/defaults and override files |
 | `cli/src/presets.rs` | Embedded extraction, active asset reads, category enumeration |
 | `cli/src/preset_commands.rs` | Preset copy/export/link/unlink/overlay commands |
-| `cli/src/preset_meta.rs` | Shared preset kind and canonical target metadata |
-| `cli/src/preset_validation.rs` | Config-independent preset discovery, static validation report, and text/JSON rendering |
+| `cli/src/preset_meta.rs` | Test-only Core capability-report renderer for public manual parity |
+| `cli/src/preset_validation.rs` | Core validation report text/JSON rendering and exit mapping |
+| `cli/src/preset_lint.rs` | Core author-quality lint report rendering and strict-CI exit mapping |
+| `cli/src/preset_authoring.rs` | Hypothetical authoring-plan text/JSON rendering and platform mapping |
+| `cli/src/preset_test.rs` | Declarative fixture report rendering and failed-case exit mapping |
+| `cli/src/preset_pack.rs` | Deterministic bundle report rendering and explicit atomic output write |
+| `cli/src/preset_schema.rs` | Live Clap help plus Core-generated authoring schema reference rendering |
+| `core/src/runtime/authoring.rs` | Same-snapshot static validation and synthetic-host App/Shell/Sys authoring reports |
+| `core/src/runtime/lint.rs` | Same-snapshot cross-platform author-quality, portability, and permission-minimization diagnostics |
+| `core/src/runtime/fixture.rs` | Versioned `shine.test.toml` parsing and structured authoring-report assertions |
+| `core/src/runtime/pack.rs` | Bundle manifest, reproducible tar.gz bytes, and source-tree pack policy |
+| `core/src/runtime/schema.rs` | Generated JSON Schemas for authoring reports, fixtures, and bundle manifests |
 | `cli/src/git_pull.rs` | FF-only external source pulls and managed overlay mirroring |
 | `cli/src/state.rs` | Versioned runtime-state cleanup |
-| `cli/src/status.rs` | Shared installed-status row builders |
+| `cli/src/status.rs` | Core App/Shell inspection-to-terminal row adapter |
 
 Config discovery priority is documented as a behavioral contract in
 [`data-flows.md`](data-flows.md#config-discovery) and

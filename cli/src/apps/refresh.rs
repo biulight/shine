@@ -1,22 +1,16 @@
 //! Explicit refresh of manifest-owned generated app files.
 
 use anyhow::{Result, bail};
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::colors;
 use crate::config::Config;
-use crate::env::EnvConfig;
-use crate::install_core::file_ops::InstallOutcome;
-use crate::install_core::manifest::{AppEntry, AppManifest};
-
-use super::hooks::{HookPhase, run_app_hooks};
-use super::metadata;
-use super::report::{print_install_error, print_install_success};
-use super::{
-    desired_content_hash, install_prepared_content, installed_content_hash,
-    materialize_file_content, resolve_install_destination,
+use crate::presentation::TerminalInteraction;
+use shine_core::runtime::{
+    AppFileAction, AppRefreshPlanRequest, PlanningInputVersions, RuntimeEvent, RuntimeObserver,
 };
+
+use super::report::{print_install_error, print_install_success};
 
 pub async fn handle_refresh(
     config: &Config,
@@ -24,169 +18,82 @@ pub async fn handle_refresh(
     file_selector: Option<&str>,
     force: bool,
 ) -> Result<()> {
+    handle_refresh_approved(config, category, file_selector, force, true).await
+}
+
+pub async fn handle_refresh_approved(
+    config: &Config,
+    category: &str,
+    file_selector: Option<&str>,
+    force: bool,
+    yes: bool,
+) -> Result<()> {
     crate::config::print_presets_note(config);
-    let categories = metadata::load_active_categories(config, Some(category)).await?;
-    let cat = categories
-        .iter()
-        .find(|cat| cat.name == category)
-        .ok_or_else(|| anyhow::anyhow!("app preset category not found: {category}"))?;
-    let env = EnvConfig::load_or_init(config).await?;
-    let env_map = env.as_map();
-    let mut manifest = AppManifest::load(config.shine_dir()).await?;
-
-    let candidates = if let Some(selector) = file_selector {
-        let file = cat
-            .files
-            .iter()
-            .find(|file| file.source_rel == Path::new(selector))
-            .ok_or_else(|| anyhow::anyhow!("app '{category}' file not found: {selector}"))?;
-        if file.generator.is_none() {
-            bail!("app '{category}' file is not generated: {selector}");
-        }
-        vec![file]
-    } else {
-        cat.files
-            .iter()
-            .filter(|file| file.generator.is_some())
-            .collect::<Vec<_>>()
+    let plan_request = AppRefreshPlanRequest {
+        category: category.to_string(),
+        file: file_selector.map(Path::new).map(Path::to_path_buf),
+        force,
+        input_versions: PlanningInputVersions::default(),
     };
-
-    if candidates.is_empty() {
-        bail!("app '{category}' has no generated files");
-    }
-
-    let mut selected = Vec::new();
-    for file in candidates {
-        let destination = resolve_install_destination(cat, file, config)?;
-        let Some(entry) = manifest.find_by_dest(&destination).cloned() else {
-            if file_selector.is_some() {
-                bail!(
-                    "app '{category}' generated file is not installed: {}",
-                    file.source_rel.display()
-                );
-            }
-            continue;
-        };
-        selected.push((file, destination, entry));
-    }
-    if selected.is_empty() {
-        bail!(
-            "app '{category}' has no installed generated files; run `shine install app/{category}` first"
-        );
-    }
+    let reviewed = crate::lifecycle_plan::review_plans(
+        config,
+        [crate::lifecycle_plan::LifecyclePlanRequest::app_refresh(
+            plan_request.clone(),
+            config,
+        )],
+        yes,
+    )
+    .await?
+    .into_iter()
+    .next()
+    .expect("one reviewed App refresh Plan");
+    let runtime = crate::lifecycle_plan::prepare_runtime(config, &reviewed).await?;
 
     println!(
         "{}",
         colors::bold(&format!("Refreshing app generators: {category}"))
     );
-    let mut updated = 0usize;
-    let mut unchanged = 0usize;
-    let mut failed = 0usize;
-
-    for (file, destination, entry) in selected {
-        let label = format!("{category}/{}", file.source_rel.display());
-        let generator = file.generator.as_ref().expect("candidate has generator");
-        if !env_map.contains_key(&generator.when_env) {
-            eprintln!(
-                "  {} {label}: generator requires config env '{}'",
-                colors::symbol_stderr("✗"),
-                generator.when_env
-            );
-            failed += 1;
-            continue;
-        }
-
-        let content = match materialize_file_content(config, cat, file, env_map).await {
-            Ok(content) => content,
-            Err(error) => {
-                print_install_error(&label, &error);
-                failed += 1;
-                continue;
-            }
-        };
-        let desired_hash = match desired_content_hash(file, &content) {
-            Ok(hash) => hash,
-            Err(error) => {
-                print_install_error(&label, &error);
-                failed += 1;
-                continue;
-            }
-        };
-
-        let (destination_exists, current_hash) = match tokio::fs::read(&destination).await {
-            Ok(bytes) => match installed_content_hash(file, &bytes) {
-                Ok(hash) => (true, hash),
-                Err(error) => {
-                    if !force {
-                        print_install_error(&label, &error);
-                        failed += 1;
-                        continue;
-                    }
-                    (true, None)
-                }
-            },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (false, None),
-            Err(error) => {
-                print_install_error(&label, &error.into());
-                failed += 1;
-                continue;
-            }
-        };
-
-        if current_hash == Some(entry.content_hash) && desired_hash == entry.content_hash {
-            println!(
-                "  {} {label}  {}",
-                colors::dim("-"),
-                colors::dim("already up to date")
-            );
-            unchanged += 1;
-            continue;
-        }
-        if destination_exists && current_hash != Some(entry.content_hash) && !force {
-            eprintln!(
-                "  {} {label}: user-modified, kept (use --force to overwrite)",
-                colors::symbol("!")
-            );
-            failed += 1;
-            continue;
-        }
-
-        match install_prepared_content(file, &content, &destination, true, false, true).await {
-            Ok(InstallOutcome::Installed { hash })
-            | Ok(InstallOutcome::BackedUpAndInstalled { hash, .. }) => {
-                print_install_success(&label, "", &destination, config);
-                manifest.upsert(AppEntry {
-                    source: entry.source,
-                    destination,
-                    backup: entry.backup,
-                    content_hash: hash,
-                    install_strategy: file.install_strategy.clone(),
-                    uses_env: true,
-                    requires_admin: file.requires_admin,
-                });
+    let mut observer = RefreshObserver;
+    let mut interaction = TerminalInteraction;
+    let report = runtime
+        .refresh_app_generators_approved(
+            plan_request,
+            &reviewed.approval,
+            &mut observer,
+            &mut interaction,
+        )
+        .await?;
+    let mut updated = 0;
+    let mut unchanged = 0;
+    let mut failed = 0;
+    for file in report.files {
+        let label = format!("{category}/{}", file.source.display());
+        match file.action {
+            AppFileAction::Installed | AppFileAction::BackedUp => {
+                print_install_success(&label, "", &file.destination, config);
                 updated += 1;
             }
-            Ok(InstallOutcome::AlreadyManaged) => {
+            AppFileAction::Unchanged => {
+                println!(
+                    "  {} {label}  {}",
+                    colors::dim("-"),
+                    colors::dim("already up to date")
+                );
                 unchanged += 1;
             }
-            Ok(InstallOutcome::DryRun) => unreachable!("refresh is never a dry run"),
-            Err(error) => {
-                print_install_error(&label, &error);
+            AppFileAction::UserModified => {
+                eprintln!(
+                    "  {} {label}: user-modified, kept (use --force to overwrite)",
+                    colors::symbol("!")
+                );
                 failed += 1;
             }
+            AppFileAction::Failed => {
+                print_install_error(&label, &anyhow::anyhow!(file.error.unwrap_or_default()));
+                failed += 1;
+            }
+            _ => unchanged += 1,
         }
-    }
-
-    if updated > 0 {
-        manifest.save(config.shine_dir()).await?;
-        run_app_hooks(
-            config,
-            |name| categories.iter().find(|cat| cat.name == name),
-            &BTreeSet::from([category.to_string()]),
-            HookPhase::PostUpgrade,
-            true,
-        )
-        .await;
     }
 
     println!(
@@ -201,10 +108,38 @@ pub async fn handle_refresh(
     Ok(())
 }
 
+struct RefreshObserver;
+
+impl RuntimeObserver for RefreshObserver {
+    fn emit(&mut self, event: RuntimeEvent) {
+        match event {
+            RuntimeEvent::Warning { detail, .. } => eprintln!("  {} {detail}", colors::symbol("!")),
+            RuntimeEvent::ProcessOutput { text, .. } => {
+                for line in text.lines() {
+                    println!("     {}", colors::dim(line));
+                }
+            }
+            RuntimeEvent::Progress {
+                code: "app_hook_completed",
+                target,
+            } => {
+                println!(
+                    "  {} {}: post-upgrade hook completed",
+                    colors::symbol("✓"),
+                    target.trim_start_matches("app/")
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::apps::metadata;
     use crate::apps::{handle_install, handle_upgrade_installed};
+    use crate::install_core::manifest::AppManifest;
     use crate::status::{FileStatus, app_entry_status};
     use std::os::unix::fs::PermissionsExt;
     use tokio::fs;
@@ -212,7 +147,6 @@ mod tests {
     async fn write_fixture(root: &Path, two_files: bool) -> Config {
         let mut config = Config::new_for_test(root);
         config.is_external_presets = true;
-        config.allow_app_hooks = true;
         config
             .env
             .insert("SOURCE_URL".to_string(), "https://example.test".to_string());
@@ -233,6 +167,14 @@ generator = { script = "second.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
             format!(
                 r#"description = "sample"
 dest = "{}"
+
+[permissions]
+schema_version = 1
+filesystem = [
+  {{ access = ["execute"], base = "preset", path = "first.sh" }},
+  {{ access = ["execute"], base = "preset", path = "second.sh" }},
+]
+environment = [{{ name = "SOURCE_URL", sensitivity = "plain" }}]
 
 [[files]]
 source = "first.txt"
@@ -259,6 +201,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
                 .unwrap();
             write_generator(&app_dir.join("second.sh"), "second").await;
         }
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
         config
     }
 
@@ -311,7 +254,9 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
             .unwrap();
         let cat = &categories[0];
         let file = &cat.files[0];
-        let manifest = AppManifest::load(config.shine_dir()).await.unwrap();
+        let manifest = AppManifest::load(&shine_core::runtime::RealHost, config.shine_dir())
+            .await
+            .unwrap();
         let entry = manifest.find_by_dest(&dest).unwrap();
         assert_eq!(
             app_entry_status(&config, cat, file, entry, &config.env).await,
@@ -330,6 +275,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         );
         assert_eq!(fs::read(&dest).await.unwrap(), b"first-v1\n");
 
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
         handle_refresh(&config, "sample", Some("first.txt"), false)
             .await
             .unwrap();
@@ -339,6 +285,102 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
                 .await
                 .unwrap(),
             "xx"
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn automatic_generator_status_reports_refresh_without_execution() {
+        let root = crate::test_support::make_temp_dir("shine-refresh-status").await;
+        let config = write_fixture(&root, false).await;
+        let metadata_path = config.presets_dir().join("app/sample/shine.toml");
+        let metadata = fs::read_to_string(&metadata_path)
+            .await
+            .unwrap()
+            .replace("auto = false", "auto = true");
+        fs::write(&metadata_path, metadata).await.unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
+        handle_install(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+
+        let categories = metadata::load_active_categories(&config, Some("sample"))
+            .await
+            .unwrap();
+        let rows = crate::status::build_app_rows(&config, &categories)
+            .await
+            .unwrap();
+        assert_eq!(rows[0].file_status, FileStatus::GeneratorNotEvaluated);
+        assert_eq!(
+            fs::read_to_string(config.presets_dir().join("app/sample/first.runs"))
+                .await
+                .unwrap(),
+            "x",
+            "read-only status must not execute an automatic generator"
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_generator_evaluation_materializes_desired_content_before_install() {
+        let root = crate::test_support::make_temp_dir("shine-generator-preview").await;
+        let config = write_fixture(&root, false).await;
+        let mut runtime = crate::core_runtime::from_config(&config).await.unwrap();
+        runtime.context_mut_for_cli().env = config.env.clone();
+        let inspections = runtime
+            .inspect_apps_with_options(
+                shine_core::runtime::AppInspectionOptions {
+                    run_generators: true,
+                    categories: vec!["sample".to_string()],
+                },
+                &mut shine_core::runtime::NullObserver,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            inspections[0].desired_content.as_deref(),
+            Some(b"first-v1\n".as_slice())
+        );
+        assert!(!root.join("dest/first.txt").exists());
+        assert_eq!(
+            fs::read_to_string(config.presets_dir().join("app/sample/first.runs"))
+                .await
+                .unwrap(),
+            "x"
+        );
+        fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_generator_evaluation_updates_status_without_writing_destination() {
+        let root = crate::test_support::make_temp_dir("shine-generator-evaluation").await;
+        let config = write_fixture(&root, false).await;
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
+        handle_install(&config, Some("sample"), false, false)
+            .await
+            .unwrap();
+        let app_dir = config.presets_dir().join("app/sample");
+        let destination = root.join("dest/first.txt");
+        fs::write(app_dir.join("first.payload"), b"first-v2\n")
+            .await
+            .unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
+
+        let categories = metadata::load_active_categories(&config, Some("sample"))
+            .await
+            .unwrap();
+        let (rows, _, _) =
+            crate::status::build_app_rows_with_lifecycle_options(&config, &categories, true)
+                .await
+                .unwrap();
+        assert_eq!(rows[0].file_status, FileStatus::UpdateAvail);
+        assert_eq!(fs::read(&destination).await.unwrap(), b"first-v1\n");
+        assert_eq!(
+            fs::read_to_string(app_dir.join("first.runs"))
+                .await
+                .unwrap(),
+            "xx",
+            "explicit evaluation must execute the selected generator exactly once"
         );
         fs::remove_dir_all(root).await.unwrap();
     }
@@ -360,6 +402,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
             .await
             .unwrap();
         fs::write(&first_dest, b"user edit\n").await.unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         assert!(
             handle_refresh(&config, "sample", Some("first.txt"), false)
@@ -398,6 +441,7 @@ generator = {{ script = "first.sh", env = ["SOURCE_URL"], when_env = "SOURCE_URL
         fs::write(app_dir.join("second.payload"), b"second-v2\n")
             .await
             .unwrap();
+        crate::trust::grant_current_for_test(&config, "app/sample").await;
 
         assert!(
             handle_refresh(&config, "sample", None, false)

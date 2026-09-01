@@ -17,11 +17,18 @@ directory. Start from `shine preset new shell`; its template is authoritative.
 Command names must be plain filenames and unique within every platform branch.
 Keep all sources inside the category; do not use absolute paths or `..`.
 
+Every `[[files]]` command has its own `[files.permissions]` table with
+`schema_version = 1`. Platform variants of the same command declare separately.
+Record program identities without argv and environment names without values;
+classify every environment entry as `plain` or `secret`. Standard launcher,
+snapshot, receipt, and profile ownership remains derived from Shell metadata.
+
 ## Bun and transforms
 
 For cross-platform TypeScript or JavaScript helpers, set `runtime = "bun"` and
 use a `.ts`, `.js`, `.mts`, or `.mjs` source. Bun entries may declare `env` and
-`transforms`; native entries cannot declare runtime environment injection.
+`transforms`; native entries cannot declare runtime environment injection. The
+source name in an `env = ["SOURCE=TARGET"]` alias is the permission identity.
 
 If Bun dependencies are needed, include both `package.json` and `bun.lock` at
 the category root. Do not declare `trustedDependencies`. Shine does not install

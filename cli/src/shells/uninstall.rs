@@ -1,12 +1,17 @@
-use super::install::installed_source_commands;
-use super::profile::{
-    remove_managed_shell_profile, remove_path_from_shell_config, write_managed_shell_profile,
+#[cfg(test)]
+use super::profile::remove_path_from_shell_config;
+use super::report::{
+    shell_cache_remove_summary_parts, style_dim, style_symbol, unlink_report_summary_parts,
 };
-use super::report::{remove_report_summary_parts, unlink_report_summary_parts};
 use crate::config::Config;
 use crate::output;
-use anyhow::{Context, Result, bail};
-use std::ffi::OsStr;
+use crate::presentation::{LifecycleReporter, PresentationEvent, TerminalRenderer};
+use anyhow::Result;
+use shine_core::lifecycle::LifecycleOperation;
+use shine_core::lifecycle::LifecycleResultV1;
+#[cfg(test)]
+use shine_core::lifecycle::{LifecycleEffect, LifecycleStatus};
+use shine_core::runtime::{PlanningInputVersions, ShellPlanRequest};
 
 pub async fn handle_uninstall(
     config: &Config,
@@ -14,295 +19,126 @@ pub async fn handle_uninstall(
     purge: bool,
     dry_run: bool,
 ) -> Result<()> {
-    crate::config::print_presets_note(config);
-    if dry_run {
-        println!(
-            "{}",
-            crate::colors::dim("[dry-run] No files will be modified.")
-        );
-    }
-    let selection = target
-        .map(super::metadata::parse_lifecycle_target)
-        .transpose()?;
-    if let Some(selection) = selection
-        && let Some(command) = selection.command
-    {
-        return handle_uninstall_command(config, selection.category, command, purge, dry_run).await;
-    }
-    let category = selection.map(|selection| selection.category);
-
-    // When a category is given, scope removal to that category's subdirectory.
-    let managed_presets_root = match category {
-        Some(cat) => config.presets_dir().join("shell").join(cat),
-        None => config.presets_dir().to_path_buf(),
-    };
-    let managed_rendered_root = match category {
-        Some(cat) => config.rendered_dir().join("shell").join(cat),
-        None => config.rendered_dir().join("shell"),
-    };
-    let prefix = match category {
-        Some(cat) => format!("shell/{cat}"),
-        None => "shell".to_owned(),
-    };
-
-    // Remove symlinks pointing to presets_dir (old-style) or rendered_dir (new-style).
-    let unlink_presets =
-        crate::bin_links::unlink_managed(config.bin_dir(), &managed_presets_root, dry_run).await?;
-    let unlink_rendered =
-        crate::bin_links::unlink_managed(config.bin_dir(), &managed_rendered_root, dry_run).await?;
-    let managed_installed_root = match category {
-        Some(cat) => config.installed_shell_dir().join(cat),
-        None => config.installed_shell_dir(),
-    };
-    let unlink_installed =
-        crate::bin_links::unlink_managed(config.bin_dir(), &managed_installed_root, dry_run)
-            .await?;
-    let unlink_report = crate::bin_links::UnlinkReport {
-        removed: [
-            unlink_presets.removed,
-            unlink_rendered.removed,
-            unlink_installed.removed,
-        ]
-        .concat(),
-        skipped: [
-            unlink_presets.skipped,
-            unlink_rendered.skipped,
-            unlink_installed.skipped,
-        ]
-        .concat(),
-    };
-    output::summary_line("Bin Links", &unlink_report_summary_parts(&unlink_report));
-
-    // When the user has a custom presets directory, the source files are theirs —
-    // only remove the embedded-managed files when using the default directory.
-    if !config.is_external_presets {
-        let remove_report =
-            crate::presets::remove_prefix(&prefix, config.presets_dir(), dry_run).await?;
-        output::summary_line(
-            "Shell Presets",
-            &remove_report_summary_parts(&remove_report),
-        );
-    }
-
-    // Only purge managed directories when using the default presets directory.
-    // Never delete a user-configured external folder.
-    if purge && !dry_run && !config.is_external_presets {
-        let purge_dir = match category {
-            Some(cat) => config.presets_dir().join("shell").join(cat),
-            None => config.presets_dir().join("shell"),
-        };
-        if purge_dir.exists() {
-            tokio::fs::remove_dir_all(&purge_dir)
-                .await
-                .with_context(|| format!("removing presets directory: {purge_dir:?}"))?;
-        }
-        if category.is_none() {
-            // remove_dir only succeeds if empty — treat non-empty as benign
-            let _ = tokio::fs::remove_dir(config.presets_dir()).await;
-            let _ = tokio::fs::remove_dir(config.bin_dir()).await;
-        }
-        println!(
-            "  {}  {}",
-            crate::colors::symbol("✓"),
-            crate::colors::dim("managed directories purged (if empty)"),
-        );
-    }
-
-    // Remove rendered_dir files — always shine-managed regardless of external-presets mode.
-    if !dry_run && managed_rendered_root.exists() {
-        tokio::fs::remove_dir_all(&managed_rendered_root)
-            .await
-            .with_context(|| {
-                format!("removing rendered dir: {}", managed_rendered_root.display())
-            })?;
-    }
-
-    if !dry_run && managed_installed_root.exists() {
-        tokio::fs::remove_dir_all(&managed_installed_root)
-            .await
-            .with_context(|| {
-                format!(
-                    "removing installed shell snapshot: {}",
-                    managed_installed_root.display()
-                )
-            })?;
-    }
-
-    if !dry_run {
-        let mut manifest = super::deployment::ShellManifest::load(config).await?;
-        if let Some(category) = category {
-            manifest.remove_category(category);
-        } else {
-            manifest.entries.clear();
-        }
-        manifest.save(config).await?;
-    }
-
-    if !dry_run {
-        if category.is_none() {
-            // Only remove the PATH sentinel when uninstalling all shell presets.
-            remove_path_from_shell_config(config).await?;
-            remove_managed_shell_profile(config).await?;
-        } else {
-            let remaining_source_commands = installed_source_commands(config).await?;
-            write_managed_shell_profile(config, &remaining_source_commands).await?;
-        }
-    }
-
-    Ok(())
+    handle_uninstall_approved(config, target, purge, dry_run, true).await
 }
 
-async fn handle_uninstall_command(
+pub async fn handle_uninstall_approved(
     config: &Config,
-    category: &str,
-    command: &str,
+    target: Option<&str>,
     purge: bool,
     dry_run: bool,
+    yes: bool,
 ) -> Result<()> {
-    let mut manifest = super::deployment::ShellManifest::load(config).await?;
-    let canonical = format!("shell/{category}/{command}");
-    let manifest_entry = manifest.find(&canonical).cloned();
-    let active_target = match super::metadata::load_active_target(
-        config,
-        super::metadata::ShellTarget {
-            category,
-            command: Some(command),
-        },
-    )
-    .await
-    {
-        Ok(categories) => Some(categories),
-        Err(error) if manifest_entry.is_none() => return Err(error),
-        Err(_) => None,
+    let mut renderer = TerminalRenderer::stdio();
+    handle_uninstall_with_reporter(config, target, purge, dry_run, yes, &mut renderer)
+        .await
+        .map(|_| ())
+}
+
+#[cfg(test)]
+pub(crate) async fn handle_uninstall_with_result(
+    config: &Config,
+    target: Option<&str>,
+    purge: bool,
+    dry_run: bool,
+) -> Result<LifecycleResultV1> {
+    let mut renderer = TerminalRenderer::stdio();
+    handle_uninstall_with_reporter(config, target, purge, dry_run, true, &mut renderer).await
+}
+
+async fn handle_uninstall_with_reporter(
+    config: &Config,
+    target: Option<&str>,
+    purge: bool,
+    dry_run: bool,
+    yes: bool,
+    reporter: &mut dyn LifecycleReporter,
+) -> Result<LifecycleResultV1> {
+    for line in crate::config::presets_note_lines(config) {
+        reporter.emit(PresentationEvent::stdout(line));
+    }
+    if dry_run {
+        reporter.emit(PresentationEvent::stdout(style_dim(
+            "[dry-run] No files will be modified.",
+        )));
+    }
+    let reviewed = if dry_run {
+        None
+    } else {
+        crate::lifecycle_plan::review_plans(
+            config,
+            [crate::lifecycle_plan::LifecyclePlanRequest::shell(
+                ShellPlanRequest {
+                    operation: LifecycleOperation::Uninstall,
+                    target: target.map(str::to_string),
+                    force: false,
+                    purge,
+                    input_versions: PlanningInputVersions::default(),
+                },
+                config,
+            )],
+            yes,
+        )
+        .await?
+        .into_iter()
+        .next()
     };
-
-    let mut managed_roots = vec![
-        config.presets_dir().join("shell").join(category),
-        config.rendered_dir().join("shell").join(category),
-        config.installed_shell_dir().join(category),
-    ];
-    if let Some(overlay) = config.active_presets_overlay_dir() {
-        managed_roots.push(overlay.join("shell").join(category));
-    }
-    if let Some(entry) = &manifest_entry {
-        // A live source or overlay may have moved since installation. The exact
-        // recorded targets are still valid ownership evidence for removing this
-        // launcher, without broadening removal to their user-owned parent tree.
-        managed_roots.push(entry.source_path.clone());
-        managed_roots.push(entry.rendered_path.clone());
-    }
-    let unlink_report = crate::bin_links::unlink_managed_command(
-        config.bin_dir(),
-        OsStr::new(command),
-        &managed_roots,
-        dry_run,
-    )
-    .await?;
-    if manifest_entry.is_none() && unlink_report.removed.is_empty() {
-        if unlink_report.skipped.is_empty() {
-            bail!("shell command is not installed: {category}/{command}");
-        }
-        bail!(
-            "shell command entry is not managed by Shine: {}",
-            unlink_report.skipped[0].display()
-        );
-    }
-    output::summary_line("Bin Links", &unlink_report_summary_parts(&unlink_report));
-
-    let other_manifest_entry = manifest
-        .entries
-        .iter()
-        .any(|entry| entry.category == category && entry.command != command);
-    let other_link_exists =
-        match super::metadata::load_active_categories(config, Some(category)).await {
-            Ok(categories) => categories
-                .iter()
-                .flat_map(|category| &category.files)
-                .any(|file| {
-                    file.command_name != command
-                        && crate::bin_links::command_path_for_name(
-                            config.bin_dir(),
-                            OsStr::new(&file.command_name),
-                        )
-                        .exists()
-                }),
-            Err(_) => false,
-        };
-    let category_still_installed = other_manifest_entry || other_link_exists;
-
-    if !dry_run {
-        let rendered_path = manifest_entry
-            .as_ref()
-            .map(|entry| entry.rendered_path.clone())
-            .or_else(|| {
-                active_target.and_then(|categories| {
-                    categories.first().and_then(|category| {
-                        category.files.first().map(|file| {
-                            super::deployment::rendered_path(
-                                config,
-                                &category.name,
-                                &file.source_rel,
-                            )
-                        })
-                    })
-                })
-            });
-        if let Some(path) = rendered_path
-            && path.starts_with(config.rendered_dir())
-            && !manifest.entries.iter().any(|entry| {
-                (entry.category != category || entry.command != command)
-                    && entry.rendered_path == path
-            })
-        {
-            remove_file_if_present(&path).await?;
-        }
-        manifest.remove_target(category, command);
-        manifest.save(config).await?;
-    }
-
-    if !category_still_installed {
-        if !config.is_external_presets {
-            let report = crate::presets::remove_prefix(
-                &format!("shell/{category}"),
-                config.presets_dir(),
-                dry_run,
+    let runtime = if let Some(reviewed) = &reviewed {
+        crate::lifecycle_plan::prepare_runtime(config, reviewed).await?
+    } else {
+        crate::core_runtime::from_config(config).await?
+    };
+    let core_report = if let Some(reviewed) = &reviewed {
+        runtime
+            .uninstall_shells_approved(
+                match &reviewed.request {
+                    crate::lifecycle_plan::LifecyclePlanRequest::Shell(request) => request.clone(),
+                    _ => unreachable!("reviewed Shell Plan"),
+                },
+                &reviewed.approval,
             )
-            .await?;
-            output::summary_line("Shell Presets", &remove_report_summary_parts(&report));
+            .await?
+    } else {
+        runtime
+            .preview_uninstall_shells(shine_core::runtime::ShellUninstallRequest {
+                target: target.map(str::to_string),
+                dry_run,
+                purge,
+            })
+            .await?
+    };
+    reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+        "Bin Links",
+        &unlink_report_summary_parts(&core_report.links),
+    )));
+    if !config.is_external_presets {
+        reporter.emit(PresentationEvent::stdout(output::summary_line_text(
+            "Shell Presets",
+            &shell_cache_remove_summary_parts(&core_report.cache),
+        )));
+    }
+    if purge && !dry_run && !config.is_external_presets {
+        reporter.emit(PresentationEvent::stdout(format!(
+            "  {}  {}",
+            style_symbol("✓"),
+            style_dim("managed directories purged (if empty)"),
+        )));
+    }
+    if let Some(profile) = &core_report.profile {
+        for path in &profile.config_paths {
+            reporter.emit(PresentationEvent::stdout(format!(
+                "Shell config ({}): shine entry removed",
+                crate::path_display::format_home(path, &config.home_dir)
+            )));
         }
-        if !dry_run {
-            remove_dir_if_present(&config.rendered_dir().join("shell").join(category)).await?;
-            remove_dir_if_present(&config.installed_shell_dir().join(category)).await?;
+        if let Some(path) = &profile.managed_profile {
+            reporter.emit(PresentationEvent::stdout(format!(
+                "Shell profile ({}): removed",
+                crate::path_display::format_home(path, &config.home_dir)
+            )));
         }
     }
-
-    if purge && !dry_run && !config.is_external_presets && !category_still_installed {
-        let _ = tokio::fs::remove_dir(config.presets_dir().join("shell")).await;
-        let _ = tokio::fs::remove_dir(config.presets_dir()).await;
-        let _ = tokio::fs::remove_dir(config.bin_dir()).await;
-    }
-
-    if !dry_run {
-        let remaining_source_commands = installed_source_commands(config).await?;
-        write_managed_shell_profile(config, &remaining_source_commands).await?;
-    }
-    Ok(())
-}
-
-async fn remove_file_if_present(path: &std::path::Path) -> Result<()> {
-    match tokio::fs::remove_file(path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("removing {}", path.display())),
-    }
-}
-
-async fn remove_dir_if_present(path: &std::path::Path) -> Result<()> {
-    match tokio::fs::remove_dir_all(path).await {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("removing {}", path.display())),
-    }
+    Ok(core_report.lifecycle)
 }
 
 #[cfg(test)]
@@ -345,9 +181,10 @@ mod tests {
         assert!(!removed.exists());
         assert!(sibling.exists());
 
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_none());
         assert!(manifest.find("shell/utils/shine-theme-sync").is_some());
 
@@ -367,7 +204,7 @@ mod tests {
         fs::create_dir_all(&category).await.unwrap();
         fs::write(
             category.join("shine.toml"),
-            b"[[files]]\nsource = \"shared.sh\"\ntarget = \"one\"\ntransforms = [\"template\"]\n\n[[files]]\nsource = \"shared.sh\"\ntarget = \"two\"\ntransforms = [\"template\"]\n",
+            b"[[files]]\nsource = \"shared.sh\"\ntarget = \"one\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n\n[[files]]\nsource = \"shared.sh\"\ntarget = \"two\"\ntransforms = [\"template\"]\n[files.permissions]\nschema_version = 1\n",
         )
         .await
         .unwrap();
@@ -399,9 +236,10 @@ mod tests {
             crate::bin_links::command_path_for_name(config.bin_dir(), std::ffi::OsStr::new("two"))
                 .exists()
         );
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
         assert!(manifest.find("shell/custom/one").is_none());
         assert_eq!(
             manifest.find("shell/custom/two").unwrap().rendered_path,
@@ -420,18 +258,27 @@ mod tests {
             .await
             .unwrap();
 
-        handle_uninstall(&config, Some("utils/shine-env-export"), false, true)
-            .await
-            .unwrap();
+        let result =
+            handle_uninstall_with_result(&config, Some("utils/shine-env-export"), false, true)
+                .await
+                .unwrap();
+
+        assert_eq!(result.outcomes[0].status, LifecycleStatus::Previewed);
+        assert!(
+            result.outcomes[0]
+                .effects
+                .contains(&LifecycleEffect::CacheRemovePreviewed)
+        );
 
         let command = crate::bin_links::command_path_for_name(
             config.bin_dir(),
             std::ffi::OsStr::new("shine-env-export"),
         );
         assert!(command.exists());
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_some());
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -449,7 +296,8 @@ mod tests {
             config.bin_dir(),
             std::ffi::OsStr::new("shine-env-export"),
         );
-        crate::bin_links::unlink_managed_command(
+        shine_core::runtime::unlink_managed_command_with_host(
+            &shine_core::runtime::RealHost,
             config.bin_dir(),
             std::ffi::OsStr::new("shine-env-export"),
             &[config.presets_dir().join("shell/utils")],
@@ -459,17 +307,51 @@ mod tests {
         .unwrap();
         fs::write(&command, b"user-owned command\n").await.unwrap();
 
-        handle_uninstall(&config, Some("utils/shine-env-export"), false, false)
+        let update = super::super::install::collect_update_lifecycle_result(&config)
             .await
             .unwrap();
+        let pending = update
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.target == "shell/utils/shine-env-export")
+            .unwrap();
+        assert_eq!(pending.status, LifecycleStatus::Conflict);
+
+        let mut separator = crate::output::SectionSeparator::new();
+        let error = super::super::install::handle_upgrade_installed_target_with_result(
+            &config,
+            Some("utils"),
+            false,
+            &mut separator,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("Plan is blocked"));
+        assert_eq!(
+            fs::read_to_string(&command).await.unwrap(),
+            "user-owned command\n"
+        );
+
+        let result =
+            handle_uninstall_with_result(&config, Some("utils/shine-env-export"), false, false)
+                .await
+                .unwrap();
+
+        assert_eq!(result.outcomes[0].status, LifecycleStatus::Conflict);
+        assert!(
+            result.outcomes[0]
+                .effects
+                .contains(&LifecycleEffect::UserResourcePreserved)
+        );
 
         assert_eq!(
             fs::read_to_string(&command).await.unwrap(),
             "user-owned command\n"
         );
-        let manifest = crate::shells::deployment::ShellManifest::load(&config)
-            .await
-            .unwrap();
+        let manifest =
+            crate::shells::deployment::ShellManifest::load(&shine_core::runtime::RealHost, &config)
+                .await
+                .unwrap();
         assert!(manifest.find("shell/utils/shine-env-export").is_none());
 
         fs::remove_dir_all(&dir).await.unwrap();
@@ -627,6 +509,12 @@ mod tests {
         fs::write(&script, b"#!/bin/bash\n# My tool.\necho hi\n")
             .await
             .unwrap();
+        fs::write(
+            cat_dir.join("shine.toml"),
+            b"[[files]]\nsource = \"my_tool.sh\"\ntarget = \"my_tool\"\n[files.permissions]\nschema_version = 1\n",
+        )
+        .await
+        .unwrap();
         use std::os::unix::fs::PermissionsExt;
         let mut perms = fs::metadata(&script).await.unwrap().permissions();
         perms.set_mode(perms.mode() | 0o111);

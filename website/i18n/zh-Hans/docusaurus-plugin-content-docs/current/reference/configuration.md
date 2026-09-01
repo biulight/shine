@@ -16,8 +16,6 @@ external_shell_mode = "live"
 presets_overlay_git = "https://example.com/team/shine-overlay.git"
 presets_overlay_git_branch = "main"
 app_default_dest_root = "~/.config"
-allow_app_hooks = true
-allow_sys_code = true
 sync_terminal_theme = true
 gpg_recipients = ["user@example.com", "team-backup@example.com"]
 
@@ -49,8 +47,6 @@ enabled = false
 | `presets_overlay_git` | 由 Shine 浅克隆并镜像到 `~/.shine/overlay/` 的 Git overlay URL |
 | `presets_overlay_git_branch` | Git overlay 跟踪的分支；省略时使用远端默认分支 |
 | `app_default_dest_root` | 未声明目标路径的旧式 app 预设默认根目录 |
-| `allow_app_hooks` | 允许外部 app 预设在安装或升级后运行生命周期钩子 |
-| `allow_sys_code` | 仅全局配置可授予：允许外部 sys 脚本和持久的可执行 profile 代码；项目配置不能自行启用 |
 | `sync_terminal_theme` | 控制受管 Unix shell profile 是否自动运行终端主题同步，默认为启用 |
 | `gpg_recipients` | `shine env secret encrypt` 默认 GPG recipient 列表 |
 | `secret_backend` | 默认密钥后端，省略时为 `gpg` |
@@ -60,6 +56,22 @@ enabled = false
 | `[[env_proxy]]` | 一个透明命令代理规则；`command` 为裸命令名，`with` 为允许注入的 `KEY` 或 `KEY=ALIAS` 列表，`enabled` 默认为 `true` |
 
 `gpg_key_id` 与 workspace 的 `[env.encryption].recipient` 是旧版单 recipient 字段。Shine 不会在普通读取配置时改写文件；用 `shine state migrate --dry-run` 预览并用 `shine state migrate` 迁移为 `gpg_recipients`。遇到旧 workspace 时，`env run` 和 `env secret seal` 会提示迁移。
+
+## 外部代码信任
+
+外部 App hook、generator、artifact、Sys 安装脚本及可执行 profile 内容使用 target-scoped grant，
+并保存在仅所有者可读写的 `~/.shine/trust.toml`。不要手改该文件，也不能从项目配置授予信任。
+
+```bash
+shine trust inspect app/example
+shine trust grant app/example
+shine trust list
+shine trust revoke app/example
+```
+
+Grant 会绑定 canonical target、capability、有效代码 digest、来源层和准确的权限声明；代码、来源层或
+权限变化后必须重新审阅。Grant 不能替代每次 mutation 的安全 Plan。旧的 `allow_app_hooks` 和
+`allow_sys_code` 已被忽略，并会在下次保存配置时移除。
 
 ## Env 条目格式与说明
 

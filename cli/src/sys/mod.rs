@@ -1,40 +1,39 @@
-mod bootstrap;
 mod commands;
 mod detect;
-mod drivers;
 mod execution;
 mod managed;
+#[cfg(test)]
 mod manifest;
 mod model;
-mod profile;
-mod profile_blocks;
 mod profile_commands;
-mod profile_compose;
+mod recovery;
 mod render;
-mod resources;
 mod run_manifest;
 mod selection;
 
 use model::{
-    LoadedSysPreset, ResolvedSelection, SYS_PROFILE_PHASES, SelectionSource,
-    ShellProfileBlockPosition, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall,
-    SysInstalledRow, SysItem, SysItemMode, SysItemOutcome, SysItemStatus, SysManifest,
-    SysPackageProvider, SysProfilePhase, SysShellIntegration, SysShellKind, SysUpdateRow,
-    SysUpgradeReport,
+    LoadedSysPreset, ResolvedSelection, SysDetection, SysDetectionProbe, SysDriverKind, SysInstall,
+    SysInstalledRow, SysItem, SysItemMode, SysItemOutcome, SysItemStatus, SysPackageProvider,
+    SysUpdateRow, SysUpgradeReport,
 };
-use render::sys_init_theme;
 
 use anyhow::{Context, Result};
-use std::path::Path;
 
 pub use commands::{handle_info, handle_init, handle_list, handle_status};
 pub use detect::detect_os_id;
 pub(crate) use managed::installed_managed;
 pub use managed::{
-    handle_apply, handle_uninstall, handle_upgrade_managed, handle_upgrade_managed_target,
-    managed_updates,
+    handle_apply, handle_apply_approved, handle_uninstall, handle_uninstall_approved,
+    handle_upgrade_managed, handle_upgrade_managed_target, managed_updates,
 };
-pub use profile_commands::{handle_profile_disable, handle_profile_enable};
+pub(crate) use managed::{
+    handle_upgrade_managed_target_with_result_approved, handle_upgrade_managed_with_result_prepared,
+};
+pub use profile_commands::{
+    handle_profile_disable, handle_profile_disable_approved, handle_profile_enable,
+    handle_profile_enable_approved,
+};
+pub use recovery::handle_recover_approved;
 
 const SYS_TEMPLATE: &str = r#"# System bootstrap preset metadata for shine (schema v2).
 version = 2
@@ -50,6 +49,11 @@ detect = { kind = "command", command = "my-tool", version_args = ["--version"] }
 # Keep scripts inside this category. For Windows, use a .ps1 script instead.
 install = { kind = "script", path = "install/my-tool.sh" }
 
+[items.permissions]
+schema_version = 1
+filesystem = [{ access = ["execute"], base = "preset", path = "install/my-tool.sh" }]
+# Add reviewed command, network, administrator, environment, and system identities used by the script.
+
 [profiles.recommended]
 items = ["my-tool"]
 "#;
@@ -57,7 +61,7 @@ items = ["my-tool"]
 pub async fn handle_init_template(force: bool) -> Result<()> {
     let dir = std::env::current_dir().context("reading current directory")?;
     let (path, overwritten) =
-        utils::init_template::write_shine_toml_template(&dir, force, SYS_TEMPLATE)?;
+        shine_core::init_template::write_shine_toml_template(&dir, force, SYS_TEMPLATE)?;
     if overwritten {
         println!("Updated sys preset template: {}", path.display());
     } else {
@@ -66,10 +70,21 @@ pub async fn handle_init_template(force: bool) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn validate_preset_category(
-    name: &str,
-    root: &Path,
-) -> std::result::Result<bool, crate::preset_validation::PresetValidationFailure> {
-    manifest::validate_preset_category(name, root)?;
-    Ok(true)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_template_contains_valid_permission_declaration() {
+        let manifest = manifest::parse_and_validate_manifest(SYS_TEMPLATE).unwrap();
+
+        assert_eq!(manifest.items.len(), 1);
+        assert_eq!(
+            manifest.items[0]
+                .permissions
+                .as_ref()
+                .map(|permissions| permissions.schema_version),
+            Some(1)
+        );
+    }
 }

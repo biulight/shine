@@ -46,17 +46,15 @@ fn default_sync_terminal_theme() -> bool {
     true
 }
 
+fn default_shell_type() -> ShellType {
+    crate::shells::get_shell().unwrap_or_default()
+}
+
 fn is_true(value: &bool) -> bool {
     *value
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ExternalShellMode {
-    #[default]
-    Snapshot,
-    Live,
-}
+pub use shine_core::runtime::ExternalShellMode;
 
 /// A command whose protected environment values are injected by a shine proxy.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -105,7 +103,7 @@ pub struct Config {
     pub schema_version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_cleared_schema_version: Option<u32>,
-    #[serde(skip)]
+    #[serde(skip, default = "default_shell_type")]
     pub shell_type: ShellType,
     /// Optional persistent presets_dir override stored in the active config.
     /// Takes effect when neither SHINE_CONFIG_DIR nor SHINE_PRESETS is set.
@@ -156,15 +154,12 @@ pub struct Config {
     /// assets. Shell deployment then follows `external_shell_mode`.
     #[serde(skip)]
     pub is_external_presets: bool,
-    /// Allows app presets loaded from external preset directories to run post-upgrade hooks.
-    /// Embedded presets may run hooks without this opt-in.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub allow_app_hooks: bool,
-    /// Global-only opt-in allowing external sys presets and overlays to execute install scripts or
-    /// install persistent shell-profile code. Declarative package providers,
-    /// detection, PATH, env, and aliases do not require this opt-in.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub allow_sys_code: bool,
+    /// Retired coarse App trust flag, read only to emit a migration warning.
+    #[serde(rename = "allow_app_hooks", default, skip_serializing)]
+    pub legacy_allow_app_hooks: bool,
+    /// Retired coarse Sys trust flag, read only to emit a migration warning.
+    #[serde(rename = "allow_sys_code", default, skip_serializing)]
+    pub legacy_allow_sys_code: bool,
     /// Whether the managed sys `pre` profile auto-syncs the terminal theme
     /// (`shine theme sync --auto`) on interactive shell startup. Defaults to
     /// `true`. The `SHINE_SYNC_TERMINAL_THEME` env var overrides this at
@@ -326,7 +321,7 @@ impl Config {
             home_dir: dir.to_path_buf(),
             schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
             last_cleared_schema_version: None,
-            shell_type: ShellType::default(),
+            shell_type: default_shell_type(),
             presets_dir_override: None,
             external_shell_mode: ExternalShellMode::Snapshot,
             presets_overlay_dir_override: None,
@@ -335,8 +330,8 @@ impl Config {
             managed_overlay_dir: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
-            allow_app_hooks: false,
-            allow_sys_code: false,
+            legacy_allow_app_hooks: false,
+            legacy_allow_sys_code: false,
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_recipients: Vec::new(),
@@ -470,34 +465,44 @@ impl Config {
     }
 }
 
+impl AsRef<Path> for Config {
+    fn as_ref(&self) -> &Path {
+        self.shine_dir()
+    }
+}
+
 /// Print the effective base preset source, optional overlay, and external
 /// shell deployment mode. This makes built-in, external, and overlay-backed
 /// runs report provenance with the same vocabulary.
 pub fn print_presets_note(config: &Config) {
+    for line in presets_note_lines(config) {
+        println!("{line}");
+    }
+}
+
+pub(crate) fn presets_note_lines(config: &Config) -> Vec<String> {
+    let mut lines = Vec::new();
     if config.is_external_presets {
-        println!(
-            "{}",
-            crate::colors::external_presets_note(config.presets_dir())
-        );
+        lines.push(crate::colors::external_presets_note(config.presets_dir()));
         if let Some(dir) = config.active_presets_overlay_dir() {
-            println!("{}", crate::colors::presets_overlay_note(dir));
+            lines.push(crate::colors::presets_overlay_note(dir));
         }
         let deployment = match config.external_shell_mode {
             ExternalShellMode::Snapshot => "snapshot · changes require `shine upgrade`",
             ExternalShellMode::Live => "live · content applies on next invocation",
         };
-        println!(
-            "{}",
-            crate::colors::dim(&crate::colors::shell_deployment_note(deployment))
-        );
-        println!();
+        lines.push(crate::colors::dim(&crate::colors::shell_deployment_note(
+            deployment,
+        )));
+        lines.push(String::new());
     } else {
-        println!("{}", crate::colors::presets_source_note("built-in"));
+        lines.push(crate::colors::presets_source_note("built-in"));
         if let Some(dir) = config.active_presets_overlay_dir() {
-            println!("{}", crate::colors::presets_overlay_note(dir));
+            lines.push(crate::colors::presets_overlay_note(dir));
         }
-        println!();
+        lines.push(String::new());
     }
+    lines
 }
 
 impl Default for Config {
@@ -515,7 +520,7 @@ impl Default for Config {
             home_dir,
             schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
             last_cleared_schema_version: None,
-            shell_type: ShellType::default(),
+            shell_type: default_shell_type(),
             presets_dir_override: None,
             external_shell_mode: ExternalShellMode::Snapshot,
             presets_overlay_dir_override: None,
@@ -524,8 +529,8 @@ impl Default for Config {
             managed_overlay_dir: None,
             app_default_dest_root_override: None,
             is_external_presets: false,
-            allow_app_hooks: false,
-            allow_sys_code: false,
+            legacy_allow_app_hooks: false,
+            legacy_allow_sys_code: false,
             sync_terminal_theme: default_sync_terminal_theme(),
             self_install_dest: None,
             gpg_recipients: Vec::new(),

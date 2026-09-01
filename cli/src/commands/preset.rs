@@ -10,9 +10,16 @@ pub enum PresetTemplateKind {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-pub enum PresetValidationFormat {
+pub enum PresetReportFormat {
     Text,
     Json,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum PresetPlatform {
+    Macos,
+    Linux,
+    Windows,
 }
 
 #[derive(Args, Debug)]
@@ -107,14 +114,68 @@ pub enum PresetCommands {
         #[arg(long, short = 'f')]
         force: bool,
     },
+    /// Generate the versioned JSON Schema and command-help reference
+    Schema {
+        /// Output format
+        #[arg(long, value_enum, default_value_t = PresetReportFormat::Text)]
+        format: PresetReportFormat,
+    },
     /// Statically validate preset metadata and referenced files
     Validate {
         /// Preset repository, category directory, or shine.toml (defaults to current directory)
         #[arg(value_name = "PATH", default_value = ".")]
         path: PathBuf,
         /// Output format
-        #[arg(long, value_enum, default_value_t = PresetValidationFormat::Text)]
-        format: PresetValidationFormat,
+        #[arg(long, value_enum, default_value_t = PresetReportFormat::Text)]
+        format: PresetReportFormat,
+    },
+    /// Check Preset author quality, portability, and permission minimization
+    Lint {
+        /// Preset repository, category directory, or shine.toml (defaults to current directory)
+        #[arg(value_name = "PATH", default_value = ".")]
+        path: PathBuf,
+        /// Output format
+        #[arg(long, value_enum, default_value_t = PresetReportFormat::Text)]
+        format: PresetReportFormat,
+        /// Exit with status 1 when lint warnings are present
+        #[arg(long)]
+        deny_warnings: bool,
+    },
+    /// Preview a first install against deterministic synthetic host state
+    Plan {
+        /// One app, shell, or sys category directory, or its shine.toml
+        #[arg(value_name = "CATEGORY", default_value = ".")]
+        path: PathBuf,
+        /// Target platform for the hypothetical authoring report
+        #[arg(long, value_enum)]
+        platform: PresetPlatform,
+        /// Output format
+        #[arg(long, value_enum, default_value_t = PresetReportFormat::Text)]
+        format: PresetReportFormat,
+    },
+    /// Run declarative shine.test.toml authoring fixtures
+    Test {
+        /// One app, shell, or sys category directory, or its shine.toml
+        #[arg(value_name = "CATEGORY", default_value = ".")]
+        path: PathBuf,
+        /// Output format
+        #[arg(long, value_enum, default_value_t = PresetReportFormat::Text)]
+        format: PresetReportFormat,
+    },
+    /// Build a deterministic, policy-gated Preset bundle
+    Pack {
+        /// One app, shell, or sys category directory, or its shine.toml
+        #[arg(value_name = "CATEGORY", default_value = ".")]
+        path: PathBuf,
+        /// Destination tar.gz bundle path (must be outside the category)
+        #[arg(long, value_name = "FILE")]
+        output: PathBuf,
+        /// Replace an existing output file
+        #[arg(long, short = 'f')]
+        force: bool,
+        /// Report output format
+        #[arg(long, value_enum, default_value_t = PresetReportFormat::Text)]
+        format: PresetReportFormat,
     },
     /// Copy built-in presets to a directory for local customization
     Export(ExportCommand),
