@@ -2139,17 +2139,24 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     let source =
                         self.shell_deployment_source_path(&category.name, &file.source_rel);
                     let rendered = self.shell_rendered_path(&category.name, &file.source_rel);
-                    let effective = if file.transforms.is_empty() {
-                        source.clone()
-                    } else {
-                        rendered.clone()
-                    };
                     let logical_source =
                         format!("shell/{}/{}", category.name, logical_path(&file.source_rel));
                     let desired_source = self
                         .presets()
                         .get(&logical_source)
                         .context("missing Shell source")?;
+                    let effective_transforms = if !file.transforms.is_empty() {
+                        file.transforms.clone()
+                    } else if has_template_annotation(desired_source) {
+                        vec!["template".to_string()]
+                    } else {
+                        Vec::new()
+                    };
+                    let effective = if effective_transforms.is_empty() {
+                        source.clone()
+                    } else {
+                        rendered.clone()
+                    };
                     state.public(
                         format!("desired:{logical_source}"),
                         sha256_hex(desired_source),
@@ -2161,6 +2168,100 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         &source,
                     )
                     .await?;
+                    let mut rendered_current = true;
+                    if !effective_transforms.is_empty() {
+                        let desired_rendered = crate::install::apply_transforms(
+                            &effective_transforms,
+                            desired_source,
+                            &self.context().env,
+                        )?;
+                        let desired_mode = self
+                            .host()
+                            .metadata(&source)
+                            .await
+                            .ok()
+                            .and_then(|metadata| metadata.unix_mode)
+                            .or_else(|| cfg!(unix).then_some(0o755));
+                        let rendered_conflict = match self.host().metadata(&rendered).await {
+                            Ok(metadata) if metadata.kind == FileKind::File => {
+                                let current =
+                                    self.host().read(&rendered).await.map_err(|error| {
+                                        error.into_anyhow("reading Shell rendered output")
+                                    })?;
+                                rendered_current = current == desired_rendered
+                                    && metadata.unix_mode == desired_mode;
+                                false
+                            }
+                            Ok(_) => {
+                                rendered_current = false;
+                                true
+                            }
+                            Err(error) if error.is_not_found() => {
+                                rendered_current = false;
+                                false
+                            }
+                            Err(error) if error.is_not_directory() => {
+                                return Err(error.into_anyhow("creating rendered script directory"));
+                            }
+                            Err(error) => {
+                                return Err(error.into_anyhow("inspecting Shell rendered output"));
+                            }
+                        };
+                        if !rendered_current {
+                            let rollback = managed_file_rollback_path(&rendered);
+                            capture_path_state(
+                                self.host(),
+                                &mut state,
+                                format!("rendered:{canonical}"),
+                                &rendered,
+                            )
+                            .await?;
+                            capture_path_state(
+                                self.host(),
+                                &mut state,
+                                format!("rendered-rollback:{canonical}"),
+                                &rollback,
+                            )
+                            .await?;
+                            let rollback_occupied = path_exists(self.host(), &rollback).await?;
+                            if !rendered_conflict && !rollback_occupied {
+                                typed_launcher_transaction = true;
+                                for (access, path) in [
+                                    (FilesystemAccessV1::Write, &rendered),
+                                    (FilesystemAccessV1::Remove, &rendered),
+                                    (FilesystemAccessV1::Write, &rollback),
+                                    (FilesystemAccessV1::Remove, &rollback),
+                                ] {
+                                    permissions.implicit(PermissionV1::Filesystem {
+                                        access,
+                                        path: review_path(self.context(), path),
+                                    });
+                                }
+                            }
+                            steps.push(
+                                PlanStepV1::new(
+                                    &canonical,
+                                    Some("rendered-output"),
+                                    if rendered_conflict || rollback_occupied {
+                                        PlanActionV1::Blocked
+                                    } else if path_exists(self.host(), &rendered).await? {
+                                        PlanActionV1::Update
+                                    } else {
+                                        PlanActionV1::Create
+                                    },
+                                )
+                                .with_diagnostic_code(
+                                    if rendered_conflict {
+                                        "shell_rendered_destination_conflict"
+                                    } else if rollback_occupied {
+                                        "shell_rendered_rollback_occupied"
+                                    } else {
+                                        "shell_rendered_replace_transaction"
+                                    },
+                                ),
+                            );
+                        }
+                    }
                     let bun = self.shell_bun_runtime_spec(&category.name, file)?;
                     let env = file
                         .env
@@ -2169,7 +2270,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         .collect::<Vec<_>>();
                     let render_target = (self.context().is_external_presets
                         && self.context().external_shell_mode == ExternalShellMode::Live
-                        && !file.transforms.is_empty())
+                        && !effective_transforms.is_empty())
                     .then(|| canonical.clone());
                     let desired_spec = LinkSpec {
                         source: effective.clone(),
@@ -2224,11 +2325,12 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             && entry.bun_dependencies
                                 == bun.dependency_mode.as_manifest_value().map(str::to_string)
                             && entry.dependency_hash == bun.dependency_hash
-                            && entry.transforms == file.transforms
+                            && entry.transforms == effective_transforms
                             && entry.env == env
                             && entry.needs_source == file.needs_source
                     });
-                    let current = link_current && source_current && manifest_current;
+                    let current =
+                        link_current && source_current && rendered_current && manifest_current;
                     let mut action = if exists && !managed && !request.force {
                         PlanActionV1::Blocked
                     } else if !exists {
@@ -2330,7 +2432,7 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                             request.operation,
                         );
                     }
-                    if !file.transforms.is_empty() {
+                    if !effective_transforms.is_empty() {
                         add_shell_typed_permissions(
                             self.context(),
                             &mut permissions,
@@ -8662,6 +8764,17 @@ target = '$HOME/.config/disabled.txt'
             .build()
     }
 
+    fn transformed_shell_snapshot(script: &[u8]) -> PresetSnapshot {
+        PresetSnapshot::builder(PresetSourceKind::Embedded)
+            .file(
+                "shell/demo/shine.toml",
+                b"[[files]]\nsource = 'demo.sh'\ntarget = 'demo'\ntransforms = ['template']\n[files.permissions]\nschema_version = 1\n"
+                    .to_vec(),
+            )
+            .file("shell/demo/demo.sh", script.to_vec())
+            .build()
+    }
+
     fn shell_install_request() -> ShellPlanRequest {
         ShellPlanRequest {
             operation: LifecycleOperation::Install,
@@ -8685,6 +8798,184 @@ target = '$HOME/.config/disabled.txt'
         context.is_external_presets = true;
         context.external_shell_mode = ExternalShellMode::Snapshot;
         CoreRuntime::new(InMemoryHost::new(), context, snapshot)
+    }
+
+    #[tokio::test]
+    async fn transformed_shell_install_transactions_rendered_output_before_receipt() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho first\n"));
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("rendered-output")
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_rendered_replace_transaction".to_string())
+        }));
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        for (access, path) in [
+            (FilesystemAccessV1::Write, &rendered),
+            (FilesystemAccessV1::Remove, &rendered),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), path),
+                    })
+            );
+        }
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho first\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            runtime
+                .host()
+                .metadata(
+                    &runtime
+                        .context()
+                        .shine_dir
+                        .join(super::super::SHELL_OPERATION_JOURNAL_FILE)
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_shell_receipt_failure_removes_created_output_on_recovery() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho first\n"));
+        let request = shell_install_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt write should fail");
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        assert!(runtime.host().metadata(&rendered).await.is_ok());
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_previous_rendered_file".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&rendered).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_shell_marker_failure_restores_previous_output_and_receipt() {
+        let original = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho previous\n"));
+        let install = shell_install_request();
+        let approval = PlanApprovalV1::for_reviewed_plan(
+            &original.plan_shells(install.clone()).await.unwrap(),
+        )
+        .unwrap();
+        original
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let previous_receipt = ShellManifest::load(original.host(), &original.context().shine_dir)
+            .await
+            .unwrap()
+            .find("shell/demo/demo")
+            .unwrap()
+            .clone();
+        let runtime = CoreRuntime::new(
+            original.host().clone(),
+            original.context().clone(),
+            transformed_shell_snapshot(b"#!/bin/sh\necho desired\n"),
+        );
+        runtime.host().put_file(
+            runtime.context().presets_dir.join("shell/demo/demo.sh"),
+            b"#!/bin/sh\necho desired\n".to_vec(),
+        );
+        let request = ShellPlanRequest {
+            operation: LifecycleOperation::Upgrade,
+            target: Some("demo".to_string()),
+            force: false,
+            purge: false,
+            input_versions: PlanningInputVersions::default(),
+        };
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 2);
+        runtime
+            .upgrade_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("rendered receipt marker write should fail");
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho desired\n"
+        );
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"#!/bin/sh\necho previous\n"
+        );
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho previous\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert_eq!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .unwrap(),
+            &previous_receipt
+        );
     }
 
     #[tokio::test]

@@ -63,6 +63,9 @@ For an external preset in snapshot mode, Shine also journals creation or replace
 category snapshot when the selected commands need no rendered output. The old category tree stays
 in a deterministic rollback directory until all selected command receipts and a separate commit
 marker are durable.
+Transformed output created during install or upgrade uses a separate file-scoped transaction. An
+existing rendered file moves to same-directory `.shine.rollback`, and the exact old file remains
+there until all command receipts consuming that path and a separate commit marker are durable.
 Review and apply the dedicated recovery Plan:
 
 ```bash
@@ -79,7 +82,12 @@ material. A changed replacement or rollback path blocks recovery and is preserve
 snapshot transaction, recovery before the commit marker restores the previous selected receipts and
 exact old category tree; afterward it keeps the desired tree and cleans only exact rollback. A
 changed stage, active tree, or rollback tree blocks recovery. Embedded cache and rendered files may
-still remain as Shine-managed material, and recovery never edits your shell profile.
+still remain as Shine-managed material. For an interrupted rendered-file transaction, recovery
+before the marker restores previous receipts and the exact old file, or removes an exact newly
+created file; after the marker it keeps the desired file and cleans only exact rollback. Modified
+rendered or rollback files block recovery. Embedded cache replacement, rendered-file uninstall,
+execution-time live rendering, and profile edits remain outside this proof; recovery never edits
+your shell profile.
 
 Uninstall uses this transaction only for an unchanged, receipt-owned launcher. It moves every
 platform launcher resource to same-directory rollback material before removing the receipt, then

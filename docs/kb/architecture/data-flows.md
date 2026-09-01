@@ -100,6 +100,13 @@ receipt transitions. After saving the desired receipts, Core records a positive 
 before cleaning the exact old tree. Before that marker, recovery projects the previous receipts
 into both planning and execution so dependent launcher actions are assessed at the same old
 boundary, then restores the exact old category tree. Modified tree state blocks the whole recovery.
+For every selected command whose lifecycle transforms produce missing or changed output, Core also
+derives a payload-free `ReplaceShellRenderedFile` action before launcher actions. One file-scoped
+action binds its previous/desired hash and mode, canonical same-directory rollback, all consuming
+command receipt transitions, and a positive commit marker. Recovery projects uncommitted rendered
+receipt transitions back before assessing launchers, then removes an exact new file or restores the
+exact previous file. Once marked committed, it keeps the desired file and cleans only exact
+rollback. Execution-time live rendering remains outside this lifecycle journal.
 For a command with no receipt and entirely absent launcher resources, Core derives a payload-free
 `CreateShellLauncher` action, writes `shell-operation-journal.toml`, creates the Unix symlink,
 Unix generated launcher, or Windows shim pair, persists the exact command receipt, and only then

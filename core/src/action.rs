@@ -360,6 +360,23 @@ impl ActionIrV1 {
                         });
                     }
                 }
+                ActionKindV1::ReplaceShellRenderedFile {
+                    destination,
+                    rollback,
+                    ..
+                } => {
+                    for (access, path) in [
+                        (FilesystemAccessV1::Write, destination.as_path()),
+                        (FilesystemAccessV1::Remove, destination.as_path()),
+                        (FilesystemAccessV1::Write, rollback.as_path()),
+                        (FilesystemAccessV1::Remove, rollback.as_path()),
+                    ] {
+                        required.insert(PermissionV1::Filesystem {
+                            access,
+                            path: path_identity(path),
+                        });
+                    }
+                }
                 ActionKindV1::OpaqueExecution { .. } => {
                     uncomputable_codes.insert("opaque_action_permissions_uncomputable".to_string());
                 }
@@ -711,6 +728,28 @@ impl DeclarativeActionV1 {
         }
     }
 
+    pub fn replace_shell_rendered_file(
+        action_id: impl Into<String>,
+        target: impl Into<String>,
+        resource: impl Into<String>,
+        spec: ShellRenderedFileReplacementSpecV1,
+    ) -> Self {
+        let rollback = managed_file_rollback_path(&spec.destination);
+        Self {
+            action_id: action_id.into(),
+            target: target.into(),
+            resource: resource.into(),
+            kind: ActionKindV1::ReplaceShellRenderedFile {
+                destination: spec.destination,
+                rollback,
+                previous: spec.previous,
+                desired: spec.desired,
+                receipts: spec.receipts,
+            },
+            rollback: RollbackSupportV1::RestorePreviousShellRenderedFileIfUnchanged,
+        }
+    }
+
     fn validate(&self) -> Result<(), ActionIrError> {
         validate_identity("action", &self.action_id)?;
         validate_identity("target", &self.target)?;
@@ -993,6 +1032,26 @@ impl DeclarativeActionV1 {
             }
             (ActionKindV1::ReplaceShellSnapshot { .. }, _) => Err(ActionIrError::Invalid(
                 "Shell snapshot replacement requires canonical stage/rollback paths, valid tree identities and receipt transitions, and restore-previous-shell-snapshot-if-unchanged rollback"
+                    .to_string(),
+            )),
+            (
+                ActionKindV1::ReplaceShellRenderedFile {
+                    destination,
+                    rollback,
+                    previous,
+                    desired,
+                    receipts,
+                },
+                RollbackSupportV1::RestorePreviousShellRenderedFileIfUnchanged,
+            ) if !destination.as_os_str().is_empty()
+                && *rollback == managed_file_rollback_path(destination)
+                && previous.as_ref() != Some(desired)
+                && valid_shell_receipt_transitions(receipts) =>
+            {
+                Ok(())
+            }
+            (ActionKindV1::ReplaceShellRenderedFile { .. }, _) => Err(ActionIrError::Invalid(
+                "Shell rendered-file replacement requires a distinct previous/desired identity, canonical rollback path, valid receipt transitions, and restore-previous-shell-rendered-file-if-unchanged rollback"
                     .to_string(),
             )),
             (
@@ -1286,6 +1345,14 @@ pub enum ActionKindV1 {
         desired_files: Vec<ShellTreeFileV1>,
         receipts: Vec<ShellReceiptTransitionV1>,
     },
+    ReplaceShellRenderedFile {
+        destination: PathBuf,
+        rollback: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        previous: Option<ShellFileIdentityV1>,
+        desired: ShellFileIdentityV1,
+        receipts: Vec<ShellReceiptTransitionV1>,
+    },
     OpaqueExecution {
         capability: String,
         provenance: ActionProvenanceV1,
@@ -1317,6 +1384,7 @@ pub enum RollbackSupportV1 {
     RestorePreviousLauncherIfUnchanged,
     RestoreRemovedLauncherIfUnchanged,
     RestorePreviousShellSnapshotIfUnchanged,
+    RestorePreviousShellRenderedFileIfUnchanged,
     Unsupported { reason_code: String },
 }
 
@@ -1334,6 +1402,22 @@ pub struct ShellReceiptTransitionV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<Box<ShellLauncherReceiptV1>>,
     pub desired: Box<ShellLauncherReceiptV1>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShellFileIdentityV1 {
+    pub content_hash: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unix_mode: Option<u32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ShellRenderedFileReplacementSpecV1 {
+    pub destination: PathBuf,
+    pub previous: Option<ShellFileIdentityV1>,
+    pub desired: ShellFileIdentityV1,
+    pub receipts: Vec<ShellReceiptTransitionV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1822,6 +1906,67 @@ mod tests {
         let requirements =
             value.permission_requirements(|path| format!("absolute:{}", path.display()));
         for (access, path) in [
+            (FilesystemAccessV1::Remove, &destination),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(requirements.required.contains(&PermissionV1::Filesystem {
+                access,
+                path: format!("absolute:{}", path.display()),
+            }));
+        }
+    }
+
+    #[test]
+    fn shell_rendered_file_action_is_payload_free_and_derives_rollback_permissions() {
+        let destination = PathBuf::from("/home/test/.shine/rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&destination);
+        let receipt = ShellLauncherReceiptV1 {
+            category: "demo".to_string(),
+            command: "demo".to_string(),
+            mode: "snapshot".to_string(),
+            source_path: PathBuf::from("/home/test/.shine/presets/shell/demo/demo.sh"),
+            rendered_path: destination.clone(),
+            runtime: "native".to_string(),
+            bun_dependencies: None,
+            dependency_hash: None,
+            transforms: vec!["template".to_string()],
+            env: Vec::new(),
+            needs_source: false,
+            content_hash: hash_content(b"private source bytes"),
+        };
+        let value = ActionIrV1::new(
+            "shell-rendered",
+            vec![DeclarativeActionV1::replace_shell_rendered_file(
+                "replace-rendered",
+                "shell/demo/demo",
+                "rendered-output",
+                ShellRenderedFileReplacementSpecV1 {
+                    destination: destination.clone(),
+                    previous: Some(ShellFileIdentityV1 {
+                        content_hash: hash_content(b"private previous rendered bytes"),
+                        unix_mode: Some(0o755),
+                    }),
+                    desired: ShellFileIdentityV1 {
+                        content_hash: hash_content(b"private desired rendered bytes"),
+                        unix_mode: Some(0o755),
+                    },
+                    receipts: vec![ShellReceiptTransitionV1 {
+                        target: "shell/demo/demo".to_string(),
+                        previous: Some(Box::new(receipt.clone())),
+                        desired: Box::new(receipt),
+                    }],
+                },
+            )],
+        );
+        value.validate().unwrap();
+        let encoded = toml::to_string(&value).unwrap();
+        assert!(!encoded.contains("private previous rendered bytes"));
+        assert!(!encoded.contains("private desired rendered bytes"));
+        let requirements =
+            value.permission_requirements(|path| format!("absolute:{}", path.display()));
+        for (access, path) in [
+            (FilesystemAccessV1::Write, &destination),
             (FilesystemAccessV1::Remove, &destination),
             (FilesystemAccessV1::Write, &rollback),
             (FilesystemAccessV1::Remove, &rollback),

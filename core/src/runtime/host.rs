@@ -43,6 +43,10 @@ impl HostError {
         self.kind == std::io::ErrorKind::NotFound
     }
 
+    pub fn is_not_directory(&self) -> bool {
+        self.kind == std::io::ErrorKind::NotADirectory
+    }
+
     pub fn into_anyhow(self, context: &'static str) -> anyhow::Error {
         self.error.context(context)
     }

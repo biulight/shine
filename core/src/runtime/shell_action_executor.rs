@@ -12,11 +12,11 @@ use super::{
     PrivilegedFileSystemHost, RuntimeContext,
 };
 use crate::action::{
-    ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, DeclarativeActionV1,
+    ACTION_IR_SCHEMA_VERSION, ActionIrV1, ActionKindV1, DeclarativeActionV1, ShellFileIdentityV1,
     ShellLauncherReceiptV1, ShellLauncherRemovalResourceV1, ShellLauncherResourceV1,
-    ShellLauncherUpdateResourceV1, ShellReceiptTransitionV1, ShellSnapshotReplacementSpecV1,
-    ShellTreeFileV1, managed_file_rollback_path, shell_snapshot_rollback_path,
-    shell_snapshot_stage_path,
+    ShellLauncherUpdateResourceV1, ShellReceiptTransitionV1, ShellRenderedFileReplacementSpecV1,
+    ShellSnapshotReplacementSpecV1, ShellTreeFileV1, managed_file_rollback_path,
+    shell_snapshot_rollback_path, shell_snapshot_stage_path,
 };
 use crate::install::hash_content;
 use crate::plan::{
@@ -57,6 +57,14 @@ pub(crate) struct ShellSnapshotReplacement {
     pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
 }
 
+pub(crate) struct ShellRenderedFileReplacement {
+    pub target: String,
+    pub destination: PathBuf,
+    pub bytes: Vec<u8>,
+    pub unix_mode: Option<u32>,
+    pub receipt_transitions: Vec<(String, Option<ShellManifestEntry>, ShellManifestEntry)>,
+}
+
 enum PreparedShellAction {
     Snapshot {
         destination: PathBuf,
@@ -64,6 +72,13 @@ enum PreparedShellAction {
         rollback: PathBuf,
         previous_present: bool,
         files: Vec<(PathBuf, Vec<u8>)>,
+    },
+    RenderedFile {
+        destination: PathBuf,
+        rollback: PathBuf,
+        previous_present: bool,
+        bytes: Vec<u8>,
+        unix_mode: Option<u32>,
     },
     Create(Vec<PreparedLauncherResource>),
     Update(Vec<PreparedShellLauncherUpdateResource>),
@@ -129,9 +144,10 @@ impl ShellOperationJournalV1 {
                     | ActionKindV1::UpdateShellLauncher { .. }
                     | ActionKindV1::RemoveShellLauncher { .. }
                     | ActionKindV1::ReplaceShellSnapshot { .. }
+                    | ActionKindV1::ReplaceShellRenderedFile { .. }
             )
         }) {
-            bail!("Shell operation journal contains a non-launcher action");
+            bail!("Shell operation journal contains an unsupported action");
         }
         if self.applied.iter().collect::<BTreeSet<_>>().len() != self.applied.len()
             || self.applied.iter().any(|action_id| {
@@ -154,6 +170,7 @@ impl ShellOperationJournalV1 {
                                 action.kind,
                                 ActionKindV1::RemoveShellLauncher { .. }
                                     | ActionKindV1::ReplaceShellSnapshot { .. }
+                                    | ActionKindV1::ReplaceShellRenderedFile { .. }
                             )
                     })
             })
@@ -180,22 +197,22 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                 .context("no interrupted Shell operation is available for recovery")?;
         let mut manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
-        let mut snapshot_receipts_to_restore = BTreeSet::new();
-        let mut snapshot_receipt_conflicts = BTreeSet::new();
+        let mut shared_receipts_to_restore = BTreeSet::new();
+        let mut shared_receipt_conflicts = BTreeSet::new();
         for action in &journal.action_ir.actions {
-            let ActionKindV1::ReplaceShellSnapshot { receipts, .. } = &action.kind else {
+            let Some(receipts) = shell_shared_receipt_transitions(&action.kind) else {
                 continue;
             };
             if journal.receipt_committed.contains(&action.action_id) {
-                if !shell_snapshot_receipts_match_desired(&manifest, receipts) {
-                    snapshot_receipt_conflicts.insert(action.action_id.clone());
+                if !shell_receipts_match_desired(&manifest, receipts) {
+                    shared_receipt_conflicts.insert(action.action_id.clone());
                 }
-            } else if shell_snapshot_receipts_match_previous(&manifest, receipts) {
-            } else if shell_snapshot_receipts_match_desired(&manifest, receipts) {
-                restore_shell_snapshot_previous_receipts(&mut manifest, receipts)?;
-                snapshot_receipts_to_restore.insert(action.action_id.clone());
+            } else if shell_receipts_match_previous(&manifest, receipts) {
+            } else if shell_receipts_match_desired(&manifest, receipts) {
+                restore_shell_previous_receipts(&mut manifest, receipts)?;
+                shared_receipts_to_restore.insert(action.action_id.clone());
             } else {
-                snapshot_receipt_conflicts.insert(action.action_id.clone());
+                shared_receipt_conflicts.insert(action.action_id.clone());
             }
         }
         let manifest_bytes = match self
@@ -437,8 +454,8 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     receipts: _,
                 } => {
                     let committed = journal.receipt_committed.contains(&action.action_id);
-                    let receipt_conflict = snapshot_receipt_conflicts.contains(&action.action_id);
-                    let restore_receipts = snapshot_receipts_to_restore.contains(&action.action_id);
+                    let receipt_conflict = shared_receipt_conflicts.contains(&action.action_id);
+                    let restore_receipts = shared_receipts_to_restore.contains(&action.action_id);
                     for (label, path) in [
                         ("destination", destination),
                         ("stage", stage),
@@ -519,6 +536,89 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         ),
                     }
                 }
+                ActionKindV1::ReplaceShellRenderedFile {
+                    destination,
+                    rollback,
+                    previous,
+                    desired,
+                    receipts: _,
+                } => {
+                    let committed = journal.receipt_committed.contains(&action.action_id);
+                    let receipt_conflict = shared_receipt_conflicts.contains(&action.action_id);
+                    let restore_receipts = shared_receipts_to_restore.contains(&action.action_id);
+                    for (label, path) in [("destination", destination), ("rollback", rollback)] {
+                        let observation = observe_shell_file(self.host(), path).await?;
+                        state.add_observation(
+                            format!("rendered:{}:{label}", action.action_id),
+                            serde_json::to_vec(&observation)
+                                .context("serializing Shell rendered-file recovery observation")?,
+                        )?;
+                    }
+                    let assessment = if receipt_conflict {
+                        ShellRenderedFileRecoveryAssessment::Blocked
+                    } else {
+                        assess_shell_rendered_file_recovery(
+                            self.host(),
+                            destination,
+                            rollback,
+                            previous.as_ref(),
+                            desired,
+                            committed,
+                        )
+                        .await?
+                    };
+                    if restore_receipts {
+                        required.insert(PermissionV1::Filesystem {
+                            access: FilesystemAccessV1::Write,
+                            path: review_path(
+                                self.context(),
+                                &self.context().shine_dir.join("shell-manifest.toml"),
+                            ),
+                        });
+                    }
+                    for (access, path) in
+                        rendered_file_recovery_permissions(assessment, destination, rollback)
+                    {
+                        required.insert(PermissionV1::Filesystem {
+                            access,
+                            path: review_path(self.context(), path),
+                        });
+                    }
+                    match assessment {
+                        ShellRenderedFileRecoveryAssessment::Blocked => (
+                            PlanActionV1::Blocked,
+                            "shell_recovery_rendered_file_changed",
+                            true,
+                        ),
+                        ShellRenderedFileRecoveryAssessment::Stable => (
+                            if restore_receipts {
+                                PlanActionV1::Update
+                            } else {
+                                PlanActionV1::None
+                            },
+                            if committed {
+                                "shell_recovery_rendered_file_committed"
+                            } else if restore_receipts {
+                                "shell_recovery_restore_rendered_receipts"
+                            } else {
+                                "shell_recovery_rendered_file_not_started"
+                            },
+                            false,
+                        ),
+                        ShellRenderedFileRecoveryAssessment::CleanupRollback => (
+                            PlanActionV1::Remove,
+                            "shell_recovery_cleanup_rendered_rollback",
+                            false,
+                        ),
+                        ShellRenderedFileRecoveryAssessment::RestoreMoved
+                        | ShellRenderedFileRecoveryAssessment::RestoreReplaced
+                        | ShellRenderedFileRecoveryAssessment::RemoveCreated => (
+                            PlanActionV1::Update,
+                            "shell_recovery_restore_previous_rendered_file",
+                            false,
+                        ),
+                    }
+                }
                 _ => unreachable!("validated Shell journal action kind"),
             };
             blocked |= action_blocked;
@@ -565,12 +665,17 @@ where
     pub(crate) async fn reconcile_shell_launchers_approved(
         &self,
         snapshots: &[ShellSnapshotReplacement],
+        rendered_files: &[ShellRenderedFileReplacement],
         creations: &[ShellLauncherCreation<'_>],
         updates: &[ShellLauncherUpdate<'_>],
         removals: &[ShellLauncherRemoval],
         approval: &PlanApprovalV1,
     ) -> Result<Option<ShellOperationExecutionV1>> {
-        if snapshots.is_empty() && creations.is_empty() && updates.is_empty() && removals.is_empty()
+        if snapshots.is_empty()
+            && rendered_files.is_empty()
+            && creations.is_empty()
+            && updates.is_empty()
+            && removals.is_empty()
         {
             return Ok(None);
         }
@@ -629,6 +734,64 @@ where
                 rollback,
                 previous_present: self.host().metadata(&snapshot.destination).await.is_ok(),
                 files: snapshot.files.clone(),
+            });
+        }
+        for rendered in rendered_files {
+            let rollback = managed_file_rollback_path(&rendered.destination);
+            match self.host().metadata(&rollback).await {
+                Err(error) if error.is_not_found() => {}
+                Ok(_) => bail!(
+                    "Shell rendered-file rollback path is occupied: {}",
+                    rollback.display()
+                ),
+                Err(error) => {
+                    return Err(error.into_anyhow("revalidating Shell rendered-file rollback path"));
+                }
+            }
+            let previous = observe_shell_file(self.host(), &rendered.destination).await?;
+            let previous_identity = match previous {
+                ShellFileObservation::Missing => None,
+                ShellFileObservation::Regular(identity) => Some(identity),
+                ShellFileObservation::Other => {
+                    bail!(
+                        "Shell rendered-file destination is not a regular file: {}",
+                        rendered.destination.display()
+                    )
+                }
+            };
+            let desired = ShellFileIdentityV1 {
+                content_hash: hash_content(&rendered.bytes),
+                unix_mode: rendered.unix_mode,
+            };
+            if previous_identity.as_ref() == Some(&desired) {
+                bail!("Shell rendered-file replacement contains no changed file");
+            }
+            let receipts = rendered
+                .receipt_transitions
+                .iter()
+                .map(|(target, previous, desired)| ShellReceiptTransitionV1 {
+                    target: target.clone(),
+                    previous: previous.as_ref().map(receipt_contract).map(Box::new),
+                    desired: Box::new(receipt_contract(desired)),
+                })
+                .collect();
+            actions.push(DeclarativeActionV1::replace_shell_rendered_file(
+                format!("replace-rendered:{}", rendered.target),
+                &rendered.target,
+                "rendered-output",
+                ShellRenderedFileReplacementSpecV1 {
+                    destination: rendered.destination.clone(),
+                    previous: previous_identity.clone(),
+                    desired,
+                    receipts,
+                },
+            ));
+            prepared.push(PreparedShellAction::RenderedFile {
+                destination: rendered.destination.clone(),
+                rollback,
+                previous_present: previous_identity.is_some(),
+                bytes: rendered.bytes.clone(),
+                unix_mode: rendered.unix_mode,
             });
         }
         for creation in creations {
@@ -821,6 +984,34 @@ where
                         .await
                         .map_err(|error| error.into_anyhow("installing staged Shell snapshot"))?;
                 }
+                PreparedShellAction::RenderedFile {
+                    destination,
+                    rollback,
+                    previous_present,
+                    bytes,
+                    unix_mode,
+                } => {
+                    if *previous_present {
+                        self.host()
+                            .rename(destination, rollback)
+                            .await
+                            .map_err(|error| {
+                                error.into_anyhow("moving previous Shell rendered file to rollback")
+                            })?;
+                    }
+                    self.host()
+                        .write_atomic(destination, bytes)
+                        .await
+                        .map_err(|error| error.into_anyhow("writing Shell rendered file"))?;
+                    if let Some(mode) = unix_mode {
+                        self.host()
+                            .set_mode(destination, *mode)
+                            .await
+                            .map_err(|error| {
+                                error.into_anyhow("setting Shell rendered-file mode")
+                            })?;
+                    }
+                }
                 PreparedShellAction::Create(resources) => {
                     for resource in resources {
                         apply_prepared_launcher_resource(self.host(), resource).await?;
@@ -903,13 +1094,33 @@ where
                     ..
                 } => {
                     if !journal.applied.contains(&action.action_id)
-                        || !shell_snapshot_receipts_match_desired(&manifest, receipts)
+                        || !shell_receipts_match_desired(&manifest, receipts)
                         || observe_shell_tree(self.host(), destination, desired_files, false)
                             .await?
                             != ShellTreeObservation::Exact
                     {
                         bail!(
                             "Shell snapshot cannot mark its receipt committed before the desired tree and receipts are durable"
+                        );
+                    }
+                    if !journal.receipt_committed.contains(&action.action_id) {
+                        journal.receipt_committed.push(action.action_id.clone());
+                    }
+                }
+                ActionKindV1::ReplaceShellRenderedFile {
+                    destination,
+                    desired,
+                    receipts,
+                    ..
+                } => {
+                    if !journal.applied.contains(&action.action_id)
+                        || !shell_receipts_match_desired(&manifest, receipts)
+                        || !observe_shell_file(self.host(), destination)
+                            .await?
+                            .matches(desired)
+                    {
+                        bail!(
+                            "Shell rendered file cannot mark its receipt committed before the desired file and receipts are durable"
                         );
                     }
                     if !journal.receipt_committed.contains(&action.action_id) {
@@ -1014,7 +1225,7 @@ where
                     receipts,
                 } => {
                     if !journal.receipt_committed.contains(&action.action_id)
-                        || !shell_snapshot_receipts_match_desired(&manifest, receipts)
+                        || !shell_receipts_match_desired(&manifest, receipts)
                         || assess_shell_snapshot_recovery(
                             self.host(),
                             destination,
@@ -1029,6 +1240,29 @@ where
                             == ShellSnapshotRecoveryAssessment::Blocked
                     {
                         bail!("Shell snapshot changed before operation commit");
+                    }
+                }
+                ActionKindV1::ReplaceShellRenderedFile {
+                    destination,
+                    rollback,
+                    previous,
+                    desired,
+                    receipts,
+                } => {
+                    if !journal.receipt_committed.contains(&action.action_id)
+                        || !shell_receipts_match_desired(&manifest, receipts)
+                        || assess_shell_rendered_file_recovery(
+                            self.host(),
+                            destination,
+                            rollback,
+                            previous.as_ref(),
+                            desired,
+                            true,
+                        )
+                        .await?
+                            == ShellRenderedFileRecoveryAssessment::Blocked
+                    {
+                        bail!("Shell rendered file changed before operation commit");
                     }
                 }
                 _ => unreachable!("validated Shell journal action kind"),
@@ -1066,6 +1300,19 @@ where
                     }
                 }
             }
+            if let ActionKindV1::ReplaceShellRenderedFile {
+                rollback, previous, ..
+            } = &action.kind
+                && previous.is_some()
+            {
+                match self.host().remove_file(rollback).await {
+                    Ok(()) => {}
+                    Err(error) if error.is_not_found() => {}
+                    Err(error) => {
+                        return Err(error.into_anyhow("cleaning Shell rendered-file rollback"));
+                    }
+                }
+            }
         }
         remove_shell_operation_journal(self.host(), &self.context().shine_dir).await
     }
@@ -1083,24 +1330,24 @@ where
         let mut manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let mut rolled_back_actions = Vec::new();
-        let mut restored_snapshot_receipts = BTreeSet::new();
+        let mut restored_shared_receipts = BTreeSet::new();
         for action in &journal.action_ir.actions {
-            let ActionKindV1::ReplaceShellSnapshot { receipts, .. } = &action.kind else {
+            let Some(receipts) = shell_shared_receipt_transitions(&action.kind) else {
                 continue;
             };
             if journal.receipt_committed.contains(&action.action_id) {
-                if !shell_snapshot_receipts_match_desired(&manifest, receipts) {
-                    bail!("Shell snapshot receipts changed after recovery approval");
+                if !shell_receipts_match_desired(&manifest, receipts) {
+                    bail!("Shell shared-resource receipts changed after recovery approval");
                 }
-            } else if shell_snapshot_receipts_match_previous(&manifest, receipts) {
-            } else if shell_snapshot_receipts_match_desired(&manifest, receipts) {
-                restore_shell_snapshot_previous_receipts(&mut manifest, receipts)?;
-                restored_snapshot_receipts.insert(action.action_id.clone());
+            } else if shell_receipts_match_previous(&manifest, receipts) {
+            } else if shell_receipts_match_desired(&manifest, receipts) {
+                restore_shell_previous_receipts(&mut manifest, receipts)?;
+                restored_shared_receipts.insert(action.action_id.clone());
             } else {
-                bail!("Shell snapshot receipts changed after recovery approval");
+                bail!("Shell shared-resource receipts changed after recovery approval");
             }
         }
-        if !restored_snapshot_receipts.is_empty() {
+        if !restored_shared_receipts.is_empty() {
             manifest
                 .save(self.host(), &self.context().shine_dir)
                 .await?;
@@ -1247,13 +1494,13 @@ where
                     receipts,
                 } => {
                     let committed = journal.receipt_committed.contains(&action.action_id);
-                    if committed && !shell_snapshot_receipts_match_desired(&manifest, receipts) {
+                    if committed && !shell_receipts_match_desired(&manifest, receipts) {
                         bail!("Shell snapshot receipts changed after recovery approval");
                     }
-                    if !committed && !shell_snapshot_receipts_match_previous(&manifest, receipts) {
+                    if !committed && !shell_receipts_match_previous(&manifest, receipts) {
                         bail!("Shell snapshot receipts changed after recovery approval");
                     }
-                    changed |= restored_snapshot_receipts.contains(&action.action_id);
+                    changed |= restored_shared_receipts.contains(&action.action_id);
                     match assess_shell_snapshot_recovery(
                         self.host(),
                         destination,
@@ -1322,6 +1569,76 @@ where
                         }
                         ShellSnapshotRecoveryAssessment::Blocked => {
                             bail!("Shell snapshot changed after recovery approval")
+                        }
+                    }
+                }
+                ActionKindV1::ReplaceShellRenderedFile {
+                    destination,
+                    rollback,
+                    previous,
+                    desired,
+                    receipts,
+                } => {
+                    let committed = journal.receipt_committed.contains(&action.action_id);
+                    if committed && !shell_receipts_match_desired(&manifest, receipts) {
+                        bail!("Shell rendered-file receipts changed after recovery approval");
+                    }
+                    if !committed && !shell_receipts_match_previous(&manifest, receipts) {
+                        bail!("Shell rendered-file receipts changed after recovery approval");
+                    }
+                    changed |= restored_shared_receipts.contains(&action.action_id);
+                    match assess_shell_rendered_file_recovery(
+                        self.host(),
+                        destination,
+                        rollback,
+                        previous.as_ref(),
+                        desired,
+                        committed,
+                    )
+                    .await?
+                    {
+                        ShellRenderedFileRecoveryAssessment::Stable => {}
+                        ShellRenderedFileRecoveryAssessment::RestoreMoved => {
+                            self.host()
+                                .rename(rollback, destination)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow("restoring previous Shell rendered file")
+                                })?;
+                            changed = true;
+                        }
+                        ShellRenderedFileRecoveryAssessment::RestoreReplaced => {
+                            self.host()
+                                .remove_file(destination)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow("removing replacement Shell rendered file")
+                                })?;
+                            self.host()
+                                .rename(rollback, destination)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow("restoring previous Shell rendered file")
+                                })?;
+                            changed = true;
+                        }
+                        ShellRenderedFileRecoveryAssessment::RemoveCreated => {
+                            self.host()
+                                .remove_file(destination)
+                                .await
+                                .map_err(|error| {
+                                    error.into_anyhow("removing created Shell rendered file")
+                                })?;
+                            changed = true;
+                        }
+                        ShellRenderedFileRecoveryAssessment::CleanupRollback => {
+                            self.host().remove_file(rollback).await.map_err(|error| {
+                                error.into_anyhow("cleaning Shell rendered-file rollback")
+                            })?;
+                            changed = true;
+                        }
+                        ShellRenderedFileRecoveryAssessment::Blocked => {
+                            bail!("Shell rendered file changed after recovery approval")
                         }
                     }
                 }
@@ -1474,6 +1791,20 @@ enum ReceiptState {
     Conflict,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum ShellFileObservation {
+    Missing,
+    Regular(ShellFileIdentityV1),
+    Other,
+}
+
+impl ShellFileObservation {
+    fn matches(&self, expected: &ShellFileIdentityV1) -> bool {
+        matches!(self, Self::Regular(actual) if actual == expected)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShellTreeObservation {
     Missing,
@@ -1493,6 +1824,114 @@ enum ShellSnapshotRecoveryAssessment {
     Blocked,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellRenderedFileRecoveryAssessment {
+    Stable,
+    RestoreMoved,
+    RestoreReplaced,
+    RemoveCreated,
+    CleanupRollback,
+    Blocked,
+}
+
+async fn observe_shell_file(
+    host: &impl FileSystemObservationHost,
+    path: &Path,
+) -> Result<ShellFileObservation> {
+    let metadata = match host.metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.is_not_found() => return Ok(ShellFileObservation::Missing),
+        Err(error) => return Err(error.into_anyhow("observing Shell rendered file")),
+    };
+    if metadata.kind != FileKind::File {
+        return Ok(ShellFileObservation::Other);
+    }
+    let bytes = host
+        .read(path)
+        .await
+        .map_err(|error| error.into_anyhow("reading Shell rendered file"))?;
+    Ok(ShellFileObservation::Regular(ShellFileIdentityV1 {
+        content_hash: hash_content(&bytes),
+        unix_mode: metadata.unix_mode,
+    }))
+}
+
+async fn assess_shell_rendered_file_recovery(
+    host: &impl FileSystemObservationHost,
+    destination: &Path,
+    rollback: &Path,
+    previous: Option<&ShellFileIdentityV1>,
+    desired: &ShellFileIdentityV1,
+    committed: bool,
+) -> Result<ShellRenderedFileRecoveryAssessment> {
+    let destination = observe_shell_file(host, destination).await?;
+    let rollback = observe_shell_file(host, rollback).await?;
+    if committed {
+        if !destination.matches(desired) {
+            return Ok(ShellRenderedFileRecoveryAssessment::Blocked);
+        }
+        return match previous {
+            Some(previous) if rollback.matches(previous) => {
+                Ok(ShellRenderedFileRecoveryAssessment::CleanupRollback)
+            }
+            Some(_) | None if rollback == ShellFileObservation::Missing => {
+                Ok(ShellRenderedFileRecoveryAssessment::Stable)
+            }
+            Some(_) | None => Ok(ShellRenderedFileRecoveryAssessment::Blocked),
+        };
+    }
+    match previous {
+        Some(previous) => {
+            if destination.matches(previous) && rollback == ShellFileObservation::Missing {
+                Ok(ShellRenderedFileRecoveryAssessment::Stable)
+            } else if destination == ShellFileObservation::Missing && rollback.matches(previous) {
+                Ok(ShellRenderedFileRecoveryAssessment::RestoreMoved)
+            } else if destination.matches(desired) && rollback.matches(previous) {
+                Ok(ShellRenderedFileRecoveryAssessment::RestoreReplaced)
+            } else {
+                Ok(ShellRenderedFileRecoveryAssessment::Blocked)
+            }
+        }
+        None => {
+            if rollback != ShellFileObservation::Missing {
+                Ok(ShellRenderedFileRecoveryAssessment::Blocked)
+            } else if destination == ShellFileObservation::Missing {
+                Ok(ShellRenderedFileRecoveryAssessment::Stable)
+            } else if destination.matches(desired) {
+                Ok(ShellRenderedFileRecoveryAssessment::RemoveCreated)
+            } else {
+                Ok(ShellRenderedFileRecoveryAssessment::Blocked)
+            }
+        }
+    }
+}
+
+fn rendered_file_recovery_permissions<'a>(
+    assessment: ShellRenderedFileRecoveryAssessment,
+    destination: &'a Path,
+    rollback: &'a Path,
+) -> Vec<(FilesystemAccessV1, &'a Path)> {
+    match assessment {
+        ShellRenderedFileRecoveryAssessment::RestoreMoved => vec![
+            (FilesystemAccessV1::Write, destination),
+            (FilesystemAccessV1::Remove, rollback),
+        ],
+        ShellRenderedFileRecoveryAssessment::RestoreReplaced => vec![
+            (FilesystemAccessV1::Remove, destination),
+            (FilesystemAccessV1::Write, destination),
+            (FilesystemAccessV1::Remove, rollback),
+        ],
+        ShellRenderedFileRecoveryAssessment::RemoveCreated => {
+            vec![(FilesystemAccessV1::Remove, destination)]
+        }
+        ShellRenderedFileRecoveryAssessment::CleanupRollback => {
+            vec![(FilesystemAccessV1::Remove, rollback)]
+        }
+        ShellRenderedFileRecoveryAssessment::Stable
+        | ShellRenderedFileRecoveryAssessment::Blocked => Vec::new(),
+    }
+}
+
 fn matching_shell_receipt(
     manifest: &ShellManifest,
     target: &str,
@@ -1508,7 +1947,15 @@ fn matching_shell_receipt(
     }
 }
 
-fn shell_snapshot_receipts_match_previous(
+fn shell_shared_receipt_transitions(kind: &ActionKindV1) -> Option<&[ShellReceiptTransitionV1]> {
+    match kind {
+        ActionKindV1::ReplaceShellSnapshot { receipts, .. }
+        | ActionKindV1::ReplaceShellRenderedFile { receipts, .. } => Some(receipts),
+        _ => None,
+    }
+}
+
+fn shell_receipts_match_previous(
     manifest: &ShellManifest,
     transitions: &[ShellReceiptTransitionV1],
 ) -> bool {
@@ -1523,7 +1970,7 @@ fn shell_snapshot_receipts_match_previous(
         })
 }
 
-fn shell_snapshot_receipts_match_desired(
+fn shell_receipts_match_desired(
     manifest: &ShellManifest,
     transitions: &[ShellReceiptTransitionV1],
 ) -> bool {
@@ -1533,7 +1980,7 @@ fn shell_snapshot_receipts_match_desired(
     })
 }
 
-fn restore_shell_snapshot_previous_receipts(
+fn restore_shell_previous_receipts(
     manifest: &mut ShellManifest,
     transitions: &[ShellReceiptTransitionV1],
 ) -> Result<()> {
@@ -2034,6 +2481,37 @@ mod tests {
             .await
             .unwrap(),
             ShellSnapshotRecoveryAssessment::Blocked
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_file_recovery_blocks_changed_rollback() {
+        let host = InMemoryHost::new();
+        let destination = std::env::temp_dir().join("shine-shell-rendered-recovery-test/demo.sh");
+        let rollback = managed_file_rollback_path(&destination);
+        host.put_file(&destination, b"desired".to_vec());
+        host.put_file(&rollback, b"user-changed".to_vec());
+        let previous = ShellFileIdentityV1 {
+            content_hash: hash_content(b"previous"),
+            unix_mode: None,
+        };
+        let desired = ShellFileIdentityV1 {
+            content_hash: hash_content(b"desired"),
+            unix_mode: None,
+        };
+
+        assert_eq!(
+            assess_shell_rendered_file_recovery(
+                &host,
+                &destination,
+                &rollback,
+                Some(&previous),
+                &desired,
+                false,
+            )
+            .await
+            .unwrap(),
+            ShellRenderedFileRecoveryAssessment::Blocked
         );
     }
 }

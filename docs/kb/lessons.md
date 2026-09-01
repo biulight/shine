@@ -3,6 +3,19 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-01 — Rendered bytes can change without a receipt transition
+
+- **Symptom**: transformed Shell output was rewritten before the launcher journal, so a later
+  receipt failure could leave new rendered bytes active while recovery restored the previous
+  command boundary.
+- **Root cause**: command receipts intentionally omit environment values, but those values affect
+  rendered bytes. Receipt equality therefore cannot prove that a shared rendered-file replacement
+  committed.
+- **Fix**: journal a file-scoped `ReplaceShellRenderedFile` with old/new hash and mode, canonical
+  rollback, all consuming receipt transitions, and an independent positive commit marker.
+- **Rule**: when durable output depends on intentionally unrecorded inputs, commit evidence must bind
+  the output identity itself rather than infer completion from unchanged ownership metadata.
+
 ## 2026-09-01 — Shared state needs a positive commit boundary across dependent actions
 
 - **Symptom**: an external Shell category snapshot could be replaced before the launcher journal

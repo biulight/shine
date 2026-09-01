@@ -1,6 +1,7 @@
 use super::launcher::{prepare_launcher_resources, prepared_launcher_resource_is_exact};
 use super::shell_action_executor::{
-    ShellLauncherCreation, ShellLauncherRemoval, ShellLauncherUpdate, ShellSnapshotReplacement,
+    ShellLauncherCreation, ShellLauncherRemoval, ShellLauncherUpdate, ShellRenderedFileReplacement,
+    ShellSnapshotReplacement,
 };
 use super::{
     CoreRuntime, FileKind, FileSystemHost, InspectionChange, InspectionFileStatus, LinkConflict,
@@ -902,7 +903,11 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 })
             })
             .collect::<Vec<_>>();
-        let templates = self.render_shell_templates(&scripts).await?;
+        let mut templates = if approval.is_some() {
+            ShellTemplateReport::default()
+        } else {
+            self.render_shell_templates(&scripts).await?
+        };
         let mut applicable_specs = Vec::new();
         let mut foreign_commands = BTreeSet::new();
         let mut links = empty_link_report();
@@ -1120,9 +1125,19 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 receipt_transitions,
             });
         }
+        let rendered_replacements = if approval.is_some() {
+            let (replacements, report) = self
+                .prepare_shell_rendered_replacements(&manifest_categories, &manifest_before)
+                .await?;
+            templates = report;
+            replacements
+        } else {
+            Vec::new()
+        };
         let shell_execution = if let Some(approval) = approval {
             self.reconcile_shell_launchers_approved(
                 &snapshot_replacements,
+                &rendered_replacements,
                 &launcher_creation_refs,
                 &launcher_update_refs,
                 &[],
@@ -1438,8 +1453,15 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             .map(|removal| removal.target.clone())
             .collect::<BTreeSet<_>>();
         let shell_execution = if let Some(approval) = approval {
-            self.reconcile_shell_launchers_approved(&[], &[], &[], &launcher_removals, approval)
-                .await?
+            self.reconcile_shell_launchers_approved(
+                &[],
+                &[],
+                &[],
+                &[],
+                &launcher_removals,
+                approval,
+            )
+            .await?
         } else {
             None
         };
@@ -2411,6 +2433,103 @@ impl<H> CoreRuntime<H> {
 }
 
 impl<H: FileSystemHost> CoreRuntime<H> {
+    async fn prepare_shell_rendered_replacements(
+        &self,
+        categories: &[ShellCategory],
+        manifest_before: &ShellManifest,
+    ) -> Result<(Vec<ShellRenderedFileReplacement>, ShellTemplateReport)> {
+        let mut replacements = BTreeMap::<PathBuf, ShellRenderedFileReplacement>::new();
+        let mut report = ShellTemplateReport::default();
+        for category in categories {
+            for file in &category.files {
+                let logical = format!(
+                    "shell/{}/{}",
+                    category.name,
+                    shell_logical_path(&file.source_rel)
+                );
+                let desired_source = self
+                    .presets()
+                    .get(&logical)
+                    .context("missing desired Shell rendered-file source")?;
+                let transforms = if !file.transforms.is_empty() {
+                    file.transforms.clone()
+                } else if has_template_annotation(desired_source) {
+                    vec!["template".to_string()]
+                } else {
+                    continue;
+                };
+                let source = self.shell_deployment_source_path(&category.name, &file.source_rel);
+                let content = self
+                    .host()
+                    .read(&source)
+                    .await
+                    .map_err(|error| error.into_anyhow("reading Shell rendered-file source"))?;
+                let rendered =
+                    crate::install::apply_transforms(&transforms, &content, &self.context().env)
+                        .with_context(|| {
+                            format!("template substitution failed for {}", source.display())
+                        })?;
+                let destination = self.shell_rendered_path(&category.name, &file.source_rel);
+                let unix_mode = self
+                    .host()
+                    .metadata(&source)
+                    .await
+                    .ok()
+                    .and_then(|metadata| metadata.unix_mode)
+                    .or_else(|| cfg!(unix).then_some(0o755));
+                let current = match self.host().metadata(&destination).await {
+                    Ok(metadata) if metadata.kind == FileKind::File => {
+                        let bytes = self.host().read(&destination).await.map_err(|error| {
+                            error.into_anyhow("reading current Shell rendered file")
+                        })?;
+                        bytes == rendered && metadata.unix_mode == unix_mode
+                    }
+                    Ok(_) => false,
+                    Err(error) if error.is_not_found() => false,
+                    Err(error) => {
+                        return Err(error.into_anyhow("inspecting Shell rendered file"));
+                    }
+                };
+                if current {
+                    continue;
+                }
+                let target = format!("shell/{}/{}", category.name, file.command_name);
+                let desired_receipt = self.shell_manifest_entry(category, file).await?;
+                let transition = (
+                    target.clone(),
+                    manifest_before.find(&target).cloned(),
+                    desired_receipt,
+                );
+                if let Some(existing) = replacements.get_mut(&destination) {
+                    if existing.bytes != rendered || existing.unix_mode != unix_mode {
+                        bail!(
+                            "Shell commands sharing rendered path {} produce different output",
+                            destination.display()
+                        );
+                    }
+                    existing.receipt_transitions.push(transition);
+                } else {
+                    replacements.insert(
+                        destination.clone(),
+                        ShellRenderedFileReplacement {
+                            target,
+                            destination,
+                            bytes: rendered,
+                            unix_mode,
+                            receipt_transitions: vec![transition],
+                        },
+                    );
+                }
+                report
+                    .updated
+                    .push(format!("{}/{}", category.name, file.command_name));
+            }
+        }
+        report.updated.sort();
+        report.updated.dedup();
+        Ok((replacements.into_values().collect(), report))
+    }
+
     pub async fn render_shell_templates(
         &self,
         scripts: &[ShellScriptTemplate],

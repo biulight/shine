@@ -53,7 +53,9 @@ receipt 持久化后才会清理 journal。如果安装在这个窗口中断，�
 使用同一 journal：旧资源会先移到同目录 `.shine.rollback`，新 receipt 持久化前不会清理这些
 rollback material。外部预设使用 snapshot 模式且选中命令无需 rendered output 时，Shine 也会把
 共享 category snapshot 的创建或替换写入 journal；全部选中 command receipt 与独立 commit marker
-持久化前，旧 category 树会留在确定性的 rollback 目录。请审阅并执行专用 recovery Plan：
+持久化前，旧 category 树会留在确定性的 rollback 目录。install 或 upgrade 产生的 transformed output
+使用独立的文件级事务：已有 rendered 文件会移到同目录 `.shine.rollback`，所有消费该路径的 command
+receipt 与独立 marker 持久化前，精确旧文件会一直保留。请审阅并执行专用 recovery Plan：
 
 ```bash
 shine shell recover
@@ -68,7 +70,10 @@ launcher 会保持安装状态，恢复只清理 stale journal。更新中断时
 会阻塞恢复并保留现场。对于符合条件的 snapshot 事务，commit marker 前的恢复会还原旧的选中
 receipt 与精确旧 category 树；marker 后保留 desired 树，只清理精确 rollback。stage、active tree 或
 rollback tree 被修改都会阻塞恢复。内置 cache 与 rendered 文件仍可能作为 Shine 管理的 material
-保留，recovery 不会编辑用户的 shell profile。
+保留。rendered 文件事务在 marker 前中断时，恢复会还原旧 receipt 与精确旧文件，或移除精确匹配的
+事务新建文件；marker 后保留 desired 文件，只清理精确 rollback。rendered 或 rollback 文件被修改会
+阻塞恢复。内置 cache 替换、rendered 文件卸载、执行期 live rendering 与 profile 编辑不属于这项
+证明；recovery 不会编辑用户的 shell profile。
 
 uninstall 只会对未修改、已有 receipt 的 launcher 使用这项事务。它会先把每个平台 launcher
 resource 移到同目录 rollback material，再删除 receipt，随后另行记录持久化 commit marker。如果

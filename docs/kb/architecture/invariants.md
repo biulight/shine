@@ -297,6 +297,15 @@ bugs. Check this list before changing the modules named in each entry.
   exact old rollback tree. Extra or changed stage files, changed destination/rollback trees, or
   conflicting receipts block all recovery. Embedded cache, rendered outputs, uninstall, and profile
   sentinel blocks do not inherit this proof.
+- **A lifecycle-rendered Shell file commits at a file and receipt-set boundary.**
+  `ReplaceShellRenderedFile` binds the optional previous and required desired hash/mode identity,
+  canonical same-directory `.shine.rollback`, every selected command receipt transition consuming
+  that path, and a positive per-action commit marker. Before the marker, recovery projects those
+  transitions back to the previous manifest boundary before restoring an exact prior file or
+  removing an exact transaction-created file; afterward it preserves the exact desired file and
+  cleans only exact rollback. Changed or non-file destinations, occupied/changed rollback paths, or
+  conflicting receipts block all recovery. Embedded cache, rendered uninstall, execution-time live
+  rendering, snapshot uninstall, and profile sentinel blocks do not inherit this proof.
 - **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
   generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
   privilege, permission and unsupported-rollback classification until a narrower typed action

@@ -2,7 +2,7 @@
 
 > **Status:** Roadmap Phase 4 foundation in progress. Slices 4A, 4B, 4B.5, 4C.1, 4C.2a,
 > 4C.2b-1, 4C.2b-2, 4C.2b-3a, 4C.2b-3b, 4C.2c, 4C.3, 4C.4a, 4C.4b,
-> 4C.4c, and 4D.4a are
+> 4C.4c, 4D.4a, and 4D.4b are
 > implemented: approved App install uses managed-file creation IR for absent or backup-eligible
 > unowned static Copy destinations, and the explicit CLI recovery path can remove an
 > unchanged transaction-created file or restore an unchanged fixed backup. Approved install and
@@ -27,6 +27,9 @@
 > Raw external Shell snapshot selections now replace their category tree through one action with
 > deterministic stage/rollback directories, selected command receipt transitions, and positive
 > commit evidence shared with dependent launcher recovery.
+> Lifecycle-rendered Shell files now use file-scoped replacement actions with exact hash/mode
+> identities, same-directory rollback, consuming receipt transitions, and independent positive
+> commit evidence.
 > This document is internal and does not define released CLI behavior.
 
 ## Summary
@@ -376,13 +379,28 @@ cleans only exact rollback material.
   trees, and conflicting receipts. Keep embedded cache, rendered output, snapshot uninstall, and
   profile blocks for later slices.
 
+### Slice 4D.4b — Shell rendered-file replacement (implemented)
+
+- Replace missing or changed lifecycle-rendered output through one `ReplaceShellRenderedFile`
+  action per rendered path, before dependent launcher actions.
+- Bind optional previous and required desired hash/mode identities, canonical same-directory
+  rollback, every consuming command receipt transition, and a positive commit marker without
+  serializing source or rendered payloads.
+- Before commit, project previous rendered receipt transitions into recovery planning and execution,
+  then remove an exact created file or restore the exact previous file. After commit, preserve the
+  desired file and clean only exact rollback material.
+- Block non-file destinations, occupied or changed rollback, modified rendered files, and receipt
+  conflicts. Keep embedded cache, rendered uninstall, execution-time live rendering, snapshot
+  uninstall, and profile blocks for later slices.
+
 ### Slice 4D — Other domains and opaque inventory
 
 - Shell launcher/profile declarative actions. First-time launcher creation and explicit recovery are
   implemented as Slice 4D.1. Unchanged receipt-owned launcher update is implemented as Slice 4D.2;
   unchanged receipt-owned launcher removal with positive receipt-commit evidence is implemented as
-  Slice 4D.3. Raw external snapshot replacement is implemented as Slice 4D.4a; embedded cache,
-  rendered output, snapshot uninstall, and profile sentinel blocks remain.
+  Slice 4D.3. Raw external snapshot replacement is implemented as Slice 4D.4a and lifecycle-rendered
+  replacement as Slice 4D.4b; embedded cache, rendered uninstall, execution-time live rendering,
+  snapshot uninstall, and profile sentinel blocks remain.
 - Managed Sys files and split-DNS typed actions.
 - Sys package/provider and executable code classification.
 - Migrate or explicitly classify every built-in executable Preset listed in
@@ -418,3 +436,5 @@ static Copy relocation recovery and old/new destination safety guidance to both 
 4C.4c extends that guidance to key-owned JSON relocation and unrelated-value preservation at both
 destinations. Slice 4D.4a extends `shine shell recover` to raw external category snapshot creation
 and replacement, including selected-receipt restoration before dependent launcher rollback.
+Slice 4D.4b extends the same command to lifecycle-rendered file creation and replacement, including
+exact hash/mode rollback and receipt restoration before dependent launcher recovery.
