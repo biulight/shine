@@ -49,8 +49,10 @@ until the new receipt commits. Unchanged receipt-owned launcher removal is typed
 receipt-commit marker. Raw external snapshot-mode selections without rendered output now replace
 their category tree through a typed action with deterministic stage/rollback directories, selected
 receipt transitions, and positive commit evidence. Embedded cache writes now use category-scoped
-file-patch actions, and lifecycle-rendered output uses file-scoped replacement actions; cache and
-snapshot uninstall plus profile sentinel blocks remain to migrate.
+file-patch actions, and lifecycle-rendered output uses file-scoped replacement/removal actions.
+Invocation-time live rendering is atomic, serialized with lifecycle/recovery, and blocked by a
+pending journal without creating its own persistent transaction. Cache and snapshot uninstall plus
+profile sentinel blocks remain to migrate.
 
 | Category | Targets | Runtime/class | Privilege | Built-in provenance | Rollback classification |
 |---|---|---|---|---|---|
@@ -88,8 +90,9 @@ the target ran but does not own third-party package uninstall or version rollbac
    key-owned JSON relocation (implemented).
 7. Shell first-time launcher creation plus unchanged receipt-owned launcher update and removal
    (implemented); raw external snapshot replacement, embedded cache replacement, and lifecycle-
-   rendered output replacement are also implemented, while cache/snapshot uninstall and profile
-   blocks remain.
+   rendered output replacement/removal are also implemented; live rendering is explicitly
+   invocation-scoped and serialized with lifecycle recovery, while cache/snapshot uninstall and
+   profile blocks remain.
 8. Managed Sys files/profile blocks and split DNS.
 9. Preserve App hooks/generators/artifacts, Shell command bodies and Sys scripts/providers as explicit
    opaque escape hatches unless a narrower typed action replaces them.

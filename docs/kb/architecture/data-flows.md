@@ -136,6 +136,14 @@ same-directory rollback, removes the command receipt, records a positive `receip
 then cleans exact rollback material. Before that marker, recovery restores the old receipt if
 needed and moves exact resources back; after it, recovery preserves the completed uninstall and
 cleans only exact rollback. Modified or foreign launchers remain preserved and outside this proof.
+When uninstall selects the last command receipts consuming a regular managed rendered path, Core
+also derives `RemoveShellRenderedFile`: the exact file moves to same-directory rollback before the
+receipt set is removed, and a positive marker separates receipt absence from committed deletion.
+Before that marker, recovery reconstructs missing receipts and restores only the exact old file;
+afterward it preserves absence and cleans exact rollback. Unselected consumers and unrelated
+rendered files are preserved. Invocation-time live rendering takes the same cross-process lock,
+refuses a pending journal, and re-reads its receipt before atomically replacing last-known-good
+output.
 Status treats a manifest receipt or a compatible legacy launcher as installed; extracted source
 files alone are only cache state. Command uninstall removes only the selected managed launcher,
 rendered output, and receipt, rebuilds source-command profile wrappers from the remaining launchers,

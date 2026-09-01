@@ -32,7 +32,10 @@ Static Copy and JSON destination relocation each replace one source receipt thro
 two-destination transaction; JSON recovery restores/removes only the independently bound old/new
 managed-key sets. Raw external Shell snapshot replacement now binds a category tree, deterministic
 stage/rollback directories, selected command receipt transitions, and positive commit evidence in
-the Shell journal. Generators and remaining cache/render/profile/Sys resources retain their
+the Shell journal. Embedded cache replacement binds only actual category file patches, and
+lifecycle-rendered replacement/removal binds exact file identities plus every consumer receipt.
+Live rendering shares the Shell lifecycle/recovery lock without creating an invocation journal.
+Generators and remaining cache/snapshot uninstall, profile, and Sys resources retain their
 existing executors and explicit rollback classifications until narrower contracts land.
 
 Runtime APIs are workspace-internal and hidden from normal documentation. The versioned lifecycle

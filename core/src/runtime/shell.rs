@@ -1,8 +1,8 @@
 use super::launcher::{prepare_launcher_resources, prepared_launcher_resource_is_exact};
 use super::shell_action_executor::{
     ShellCacheReplacement, ShellCacheReplacementFile, ShellLauncherCreation, ShellLauncherRemoval,
-    ShellLauncherUpdate, ShellRenderedFileReplacement, ShellSharedReplacements,
-    ShellSnapshotReplacement,
+    ShellLauncherUpdate, ShellRenderedFileRemoval, ShellRenderedFileReplacement,
+    ShellSharedReplacements, ShellSnapshotReplacement,
 };
 use super::{
     CoreRuntime, FileKind, FileSystemHost, InspectionChange, InspectionFileStatus, LinkConflict,
@@ -1175,6 +1175,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                     caches: &cache_replacements,
                     snapshots: &snapshot_replacements,
                     rendered_files: &rendered_replacements,
+                    rendered_removals: &[],
                 },
                 &launcher_creation_refs,
                 &launcher_update_refs,
@@ -1490,12 +1491,87 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             .iter()
             .map(|removal| removal.target.clone())
             .collect::<BTreeSet<_>>();
+        let mut rendered_removals = Vec::new();
+        if approval.is_some() && !request.dry_run {
+            let rendered_root = self.context().shine_dir.join("rendered/shell");
+            let selected_rendered_paths = manifest
+                .entries
+                .iter()
+                .filter(|entry| targets.contains(&(entry.category.clone(), entry.command.clone())))
+                .map(|entry| entry.rendered_path.clone())
+                .collect::<BTreeSet<_>>();
+            for destination in selected_rendered_paths {
+                if !destination.starts_with(&rendered_root) {
+                    continue;
+                }
+                let consumers = manifest
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.rendered_path == destination)
+                    .collect::<Vec<_>>();
+                if consumers.iter().any(|entry| {
+                    !targets.contains(&(entry.category.clone(), entry.command.clone()))
+                }) {
+                    continue;
+                }
+                let rollback = managed_file_rollback_path(&destination);
+                match self.host().metadata(&rollback).await {
+                    Err(error) if error.is_not_found() => {}
+                    Ok(_) => bail!(
+                        "Shell rendered-file rollback path is occupied: {}",
+                        rollback.display()
+                    ),
+                    Err(error) => {
+                        return Err(error
+                            .into_anyhow("inspecting Shell rendered-file removal rollback path"));
+                    }
+                }
+                let metadata = match self.host().metadata(&destination).await {
+                    Err(error) if error.is_not_found() => continue,
+                    Ok(metadata) if metadata.kind == FileKind::File => metadata,
+                    Ok(_) => bail!("Shell rendered-file removal target is not a regular file"),
+                    Err(error) => {
+                        return Err(
+                            error.into_anyhow("inspecting Shell rendered-file removal target")
+                        );
+                    }
+                };
+                let previous = ShellFileIdentityV1 {
+                    content_hash: crate::install::hash_content(
+                        &self.host().read(&destination).await.map_err(|error| {
+                            error.into_anyhow("reading Shell rendered-file removal target")
+                        })?,
+                    ),
+                    unix_mode: metadata.unix_mode,
+                };
+                let previous_receipts = consumers
+                    .into_iter()
+                    .map(|entry| {
+                        (
+                            format!("shell/{}/{}", entry.category, entry.command),
+                            entry.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let target = previous_receipts
+                    .first()
+                    .map(|(target, _)| target.clone())
+                    .context("Shell rendered-file removal has no receipt consumer")?;
+                rendered_removals.push(ShellRenderedFileRemoval {
+                    target,
+                    destination,
+                    previous,
+                    previous_receipts,
+                });
+            }
+        }
         let shell_execution = if let Some(approval) = approval {
             self.reconcile_shell_launchers_approved(
                 ShellSharedReplacements {
                     caches: &[],
                     snapshots: &[],
                     rendered_files: &[],
+                    rendered_removals: &rendered_removals,
                 },
                 &[],
                 &[],
@@ -1508,7 +1584,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         };
         let mut links = empty_unlink_report();
         let mut target_states = Vec::new();
-        let mut rendered_removals = Vec::new();
         for (category, command) in &targets {
             let canonical = format!("shell/{category}/{command}");
             let entry = manifest.find(&canonical).cloned();
@@ -1554,17 +1629,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
             target_states.push((category.clone(), command.clone(), managed, foreign));
 
             if !request.dry_run {
-                if let Some(entry) = &entry
-                    && !manifest.entries.iter().any(|other| {
-                        (other.category != *category || other.command != *command)
-                            && other.rendered_path == entry.rendered_path
-                    })
-                    && entry
-                        .rendered_path
-                        .starts_with(self.context().shine_dir.join("rendered"))
-                {
-                    rendered_removals.push(entry.rendered_path.clone());
-                }
                 manifest.remove_target(category, command);
             }
         }
@@ -1576,15 +1640,6 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
                 self.mark_shell_launcher_receipt_committed(execution)
                     .await?;
                 self.commit_shell_launcher_operation(execution).await?;
-            }
-            for rendered_path in rendered_removals {
-                match self.host().remove_file(&rendered_path).await {
-                    Ok(()) => {}
-                    Err(error) if error.is_not_found() => {}
-                    Err(error) => {
-                        return Err(error.into_anyhow("removing rendered Shell source"));
-                    }
-                }
             }
         }
         let categories_removed = targets
@@ -1626,7 +1681,7 @@ impl<H: FileSystemHost + PrivilegedFileSystemHost> CoreRuntime<H> {
         }
         if !request.dry_run {
             for category in &categories_removed {
-                self.remove_shell_managed_trees(Some(category)).await?;
+                self.remove_shell_snapshot_tree(category).await?;
             }
             if request.purge && !self.context().is_external_presets {
                 self.remove_empty_shell_roots().await?;
@@ -2237,7 +2292,14 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         })
     }
 
-    pub async fn render_live_shell(&self, target: &str) -> Result<()> {
+    pub async fn render_live_shell(&self, target: &str) -> Result<()>
+    where
+        H: PrivilegedFileSystemHost,
+    {
+        let _guard = self.host().acquire_privileged_operation().await?;
+        if self.shell_operation_journal_bytes().await?.is_some() {
+            bail!("an interrupted Shell operation requires explicit recovery");
+        }
         let manifest =
             load_shell_manifest_with_host(self.host(), &self.context().shine_dir).await?;
         let entry = manifest
@@ -2303,20 +2365,21 @@ impl<H: FileSystemHost> CoreRuntime<H> {
         save_shell_manifest_with_host(self.host(), &self.context().shine_dir, &manifest).await
     }
 
-    pub async fn remove_shell_managed_trees(&self, category: Option<&str>) -> Result<()> {
-        for base in [
-            self.context().shine_dir.join("rendered/shell"),
-            self.context().shine_dir.join("installed/shell"),
-        ] {
-            let path = category.map_or(base.clone(), |category| base.join(category));
-            match self.host().metadata(&path).await {
-                Ok(_) => self
-                    .host()
-                    .remove_dir_all(&path)
-                    .await
-                    .map_err(|error| error.into_anyhow("removing managed Shell tree"))?,
-                Err(error) if error.is_not_found() => {}
-                Err(error) => return Err(error.into_anyhow("inspecting managed Shell tree")),
+    pub async fn remove_shell_snapshot_tree(&self, category: &str) -> Result<()> {
+        let path = self
+            .context()
+            .shine_dir
+            .join("installed/shell")
+            .join(category);
+        match self.host().metadata(&path).await {
+            Ok(_) => self
+                .host()
+                .remove_dir_all(&path)
+                .await
+                .map_err(|error| error.into_anyhow("removing managed Shell snapshot tree"))?,
+            Err(error) if error.is_not_found() => {}
+            Err(error) => {
+                return Err(error.into_anyhow("inspecting managed Shell snapshot tree"));
             }
         }
         Ok(())

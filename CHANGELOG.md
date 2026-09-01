@@ -75,6 +75,10 @@ See [Conventional Commits](https://www.conventionalcommits.org/) for commit guid
   shims move to exact same-directory rollback material before receipt removal; a positive commit
   marker distinguishes completed removal from the crash window that reconstructs the old receipt
   and restores unchanged resources through `shine shell recover`.
+- Journaled removal of the last-consumer Shell rendered file before command receipt deletion.
+  Recovery reconstructs missing consumer receipts and restores only exact rollback material before
+  the positive commit marker; live rendering now shares the lifecycle/recovery lock and refuses a
+  pending journal.
 
 ### Breaking changes
 

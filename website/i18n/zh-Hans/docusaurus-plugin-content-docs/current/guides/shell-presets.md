@@ -76,8 +76,12 @@ rollback tree 被修改都会阻塞恢复。内置 cache 事务在 marker 前中
 任一 cache destination 或 rollback 被修改都会阻塞整个 cache Action，跳过与无关文件保持不变。
 rendered 文件事务在 marker 前中断时，恢复会还原旧 receipt 与精确旧文件，或移除精确匹配的
 事务新建文件；marker 后保留 desired 文件，只清理精确 rollback。rendered 或 rollback 文件被修改会
-阻塞恢复。cache 卸载、rendered 文件卸载、执行期 live rendering 与 profile 编辑不属于这项
-证明；recovery 不会编辑用户的 shell profile。
+阻塞恢复。卸载选择了 rendered 路径的最后一组 consumer receipt 时，Shine 会使用独立事务先记录并
+移动精确旧文件，再删除全部 consumer receipt。正向 marker 前，恢复会重建缺失 receipt 并只还原
+精确旧文件；marker 后保持路径缺失，只清理精确 rollback。未选中的 consumer 与无关 rendered 文件
+保持不变。执行期 live rendering 使用相同 lifecycle lock，pending journal 存在时拒绝运行，但仍是
+invocation-scoped atomic write，而非持久事务。cache 卸载与 profile 编辑仍不属于这些 proof；
+recovery 不会编辑用户的 shell profile。
 
 uninstall 只会对未修改、已有 receipt 的 launcher 使用这项事务。它会先把每个平台 launcher
 resource 移到同目录 rollback material，再删除 receipt，随后另行记录持久化 commit marker。如果

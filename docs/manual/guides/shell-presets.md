@@ -92,9 +92,14 @@ cache destination or rollback blocks the whole cache action while skipped and un
 untouched. For an interrupted rendered-file transaction, recovery
 before the marker restores previous receipts and the exact old file, or removes an exact newly
 created file; after the marker it keeps the desired file and cleans only exact rollback. Modified
-rendered or rollback files block recovery. Cache uninstall, rendered-file uninstall, execution-time
-live rendering, and profile edits remain outside this proof; recovery never edits your shell
-profile.
+rendered or rollback files block recovery. When uninstall selects the last receipt consuming a
+rendered path, Shine separately journals the exact file before removing every consumer receipt.
+Before its positive marker, recovery reconstructs missing receipts and restores only the exact old
+file; afterward it keeps the path absent and cleans exact rollback. An unselected consumer or an
+unrelated rendered file is preserved. Execution-time live rendering uses the same lifecycle lock
+and refuses to run while recovery is pending, but remains an atomic invocation-time write rather
+than a persistent transaction. Cache uninstall and profile edits remain outside these proofs;
+recovery never edits your shell profile.
 
 Uninstall uses this transaction only for an unchanged, receipt-owned launcher. It moves every
 platform launcher resource to same-directory rollback material before removing the receipt, then

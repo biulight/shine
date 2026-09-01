@@ -1875,7 +1875,85 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                     })
                 })
                 .collect::<BTreeSet<_>>();
-            for entry in selected_entries {
+            let rendered_root = self.context().shine_dir.join("rendered/shell");
+            let selected_rendered_paths = selected_entries
+                .iter()
+                .map(|entry| entry.rendered_path.clone())
+                .collect::<BTreeSet<_>>();
+            for destination in selected_rendered_paths {
+                if !destination.starts_with(&rendered_root) {
+                    continue;
+                }
+                let consumers = manifest
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.rendered_path == destination)
+                    .collect::<Vec<_>>();
+                if consumers.iter().any(|entry| {
+                    !selected_keys.contains(&(entry.category.as_str(), entry.command.as_str()))
+                }) {
+                    continue;
+                }
+                let target = consumers
+                    .first()
+                    .map(|entry| format!("shell/{}/{}", entry.category, entry.command))
+                    .context("Shell rendered-file removal has no receipt consumer")?;
+                let rollback = managed_file_rollback_path(&destination);
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("rendered-remove:{target}"),
+                    &destination,
+                )
+                .await?;
+                capture_path_state(
+                    self.host(),
+                    &mut state,
+                    format!("rendered-remove-rollback:{target}"),
+                    &rollback,
+                )
+                .await?;
+                let destination_state = self.host().metadata(&destination).await;
+                let rollback_occupied = path_exists(self.host(), &rollback).await?;
+                let (action, diagnostic) = match destination_state {
+                    Ok(metadata) if metadata.kind != FileKind::File => (
+                        PlanActionV1::Blocked,
+                        "shell_rendered_file_removal_not_regular",
+                    ),
+                    _ if rollback_occupied => (
+                        PlanActionV1::Blocked,
+                        "shell_rendered_file_removal_rollback_occupied",
+                    ),
+                    Err(error) if error.is_not_found() => {
+                        (PlanActionV1::None, "shell_rendered_file_removal_not_needed")
+                    }
+                    Ok(_) => {
+                        typed_launcher_transaction = true;
+                        for (access, path) in [
+                            (FilesystemAccessV1::Remove, &destination),
+                            (FilesystemAccessV1::Write, &rollback),
+                            (FilesystemAccessV1::Remove, &rollback),
+                        ] {
+                            permissions.implicit(PermissionV1::Filesystem {
+                                access,
+                                path: review_path(self.context(), path),
+                            });
+                        }
+                        (
+                            PlanActionV1::Remove,
+                            "shell_rendered_file_remove_transaction",
+                        )
+                    }
+                    Err(error) => {
+                        return Err(error.into_anyhow("inspecting Shell rendered-file removal"));
+                    }
+                };
+                steps.push(
+                    PlanStepV1::new(target, Some("rendered-output"), action)
+                        .with_diagnostic_code(diagnostic),
+                );
+            }
+            for entry in &selected_entries {
                 let target = format!("shell/{}/{}", entry.category, entry.command);
                 let previous_spec = shell_link_spec_from_manifest_entry(entry)?;
                 let resources = prepare_launcher_resources(&self.context().bin_dir, &previous_spec);
@@ -1952,15 +2030,11 @@ impl<H: FileSystemObservationHost> CoreRuntime<H> {
                         self.context().presets_dir.join("shell").join(category),
                         self.context()
                             .shine_dir
-                            .join("rendered/shell")
-                            .join(category),
-                        self.context()
-                            .shine_dir
                             .join("installed/shell")
                             .join(category),
                     ];
                     let mut category_state_exists = false;
-                    for (kind, root) in ["cache", "rendered", "snapshot"].into_iter().zip(roots) {
+                    for (kind, root) in ["cache", "snapshot"].into_iter().zip(roots) {
                         let exists = path_exists(self.host(), &root).await?;
                         category_state_exists |= exists;
                         capture_tree_state(
@@ -9258,6 +9332,366 @@ target = '$HOME/.config/disabled.txt'
                 .unwrap(),
             &previous_receipt
         );
+    }
+
+    #[tokio::test]
+    async fn transformed_shell_uninstall_transactions_rendered_output() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        assert!(plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("rendered-output")
+                && step.action == PlanActionV1::Remove
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_rendered_file_remove_transaction".to_string())
+        }));
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let unrelated = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/unrelated.sh");
+        runtime
+            .host()
+            .put_file(&unrelated, b"unrelated rendered bytes".to_vec());
+        let rollback = managed_file_rollback_path(&rendered);
+        for (access, path) in [
+            (FilesystemAccessV1::Remove, &rendered),
+            (FilesystemAccessV1::Write, &rollback),
+            (FilesystemAccessV1::Remove, &rollback),
+        ] {
+            assert!(
+                plan.permissions
+                    .required
+                    .contains(&PermissionV1::Filesystem {
+                        access,
+                        path: review_path(runtime.context(), path),
+                    })
+            );
+        }
+
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .unwrap();
+        assert!(runtime.host().metadata(&rendered).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert_eq!(
+            runtime.host().read(&unrelated).await.unwrap(),
+            b"unrelated rendered bytes"
+        );
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_uninstall_receipt_failure_restores_file_on_recovery() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        assert!(runtime.host().metadata(&rendered).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_rendered_file".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho rendered\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_uninstall_recovery_blocks_modified_rollback() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell receipt removal should fail");
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        runtime
+            .host()
+            .put_file(&rollback, b"user changed rollback".to_vec());
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(!recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_rendered_file_removal_changed".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"user changed rollback"
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_uninstall_marker_failure_reconstructs_receipt_before_restore() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let install = shell_install_request();
+        let approval =
+            PlanApprovalV1::for_reviewed_plan(&runtime.plan_shells(install.clone()).await.unwrap())
+                .unwrap();
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .unwrap();
+        let request = shell_uninstall_request();
+        let plan = runtime.plan_shells(request.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        let journal = runtime
+            .context()
+            .shine_dir
+            .join(super::super::SHELL_OPERATION_JOURNAL_FILE);
+        runtime.host().fail_write_after(&journal, 3);
+        runtime
+            .uninstall_shells_approved(request, &approval)
+            .await
+            .err()
+            .expect("Shell rendered removal commit marker should fail");
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        assert!(runtime.host().metadata(&rendered).await.is_err());
+        assert!(runtime.host().metadata(&rollback).await.is_ok());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_none()
+        );
+
+        let recovery = runtime.plan_shell_operation_recovery().await.unwrap();
+        assert!(recovery.is_ready());
+        assert!(recovery.steps.iter().any(|step| {
+            step.diagnostic_codes
+                .contains(&"shell_recovery_restore_removed_rendered_file".to_string())
+        }));
+        let approval = PlanApprovalV1::for_reviewed_plan(&recovery).unwrap();
+        runtime
+            .recover_shell_operation_approved(&approval)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho rendered\n"
+        );
+        assert!(runtime.host().metadata(&rollback).await.is_err());
+        assert!(
+            ShellManifest::load(runtime.host(), &runtime.context().shine_dir)
+                .await
+                .unwrap()
+                .find("shell/demo/demo")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_uninstall_preserves_a_file_with_an_unselected_consumer() {
+        let runtime = runtime(PresetSnapshot::builder(PresetSourceKind::Embedded).build());
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/shared.sh");
+        runtime
+            .host()
+            .put_file(&rendered, b"#!/bin/sh\necho shared\n".to_vec());
+        let entries = ["one", "two"]
+            .into_iter()
+            .map(|command| ShellManifestEntry {
+                category: "demo".to_string(),
+                command: command.to_string(),
+                mode: ExternalShellMode::Snapshot,
+                source_path: runtime.context().presets_dir.join("shell/demo/shared.sh"),
+                rendered_path: rendered.clone(),
+                runtime: "native".to_string(),
+                bun_dependencies: None,
+                dependency_hash: None,
+                transforms: vec!["template".to_string()],
+                env: Vec::new(),
+                needs_source: false,
+                content_hash: 1,
+            })
+            .collect();
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("shell-manifest.toml"),
+            toml::to_string(&ShellManifest {
+                schema_version: super::super::SHELL_MANIFEST_SCHEMA_VERSION,
+                entries,
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        let plan = runtime
+            .plan_shells(ShellPlanRequest {
+                operation: LifecycleOperation::Uninstall,
+                target: Some("demo/one".to_string()),
+                force: false,
+                purge: false,
+                input_versions: PlanningInputVersions::default(),
+            })
+            .await
+            .unwrap();
+        assert!(!plan.steps.iter().any(|step| {
+            step.resource.as_deref() == Some("rendered-output")
+                && step.action == PlanActionV1::Remove
+        }));
+        assert_eq!(
+            runtime.host().read(&rendered).await.unwrap(),
+            b"#!/bin/sh\necho shared\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_uninstall_blocks_an_occupied_rollback_when_destination_is_missing() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let rendered = runtime
+            .context()
+            .shine_dir
+            .join("rendered/shell/demo/demo.sh");
+        let rollback = managed_file_rollback_path(&rendered);
+        runtime.host().put_file(
+            runtime.context().shine_dir.join("shell-manifest.toml"),
+            toml::to_string(&ShellManifest {
+                schema_version: super::super::SHELL_MANIFEST_SCHEMA_VERSION,
+                entries: vec![ShellManifestEntry {
+                    category: "demo".to_string(),
+                    command: "demo".to_string(),
+                    mode: ExternalShellMode::Snapshot,
+                    source_path: runtime.context().presets_dir.join("shell/demo/demo.sh"),
+                    rendered_path: rendered.clone(),
+                    runtime: "native".to_string(),
+                    bun_dependencies: None,
+                    dependency_hash: None,
+                    transforms: vec!["template".to_string()],
+                    env: Vec::new(),
+                    needs_source: false,
+                    content_hash: 1,
+                }],
+            })
+            .unwrap()
+            .into_bytes(),
+        );
+        runtime
+            .host()
+            .put_file(&rollback, b"unclaimed rollback".to_vec());
+
+        let plan = runtime
+            .plan_shells(shell_uninstall_request())
+            .await
+            .unwrap();
+        assert!(!plan.is_ready());
+        assert!(plan.steps.iter().any(|step| {
+            step.action == PlanActionV1::Blocked
+                && step
+                    .diagnostic_codes
+                    .contains(&"shell_rendered_file_removal_rollback_occupied".to_string())
+        }));
+        assert_eq!(
+            runtime.host().read(&rollback).await.unwrap(),
+            b"unclaimed rollback"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_render_refuses_to_run_while_shell_recovery_is_pending() {
+        let runtime = runtime(transformed_shell_snapshot(b"#!/bin/sh\necho rendered\n"));
+        let install = shell_install_request();
+        let plan = runtime.plan_shells(install.clone()).await.unwrap();
+        let approval = PlanApprovalV1::for_reviewed_plan(&plan).unwrap();
+        runtime
+            .host()
+            .fail_write_after(runtime.context().shine_dir.join("shell-manifest.toml"), 0);
+        runtime
+            .install_shells_approved(install, &approval)
+            .await
+            .err()
+            .expect("Shell receipt write should fail");
+
+        let error = runtime
+            .render_live_shell("shell/demo/demo")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("requires explicit recovery"));
     }
 
     #[tokio::test]

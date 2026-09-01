@@ -56,9 +56,11 @@
   缺失或变化的 transformed rendered output 也已迁移：文件 hash/mode、同目录 rollback、全部消费方
   receipt transition 与独立 marker 由文件级 Action 绑定。内置 Shell cache 的实际创建与
   `--replace-managed` 覆盖也已迁移：category Action 只绑定本次写入文件、逐文件 rollback、所选 command
-  receipt transition 与正向 marker，未触碰文件保持在事务之外。cache uninstall、rendered uninstall、
-  运行时 live render、snapshot uninstall、profile block 与 Sys action 尚未迁移，也不代表 Phase 4 exit
-  criteria 已满足。
+  receipt transition 与正向 marker，未触碰文件保持在事务之外。最后一个 consumer 被选中时，rendered
+  output 的卸载也使用独立文件级 Action：精确旧文件先进入 rollback，全部 consumer receipt 删除并写入
+  正向 marker 后才清理；live render 使用同一跨进程 lock，pending journal 存在时拒绝运行，但继续保持
+  invocation-scoped atomic write。cache uninstall、snapshot uninstall、profile block 与 Sys action 尚未
+  迁移，也不代表 Phase 4 exit criteria 已满足。
 
 ## Guiding Principles
 

@@ -3,6 +3,20 @@
 Dated entries mined from real bugs. Format: **symptom → root cause → fix → rule**.
 Newest first. Cite the fixing commit. Add an entry whenever a bug's cause was non-obvious.
 
+## 2026-09-01 — Rendered-file removal and live rendering share one mutation boundary
+
+- **Symptom**: Shell uninstall committed command receipt removal before directly deleting the last
+  rendered output, while a live launcher could atomically rewrite the same path outside the
+  lifecycle lock. A crash or concurrent invocation could leave an orphan, remove an active source,
+  or change rollback state during recovery.
+- **Root cause**: rendered output was treated as command-local cleanup even though it has a
+  file-scoped consumer receipt set and an invocation-time writer.
+- **Fix**: journal `RemoveShellRenderedFile` with the exact file identity, canonical rollback,
+  every previous consumer receipt, and a positive commit marker; serialize live rendering on the
+  same operation lock and reject it while recovery is pending.
+- **Rule**: every writer of a transactional resource must share its serialization boundary. Atomic
+  replacement protects file integrity, not receipt coherence or rollback ownership.
+
 ## 2026-09-01 — Embedded cache ownership is a patch, not a whole tree
 
 - **Symptom**: embedded Shell cache files were created or overwritten before the Shell journal, so

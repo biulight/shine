@@ -318,6 +318,17 @@ bugs. Check this list before changing the modules named in each entry.
   conflicting receipts block all recovery. Embedded cache uses its separate file-patch action;
   rendered uninstall, execution-time live rendering, snapshot uninstall, and profile sentinel
   blocks do not inherit this proof.
+- **Rendered Shell removal owns exact bytes only after the last consumer is selected.**
+  `RemoveShellRenderedFile` binds the current regular-file hash/mode, canonical same-directory
+  rollback, and every exact previous command receipt consuming that path. The journal precedes the
+  move to rollback; receipt absence must be followed by a positive per-action commit marker before
+  cleanup. Before the marker, recovery reconstructs missing previous receipts before restoring the
+  exact file. Afterward it keeps the destination absent and removes only unchanged rollback. An
+  unselected consumer, changed/non-file destination, occupied/changed rollback, or receipt conflict
+  blocks or excludes the action. Unrelated rendered files are never category cleanup material.
+  Invocation-time live rendering remains atomic rather than journaled, but it holds the same
+  cross-process operation lock, refuses to run with a pending Shell journal, and re-reads its
+  manifest receipt under that lock.
 - **Opaque execution is never granted declarative rollback by classification alone.** Hooks,
   generators, artifacts, shell bodies, scripts, and package providers retain explicit provenance,
   privilege, permission and unsupported-rollback classification until a narrower typed action

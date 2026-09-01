@@ -137,9 +137,14 @@ file before dependent launcher changes. An existing file moves to its canonical 
 receipt transition, and a positive commit marker. Before that marker, recovery restores the
 previous receipts and exact prior file, or removes an exact transaction-created file. After the
 marker it keeps the desired file and cleans only exact rollback. A changed or non-file destination,
-occupied or modified rollback, or conflicting receipt blocks recovery. Rendered-file uninstall,
-execution-time live rendering, snapshot uninstall, and profile edits retain
-their existing lifecycle behavior.
+occupied or modified rollback, or conflicting receipt blocks recovery. Uninstall also journals a
+rendered file when every consuming receipt is selected: the exact file moves to rollback before
+receipt removal, and receipt absence requires a positive marker before cleanup. Before that marker,
+recovery reconstructs missing receipts and restores the exact file; afterward it preserves absence
+and cleans exact rollback. Unselected consumers and unrelated rendered files remain untouched.
+Execution-time live rendering shares the lifecycle/recovery lock and refuses a pending journal while
+remaining invocation-scoped and atomic. Snapshot uninstall and profile edits retain their existing
+lifecycle behavior.
 
 Without `--dry-run`, App and Shell lifecycle mutations, App refresh, and artifact apply/remove
 display a snapshot-bound security Plan and ask once with a default answer of No. `--yes` still

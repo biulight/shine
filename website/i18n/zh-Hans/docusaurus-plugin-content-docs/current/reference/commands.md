@@ -116,8 +116,12 @@ install 或 upgrade 创建或更新 transformed output 时，Shine 也会先把 
 hash/mode、所有消费该路径的 command receipt transition，以及独立的正向 commit marker。marker 前，
 恢复会还原旧 receipt 与精确旧文件，或移除精确匹配的事务新建文件；marker 后保留 desired 文件，
 只清理精确 rollback。destination 不是普通文件、destination 或 rollback 被修改、rollback 路径被占用，
-或 receipt 冲突时都会阻塞恢复。rendered 文件卸载、执行期 live rendering、snapshot
-卸载与 profile 编辑仍沿用原有 lifecycle 行为。
+或 receipt 冲突时都会阻塞恢复。卸载选择全部 consumer receipt 时，也会先把精确 rendered 文件移到
+rollback，再删除 receipt；receipt 缺失只有在正向 marker 持久化后才代表可清理。marker 前，恢复会
+重建缺失 receipt 并还原精确文件；marker 后保持删除结果，只清理精确 rollback。未选择的 consumer
+与无关 rendered 文件保持不变。执行期 live rendering 与 lifecycle/recovery 使用同一 lock，pending
+journal 存在时拒绝运行，同时继续保持 invocation-scoped atomic write。snapshot 卸载与 profile 编辑
+仍沿用原有 lifecycle 行为。
 
 不使用 `--dry-run` 时，App 与 Shell 生命周期 mutation、App refresh 和 artifact apply/remove
 都会先显示绑定快照的安全 Plan，并以默认 No 询问一次。`--yes` 仍会完整显示并重新校验 Plan，
